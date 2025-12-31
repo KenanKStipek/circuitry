@@ -72,4 +72,18 @@ class OllamaAdapter:
         raw = self._curl_json(
             url=url, method="POST", payload=payload, timeout_seconds=timeout_seconds
         )
-        return GenerateResult(text=(raw.get("response") or "").strip(), raw=raw)
+
+        # Ollama commonly returns:
+        # - prompt_eval_count (tokens processed for prompt)
+        # - eval_count (tokens generated)
+        tokens_sent = raw.get("prompt_eval_count")
+        tokens_received = raw.get("eval_count")
+
+        return GenerateResult(
+            text=(raw.get("response") or "").strip(),
+            raw=raw,
+            tokens_sent=int(tokens_sent) if isinstance(tokens_sent, int) else None,
+            tokens_received=int(tokens_received)
+            if isinstance(tokens_received, int)
+            else None,
+        )
