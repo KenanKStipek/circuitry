@@ -1,0 +1,13 @@
+{
+  "default_model": "ministral-3:14b",
+  "default_adapter": "ollama",
+  "plugins": [],
+  "runtime": {
+    "adapters": {
+      "ollama": {
+        "base_url": "http://192.168.1.190:11434",
+        "timeout_seconds": 120
+      }
+    }
+  }
+}

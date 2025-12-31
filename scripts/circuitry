@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Run the Circuitry CLI via python module.
+# Usage:
+#   ./scripts/circuitry --help
+#   ./scripts/circuitry run path/to/orch.yml --state state.json
+
+python -m circuitry.cli.app "$@"

@@ -1,0 +1,14 @@
+# CLI
+typer[all]>=0.12
+rich>=13.7
+
+# Orchestration formats
+pyyaml>=6.0
+
+# Template rendering (you’re already aligned here)
+chevron>=0.14
+
+# Optional but recommended (nice errors, speed)
+python-dotenv>=1.0
+
+ollama>=0.1.8

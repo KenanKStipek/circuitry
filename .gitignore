@@ -1,0 +1,70 @@
+# ================================
+# Python
+# ================================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# ================================
+# Packaging / build artifacts
+# ================================
+build/
+dist/
+pip-wheel-metadata/
+
+# ================================
+# Test / tooling
+# ================================
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# ================================
+# Editor / OS
+# ================================
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ================================
+# Logs & runtime output
+# ================================
+*.log
+state.json
+out.json
+*.state.json
+
+# ================================
+# Environment / secrets
+# ================================
+.env
+.env.*
+*.key
+*.pem
+
+# ================================
+# CLI / runtime artifacts
+# ================================
+.history
+.cache/
+
+# ================================
+# Local-only files
+# ================================
+scratch/
+tmp/

@@ -1,0 +1,6 @@
+adapter: "ollama"
+model: "ministral-3:14b"
+steps:
+  - type: prompt
+    name: say_hello
+    template: "In one sentence, what is Circuitry?"
