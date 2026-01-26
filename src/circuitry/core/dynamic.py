@@ -9,22 +9,30 @@ from .prompt import PromptDefinition, PromptRuntime
 from ..adapters import Adapter
 
 if TYPE_CHECKING:
-    # Type-only import to avoid circular imports at runtime
+    # Type-only imports to avoid circular imports at runtime
     from .reflector import ReflectorDefinition
+    from .conditional import ConditionalDefinition
+    from .loop import LoopDefinition
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-StepDef = Union["DynamicDefinition", PromptDefinition, "ReflectorDefinition"]
+EffectDef = Union[
+    "DynamicDefinition",
+    PromptDefinition,
+    "ReflectorDefinition",
+    "ConditionalDefinition",
+    "LoopDefinition",
+]
 
 
 @dataclass(frozen=True)
 class DynamicDefinition:
     name: str
-    steps: Sequence[StepDef]
-    strategy: Literal["chain"] = "chain"
+    effects: Sequence[EffectDef]
+    flow: Literal["chain", "tree"] = "chain"
 
 
 class DynamicRuntime:
@@ -60,13 +68,13 @@ class DynamicRuntime:
                 "tokens_sent": None,
                 "tokens_received": None,
                 "error": None,
-                "strategy": self.defn.strategy,
+                "flow": self.defn.flow,
                 "dry_run": self.dry_run,
             }
         )
 
-        if self.defn.strategy != "chain":
-            meta["error"] = f"Unsupported strategy: {self.defn.strategy}"
+        if self.defn.flow not in ("chain", "tree"):
+            meta["error"] = f"Unsupported flow: {self.defn.flow}"
             meta["completed_at"] = _now_iso()
             dyn["value"] = False
             raise ValueError(meta["error"])
@@ -75,39 +83,8 @@ class DynamicRuntime:
         child_store = Store(dyn, on_write=store.on_write)
 
         try:
-            for step in self.defn.steps:
-                if isinstance(step, PromptDefinition):
-                    PromptRuntime(
-                        step,
-                        adapter=self.adapter,
-                        model=self.model,
-                        dry_run=self.dry_run,
-                        timeout_seconds=self.timeout_seconds,
-                    ).execute(store=child_store, ctx=ctx)
-
-                elif isinstance(step, DynamicDefinition):
-                    DynamicRuntime(
-                        step,
-                        adapter=self.adapter,
-                        model=self.model,
-                        dry_run=self.dry_run,
-                        timeout_seconds=self.timeout_seconds,
-                    ).execute(store=child_store)
-
-                else:
-                    # Local import to avoid circular import at module load time
-                    from .reflector import ReflectorDefinition, ReflectorRuntime
-
-                    if isinstance(step, ReflectorDefinition):
-                        ReflectorRuntime(
-                            step,
-                            adapter=self.adapter,
-                            model=self.model,
-                            dry_run=self.dry_run,
-                            timeout_seconds=self.timeout_seconds,
-                        ).execute(store=child_store)
-                    else:
-                        raise TypeError(f"Unsupported step type: {type(step)}")
+            for effect in self.defn.effects:
+                self._execute_effect(effect, store=child_store, ctx=ctx)
 
             dyn["value"] = True
             meta["completed_at"] = _now_iso()
@@ -117,3 +94,59 @@ class DynamicRuntime:
             meta["error"] = str(e)
             meta["completed_at"] = _now_iso()
             raise
+
+    def _execute_effect(self, effect: EffectDef, *, store: Store, ctx: dict) -> None:
+        """Execute a single effect within the dynamic."""
+        if isinstance(effect, PromptDefinition):
+            PromptRuntime(
+                effect,
+                adapter=self.adapter,
+                model=self.model,
+                dry_run=self.dry_run,
+                timeout_seconds=self.timeout_seconds,
+            ).execute(store=store, ctx=ctx)
+
+        elif isinstance(effect, DynamicDefinition):
+            DynamicRuntime(
+                effect,
+                adapter=self.adapter,
+                model=self.model,
+                dry_run=self.dry_run,
+                timeout_seconds=self.timeout_seconds,
+            ).execute(store=store)
+
+        else:
+            # Local imports to avoid circular imports at module load time
+            from .reflector import ReflectorDefinition, ReflectorRuntime
+            from .conditional import ConditionalDefinition, ConditionalRuntime
+            from .loop import LoopDefinition, LoopRuntime
+
+            if isinstance(effect, ReflectorDefinition):
+                ReflectorRuntime(
+                    effect,
+                    adapter=self.adapter,
+                    model=self.model,
+                    dry_run=self.dry_run,
+                    timeout_seconds=self.timeout_seconds,
+                ).execute(store=store)
+
+            elif isinstance(effect, ConditionalDefinition):
+                ConditionalRuntime(
+                    effect,
+                    adapter=self.adapter,
+                    model=self.model,
+                    dry_run=self.dry_run,
+                    timeout_seconds=self.timeout_seconds,
+                ).execute(store=store, ctx=ctx)
+
+            elif isinstance(effect, LoopDefinition):
+                LoopRuntime(
+                    effect,
+                    adapter=self.adapter,
+                    model=self.model,
+                    dry_run=self.dry_run,
+                    timeout_seconds=self.timeout_seconds,
+                ).execute(store=store, ctx=ctx)
+
+            else:
+                raise TypeError(f"Unsupported effect type: {type(effect)}")

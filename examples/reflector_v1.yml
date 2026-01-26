@@ -1,0 +1,20 @@
+effects:
+  - type: prompt
+    name: goal
+    template: "Give me a one-sentence goal for a small demo app."
+
+  - type: reflector
+    name: plan
+    max_effects: 5
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: |
+          Goal:
+          {{prime.goal.value}}
+
+          Context:
+          {{runtime.effective_settings}}
+
+          Output must follow the OUTPUT CONTRACT exactly.
+          Now generate effects.

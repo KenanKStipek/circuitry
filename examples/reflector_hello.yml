@@ -1,7 +1,0 @@
-steps:
-  - type: reflector
-    name: reflect
-    steps:
-      - type: prompt
-        name: ask
-        template: "In one sentence, define Circuitry."

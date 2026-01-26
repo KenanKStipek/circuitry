@@ -1,7 +1,8 @@
-steps:
+effects:
   - type: dynamic
     name: onboarding
-    steps:
+    flow: chain
+    effects:
       - type: prompt
         name: ask_name
         template: "What is your name?"

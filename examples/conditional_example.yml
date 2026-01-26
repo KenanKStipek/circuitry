@@ -1,0 +1,19 @@
+# Example: Conditional branching based on user role
+effects:
+  - type: prompt
+    name: get_role
+    template: "What is the user's role? Respond with either 'admin' or 'user'."
+
+  - type: if
+    name: check_role
+    if:
+      mode: cel
+      expr: "state.prime.get_role.value == 'admin'"
+    then:
+      - type: prompt
+        name: admin_greeting
+        template: "Welcome, administrator! You have full access to the system."
+    else:
+      - type: prompt
+        name: user_greeting
+        template: "Welcome, user! You have limited access to the system."

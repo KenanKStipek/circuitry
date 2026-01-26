@@ -1,0 +1,15 @@
+# Example: Loop over a collection of items
+effects:
+  - type: prompt
+    name: generate_topics
+    template: "Generate a list of 3 programming topics as a JSON array, e.g. [\"Python\", \"Rust\", \"Go\"]"
+
+  - type: loop
+    name: explain_topics
+    each:
+      in: state.prime.generate_topics.value
+      as: topic
+    body:
+      - type: prompt
+        name: explain
+        template: "Explain {{topic}} in one sentence."

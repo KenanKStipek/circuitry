@@ -1,0 +1,31 @@
+# Example: Typed prompts with JSON schema validation
+effects:
+  - type: prompt
+    name: extract_entities
+    description: "Extract key entities from a short paragraph."
+    prompt_type: json
+    schema:
+      type: object
+      properties:
+        entities:
+          type: array
+          items:
+            type: string
+      required:
+        - entities
+      additionalProperties: false
+    template: |
+      Extract key entities from the following text and return as JSON:
+      {"entities": ["entity1", "entity2", ...]}
+
+      Text: "The quick brown fox jumps over the lazy dog in the park near London."
+
+  - type: prompt
+    name: count_entities
+    prompt_type: number
+    template: "How many entities were extracted? Just respond with the number: {{prime.extract_entities.value.entities}}"
+
+  - type: prompt
+    name: is_location_present
+    prompt_type: boolean
+    template: "Does the entity list contain a location? Respond with yes or no. Entities: {{prime.extract_entities.value.entities}}"
