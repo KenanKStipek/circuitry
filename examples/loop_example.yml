@@ -2,12 +2,13 @@
 effects:
   - type: prompt
     name: generate_topics
-    template: "Generate a list of 3 programming topics as a JSON array, e.g. [\"Python\", \"Rust\", \"Go\"]"
+    prompt_type: json
+    template: 'Generate a list of exactly 3 programming languages as a JSON array. Return ONLY the JSON array, nothing else. Example: ["Python", "Rust", "Go"]'
 
   - type: loop
     name: explain_topics
     each:
-      in: state.prime.generate_topics.value
+      in: prime.generate_topics.value
       as: topic
     body:
       - type: prompt

@@ -1,5 +1,5 @@
-adapter: "ollama"
-model: "ministral-3:14b"
+adapter: ollama
+model: phi3:mini
 effects:
   - type: prompt
     name: say_hello
