@@ -40,39 +40,39 @@ tracking_system: file-system
 story_location: "/Users/kenanstipek/src/circuitry/_bmad-output/implementation-artifacts"
 
 development_status:
-  epic-1: backlog
-  1-1-define-and-validate-basic-dol-orchestrations: backlog
-  1-2-execute-orchestrations-from-cli-with-state-output: backlog
-  1-3-execute-orchestrations-via-embedded-python-api: backlog
-  1-4-ship-time-to-value-cli-examples: backlog
+  epic-1: in-progress
+  1-1-define-and-validate-basic-dol-orchestrations: ready-for-dev
+  1-2-execute-orchestrations-from-cli-with-state-output: ready-for-dev
+  1-3-execute-orchestrations-via-embedded-python-api: ready-for-dev
+  1-4-ship-time-to-value-cli-examples: ready-for-dev
   epic-1-retrospective: optional
-  epic-2: backlog
-  2-1-implement-chain-and-tree-effect-topologies: backlog
-  2-2-implement-conditional-and-loop-cybernetic-primitives: backlog
-  2-3-support-nested-dynamic-composition: backlog
-  2-4-validate-execution-pattern-test-coverage: backlog
+  epic-2: in-progress
+  2-1-implement-chain-and-tree-effect-topologies: ready-for-dev
+  2-2-implement-conditional-and-loop-cybernetic-primitives: ready-for-dev
+  2-3-support-nested-dynamic-composition: ready-for-dev
+  2-4-validate-execution-pattern-test-coverage: ready-for-dev
   epic-2-retrospective: optional
-  epic-3: backlog
-  3-1-trigger-orchestrations-through-rest-interface: backlog
-  3-2-run-recurring-scheduled-orchestrations: backlog
-  3-3-handle-adapter-outages-with-recovery-metadata: backlog
-  3-4-troubleshoot-divergence-via-deterministic-state-paths: backlog
+  epic-3: in-progress
+  3-1-trigger-orchestrations-through-rest-interface: ready-for-dev
+  3-2-run-recurring-scheduled-orchestrations: ready-for-dev
+  3-3-handle-adapter-outages-with-recovery-metadata: ready-for-dev
+  3-4-troubleshoot-divergence-via-deterministic-state-paths: ready-for-dev
   epic-3-retrospective: optional
-  epic-4: backlog
-  4-1-configure-multi-provider-adapter-runtime: backlog
-  4-2-integrate-litellm-and-direct-provider-conformance: backlog
-  4-3-persist-runtime-state-through-postgres-tooling: backlog
-  4-4-expose-plugin-and-tool-extension-points: backlog
+  epic-4: in-progress
+  4-1-configure-multi-provider-adapter-runtime: ready-for-dev
+  4-2-integrate-litellm-and-direct-provider-conformance: ready-for-dev
+  4-3-persist-runtime-state-through-postgres-tooling: ready-for-dev
+  4-4-expose-plugin-and-tool-extension-points: ready-for-dev
   epic-4-retrospective: optional
-  epic-5: backlog
-  5-1-retrieve-shared-library-orchestrations: backlog
-  5-2-execute-shared-assets-across-services: backlog
-  5-3-publish-new-orchestrations-to-shared-library: backlog
-  5-4-define-growth-workflow-for-library-contributions: backlog
+  epic-5: in-progress
+  5-1-retrieve-shared-library-orchestrations: ready-for-dev
+  5-2-execute-shared-assets-across-services: ready-for-dev
+  5-3-publish-new-orchestrations-to-shared-library: ready-for-dev
+  5-4-define-growth-workflow-for-library-contributions: ready-for-dev
   epic-5-retrospective: optional
-  epic-6: backlog
-  6-1-deliver-readme-and-quick-start-documentation: backlog
-  6-2-deliver-architecture-and-api-reference-documentation: backlog
-  6-3-provide-curated-example-orchestrations: backlog
-  6-4-provide-editor-highlighting-and-post-mvp-perceptron-boundary: backlog
+  epic-6: in-progress
+  6-1-deliver-readme-and-quick-start-documentation: ready-for-dev
+  6-2-deliver-architecture-and-api-reference-documentation: ready-for-dev
+  6-3-provide-curated-example-orchestrations: ready-for-dev
+  6-4-provide-editor-highlighting-and-post-mvp-perceptron-boundary: ready-for-dev
   epic-6-retrospective: optional
