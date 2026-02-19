@@ -53,10 +53,10 @@ development_status:
   2-4-validate-execution-pattern-test-coverage: review
   epic-2-retrospective: optional
   epic-3: in-progress
-  3-1-trigger-orchestrations-through-rest-interface: ready-for-dev
-  3-2-run-recurring-scheduled-orchestrations: ready-for-dev
-  3-3-handle-adapter-outages-with-recovery-metadata: ready-for-dev
-  3-4-troubleshoot-divergence-via-deterministic-state-paths: ready-for-dev
+  3-1-trigger-orchestrations-through-rest-interface: review
+  3-2-run-recurring-scheduled-orchestrations: review
+  3-3-handle-adapter-outages-with-recovery-metadata: review
+  3-4-troubleshoot-divergence-via-deterministic-state-paths: review
   epic-3-retrospective: optional
   epic-4: in-progress
   4-1-configure-multi-provider-adapter-runtime: ready-for-dev

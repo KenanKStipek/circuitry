@@ -1,6 +1,6 @@
 # Story 3.4: Troubleshoot Divergence via Deterministic State Paths
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -18,11 +18,11 @@ so that I can isolate where orchestration behavior diverged from expectations.
 
 ## Tasks / Subtasks
 
-- [ ] Define standard divergence-inspection workflow using deterministic state-path traversal (AC: 1, 3)
-- [ ] Improve error metadata context to include hierarchical execution path breadcrumbs where feasible (AC: 1, 2)
-- [ ] Add helper utilities or docs for extracting failed node paths and related metadata quickly (AC: 1, 3)
-- [ ] Add regression tests asserting deterministic path layout and diagnosability under failure scenarios (AC: 1, 2)
-- [ ] Document troubleshooting examples for prompt/dynamic/conditional/loop failure modes (AC: 3)
+- [x] Define standard divergence-inspection workflow using deterministic state-path traversal (AC: 1, 3)
+- [x] Improve error metadata context to include hierarchical execution path breadcrumbs where feasible (AC: 1, 2)
+- [x] Add helper utilities or docs for extracting failed node paths and related metadata quickly (AC: 1, 3)
+- [x] Add regression tests asserting deterministic path layout and diagnosability under failure scenarios (AC: 1, 2)
+- [x] Document troubleshooting examples for prompt/dynamic/conditional/loop failure modes (AC: 3)
 
 ## Dev Notes
 
@@ -109,10 +109,21 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 3 source and architecture constraints.
-- Included existing-code cross-reference with present capabilities and concrete gaps.
-- Ready for `dev-story` implementation workflow.
+- Added deterministic divergence helper `find_divergence_paths(...)` in `src/circuitry/core/diagnostics.py` to extract sorted failure-path records from runtime state metadata.
+- Exposed the helper through embedded API surface as `inspect_divergence_paths(...)` (`src/circuitry/api.py`, `src/circuitry/__init__.py`).
+- Added regression coverage in `tests/core/test_diagnostics.py` for deterministic sorting and nested failure breadcrumb discoverability from real runtime failures.
+- Added embedded API coverage in `tests/api/test_embedded_api.py` for deterministic divergence extraction output ordering.
+- Added operator-facing troubleshooting playbook in `docs/troubleshooting-state-paths.md` and indexed it in `docs/index.md`.
+- Verified quality gates: `pytest -q`, `ruff check src tests`, and `mypy src` all passing after implementation.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/3-4-troubleshoot-divergence-via-deterministic-state-paths.md`
+- `src/circuitry/core/diagnostics.py`
+- `src/circuitry/core/__init__.py`
+- `src/circuitry/api.py`
+- `src/circuitry/__init__.py`
+- `tests/core/test_diagnostics.py`
+- `tests/api/test_embedded_api.py`
+- `docs/troubleshooting-state-paths.md`
+- `docs/index.md`

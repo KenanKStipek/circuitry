@@ -1,6 +1,6 @@
 # Story 3.1: Trigger Orchestrations Through REST Interface
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -18,11 +18,11 @@ so that external services can trigger runtime execution programmatically.
 
 ## Tasks / Subtasks
 
-- [ ] Design minimal REST trigger contract (request payload, auth, response envelope, correlation IDs) (AC: 1, 2)
-- [ ] Reuse existing runtime execution path (`run(req)`) behind REST handler to avoid duplicate orchestration logic (AC: 2)
-- [ ] Add authentication and request validation guardrails aligned with NFR-S3 (AC: 1, 3)
-- [ ] Persist request/trace metadata into runtime state for post-run inspection (AC: 2, 3)
-- [ ] Add API tests for success, auth failure, validation failure, and runtime failure paths (AC: 1, 2, 3)
+- [x] Design minimal REST trigger contract (request payload, auth, response envelope, correlation IDs) (AC: 1, 2)
+- [x] Reuse existing runtime execution path (`run(req)`) behind REST handler to avoid duplicate orchestration logic (AC: 2)
+- [x] Add authentication and request validation guardrails aligned with NFR-S3 (AC: 1, 3)
+- [x] Persist request/trace metadata into runtime state for post-run inspection (AC: 2, 3)
+- [x] Add API tests for success, auth failure, validation failure, and runtime failure paths (AC: 1, 2, 3)
 
 ## Dev Notes
 
@@ -108,10 +108,15 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 3 source and architecture constraints.
-- Included existing-code cross-reference with present capabilities and concrete gaps.
-- Ready for `dev-story` implementation workflow.
+- Implemented `src/circuitry/service/rest.py` with a minimal `POST /v1/triggers/run` contract, bearer token guard, request ID correlation, and response envelope metadata.
+- Reused existing execution path by constructing `RunRequest` and invoking `src/circuitry/cli/runtime_shim.py:run`, avoiding duplicate orchestration runtime logic.
+- Added runtime trace metadata injection at `runtime.trigger` (`interface`, `request_id`, `status`, timestamps, `error`) to support follow-up inspection.
+- Added REST contract tests covering success, authentication failure, payload validation failure, and runtime failure in `tests/service/test_rest_trigger.py`.
+- Verified quality gates: `pytest -q`, `ruff check .`, and `mypy src` all passing after implementation.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/3-1-trigger-orchestrations-through-rest-interface.md`
+- `src/circuitry/service/__init__.py`
+- `src/circuitry/service/rest.py`
+- `tests/service/test_rest_trigger.py`

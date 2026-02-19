@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 
 from circuitry import (
     CircuitryExecutionError,
+    inspect_divergence_paths,
     inspect_orchestration,
     run_orchestration,
     validate_orchestration,
@@ -133,3 +134,14 @@ effects:
     summary = inspect_orchestration(orchestration_path=orch)
     assert summary["effects_count"] == 1
     assert summary["effect_names"] == ["greet"]
+
+
+def test_inspect_divergence_paths_extracts_failures_deterministically() -> None:
+    state = {
+        "prime": {
+            "z": {"meta": {"error": "z failed"}},
+            "a": {"meta": {"error": "a failed"}},
+        }
+    }
+    records = inspect_divergence_paths(state=state)
+    assert [r["path"] for r in records] == ["prime.a", "prime.z"]

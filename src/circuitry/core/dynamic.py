@@ -43,12 +43,14 @@ class DynamicRuntime:
         *,
         adapter: Adapter,
         model: str,
+        runtime_config: dict[str, Any] | None = None,
         dry_run: bool = False,
         timeout_seconds: int = 120,
     ):
         self.defn = definition
         self.adapter = adapter
         self.model = model
+        self.runtime_config = runtime_config or {}
         self.dry_run = dry_run
         self.timeout_seconds = timeout_seconds
 
@@ -122,6 +124,7 @@ class DynamicRuntime:
                 effect,
                 adapter=self.adapter,
                 model=self.model,
+                runtime_config=self.runtime_config,
                 dry_run=self.dry_run,
                 timeout_seconds=self.timeout_seconds,
             ).execute(store=store, ctx=ctx)
@@ -131,6 +134,7 @@ class DynamicRuntime:
                 effect,
                 adapter=self.adapter,
                 model=self.model,
+                runtime_config=self.runtime_config,
                 dry_run=self.dry_run,
                 timeout_seconds=self.timeout_seconds,
             ).execute(store=store, ctx_override=ctx)
@@ -146,6 +150,7 @@ class DynamicRuntime:
                     effect,
                     adapter=self.adapter,
                     model=self.model,
+                    runtime_config=self.runtime_config,
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
                 ).execute(store=store)
@@ -155,6 +160,7 @@ class DynamicRuntime:
                     effect,
                     adapter=self.adapter,
                     model=self.model,
+                    runtime_config=self.runtime_config,
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
                 ).execute(store=store, ctx=ctx)
@@ -164,6 +170,7 @@ class DynamicRuntime:
                     effect,
                     adapter=self.adapter,
                     model=self.model,
+                    runtime_config=self.runtime_config,
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
                 ).execute(store=store, ctx=ctx)

@@ -1,6 +1,6 @@
 # Story 3.2: Run Recurring Scheduled Orchestrations
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -18,11 +18,11 @@ so that periodic workflows execute consistently without manual intervention.
 
 ## Tasks / Subtasks
 
-- [ ] Define scheduler abstraction and job definition format for orchestration targets (AC: 1)
-- [ ] Implement recurring dispatch worker that invokes existing runtime pipeline reliably (AC: 1, 3)
-- [ ] Record schedule metadata (planned_at, triggered_at, status, errors) per run (AC: 2, 3)
-- [ ] Add handling/reporting for missed, delayed, and failed schedule events (AC: 2)
-- [ ] Add tests for recurring dispatch behavior, failure handling, and metadata traceability (AC: 1, 2, 3)
+- [x] Define scheduler abstraction and job definition format for orchestration targets (AC: 1)
+- [x] Implement recurring dispatch worker that invokes existing runtime pipeline reliably (AC: 1, 3)
+- [x] Record schedule metadata (planned_at, triggered_at, status, errors) per run (AC: 2, 3)
+- [x] Add handling/reporting for missed, delayed, and failed schedule events (AC: 2)
+- [x] Add tests for recurring dispatch behavior, failure handling, and metadata traceability (AC: 1, 2, 3)
 
 ## Dev Notes
 
@@ -107,10 +107,16 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 3 source and architecture constraints.
-- Included existing-code cross-reference with present capabilities and concrete gaps.
-- Ready for `dev-story` implementation workflow.
+- Implemented `src/circuitry/service/scheduler.py` with `ScheduledJob`, `ScheduledDispatchRecord`, and `RecurringScheduler.tick()` for deterministic recurring dispatch.
+- Reused `src/circuitry/cli/runtime_shim.py:run` for job execution by generating `RunRequest` per invocation, preserving a single orchestration runtime path.
+- Added schedule invocation metadata at `runtime.schedule` and append-only per-run records at `runtime.schedule_history` including `planned_at`, `triggered_at`, `completed_at`, `delay_seconds`, `status`, and `error`.
+- Added delayed/missed diagnostics via `allowed_lateness_seconds` and persisted `delayed` with measured dispatch latency.
+- Added scheduler tests in `tests/service/test_scheduler.py` for due dispatch, delayed diagnostics, failure reporting, and repeated invocation traceability.
+- Verified quality gates: `pytest -q`, `ruff check .`, and `mypy src` all passing after implementation.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/3-2-run-recurring-scheduled-orchestrations.md`
+- `src/circuitry/service/scheduler.py`
+- `src/circuitry/service/__init__.py`
+- `tests/service/test_scheduler.py`

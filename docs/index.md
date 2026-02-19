@@ -1,6 +1,6 @@
 # Project Documentation Index
 
-Last Updated: 2026-02-18
+Last Updated: 2026-02-19
 
 ## Project Overview
 
@@ -22,6 +22,7 @@ Last Updated: 2026-02-18
 - [Development Guide](./development-guide.md)
 - [Testing Policy](./testing-policy.md)
 - [Test Matrix](./test-matrix.md)
+- [Troubleshooting State Paths](./troubleshooting-state-paths.md)
 - [Project Scan Sections](./project-scan-sections.md)
 
 ## Existing Domain Documentation

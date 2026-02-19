@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional, Sequence
 
-from ..adapters import Adapter
+from ..adapters import Adapter, build_adapter
+from ..adapters.base import GenerateResult
 from .store import Store
 
 
@@ -109,12 +110,14 @@ class PromptRuntime:
         *,
         adapter: Adapter,
         model: str,
+        runtime_config: dict[str, Any] | None = None,
         dry_run: bool = False,
         timeout_seconds: int = 120,
     ):
         self.defn = definition
         self.adapter = adapter
         self.model = model
+        self.runtime_config = runtime_config or {}
         self.dry_run = dry_run
         self.timeout_seconds = timeout_seconds
 
@@ -145,18 +148,25 @@ class PromptRuntime:
         meta["tokens_received"] = None
         meta["error"] = None
         meta["dry_run"] = self.dry_run
+        meta["fallback_attempts"] = []
+        meta["fallback_recovered"] = False
 
         if self.dry_run:
             node["value"] = None
             meta["completed_at"] = _now_iso()
             return
 
+        attempts_meta: list[dict[str, Any]] = []
         try:
-            res = self.adapter.generate(
-                model=self.model,
-                prompt=prompt_sent,
-                timeout_seconds=self.timeout_seconds,
+            resolved_model = self.defn.model or self.model
+            attempts = self._build_attempts(default_model=resolved_model)
+            res, attempts_meta, generation_error = self._generate_with_fallbacks(
+                prompt=prompt_sent, attempts=attempts
             )
+            if generation_error is not None or res is None:
+                raise RuntimeError(
+                    f"All adapter attempts failed: {attempts_meta}"
+                ) from generation_error
 
             # Decode and validate output based on prompt_type
             decoded_value = self._decode_output(res.text)
@@ -172,9 +182,17 @@ class PromptRuntime:
             node["value"] = decoded_value
             meta["tokens_sent"] = res.tokens_sent
             meta["tokens_received"] = res.tokens_received
+            meta["fallback_attempts"] = attempts_meta
+            meta["fallback_recovered"] = len(attempts_meta) > 1
             meta["completed_at"] = _now_iso()
+            if attempts_meta:
+                last = attempts_meta[-1]
+                meta["adapter"] = last["adapter"]
+                meta["model"] = last["model"]
 
         except Exception as e:
+            meta["fallback_attempts"] = attempts_meta
+            meta["fallback_recovered"] = False
             meta["error"] = str(e)
             meta["completed_at"] = _now_iso()
             if self.defn.on_error == "fail":
@@ -182,6 +200,81 @@ class PromptRuntime:
             elif self.defn.on_error == "skip":
                 node["value"] = None
             # continue: keep going with None value
+
+    def _build_attempts(self, *, default_model: str) -> list[tuple[str, str]]:
+        attempts: list[tuple[str, str]] = []
+
+        primary_adapter = getattr(self.adapter, "name", "unknown")
+        attempts.append((primary_adapter, default_model))
+
+        if self.defn.provider:
+            attempts.insert(
+                0, self._parse_provider_token(self.defn.provider, default_model)
+            )
+
+        for provider_token in self.defn.provider_fallbacks or ():
+            attempts.append(self._parse_provider_token(provider_token, default_model))
+
+        deduped: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for attempt in attempts:
+            if attempt not in seen:
+                seen.add(attempt)
+                deduped.append(attempt)
+        return deduped
+
+    def _parse_provider_token(self, token: str, default_model: str) -> tuple[str, str]:
+        parsed = (token or "").strip()
+        if not parsed:
+            return (getattr(self.adapter, "name", "unknown"), default_model)
+        if ":" not in parsed:
+            return (parsed, default_model)
+        adapter_name, model_name = parsed.split(":", 1)
+        adapter_name = adapter_name.strip()
+        model_name = model_name.strip() or default_model
+        return (adapter_name, model_name)
+
+    def _generate_with_fallbacks(
+        self, *, prompt: str, attempts: list[tuple[str, str]]
+    ) -> tuple[GenerateResult | None, list[dict[str, Any]], Exception | None]:
+        attempts_meta: list[dict[str, Any]] = []
+        last_error: Exception | None = None
+
+        for adapter_name, model_name in attempts:
+            adapter = self._resolve_adapter(adapter_name)
+            try:
+                res = adapter.generate(
+                    model=model_name,
+                    prompt=prompt,
+                    timeout_seconds=self.timeout_seconds,
+                )
+                attempts_meta.append(
+                    {
+                        "adapter": adapter_name,
+                        "model": model_name,
+                        "status": "succeeded",
+                        "error": None,
+                    }
+                )
+                return (res, attempts_meta, None)
+            except Exception as e:
+                last_error = e
+                attempts_meta.append(
+                    {
+                        "adapter": adapter_name,
+                        "model": model_name,
+                        "status": "failed",
+                        "error": str(e),
+                    }
+                )
+
+        return (None, attempts_meta, last_error)
+
+    def _resolve_adapter(self, adapter_name: str) -> Adapter:
+        default_name = getattr(self.adapter, "name", "")
+        if adapter_name == default_name:
+            return self.adapter
+        return build_adapter(adapter_name=adapter_name, runtime=self.runtime_config)
 
     def _materialize_input(self, ctx: dict[str, Any]) -> str:
         """Materialize the prompt input from template or messages."""

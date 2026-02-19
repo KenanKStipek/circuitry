@@ -48,6 +48,7 @@ class ReflectorRuntime:
         *,
         adapter: Adapter,
         model: str,
+        runtime_config: dict[str, Any] | None = None,
         dry_run: bool = False,
         timeout_seconds: int = 120,
         verbose: bool = False,
@@ -55,6 +56,7 @@ class ReflectorRuntime:
         self.defn = definition
         self.adapter = adapter
         self.model = model
+        self.runtime_config = runtime_config or {}
         self.dry_run = dry_run
         self.timeout_seconds = timeout_seconds
         self.verbose = verbose
@@ -129,6 +131,7 @@ class ReflectorRuntime:
                 inner,
                 adapter=self.adapter,
                 model=self.model,
+                runtime_config=self.runtime_config,
                 dry_run=self.dry_run,
                 timeout_seconds=self.timeout_seconds,
             ).execute(store=reflector_store)
@@ -205,6 +208,7 @@ class ReflectorRuntime:
                 gen_def,
                 adapter=self.adapter,
                 model=self.model,
+                runtime_config=self.runtime_config,
                 dry_run=self.dry_run,
                 timeout_seconds=self.timeout_seconds,
             ).execute(store=gen_store)

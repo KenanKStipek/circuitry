@@ -17,6 +17,7 @@ from .cli.runtime_shim import (
 from .cli.runtime_shim import (
     validate as _validate,
 )
+from .core.diagnostics import find_divergence_paths as _find_divergence_paths
 
 
 class CircuitryExecutionError(RuntimeError):
@@ -77,3 +78,12 @@ def validate_orchestration(*, orchestration_path: str | Path) -> dict[str, Any]:
 def inspect_orchestration(*, orchestration_path: str | Path) -> dict[str, Any]:
     """Inspect orchestration metadata (format, model/adapter, effect names/counts)."""
     return _inspect_orchestration(Path(orchestration_path))
+
+
+def inspect_divergence_paths(
+    *,
+    state: dict[str, Any],
+    root_path: str | None = "prime",
+) -> list[dict[str, Any]]:
+    """Return deterministic failure-path records discovered from runtime state."""
+    return _find_divergence_paths(state, root_path=root_path)

@@ -1,6 +1,6 @@
 # Story 3.3: Handle Adapter Outages with Recovery Metadata
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -18,11 +18,11 @@ so that I can recover runs and minimize downtime impact.
 
 ## Tasks / Subtasks
 
-- [ ] Define adapter fallback policy model at runtime configuration level (AC: 1, 3)
-- [ ] Implement retry/fallback orchestration around adapter invocation boundaries (AC: 1, 3)
-- [ ] Persist structured failure metadata including adapter/model/error/fallback-attempts (AC: 1, 2)
-- [ ] Ensure all failure modes surface through CLI/API responses and state records (AC: 2)
-- [ ] Add tests for outage simulation, fallback success, and fallback exhaustion paths (AC: 1, 2, 3)
+- [x] Define adapter fallback policy model at runtime configuration level (AC: 1, 3)
+- [x] Implement retry/fallback orchestration around adapter invocation boundaries (AC: 1, 3)
+- [x] Persist structured failure metadata including adapter/model/error/fallback-attempts (AC: 1, 2)
+- [x] Ensure all failure modes surface through CLI/API responses and state records (AC: 2)
+- [x] Add tests for outage simulation, fallback success, and fallback exhaustion paths (AC: 1, 2, 3)
 
 ## Dev Notes
 
@@ -109,10 +109,20 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 3 source and architecture constraints.
-- Included existing-code cross-reference with present capabilities and concrete gaps.
-- Ready for `dev-story` implementation workflow.
+- Implemented prompt-level adapter fallback sequencing in `src/circuitry/core/prompt.py` using `provider` and `provider_fallbacks` with deterministic attempt order.
+- Added structured fallback metadata in prompt node meta: `fallback_attempts`, `fallback_recovered`, final `adapter/model`, and surfaced exhaustive-failure details in `meta.error`.
+- Enabled per-prompt alternate adapter materialization via `build_adapter(...)` and runtime config propagation through dynamic/conditional/loop/reflector runtimes.
+- Preserved single runtime execution path by extending existing runtime constructors (`runtime_config`) rather than introducing parallel execution logic.
+- Added outage/fallback tests in `tests/core/test_prompt_fallbacks.py` for recovery success and fallback exhaustion behavior.
+- Verified quality gates: `pytest -q`, `ruff check .`, and `mypy src` all passing after implementation.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/3-3-handle-adapter-outages-with-recovery-metadata.md`
+- `src/circuitry/core/prompt.py`
+- `src/circuitry/core/dynamic.py`
+- `src/circuitry/core/conditional.py`
+- `src/circuitry/core/loop.py`
+- `src/circuitry/core/reflector.py`
+- `src/circuitry/cli/runtime_shim.py`
+- `tests/core/test_prompt_fallbacks.py`

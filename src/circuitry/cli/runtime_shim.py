@@ -116,6 +116,7 @@ def run(req: RunRequest) -> RunResult:
             root_def,
             adapter=adapter,
             model=effective.model,
+            runtime_config=effective.runtime or {},
             dry_run=req.dry_run,
             timeout_seconds=timeout_seconds,
         )
