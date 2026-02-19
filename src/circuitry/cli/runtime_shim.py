@@ -150,13 +150,17 @@ def inspect_orchestration(orchestration_path: Path) -> dict[str, Any]:
 
     if suffix in {".yml", ".yaml"}:
         data = load_orchestration_file(orchestration_path)
-        steps = data.get("steps") or []
+        effects = data.get("effects") or data.get("steps") or []
+        effect_names = [
+            s.get("name") for s in effects if isinstance(s, dict) and s.get("name")
+        ]
         summary["model"] = data.get("model")
         summary["adapter"] = data.get("adapter")
-        summary["steps_count"] = len(steps) if isinstance(steps, list) else 0
-        summary["step_names"] = [
-            s.get("name") for s in steps if isinstance(s, dict) and s.get("name")
-        ]
+        summary["effects_count"] = len(effects) if isinstance(effects, list) else 0
+        summary["effect_names"] = effect_names
+        # Backward-compatible aliases.
+        summary["steps_count"] = summary["effects_count"]
+        summary["step_names"] = effect_names
     else:
         summary["note"] = "Non-YAML inspection is currently shallow."
 

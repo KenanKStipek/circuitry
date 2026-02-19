@@ -191,6 +191,20 @@ See the `examples/` directory for sample orchestration files:
 - `typed_prompt_example.yml` - Typed prompts with JSON schema
 - `reflector_v1.yml` - Reflector-driven planning
 
+### State Path Walkthrough
+
+Runtime state paths follow orchestration names under `prime`.
+
+- Prompt: `prime.say_hello.value`
+- Nested dynamic prompt: `prime.onboarding.ask_name.value`
+- Named loop iteration prompt: `prime.explain_topics.iter_0.explain.value`
+
+Use CLI output state files to inspect paths:
+
+```bash
+circuitry run examples/loop_example.yml --out out.json --pretty
+```
+
 ## Architecture
 
 ```

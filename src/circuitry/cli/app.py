@@ -24,6 +24,17 @@ def _print_header(title: str) -> None:
     console.print(Panel.fit(title, border_style="cyan"))
 
 
+def _write_state_json(*, out: Path, state: dict, pretty: bool) -> None:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if pretty:
+        out.write_text(
+            json.dumps(state, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    else:
+        out.write_text(json.dumps(state) + "\n", encoding="utf-8")
+
+
 @app.command("run")
 def run_cmd(
     orchestration: Path = typer.Argument(
@@ -83,24 +94,30 @@ def run_cmd(
     ):
         result = run(req)
 
+    # Write --out for both success and failure (failure state still contains runtime metadata).
+    if out:
+        _write_state_json(out=out, state=result.state, pretty=pretty)
+
     if not result.ok:
         if json_out:
-            payload = {"ok": False, "error": result.error, "warnings": result.warnings}
+            payload = {
+                "ok": False,
+                "error": result.error,
+                "warnings": result.warnings,
+                "state_out": str(out) if out else None,
+            }
             console.print_json(json.dumps(payload))
         else:
+            console.print("[red]Run failed[/red]")
             console.print(f"[red]Error:[/red] {result.error}")
+            if out:
+                console.print(f"[bold]State written:[/bold] {out}")
         raise typer.Exit(code=1)
 
-    # Write --out
-    if out:
-        out.parent.mkdir(parents=True, exist_ok=True)
-        if pretty:
-            out.write_text(
-                json.dumps(result.state, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-        else:
-            out.write_text(json.dumps(result.state) + "\n", encoding="utf-8")
+    if not (quiet or json_out):
+        console.print("[green]Run succeeded[/green]")
+        if out:
+            console.print(f"[bold]State written:[/bold] {out}")
 
     # Print --print (or default print for --json with no --out)
     if print_state or (not out and json_out):
