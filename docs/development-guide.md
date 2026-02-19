@@ -63,3 +63,17 @@ pytest
 ruff check .
 mypy src
 ```
+
+## Story Implementation Rule
+
+For every implementation story, tests are part of the solution, not a follow-up task.
+
+Minimum rule set:
+- Add or update automated tests for every behavior change.
+- If behavior is state-path related, include deterministic path assertions.
+- Do not mark a story complete without passing:
+  - `pytest`
+  - `ruff check .`
+  - `mypy src`
+
+Use `docs/testing-policy.md` as the story-level checklist and Definition of Done.

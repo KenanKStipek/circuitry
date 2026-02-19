@@ -20,6 +20,7 @@ Last Updated: 2026-02-18
 - [Architecture](./architecture.md)
 - [Source Tree Analysis](./source-tree-analysis.md)
 - [Development Guide](./development-guide.md)
+- [Testing Policy](./testing-policy.md)
 - [Project Scan Sections](./project-scan-sections.md)
 
 ## Existing Domain Documentation
