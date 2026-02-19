@@ -23,6 +23,7 @@ Last Updated: 2026-02-19
 - [Testing Policy](./testing-policy.md)
 - [Test Matrix](./test-matrix.md)
 - [Adapter Conformance](./adapter-conformance.md)
+- [Postgres Persistence](./postgres-persistence.md)
 - [Troubleshooting State Paths](./troubleshooting-state-paths.md)
 - [Project Scan Sections](./project-scan-sections.md)
 

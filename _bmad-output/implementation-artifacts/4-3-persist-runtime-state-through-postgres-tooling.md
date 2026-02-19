@@ -1,6 +1,6 @@
 # Story 4.3: Persist Runtime State Through Postgres Tooling
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -24,11 +24,11 @@ so that run data is durable and queryable for downstream usage.
 
 ## Tasks / Subtasks
 
-- [ ] Design persistence abstraction for state snapshot/write/read operations with deterministic key structure (AC: 1)
-- [ ] Implement Postgres-backed storage adapter/tooling and secure connection requirements (AC: 1)
-- [ ] Integrate persistence lifecycle into runtime execution path with robust error handling (AC: 2)
-- [ ] Add tests for persistence round-trip integrity and failure metadata behavior (AC: 1, 2, 3)
-- [ ] Document operational setup (schema, migrations, connectivity, security) for Postgres persistence (AC: 1, 3)
+- [x] Design persistence abstraction for state snapshot/write/read operations with deterministic key structure (AC: 1)
+- [x] Implement Postgres-backed storage adapter/tooling and secure connection requirements (AC: 1)
+- [x] Integrate persistence lifecycle into runtime execution path with robust error handling (AC: 2)
+- [x] Add tests for persistence round-trip integrity and failure metadata behavior (AC: 1, 2, 3)
+- [x] Document operational setup (schema, migrations, connectivity, security) for Postgres persistence (AC: 1, 3)
 
 ## Dev Notes
 
@@ -115,10 +115,28 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 4 source and architecture constraints.
-- Included existing-code cross-reference with present capabilities and concrete gaps.
-- Ready for `dev-story` implementation workflow.
+- Added persistence abstraction in `src/circuitry/core/store/persistence.py` with runtime backend resolution and protocol shape for state load/save lifecycle.
+- Implemented Postgres backend in `src/circuitry/core/store/postgres.py` including schema bootstrap, snapshot load/save, SSL mode safeguards, and actionable diagnostics.
+- Integrated persistence lifecycle into `src/circuitry/cli/runtime_shim.py`:
+  - optional state hydration from latest persisted snapshot
+  - per-run snapshot persistence
+  - non-silent failure propagation via `runtime.persistence` metadata and run errors
+  - auditable run IDs under `runtime.last_run.run_id`
+- Added tests for persistence round-trip and failure behavior:
+  - `tests/cli/test_postgres_persistence.py`
+  - `tests/core/test_postgres_persistence_config.py`
+- Added operational documentation in `docs/postgres-persistence.md` and linked from `docs/index.md`; referenced in `docs/development-guide.md`.
+- Verified quality gates: `pytest -q`, `ruff check src tests`, and `mypy src` all passing.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/4-3-persist-runtime-state-through-postgres-tooling.md`
+- `src/circuitry/core/store/persistence.py`
+- `src/circuitry/core/store/postgres.py`
+- `src/circuitry/core/store/__init__.py`
+- `src/circuitry/cli/runtime_shim.py`
+- `tests/cli/test_postgres_persistence.py`
+- `tests/core/test_postgres_persistence_config.py`
+- `docs/postgres-persistence.md`
+- `docs/index.md`
+- `docs/development-guide.md`

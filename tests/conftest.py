@@ -30,6 +30,11 @@ def pytest_runtest_setup(item: Any) -> None:
 
 
 def pytest_configure(config: Any) -> None:
+    config.addinivalue_line(
+        "markers",
+        "integration: marks tests that require local runtime dependencies (opt-in)",
+    )
+
     if not config.getoption("--trace-state"):
         return
 

@@ -5,11 +5,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from uuid import uuid4
 
 from ..adapters import build_adapter
 from ..core.compiler import compile_orchestration
 from ..core.dynamic import DynamicRuntime
-from ..core.store import Store
+from ..core.store import Store, build_persistence_backend
 from .config import CircuitryConfig
 from .effective_settings import EffectiveSettings, resolve_effective_settings
 from .orchestration_loader import load_orchestration_file
@@ -61,9 +62,34 @@ def run(req: RunRequest) -> RunResult:
         orch = load_orchestration_file(req.orchestration_path)
 
         effective = resolve_effective_settings(cfg=cfg, orch=orch)
+        persistence = build_persistence_backend(effective.runtime)
+
+        loaded_from_persistence = False
+        if (
+            persistence is not None
+            and req.initial_state is None
+            and req.state_path is None
+        ):
+            try:
+                persisted = persistence.load_latest_state(
+                    orchestration_path=str(req.orchestration_path)
+                )
+                if isinstance(persisted, dict):
+                    state = deepcopy(persisted)
+                    loaded_from_persistence = True
+            except Exception as e:
+                state.setdefault("runtime", {})
+                state["runtime"]["persistence"] = {
+                    "enabled": True,
+                    "status": "load_failed",
+                    "error": str(e),
+                }
+                raise RuntimeError(f"Failed to load persisted state: {e}") from e
 
         state.setdefault("runtime", {})
+        run_id = str(uuid4())
         state["runtime"]["last_run"] = {
+            "run_id": run_id,
             "orchestration_path": str(req.orchestration_path),
             "dry_run": req.dry_run,
             "validate_only": req.validate_only,
@@ -79,6 +105,16 @@ def run(req: RunRequest) -> RunResult:
             "runtime": effective.runtime,
             "sources": effective.sources,
         }
+        if persistence is not None:
+            state["runtime"]["persistence"] = {
+                "enabled": True,
+                "status": "ready",
+                "error": None,
+                "loaded_from_persistence": loaded_from_persistence,
+                "persisted": False,
+                "run_id": run_id,
+                **persistence.describe(),
+            }
 
         if req.validate_only:
             state["runtime"]["last_run"]["completed_at"] = _now_iso()
@@ -119,6 +155,23 @@ def run(req: RunRequest) -> RunResult:
         runtime.execute(store=store)
 
         state["runtime"]["last_run"]["completed_at"] = _now_iso()
+
+        if persistence is not None:
+            try:
+                persistence.save_run_snapshot(
+                    orchestration_path=str(req.orchestration_path),
+                    run_id=run_id,
+                    ok=True,
+                    error=None,
+                    state=state,
+                )
+                state["runtime"]["persistence"]["status"] = "persisted"
+                state["runtime"]["persistence"]["persisted"] = True
+            except Exception as e:
+                state["runtime"]["persistence"]["status"] = "save_failed"
+                state["runtime"]["persistence"]["error"] = str(e)
+                raise RuntimeError(f"Failed to persist runtime state: {e}") from e
+
         return RunResult(ok=True, state=state, warnings=warnings)
 
     except Exception as e:
@@ -126,6 +179,11 @@ def run(req: RunRequest) -> RunResult:
             state.setdefault("runtime", {}).setdefault("last_run", {})[
                 "completed_at"
             ] = _now_iso()
+            persistence_node = state.setdefault("runtime", {}).get("persistence")
+            if isinstance(persistence_node, dict):
+                if not persistence_node.get("status"):
+                    persistence_node["status"] = "failed"
+                persistence_node["error"] = str(e)
         except Exception:
             pass
         return RunResult(ok=False, state=state, warnings=warnings, error=str(e))

@@ -1,3 +1,12 @@
+from .persistence import PersistenceBackend, build_persistence_backend
+from .postgres import PostgresStatePersistence
+from .sqlite import SQLiteStatePersistence
 from .store import Store
 
-__all__ = ["Store"]
+__all__ = [
+    "Store",
+    "PersistenceBackend",
+    "build_persistence_backend",
+    "PostgresStatePersistence",
+    "SQLiteStatePersistence",
+]

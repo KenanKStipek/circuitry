@@ -17,6 +17,9 @@ Optional environment variables for non-default adapters:
 - `OPENAI_API_KEY`
 - `ANTHROPIC_API_KEY`
 
+Optional dependency for Postgres state persistence:
+- `psycopg[binary]`
+
 ## Local Commands
 
 Run CLI via script wrapper:
@@ -76,6 +79,17 @@ mypy src
 Adapter conformance suite:
 ```bash
 .venv/bin/pytest -q tests/adapters/test_conformance.py
+```
+
+Postgres persistence tests:
+```bash
+.venv/bin/pytest -q tests/cli/test_postgres_persistence.py tests/core/test_postgres_persistence_config.py
+```
+
+Integration test (SQLite persistence + local Ollama inference):
+```bash
+CIRCUITRY_RUN_INTEGRATION=1 CIRCUITRY_INTEGRATION_MODEL=smollm2:135m \
+  .venv/bin/pytest -q tests/integration/test_sqlite_persistence_integration.py -m integration
 ```
 
 ## Story Implementation Rule
