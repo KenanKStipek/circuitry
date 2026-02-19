@@ -33,10 +33,18 @@ Run CLI via script wrapper:
 Run CLI via module:
 ```bash
 python -m circuitry.cli.app run examples/hello.yml
+python -m circuitry.cli.app fetch welcome --version 1.0.0 --out ./welcome.yml
+python -m circuitry.cli.app run-library welcome --version 1.0.0 --service-profile svc-a --dry-run
 python -m circuitry.cli.app validate examples/hello.yml
 python -m circuitry.cli.app inspect examples/hello.yml
 python -m circuitry.cli.app doctor --generate
 ```
+
+Shared library governance:
+- Publishing is handled by PRs in the separate shared-library repository.
+- This repo only retrieves and executes shared-library assets.
+- Contribution workflow and merge checklist: `docs/shared-library-contributions.md`
+- Growth workflow, automation roadmap, and metrics: `docs/shared-library-growth.md`
 
 ## Configuration
 

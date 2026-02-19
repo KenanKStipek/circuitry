@@ -5,12 +5,14 @@ from .api import (
     inspect_divergence_paths,
     inspect_orchestration,
     run_orchestration,
+    run_shared_orchestration,
     validate_orchestration,
 )
 
 __all__ = [
     "CircuitryExecutionError",
     "run_orchestration",
+    "run_shared_orchestration",
     "validate_orchestration",
     "inspect_orchestration",
     "inspect_divergence_paths",

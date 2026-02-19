@@ -1,6 +1,6 @@
 # Story 5.1: Retrieve Shared Library Orchestrations
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -21,11 +21,11 @@ so that I can reuse proven orchestration assets quickly.
 
 ## Tasks / Subtasks
 
-- [ ] Define shared-library retrieval contract (asset identifier, version selector, metadata envelope, auth) (AC: 1)
-- [ ] Implement retrieval path that materializes library assets into executable orchestration payloads (AC: 1, 2)
-- [ ] Capture and expose required metadata/version details in CLI and runtime metadata (AC: 1)
-- [ ] Add error handling for missing/unauthorized/invalid library assets with diagnosable messages (AC: 1, 2)
-- [ ] Add tests for retrieval success, version pinning, and execution-readiness of fetched assets (AC: 1, 2)
+- [x] Define shared-library retrieval contract (asset identifier, version selector, metadata envelope, auth) (AC: 1)
+- [x] Implement retrieval path that materializes library assets into executable orchestration payloads (AC: 1, 2)
+- [x] Capture and expose required metadata/version details in CLI and runtime metadata (AC: 1)
+- [x] Add error handling for missing/unauthorized/invalid library assets with diagnosable messages (AC: 1, 2)
+- [x] Add tests for retrieval success, version pinning, and execution-readiness of fetched assets (AC: 1, 2)
 
 ## Dev Notes
 
@@ -110,10 +110,23 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 5 source and architecture constraints.
-- Included existing-code cross-reference with concrete retrieval/publishing gaps.
-- Ready for `dev-story` implementation workflow.
+- Added shared-library retrieval contract and resolver in `src/circuitry/cli/shared_library.py` supporting asset ID, optional version pinning, metadata envelope, and auth token checks.
+- Implemented CLI retrieval and execution paths in `src/circuitry/cli/app.py`:
+  - `fetch` command materializes a shared library asset to local YAML output
+  - `run-library` command executes fetched assets through existing runtime path
+- Added runtime metadata capture for shared assets in `src/circuitry/cli/runtime_shim.py` under `runtime.shared_library`.
+- Added diagnosable error handling for unauthorized access, missing assets, and missing versions with available-version reporting.
+- Added tests in `tests/cli/test_shared_library.py` for retrieval success, latest/pinned version behavior, execution readiness via `run-library`, and failure paths.
+- Added operator docs in `docs/shared-library.md` and linked from `docs/index.md`; updated CLI examples in `docs/development-guide.md`.
+- Verified quality gates: `pytest -q`, `ruff check src tests`, and `mypy src` all passing.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/5-1-retrieve-shared-library-orchestrations.md`
+- `src/circuitry/cli/shared_library.py`
+- `src/circuitry/cli/app.py`
+- `src/circuitry/cli/runtime_shim.py`
+- `tests/cli/test_shared_library.py`
+- `docs/shared-library.md`
+- `docs/index.md`
+- `docs/development-guide.md`

@@ -17,6 +17,15 @@ from .cli.runtime_shim import (
 from .cli.runtime_shim import (
     validate as _validate,
 )
+from .cli.shared_library import (
+    apply_service_profile as _apply_service_profile,
+)
+from .cli.shared_library import (
+    fetch_shared_orchestration as _fetch_shared_orchestration,
+)
+from .cli.shared_library import (
+    resolve_service_profile as _resolve_service_profile,
+)
 from .core.diagnostics import find_divergence_paths as _find_divergence_paths
 
 
@@ -67,6 +76,57 @@ def run_orchestration(
             result=result,
         )
 
+    return result
+
+
+def run_shared_orchestration(
+    *,
+    asset_id: str,
+    config: CircuitryConfig,
+    version: str | None = None,
+    auth_token: str | None = None,
+    service_profile: str | None = None,
+    state: dict[str, Any] | None = None,
+    state_path: str | Path | None = None,
+    out_path: str | Path | None = None,
+    dry_run: bool = False,
+    validate_only: bool = False,
+    verbose: bool = False,
+    raise_on_error: bool = True,
+) -> RunResult:
+    """Fetch and run a shared-library orchestration using embedded API."""
+    if state is not None and state_path is not None:
+        raise ValueError("Provide either 'state' or 'state_path', not both.")
+
+    profile = _resolve_service_profile(cfg=config, profile_name=service_profile)
+    effective_config = _apply_service_profile(cfg=config, profile=profile)
+    asset = _fetch_shared_orchestration(
+        cfg=effective_config,
+        asset_id=asset_id,
+        version=version,
+        auth_token=auth_token,
+    )
+    if profile is not None:
+        asset.metadata["service_profile"] = profile.name
+
+    req = RunRequest(
+        orchestration_path=asset.file_path,
+        state_path=Path(state_path) if state_path is not None else None,
+        initial_state=state,
+        out_path=Path(out_path) if out_path is not None else None,
+        dry_run=dry_run,
+        validate_only=validate_only,
+        shared_library_metadata=asset.metadata,
+        verbose=verbose,
+        config=effective_config,
+    )
+    result = _run(req)
+
+    if not result.ok and raise_on_error:
+        raise CircuitryExecutionError(
+            result.error or "Embedded shared-orchestration execution failed.",
+            result=result,
+        )
     return result
 
 

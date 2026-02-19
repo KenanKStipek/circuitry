@@ -1,6 +1,6 @@
 # Story 5.2: Execute Shared Assets Across Services
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -21,11 +21,11 @@ so that behavior is reusable without redefining logic per service.
 
 ## Tasks / Subtasks
 
-- [ ] Define execution contract for shared assets across service contexts (runtime inputs, metadata, invariants) (AC: 1)
-- [ ] Add shared-asset identity/version metadata to runtime run records for traceability across services (AC: 1)
-- [ ] Introduce service-specific override mechanism (adapter/model/runtime knobs) without mutating shared asset payloads (AC: 2)
-- [ ] Add cross-service conformance tests that assert equivalent state-path and semantic outputs (AC: 1, 2)
-- [ ] Document usage pattern for shared-asset execution in CLI and embedded API integrations (AC: 1, 2)
+- [x] Define execution contract for shared assets across service contexts (runtime inputs, metadata, invariants) (AC: 1)
+- [x] Add shared-asset identity/version metadata to runtime run records for traceability across services (AC: 1)
+- [x] Introduce service-specific override mechanism (adapter/model/runtime knobs) without mutating shared asset payloads (AC: 2)
+- [x] Add cross-service conformance tests that assert equivalent state-path and semantic outputs (AC: 1, 2)
+- [x] Document usage pattern for shared-asset execution in CLI and embedded API integrations (AC: 1, 2)
 
 ## Dev Notes
 
@@ -113,10 +113,23 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 5 source and architecture constraints.
-- Included existing-code cross-reference with concrete retrieval/publishing gaps.
-- Ready for `dev-story` implementation workflow.
+- Extended shared-library execution contract in `src/circuitry/cli/shared_library.py` with `service_profiles` and deterministic runtime override application via `apply_service_profile(...)`.
+- Added service-profile support to CLI `run-library` in `src/circuitry/cli/app.py` (`--service-profile`) without mutating shared asset payloads.
+- Added embedded API support through `run_shared_orchestration(...)` in `src/circuitry/api.py`, including service profile override handling and shared metadata propagation.
+- Preserved traceability by recording service profile identity in `runtime.shared_library.service_profile` (when applied), alongside asset/version/source metadata.
+- Added cross-service conformance tests in `tests/cli/test_shared_library_service_profiles.py` asserting equivalent shared-asset semantic outputs across profiles plus profile-specific effective settings.
+- Added embedded API shared-asset execution coverage in `tests/api/test_shared_library_api.py`.
+- Updated usage docs in `docs/shared-library.md` and `docs/development-guide.md` with service-profile and CLI/API patterns.
+- Verified quality gates: `pytest -q`, `ruff check src tests`, and `mypy src` all passing.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/5-2-execute-shared-assets-across-services.md`
+- `src/circuitry/cli/shared_library.py`
+- `src/circuitry/cli/app.py`
+- `src/circuitry/api.py`
+- `src/circuitry/__init__.py`
+- `tests/cli/test_shared_library_service_profiles.py`
+- `tests/api/test_shared_library_api.py`
+- `docs/shared-library.md`
+- `docs/development-guide.md`

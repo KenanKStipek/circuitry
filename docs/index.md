@@ -25,6 +25,9 @@ Last Updated: 2026-02-19
 - [Adapter Conformance](./adapter-conformance.md)
 - [Postgres Persistence](./postgres-persistence.md)
 - [Plugin Extensions](./plugins.md)
+- [Shared Library Retrieval](./shared-library.md)
+- [Shared Library Contributions](./shared-library-contributions.md)
+- [Shared Library Growth](./shared-library-growth.md)
 - [Troubleshooting State Paths](./troubleshooting-state-paths.md)
 - [Project Scan Sections](./project-scan-sections.md)
 

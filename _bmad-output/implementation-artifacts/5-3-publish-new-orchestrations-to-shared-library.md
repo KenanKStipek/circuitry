@@ -1,31 +1,31 @@
 # Story 5.3: Publish New Orchestrations to Shared Library
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
 ## Story
 
 As a contributor,
-I want to add new orchestrations to the shared library,
+I want to add new orchestrations to the shared library via pull request to the library repository,
 so that other teams can discover and reuse them.
 
 ## Acceptance Criteria
 
-1. **Given** a valid orchestration artifact and publication workflow  
-   **When** I publish the asset  
-   **Then** it is stored with searchable metadata and version information.
+1. **Given** a valid orchestration artifact and contribution workflow  
+   **When** I submit a pull request to the shared-library repository  
+   **Then** the asset includes searchable metadata and version information required for retrieval.
 2. **Given** publication validation requirements  
-   **When** an asset is published  
-   **Then** publication validation ensures minimum quality requirements are met.
+   **When** a contribution pull request is reviewed  
+   **Then** validation gates ensure minimum quality requirements are met before merge.
 
 ## Tasks / Subtasks
 
-- [ ] Define publish workflow contract (artifact payload, metadata schema, versioning policy, auth) (AC: 1)
-- [ ] Implement publish interface and storage integration for orchestration assets and metadata index records (AC: 1)
-- [ ] Add metadata/search indexing fields for discoverability (name, tags, owner, version, compatibility) (AC: 1)
-- [ ] Implement publication quality gates (schema/compile checks, deterministic path checks, lint policy) (AC: 2)
-- [ ] Add tests for publish success, duplicate/version conflict, validation failure, and retrieval after publish (AC: 1, 2)
+- [x] Define contribution contract for library repo PRs (artifact layout, metadata schema, versioning policy, ownership fields) (AC: 1)
+- [x] Document repository boundary: this repo retrieves/executes assets only; publish happens in library repo (AC: 1)
+- [x] Define required metadata/search fields for discoverability (name, tags, owner, version, compatibility) (AC: 1)
+- [x] Define publication quality gates using existing validation paths (schema/compile checks, deterministic path checks, lint/type/test policy) (AC: 2)
+- [x] Add contribution checklist that verifies retrieval readiness from this repo after merge (AC: 1, 2)
 
 ## Dev Notes
 
@@ -37,64 +37,67 @@ so that other teams can discover and reuse them.
 ### Cross-Reference: Existing Code vs Story Scope
 
 - Already present:
-- Local validation and compile entrypoints exist and can be reused as part of publication gates.
-- Compiler and loader enforce basic orchestration shape/type checks before execution.
+- Local validation and compile entrypoints exist and can be reused as part of PR contribution gates.
+- Compiler and loader enforce orchestration shape/type checks before execution.
+- Shared library retrieval + version selection exists (`fetch`, `run-library`) and defines the consumer-side contract.
 - Gaps to close for this story:
-- No publish command/workflow currently exists in CLI or runtime integration.
-- No shared-library storage/index component exists for metadata/versioned assets.
-- Current validate path is minimal and does not enforce publication-grade quality checks.
+- Publish process for shared assets must be documented as external repository workflow.
+- Governance contract for metadata/version expectations must be explicit.
+- Contribution checklist needs to map existing tooling commands to merge gates.
 
 ### Source Code Anchors
 
-- `src/circuitry/cli/app.py:118`
-- `src/circuitry/cli/runtime_shim.py:130`
+- `src/circuitry/cli/app.py:320`
+- `src/circuitry/cli/app.py:368`
+- `src/circuitry/cli/shared_library.py:27`
 - `src/circuitry/cli/orchestration_loader.py:9`
 - `src/circuitry/core/compiler.py:32`
-- `src/circuitry/core/compiler.py:37`
 
 ### Technical Requirements
 
 - Keep compile/runtime behavior deterministic and aligned with declared DOL semantics.
 - Preserve root and nested path composition under `prime` with named child segments.
-- Any behavior change must include deterministic state-path assertions and failure-path diagnostics.
+- Any contribution guidance must preserve deterministic validation requirements and failure-path diagnostics.
 
 ### Architecture Compliance
 
 - Enforce deterministic orchestration-to-state mapping per State Path Contract.
 - Do not introduce hidden/non-deterministic path segments.
-- Maintain backward compatibility posture for state path format unless explicitly versioned.
+- Maintain backward compatibility posture for state path format unless explicitly versioned in the library repo.
 
 ### Library / Framework Requirements
 
 - Python package layout under `src/`.
 - Orchestration parsing via `PyYAML` from `requirements.txt`.
-- CLI UX stack remains Typer + Rich where CLI behavior is involved.
-- Quality gates remain pytest + ruff + mypy.
+- CLI UX stack remains Typer + Rich where consumer behavior is involved.
+- Contribution gates rely on `validate`/`inspect` plus `pytest` + `ruff` + `mypy`.
 
 ### File Structure Requirements
 
-- Keep changes scoped to existing module boundaries (`cli`, `core`, docs/tests as needed).
+- Keep changes scoped to docs and existing consumer interfaces (`cli`, docs).
 - Avoid introducing duplicate orchestration execution paths.
-- Add tests in a dedicated `tests/` tree when implementing this story.
+- Keep publish mechanics outside this repository.
 
 ### Testing Requirements
 
-- Add unit/integration tests directly tied to story acceptance criteria.
-- Include deterministic state-path assertions and failure-diagnostics checks.
-- Verify no regressions to existing example orchestration behavior.
+- Validate documented process via existing retrieval and runtime tests.
+- Ensure contribution checklist references deterministic state-path assertions and failure diagnostics.
+- Verify no regressions to existing shared-library retrieval behavior.
 
 ### Project Structure Notes
 
-- Current repo has no committed `tests/` tree; implementation should introduce one deliberately with focused scope.
-- Preserve current runtime semantics where unchanged by explicit story acceptance criteria.
+- Shared-library publication source-of-truth is a separate repository by design.
+- Preserve runtime semantics in this repo; only retrieval/execution lives here.
 
 ### References
 
 - `_bmad-output/planning-artifacts/epics.md`
 - `_bmad-output/planning-artifacts/architecture.md`
+- `docs/shared-library.md`
+- `docs/shared-library-contributions.md`
 - `docs/architecture.md`
 - `src/circuitry/cli/app.py`
-- `src/circuitry/cli/runtime_shim.py`
+- `src/circuitry/cli/shared_library.py`
 - `src/circuitry/cli/orchestration_loader.py`
 - `src/circuitry/core/compiler.py`
 
@@ -111,10 +114,12 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 5 source and architecture constraints.
-- Included existing-code cross-reference with concrete retrieval/publishing gaps.
-- Ready for `dev-story` implementation workflow.
+- Implemented contribution workflow documentation for external shared-library repository publication.
+- Defined metadata/version contract and merge-gate checklist aligned with existing CLI/tooling.
+- Confirmed in-repo scope boundary remains retrieval/execution only.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/5-3-publish-new-orchestrations-to-shared-library.md`
+- `docs/shared-library.md`
+- `docs/shared-library-contributions.md`

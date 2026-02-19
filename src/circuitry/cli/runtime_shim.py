@@ -31,6 +31,7 @@ class RunRequest:
     dry_run: bool
     validate_only: bool
     initial_state: dict[str, Any] | None = None
+    shared_library_metadata: dict[str, Any] | None = None
     verbose: bool = False
     config: CircuitryConfig | None = None
 
@@ -117,6 +118,8 @@ def run(req: RunRequest) -> RunResult:
             "runtime": effective.runtime,
             "sources": effective.sources,
         }
+        if req.shared_library_metadata is not None:
+            state["runtime"]["shared_library"] = req.shared_library_metadata
         state["runtime"]["plugins"] = {
             "contract_version": PLUGIN_CONTRACT_VERSION,
             "configured": list(effective.plugins),

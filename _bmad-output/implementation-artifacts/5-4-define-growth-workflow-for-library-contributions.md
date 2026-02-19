@@ -1,6 +1,6 @@
 # Story 5.4: Define Growth Workflow for Library Contributions
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -21,11 +21,11 @@ so that library expansion remains scalable and governed over time.
 
 ## Tasks / Subtasks
 
-- [ ] Define contribution lifecycle for shared assets (proposal, review, validation, approval, publish, deprecate) (AC: 1)
-- [ ] Define governance policy for ownership, version compatibility, and breaking-change handling (AC: 1)
-- [ ] Document contribution playbook and review checklist with explicit quality gates (AC: 1, 2)
-- [ ] Define post-MVP automation roadmap (policy checks, CI hooks, dependency/security gates, release flows) (AC: 2)
-- [ ] Add maintainership metrics/reporting requirements for library growth and contribution health (AC: 2)
+- [x] Define contribution lifecycle for shared assets (proposal, review, validation, approval, publish, deprecate) (AC: 1)
+- [x] Define governance policy for ownership, version compatibility, and breaking-change handling (AC: 1)
+- [x] Document contribution playbook and review checklist with explicit quality gates (AC: 1, 2)
+- [x] Define post-MVP automation roadmap (policy checks, CI hooks, dependency/security gates, release flows) (AC: 2)
+- [x] Add maintainership metrics/reporting requirements for library growth and contribution health (AC: 2)
 
 ## Dev Notes
 
@@ -39,24 +39,24 @@ so that library expansion remains scalable and governed over time.
 - Already present:
 - Core project and architecture documentation exists and can host contribution workflow guidance.
 - CLI includes baseline validation and orchestration inspection primitives that can be incorporated into governance checklists.
+- Shared library retrieval docs define explicit repo scope boundaries for publish vs consume.
 - Gaps to close for this story:
-- No dedicated contribution workflow/governance document exists for shared library assets.
-- No automated policy enforcement or CI workflow currently exists for contribution gates.
-- No documented roadmap for growth automation and maintainership operations currently exists.
+- Need explicit contribution lifecycle/governance documentation for library growth.
+- Need explicit post-MVP automation roadmap and maintainership metrics.
 
 ### Source Code Anchors
 
-- `docs/index.md:17`
-- `README.md:183`
-- `src/circuitry/cli/app.py:118`
-- `src/circuitry/cli/app.py:144`
-- `src/circuitry/cli/runtime_shim.py:130`
+- `docs/shared-library-contributions.md:1`
+- `docs/shared-library-growth.md:1`
+- `docs/shared-library.md:5`
+- `docs/index.md:28`
+- `docs/development-guide.md:43`
 
 ### Technical Requirements
 
 - Keep compile/runtime behavior deterministic and aligned with declared DOL semantics.
 - Preserve root and nested path composition under `prime` with named child segments.
-- Any behavior change must include deterministic state-path assertions and failure-path diagnostics.
+- Contribution governance must require deterministic state-path validation and failure diagnostics.
 
 ### Architecture Compliance
 
@@ -73,25 +73,28 @@ so that library expansion remains scalable and governed over time.
 
 ### File Structure Requirements
 
-- Keep changes scoped to existing module boundaries (`docs`, `cli`, tests/tooling as needed).
+- Keep changes scoped to documentation and existing consumer tooling references.
 - Avoid introducing duplicate orchestration execution paths.
-- Add tests in a dedicated `tests/` tree when implementing executable policy checks.
+- Keep publication ownership in external library repository.
 
 ### Testing Requirements
 
-- Add unit/integration tests directly tied to story acceptance criteria where policy checks are executable.
-- Include deterministic state-path assertions and failure-diagnostics checks where runtime behavior is touched.
-- Verify no regressions to existing example orchestration behavior.
+- Verify referenced quality gates remain valid and executable.
+- Ensure checklist explicitly requires deterministic state-path validation.
+- Verify no regressions to existing retrieval/execution docs.
 
 ### Project Structure Notes
 
-- Current repo has no committed `tests/` tree; implementation should introduce one deliberately with focused scope.
-- Preserve current runtime semantics where unchanged by explicit story acceptance criteria.
+- Growth/publish governance is documentation and process in this repo; publication mechanics stay external.
+- Preserve runtime semantics where unchanged by explicit story acceptance criteria.
 
 ### References
 
 - `_bmad-output/planning-artifacts/epics.md`
 - `_bmad-output/planning-artifacts/architecture.md`
+- `docs/shared-library-contributions.md`
+- `docs/shared-library-growth.md`
+- `docs/shared-library.md`
 - `docs/index.md`
 - `README.md`
 - `src/circuitry/cli/app.py`
@@ -110,10 +113,12 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 5 source and architecture constraints.
-- Included existing-code cross-reference with concrete contribution-governance and growth-workflow gaps.
-- Ready for `dev-story` implementation workflow.
+- Added contribution workflow and governance checklist documentation for shared-library growth.
+- Added post-MVP automation roadmap and maintainership metrics guidance.
+- Aligned documentation with scope boundary: publishing is handled in a separate library repository.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/5-4-define-growth-workflow-for-library-contributions.md`
+- `docs/shared-library-contributions.md`
+- `docs/shared-library-growth.md`
