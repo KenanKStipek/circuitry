@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0.0",
+  "examples_version": "2026.02.19",
+  "runtime_compatibility": {
+    "min_version": "0.1.0",
+    "notes": "Validated against current main branch runtime in dry-run mode."
+  },
+  "examples": [
+    {
+      "file": "hello.yml",
+      "intent": "single prompt quick-start",
+      "difficulty": "beginner",
+      "primitives": ["prompt"]
+    },
+    {
+      "file": "dynamic_hello.yml",
+      "intent": "dynamic chain composition",
+      "difficulty": "beginner",
+      "primitives": ["dynamic", "prompt"]
+    },
+    {
+      "file": "conditional_example.yml",
+      "intent": "deterministic conditional branching",
+      "difficulty": "beginner",
+      "primitives": ["if", "prompt"]
+    },
+    {
+      "file": "loop_example.yml",
+      "intent": "collection iteration",
+      "difficulty": "intermediate",
+      "primitives": ["loop", "prompt"]
+    },
+    {
+      "file": "typed_prompt_example.yml",
+      "intent": "typed outputs and schema",
+      "difficulty": "intermediate",
+      "primitives": ["prompt"]
+    },
+    {
+      "file": "reflector_v1.yml",
+      "intent": "reflector planning",
+      "difficulty": "advanced",
+      "primitives": ["reflector", "prompt"]
+    },
+    {
+      "file": "multi_primitive_story.yml",
+      "intent": "mixed multi-primitive orchestration",
+      "difficulty": "advanced",
+      "primitives": ["dynamic", "loop", "if", "prompt"]
+    }
+  ]
+}

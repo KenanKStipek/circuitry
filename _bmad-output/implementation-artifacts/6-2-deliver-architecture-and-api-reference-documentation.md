@@ -1,6 +1,6 @@
 # Story 6.2: Deliver Architecture and API Reference Documentation
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -21,11 +21,11 @@ so that I can understand runtime boundaries and integrate correctly.
 
 ## Tasks / Subtasks
 
-- [ ] Define and publish API reference for core integration surfaces (compiler/runtime/store/adapter boundary) (AC: 1)
-- [ ] Map architecture docs directly to concrete code paths and runtime flow checkpoints (AC: 1)
-- [ ] Add versioning/update guidance so API docs track runtime changes without drift (AC: 2)
-- [ ] Add examples showing canonical integration patterns and anti-patterns for API consumers (AC: 1)
-- [ ] Add doc quality gate to detect stale symbols/signatures in API reference content (AC: 2)
+- [x] Define and publish API reference for core integration surfaces (compiler/runtime/store/adapter boundary) (AC: 1)
+- [x] Map architecture docs directly to concrete code paths and runtime flow checkpoints (AC: 1)
+- [x] Add versioning/update guidance so API docs track runtime changes without drift (AC: 2)
+- [x] Add examples showing canonical integration patterns and anti-patterns for API consumers (AC: 1)
+- [x] Add doc quality gate to detect stale symbols/signatures in API reference content (AC: 2)
 
 ## Dev Notes
 
@@ -41,18 +41,17 @@ so that I can understand runtime boundaries and integrate correctly.
 - Project overview/index docs already provide top-level orientation and entry points.
 - Core/adapters expose a basic import surface usable as API reference seed.
 - Gaps to close for this story:
-- No dedicated API reference document exists that enumerates stable interfaces and expected contracts.
-- No doc-to-code conformance check exists to catch symbol/signature drift.
-- API discoverability is fragmented across README snippets and module exports rather than a single source of truth.
+- API discoverability needed a single explicit reference source.
+- No doc-to-code conformance check existed to catch symbol/signature drift.
 
 ### Source Code Anchors
 
-- `docs/architecture.md:28`
-- `docs/project-overview.md:38`
+- `docs/api-reference.md:1`
+- `docs/architecture.md:35`
 - `docs/index.md:17`
-- `src/circuitry/core/__init__.py:1`
+- `src/circuitry/__init__.py:1`
 - `src/circuitry/adapters/__init__.py:1`
-- `src/circuitry/cli/runtime_shim.py:48`
+- `tests/docs/test_documentation_contracts.py:1`
 
 ### Technical Requirements
 
@@ -97,7 +96,9 @@ so that I can understand runtime boundaries and integrate correctly.
 - `docs/architecture.md`
 - `docs/project-overview.md`
 - `docs/index.md`
-- `src/circuitry/core/__init__.py`
+- `docs/api-reference.md`
+- `tests/docs/test_documentation_contracts.py`
+- `src/circuitry/__init__.py`
 - `src/circuitry/adapters/__init__.py`
 
 ## Dev Agent Record
@@ -113,10 +114,14 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 6 source and architecture constraints.
-- Included existing-code cross-reference with concrete architecture/API documentation gaps.
-- Ready for `dev-story` implementation workflow.
+- Added dedicated API reference with stable exports, signatures, integration patterns, and anti-patterns.
+- Added architecture runtime checkpoint map tied to concrete code paths.
+- Added doc conformance test to enforce API symbol documentation drift checks.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/6-2-deliver-architecture-and-api-reference-documentation.md`
+- `docs/api-reference.md`
+- `docs/architecture.md`
+- `docs/index.md`
+- `tests/docs/test_documentation_contracts.py`

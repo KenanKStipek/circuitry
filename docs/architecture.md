@@ -33,6 +33,24 @@ Circuitry is a single-package Python orchestration runtime for deterministic exe
 4. Execute runtime effects deterministically.
 5. Persist values and metadata into hierarchical state.
 
+## Runtime Checkpoints (Code Paths)
+
+1. CLI/API entry
+   - `src/circuitry/cli/app.py`
+   - `src/circuitry/api.py`
+2. Request normalization and settings resolution
+   - `src/circuitry/cli/runtime_shim.py`
+3. Orchestration parse/load
+   - `src/circuitry/cli/orchestration_loader.py`
+4. Compilation
+   - `src/circuitry/core/compiler.py`
+5. Effect execution and state writes
+   - `src/circuitry/core/runtime.py`
+   - `src/circuitry/core/store/store.py`
+6. Diagnostics and metadata
+   - `src/circuitry/core/diagnostics.py`
+   - `runtime.*` sections in emitted state
+
 ## Core Components
 
 - `src/circuitry/core/compiler.py`: compiles YAML effects into runtime definition objects.
@@ -62,6 +80,10 @@ Circuitry is a single-package Python orchestration runtime for deterministic exe
 ## Source Tree Reference
 
 See `docs/source-tree-analysis.md` for annotated folder and file layout.
+
+## API Reference
+
+See `docs/api-reference.md` for stable integration surface, exported symbols, and update/versioning guidance.
 
 ## Development Workflow
 

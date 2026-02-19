@@ -84,6 +84,11 @@ ruff check .
 mypy src
 ```
 
+Documentation conformance checks:
+```bash
+pytest -q tests/docs/test_documentation_contracts.py
+```
+
 Adapter conformance suite:
 ```bash
 .venv/bin/pytest -q tests/adapters/test_conformance.py
@@ -103,6 +108,16 @@ CIRCUITRY_RUN_INTEGRATION=1 CIRCUITRY_INTEGRATION_MODEL=smollm2:135m \
 Plugin runtime tests:
 ```bash
 .venv/bin/pytest -q tests/cli/test_plugins_runtime.py
+```
+
+Examples curation and validation:
+```bash
+pytest -q tests/examples/test_examples_smoke.py
+```
+
+Editor highlighting verification:
+```bash
+pytest -q tests/docs/test_editor_highlighting.py
 ```
 
 ## Story Implementation Rule

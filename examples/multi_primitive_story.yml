@@ -1,0 +1,37 @@
+# Example: multi-primitive composition for a realistic mini-pipeline
+adapter: ollama
+model: phi3:mini
+effects:
+  - type: dynamic
+    name: pipeline
+    flow: chain
+    effects:
+      - type: prompt
+        name: collect_topics
+        prompt_type: json
+        template: >
+          Return exactly this JSON array: ["reliability","observability","testing"]
+
+      - type: loop
+        name: summarize
+        each:
+          in: prime.pipeline.collect_topics.value
+          as: topic
+        body:
+          - type: prompt
+            name: line
+            template: "Give one sentence on {{topic}}."
+
+      - type: if
+        name: finalize
+        if:
+          mode: cel
+          expr: "size(state.prime.pipeline.summarize) >= 1"
+        then:
+          - type: prompt
+            name: success_note
+            template: "Summaries were generated successfully."
+        else:
+          - type: prompt
+            name: empty_note
+            template: "No summaries were generated."

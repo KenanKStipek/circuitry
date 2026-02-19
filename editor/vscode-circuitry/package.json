@@ -1,0 +1,28 @@
+{
+  "name": "circuitry-syntax",
+  "displayName": "Circuitry Syntax",
+  "description": "Syntax highlighting support for Circuitry orchestration YAML files.",
+  "version": "0.0.1",
+  "publisher": "circuitry-local",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "circuitry",
+        "aliases": ["Circuitry", "circuitry"],
+        "extensions": [".circuitry.yml", ".circuitry.yaml"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "circuitry",
+        "scopeName": "source.circuitry",
+        "path": "./syntaxes/circuitry.tmLanguage.json"
+      }
+    ]
+  }
+}

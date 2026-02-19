@@ -18,6 +18,7 @@ Last Updated: 2026-02-19
 
 - [Project Overview](./project-overview.md)
 - [Architecture](./architecture.md)
+- [API Reference](./api-reference.md)
 - [Source Tree Analysis](./source-tree-analysis.md)
 - [Development Guide](./development-guide.md)
 - [Testing Policy](./testing-policy.md)
@@ -28,6 +29,8 @@ Last Updated: 2026-02-19
 - [Shared Library Retrieval](./shared-library.md)
 - [Shared Library Contributions](./shared-library-contributions.md)
 - [Shared Library Growth](./shared-library-growth.md)
+- [Editor Highlighting](./editor-highlighting.md)
+- [Perceptron Boundary](./perceptron-boundary.md)
 - [Troubleshooting State Paths](./troubleshooting-state-paths.md)
 - [Project Scan Sections](./project-scan-sections.md)
 

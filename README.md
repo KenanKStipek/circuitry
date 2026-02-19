@@ -137,7 +137,17 @@ pip install -e .
 
 ### Quick Start (2 Minutes)
 
-Use a dry run first to verify install and runtime wiring without requiring live model calls:
+Use a dry run first to verify install and runtime wiring without requiring live model calls.
+
+Dry-run expectations:
+- No network/model provider required
+- Validates orchestration loading, compile path, and deterministic state writes
+
+Live-run expectations:
+- Adapter/provider credentials must be configured where applicable (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`)
+- Ollama must be running locally if using default runtime config
+
+Dry run command:
 
 ```bash
 circuitry run examples/hello.yml --dry-run --out out.json --pretty
@@ -152,6 +162,12 @@ Common setup pitfalls:
   - run via module: `python -m circuitry.cli.app run examples/hello.yml --dry-run`
 - Import/runtime dependency issues
   - install deps: `pip install -e . && pip install -r requirements-dev.txt`
+
+Quick verification checklist:
+1. `circuitry run examples/hello.yml --dry-run` exits with code `0`.
+2. `out.json` (or stdout state) shows `prime.say_hello.value`.
+3. Programmatic snippet below returns `result.ok == True`.
+4. Optional live run (`circuitry run examples/hello.yml`) works after adapter setup.
 
 ### CLI
 
@@ -179,6 +195,14 @@ result = run_orchestration(
 print(result.ok)                 # True/False
 print(result.state["runtime"])   # runtime metadata + outputs
 ```
+
+Additional embedded API surface:
+- `run_shared_orchestration` for shared-library assets
+- `validate_orchestration` for compiler-backed validation
+- `inspect_orchestration` for orchestration metadata
+- `inspect_divergence_paths` for deterministic failure-path diagnostics
+
+See `docs/api-reference.md` for signatures and integration guidance.
 
 ### Multi-Provider Runtime Configuration
 
@@ -230,6 +254,11 @@ See the `examples/` directory for sample orchestration files:
 - `loop_example.yml` - Collection iteration
 - `typed_prompt_example.yml` - Typed prompts with JSON schema
 - `reflector_v1.yml` - Reflector-driven planning
+- `multi_primitive_story.yml` - Combined dynamic + loop + conditional composition
+
+Curated examples index, expected outputs, and compatibility/versioning notes:
+- `examples/README.md`
+- `examples/manifest.json`
 
 ### State Path Walkthrough
 

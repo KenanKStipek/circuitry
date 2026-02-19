@@ -1,0 +1,63 @@
+{
+  "name": "Circuitry",
+  "scopeName": "source.circuitry",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#keys"
+    },
+    {
+      "include": "#flowValues"
+    },
+    {
+      "include": "#promptTypes"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.yaml",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "keyword.control.circuitry.type",
+          "match": "(?<=\\btype:\\s)(prompt|dynamic|if|conditional|loop|reflector)\\b"
+        }
+      ]
+    },
+    "keys": {
+      "patterns": [
+        {
+          "name": "support.type.property-name.circuitry",
+          "match": "\\b(adapter|model|runtime|effects|flow|name|template|prompt_type|schema|if|then|else|each|while|body|max_effects)\\b(?=\\s*:)"
+        }
+      ]
+    },
+    "flowValues": {
+      "patterns": [
+        {
+          "name": "constant.language.circuitry.flow",
+          "match": "(?<=\\bflow:\\s)(chain|chain_of_thought|cot|tree|tree_of_thought|tot)\\b"
+        }
+      ]
+    },
+    "promptTypes": {
+      "patterns": [
+        {
+          "name": "constant.language.circuitry.prompt-type",
+          "match": "(?<=\\bprompt_type:\\s)(text|json|boolean|number|array|object|tool)\\b"
+        }
+      ]
+    }
+  }
+}

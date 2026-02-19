@@ -1,6 +1,6 @@
 # Story 6.3: Provide Curated Example Orchestrations
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -21,11 +21,11 @@ so that I can adapt working patterns instead of starting from scratch.
 
 ## Tasks / Subtasks
 
-- [ ] Curate example set to explicitly cover core primitives and practical composition patterns (AC: 1)
-- [ ] Add example metadata/readme index (intent, expected outputs, prerequisites, difficulty) (AC: 1)
-- [ ] Add versioning policy for examples and compatibility notes per runtime release changes (AC: 2)
-- [ ] Add automated checks to validate examples execute/inspect successfully in CI or local quality gate (AC: 2)
-- [ ] Add at least one multi-primitive scenario example demonstrating realistic orchestration composition (AC: 1, 2)
+- [x] Curate example set to explicitly cover core primitives and practical composition patterns (AC: 1)
+- [x] Add example metadata/readme index (intent, expected outputs, prerequisites, difficulty) (AC: 1)
+- [x] Add versioning policy for examples and compatibility notes per runtime release changes (AC: 2)
+- [x] Add automated checks to validate examples execute/inspect successfully in CI or local quality gate (AC: 2)
+- [x] Add at least one multi-primitive scenario example demonstrating realistic orchestration composition (AC: 1, 2)
 
 ## Dev Notes
 
@@ -40,9 +40,8 @@ so that I can adapt working patterns instead of starting from scratch.
 - Repository already contains six example orchestration YAMLs spanning core primitives.
 - README and development guide already reference examples and demonstrate run commands.
 - Gaps to close for this story:
-- No explicit versioning/compatibility metadata is attached to examples.
-- No committed automated example-validation suite currently exists to guard against runtime drift.
-- Example documentation is list-based and lacks a curated mapping from use case to artifact expectations.
+- Example set needed explicit curation metadata and compatibility/version policy.
+- Needed a broader automated run+inspect validation pass tied to curated set.
 
 ### Source Code Anchors
 
@@ -52,8 +51,10 @@ so that I can adapt working patterns instead of starting from scratch.
 - `examples/loop_example.yml`
 - `examples/typed_prompt_example.yml`
 - `examples/reflector_v1.yml`
-- `README.md:183`
-- `docs/development-guide.md:22`
+- `examples/multi_primitive_story.yml`
+- `examples/README.md`
+- `examples/manifest.json`
+- `tests/examples/test_examples_smoke.py`
 
 ### Technical Requirements
 
@@ -98,6 +99,9 @@ so that I can adapt working patterns instead of starting from scratch.
 - `README.md`
 - `docs/development-guide.md`
 - `examples/`
+- `examples/README.md`
+- `examples/manifest.json`
+- `tests/examples/test_examples_smoke.py`
 - `src/circuitry/cli/app.py`
 
 ## Dev Agent Record
@@ -113,10 +117,16 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 6 source and architecture constraints.
-- Included existing-code cross-reference with concrete example curation/validation gaps.
-- Ready for `dev-story` implementation workflow.
+- Added curated examples index with intent, prerequisites, difficulty, and expected state-path outcomes.
+- Added example manifest with versioning/compatibility metadata.
+- Added multi-primitive example and expanded automated validate/inspect/dry-run coverage.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/6-3-provide-curated-example-orchestrations.md`
+- `examples/README.md`
+- `examples/manifest.json`
+- `examples/multi_primitive_story.yml`
+- `tests/examples/test_examples_smoke.py`
+- `README.md`
+- `docs/development-guide.md`

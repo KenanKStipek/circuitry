@@ -1,6 +1,6 @@
 # Story 6.4: Provide Editor Highlighting and Post-MVP Perceptron Boundary
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -21,11 +21,11 @@ so that authoring experience improves without destabilizing MVP scope.
 
 ## Tasks / Subtasks
 
-- [ ] Define MVP editor-highlighting scope (file extensions, token classes, packaging target, install instructions) (AC: 1)
-- [ ] Deliver initial highlighting artifact (grammar/rules) and example fixtures for validation (AC: 1)
-- [ ] Add docs for editor support setup, known limitations, and contribution workflow (AC: 1)
-- [ ] Document explicit MVP vs post-MVP boundary for Perceptron with scope guardrails (AC: 2)
-- [ ] Add verification checks for highlighting behavior against representative orchestration files (AC: 1)
+- [x] Define MVP editor-highlighting scope (file extensions, token classes, packaging target, install instructions) (AC: 1)
+- [x] Deliver initial highlighting artifact (grammar/rules) and example fixtures for validation (AC: 1)
+- [x] Add docs for editor support setup, known limitations, and contribution workflow (AC: 1)
+- [x] Document explicit MVP vs post-MVP boundary for Perceptron with scope guardrails (AC: 2)
+- [x] Add verification checks for highlighting behavior against representative orchestration files (AC: 1)
 
 ## Dev Notes
 
@@ -40,9 +40,9 @@ so that authoring experience improves without destabilizing MVP scope.
 - MVP planning artifacts already call out editor highlighting as MVP and Perceptron as post-MVP.
 - Example YAML artifacts exist and can be used as fixtures for highlighting token coverage.
 - Gaps to close for this story:
-- No editor extension/highlighting grammar or package currently exists in repo.
-- No user-facing documentation currently explains how to install/use orchestration syntax highlighting.
-- No explicit MVP boundary document currently operationalizes Perceptron deferral for implementation planning.
+- Needed concrete editor-highlighting artifact and packaging target.
+- Needed install/setup and limitation docs for contributors/users.
+- Needed explicit Perceptron scope boundary guardrails in project docs.
 
 ### Source Code Anchors
 
@@ -52,6 +52,10 @@ so that authoring experience improves without destabilizing MVP scope.
 - `_bmad-output/planning-artifacts/prd.md:433`
 - `examples/hello.yml`
 - `examples/typed_prompt_example.yml`
+- `editor/vscode-circuitry/syntaxes/circuitry.tmLanguage.json`
+- `docs/editor-highlighting.md`
+- `docs/perceptron-boundary.md`
+- `tests/docs/test_editor_highlighting.py`
 
 ### Technical Requirements
 
@@ -96,6 +100,12 @@ so that authoring experience improves without destabilizing MVP scope.
 - `_bmad-output/planning-artifacts/architecture.md`
 - `examples/`
 - `docs/index.md`
+- `editor/vscode-circuitry/package.json`
+- `editor/vscode-circuitry/language-configuration.json`
+- `editor/vscode-circuitry/syntaxes/circuitry.tmLanguage.json`
+- `docs/editor-highlighting.md`
+- `docs/perceptron-boundary.md`
+- `tests/docs/test_editor_highlighting.py`
 
 ## Dev Agent Record
 
@@ -110,10 +120,16 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 6 source and architecture constraints.
-- Included existing-code cross-reference with concrete highlighting and Perceptron-boundary gaps.
-- Ready for `dev-story` implementation workflow.
+- Added MVP syntax-highlighting artifact for VS Code/TextMate with key Circuitry token classes.
+- Added installation/limitations/contribution docs for editor highlighting.
+- Added explicit Perceptron post-MVP boundary document with implementation guardrails.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/6-4-provide-editor-highlighting-and-post-mvp-perceptron-boundary.md`
+- `editor/vscode-circuitry/package.json`
+- `editor/vscode-circuitry/language-configuration.json`
+- `editor/vscode-circuitry/syntaxes/circuitry.tmLanguage.json`
+- `docs/editor-highlighting.md`
+- `docs/perceptron-boundary.md`
+- `tests/docs/test_editor_highlighting.py`

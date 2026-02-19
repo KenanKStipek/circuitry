@@ -1,6 +1,6 @@
 # Story 6.1: Deliver README and Quick-Start Documentation
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -21,11 +21,11 @@ so that I can install, configure, and run first orchestration quickly.
 
 ## Tasks / Subtasks
 
-- [ ] Tighten README quick-start flow to be executable end-to-end for a first run (AC: 1)
-- [ ] Align programmatic Python snippets with actual exported API names and signatures (AC: 2)
-- [ ] Add explicit prerequisites and environment expectations for dry-run vs live adapter execution (AC: 1)
-- [ ] Add verification checklist for CLI + embedded path completion in onboarding docs (AC: 1, 2)
-- [ ] Add doc validation checks to catch drift between README examples and runtime behavior (AC: 1, 2)
+- [x] Tighten README quick-start flow to be executable end-to-end for a first run (AC: 1)
+- [x] Align programmatic Python snippets with actual exported API names and signatures (AC: 2)
+- [x] Add explicit prerequisites and environment expectations for dry-run vs live adapter execution (AC: 1)
+- [x] Add verification checklist for CLI + embedded path completion in onboarding docs (AC: 1, 2)
+- [x] Add doc validation checks to catch drift between README examples and runtime behavior (AC: 1, 2)
 
 ## Dev Notes
 
@@ -40,18 +40,17 @@ so that I can install, configure, and run first orchestration quickly.
 - README includes installation, CLI usage, embedded usage, and examples overview.
 - Development guide includes prerequisites and concrete local commands for run/validate/inspect.
 - Gaps to close for this story:
-- Programmatic README snippet references `create_adapter`, while current public adapter factory export is `build_adapter`.
 - No automated doc-example verification currently ensures README snippets remain executable against code.
-- Onboarding flow does not explicitly separate no-network dry-run first success from live provider setup path.
+- Onboarding flow did not explicitly separate no-network dry-run first success from live provider setup path.
 
 ### Source Code Anchors
 
-- `README.md:130`
-- `README.md:151`
-- `README.md:157`
-- `docs/development-guide.md:22`
-- `docs/development-guide.md:30`
-- `src/circuitry/adapters/__init__.py:2`
+- `README.md:108`
+- `README.md:132`
+- `README.md:172`
+- `docs/development-guide.md:70`
+- `tests/docs/test_documentation_contracts.py:1`
+- `src/circuitry/__init__.py:1`
 
 ### Technical Requirements
 
@@ -95,7 +94,8 @@ so that I can install, configure, and run first orchestration quickly.
 - `_bmad-output/planning-artifacts/architecture.md`
 - `README.md`
 - `docs/development-guide.md`
-- `src/circuitry/adapters/__init__.py`
+- `docs/api-reference.md`
+- `tests/docs/test_documentation_contracts.py`
 - `src/circuitry/cli/app.py`
 
 ## Dev Agent Record
@@ -111,10 +111,14 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 6 source and architecture constraints.
-- Included existing-code cross-reference with concrete documentation and API-drift gaps.
-- Ready for `dev-story` implementation workflow.
+- Tightened README onboarding with explicit dry-run/live expectations and a quick verification checklist.
+- Added explicit embedded API surface guidance with link to API reference.
+- Added docs conformance tests to detect onboarding/symbol drift.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/6-1-deliver-readme-and-quick-start-documentation.md`
+- `README.md`
+- `docs/development-guide.md`
+- `docs/api-reference.md`
+- `tests/docs/test_documentation_contracts.py`
