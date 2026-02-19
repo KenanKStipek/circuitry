@@ -1,4 +1,6 @@
 # Example: Typed prompts with JSON schema validation
+adapter: ollama
+model: phi3:mini
 effects:
   - type: prompt
     name: extract_entities

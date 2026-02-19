@@ -1,3 +1,5 @@
+adapter: ollama
+model: phi3:mini
 effects:
   - type: dynamic
     name: onboarding

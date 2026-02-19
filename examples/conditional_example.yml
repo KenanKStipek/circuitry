@@ -1,4 +1,6 @@
 # Example: Conditional branching based on user role
+adapter: ollama
+model: phi3:mini
 effects:
   - type: prompt
     name: get_role

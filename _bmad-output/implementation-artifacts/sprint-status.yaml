@@ -44,7 +44,7 @@ development_status:
   1-1-define-and-validate-basic-dol-orchestrations: review
   1-2-execute-orchestrations-from-cli-with-state-output: review
   1-3-execute-orchestrations-via-embedded-python-api: review
-  1-4-ship-time-to-value-cli-examples: ready-for-dev
+  1-4-ship-time-to-value-cli-examples: review
   epic-1-retrospective: optional
   epic-2: in-progress
   2-1-implement-chain-and-tree-effect-topologies: ready-for-dev

@@ -135,14 +135,32 @@ pip install -e .
 
 ## Usage
 
+### Quick Start (2 Minutes)
+
+Use a dry run first to verify install and runtime wiring without requiring live model calls:
+
+```bash
+circuitry run examples/hello.yml --dry-run --out out.json --pretty
+```
+
+Expected result:
+- Command exits successfully
+- `out.json` contains `runtime.last_run`, `runtime.effective_settings`, and `prime.*` state keys
+
+Common setup pitfalls:
+- `circuitry: command not found`
+  - run via module: `python -m circuitry.cli.app run examples/hello.yml --dry-run`
+- Import/runtime dependency issues
+  - install deps: `pip install -e . && pip install -r requirements-dev.txt`
+
 ### CLI
 
 ```bash
-# Run an orchestration file
-circuitry run examples/hello.yml
-
-# Dry run (no model invocations)
+# Recommended first run (no model invocations)
 circuitry run examples/hello.yml --dry-run
+
+# Run with live model invocation
+circuitry run examples/hello.yml
 
 # With verbose output
 circuitry run examples/hello.yml --verbose
