@@ -151,33 +151,15 @@ circuitry run examples/hello.yml --verbose
 ### Programmatic
 
 ```python
-from circuitry.core.compiler import compile_orchestration
-from circuitry.core.dynamic import DynamicRuntime
-from circuitry.core.store import Store
-from circuitry.adapters import create_adapter
-import yaml
+from circuitry import run_orchestration
 
-# Load orchestration
-with open("examples/hello.yml") as f:
-    orch = yaml.safe_load(f)
-
-# Compile
-definition = compile_orchestration(orch=orch)
-
-# Create adapter and store
-adapter = create_adapter("ollama")
-store = Store({"input": {"user_name": "World"}})
-
-# Execute
-runtime = DynamicRuntime(
-    definition,
-    adapter=adapter,
-    model="llama3.2",
+result = run_orchestration(
+    orchestration_path="examples/hello.yml",
+    state={"input": {"user_name": "World"}},
+    dry_run=True,
 )
-runtime.execute(store=store)
-
-# Access results
-print(store.get("prime.greet_user.value"))
+print(result.ok)                 # True/False
+print(result.state["runtime"])   # runtime metadata + outputs
 ```
 
 ## Examples

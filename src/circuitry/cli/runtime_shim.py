@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,7 @@ class RunRequest:
     out_path: Optional[Path]
     dry_run: bool
     validate_only: bool
+    initial_state: dict[str, Any] | None = None
     verbose: bool = False
     config: CircuitryConfig | None = None
 
@@ -37,7 +39,12 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _load_state(path: Optional[Path]) -> dict[str, Any]:
+def _load_state(
+    path: Optional[Path], initial_state: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    if initial_state is not None:
+        # Isolate runtime mutations from caller-owned dictionaries.
+        return deepcopy(initial_state)
     if not path or not path.exists():
         return {}
     import json
@@ -46,7 +53,7 @@ def _load_state(path: Optional[Path]) -> dict[str, Any]:
 
 
 def run(req: RunRequest) -> RunResult:
-    state = _load_state(req.state_path)
+    state = _load_state(req.state_path, req.initial_state)
     warnings: list[str] = []
 
     try:

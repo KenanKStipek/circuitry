@@ -80,6 +80,7 @@ def run_cmd(
     req = RunRequest(
         orchestration_path=orchestration,
         state_path=state,
+        initial_state=None,
         out_path=out,
         dry_run=dry_run,
         validate_only=False,
