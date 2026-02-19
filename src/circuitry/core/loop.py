@@ -356,7 +356,12 @@ Should the loop continue? Answer (yes/no):"""
         else:
             iter_store = store
 
+        executed: list[dict[str, Any]] = []
         for effect in self.defn.body:
+            effect_record = {
+                "type": type(effect).__name__,
+                "name": getattr(effect, "name", None),
+            }
             if isinstance(effect, PromptDefinition):
                 PromptRuntime(
                     effect,
@@ -365,6 +370,7 @@ Should the loop continue? Answer (yes/no):"""
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
                 ).execute(store=iter_store, ctx=ctx)
+                executed.append(effect_record)
 
             elif isinstance(effect, DynamicDefinition):
                 DynamicRuntime(
@@ -374,6 +380,7 @@ Should the loop continue? Answer (yes/no):"""
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
                 ).execute(store=iter_store)
+                executed.append(effect_record)
 
             elif isinstance(effect, ConditionalDefinition):
                 ConditionalRuntime(
@@ -383,6 +390,7 @@ Should the loop continue? Answer (yes/no):"""
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
                 ).execute(store=iter_store, ctx=ctx)
+                executed.append(effect_record)
 
             elif isinstance(effect, LoopDefinition):
                 LoopRuntime(
@@ -392,6 +400,7 @@ Should the loop continue? Answer (yes/no):"""
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
                 ).execute(store=iter_store, ctx=ctx)
+                executed.append(effect_record)
 
             elif isinstance(effect, ReflectorDefinition):
                 ReflectorRuntime(
@@ -401,5 +410,9 @@ Should the loop continue? Answer (yes/no):"""
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
                 ).execute(store=iter_store)
+                executed.append(effect_record)
 
-        return {}  # Could capture executed effects here if needed
+        return {
+            "executed_effects": executed,
+            "count": len(executed),
+        }

@@ -134,10 +134,12 @@ class ConditionalRuntime:
             meta["branch"] = branch
 
         # Execute selected branch effects
-        executed_effects: dict[str, Any] = {}
+        executed_effects: list[dict[str, Any]] = []
 
         try:
-            for effect in effects_to_run:
+            for idx, effect in enumerate(effects_to_run):
+                effect_record = self._effect_record(effect=effect, index=idx)
+
                 if isinstance(effect, PromptDefinition):
                     PromptRuntime(
                         effect,
@@ -146,6 +148,7 @@ class ConditionalRuntime:
                         dry_run=self.dry_run,
                         timeout_seconds=self.timeout_seconds,
                     ).execute(store=child_store, ctx=ctx)
+                    executed_effects.append(effect_record)
 
                 elif isinstance(effect, DynamicDefinition):
                     DynamicRuntime(
@@ -155,6 +158,7 @@ class ConditionalRuntime:
                         dry_run=self.dry_run,
                         timeout_seconds=self.timeout_seconds,
                     ).execute(store=child_store)
+                    executed_effects.append(effect_record)
 
                 elif isinstance(effect, ConditionalDefinition):
                     ConditionalRuntime(
@@ -164,6 +168,7 @@ class ConditionalRuntime:
                         dry_run=self.dry_run,
                         timeout_seconds=self.timeout_seconds,
                     ).execute(store=child_store, ctx=ctx)
+                    executed_effects.append(effect_record)
 
                 elif isinstance(effect, LoopDefinition):
                     LoopRuntime(
@@ -173,6 +178,7 @@ class ConditionalRuntime:
                         dry_run=self.dry_run,
                         timeout_seconds=self.timeout_seconds,
                     ).execute(store=child_store, ctx=ctx)
+                    executed_effects.append(effect_record)
 
                 elif isinstance(effect, ReflectorDefinition):
                     ReflectorRuntime(
@@ -182,6 +188,7 @@ class ConditionalRuntime:
                         dry_run=self.dry_run,
                         timeout_seconds=self.timeout_seconds,
                     ).execute(store=child_store)
+                    executed_effects.append(effect_record)
 
             if node:
                 node["value"] = {
@@ -193,10 +200,24 @@ class ConditionalRuntime:
                     meta["completed_at"] = _now_iso()
 
         except Exception as e:
+            if node:
+                node["value"] = {
+                    "result": result,
+                    "branch": branch,
+                    "effects": executed_effects,
+                }
             if meta:
                 meta["error"] = str(e)
                 meta["completed_at"] = _now_iso()
             raise
+
+    def _effect_record(self, *, effect: EffectDef, index: int) -> dict[str, Any]:
+        effect_name = getattr(effect, "name", None)
+        return {
+            "index": index,
+            "type": type(effect).__name__,
+            "name": effect_name if isinstance(effect_name, str) else None,
+        }
 
     def _evaluate_condition(self, *, ctx: dict[str, Any]) -> bool:
         """Evaluate the condition and return a boolean result."""

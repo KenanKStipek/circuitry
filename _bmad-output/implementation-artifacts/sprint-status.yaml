@@ -47,10 +47,10 @@ development_status:
   1-4-ship-time-to-value-cli-examples: review
   epic-1-retrospective: optional
   epic-2: in-progress
-  2-1-implement-chain-and-tree-effect-topologies: ready-for-dev
-  2-2-implement-conditional-and-loop-cybernetic-primitives: ready-for-dev
-  2-3-support-nested-dynamic-composition: ready-for-dev
-  2-4-validate-execution-pattern-test-coverage: ready-for-dev
+  2-1-implement-chain-and-tree-effect-topologies: review
+  2-2-implement-conditional-and-loop-cybernetic-primitives: review
+  2-3-support-nested-dynamic-composition: review
+  2-4-validate-execution-pattern-test-coverage: review
   epic-2-retrospective: optional
   epic-3: in-progress
   3-1-trigger-orchestrations-through-rest-interface: ready-for-dev

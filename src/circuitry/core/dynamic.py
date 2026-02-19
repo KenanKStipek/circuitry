@@ -1,18 +1,19 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Literal, Sequence, TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Any, Literal, Sequence, Union
 
-from .store import Store
-from .prompt import PromptDefinition, PromptRuntime
 from ..adapters import Adapter
+from .prompt import PromptDefinition, PromptRuntime
+from .store import Store
 
 if TYPE_CHECKING:
     # Type-only imports to avoid circular imports at runtime
-    from .reflector import ReflectorDefinition
     from .conditional import ConditionalDefinition
     from .loop import LoopDefinition
+    from .reflector import ReflectorDefinition
 
 
 def _now_iso() -> str:
@@ -51,7 +52,9 @@ class DynamicRuntime:
         self.dry_run = dry_run
         self.timeout_seconds = timeout_seconds
 
-    def execute(self, *, store: Store) -> None:
+    def execute(
+        self, *, store: Store, ctx_override: dict[str, Any] | None = None
+    ) -> None:
         dyn = store.ensure_dict(self.defn.name)
         dyn.setdefault("value", None)
         meta = dyn.get("meta")
@@ -79,12 +82,27 @@ class DynamicRuntime:
             dyn["value"] = False
             raise ValueError(meta["error"])
 
-        ctx = store.state
+        ctx = ctx_override if ctx_override is not None else store.state
         child_store = Store(dyn, on_write=store.on_write)
 
         try:
-            for effect in self.defn.effects:
-                self._execute_effect(effect, store=child_store, ctx=ctx)
+            if self.defn.flow == "chain":
+                for idx, effect in enumerate(self.defn.effects):
+                    effect_path = self._effect_path(effect=effect, index=idx)
+                    try:
+                        self._execute_effect(effect, store=child_store, ctx=ctx)
+                    except Exception as e:
+                        raise RuntimeError(f"{effect_path}: {e}") from e
+            else:
+                # Tree semantics: each sibling effect evaluates against the same
+                # deterministic snapshot from dynamic start, not sibling writes.
+                tree_ctx = deepcopy(ctx)
+                for idx, effect in enumerate(self.defn.effects):
+                    effect_path = self._effect_path(effect=effect, index=idx)
+                    try:
+                        self._execute_effect(effect, store=child_store, ctx=tree_ctx)
+                    except Exception as e:
+                        raise RuntimeError(f"{effect_path}: {e}") from e
 
             dyn["value"] = True
             meta["completed_at"] = _now_iso()
@@ -95,7 +113,9 @@ class DynamicRuntime:
             meta["completed_at"] = _now_iso()
             raise
 
-    def _execute_effect(self, effect: EffectDef, *, store: Store, ctx: dict) -> None:
+    def _execute_effect(
+        self, effect: EffectDef, *, store: Store, ctx: dict[str, Any]
+    ) -> None:
         """Execute a single effect within the dynamic."""
         if isinstance(effect, PromptDefinition):
             PromptRuntime(
@@ -113,13 +133,13 @@ class DynamicRuntime:
                 model=self.model,
                 dry_run=self.dry_run,
                 timeout_seconds=self.timeout_seconds,
-            ).execute(store=store)
+            ).execute(store=store, ctx_override=ctx)
 
         else:
             # Local imports to avoid circular imports at module load time
-            from .reflector import ReflectorDefinition, ReflectorRuntime
             from .conditional import ConditionalDefinition, ConditionalRuntime
             from .loop import LoopDefinition, LoopRuntime
+            from .reflector import ReflectorDefinition, ReflectorRuntime
 
             if isinstance(effect, ReflectorDefinition):
                 ReflectorRuntime(
@@ -150,3 +170,9 @@ class DynamicRuntime:
 
             else:
                 raise TypeError(f"Unsupported effect type: {type(effect)}")
+
+    def _effect_path(self, *, effect: EffectDef, index: int) -> str:
+        name = getattr(effect, "name", None)
+        if isinstance(name, str) and name:
+            return f"{self.defn.name}.{name}"
+        return f"{self.defn.name}.{type(effect).__name__}[{index}]"
