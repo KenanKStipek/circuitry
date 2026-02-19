@@ -70,9 +70,9 @@ development_status:
   5-3-publish-new-orchestrations-to-shared-library: review
   5-4-define-growth-workflow-for-library-contributions: review
   epic-5-retrospective: optional
-  epic-6: in-progress
-  6-1-deliver-readme-and-quick-start-documentation: review
-  6-2-deliver-architecture-and-api-reference-documentation: review
-  6-3-provide-curated-example-orchestrations: review
-  6-4-provide-editor-highlighting-and-post-mvp-perceptron-boundary: review
+  epic-6: done
+  6-1-deliver-readme-and-quick-start-documentation: done
+  6-2-deliver-architecture-and-api-reference-documentation: done
+  6-3-provide-curated-example-orchestrations: done
+  6-4-provide-editor-highlighting-and-post-mvp-perceptron-boundary: done
   epic-6-retrospective: optional
