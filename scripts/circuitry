@@ -6,4 +6,10 @@ set -euo pipefail
 #   ./scripts/circuitry --help
 #   ./scripts/circuitry run path/to/orch.yml --state state.json
 
-python -m circuitry.cli.app "$@"
+if [[ -x ".venv/bin/python" ]]; then
+  PYTHON_BIN=".venv/bin/python"
+else
+  PYTHON_BIN="python"
+fi
+
+"${PYTHON_BIN}" -m circuitry.cli.app "$@"

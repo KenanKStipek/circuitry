@@ -22,9 +22,29 @@ Compatibility:
 ## Run and Inspect
 
 ```bash
-python -m circuitry.cli.app run examples/multi_primitive_story.yml --dry-run --out out.json --pretty
-python -m circuitry.cli.app inspect examples/multi_primitive_story.yml
+./scripts/run-examples
+./scripts/circuitry inspect examples/multi_primitive_story.yml
 ```
+
+Live adapter test (optional):
+
+```bash
+./scripts/run-examples --live
+```
+
+Custom output paths:
+
+```bash
+./scripts/run-examples --out /tmp/examples-dry.json
+./scripts/run-examples --live --out /tmp/examples-dry.json --live-out /tmp/examples-live.json
+```
+
+Notes:
+- `./scripts/run-examples` validates and dry-runs all example files.
+- `--live` runs a small subset that performs actual model inference.
+- `--out` and `--live-out` control where state files are written.
+- Default outputs are repo-relative and ignored by git: `tmp/circuitry-example-state.json` and `tmp/circuitry-example-live-state.json`.
+- Live runs require your configured adapter endpoint (default `ollama` at `http://localhost:11434`).
 
 ## Maintenance Rule
 

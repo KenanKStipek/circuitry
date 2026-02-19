@@ -113,6 +113,7 @@ Plugin runtime tests:
 Examples curation and validation:
 ```bash
 pytest -q tests/examples/test_examples_smoke.py
+./scripts/run-examples
 ```
 
 Editor highlighting verification:

@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+run_live=0
+dry_out="tmp/circuitry-example-state.json"
+live_out="tmp/circuitry-example-live-state.json"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --live)
+      run_live=1
+      shift
+      ;;
+    --out)
+      dry_out="${2:?missing value for --out}"
+      shift 2
+      ;;
+    --live-out)
+      live_out="${2:?missing value for --live-out}"
+      shift 2
+      ;;
+    *)
+      echo "Unknown option: $1"
+      echo "Usage: ./scripts/run-examples [--live] [--out PATH] [--live-out PATH]"
+      exit 2
+      ;;
+  esac
+done
+
+if [[ "${run_live}" -eq 1 && "${dry_out}" == "${live_out}" ]]; then
+  echo "--out and --live-out must be different when using --live"
+  exit 2
+fi
+
+if [[ -x ".venv/bin/python" ]]; then
+  PYTHON_BIN=".venv/bin/python"
+else
+  PYTHON_BIN="python"
+fi
+
+echo "Using python: ${PYTHON_BIN}"
+echo "Dry-run output: ${dry_out}"
+if [[ "${run_live}" -eq 1 ]]; then
+  echo "Live-run output: ${live_out}"
+fi
+
+mkdir -p "$(dirname "${dry_out}")"
+if [[ "${run_live}" -eq 1 ]]; then
+  mkdir -p "$(dirname "${live_out}")"
+fi
+
+for file in examples/*.yml; do
+  echo
+  echo "==> validate: ${file}"
+  "${PYTHON_BIN}" -m circuitry.cli.app validate "${file}"
+
+  echo "==> dry-run: ${file}"
+  "${PYTHON_BIN}" -m circuitry.cli.app run "${file}" --dry-run --out "${dry_out}" >/dev/null
+done
+
+if [[ "${run_live}" -eq 1 ]]; then
+  echo
+  echo "Running live example subset (requires configured adapter endpoint)..."
+  if ! curl --silent --show-error --fail --max-time 2 http://localhost:11434/api/tags >/dev/null 2>&1; then
+    echo "Live run precheck failed: could not reach Ollama at http://localhost:11434"
+    echo "Start Ollama (or update adapter config) and retry ./scripts/run-examples --live"
+    exit 1
+  fi
+  for file in examples/hello.yml examples/dynamic_hello.yml examples/typed_prompt_example.yml; do
+    echo "==> live-run: ${file}"
+    "${PYTHON_BIN}" -m circuitry.cli.app run "${file}" --out "${live_out}" >/dev/null
+  done
+fi
+
+echo
+echo "Examples check complete."
