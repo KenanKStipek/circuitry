@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -47,7 +46,7 @@ class LiteLLMAdapter:
         self, *, model: str, prompt: str, timeout_seconds: int = 120
     ) -> GenerateResult:
         try:
-            import litellm
+            import litellm  # type: ignore[import-not-found]
         except ImportError as e:
             raise RuntimeError(
                 "litellm package not installed. Install with: pip install litellm"

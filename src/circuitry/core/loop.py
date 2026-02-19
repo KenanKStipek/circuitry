@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional, Sequence, TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, Union
 
-from .store import Store
 from ..adapters import Adapter
+from .store import Store
 
 if TYPE_CHECKING:
+    from .conditional import ConditionalDefinition
     from .dynamic import DynamicDefinition
     from .prompt import PromptDefinition
-    from .conditional import ConditionalDefinition
+    from .reflector import ReflectorDefinition
 
 
 def _now_iso() -> str:
@@ -18,7 +19,11 @@ def _now_iso() -> str:
 
 
 EffectDef = Union[
-    "DynamicDefinition", "PromptDefinition", "ConditionalDefinition", "LoopDefinition"
+    "DynamicDefinition",
+    "PromptDefinition",
+    "ConditionalDefinition",
+    "LoopDefinition",
+    "ReflectorDefinition",
 ]
 
 
@@ -94,15 +99,12 @@ class LoopRuntime:
         self.timeout_seconds = timeout_seconds
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
-        from .dynamic import DynamicRuntime, DynamicDefinition
-        from .prompt import PromptRuntime, PromptDefinition
-        from .conditional import ConditionalRuntime, ConditionalDefinition
-
         # Named loop: create a node for this loop
         # Transparent control: effects merge directly into parent
         is_named = bool(self.defn.name)
 
         if is_named:
+            assert self.defn.name is not None
             node = store.ensure_dict(self.defn.name)
             node.setdefault("value", None)
             meta = node.get("meta")
@@ -154,7 +156,7 @@ class LoopRuntime:
                             )
                             iterations_effects.append(iter_effects)
                             iteration_count += 1
-                        except Exception as e:
+                        except Exception:
                             if self.defn.on_error == "fail":
                                 termination_reason = "error"
                                 raise
@@ -189,7 +191,7 @@ class LoopRuntime:
                         )
                         iterations_effects.append(iter_effects)
                         iteration_count += 1
-                    except Exception as e:
+                    except Exception:
                         if self.defn.on_error == "fail":
                             termination_reason = "error"
                             raise
@@ -233,7 +235,7 @@ class LoopRuntime:
         path = self.defn.each_def.in_path
 
         # Navigate the path
-        current = ctx
+        current: Any = ctx
         for part in path.split("."):
             if not part:
                 continue
@@ -267,7 +269,7 @@ class LoopRuntime:
 
         # Render template against context
         try:
-            import chevron
+            import chevron  # type: ignore[import-untyped]
 
             rendered = chevron.render(template, ctx)
         except Exception:
@@ -341,9 +343,10 @@ Should the loop continue? Answer (yes/no):"""
         iteration: int,
     ) -> dict[str, Any]:
         """Execute all effects in the loop body for one iteration."""
-        from .dynamic import DynamicRuntime, DynamicDefinition
-        from .prompt import PromptRuntime, PromptDefinition
-        from .conditional import ConditionalRuntime, ConditionalDefinition
+        from .conditional import ConditionalDefinition, ConditionalRuntime
+        from .dynamic import DynamicDefinition, DynamicRuntime
+        from .prompt import PromptDefinition, PromptRuntime
+        from .reflector import ReflectorDefinition, ReflectorRuntime
 
         # Create iteration-specific store if named
         if self.defn.name:
@@ -363,7 +366,7 @@ Should the loop continue? Answer (yes/no):"""
                     timeout_seconds=self.timeout_seconds,
                 ).execute(store=iter_store, ctx=ctx)
 
-            elif hasattr(effect, "effects"):  # DynamicDefinition
+            elif isinstance(effect, DynamicDefinition):
                 DynamicRuntime(
                     effect,
                     adapter=self.adapter,
@@ -389,5 +392,14 @@ Should the loop continue? Answer (yes/no):"""
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
                 ).execute(store=iter_store, ctx=ctx)
+
+            elif isinstance(effect, ReflectorDefinition):
+                ReflectorRuntime(
+                    effect,
+                    adapter=self.adapter,
+                    model=self.model,
+                    dry_run=self.dry_run,
+                    timeout_seconds=self.timeout_seconds,
+                ).execute(store=iter_store)
 
         return {}  # Could capture executed effects here if needed

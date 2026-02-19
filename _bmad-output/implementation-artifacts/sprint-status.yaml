@@ -41,7 +41,7 @@ story_location: "/Users/kenanstipek/src/circuitry/_bmad-output/implementation-ar
 
 development_status:
   epic-1: in-progress
-  1-1-define-and-validate-basic-dol-orchestrations: in-progress
+  1-1-define-and-validate-basic-dol-orchestrations: review
   1-2-execute-orchestrations-from-cli-with-state-output: ready-for-dev
   1-3-execute-orchestrations-via-embedded-python-api: ready-for-dev
   1-4-ship-time-to-value-cli-examples: ready-for-dev

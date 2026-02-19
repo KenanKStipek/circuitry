@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Union
+from typing import Any, Literal, Union, cast
 
 from .conditional import ConditionalDefinition, ConditionDef
 from .dynamic import DynamicDefinition
 from .loop import LoopDefinition, LoopEachDef, LoopWhileDef
 from .primes import REFLECTOR_PRIME_V1
-from .prompt import AssetRefDef, MessageDef, PromptDefinition, RetryPolicyDef
+from .prompt import (
+    AssetRefDef,
+    MessageDef,
+    PromptDefinition,
+    PromptType,
+    RetryPolicyDef,
+)
 from .reflector import ReflectorDefinition
 
 EffectDef = Union[
@@ -129,7 +135,7 @@ def _compile_effects_in_scope(
     return compiled
 
 
-def _normalize_flow(flow: str) -> str:
+def _normalize_flow(flow: str) -> Literal["chain", "tree"]:
     """Normalize flow aliases to canonical form."""
     flow = (flow or "chain").strip().lower()
     if flow in ("chain", "chain_of_thought", "cot"):
@@ -291,9 +297,8 @@ def _compile_conditional(
             "condition definition."
         )
 
-    mode = (if_def.get("mode") or "model").strip().lower()
-    if mode not in ("model", "cel"):
-        mode = "model"
+    mode_raw = str(if_def.get("mode") or "model").strip().lower()
+    mode: Literal["model", "cel"] = "cel" if mode_raw == "cel" else "model"
 
     condition = ConditionDef(
         mode=mode,
@@ -322,9 +327,12 @@ def _compile_conditional(
 
     # Additional options
     threshold = float(effect.get("threshold") or 0.5)
-    on_error = (effect.get("on_error") or "fail").strip().lower()
-    if on_error not in ("fail", "continue", "skip"):
-        on_error = "fail"
+    on_error_raw = str(effect.get("on_error") or "fail").strip().lower()
+    on_error: Literal["fail", "continue", "skip"] = (
+        cast(Literal["fail", "continue", "skip"], on_error_raw)
+        if on_error_raw in ("fail", "continue", "skip")
+        else "fail"
+    )
 
     return ConditionalDefinition(
         name=validated_name,
@@ -368,9 +376,8 @@ def _compile_loop(
     if "while" in effect:
         while_config = effect.get("while")
         if isinstance(while_config, dict):
-            mode = (while_config.get("mode") or "model").strip().lower()
-            if mode not in ("model", "cel"):
-                mode = "model"
+            mode_raw = str(while_config.get("mode") or "model").strip().lower()
+            mode: Literal["model", "cel"] = "cel" if mode_raw == "cel" else "model"
             while_def = LoopWhileDef(
                 mode=mode,
                 template=while_config.get("template") if mode == "model" else None,
@@ -392,9 +399,12 @@ def _compile_loop(
     min_iterations = int(effect.get("min_iterations") or 0)
 
     # Error behavior
-    on_error = (effect.get("on_error") or "fail").strip().lower()
-    if on_error not in ("fail", "break", "continue"):
-        on_error = "fail"
+    on_error_raw = str(effect.get("on_error") or "fail").strip().lower()
+    on_error: Literal["fail", "break", "continue"] = (
+        cast(Literal["fail", "break", "continue"], on_error_raw)
+        if on_error_raw in ("fail", "break", "continue")
+        else "fail"
+    )
 
     return LoopDefinition(
         name=validated_name,
@@ -433,8 +443,8 @@ def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
         raise ValueError(f"Prompt '{name}' must have 'template' or 'messages'.")
 
     # Prompt type
-    prompt_type = (effect.get("prompt_type") or "text").strip().lower()
-    if prompt_type not in (
+    prompt_type_raw = str(effect.get("prompt_type") or "text").strip().lower()
+    if prompt_type_raw not in (
         "text",
         "json",
         "boolean",
@@ -443,7 +453,8 @@ def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
         "array",
         "object",
     ):
-        prompt_type = "text"
+        prompt_type_raw = "text"
+    prompt_type: PromptType = cast(PromptType, prompt_type_raw)
 
     # Schema for validation
     schema = effect.get("schema")
@@ -496,9 +507,12 @@ def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
         )
 
     # Error behavior
-    on_error = (effect.get("on_error") or "fail").strip().lower()
-    if on_error not in ("fail", "skip", "continue"):
-        on_error = "fail"
+    on_error_raw = str(effect.get("on_error") or "fail").strip().lower()
+    on_error: Literal["fail", "skip", "continue"] = (
+        cast(Literal["fail", "skip", "continue"], on_error_raw)
+        if on_error_raw in ("fail", "skip", "continue")
+        else "fail"
+    )
 
     # Description
     description = effect.get("description")

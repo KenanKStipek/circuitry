@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any
 
 from .base import GenerateResult
 
@@ -30,8 +29,8 @@ class AnthropicAdapter:
     def generate(
         self, *, model: str, prompt: str, timeout_seconds: int = 120
     ) -> GenerateResult:
-        import subprocess
         import shlex
+        import subprocess
 
         model = model or self.default_model
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")

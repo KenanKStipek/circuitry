@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional, Sequence
 
-from .store import Store
 from ..adapters import Adapter
+from .store import Store
 
 
 def _now_iso() -> str:
@@ -275,7 +275,7 @@ class PromptRuntime:
             return
 
         try:
-            import jsonschema
+            import jsonschema  # type: ignore[import-untyped]
 
             jsonschema.validate(value, self.defn.schema)
         except ImportError:

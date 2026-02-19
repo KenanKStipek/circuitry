@@ -13,7 +13,8 @@ class GenerateResult:
 
 
 class Adapter(Protocol):
-    name: str
+    @property
+    def name(self) -> str: ...
 
     def generate(
         self, *, model: str, prompt: str, timeout_seconds: int = 120

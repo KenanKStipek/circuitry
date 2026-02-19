@@ -34,13 +34,17 @@ def resolve_effective_settings(
     cli_plugins: Optional[list[str]] = None,
 ) -> EffectiveSettings:
     sources: dict[str, str] = {}
+    model: Optional[str]
+    adapter: Optional[str]
+    plugins: list[str]
 
     # model precedence: cli > orch > config > default
     if cli_model is not None:
         model = cli_model
         sources["model"] = "cli"
     elif orch.get("model") is not None:
-        model = orch.get("model")
+        raw_model = orch.get("model")
+        model = str(raw_model) if raw_model is not None else None
         sources["model"] = "orchestration"
     elif cfg.default_model is not None:
         model = cfg.default_model
@@ -54,7 +58,8 @@ def resolve_effective_settings(
         adapter = cli_adapter
         sources["adapter"] = "cli"
     elif orch.get("adapter") is not None:
-        adapter = orch.get("adapter")
+        raw_adapter = orch.get("adapter")
+        adapter = str(raw_adapter) if raw_adapter is not None else None
         sources["adapter"] = "orchestration"
     elif cfg.default_adapter is not None:
         adapter = cfg.default_adapter
@@ -74,7 +79,7 @@ def resolve_effective_settings(
     else:
         combined = [*cfg.plugins, *orch_plugins]
         seen: set[str] = set()
-        plugins: list[str] = []
+        plugins = []
         for p in combined:
             if not isinstance(p, str):
                 raise ValueError("Plugins must be strings.")

@@ -2,21 +2,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional, Sequence, TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, Union
 
-from .store import Store
 from ..adapters import Adapter
+from .store import Store
 
 if TYPE_CHECKING:
     from .dynamic import DynamicDefinition
+    from .loop import LoopDefinition
     from .prompt import PromptDefinition
+    from .reflector import ReflectorDefinition
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-EffectDef = Union["DynamicDefinition", "PromptDefinition", "ConditionalDefinition"]
+EffectDef = Union[
+    "DynamicDefinition",
+    "PromptDefinition",
+    "ConditionalDefinition",
+    "LoopDefinition",
+    "ReflectorDefinition",
+]
 
 
 @dataclass(frozen=True)
@@ -76,14 +84,17 @@ class ConditionalRuntime:
         self.timeout_seconds = timeout_seconds
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
-        from .dynamic import DynamicRuntime
-        from .prompt import PromptRuntime, PromptDefinition
+        from .dynamic import DynamicDefinition, DynamicRuntime
+        from .loop import LoopDefinition, LoopRuntime
+        from .prompt import PromptDefinition, PromptRuntime
+        from .reflector import ReflectorDefinition, ReflectorRuntime
 
         # Named decision: create a node for this conditional
         # Transparent control: effects merge directly into parent
         is_named = bool(self.defn.name)
 
         if is_named:
+            assert self.defn.name is not None
             node = store.ensure_dict(self.defn.name)
             node.setdefault("value", None)
             meta = node.get("meta")
@@ -136,7 +147,7 @@ class ConditionalRuntime:
                         timeout_seconds=self.timeout_seconds,
                     ).execute(store=child_store, ctx=ctx)
 
-                elif hasattr(effect, "effects"):  # DynamicDefinition
+                elif isinstance(effect, DynamicDefinition):
                     DynamicRuntime(
                         effect,
                         adapter=self.adapter,
@@ -153,6 +164,24 @@ class ConditionalRuntime:
                         dry_run=self.dry_run,
                         timeout_seconds=self.timeout_seconds,
                     ).execute(store=child_store, ctx=ctx)
+
+                elif isinstance(effect, LoopDefinition):
+                    LoopRuntime(
+                        effect,
+                        adapter=self.adapter,
+                        model=self.model,
+                        dry_run=self.dry_run,
+                        timeout_seconds=self.timeout_seconds,
+                    ).execute(store=child_store, ctx=ctx)
+
+                elif isinstance(effect, ReflectorDefinition):
+                    ReflectorRuntime(
+                        effect,
+                        adapter=self.adapter,
+                        model=self.model,
+                        dry_run=self.dry_run,
+                        timeout_seconds=self.timeout_seconds,
+                    ).execute(store=child_store)
 
             if node:
                 node["value"] = {
@@ -185,7 +214,7 @@ class ConditionalRuntime:
 
         # Render template against context
         try:
-            import chevron
+            import chevron  # type: ignore[import-untyped]
 
             rendered = chevron.render(template, ctx)
         except Exception:

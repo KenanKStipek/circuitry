@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
-from .store import Store
 from ..adapters import Adapter
 from .primes import REFLECTOR_PRIME_V1
+from .store import Store
 
 if TYPE_CHECKING:
     from .dynamic import DynamicDefinition
@@ -60,9 +60,6 @@ class ReflectorRuntime:
         self.verbose = verbose
 
     def execute(self, *, store: Store) -> None:
-        # Local imports to avoid circulars
-        from .dynamic import DynamicRuntime
-
         node = store.ensure_dict(self.defn.name)
         node.setdefault("value", None)
         meta = _ensure_dict(node, "meta")
@@ -99,8 +96,8 @@ class ReflectorRuntime:
           4) parse/validate plan
           5) compile + execute generated effects under reflector.generated.iter_{i}
         """
-        from .dynamic import DynamicRuntime
         from .compiler import compile_orchestration
+        from .dynamic import DynamicRuntime
 
         rec: dict[str, Any] = {
             "i": i,
@@ -370,7 +367,7 @@ def _parse_plan_yaml(text: str) -> dict[str, Any]:
       - Legacy 'steps' key is also supported for backwards compatibility
     Also tolerates multi-document YAML (---) by selecting the first parseable doc.
     """
-    import yaml
+    import yaml  # type: ignore[import-untyped]
 
     cleaned = _extract_yaml(text)
     if not cleaned.strip():
