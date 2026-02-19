@@ -5,13 +5,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from ..adapters import build_adapter
+from ..core.compiler import compile_orchestration
+from ..core.dynamic import DynamicRuntime
+from ..core.store import Store
 from .config import CircuitryConfig
 from .effective_settings import resolve_effective_settings
 from .orchestration_loader import load_orchestration_file
-from ..adapters import build_adapter
-from ..core.store import Store
-from ..core.dynamic import DynamicRuntime
-from ..core.compiler import compile_orchestration
 
 
 @dataclass(frozen=True)
@@ -129,8 +129,15 @@ def run(req: RunRequest) -> RunResult:
 
 def validate(orchestration_path: Path) -> dict[str, Any]:
     text = orchestration_path.read_text(encoding="utf-8").strip()
-    ok = len(text) > 0
-    return {"ok": ok, "errors": [] if ok else ["Orchestration file is empty."]}
+    if not text:
+        return {"ok": False, "errors": ["Orchestration file is empty."]}
+
+    try:
+        orch = load_orchestration_file(orchestration_path)
+        compile_orchestration(orch=orch, root_name="prime")
+        return {"ok": True, "errors": []}
+    except Exception as e:
+        return {"ok": False, "errors": [str(e)]}
 
 
 def inspect_orchestration(orchestration_path: Path) -> dict[str, Any]:
