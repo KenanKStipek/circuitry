@@ -10,6 +10,13 @@ from uuid import uuid4
 from ..adapters import build_adapter
 from ..core.compiler import compile_orchestration
 from ..core.dynamic import DynamicRuntime
+from ..core.plugins import (
+    PLUGIN_CONTRACT_VERSION,
+    PluginContext,
+    RuntimePlugin,
+    invoke_plugins,
+    load_plugins,
+)
 from ..core.store import Store, build_persistence_backend
 from .config import CircuitryConfig
 from .effective_settings import EffectiveSettings, resolve_effective_settings
@@ -56,13 +63,18 @@ def _load_state(
 def run(req: RunRequest) -> RunResult:
     state = _load_state(req.state_path, req.initial_state)
     warnings: list[str] = []
+    plugins: list[RuntimePlugin] = []
+    run_id: str | None = None
+    runtime_config: dict[str, Any] = {}
 
     try:
         cfg = req.config or CircuitryConfig()
         orch = load_orchestration_file(req.orchestration_path)
 
         effective = resolve_effective_settings(cfg=cfg, orch=orch)
+        runtime_config = effective.runtime
         persistence = build_persistence_backend(effective.runtime)
+        plugins, plugin_events = _initialize_plugins(effective.plugins)
 
         loaded_from_persistence = False
         if (
@@ -105,6 +117,12 @@ def run(req: RunRequest) -> RunResult:
             "runtime": effective.runtime,
             "sources": effective.sources,
         }
+        state["runtime"]["plugins"] = {
+            "contract_version": PLUGIN_CONTRACT_VERSION,
+            "configured": list(effective.plugins),
+            "loaded": [getattr(p, "name", type(p).__name__) for p in plugins],
+            "events": plugin_events,
+        }
         if persistence is not None:
             state["runtime"]["persistence"] = {
                 "enabled": True,
@@ -119,6 +137,20 @@ def run(req: RunRequest) -> RunResult:
         if req.validate_only:
             state["runtime"]["last_run"]["completed_at"] = _now_iso()
             return RunResult(ok=True, state=state, warnings=warnings)
+
+        start_events = invoke_plugins(
+            plugins=plugins,
+            hook_name="on_run_start",
+            state=state,
+            context=PluginContext(
+                run_id=run_id,
+                orchestration_path=req.orchestration_path,
+                dry_run=req.dry_run,
+                validate_only=req.validate_only,
+                runtime_config=effective.runtime,
+            ),
+        )
+        state["runtime"]["plugins"]["events"].extend(start_events)
 
         # Compile YAML -> core definitions before adapter/model initialization so
         # structural orchestration errors are surfaced deterministically.
@@ -156,6 +188,20 @@ def run(req: RunRequest) -> RunResult:
 
         state["runtime"]["last_run"]["completed_at"] = _now_iso()
 
+        success_events = invoke_plugins(
+            plugins=plugins,
+            hook_name="on_run_success",
+            state=state,
+            context=PluginContext(
+                run_id=run_id,
+                orchestration_path=req.orchestration_path,
+                dry_run=req.dry_run,
+                validate_only=req.validate_only,
+                runtime_config=effective.runtime,
+            ),
+        )
+        state["runtime"]["plugins"]["events"].extend(success_events)
+
         if persistence is not None:
             try:
                 persistence.save_run_snapshot(
@@ -176,6 +222,33 @@ def run(req: RunRequest) -> RunResult:
 
     except Exception as e:
         try:
+            if run_id is None:
+                run_id = str(uuid4())
+            plugins_meta = state.setdefault("runtime", {}).setdefault("plugins", {})
+            if isinstance(plugins_meta, dict):
+                configured = plugins_meta.get("configured")
+                if not isinstance(configured, list):
+                    plugins_meta["configured"] = []
+                loaded = plugins_meta.get("loaded")
+                if not isinstance(loaded, list):
+                    plugins_meta["loaded"] = []
+                events = plugins_meta.get("events")
+                if not isinstance(events, list):
+                    plugins_meta["events"] = []
+                failure_events = invoke_plugins(
+                    plugins=plugins,
+                    hook_name="on_run_failure",
+                    state=state,
+                    context=PluginContext(
+                        run_id=run_id,
+                        orchestration_path=req.orchestration_path,
+                        dry_run=req.dry_run,
+                        validate_only=req.validate_only,
+                        runtime_config=runtime_config,
+                    ),
+                    error=str(e),
+                )
+                plugins_meta["events"].extend(failure_events)
             state.setdefault("runtime", {}).setdefault("last_run", {})[
                 "completed_at"
             ] = _now_iso()
@@ -247,3 +320,33 @@ def _require_resolved_settings(
             f"(model source: {effective.sources.get('model')})"
         )
     return (effective.adapter, effective.model)
+
+
+def _initialize_plugins(
+    plugin_ids: list[str],
+) -> tuple[list[RuntimePlugin], list[dict[str, Any]]]:
+    loaded_plugins: list[RuntimePlugin] = []
+    events: list[dict[str, Any]] = []
+
+    for result in load_plugins(plugin_ids):
+        if result.plugin is not None:
+            loaded_plugins.append(result.plugin)
+            events.append(
+                {
+                    "plugin": result.plugin_id,
+                    "hook": "load",
+                    "ok": True,
+                    "error": None,
+                }
+            )
+            continue
+        events.append(
+            {
+                "plugin": result.plugin_id,
+                "hook": "load",
+                "ok": False,
+                "error": result.error,
+            }
+        )
+
+    return (loaded_plugins, events)

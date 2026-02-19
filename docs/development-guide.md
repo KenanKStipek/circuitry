@@ -92,6 +92,11 @@ CIRCUITRY_RUN_INTEGRATION=1 CIRCUITRY_INTEGRATION_MODEL=smollm2:135m \
   .venv/bin/pytest -q tests/integration/test_sqlite_persistence_integration.py -m integration
 ```
 
+Plugin runtime tests:
+```bash
+.venv/bin/pytest -q tests/cli/test_plugins_runtime.py
+```
+
 ## Story Implementation Rule
 
 For every implementation story, tests are part of the solution, not a follow-up task.

@@ -1,6 +1,6 @@
 # Story 4.4: Expose Plugin and Tool Extension Points
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -24,11 +24,11 @@ so that I can add custom runtime capabilities without patching core execution en
 
 ## Tasks / Subtasks
 
-- [ ] Define stable plugin/tool extension interfaces and lifecycle hooks (AC: 1, 3)
-- [ ] Implement plugin registration/loading/invocation path in runtime integration layer (AC: 1)
-- [ ] Add error-isolation boundaries so extension failures do not corrupt core runtime state (AC: 2)
-- [ ] Add conformance tests for extension hook contracts and failure observability (AC: 2, 3)
-- [ ] Document extension authoring guide with compatibility/versioning rules (AC: 1, 3)
+- [x] Define stable plugin/tool extension interfaces and lifecycle hooks (AC: 1, 3)
+- [x] Implement plugin registration/loading/invocation path in runtime integration layer (AC: 1)
+- [x] Add error-isolation boundaries so extension failures do not corrupt core runtime state (AC: 2)
+- [x] Add conformance tests for extension hook contracts and failure observability (AC: 2, 3)
+- [x] Document extension authoring guide with compatibility/versioning rules (AC: 1, 3)
 
 ## Dev Notes
 
@@ -115,10 +115,21 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 4 source and architecture constraints.
-- Included existing-code cross-reference with present capabilities and concrete gaps.
-- Ready for `dev-story` implementation workflow.
+- Added stable plugin contract in `src/circuitry/core/plugins.py` with contract versioning, lifecycle hooks (`on_run_start`, `on_run_success`, `on_run_failure`), plugin loading, and invocation helpers.
+- Integrated plugin registration/loading/invocation into runtime path in `src/circuitry/cli/runtime_shim.py` with runtime metadata under `runtime.plugins`.
+- Implemented failure isolation boundaries: plugin load/hook failures are non-fatal and recorded in `runtime.plugins.events` with per-hook diagnostics.
+- Added conformance and observability tests in `tests/cli/test_plugins_runtime.py` covering success hooks, load failure visibility, hook-failure isolation, and failure-hook behavior on runtime errors.
+- Added extension authoring guide in `docs/plugins.md` and linked from `docs/index.md`; added plugin test command to `docs/development-guide.md`.
+- Included deterministic plugin fixtures for tests in `src/circuitry/dev_plugin_fixtures.py`.
+- Verified quality gates: `pytest -q`, `ruff check src tests`, and `mypy src` all passing.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/4-4-expose-plugin-and-tool-extension-points.md`
+- `src/circuitry/core/plugins.py`
+- `src/circuitry/cli/runtime_shim.py`
+- `src/circuitry/dev_plugin_fixtures.py`
+- `tests/cli/test_plugins_runtime.py`
+- `docs/plugins.md`
+- `docs/index.md`
+- `docs/development-guide.md`

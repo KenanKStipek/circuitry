@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+import importlib
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Protocol
+
+PLUGIN_CONTRACT_VERSION = "1"
+
+
+@dataclass(frozen=True)
+class PluginContext:
+    run_id: str
+    orchestration_path: Path
+    dry_run: bool
+    validate_only: bool
+    runtime_config: dict[str, Any]
+
+
+class RuntimePlugin(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    def on_run_start(self, *, state: dict[str, Any], context: PluginContext) -> None: ...
+
+    def on_run_success(
+        self, *, state: dict[str, Any], context: PluginContext
+    ) -> None: ...
+
+    def on_run_failure(
+        self, *, state: dict[str, Any], context: PluginContext, error: str
+    ) -> None: ...
+
+
+@dataclass(frozen=True)
+class PluginLoadResult:
+    plugin_id: str
+    plugin: RuntimePlugin | None
+    error: str | None = None
+
+
+def load_plugins(plugin_ids: list[str]) -> list[PluginLoadResult]:
+    results: list[PluginLoadResult] = []
+    for plugin_id in plugin_ids:
+        try:
+            plugin = _load_single_plugin(plugin_id)
+            results.append(PluginLoadResult(plugin_id=plugin_id, plugin=plugin))
+        except Exception as e:
+            results.append(
+                PluginLoadResult(plugin_id=plugin_id, plugin=None, error=str(e))
+            )
+    return results
+
+
+def invoke_plugins(
+    *,
+    plugins: list[RuntimePlugin],
+    hook_name: str,
+    state: dict[str, Any],
+    context: PluginContext,
+    error: str | None = None,
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+
+    for plugin in plugins:
+        plugin_name = _plugin_name(plugin)
+        try:
+            if hook_name == "on_run_start":
+                plugin.on_run_start(state=state, context=context)
+            elif hook_name == "on_run_success":
+                plugin.on_run_success(state=state, context=context)
+            elif hook_name == "on_run_failure":
+                plugin.on_run_failure(
+                    state=state, context=context, error=error or "unknown error"
+                )
+            else:
+                raise ValueError(f"Unknown plugin hook: {hook_name}")
+
+            events.append(
+                {
+                    "plugin": plugin_name,
+                    "hook": hook_name,
+                    "ok": True,
+                    "error": None,
+                }
+            )
+        except Exception as e:
+            events.append(
+                {
+                    "plugin": plugin_name,
+                    "hook": hook_name,
+                    "ok": False,
+                    "error": str(e),
+                }
+            )
+
+    return events
+
+
+def _load_single_plugin(plugin_id: str) -> RuntimePlugin:
+    plugin_id = plugin_id.strip()
+    if not plugin_id:
+        raise ValueError("Plugin identifier cannot be empty")
+
+    if ":" in plugin_id:
+        module_name, attr_name = plugin_id.split(":", 1)
+        module = importlib.import_module(module_name)
+        attr = getattr(module, attr_name)
+    else:
+        module = importlib.import_module(plugin_id)
+        attr = getattr(module, "plugin", None)
+        if attr is None:
+            raise ValueError(
+                "Plugin module must expose a 'plugin' symbol or use module:attr"
+            )
+
+    if callable(attr):
+        instance = attr()
+    else:
+        instance = attr
+
+    _validate_plugin(instance, plugin_id)
+    return instance
+
+
+def _validate_plugin(instance: Any, plugin_id: str) -> None:
+    for required in ("on_run_start", "on_run_success", "on_run_failure"):
+        if not hasattr(instance, required) or not callable(getattr(instance, required)):
+            raise ValueError(
+                f"Plugin '{plugin_id}' does not implement required hook: {required}"
+            )
+
+
+def _plugin_name(plugin: RuntimePlugin) -> str:
+    name = getattr(plugin, "name", None)
+    if isinstance(name, str) and name:
+        return name
+    return type(plugin).__name__

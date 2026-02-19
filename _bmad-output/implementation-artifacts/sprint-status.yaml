@@ -62,7 +62,7 @@ development_status:
   4-1-configure-multi-provider-adapter-runtime: review
   4-2-integrate-litellm-and-direct-provider-conformance: review
   4-3-persist-runtime-state-through-postgres-tooling: review
-  4-4-expose-plugin-and-tool-extension-points: ready-for-dev
+  4-4-expose-plugin-and-tool-extension-points: review
   epic-4-retrospective: optional
   epic-5: in-progress
   5-1-retrieve-shared-library-orchestrations: ready-for-dev
