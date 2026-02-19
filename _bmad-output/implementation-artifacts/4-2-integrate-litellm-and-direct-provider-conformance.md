@@ -1,6 +1,6 @@
 # Story 4.2: Integrate LiteLLM and Direct Provider Conformance
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -24,11 +24,11 @@ so that provider behavior is portable and predictable.
 
 ## Tasks / Subtasks
 
-- [ ] Define adapter conformance contract and required capabilities (response shape, tokens, error behavior) (AC: 1, 3)
-- [ ] Build conformance fixtures spanning LiteLLM + direct providers (OpenAI/Anthropic/Ollama) (AC: 1)
-- [ ] Add failure diagnostics for contract mismatches (AC: 2)
-- [ ] Add test harness support for provider stubs/mocks to avoid flaky network dependence (AC: 1, 2)
-- [ ] Document conformance onboarding steps for future adapters (AC: 3)
+- [x] Define adapter conformance contract and required capabilities (response shape, tokens, error behavior) (AC: 1, 3)
+- [x] Build conformance fixtures spanning LiteLLM + direct providers (OpenAI/Anthropic/Ollama) (AC: 1)
+- [x] Add failure diagnostics for contract mismatches (AC: 2)
+- [x] Add test harness support for provider stubs/mocks to avoid flaky network dependence (AC: 1, 2)
+- [x] Document conformance onboarding steps for future adapters (AC: 3)
 
 ## Dev Notes
 
@@ -115,10 +115,19 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 4 source and architecture constraints.
-- Included existing-code cross-reference with present capabilities and concrete gaps.
-- Ready for `dev-story` implementation workflow.
+- Added reusable conformance contract validator in `src/circuitry/adapters/conformance.py` for normalized `GenerateResult` requirements (text/raw/tokens/error diagnostics).
+- Added provider-agnostic conformance suite in `tests/adapters/test_conformance.py` covering LiteLLM, OpenAI, Anthropic, and Ollama against the same contract.
+- Implemented fully mocked test harness behavior for provider transports/modules (`subprocess.run` and `litellm` module stubs), avoiding network flakiness in CI and local runs.
+- Added actionable mismatch diagnostics assertions for contract violations and provider error-path behavior.
+- Added onboarding documentation in `docs/adapter-conformance.md` and linked it from `docs/index.md`; also referenced conformance command in `docs/development-guide.md`.
+- Verified quality gates: `pytest -q`, `ruff check src tests`, and `mypy src` all passing.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/4-2-integrate-litellm-and-direct-provider-conformance.md`
+- `src/circuitry/adapters/conformance.py`
+- `src/circuitry/adapters/__init__.py`
+- `tests/adapters/test_conformance.py`
+- `docs/adapter-conformance.md`
+- `docs/index.md`
+- `docs/development-guide.md`

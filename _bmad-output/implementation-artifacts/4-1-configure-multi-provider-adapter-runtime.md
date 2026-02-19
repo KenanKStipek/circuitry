@@ -1,6 +1,6 @@
 # Story 4.1: Configure Multi-Provider Adapter Runtime
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -24,11 +24,11 @@ so that I can choose the best model path per environment and workload.
 
 ## Tasks / Subtasks
 
-- [ ] Define explicit adapter-selection policy precedence and document edge cases (AC: 1, 3)
-- [ ] Ensure runtime metadata consistently records resolved adapter/model/source across all run outcomes (AC: 2)
-- [ ] Improve diagnostics for unknown/missing adapter and model configuration paths (AC: 3)
-- [ ] Add tests for config precedence (CLI/orchestration/config/default) and adapter resolution behavior (AC: 1, 3)
-- [ ] Add operator-facing docs for multi-provider runtime configuration examples (AC: 1, 2)
+- [x] Define explicit adapter-selection policy precedence and document edge cases (AC: 1, 3)
+- [x] Ensure runtime metadata consistently records resolved adapter/model/source across all run outcomes (AC: 2)
+- [x] Improve diagnostics for unknown/missing adapter and model configuration paths (AC: 3)
+- [x] Add tests for config precedence (CLI/orchestration/config/default) and adapter resolution behavior (AC: 1, 3)
+- [x] Add operator-facing docs for multi-provider runtime configuration examples (AC: 1, 2)
 
 ## Dev Notes
 
@@ -115,10 +115,18 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 4 source and architecture constraints.
-- Included existing-code cross-reference with present capabilities and concrete gaps.
-- Ready for `dev-story` implementation workflow.
+- Improved unknown adapter diagnostics in `src/circuitry/adapters/factory.py` with supported adapter list and actionable runtime/config hints.
+- Added runtime initialization validation in `src/circuitry/cli/runtime_shim.py` to produce explicit missing adapter/model resolution errors with source context.
+- Preserved and validated runtime metadata behavior (`runtime.effective_settings`) including adapter/model/runtime source traceability.
+- Added precedence and resolution tests in `tests/cli/test_effective_settings_precedence.py` covering CLI/orchestration/config ordering and actionable failure paths.
+- Added operator-facing multi-provider configuration guidance and precedence docs in `README.md` and `docs/development-guide.md`.
+- Verified quality gates: `pytest -q`, `ruff check .`, and `mypy src` all passing.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/4-1-configure-multi-provider-adapter-runtime.md`
+- `src/circuitry/adapters/factory.py`
+- `src/circuitry/cli/runtime_shim.py`
+- `tests/cli/test_effective_settings_precedence.py`
+- `README.md`
+- `docs/development-guide.md`

@@ -45,6 +45,15 @@ Key defaults in this repo:
 - Model: `phi3:mini`
 - Ollama base URL: `http://localhost:11434`
 
+Adapter/provider precedence:
+- Adapter: CLI > orchestration > config > unset
+- Model: CLI > orchestration > config > unset
+
+When configured, each run persists resolved values and sources to:
+- `runtime.effective_settings.adapter`
+- `runtime.effective_settings.model`
+- `runtime.effective_settings.sources`
+
 ## Build and Packaging
 
 - Build backend: `setuptools.build_meta`
@@ -62,6 +71,11 @@ Typical local usage:
 pytest
 ruff check .
 mypy src
+```
+
+Adapter conformance suite:
+```bash
+.venv/bin/pytest -q tests/adapters/test_conformance.py
 ```
 
 ## Story Implementation Rule

@@ -1,9 +1,10 @@
+from .anthropic import AnthropicAdapter
 from .base import Adapter, GenerateResult
+from .conformance import validate_generate_result
 from .factory import build_adapter
+from .litellm import LiteLLMAdapter
 from .ollama import OllamaAdapter
 from .openai import OpenAIAdapter
-from .anthropic import AnthropicAdapter
-from .litellm import LiteLLMAdapter
 
 __all__ = [
     "Adapter",
@@ -13,4 +14,5 @@ __all__ = [
     "OpenAIAdapter",
     "AnthropicAdapter",
     "LiteLLMAdapter",
+    "validate_generate_result",
 ]

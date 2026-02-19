@@ -22,6 +22,7 @@ Last Updated: 2026-02-19
 - [Development Guide](./development-guide.md)
 - [Testing Policy](./testing-policy.md)
 - [Test Matrix](./test-matrix.md)
+- [Adapter Conformance](./adapter-conformance.md)
 - [Troubleshooting State Paths](./troubleshooting-state-paths.md)
 - [Project Scan Sections](./project-scan-sections.md)
 

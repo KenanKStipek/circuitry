@@ -59,8 +59,8 @@ development_status:
   3-4-troubleshoot-divergence-via-deterministic-state-paths: review
   epic-3-retrospective: optional
   epic-4: in-progress
-  4-1-configure-multi-provider-adapter-runtime: ready-for-dev
-  4-2-integrate-litellm-and-direct-provider-conformance: ready-for-dev
+  4-1-configure-multi-provider-adapter-runtime: review
+  4-2-integrate-litellm-and-direct-provider-conformance: review
   4-3-persist-runtime-state-through-postgres-tooling: ready-for-dev
   4-4-expose-plugin-and-tool-extension-points: ready-for-dev
   epic-4-retrospective: optional

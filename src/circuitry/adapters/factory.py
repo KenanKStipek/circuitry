@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from .anthropic import AnthropicAdapter
+from .base import Adapter
+from .litellm import LiteLLMAdapter
 from .ollama import OllamaAdapter
 from .openai import OpenAIAdapter
-from .anthropic import AnthropicAdapter
-from .litellm import LiteLLMAdapter
-from .base import Adapter
+
+SUPPORTED_ADAPTERS = ("ollama", "openai", "anthropic", "litellm")
 
 
 def build_adapter(*, adapter_name: str, runtime: dict[str, Any]) -> Adapter:
@@ -52,4 +54,8 @@ def build_adapter(*, adapter_name: str, runtime: dict[str, Any]) -> Adapter:
             timeout=int(cfg.get("timeout") or 120),
         )
 
-    raise ValueError(f"Unknown adapter: {adapter_name!r}")
+    supported = ", ".join(SUPPORTED_ADAPTERS)
+    raise ValueError(
+        f"Unknown adapter: {adapter_name!r}. Supported adapters: {supported}. "
+        "Check runtime.adapters.<adapter_name> and default_adapter/adapter resolution."
+    )

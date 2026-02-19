@@ -180,6 +180,46 @@ print(result.ok)                 # True/False
 print(result.state["runtime"])   # runtime metadata + outputs
 ```
 
+### Multi-Provider Runtime Configuration
+
+Configure provider adapters in `config.json` under `runtime.adapters` and set defaults:
+
+```json
+{
+  "default_adapter": "openai",
+  "default_model": "gpt-4o-mini",
+  "runtime": {
+    "adapters": {
+      "ollama": {
+        "base_url": "http://localhost:11434",
+        "timeout_seconds": 120
+      },
+      "openai": {
+        "base_url": "https://api.openai.com/v1",
+        "default_model": "gpt-4o-mini",
+        "timeout_seconds": 60
+      },
+      "anthropic": {
+        "base_url": "https://api.anthropic.com",
+        "default_model": "claude-sonnet-4-20250514",
+        "max_tokens": 4096
+      },
+      "litellm": {
+        "default_model": "openai/gpt-4o-mini",
+        "timeout": 120
+      }
+    }
+  }
+}
+```
+
+Selection precedence:
+- Model: CLI override > orchestration `model` > config `default_model`
+- Adapter: CLI override > orchestration `adapter` > config `default_adapter`
+- Runtime: orchestration `runtime` overrides config `runtime` (shallow merge)
+
+Every run records the resolved values and sources in `runtime.effective_settings`.
+
 ## Examples
 
 See the `examples/` directory for sample orchestration files:

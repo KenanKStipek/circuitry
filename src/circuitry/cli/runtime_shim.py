@@ -11,7 +11,7 @@ from ..core.compiler import compile_orchestration
 from ..core.dynamic import DynamicRuntime
 from ..core.store import Store
 from .config import CircuitryConfig
-from .effective_settings import resolve_effective_settings
+from .effective_settings import EffectiveSettings, resolve_effective_settings
 from .orchestration_loader import load_orchestration_file
 
 
@@ -84,21 +84,17 @@ def run(req: RunRequest) -> RunResult:
             state["runtime"]["last_run"]["completed_at"] = _now_iso()
             return RunResult(ok=True, state=state, warnings=warnings)
 
-        if not effective.adapter:
-            raise ValueError(
-                "No adapter resolved (set default_adapter or adapter in orchestration)."
-            )
-        if not effective.model:
-            raise ValueError(
-                "No model resolved (set default_model or model in orchestration)."
-            )
+        # Compile YAML -> core definitions before adapter/model initialization so
+        # structural orchestration errors are surfaced deterministically.
+        root_def = compile_orchestration(orch=orch, root_name="prime")
 
-        adapter = build_adapter(
-            adapter_name=effective.adapter, runtime=effective.runtime or {}
+        resolved_adapter, resolved_model = _require_resolved_settings(
+            effective=effective, orchestration_path=req.orchestration_path
         )
 
-        # Compile YAML -> core monads
-        root_def = compile_orchestration(orch=orch, root_name="prime")
+        adapter = build_adapter(
+            adapter_name=resolved_adapter, runtime=effective.runtime or {}
+        )
 
         # Execute using core runtime against Store
         store = Store(state)
@@ -107,7 +103,7 @@ def run(req: RunRequest) -> RunResult:
         timeout_seconds = 120
         try:
             adapters_cfg = (effective.runtime or {}).get("adapters") or {}
-            this_cfg = adapters_cfg.get(effective.adapter) or {}
+            this_cfg = adapters_cfg.get(resolved_adapter) or {}
             timeout_seconds = int(this_cfg.get("timeout_seconds") or 120)
         except Exception:
             timeout_seconds = 120
@@ -115,7 +111,7 @@ def run(req: RunRequest) -> RunResult:
         runtime = DynamicRuntime(
             root_def,
             adapter=adapter,
-            model=effective.model,
+            model=resolved_model,
             runtime_config=effective.runtime or {},
             dry_run=req.dry_run,
             timeout_seconds=timeout_seconds,
@@ -173,3 +169,23 @@ def inspect_orchestration(orchestration_path: Path) -> dict[str, Any]:
         summary["note"] = "Non-YAML inspection is currently shallow."
 
     return summary
+
+
+def _require_resolved_settings(
+    *, effective: EffectiveSettings, orchestration_path: Path
+) -> tuple[str, str]:
+    if not effective.adapter:
+        raise ValueError(
+            "No adapter resolved for orchestration "
+            f"{orchestration_path}. Set 'adapter' in the orchestration or "
+            "'default_adapter' in config.json. "
+            f"(adapter source: {effective.sources.get('adapter')})"
+        )
+    if not effective.model:
+        raise ValueError(
+            "No model resolved for orchestration "
+            f"{orchestration_path}. Set 'model' in the orchestration or "
+            "'default_model' in config.json. "
+            f"(model source: {effective.sources.get('model')})"
+        )
+    return (effective.adapter, effective.model)

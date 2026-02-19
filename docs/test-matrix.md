@@ -35,3 +35,10 @@ Every story implementation must pass:
 3. `mypy src`
 
 CI workflow: `.github/workflows/quality.yml`.
+
+## Planned Coverage Additions
+
+- Prompt interpolation contract tests (planned):
+  - nested state interpolation (for example `{{input.user.name}}`)
+  - missing-key rendering behavior
+  - non-string value rendering behavior
