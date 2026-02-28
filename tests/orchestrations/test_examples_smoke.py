@@ -15,13 +15,13 @@ from circuitry.cli.config import CircuitryConfig
 EXAMPLES_DIR = Path("orchestrations")
 MANIFEST_PATH = EXAMPLES_DIR / "manifest.json"
 CURATED_EXAMPLES = [
-    "hello.yml",
-    "dynamic_hello.yml",
-    "conditional_example.yml",
-    "loop_example.yml",
-    "typed_prompt_example.yml",
-    "reflector_v1.yml",
-    "multi_primitive_story.yml",
+    "_prompt.yml",
+    "_dynamic.yml",
+    "_dynamic_tree.yml",
+    "_conditional.yml",
+    "_loop.yml",
+    "_reflector.yml",
+    "_composition.yml",
 ]
 
 

@@ -5,7 +5,7 @@ import time
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Callable, Literal, Optional, Sequence
 
 from ..adapters import Adapter, build_adapter
 from ..adapters.base import GenerateResult
@@ -33,6 +33,22 @@ def _adapter_target(adapter: Any, model: str) -> str:
         host = urlparse(str(base_url)).hostname or str(base_url)
         return f"{adapter_name} · {model} @ {host}"
     return f"{adapter_name} · {model}"
+
+
+class _PromptSpinner:
+    """Animated single-line spinner for a prompt running in chain/sequential mode."""
+
+    _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, text: str, indent: str = "") -> None:
+        self._text = text
+        self._indent = indent
+        self._start = time.monotonic()
+
+    def __rich__(self) -> str:
+        elapsed = time.monotonic() - self._start
+        char = self._SPINNER[int(elapsed * 8) % len(self._SPINNER)]
+        return f"{self._indent}[info]{char}[/info] [cyan]◆[/cyan] {self._text}"
 
 
 def _render(template: str, ctx: dict[str, Any]) -> str:
@@ -136,6 +152,9 @@ class PromptRuntime:
         timeout_seconds: int = 120,
         verbose: bool = False,
         depth: int = 0,
+        cb_start: Callable[[], None] | None = None,
+        cb_done: Callable[[str], None] | None = None,
+        cb_error: Callable[[str], None] | None = None,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -145,6 +164,9 @@ class PromptRuntime:
         self.timeout_seconds = timeout_seconds
         self.verbose = verbose
         self.depth = depth
+        self.cb_start = cb_start
+        self.cb_done = cb_done
+        self.cb_error = cb_error
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         node = store.ensure_dict(self.defn.name)
@@ -180,30 +202,48 @@ class PromptRuntime:
         estimated_out = len(prompt_sent) // 4
         resolved_model = self.defn.model or self.model
         t0 = time.monotonic()
+        target = _adapter_target(self.adapter, resolved_model) if self.verbose else ""
 
-        if self.verbose:
-            target = _adapter_target(self.adapter, resolved_model)
-            _console.print(
-                f"{indent}[info]→[/info] [cyan]◆[/cyan] {self.defn.name}"
-                f" [dim]~{estimated_out}tok ↑  {target}[/dim]"
-            )
+        if self.verbose and self.cb_start is not None:
+            self.cb_start()
 
         if self.dry_run:
             node["value"] = None
             meta["completed_at"] = _now_iso()
             if self.verbose:
                 elapsed = time.monotonic() - t0
-                _console.print(
-                    f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.defn.name}"
-                    f" [dim]{_elapsed_str(elapsed)}[/dim]"
-                )
+                if self.cb_done is not None:
+                    line = (
+                        f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.defn.name}"
+                        f" [dim]{target} | {_elapsed_str(elapsed)}[/dim]"
+                    )
+                    self.cb_done(line)
+                else:
+                    _console.print(
+                        f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.defn.name}"
+                        f" [dim]{_elapsed_str(elapsed)}[/dim]"
+                    )
             return
 
         attempts_meta: list[dict[str, Any]] = []
         try:
             resolved_model = self.defn.model or self.model
             attempts = self._build_attempts(default_model=resolved_model)
-            with _console.status("") if self.verbose else nullcontext():
+            if self.verbose and self.cb_start is None:
+                from rich.live import Live
+
+                live_cm = Live(
+                    _PromptSpinner(
+                        f"{self.defn.name} [dim]~{estimated_out}tok ↑  {target}[/dim]",
+                        indent=indent,
+                    ),
+                    refresh_per_second=10,
+                    transient=True,
+                    console=_console,
+                )
+            else:
+                live_cm = nullcontext()
+            with live_cm:
                 res, attempts_meta, generation_error = self._generate_with_fallbacks(
                     prompt=prompt_sent, attempts=attempts
                 )
@@ -241,18 +281,26 @@ class PromptRuntime:
                 recv = res.tokens_received
                 if sent is not None or recv is not None:
                     suffix += f" | ↑{sent or 0} ↓{recv or 0} tok"
-                _console.print(
+                line = (
                     f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.defn.name}"
-                    f" [dim]{suffix}[/dim]"
+                    f" [dim]{target} | {suffix}[/dim]"
                 )
+                if self.cb_done is not None:
+                    self.cb_done(line)
+                else:
+                    _console.print(line)
 
         except Exception as e:
             if self.verbose:
                 elapsed = time.monotonic() - t0
-                _console.print(
+                line = (
                     f"{indent}[err]✗[/err] [cyan]◆[/cyan] {self.defn.name}"
-                    f" [dim]{_elapsed_str(elapsed)}[/dim]"
+                    f" [dim]{target} | {_elapsed_str(elapsed)}[/dim]"
                 )
+                if self.cb_error is not None:
+                    self.cb_error(line)
+                else:
+                    _console.print(line)
             meta["fallback_attempts"] = attempts_meta
             meta["fallback_recovered"] = False
             meta["error"] = str(e)

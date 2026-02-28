@@ -68,14 +68,15 @@ def test_no_output_when_verbose_false() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_prompt_emits_start_and_done() -> None:
+def test_prompt_emits_done() -> None:
     orch = {
         "effects": [
             {"type": "prompt", "name": "greet", "template": "hi"},
         ]
     }
     msgs = _run(orch, verbose=True)
-    assert any("→" in m and "greet" in m for m in msgs), msgs
+    # prompt start is an animated Live spinner (not a console.print)
+    # only the done line is captured
     assert any("✓" in m and "greet" in m for m in msgs), msgs
 
 
@@ -100,8 +101,8 @@ def test_nested_dynamic_emits_start_and_done() -> None:
     msgs = _run(orch, verbose=True)
     assert any("→" in m and "inner" in m for m in msgs), msgs
     assert any("✓" in m and "inner" in m for m in msgs), msgs
-    # child prompt also emitted — indented one level deeper
-    assert any("→" in m and "step" in m for m in msgs), msgs
+    # child prompt done line emitted (start is a Live spinner, not a print)
+    assert any("✓" in m and "step" in m for m in msgs), msgs
 
 
 # ---------------------------------------------------------------------------
@@ -133,8 +134,7 @@ def test_loop_each_emits_iter_and_body_messages() -> None:
     msgs = _run(orch, verbose=True, dry_run=False)
     # iter lines present
     assert any("iter" in m for m in msgs), msgs
-    # body prompt lines present
-    assert any("→" in m and "do" in m for m in msgs), msgs
+    # body prompt done lines present (start is a Live spinner, not a print)
     assert any("✓" in m and "do" in m for m in msgs), msgs
 
 
@@ -161,8 +161,8 @@ def test_conditional_emits_branch_message() -> None:
     assert any("✓" in m and "check" in m for m in msgs), msgs
     # branch label emitted
     assert any("branch" in m for m in msgs), msgs
-    # branch body prompt emitted
-    assert any("→" in m and "yes_path" in m for m in msgs), msgs
+    # branch body prompt done emitted (start is a Live spinner, not a print)
+    assert any("✓" in m and "yes_path" in m for m in msgs), msgs
 
 
 # ---------------------------------------------------------------------------
@@ -184,8 +184,9 @@ def test_nested_dynamic_messages_are_indented_deeper() -> None:
         ]
     }
     msgs = _run(orch, verbose=True)
+    # outer dynamic still prints → (non-prompt); inner prompt only prints ✓ (start is Live)
     outer_msg = next((m for m in msgs if "outer" in m and "→" in m), None)
-    inner_msg = next((m for m in msgs if "inner_step" in m and "→" in m), None)
+    inner_msg = next((m for m in msgs if "inner_step" in m and "✓" in m), None)
     assert outer_msg is not None
     assert inner_msg is not None
     # inner message should have more leading spaces than outer
