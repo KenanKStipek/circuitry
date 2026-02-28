@@ -186,6 +186,7 @@ def run(req: RunRequest) -> RunResult:
             runtime_config=effective.runtime or {},
             dry_run=req.dry_run,
             timeout_seconds=timeout_seconds,
+            verbose=req.verbose,
         )
         runtime.execute(store=store)
 

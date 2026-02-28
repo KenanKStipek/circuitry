@@ -1,17 +1,38 @@
 from __future__ import annotations
 
 import json
+import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional, Sequence
 
 from ..adapters import Adapter, build_adapter
 from ..adapters.base import GenerateResult
+from ..output import console as _console
 from .store import Store
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _elapsed_str(seconds: float) -> str:
+    if seconds >= 1:
+        return f"{seconds:.2f}s"
+    return f"{seconds * 1000:.0f}ms"
+
+
+def _adapter_target(adapter: Any, model: str) -> str:
+    """Return a human-readable 'adapter · model @ host' string."""
+    from urllib.parse import urlparse
+
+    adapter_name = getattr(adapter, "name", "unknown")
+    base_url = getattr(adapter, "base_url", None) or getattr(adapter, "api_base", None)
+    if base_url:
+        host = urlparse(str(base_url)).hostname or str(base_url)
+        return f"{adapter_name} · {model} @ {host}"
+    return f"{adapter_name} · {model}"
 
 
 def _render(template: str, ctx: dict[str, Any]) -> str:
@@ -113,6 +134,8 @@ class PromptRuntime:
         runtime_config: dict[str, Any] | None = None,
         dry_run: bool = False,
         timeout_seconds: int = 120,
+        verbose: bool = False,
+        depth: int = 0,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -120,6 +143,8 @@ class PromptRuntime:
         self.runtime_config = runtime_config or {}
         self.dry_run = dry_run
         self.timeout_seconds = timeout_seconds
+        self.verbose = verbose
+        self.depth = depth
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         node = store.ensure_dict(self.defn.name)
@@ -151,18 +176,37 @@ class PromptRuntime:
         meta["fallback_attempts"] = []
         meta["fallback_recovered"] = False
 
+        indent = "  " * self.depth
+        estimated_out = len(prompt_sent) // 4
+        resolved_model = self.defn.model or self.model
+        t0 = time.monotonic()
+
+        if self.verbose:
+            target = _adapter_target(self.adapter, resolved_model)
+            _console.print(
+                f"{indent}[info]→[/info] [cyan]◆[/cyan] {self.defn.name}"
+                f" [dim]~{estimated_out}tok ↑  {target}[/dim]"
+            )
+
         if self.dry_run:
             node["value"] = None
             meta["completed_at"] = _now_iso()
+            if self.verbose:
+                elapsed = time.monotonic() - t0
+                _console.print(
+                    f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.defn.name}"
+                    f" [dim]{_elapsed_str(elapsed)}[/dim]"
+                )
             return
 
         attempts_meta: list[dict[str, Any]] = []
         try:
             resolved_model = self.defn.model or self.model
             attempts = self._build_attempts(default_model=resolved_model)
-            res, attempts_meta, generation_error = self._generate_with_fallbacks(
-                prompt=prompt_sent, attempts=attempts
-            )
+            with _console.status("") if self.verbose else nullcontext():
+                res, attempts_meta, generation_error = self._generate_with_fallbacks(
+                    prompt=prompt_sent, attempts=attempts
+                )
             if generation_error is not None or res is None:
                 raise RuntimeError(
                     f"All adapter attempts failed: {attempts_meta}"
@@ -190,7 +234,25 @@ class PromptRuntime:
                 meta["adapter"] = last["adapter"]
                 meta["model"] = last["model"]
 
+            if self.verbose:
+                elapsed = time.monotonic() - t0
+                suffix = _elapsed_str(elapsed)
+                sent = res.tokens_sent
+                recv = res.tokens_received
+                if sent is not None or recv is not None:
+                    suffix += f" | ↑{sent or 0} ↓{recv or 0} tok"
+                _console.print(
+                    f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.defn.name}"
+                    f" [dim]{suffix}[/dim]"
+                )
+
         except Exception as e:
+            if self.verbose:
+                elapsed = time.monotonic() - t0
+                _console.print(
+                    f"{indent}[err]✗[/err] [cyan]◆[/cyan] {self.defn.name}"
+                    f" [dim]{_elapsed_str(elapsed)}[/dim]"
+                )
             meta["fallback_attempts"] = attempts_meta
             meta["fallback_recovered"] = False
             meta["error"] = str(e)

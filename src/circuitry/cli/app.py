@@ -96,7 +96,7 @@ def run_cmd(
 
     with (
         nullcontext()
-        if (quiet or json_out)
+        if (quiet or json_out or verbose)
         else console.status("[cyan]Running…[/cyan]")
     ):
         result = run(req)
@@ -280,7 +280,7 @@ def run_library_cmd(
 
     with (
         nullcontext()
-        if (quiet or json_out)
+        if (quiet or json_out or verbose)
         else console.status("[cyan]Running…[/cyan]")
     ):
         result = run(req)

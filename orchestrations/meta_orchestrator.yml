@@ -77,7 +77,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 adapter: ollama
-model: phi3:mini
+model: qwen3:8b
 
 effects:
   - type: dynamic

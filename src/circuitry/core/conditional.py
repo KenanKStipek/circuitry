@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, Union
 
 from ..adapters import Adapter
+from ..output import console as _console
 from .store import Store
 
 if TYPE_CHECKING:
@@ -77,6 +79,8 @@ class ConditionalRuntime:
         runtime_config: dict[str, Any] | None = None,
         dry_run: bool = False,
         timeout_seconds: int = 120,
+        verbose: bool = False,
+        depth: int = 0,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -84,6 +88,8 @@ class ConditionalRuntime:
         self.runtime_config = runtime_config or {}
         self.dry_run = dry_run
         self.timeout_seconds = timeout_seconds
+        self.verbose = verbose
+        self.depth = depth
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         from .dynamic import DynamicDefinition, DynamicRuntime
@@ -135,67 +141,107 @@ class ConditionalRuntime:
             meta["condition_result"] = result
             meta["branch"] = branch
 
+        branch_indent = "  " * (self.depth + 1)
+        if self.verbose:
+            _console.print(f"{branch_indent}[info]branch: {branch}[/info]")
+
         # Execute selected branch effects
         executed_effects: list[dict[str, Any]] = []
 
         try:
+            from .dynamic import _EFFECT_STYLE, _effect_type_label, _elapsed_str
+
             for idx, effect in enumerate(effects_to_run):
                 effect_record = self._effect_record(effect=effect, index=idx)
+                type_label = _effect_type_label(effect)
+                icon, color = _EFFECT_STYLE.get(type_label, ("·", "white"))
+                name = getattr(effect, "name", None) or "?"
+                is_prompt = isinstance(effect, PromptDefinition)
 
-                if isinstance(effect, PromptDefinition):
-                    PromptRuntime(
-                        effect,
-                        adapter=self.adapter,
-                        model=self.model,
-                        runtime_config=self.runtime_config,
-                        dry_run=self.dry_run,
-                        timeout_seconds=self.timeout_seconds,
-                    ).execute(store=child_store, ctx=ctx)
-                    executed_effects.append(effect_record)
+                if self.verbose and not is_prompt:
+                    _console.print(
+                        f"{branch_indent}[info]→[/info] [{color}]{icon}[/{color}]"
+                        f" {name}"
+                    )
 
-                elif isinstance(effect, DynamicDefinition):
-                    DynamicRuntime(
-                        effect,
-                        adapter=self.adapter,
-                        model=self.model,
-                        runtime_config=self.runtime_config,
-                        dry_run=self.dry_run,
-                        timeout_seconds=self.timeout_seconds,
-                    ).execute(store=child_store)
-                    executed_effects.append(effect_record)
+                t0 = time.monotonic()
+                try:
+                    if is_prompt:
+                        PromptRuntime(
+                            effect,
+                            adapter=self.adapter,
+                            model=self.model,
+                            runtime_config=self.runtime_config,
+                            dry_run=self.dry_run,
+                            timeout_seconds=self.timeout_seconds,
+                            verbose=self.verbose,
+                            depth=self.depth + 1,
+                        ).execute(store=child_store, ctx=ctx)
 
-                elif isinstance(effect, ConditionalDefinition):
-                    ConditionalRuntime(
-                        effect,
-                        adapter=self.adapter,
-                        model=self.model,
-                        runtime_config=self.runtime_config,
-                        dry_run=self.dry_run,
-                        timeout_seconds=self.timeout_seconds,
-                    ).execute(store=child_store, ctx=ctx)
-                    executed_effects.append(effect_record)
+                    elif isinstance(effect, DynamicDefinition):
+                        DynamicRuntime(
+                            effect,
+                            adapter=self.adapter,
+                            model=self.model,
+                            runtime_config=self.runtime_config,
+                            dry_run=self.dry_run,
+                            timeout_seconds=self.timeout_seconds,
+                            verbose=self.verbose,
+                            depth=self.depth + 2,
+                        ).execute(store=child_store)
 
-                elif isinstance(effect, LoopDefinition):
-                    LoopRuntime(
-                        effect,
-                        adapter=self.adapter,
-                        model=self.model,
-                        runtime_config=self.runtime_config,
-                        dry_run=self.dry_run,
-                        timeout_seconds=self.timeout_seconds,
-                    ).execute(store=child_store, ctx=ctx)
-                    executed_effects.append(effect_record)
+                    elif isinstance(effect, ConditionalDefinition):
+                        ConditionalRuntime(
+                            effect,
+                            adapter=self.adapter,
+                            model=self.model,
+                            runtime_config=self.runtime_config,
+                            dry_run=self.dry_run,
+                            timeout_seconds=self.timeout_seconds,
+                            verbose=self.verbose,
+                            depth=self.depth + 1,
+                        ).execute(store=child_store, ctx=ctx)
 
-                elif isinstance(effect, ReflectorDefinition):
-                    ReflectorRuntime(
-                        effect,
-                        adapter=self.adapter,
-                        model=self.model,
-                        runtime_config=self.runtime_config,
-                        dry_run=self.dry_run,
-                        timeout_seconds=self.timeout_seconds,
-                    ).execute(store=child_store)
-                    executed_effects.append(effect_record)
+                    elif isinstance(effect, LoopDefinition):
+                        LoopRuntime(
+                            effect,
+                            adapter=self.adapter,
+                            model=self.model,
+                            runtime_config=self.runtime_config,
+                            dry_run=self.dry_run,
+                            timeout_seconds=self.timeout_seconds,
+                            verbose=self.verbose,
+                            depth=self.depth + 1,
+                        ).execute(store=child_store, ctx=ctx)
+
+                    elif isinstance(effect, ReflectorDefinition):
+                        ReflectorRuntime(
+                            effect,
+                            adapter=self.adapter,
+                            model=self.model,
+                            runtime_config=self.runtime_config,
+                            dry_run=self.dry_run,
+                            timeout_seconds=self.timeout_seconds,
+                            verbose=self.verbose,
+                        ).execute(store=child_store)
+
+                    if self.verbose and not is_prompt:
+                        elapsed = time.monotonic() - t0
+                        _console.print(
+                            f"{branch_indent}[ok]✓[/ok] [{color}]{icon}[/{color}]"
+                            f" {name} [dim]{_elapsed_str(elapsed)}[/dim]"
+                        )
+
+                except Exception:
+                    if self.verbose and not is_prompt:
+                        elapsed = time.monotonic() - t0
+                        _console.print(
+                            f"{branch_indent}[err]✗[/err] [{color}]{icon}[/{color}]"
+                            f" {name} [dim]{_elapsed_str(elapsed)}[/dim]"
+                        )
+                    raise
+
+                executed_effects.append(effect_record)
 
             if node:
                 node["value"] = {

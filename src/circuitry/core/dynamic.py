@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal, Sequence, Union
 
 from ..adapters import Adapter
+from ..output import console as _console
 from .prompt import PromptDefinition, PromptRuntime
 from .store import Store
 
@@ -46,6 +48,8 @@ class DynamicRuntime:
         runtime_config: dict[str, Any] | None = None,
         dry_run: bool = False,
         timeout_seconds: int = 120,
+        verbose: bool = False,
+        depth: int = 0,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -53,6 +57,8 @@ class DynamicRuntime:
         self.runtime_config = runtime_config or {}
         self.dry_run = dry_run
         self.timeout_seconds = timeout_seconds
+        self.verbose = verbose
+        self.depth = depth
 
     def execute(
         self, *, store: Store, ctx_override: dict[str, Any] | None = None
@@ -119,33 +125,49 @@ class DynamicRuntime:
         self, effect: EffectDef, *, store: Store, ctx: dict[str, Any]
     ) -> None:
         """Execute a single effect within the dynamic."""
-        if isinstance(effect, PromptDefinition):
-            PromptRuntime(
-                effect,
-                adapter=self.adapter,
-                model=self.model,
-                runtime_config=self.runtime_config,
-                dry_run=self.dry_run,
-                timeout_seconds=self.timeout_seconds,
-            ).execute(store=store, ctx=ctx)
+        # Local imports to avoid circular imports at module load time
+        from .conditional import ConditionalDefinition, ConditionalRuntime
+        from .loop import LoopDefinition, LoopRuntime
+        from .reflector import ReflectorDefinition, ReflectorRuntime
 
-        elif isinstance(effect, DynamicDefinition):
-            DynamicRuntime(
-                effect,
-                adapter=self.adapter,
-                model=self.model,
-                runtime_config=self.runtime_config,
-                dry_run=self.dry_run,
-                timeout_seconds=self.timeout_seconds,
-            ).execute(store=store, ctx_override=ctx)
+        indent = "  " * self.depth
+        type_label = _effect_type_label(effect)
+        icon, color = _EFFECT_STYLE.get(type_label, ("·", "white"))
+        name = getattr(effect, "name", None) or "?"
+        is_prompt = isinstance(effect, PromptDefinition)
 
-        else:
-            # Local imports to avoid circular imports at module load time
-            from .conditional import ConditionalDefinition, ConditionalRuntime
-            from .loop import LoopDefinition, LoopRuntime
-            from .reflector import ReflectorDefinition, ReflectorRuntime
+        if self.verbose and not is_prompt:
+            _console.print(
+                f"{indent}[info]→[/info] [{color}]{icon}[/{color}] {name}"
+            )
 
-            if isinstance(effect, ReflectorDefinition):
+        t0 = time.monotonic()
+        try:
+            if is_prompt:
+                PromptRuntime(
+                    effect,
+                    adapter=self.adapter,
+                    model=self.model,
+                    runtime_config=self.runtime_config,
+                    dry_run=self.dry_run,
+                    timeout_seconds=self.timeout_seconds,
+                    verbose=self.verbose,
+                    depth=self.depth,
+                ).execute(store=store, ctx=ctx)
+
+            elif isinstance(effect, DynamicDefinition):
+                DynamicRuntime(
+                    effect,
+                    adapter=self.adapter,
+                    model=self.model,
+                    runtime_config=self.runtime_config,
+                    dry_run=self.dry_run,
+                    timeout_seconds=self.timeout_seconds,
+                    verbose=self.verbose,
+                    depth=self.depth + 1,
+                ).execute(store=store, ctx_override=ctx)
+
+            elif isinstance(effect, ReflectorDefinition):
                 ReflectorRuntime(
                     effect,
                     adapter=self.adapter,
@@ -153,6 +175,7 @@ class DynamicRuntime:
                     runtime_config=self.runtime_config,
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
+                    verbose=self.verbose,
                 ).execute(store=store)
 
             elif isinstance(effect, ConditionalDefinition):
@@ -163,6 +186,8 @@ class DynamicRuntime:
                     runtime_config=self.runtime_config,
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
+                    verbose=self.verbose,
+                    depth=self.depth,
                 ).execute(store=store, ctx=ctx)
 
             elif isinstance(effect, LoopDefinition):
@@ -173,13 +198,69 @@ class DynamicRuntime:
                     runtime_config=self.runtime_config,
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
+                    verbose=self.verbose,
+                    depth=self.depth,
                 ).execute(store=store, ctx=ctx)
 
             else:
                 raise TypeError(f"Unsupported effect type: {type(effect)}")
+
+            if self.verbose and not is_prompt:
+                elapsed = time.monotonic() - t0
+                _console.print(
+                    f"{indent}[ok]✓[/ok] [{color}]{icon}[/{color}]"
+                    f" {name} [dim]{_elapsed_str(elapsed)}[/dim]"
+                )
+
+        except Exception:
+            if self.verbose and not is_prompt:
+                elapsed = time.monotonic() - t0
+                _console.print(
+                    f"{indent}[err]✗[/err] [{color}]{icon}[/{color}]"
+                    f" {name} [dim]{_elapsed_str(elapsed)}[/dim]"
+                )
+            raise
 
     def _effect_path(self, *, effect: EffectDef, index: int) -> str:
         name = getattr(effect, "name", None)
         if isinstance(name, str) and name:
             return f"{self.defn.name}.{name}"
         return f"{self.defn.name}.{type(effect).__name__}[{index}]"
+
+
+def _effect_type_label(effect: Any) -> str:
+    """Return a short human-readable type label for verbose output."""
+    # Deferred imports to avoid circular dependency at module level
+    from .conditional import ConditionalDefinition
+    from .loop import LoopDefinition
+    from .reflector import ReflectorDefinition
+
+    if isinstance(effect, PromptDefinition):
+        return "prompt"
+    if isinstance(effect, DynamicDefinition):
+        return "dynamic"
+    if isinstance(effect, ConditionalDefinition):
+        return "if"
+    if isinstance(effect, LoopDefinition):
+        return "loop"
+    if isinstance(effect, ReflectorDefinition):
+        return "reflector"
+    return type(effect).__name__.lower()
+
+
+# (icon, rich color) per primitive type
+_EFFECT_STYLE: dict[str, tuple[str, str]] = {
+    "prompt": ("◆", "cyan"),
+    "dynamic": ("⬡", "blue"),
+    "loop": ("↻", "yellow"),
+    "if": ("◇", "magenta"),
+    "reflector": ("✺", "green"),
+}
+
+
+def _elapsed_str(seconds: float) -> str:
+    if seconds >= 1:
+        return f"{seconds:.2f}s"
+    return f"{seconds * 1000:.0f}ms"
+
+

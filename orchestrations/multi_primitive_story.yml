@@ -1,6 +1,6 @@
 # Example: multi-primitive composition for a realistic mini-pipeline
 adapter: ollama
-model: phi3:mini
+model: qwen3:8b
 effects:
   - type: dynamic
     name: pipeline

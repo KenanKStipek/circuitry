@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, Union
 
 from ..adapters import Adapter
+from ..output import console as _console
 from .store import Store
 
 if TYPE_CHECKING:
@@ -92,6 +94,8 @@ class LoopRuntime:
         runtime_config: dict[str, Any] | None = None,
         dry_run: bool = False,
         timeout_seconds: int = 120,
+        verbose: bool = False,
+        depth: int = 0,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -99,6 +103,8 @@ class LoopRuntime:
         self.runtime_config = runtime_config or {}
         self.dry_run = dry_run
         self.timeout_seconds = timeout_seconds
+        self.verbose = verbose
+        self.depth = depth
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         # Named loop: create a node for this loop
@@ -140,10 +146,15 @@ class LoopRuntime:
                 if not collection:
                     termination_reason = "collection_exhausted"
                 else:
+                    total = len(collection)
                     for idx, item in enumerate(collection):
                         if idx >= self.defn.max_iterations:
                             termination_reason = "max_iterations"
                             break
+
+                        if self.verbose:
+                            iter_indent = "  " * (self.depth + 1)
+                            _console.print(f"{iter_indent}[info]iter {idx + 1}/{total}[/info]")
 
                         # Bind current item to context
                         iter_ctx = dict(ctx)
@@ -184,6 +195,12 @@ class LoopRuntime:
                     ):
                         termination_reason = "condition_false"
                         break
+
+                    if self.verbose:
+                        iter_indent = "  " * (self.depth + 1)
+                        _console.print(
+                            f"{iter_indent}[info]iter {iteration_count + 1}[/info]"
+                        )
 
                     try:
                         iter_effects = self._execute_body(
@@ -346,7 +363,7 @@ Should the loop continue? Answer (yes/no):"""
     ) -> dict[str, Any]:
         """Execute all effects in the loop body for one iteration."""
         from .conditional import ConditionalDefinition, ConditionalRuntime
-        from .dynamic import DynamicDefinition, DynamicRuntime
+        from .dynamic import DynamicDefinition, DynamicRuntime, _effect_type_label
         from .prompt import PromptDefinition, PromptRuntime
         from .reflector import ReflectorDefinition, ReflectorRuntime
 
@@ -358,66 +375,104 @@ Should the loop continue? Answer (yes/no):"""
         else:
             iter_store = store
 
+        from .dynamic import _EFFECT_STYLE, _elapsed_str
+
+        body_indent = "  " * (self.depth + 1)
         executed: list[dict[str, Any]] = []
         for effect in self.defn.body:
             effect_record = {
                 "type": type(effect).__name__,
                 "name": getattr(effect, "name", None),
             }
-            if isinstance(effect, PromptDefinition):
-                PromptRuntime(
-                    effect,
-                    adapter=self.adapter,
-                    model=self.model,
-                    runtime_config=self.runtime_config,
-                    dry_run=self.dry_run,
-                    timeout_seconds=self.timeout_seconds,
-                ).execute(store=iter_store, ctx=ctx)
-                executed.append(effect_record)
+            type_label = _effect_type_label(effect)
+            icon, color = _EFFECT_STYLE.get(type_label, ("·", "white"))
+            name = getattr(effect, "name", None) or "?"
+            is_prompt = isinstance(effect, PromptDefinition)
 
-            elif isinstance(effect, DynamicDefinition):
-                DynamicRuntime(
-                    effect,
-                    adapter=self.adapter,
-                    model=self.model,
-                    runtime_config=self.runtime_config,
-                    dry_run=self.dry_run,
-                    timeout_seconds=self.timeout_seconds,
-                ).execute(store=iter_store)
-                executed.append(effect_record)
+            if self.verbose and not is_prompt:
+                _console.print(
+                    f"{body_indent}[info]→[/info] [{color}]{icon}[/{color}]"
+                    f" {name}"
+                )
 
-            elif isinstance(effect, ConditionalDefinition):
-                ConditionalRuntime(
-                    effect,
-                    adapter=self.adapter,
-                    model=self.model,
-                    runtime_config=self.runtime_config,
-                    dry_run=self.dry_run,
-                    timeout_seconds=self.timeout_seconds,
-                ).execute(store=iter_store, ctx=ctx)
-                executed.append(effect_record)
+            t0 = time.monotonic()
+            try:
+                if is_prompt:
+                    PromptRuntime(
+                        effect,
+                        adapter=self.adapter,
+                        model=self.model,
+                        runtime_config=self.runtime_config,
+                        dry_run=self.dry_run,
+                        timeout_seconds=self.timeout_seconds,
+                        verbose=self.verbose,
+                        depth=self.depth + 1,
+                    ).execute(store=iter_store, ctx=ctx)
 
-            elif isinstance(effect, LoopDefinition):
-                LoopRuntime(
-                    effect,
-                    adapter=self.adapter,
-                    model=self.model,
-                    runtime_config=self.runtime_config,
-                    dry_run=self.dry_run,
-                    timeout_seconds=self.timeout_seconds,
-                ).execute(store=iter_store, ctx=ctx)
-                executed.append(effect_record)
+                elif isinstance(effect, DynamicDefinition):
+                    DynamicRuntime(
+                        effect,
+                        adapter=self.adapter,
+                        model=self.model,
+                        runtime_config=self.runtime_config,
+                        dry_run=self.dry_run,
+                        timeout_seconds=self.timeout_seconds,
+                        verbose=self.verbose,
+                        depth=self.depth + 2,
+                    ).execute(store=iter_store)
 
-            elif isinstance(effect, ReflectorDefinition):
-                ReflectorRuntime(
-                    effect,
-                    adapter=self.adapter,
-                    model=self.model,
-                    runtime_config=self.runtime_config,
-                    dry_run=self.dry_run,
-                    timeout_seconds=self.timeout_seconds,
-                ).execute(store=iter_store)
-                executed.append(effect_record)
+                elif isinstance(effect, ConditionalDefinition):
+                    ConditionalRuntime(
+                        effect,
+                        adapter=self.adapter,
+                        model=self.model,
+                        runtime_config=self.runtime_config,
+                        dry_run=self.dry_run,
+                        timeout_seconds=self.timeout_seconds,
+                        verbose=self.verbose,
+                        depth=self.depth + 1,
+                    ).execute(store=iter_store, ctx=ctx)
+
+                elif isinstance(effect, LoopDefinition):
+                    LoopRuntime(
+                        effect,
+                        adapter=self.adapter,
+                        model=self.model,
+                        runtime_config=self.runtime_config,
+                        dry_run=self.dry_run,
+                        timeout_seconds=self.timeout_seconds,
+                        verbose=self.verbose,
+                        depth=self.depth + 1,
+                    ).execute(store=iter_store, ctx=ctx)
+
+                elif isinstance(effect, ReflectorDefinition):
+                    ReflectorRuntime(
+                        effect,
+                        adapter=self.adapter,
+                        model=self.model,
+                        runtime_config=self.runtime_config,
+                        dry_run=self.dry_run,
+                        timeout_seconds=self.timeout_seconds,
+                        verbose=self.verbose,
+                    ).execute(store=iter_store)
+
+                if self.verbose and not is_prompt:
+                    elapsed = time.monotonic() - t0
+                    _console.print(
+                        f"{body_indent}[ok]✓[/ok] [{color}]{icon}[/{color}]"
+                        f" {name} [dim]{_elapsed_str(elapsed)}[/dim]"
+                    )
+
+            except Exception:
+                if self.verbose and not is_prompt:
+                    elapsed = time.monotonic() - t0
+                    _console.print(
+                        f"{body_indent}[err]✗[/err] [{color}]{icon}[/{color}]"
+                        f" {name} [dim]{_elapsed_str(elapsed)}[/dim]"
+                    )
+                raise
+
+            executed.append(effect_record)
 
         return {
             "executed_effects": executed,
