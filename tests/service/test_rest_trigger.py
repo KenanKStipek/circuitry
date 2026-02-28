@@ -66,7 +66,7 @@ def test_rest_trigger_rejects_missing_or_invalid_token() -> None:
         method="POST",
         path="/v1/triggers/run",
         headers={},
-        body=json.dumps({"orchestration_path": "examples/dynamic_hello.yml"}),
+        body=json.dumps({"orchestration_path": "orchestrations/dynamic_hello.yml"}),
     )
 
     assert response.status_code == 401

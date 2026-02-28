@@ -15,7 +15,7 @@ def _read(path: Path) -> str:
 
 def test_readme_quick_start_includes_dry_run_and_verification() -> None:
     readme = _read(README_PATH)
-    assert "circuitry run examples/hello.yml --dry-run" in readme
+    assert "circuitry run orchestrations/hello.yml --dry-run" in readme
     assert "Quick verification checklist:" in readme
     assert "result.ok == True" in readme
 

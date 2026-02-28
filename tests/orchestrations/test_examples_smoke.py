@@ -12,7 +12,7 @@ from circuitry.api import (
 )
 from circuitry.cli.config import CircuitryConfig
 
-EXAMPLES_DIR = Path("examples")
+EXAMPLES_DIR = Path("orchestrations")
 MANIFEST_PATH = EXAMPLES_DIR / "manifest.json"
 CURATED_EXAMPLES = [
     "hello.yml",
@@ -27,7 +27,7 @@ CURATED_EXAMPLES = [
 
 def test_example_manifest_covers_curated_set() -> None:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-    listed = {entry["file"] for entry in manifest["examples"]}
+    listed = {entry["file"] for entry in manifest["orchestrations"]}
     assert listed == set(CURATED_EXAMPLES)
 
 

@@ -21,7 +21,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "Unknown option: $1"
-      echo "Usage: ./scripts/run-examples [--live] [--out PATH] [--live-out PATH]"
+      echo "Usage: ./scripts/run-orchestrations [--live] [--out PATH] [--live-out PATH]"
       exit 2
       ;;
   esac
@@ -49,7 +49,7 @@ if [[ "${run_live}" -eq 1 ]]; then
   mkdir -p "$(dirname "${live_out}")"
 fi
 
-for file in examples/*.yml; do
+for file in orchestrations/*.yml; do
   echo
   echo "==> validate: ${file}"
   "${PYTHON_BIN}" -m circuitry.cli.app validate "${file}"
@@ -63,14 +63,14 @@ if [[ "${run_live}" -eq 1 ]]; then
   echo "Running live example subset (requires configured adapter endpoint)..."
   if ! curl --silent --show-error --fail --max-time 2 http://localhost:11434/api/tags >/dev/null 2>&1; then
     echo "Live run precheck failed: could not reach Ollama at http://localhost:11434"
-    echo "Start Ollama (or update adapter config) and retry ./scripts/run-examples --live"
+    echo "Start Ollama (or update adapter config) and retry ./scripts/run-orchestrations --live"
     exit 1
   fi
-  for file in examples/hello.yml examples/dynamic_hello.yml examples/typed_prompt_example.yml; do
+  for file in orchestrations/hello.yml orchestrations/dynamic_hello.yml orchestrations/typed_prompt_example.yml; do
     echo "==> live-run: ${file}"
     "${PYTHON_BIN}" -m circuitry.cli.app run "${file}" --out "${live_out}" >/dev/null
   done
 fi
 
 echo
-echo "Examples check complete."
+echo "Orchestrations check complete."

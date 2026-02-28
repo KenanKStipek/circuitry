@@ -31,9 +31,9 @@ def test_highlighting_patterns_match_representative_examples() -> None:
     flow_pattern = _compile(repo["flowValues"]["patterns"][0]["match"])
     prompt_type_pattern = _compile(repo["promptTypes"]["patterns"][0]["match"])
 
-    hello = Path("examples/hello.yml").read_text(encoding="utf-8")
-    typed = Path("examples/typed_prompt_example.yml").read_text(encoding="utf-8")
-    multi = Path("examples/multi_primitive_story.yml").read_text(encoding="utf-8")
+    hello = Path("orchestrations/hello.yml").read_text(encoding="utf-8")
+    typed = Path("orchestrations/typed_prompt_example.yml").read_text(encoding="utf-8")
+    multi = Path("orchestrations/multi_primitive_story.yml").read_text(encoding="utf-8")
 
     assert types_pattern.search(hello)
     assert keys_pattern.search(hello)

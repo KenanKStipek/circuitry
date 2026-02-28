@@ -25,18 +25,18 @@ Optional dependency for Postgres state persistence:
 Run CLI via script wrapper:
 ```bash
 ./scripts/circuitry --help
-./scripts/circuitry run examples/hello.yml
-./scripts/circuitry run examples/hello.yml --dry-run
-./scripts/circuitry run examples/hello.yml --verbose
+./scripts/circuitry run orchestrations/hello.yml
+./scripts/circuitry run orchestrations/hello.yml --dry-run
+./scripts/circuitry run orchestrations/hello.yml --verbose
 ```
 
 Run CLI via module:
 ```bash
-python -m circuitry.cli.app run examples/hello.yml
+python -m circuitry.cli.app run orchestrations/hello.yml
 python -m circuitry.cli.app fetch welcome --version 1.0.0 --out ./welcome.yml
 python -m circuitry.cli.app run-library welcome --version 1.0.0 --service-profile svc-a --dry-run
-python -m circuitry.cli.app validate examples/hello.yml
-python -m circuitry.cli.app inspect examples/hello.yml
+python -m circuitry.cli.app validate orchestrations/hello.yml
+python -m circuitry.cli.app inspect orchestrations/hello.yml
 python -m circuitry.cli.app doctor --generate
 ```
 
@@ -112,8 +112,8 @@ Plugin runtime tests:
 
 Examples curation and validation:
 ```bash
-pytest -q tests/examples/test_examples_smoke.py
-./scripts/run-examples
+pytest -q tests/orchestrations/test_examples_smoke.py
+./scripts/run-orchestrations
 ```
 
 Editor highlighting verification:

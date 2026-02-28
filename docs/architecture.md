@@ -100,4 +100,4 @@ No dedicated deployment manifests (Docker/K8s/Terraform/CI pipelines) are curren
   - `pytest`
   - `ruff check .`
   - `mypy src`
-- Practical runtime validation via example orchestrations in `examples/` and CLI commands.
+- Practical runtime validation via example orchestrations in `orchestrations/` and CLI commands.

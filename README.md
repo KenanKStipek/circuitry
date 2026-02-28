@@ -150,7 +150,7 @@ Live-run expectations:
 Dry run command:
 
 ```bash
-circuitry run examples/hello.yml --dry-run --out out.json --pretty
+circuitry run orchestrations/hello.yml --dry-run --out out.json --pretty
 ```
 
 Expected result:
@@ -159,27 +159,27 @@ Expected result:
 
 Common setup pitfalls:
 - `circuitry: command not found`
-  - run via module: `python -m circuitry.cli.app run examples/hello.yml --dry-run`
+  - run via module: `python -m circuitry.cli.app run orchestrations/hello.yml --dry-run`
 - Import/runtime dependency issues
   - install deps: `pip install -e . && pip install -r requirements-dev.txt`
 
 Quick verification checklist:
-1. `circuitry run examples/hello.yml --dry-run` exits with code `0`.
+1. `circuitry run orchestrations/hello.yml --dry-run` exits with code `0`.
 2. `out.json` (or stdout state) shows `prime.say_hello.value`.
 3. Programmatic snippet below returns `result.ok == True`.
-4. Optional live run (`circuitry run examples/hello.yml`) works after adapter setup.
+4. Optional live run (`circuitry run orchestrations/hello.yml`) works after adapter setup.
 
 ### CLI
 
 ```bash
 # Recommended first run (no model invocations)
-circuitry run examples/hello.yml --dry-run
+circuitry run orchestrations/hello.yml --dry-run
 
 # Run with live model invocation
-circuitry run examples/hello.yml
+circuitry run orchestrations/hello.yml
 
 # With verbose output
-circuitry run examples/hello.yml --verbose
+circuitry run orchestrations/hello.yml --verbose
 ```
 
 ### Programmatic
@@ -188,7 +188,7 @@ circuitry run examples/hello.yml --verbose
 from circuitry import run_orchestration
 
 result = run_orchestration(
-    orchestration_path="examples/hello.yml",
+    orchestration_path="orchestrations/hello.yml",
     state={"input": {"user_name": "World"}},
     dry_run=True,
 )
@@ -244,9 +244,9 @@ Selection precedence:
 
 Every run records the resolved values and sources in `runtime.effective_settings`.
 
-## Examples
+## Orchestration Library
 
-See the `examples/` directory for sample orchestration files:
+See the `orchestrations/` directory for pre-built orchestrations:
 
 - `hello.yml` - Simple single prompt
 - `dynamic_hello.yml` - Sequential prompts with interpolation
@@ -255,10 +255,11 @@ See the `examples/` directory for sample orchestration files:
 - `typed_prompt_example.yml` - Typed prompts with JSON schema
 - `reflector_v1.yml` - Reflector-driven planning
 - `multi_primitive_story.yml` - Combined dynamic + loop + conditional composition
+- `meta_orchestrator.yml` - Generate a new orchestration from a natural language prompt
 
-Curated examples index, expected outputs, and compatibility/versioning notes:
-- `examples/README.md`
-- `examples/manifest.json`
+Full index, expected outputs, and compatibility/versioning notes:
+- `orchestrations/README.md`
+- `orchestrations/manifest.json`
 
 ### State Path Walkthrough
 
@@ -271,7 +272,7 @@ Runtime state paths follow orchestration names under `prime`.
 Use CLI output state files to inspect paths:
 
 ```bash
-circuitry run examples/loop_example.yml --out out.json --pretty
+circuitry run orchestrations/loop_example.yml --out out.json --pretty
 ```
 
 ## Architecture

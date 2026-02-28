@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "examples_version": "2026.02.19",
+  "orchestrations_version": "2026.02.19",
   "runtime_compatibility": {
     "min_version": "0.1.0",
     "notes": "Validated against current main branch runtime in dry-run mode."
   },
-  "examples": [
+  "orchestrations": [
     {
       "file": "hello.yml",
       "intent": "single prompt quick-start",

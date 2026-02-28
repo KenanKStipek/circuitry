@@ -15,7 +15,7 @@ circuitry/
 ├── config.json                          # Runtime defaults (adapter/model/provider config)
 ├── scripts/
 │   └── circuitry                        # CLI launcher wrapper (entrypoint shortcut)
-├── examples/                            # Executable orchestration examples
+├── orchestrations/                            # Pre-built orchestration library
 │   ├── hello.yml
 │   ├── dynamic_hello.yml
 │   ├── conditional_example.yml
@@ -58,7 +58,7 @@ circuitry/
 - `src/circuitry/core/`: Highest-leverage implementation area; contains deterministic runtime semantics and effect executors.
 - `src/circuitry/adapters/`: External-provider integration boundary and portability layer.
 - `src/circuitry/cli/`: Operational entrypoint for users and scripts; governs run/validate/inspect experience.
-- `examples/`: Practical spec fixtures for validating orchestration features and expected behavior.
+- `orchestrations/`: Pre-built orchestration library — runnable examples and community-contributed orchestrations.
 - `docs/`: Canonical concept/design intent used to align implementation and future planning docs.
 
 ## Entry Points

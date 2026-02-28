@@ -30,9 +30,9 @@ Current grammar highlights:
 - `prompt_type` values: `text`, `json`, `boolean`, `number`, `array`, `object`, `tool`
 
 Representative fixtures:
-- `examples/hello.yml`
-- `examples/typed_prompt_example.yml`
-- `examples/multi_primitive_story.yml`
+- `orchestrations/hello.yml`
+- `orchestrations/typed_prompt_example.yml`
+- `orchestrations/multi_primitive_story.yml`
 
 ## Known Limitations
 
@@ -43,7 +43,7 @@ Representative fixtures:
 ## Contribution Workflow
 
 1. Update grammar in `editor/vscode-circuitry/syntaxes/circuitry.tmLanguage.json`.
-2. Add/update fixture coverage using `examples/` files.
+2. Add/update fixture coverage using `orchestrations/` files.
 3. Run verification:
    - `pytest -q tests/docs/test_editor_highlighting.py`
 4. Update this document if token classes or install flow changes.
