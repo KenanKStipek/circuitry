@@ -1,6 +1,8 @@
-# Example: multi-primitive composition for a realistic mini-pipeline
 adapter: ollama
 model: qwen3:8b
+
+# Demonstrates all primitives working together:
+# dynamic(chain) → prompt(json) → loop(each) → if(cel) → prompt
 effects:
   - type: dynamic
     name: pipeline
@@ -9,8 +11,7 @@ effects:
       - type: prompt
         name: collect_topics
         prompt_type: json
-        template: >
-          Return exactly this JSON array: ["reliability","observability","testing"]
+        template: 'Return exactly this JSON array: ["reliability","observability","testing"]'
 
       - type: loop
         name: summarize

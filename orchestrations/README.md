@@ -9,22 +9,22 @@ Compatibility:
 
 ## Example Index
 
-| File | Intent | Primitives | Prerequisites | Difficulty | Expected State Highlights |
-|---|---|---|---|---|---|
-| `hello.yml` | Smallest runnable prompt | prompt | none (use `--dry-run`) | beginner | `prime.say_hello.value` |
-| `dynamic_hello.yml` | Sequential composition and interpolation | dynamic(chain), prompt | none (use `--dry-run`) | beginner | `prime.onboarding.ask_name.value`, `prime.onboarding.greet.value` |
-| `conditional_example.yml` | Branching based on condition | prompt, if(cel) | none (use `--dry-run`) | beginner | `prime.check_role.admin_greeting.value` or `prime.check_role.user_greeting.value` |
-| `loop_example.yml` | Collection iteration with named loop body | prompt(json), loop(each) | none (use `--dry-run`) | intermediate | `prime.explain_topics.iter_0.explain.value` |
-| `typed_prompt_example.yml` | Typed prompt outputs and schema-oriented flow | prompt(json/number/boolean) | none (use `--dry-run`) | intermediate | `prime.extract_entities.value.entities`, `prime.count_entities.value`, `prime.is_location_present.value` |
-| `reflector_v1.yml` | Reflector planning primitive | prompt, reflector | none (use `--dry-run`) | advanced | `prime.goal.value`, `prime.plan.*` runtime records |
-| `multi_primitive_story.yml` | Realistic mixed control flow | dynamic(chain), prompt, loop(each), if(cel), typed prompt | none (use `--dry-run`) | advanced | `prime.pipeline.summarize.value`, loop iteration paths, branch path under `finalize` |
-| `meta_orchestrator.yml` | Generate a new orchestration YAML from a natural language prompt | dynamic(chain), prompt(json), loop(each), if(cel), prompt | `--state input.json` required; 7B+ model recommended (phi3:mini unreliable — see file header) | advanced | `prime.generate.final_yaml.value` (generated YAML), `prime.generate.analyze_intent.value` (intent analysis), `prime.generate.elaborate_steps.iter_N.yaml_stub.value` (per-step stubs) |
+| File | Intent | Primitives | Difficulty | Expected State Highlights |
+|---|---|---|---|---|
+| `_prompt.yml` | prompt primitive — text, json, number, boolean output types | prompt | beginner | `prime.greeting.value`, `prime.entities.value.words`, `prime.word_count.value`, `prime.is_short.value` |
+| `_dynamic.yml` | dynamic chain — sequential steps, each sees prior outputs | dynamic(chain), prompt | beginner | `prime.pipeline.topic.value`, `prime.pipeline.explain.value`, `prime.pipeline.question.value` |
+| `_dynamic_tree.yml` | dynamic tree — independent parallel steps share same input snapshot | dynamic(tree), prompt | beginner | `prime.analysis.summary.value`, `prime.analysis.analogy.value`, `prime.analysis.question.value` |
+| `_conditional.yml` | if primitive — CEL expression branching | if(cel), prompt | intermediate | `prime.check_role.admin_greeting.value` or `prime.check_role.user_greeting.value` |
+| `_loop.yml` | loop primitive — each iteration over a JSON array | loop(each), prompt(json) | intermediate | `prime.explain.iter_0.summary.value`, … |
+| `_reflector.yml` | reflector primitive — runtime effect generation | reflector, prompt | advanced | `prime.goal.value`, `prime.plan.*` runtime records |
+| `_composition.yml` | all primitives composed — dynamic, loop, if, prompt | dynamic(chain), loop(each), if(cel), prompt | advanced | `prime.pipeline.summarize.iter_N.line.value`, `prime.pipeline.finalize.success_note.value` |
+| `meta_orchestrator.yml` | generate a new orchestration YAML from a natural language prompt | dynamic(chain), prompt(json), loop(each), if(cel), prompt | advanced | `prime.generate.final_yaml.value`, `prime.generate.analyze_intent.value` |
 
 ## Run and Inspect
 
 ```bash
 ./scripts/run-orchestrations
-./scripts/circuitry inspect orchestrations/multi_primitive_story.yml
+./scripts/circuitry inspect orchestrations/_composition.yml
 ```
 
 Live adapter test (optional):

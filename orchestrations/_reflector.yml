@@ -1,10 +1,12 @@
 adapter: ollama
 model: qwen3:8b
+
 effects:
   - type: prompt
     name: goal
     template: "Give me a one-sentence goal for a small demo app."
 
+  # reflector — planning primitive that generates and executes effects at runtime
   - type: reflector
     name: plan
     max_effects: 5

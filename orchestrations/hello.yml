@@ -1,6 +1,0 @@
-adapter: ollama
-model: qwen3:8b
-effects:
-  - type: prompt
-    name: say_hello
-    template: "In one sentence, what is Circuitry?"

@@ -7,44 +7,44 @@
   },
   "orchestrations": [
     {
-      "file": "hello.yml",
-      "intent": "single prompt quick-start",
+      "file": "_prompt.yml",
+      "intent": "prompt primitive — text, json, number, boolean output types",
       "difficulty": "beginner",
       "primitives": ["prompt"]
     },
     {
-      "file": "dynamic_hello.yml",
-      "intent": "dynamic chain composition",
+      "file": "_dynamic.yml",
+      "intent": "dynamic primitive — chain flow (sequential, each step sees prior outputs)",
       "difficulty": "beginner",
       "primitives": ["dynamic", "prompt"]
     },
     {
-      "file": "conditional_example.yml",
-      "intent": "deterministic conditional branching",
+      "file": "_dynamic_tree.yml",
+      "intent": "dynamic primitive — tree flow (all steps share the same input snapshot)",
       "difficulty": "beginner",
+      "primitives": ["dynamic", "prompt"]
+    },
+    {
+      "file": "_conditional.yml",
+      "intent": "if primitive — deterministic CEL branching",
+      "difficulty": "intermediate",
       "primitives": ["if", "prompt"]
     },
     {
-      "file": "loop_example.yml",
-      "intent": "collection iteration",
+      "file": "_loop.yml",
+      "intent": "loop primitive — each iteration over a JSON array",
       "difficulty": "intermediate",
       "primitives": ["loop", "prompt"]
     },
     {
-      "file": "typed_prompt_example.yml",
-      "intent": "typed outputs and schema",
-      "difficulty": "intermediate",
-      "primitives": ["prompt"]
-    },
-    {
-      "file": "reflector_v1.yml",
-      "intent": "reflector planning",
+      "file": "_reflector.yml",
+      "intent": "reflector primitive — runtime effect generation",
       "difficulty": "advanced",
       "primitives": ["reflector", "prompt"]
     },
     {
-      "file": "multi_primitive_story.yml",
-      "intent": "mixed multi-primitive orchestration",
+      "file": "_composition.yml",
+      "intent": "all primitives composed — dynamic, loop, if, prompt",
       "difficulty": "advanced",
       "primitives": ["dynamic", "loop", "if", "prompt"]
     }
