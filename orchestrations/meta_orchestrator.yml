@@ -64,7 +64,6 @@ effects:
     name: generate
     flow: chain
     effects:
-
       # ─── Step 1: Analyze user intent ─────────────────────────────────────────
       # Parses the natural language request into a structured design plan.
       # Produces goal, a steps array (2–5 entries), boolean flags for loop and
@@ -223,6 +222,7 @@ effects:
 
           Write the complete YAML. Add # comments explaining each section. Include a header comment block
           describing what the orchestration does, its input state keys, and primary output path.
+          Ensure relevant comments are included throughout the resulting YAML file where helpful.
 
           Start with: adapter: ollama
 

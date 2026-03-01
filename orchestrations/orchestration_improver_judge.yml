@@ -2,23 +2,12 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Convergence judge for the orchestration self-improvement loop.
 # Compares two orchestration YAML versions and returns true if they have
-# converged (functionally equivalent or trivially different), false if they
-# are meaningfully different and iteration should continue.
+# converged (functionally equivalent or only trivially different), false if
+# they are meaningfully different and iteration should continue.
 #
 # Called by the improve-orchestration script as a secondary convergence signal
 # after the SHA-256 hash check. Only invoked when hashes differ but the
 # convergence window threshold is met.
-#
-# ─── USAGE ───────────────────────────────────────────────────────────────────
-#
-#   echo '{"yaml_a": "...", "yaml_b": "..."}' > judge-input.json
-#   ./scripts/circuitry run orchestrations/orchestration_improver_judge.yml \
-#     --state judge-input.json --out judge-output.json
-#
-#   cat judge-output.json | python3 -c "
-#     import sys, json
-#     print(json.load(sys.stdin)['prime']['judge']['value'])
-#   "
 #
 # ─── INPUT STATE ─────────────────────────────────────────────────────────────
 #
@@ -26,20 +15,11 @@
 #   yaml_a  string   Previous iteration orchestration YAML
 #   yaml_b  string   Current iteration orchestration YAML
 #
-# ─── OUTPUT STATE PATHS ──────────────────────────────────────────────────────
+# ─── OUTPUT STATE PATH ───────────────────────────────────────────────────────
 #
 #   prime.judge.value
 #     → true  = orchestrations have converged (stop iterating)
 #     → false = orchestrations are meaningfully different (continue iterating)
-#
-# ─── MODEL RECOMMENDATION ────────────────────────────────────────────────────
-#
-#   A fast/cheap model is sufficient for this binary classification task.
-#   Consider overriding the default to a lighter model to reduce cost.
-#
-#   Ollama:   model: qwen3:4b  (lighter than the improver's qwen3:8b)
-#   Hosted:   model: claude-haiku-20240307   adapter: anthropic
-#             model: gpt-4o-mini             adapter: openai
 #
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -48,86 +28,25 @@ model: qwen3:8b
 
 effects:
   - type: prompt
-    name: sha256-check
+    name: judge
     prompt_type: boolean
-    template: "Are the SHA-256 hashes of the two YAML files identical? {{state.prime.sha256_hash_a.value}} == {{state.prime.sha256_hash_b.value}}"
-    schema:
-      $schema: http://json-schema.org/draft-07/schema#
-      type: object
-      properties:
-        identical:
-          type: boolean
+    template: |
+      You are evaluating whether two Circuitry orchestration YAML versions have converged.
 
-  - type: prompt
-    name: threshold-check
-    prompt_type: boolean
-    template: "Has the convergence window threshold been met? (Threshold value: {{state.prime.threshold_value.value}}) {{state.prime.threshold_met.value}}"
-    schema:
-      $schema: http://json-schema.org/draft-07/schema#
-      type: object
-      properties:
-        threshold_met:
-          type: boolean
+      Return true if the two versions are functionally equivalent or differ only in trivial
+      ways (whitespace, comments, reordered fields with identical meaning, cosmetic renames).
 
-  - type: dynamic
-    name: compare-effects
-    flow: chain
-    effects:
-      - type: loop
-        in: state.prime.effect_name.value
-        as: effect_name
-        body:
-          - type: prompt
-            name: effect-compare
-            prompt_type: boolean
-            template: "Are the effects identical? {{state.prime.[effect_name].value}} == {{state.prime.[effect_name + '_b'].value}}"
-            schema:
-              $schema: http://json-schema.org/draft-07/schema#
-              type: object
-              properties:
-                identical:
-                  type: boolean
+      Return false if version B represents a meaningful structural or behavioural improvement
+      over version A — different effects, better prompts, fixed logic, added steps, etc.
 
-  - type: if
-    name: convergence-decision
-    then:
-      - type: prompt
-        name: converged
-        prompt_type: boolean
-        template: "Are the effects identical? {{state.prime.converged.value}}"
-        schema:
-          $schema: http://json-schema.org/draft-07/schema#
-          type: object
-          properties:
-            value:
-              type: boolean
-    else:
-      - type: prompt
-        name: not-converged
-        prompt_type: boolean
-        template: "Are the effects meaningfully different? {{state.prime.not_converged.value}}"
-        schema:
-          $schema: http://json-schema.org/draft-07/schema#
-          type: object
-          properties:
-            value:
-              type: boolean
+      Version A (previous iteration):
+      <<< BEGIN YAML A >>>
+      {{yaml_a}}
+      <<< END YAML A >>>
 
-  - type: dynamic
-    name: judge-output
-    flow: chain
-    effects:
-      - type: prompt
-        name: output-value
-        prompt_type: boolean
-        template: "{{# state.prime.converged.value }}true{{/ state.prime.converged.value }}{{# !state.prime.converged.value }}false{{/ !state.prime.converged.value }}"
-        schema:
-          $schema: http://json-schema.org/draft-07/schema#
-          type: object
-          properties:
-            value:
-              type: boolean
+      Version B (current iteration):
+      <<< BEGIN YAML B >>>
+      {{yaml_b}}
+      <<< END YAML B >>>
 
-output:
-  - path: state.prime.judge.value
-    type: boolean
+      Return ONLY a JSON boolean: true if converged (stop iterating), false if meaningfully different (keep iterating).

@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""run-orchestration-ideas — generate and iteratively improve an orchestration for each idea.
+
+Reads orchestration-ideas.txt (one idea per line), runs the meta_orchestrator to
+generate an initial YAML for each, then runs improve-orchestration against it.
+
+Usage:
+    scripts/run-orchestration-ideas
+    scripts/run-orchestration-ideas --ideas path/to/ideas.txt
+    scripts/run-orchestration-ideas --max-improve-iterations 5
+    scripts/run-orchestration-ideas --skip-improve
+
+Output:
+    tmp/ideas/<slug>/initial.yml     — initial YAML from meta_orchestrator
+    tmp/ideas/<slug>/iter-N.yml      — improvement iterations
+    tmp/ideas/<slug>/iter-N.json     — full state per iteration
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+if sys.version_info < (3, 9):
+    print(
+        f"Error: Python 3.9+ required (found {sys.version_info.major}.{sys.version_info.minor}).",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+from circuitry import run_orchestration, validate_orchestration  # noqa: E402
+from circuitry.cli.config import find_config_path, load_config  # noqa: E402
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+
+META_ORCHESTRATOR = PROJECT_ROOT / "orchestrations" / "meta_orchestrator.yml"
+IDEAS_FILE = PROJECT_ROOT / "orchestration-ideas.txt"
+IDEAS_DIR = PROJECT_ROOT / "tmp" / "ideas"
+
+_CFG = load_config(find_config_path(explicit_path=None, cwd=PROJECT_ROOT))
+
+
+def _slugify(text: str, max_len: int = 60) -> str:
+    import re
+    slug = text.lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    slug = slug.strip("-")
+    return slug[:max_len].rstrip("-")
+
+
+def _sep(char: str = "─", width: int = 70) -> None:
+    print(char * width)
+
+
+def _extract_yaml(text: str) -> str:
+    """Extract the YAML portion from LLM output that may contain preamble text or markdown fences.
+
+    Strips leading prose (e.g. "Here is the corrected YAML:") and markdown code
+    fences, then returns everything from the first `adapter:` line onwards.
+    Returns an empty string if no `adapter:` line is found.
+    """
+    # Strip markdown fences first.
+    lines = text.splitlines()
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+
+    # Find the first line that starts the YAML document.
+    for i, line in enumerate(lines):
+        if line.startswith("adapter:"):
+            return "\n".join(lines[i:]).strip()
+    return ""
+
+
+def _load_ideas(path: Path) -> list[str]:
+    ideas = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            ideas.append(line)
+    return ideas
+
+
+def _generate_orchestration(idea: str, idea_dir: Path, max_retries: int = 3) -> bool:
+    """Run meta_orchestrator for the idea, retrying with validation feedback. Returns True on success."""
+    prev_errors: list[str] = []
+
+    for attempt in range(1, max_retries + 1):
+        attempt_label = f" (attempt {attempt}/{max_retries})" if max_retries > 1 else ""
+        print(f"  [1/2] Generating initial orchestration via meta_orchestrator{attempt_label}...")
+
+        # On retry, augment the user_request with errors from the previous attempt so the
+        # model knows exactly what structural issues to fix rather than guessing.
+        if prev_errors:
+            error_lines = "\n".join(f"  - {e}" for e in prev_errors[:5])
+            user_request = (
+                f"{idea}\n\n"
+                f"Your previous attempt produced a YAML that failed Circuitry structural "
+                f"validation with {len(prev_errors)} error(s):\n{error_lines}\n\n"
+                f"Fix ALL of these errors in your new attempt."
+            )
+        else:
+            user_request = idea
+
+        result = run_orchestration(
+            orchestration_path=META_ORCHESTRATOR,
+            state={"user_request": user_request},
+            config=_CFG,
+            verbose=True,
+            raise_on_error=False,
+        )
+
+        if not result.ok:
+            print(f"  ✗ meta_orchestrator failed: {result.error}")
+            return False
+
+        yaml_val: str = (
+            result.state
+            .get("prime", {})
+            .get("generate", {})
+            .get("final_yaml", {})
+            .get("value", "")
+        ) or ""
+
+        yaml_val = _extract_yaml(yaml_val)
+        if not yaml_val:
+            print(f"  ✗ No valid YAML produced (could not find 'adapter:' line in output)")
+            raw = (
+                result.state
+                .get("prime", {}).get("generate", {}).get("final_yaml", {}).get("value", "") or ""
+            )
+            if raw.strip():
+                preview = raw.strip()[:120].replace("\n", " ")
+                print(f"    Got: {preview}...")
+            return False
+
+        # Validate the generated YAML structure before saving.
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yml", encoding="utf-8", delete=False
+        ) as f:
+            f.write(yaml_val)
+            tmp_path = Path(f.name)
+        try:
+            vresult = validate_orchestration(orchestration_path=tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        if not vresult.get("ok", False):
+            prev_errors = vresult.get("errors", [])
+            print(f"  ✗ Validation failed ({len(prev_errors)} error(s))")
+            for err in prev_errors[:3]:
+                print(f"    • {err}")
+            if len(prev_errors) > 3:
+                print(f"    … and {len(prev_errors) - 3} more")
+            if attempt < max_retries:
+                print(f"  ↻ Retrying with validation errors as context...")
+            continue
+
+        idea_dir.mkdir(parents=True, exist_ok=True)
+        out_yml = idea_dir / "initial.yml"
+        out_yml.write_text(yaml_val, encoding="utf-8")
+        print(f"  ✓ Validated & saved: {out_yml}")
+        return True
+
+    print(f"  ✗ Failed to produce valid YAML after {max_retries} attempt(s)")
+    return False
+
+
+def _improve_orchestration(idea: str, idea_dir: Path, max_iterations: int) -> None:
+    """Run improve-orchestration script against the generated YAML."""
+    iter_label = "unlimited" if max_iterations == 0 else str(max_iterations)
+    print(f"  [2/2] Running improve-orchestration (max {iter_label} iterations)...")
+
+    improve_script = SCRIPT_DIR / "improve-orchestration"
+    cmd = [
+        sys.executable, str(improve_script),
+        "--orchestration", str(idea_dir / "initial.yml"),
+        "--prompt", idea,
+        "--max-iterations", str(max_iterations),
+        "--out-dir", str(idea_dir),
+        "--verbose",
+    ]
+
+    result = subprocess.run(cmd, capture_output=False)
+    if result.returncode != 0:
+        print(f"  ✗ improve-orchestration exited with code {result.returncode}")
+    else:
+        print(f"  ✓ Improvement complete")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Generate and iteratively improve an orchestration for each idea in orchestration-ideas.txt.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument(
+        "--ideas",
+        type=Path,
+        default=IDEAS_FILE,
+        help=f"Path to ideas file (default: {IDEAS_FILE.relative_to(PROJECT_ROOT)})",
+    )
+    parser.add_argument(
+        "--max-improve-iterations",
+        type=int,
+        default=0,
+        help="Max improve-orchestration iterations per idea (default: 0 = until convergence)",
+    )
+    parser.add_argument(
+        "--skip-improve",
+        action="store_true",
+        help="Only generate initial YAMLs, skip improve-orchestration step",
+    )
+    parser.add_argument(
+        "--start-at",
+        type=int,
+        default=1,
+        help="Skip to this idea number (1-based, default: 1)",
+    )
+    args = parser.parse_args()
+
+    if not args.ideas.exists():
+        print(f"Error: ideas file not found: {args.ideas}", file=sys.stderr)
+        sys.exit(1)
+
+    if not META_ORCHESTRATOR.exists():
+        print(f"Error: meta_orchestrator not found: {META_ORCHESTRATOR}", file=sys.stderr)
+        sys.exit(1)
+
+    ideas = _load_ideas(args.ideas)
+    if not ideas:
+        print("No ideas found in file.", file=sys.stderr)
+        sys.exit(1)
+
+    total = len(ideas)
+    print(f"Loaded {total} ideas from {args.ideas.relative_to(PROJECT_ROOT)}")
+    print(f"Output → {IDEAS_DIR.relative_to(PROJECT_ROOT)}/<slug>/")
+    if args.skip_improve:
+        print("Mode: generate only (--skip-improve)")
+    else:
+        iters = "unlimited" if args.max_improve_iterations == 0 else str(args.max_improve_iterations)
+        print(f"Improve iterations per idea: {iters}")
+    print()
+
+    succeeded = 0
+    failed = 0
+    skipped = 0
+
+    for idx, idea in enumerate(ideas, start=1):
+        if idx < args.start_at:
+            skipped += 1
+            continue
+
+        _sep("═")
+        print(f"[{idx}/{total}] {idea}")
+        _sep()
+
+        slug = _slugify(idea)
+        idea_dir = IDEAS_DIR / slug
+        initial_yml = idea_dir / "initial.yml"
+
+        # Step 1: Generate initial orchestration
+        if initial_yml.exists():
+            print(f"  ✓ Initial YAML already exists, skipping generation")
+            generated = True
+        else:
+            generated = _generate_orchestration(idea, idea_dir)
+
+        if not generated:
+            failed += 1
+            print()
+            continue
+
+        # Step 2: Improve (unless skipped)
+        if not args.skip_improve:
+            _improve_orchestration(idea, idea_dir, args.max_improve_iterations)
+
+        succeeded += 1
+        print()
+
+    _sep("═")
+    print(f"Done.")
+    print(f"  Succeeded : {succeeded}")
+    print(f"  Failed    : {failed}")
+    if skipped:
+        print(f"  Skipped   : {skipped}")
+    _sep("═")
+
+
+if __name__ == "__main__":
+    main()

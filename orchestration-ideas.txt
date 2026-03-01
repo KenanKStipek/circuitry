@@ -1,0 +1,74 @@
+# Orchestration Ideas
+# One idea per line. Blank lines and lines starting with # are skipped.
+
+# ── Text & Content ────────────────────────────────────────────────────────────
+Summarize a long article and extract key action items, deadlines, and owners into a structured list
+Turn a rough set of bullet points and a target audience into a polished blog post with intro, body, and conclusion
+Proofread a document for grammar, clarity, and tone, then produce a tracked-change summary and a clean final version
+Extract all named entities (people, places, organizations, dates) from a block of text and output structured JSON
+Generate a press release from a product name, feature list, and launch date
+Rewrite a technical document at three reading levels: expert, general public, and middle school
+Analyze a piece of text for sentiment, identify the most emotionally charged sentences, and suggest gentler alternatives
+Convert a wall of unstructured meeting notes into a clean agenda with decisions, action items, and open questions
+Generate five distinct titles and meta descriptions for an article optimized for SEO
+Compare two written texts for stylistic similarity and produce a report on vocabulary, sentence structure, and tone differences
+
+# ── Code & Engineering ────────────────────────────────────────────────────────
+Review code for bugs, security vulnerabilities, and style issues, then output a prioritized fix list
+Generate comprehensive unit tests for a given function signature, docstring, and language
+Refactor a code snippet to follow clean code principles: meaningful names, small functions, no duplication
+Convert a Python script to TypeScript, preserving logic and adding type annotations
+Generate an OpenAPI spec from a natural language description of a REST API
+Analyze a SQL query for performance issues and suggest optimized rewrites with explanations
+Generate a Git commit message and changelog entry from a diff description
+Produce a code review for a pull request description, flagging concerns and asking clarifying questions
+Write a Dockerfile and docker-compose.yml from a project description and list of services
+Generate a README.md for a project from its name, purpose, tech stack, and main commands
+
+# ── Research & Analysis ───────────────────────────────────────────────────────
+Analyze a batch of customer reviews, categorize them into themes, and rank themes by frequency and sentiment
+Compare two competing products based on their feature lists and output a pros/cons matrix and recommendation
+Take a list of research paper titles and abstracts, identify common themes, and synthesize a literature summary
+Evaluate a business idea against a set of criteria (market size, competition, feasibility) and score it
+Analyze a job posting and a candidate resume, identify gaps, and generate a tailored cover letter
+Fact-check a list of claims against a provided reference document and flag unsupported or contradicted claims
+Decompose a complex question into sub-questions, answer each independently, then synthesize a final answer
+Analyze a dataset description and suggest three different visualization approaches with rationale
+Generate a SWOT analysis from a company description and industry context
+Assess the risks in a project plan and produce a risk register with likelihood, impact, and mitigations
+
+# ── Decision Making & Planning ────────────────────────────────────────────────
+Score and rank a list of job candidates based on their profiles and a set of hiring criteria
+Evaluate a list of strategic options against weighted criteria and recommend the best path forward
+Break a complex software project into epics, stories, and tasks suitable for a two-week sprint
+Create a detailed travel itinerary from a destination, trip duration, budget, and list of interests
+Generate a personalized workout plan from fitness goals, available equipment, and schedule constraints
+Plan a dinner party menu from dietary restrictions, number of guests, skill level, and available pantry items
+Create a 30-60-90 day onboarding plan for a new employee given their role and team context
+Generate a negotiation strategy from a description of both parties' interests and constraints
+Prioritize a product backlog by analyzing feature requests against business value and implementation effort
+Build a decision tree for a customer support scenario from a product description and common issue types
+
+# ── Creative & Generative ─────────────────────────────────────────────────────
+Write a short story from a genre, protagonist description, setting, and a single dramatic constraint
+Generate a recipe from a list of available ingredients, dietary restrictions, and desired cuisine style
+Create a crossword puzzle clue set from a list of vocabulary words and their definitions
+Write a villain's motivational speech given their backstory, goal, and the hero they oppose
+Generate a set of icebreaker questions tailored to a specific team size, industry, and event type
+Produce a children's bedtime story featuring a user-supplied character name, animal sidekick, and moral lesson
+Write song lyrics in a specified genre and mood from a theme and a list of key images or metaphors
+Generate a board game concept including name, objective, win condition, and three core mechanics
+Create a fictional world-building document: geography, political factions, history, and three points of conflict
+Write a legal-sounding fictional contract between two absurd parties for an absurd service
+
+# ── Operations & Process ─────────────────────────────────────────────────────
+Generate a deployment runbook from a system architecture description and list of services
+Create a post-mortem report template from an incident description, timeline, and contributing factors
+Write a standard operating procedure (SOP) for a described business process with roles and checkpoints
+Generate an interview question set for a given job role, seniority level, and key competencies
+Produce a vendor evaluation scorecard from a list of requirements and a set of vendor descriptions
+Create a security threat model for a described application architecture
+Generate a data dictionary from a list of database table names and column descriptions
+Write a change management communication plan for a described organizational change
+Produce a quality assurance test plan from a feature specification and acceptance criteria
+Generate a budget breakdown and justification for a described project scope and team size

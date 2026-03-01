@@ -43,6 +43,7 @@ import hashlib
 import itertools
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 # Guard: list[str] notation requires Python 3.9+.
@@ -53,7 +54,7 @@ if sys.version_info < (3, 9):
     )
     sys.exit(1)
 
-from circuitry import run_orchestration  # noqa: E402 (import after version guard)
+from circuitry import run_orchestration, validate_orchestration  # noqa: E402 (import after version guard)
 from circuitry.cli.config import find_config_path, load_config  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -76,14 +77,40 @@ def _eprint(*args: object) -> None:
     print(*args, file=sys.stderr)
 
 
-def _strip_fences(text: str) -> str:
-    """Strip markdown code fences if a model returns ```yaml ... ``` despite instructions."""
+def _extract_yaml(text: str) -> str:
+    """Extract the YAML portion from LLM output that may contain preamble text or markdown fences.
+
+    Strips leading prose (e.g. "Here is the corrected YAML:") and markdown code
+    fences, then returns everything from the first `adapter:` line onwards.
+    Falls back to returning the full fence-stripped text if no `adapter:` line is found
+    (so the validator can report a useful error rather than silently producing nothing).
+    """
     lines = text.splitlines()
     if lines and lines[0].strip().startswith("```"):
         lines = lines[1:]
     if lines and lines[-1].strip() == "```":
         lines = lines[:-1]
+
+    for i, line in enumerate(lines):
+        if line.startswith("adapter:"):
+            return "\n".join(lines[i:]).strip()
+
+    # No adapter: line found — return the stripped text so the caller can show a useful error.
     return "\n".join(lines).strip()
+
+
+def _validate_yaml(yaml_text: str) -> tuple[bool, list[str]]:
+    """Validate a YAML string as a Circuitry orchestration. Returns (ok, errors)."""
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yml", encoding="utf-8", delete=False
+    ) as f:
+        f.write(yaml_text)
+        tmp_path = Path(f.name)
+    try:
+        result = validate_orchestration(orchestration_path=tmp_path)
+        return result.get("ok", False), result.get("errors", [])
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def main() -> None:
@@ -125,6 +152,12 @@ def main() -> None:
         action="store_true",
         help="Dry-run mode — exercises loop structure without real LLM calls",
     )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=None,
+        help="Directory to write iteration outputs (default: <project-root>/tmp/improve-<stem>/)",
+    )
     args = parser.parse_args()
 
     if args.convergence_window < 1:
@@ -145,9 +178,10 @@ def main() -> None:
         sys.exit(1)
 
     slug = orch_path.stem
-    # Always resolve out_dir relative to the project root, not the working directory,
-    # so the output location is predictable regardless of where the script is invoked from.
-    out_dir = PROJECT_ROOT / "tmp" / f"improve-{slug}"
+    # Use --out-dir if provided, otherwise default to <project-root>/tmp/improve-<stem>/.
+    # The default is always resolved relative to the project root so the output location
+    # is predictable regardless of where the script is invoked from.
+    out_dir = args.out_dir.resolve() if args.out_dir else PROJECT_ROOT / "tmp" / f"improve-{slug}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     current_yaml = orch_path.read_text(encoding="utf-8")
@@ -156,6 +190,9 @@ def main() -> None:
     # outputs (not against itself). recent_hashes[-N:] at iteration N contains
     # the outputs of iterations [N-N .. N-1].
     recent_hashes: list[str] = []
+    # Validation errors from the previous iteration, fed back into original_prompt
+    # so the improver knows exactly what structural issues to fix.
+    prev_validation_errors: list[str] = []
     unlimited = args.max_iterations == 0
     stop_reason = "interrupted" if unlimited else f"reached max iterations ({args.max_iterations})"
     last_iteration = -1
@@ -175,9 +212,22 @@ def main() -> None:
             iter_label = f"[iter {iteration + 1}]" if unlimited else f"[iter {iteration + 1}/{args.max_iterations}]"
             _eprint(f"{iter_label} Running improver...")
 
+            # If the previous iteration produced invalid YAML, tell the improver exactly
+            # what the structural errors were so it can fix them rather than guess.
+            if prev_validation_errors:
+                error_lines = "\n".join(f"  - {e}" for e in prev_validation_errors[:5])
+                prompt_for_iter = (
+                    f"{args.prompt}\n\n"
+                    f"IMPORTANT: Your previous output failed Circuitry structural validation "
+                    f"with {len(prev_validation_errors)} error(s):\n{error_lines}\n\n"
+                    f"Fix ALL of these errors in the improved YAML."
+                )
+            else:
+                prompt_for_iter = args.prompt
+
             result = run_orchestration(
                 orchestration_path=IMPROVER,
-                state={"input_yaml": current_yaml, "original_prompt": args.prompt},
+                state={"input_yaml": current_yaml, "original_prompt": prompt_for_iter},
                 verbose=args.verbose,
                 dry_run=args.dry_run,
                 config=_CFG,
@@ -199,7 +249,7 @@ def main() -> None:
             ) or ""
 
             # Strip markdown fences in case the model wraps output despite instructions.
-            output_yaml = _strip_fences(raw_output)
+            output_yaml = _extract_yaml(raw_output)
 
             if not output_yaml:
                 if args.dry_run:
@@ -212,6 +262,19 @@ def main() -> None:
                 if last_iteration >= 0:
                     _eprint(f"Last successful output: {out_dir / f'iter-{last_iteration}.yml'}")
                 sys.exit(1)
+
+            # Validate the output YAML structure before saving.
+            valid, errors = _validate_yaml(output_yaml)
+            if valid:
+                _eprint("  Validated: OK")
+                prev_validation_errors = []
+            else:
+                _eprint(f"  Validated: INVALID ({len(errors)} error(s)) — errors will be fed back next iteration")
+                for err in errors[:3]:
+                    _eprint(f"    • {err}")
+                if len(errors) > 3:
+                    _eprint(f"    … and {len(errors) - 3} more")
+                prev_validation_errors = errors
 
             # Save full state and extracted YAML for this iteration.
             (out_dir / f"iter-{iteration}.json").write_text(

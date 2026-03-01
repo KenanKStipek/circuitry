@@ -118,6 +118,7 @@ effects:
           3. Are Circuitry primitives (loop, conditional, dynamic, reflector) used appropriately for the task?
           4. Are there missing steps or effects that would improve output quality or completeness?
           5. Are templates clear, well-structured, and free of ambiguity?
+          6. Should any complex effect trees be broken into staged prompts (e.g., list → build → combine) rather than generated in a single shot?
 
           Return a JSON object with:
           - issues: list of specific problems found (be concrete, not vague)
@@ -154,6 +155,7 @@ effects:
           2. Implements every improvement area
           3. Preserves the identified strengths
           4. More fully and richly achieves the original intent
+          5. If the orchestration includes complex effect trees, split them into staged prompts (e.g., list running effect trees → build each tree → combine) rather than a single-shot generation, when this improves clarity or quality.
 
           CIRCUITRY YAML RULES — follow exactly:
           - Top-level fields: adapter, model, effects (no other top-level keys)
@@ -168,7 +170,7 @@ effects:
           - Loop each.in MUST point to a prompt_type: json effect whose output is an array
           - Use the same inner effect name in both then and else branches of any if effect
 
-          Write the complete improved YAML. Add # comments explaining each section. Include a header comment block describing what the orchestration does, its inputs, and its primary output path.
+          Write the complete improved YAML. Add # comments explaining each section and include additional comments where relevant to clarify intent or behavior. Include a header comment block describing what the orchestration does, its inputs, and its primary output path.
 
           Return ONLY the YAML. No markdown fences. No explanation outside of YAML comments.
 
@@ -201,6 +203,7 @@ effects:
           5. Do all Mustache variables in templates correspond to real initial state keys or real effect outputs?
           6. Does every prompt have name + template? Every dynamic have effects? Every loop have body + each? Every if have if + then?
           7. Do nested effects inside a dynamic reference sibling outputs using the parent dynamic name in the path (e.g. prime.<dynamic_name>.<effect_name>.value)?
+          8. Preserve and keep relevant comments that clarify sections, inputs, outputs, or behavior; add any missing relevant comments only if necessary to maintain clarity.
 
           After checking all seven items: if you found errors, output the corrected YAML. If the draft is correct, output it unchanged.
 
