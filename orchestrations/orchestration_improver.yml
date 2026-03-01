@@ -1,0 +1,207 @@
+# Orchestration Improver
+# ─────────────────────────────────────────────────────────────────────────────
+# Takes an existing Circuitry orchestration YAML and an original intent prompt,
+# analyzes the orchestration's quality, and produces a single improved version
+# that is richer, more accurate to the original intent, and better utilizes
+# Circuitry primitives.
+#
+# Designed to be called repeatedly by the `improve-orchestration` script,
+# which drives the iteration loop, detects convergence, and saves state
+# after each call.
+#
+# ─── USAGE ───────────────────────────────────────────────────────────────────
+#
+#   1. Run a single improvement pass directly:
+#
+#        echo '{"input_yaml": "...", "original_prompt": "..."}' > input.json
+#        ./scripts/circuitry run orchestrations/orchestration_improver.yml \
+#          --state input.json --out improved.json
+#
+#   2. Extract the improved YAML from state:
+#
+#        cat improved.json | python3 -c "
+#          import sys, json
+#          print(json.load(sys.stdin)['prime']['generate']['final_yaml']['value'])
+#        "
+#
+#   3. Use the improve-orchestration script for iterative refinement:
+#
+#        ./scripts/improve-orchestration \
+#          --orchestration path/to/orch.yml \
+#          --prompt "original intent"
+#
+# ─── INPUT STATE ─────────────────────────────────────────────────────────────
+#
+#   Key              Type     Description
+#   input_yaml       string   The current orchestration YAML to improve
+#   original_prompt  string   The original intent/goal the orchestration was built for
+#
+# ─── OUTPUT STATE PATHS ──────────────────────────────────────────────────────
+#
+#   prime.generate.final_yaml.value
+#     → The improved orchestration YAML (primary output)
+#
+#   prime.generate.analyze_quality.value
+#     → Quality analysis JSON: {issues, strengths, improvement_areas, alignment_score}
+#
+#   prime.generate.draft_yaml.value
+#     → Initial improved draft (before self-review pass)
+#
+# ─── MODEL RECOMMENDATION ────────────────────────────────────────────────────
+#
+#   A capable model is strongly recommended for reliable YAML generation.
+#   Small models may produce structurally invalid YAML.
+#
+#   Ollama (adapter: ollama):
+#     model: qwen3:8b        → ollama pull qwen3:8b
+#
+#   Hosted APIs (verify model IDs against current provider docs):
+#     model: claude-haiku-20240307   adapter: anthropic
+#     model: gpt-4o-mini             adapter: openai
+#     model: gemini/gemini-1.5-flash adapter: litellm
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+adapter: ollama
+model: llama3
+
+effects:
+  - type: dynamic
+    name: generate
+    flow: chain
+    effects:
+      # ─── Step 1: Analyze quality ───────────────────────────────────────────
+      # Assess the current orchestration against the original intent.
+      # Produces a structured JSON quality report identifying issues,
+      # strengths, and concrete improvement areas.
+      - type: prompt
+        name: analyze_quality
+        prompt_type: json
+        schema:
+          type: object
+          properties:
+            issues:
+              type: array
+              items:
+                type: string
+            strengths:
+              type: array
+              items:
+                type: string
+            improvement_areas:
+              type: array
+              items:
+                type: string
+            alignment_score:
+              type: number
+              minimum: 1
+              maximum: 10
+          required:
+            - issues
+            - strengths
+            - improvement_areas
+            - alignment_score
+          additionalProperties: false
+        template: |
+          You are a Circuitry orchestration quality reviewer.
+
+          Original intent: "{{original_prompt}}"
+
+          Current orchestration YAML:
+          <<< BEGIN YAML >>>
+          {{input_yaml}}
+          <<< END YAML >>>
+
+          Analyze this orchestration's quality against the original intent. Consider:
+          1. Does it fully achieve the original intent? Are any goals missing or underserved?
+          2. Are the prompt templates rich, specific, and instructive enough to produce high-quality outputs?
+          3. Are Circuitry primitives (loop, conditional, dynamic, reflector) used appropriately for the task?
+          4. Are there missing steps or effects that would improve output quality or completeness?
+          5. Are templates clear, well-structured, and free of ambiguity?
+
+          Return a JSON object with:
+          - issues: list of specific problems found (be concrete, not vague)
+          - strengths: list of what is working well and should be preserved
+          - improvement_areas: list of concrete, actionable suggestions for improvement
+          - alignment_score: integer 1–10 indicating how well this orchestration serves the original intent (10 = perfect alignment, 1 = completely misses the intent). The schema enforces this range.
+
+          Return ONLY the JSON object. No explanation. No markdown.
+
+      # ─── Step 2: Draft improved YAML ──────────────────────────────────────
+      # Produce an improved orchestration that addresses the quality analysis.
+      # Reads the analysis from Step 1 and the current YAML to produce a
+      # richer, more complete version aligned to the original intent.
+      - type: prompt
+        name: draft_yaml
+        template: |
+          You are a Circuitry YAML expert improving an existing orchestration.
+
+          Original intent: "{{original_prompt}}"
+
+          Quality analysis of the current version:
+          - Issues to fix: {{prime.generate.analyze_quality.value.issues}}
+          - Strengths to preserve: {{prime.generate.analyze_quality.value.strengths}}
+          - Improvements to make: {{prime.generate.analyze_quality.value.improvement_areas}}
+          - Current alignment score: {{prime.generate.analyze_quality.value.alignment_score}}/10 (use this as a signal of how much work remains — low scores need structural changes, high scores may only need prompt enrichment)
+
+          Current orchestration YAML to improve:
+          <<< BEGIN CURRENT YAML >>>
+          {{input_yaml}}
+          <<< END CURRENT YAML >>>
+
+          Produce an improved version that:
+          1. Fixes every issue listed above
+          2. Implements every improvement area
+          3. Preserves the identified strengths
+          4. More fully and richly achieves the original intent
+
+          CIRCUITRY YAML RULES — follow exactly:
+          - Top-level fields: adapter, model, effects (no other top-level keys)
+          - adapter options: ollama, openai, anthropic, litellm
+          - prompt: { type: prompt, name: str, template: str, prompt_type: text|json|boolean|number, schema: {...} (json only) }
+          - dynamic: { type: dynamic, name: str, flow: chain|tree, effects: [...] }
+          - if: { type: if, name: str, if: { mode: cel, expr: "state.prime.name.value == 'x'" }, then: [...], else: [...] }
+          - loop: { type: loop, name: str, each: { in: prime.effect_name.value, as: var_name }, body: [...] }
+          - Templates use Mustache: {{variable}} for initial state keys, {{prime.name.value}} for effect outputs
+          - Nested effect outputs include parent dynamic name: {{prime.dynamic_name.effect_name.value}}
+          - CEL expressions MUST use the full path prefix: state.prime.<name>.value
+          - Loop each.in MUST point to a prompt_type: json effect whose output is an array
+          - Use the same inner effect name in both then and else branches of any if effect
+
+          Write the complete improved YAML. Add # comments explaining each section. Include a header comment block describing what the orchestration does, its inputs, and its primary output path.
+
+          Return ONLY the YAML. No markdown fences. No explanation outside of YAML comments.
+
+      # ─── Step 3: Self-review and produce final output ─────────────────────
+      # Best-effort structural review — catches common Circuitry errors in the
+      # draft before returning the final output. Mirrors the review pass in
+      # meta_orchestrator.yml.
+      # Note: this is not a structural guarantee — the same model that wrote
+      # the draft is reviewing it. The improve-orchestration script additionally
+      # strips markdown fences and the caller should validate the output via
+      # `./scripts/circuitry validate` before relying on it in production.
+      # PRIMARY OUTPUT: prime.generate.final_yaml.value
+      - type: prompt
+        name: final_yaml
+        template: |
+          You are reviewing improved Circuitry orchestration YAML for correctness. Work through each check below in order, fix any errors found, then output the complete final YAML.
+
+          Original intent: "{{original_prompt}}"
+
+          Draft YAML to review:
+          <<< BEGIN DRAFT YAML >>>
+          {{prime.generate.draft_yaml.value}}
+          <<< END DRAFT YAML >>>
+
+          Work through each check systematically before producing output:
+          1. Does the file start with `adapter:` and include a `model:` field at the top level?
+          2. Are all state path references in templates formatted as `prime.<name>.value` (not just `<name>` or `<name>.value`)?
+          3. Does every loop effect.each.in point to a prompt_type: json effect that outputs an array?
+          4. Do all CEL expressions use the full `state.prime.<name>.value` prefix (not `prime.<name>.value`)?
+          5. Do all Mustache variables in templates correspond to real initial state keys or real effect outputs?
+          6. Does every prompt have name + template? Every dynamic have effects? Every loop have body + each? Every if have if + then?
+          7. Do nested effects inside a dynamic reference sibling outputs using the parent dynamic name in the path (e.g. prime.<dynamic_name>.<effect_name>.value)?
+
+          After checking all seven items: if you found errors, output the corrected YAML. If the draft is correct, output it unchanged.
+
+          Return ONLY the final YAML. No markdown fences. No explanations. No preamble.

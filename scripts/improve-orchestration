@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+"""improve-orchestration — iteratively improve a Circuitry orchestration YAML until convergence.
+
+Requires Python 3.9+ and the circuitry package (run from an activated venv).
+
+Usage:
+    scripts/improve-orchestration --orchestration path/to/orch.yml --prompt "original intent"
+    scripts/improve-orchestration --orchestration path/to/orch.yml --prompt "intent" \\
+        --max-iterations 10 --convergence-window 3 --verbose
+
+Algorithm:
+    1. Run orchestration_improver.yml on the input YAML to produce an improved version.
+    2. Save full state (JSON) and extracted YAML per iteration to
+       <project-root>/tmp/improve-<stem>/ (always relative to the project root,
+       not the working directory).
+    3. Compute SHA-256 hash of the output YAML.
+       - If hash matches any hash in the last N iterations → converged (hash match), stop.
+       - If N or more iterations have accumulated → run the LLM judge orchestration.
+         If judge returns true → converged (LLM judge), stop.
+    4. Repeat until convergence or --max-iterations is reached.
+
+Output:
+    Progress is written to stderr. On success, the path to the final improved YAML
+    file is written to stdout so it can be captured:
+        OUTPUT=$(./scripts/improve-orchestration --orchestration ... --prompt ...)
+        cat "$OUTPUT"   # print the improved YAML
+
+Options:
+    --orchestration      Path to the input orchestration YAML to improve (required)
+    --prompt             Original intent/goal the orchestration was built for (required).
+                         Keep this concise — it is embedded in every LLM call.
+    --max-iterations     Maximum number of improvement iterations (default: 10)
+    --convergence-window Recent iterations to compare for convergence (default: 3, min: 1)
+    --verbose            Pass verbose flag through to run_orchestration
+    --dry-run            Dry-run mode — exercises loop structure without real LLM calls;
+                         no output YAML is produced so the loop exits after the first pass
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import itertools
+import json
+import sys
+from pathlib import Path
+
+# Guard: list[str] notation requires Python 3.9+.
+if sys.version_info < (3, 9):
+    print(
+        f"Error: Python 3.9+ required (found {sys.version_info.major}.{sys.version_info.minor}).",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+from circuitry import run_orchestration  # noqa: E402 (import after version guard)
+from circuitry.cli.config import find_config_path, load_config  # noqa: E402
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+
+IMPROVER = PROJECT_ROOT / "orchestrations" / "orchestration_improver.yml"
+JUDGE = PROJECT_ROOT / "orchestrations" / "orchestration_improver_judge.yml"
+
+# Load project config once so adapters (e.g. ollama base_url) are picked up.
+# find_config_path searches CWD by default; we pass PROJECT_ROOT explicitly so
+# the config is always found regardless of the directory the script is invoked from.
+_CFG = load_config(find_config_path(explicit_path=None, cwd=PROJECT_ROOT))
+
+
+def _hash(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _eprint(*args: object) -> None:
+    print(*args, file=sys.stderr)
+
+
+def _strip_fences(text: str) -> str:
+    """Strip markdown code fences if a model returns ```yaml ... ``` despite instructions."""
+    lines = text.splitlines()
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Iteratively improve a Circuitry orchestration YAML until convergence.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument(
+        "--orchestration",
+        required=True,
+        help="Path to the input orchestration YAML to improve",
+    )
+    parser.add_argument(
+        "--prompt",
+        required=True,
+        help="Original intent/goal the orchestration was built for",
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=10,
+        help="Maximum number of improvement iterations (default: 10; 0 = run until convergence or Ctrl+C)",
+    )
+    parser.add_argument(
+        "--convergence-window",
+        type=int,
+        default=3,
+        help="Number of recent iterations to compare for convergence (default: 3, min: 1)",
+    )
+    parser.add_argument(
+        "--verbose",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Verbose orchestration output (default: on; use --no-verbose to suppress)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Dry-run mode — exercises loop structure without real LLM calls",
+    )
+    args = parser.parse_args()
+
+    if args.convergence_window < 1:
+        _eprint("Error: --convergence-window must be >= 1.")
+        sys.exit(1)
+
+    orch_path = Path(args.orchestration)
+    if not orch_path.exists():
+        _eprint(f"Error: orchestration file not found: {orch_path}")
+        sys.exit(1)
+
+    if not IMPROVER.exists():
+        _eprint(f"Error: improver orchestration not found: {IMPROVER}")
+        sys.exit(1)
+
+    if not JUDGE.exists():
+        _eprint(f"Error: judge orchestration not found: {JUDGE}")
+        sys.exit(1)
+
+    slug = orch_path.stem
+    # Always resolve out_dir relative to the project root, not the working directory,
+    # so the output location is predictable regardless of where the script is invoked from.
+    out_dir = PROJECT_ROOT / "tmp" / f"improve-{slug}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    current_yaml = orch_path.read_text(encoding="utf-8")
+    # Hash history: populated AFTER each iteration's convergence check so that
+    # the check at iteration N compares the current output against all prior
+    # outputs (not against itself). recent_hashes[-N:] at iteration N contains
+    # the outputs of iterations [N-N .. N-1].
+    recent_hashes: list[str] = []
+    unlimited = args.max_iterations == 0
+    stop_reason = "interrupted" if unlimited else f"reached max iterations ({args.max_iterations})"
+    last_iteration = -1
+    dry_run_exercised = False
+
+    _eprint(f"Improving: {orch_path}")
+    _eprint(f"Output dir: {out_dir}")
+    max_label = "unlimited (Ctrl+C to stop)" if unlimited else str(args.max_iterations)
+    _eprint(f"Max iterations: {max_label}  |  Convergence window: {args.convergence_window}")
+    if args.dry_run:
+        _eprint("Mode: dry-run (no real LLM calls; loop will exit on first pass)")
+    _eprint("")
+
+    loop = itertools.count() if unlimited else range(args.max_iterations)
+    try:
+        for iteration in loop:
+            iter_label = f"[iter {iteration + 1}]" if unlimited else f"[iter {iteration + 1}/{args.max_iterations}]"
+            _eprint(f"{iter_label} Running improver...")
+
+            result = run_orchestration(
+                orchestration_path=IMPROVER,
+                state={"input_yaml": current_yaml, "original_prompt": args.prompt},
+                verbose=args.verbose,
+                dry_run=args.dry_run,
+                config=_CFG,
+                raise_on_error=False,
+            )
+
+            if not result.ok:
+                _eprint(f"Error: improver failed — {result.error}")
+                if last_iteration >= 0:
+                    _eprint(f"Last successful output: {out_dir / f'iter-{last_iteration}.yml'}")
+                sys.exit(1)
+
+            raw_output: str = (
+                result.state
+                .get("prime", {})
+                .get("generate", {})
+                .get("final_yaml", {})
+                .get("value", "")
+            ) or ""
+
+            # Strip markdown fences in case the model wraps output despite instructions.
+            output_yaml = _strip_fences(raw_output)
+
+            if not output_yaml:
+                if args.dry_run:
+                    _eprint("  Dry-run: no output YAML produced (expected — no real LLM calls).")
+                    _eprint("  Loop structure exercised successfully.")
+                    stop_reason = "dry-run (no LLM output)"
+                    dry_run_exercised = True
+                    break
+                _eprint("Error: improver produced no output YAML.")
+                if last_iteration >= 0:
+                    _eprint(f"Last successful output: {out_dir / f'iter-{last_iteration}.yml'}")
+                sys.exit(1)
+
+            # Save full state and extracted YAML for this iteration.
+            (out_dir / f"iter-{iteration}.json").write_text(
+                json.dumps(result.state, indent=2), encoding="utf-8"
+            )
+            (out_dir / f"iter-{iteration}.yml").write_text(output_yaml, encoding="utf-8")
+            _eprint(f"  Saved: {out_dir / f'iter-{iteration}.yml'}")
+
+            last_iteration = iteration
+            current_hash = _hash(output_yaml)
+
+            # Hash convergence check (fast, zero LLM cost).
+            # Checks if the current output matches any output in the last N iterations.
+            if current_hash in recent_hashes[-args.convergence_window:]:
+                stop_reason = f"hash match at iteration {iteration + 1}"
+                _eprint(f"  Converged (hash match) at iteration {iteration + 1}.")
+                break
+
+            # LLM judge check — only after enough history has accumulated.
+            # yaml_a is the input to this iteration (= output of the previous iteration),
+            # yaml_b is the output of this iteration. Comparing these two directly is the
+            # correct semantic: "did this improvement step produce meaningful change?"
+            if len(recent_hashes) >= args.convergence_window:
+                _eprint("  Running convergence judge...")
+                judge_result = run_orchestration(
+                    orchestration_path=JUDGE,
+                    state={"yaml_a": current_yaml, "yaml_b": output_yaml},
+                    verbose=args.verbose,
+                    dry_run=args.dry_run,
+                    config=_CFG,
+                    raise_on_error=False,
+                )
+                if judge_result.ok:
+                    converged: object = (
+                        judge_result.state
+                        .get("prime", {})
+                        .get("judge", {})
+                        .get("value")
+                    )
+                    if converged is True:
+                        stop_reason = f"LLM judge convergence at iteration {iteration + 1}"
+                        _eprint(f"  Converged (LLM judge) at iteration {iteration + 1}.")
+                        break
+                    elif converged is None:
+                        _eprint(
+                            "  Warning: judge returned no value (state path mismatch or empty output)."
+                            " Treating as not converged and continuing."
+                        )
+                else:
+                    _eprint(f"  Warning: judge failed ({judge_result.error}), continuing.")
+
+            recent_hashes.append(current_hash)
+            current_yaml = output_yaml
+
+    except KeyboardInterrupt:
+        stop_reason = "interrupted by user (Ctrl+C)"
+        _eprint("")
+        _eprint("Interrupted.")
+
+    _eprint("")
+    _eprint("─" * 60)
+    _eprint(f"Done. Stop reason : {stop_reason}")
+    _eprint(f"Total iterations  : {last_iteration + 1}")
+
+    if last_iteration >= 0:
+        final_yml = out_dir / f"iter-{last_iteration}.yml"
+        _eprint(f"Final YAML        : {final_yml}")
+        _eprint("─" * 60)
+        # Print path to stdout so callers can capture it: OUTPUT=$(./scripts/improve-orchestration ...)
+        print(str(final_yml))
+    elif dry_run_exercised:
+        _eprint("─" * 60)
+    else:
+        _eprint("─" * 60)
+        _eprint("No iterations completed.")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

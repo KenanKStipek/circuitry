@@ -1,47 +1,33 @@
 # Meta-Orchestrator
 # ─────────────────────────────────────────────────────────────────────────────
-# Uses circuitry to build circuitry. Given a natural language description of
+# Uses Circuitry to build Circuitry. Given a natural language description of
 # what you want an orchestration to do, this workflow:
-#   1. Analyzes your intent into a structured design plan
-#   2. Elaborates each planned step (loop over steps array)
-#   3. Determines whether conditional logic is needed (if/cel branch)
-#   4. Drafts a complete Circuitry YAML orchestration
-#   5. Self-reviews and corrects common errors (best-effort pass)
+#   1. Analyzes your intent into a structured design plan (JSON)
+#   2. Elaborates each planned step into a YAML effect stub (loop)
+#   3. Drafts a complete Circuitry YAML orchestration
+#   4. Self-reviews and corrects common errors (best-effort pass)
 #
-# The generated YAML is stored in state — retrieve it and save as a .yml file.
+# Primary output: prime.generate.final_yaml.value
 #
 # ─── USAGE ───────────────────────────────────────────────────────────────────
 #
 #   1. Create an input state file:
-#
-#        echo '{"user_prompt": "Build an orchestration that summarizes a list of articles"}' > input.json
+#        echo '{"user_request": "Build an orchestration that summarizes articles"}' > input.json
 #
 #   2. Run the orchestration:
+#        ./scripts/circuitry run orchestrations/meta_orchestrator.yml \
+#          --state input.json --out out.json
 #
-#        ./scripts/circuitry run --state input.json examples/meta_orchestrator.yml
-#
-#        Output defaults to out.json in the current directory.
-#        Override with: --out /path/to/output.json
-#
-#   3. Extract the generated YAML from state:
-#
+#   3. Extract the generated YAML:
 #        cat out.json | python3 -c "
 #          import sys, json
 #          print(json.load(sys.stdin)['prime']['generate']['final_yaml']['value'])
 #        "
 #
-#   4. Save it as a new orchestration file and run it:
-#
-#        cat out.json | python3 -c "
-#          import sys, json
-#          print(json.load(sys.stdin)['prime']['generate']['final_yaml']['value'])
-#        " > my_orchestration.yml
-#        ./scripts/circuitry run my_orchestration.yml
-#
 # ─── INPUT STATE ─────────────────────────────────────────────────────────────
 #
-#   Key         Type     Description
-#   user_prompt string   Natural language description of the orchestration to build
+#   Key           Type     Description
+#   user_request  string   Natural language description of the orchestration to build
 #
 # ─── OUTPUT STATE PATHS ──────────────────────────────────────────────────────
 #
@@ -52,10 +38,7 @@
 #     → Structured intent analysis: goal, steps, requires_loop, requires_branching
 #
 #   prime.generate.elaborate_steps.iter_N.yaml_stub.value
-#     → Per-step YAML effect block stubs (one per step in the design plan)
-#
-#   prime.generate.branching_guidance.guidance.value
-#     → Design guidance note based on whether branching is required
+#     → Per-step YAML effect block stubs (one per planned step)
 #
 #   prime.generate.draft_yaml.value
 #     → Initial YAML draft (before self-review pass)
@@ -63,21 +46,18 @@
 # ─── MODEL RECOMMENDATION ────────────────────────────────────────────────────
 #
 #   A capable model is strongly recommended for reliable YAML generation.
-#   phi3:mini (default) will likely produce inconsistent output for this task.
 #
-#   Ollama (adapter: ollama):
-#     model: llama3          → ollama pull llama3
-#     model: mistral         → ollama pull mistral
+#   Ollama:   model: llama3         (default)
+#             model: qwen3:8b       → better quality
+#             model: qwen3-coder:30b → best quality
 #
-#   Hosted APIs (change adapter field to match):
-#     model: claude-haiku-20240307   adapter: anthropic
-#     model: gpt-4o-mini             adapter: openai
-#     model: gemini/gemini-1.5-flash adapter: litellm
+#   Hosted:   model: claude-haiku-20240307   adapter: anthropic
+#             model: gpt-4o-mini             adapter: openai
 #
 # ─────────────────────────────────────────────────────────────────────────────
 
 adapter: ollama
-model: qwen3:8b
+model: llama3
 
 effects:
   - type: dynamic
@@ -85,10 +65,10 @@ effects:
     flow: chain
     effects:
 
-      # ─── Step 1: Analyze user intent ───────────────────────────────────────
-      # Parses the natural language prompt into a structured design plan.
-      # Produces a JSON object with the orchestration goal, planned steps array
-      # (2–5 entries), and boolean flags for loop/branching requirements.
+      # ─── Step 1: Analyze user intent ─────────────────────────────────────────
+      # Parses the natural language request into a structured design plan.
+      # Produces goal, a steps array (2–5 entries), boolean flags for loop and
+      # branching requirements, input key descriptions, and the output state path.
       - type: prompt
         name: analyze_intent
         prompt_type: json
@@ -122,7 +102,7 @@ effects:
         template: |
           You are a Circuitry orchestration designer. Analyze the user request below and return a structured JSON design plan.
 
-          User request: "{{user_prompt}}"
+          User request: "{{user_request}}"
 
           Circuitry orchestration primitives available:
           - prompt: single model invocation (supports prompt_type: text, json, boolean, number)
@@ -148,11 +128,10 @@ effects:
 
           Return ONLY the JSON object. No explanation. No markdown.
 
-      # ─── Step 2: Elaborate each planned step ───────────────────────────────
+      # ─── Step 2: Elaborate each planned step ─────────────────────────────────
       # Iterates over the steps array from the intent analysis (2–5 iterations).
       # Each iteration produces a YAML effect block stub for that step.
       # Stubs are stored at: prime.generate.elaborate_steps.iter_N.yaml_stub.value
-      # These stubs are available in state for inspection and manual refinement.
       - type: loop
         name: elaborate_steps
         each:
@@ -166,10 +145,13 @@ effects:
 
               Step to implement: "{{step}}"
               Overall orchestration goal: {{prime.generate.analyze_intent.value.goal}}
+              Requires loop: {{prime.generate.analyze_intent.value.requires_loop}}
+              Requires branching: {{prime.generate.analyze_intent.value.requires_branching}}
 
               Write a single YAML effect block for this step using correct Circuitry syntax.
 
               Valid effect block examples:
+
                 prompt:
                   type: prompt
                   name: <name>
@@ -192,7 +174,7 @@ effects:
                   name: <name>
                   if:
                     mode: cel
-                    expr: "state.prime.<name>.value == 'expected'"
+                    expr: "state.prime.<name>.value == 'expected_value'"
                   then:
                     - type: prompt
                       name: <shared_name>
@@ -202,90 +184,60 @@ effects:
                       name: <shared_name>
                       template: "..."
 
-              Return ONLY the YAML block for this one step. No explanation. No full orchestration file. No markdown fences.
+              Return ONLY the YAML block for this one step. No markdown fences. No full orchestration file. No explanation.
 
-      # ─── Step 3: Determine branching guidance ──────────────────────────────
-      # Branches on requires_branching from the intent analysis.
-      # Both then and else branches use the same effect name (guidance) so the
-      # downstream state path is always consistent regardless of which ran:
-      #   prime.generate.branching_guidance.guidance.value
-      - type: if
-        name: branching_guidance
-        if:
-          mode: cel
-          expr: "state.prime.generate.analyze_intent.value.requires_branching == true"
-        then:
-          - type: prompt
-            name: guidance
-            prompt_type: text
-            template: |
-              The orchestration requires conditional logic. Produce this exact design note:
-              "Include an if effect with mode: cel. Write the expr field as state.prime.<name>.value == 'expected_value'. Give both the then and else branches the same inner effect name so downstream effects can reference a consistent state path."
-        else:
-          - type: prompt
-            name: guidance
-            prompt_type: text
-            template: |
-              The orchestration is a sequential chain with no branching. Produce this exact design note:
-              "Use a dynamic effect with flow: chain to compose all steps sequentially. No if effect is required."
-
-      # ─── Step 4: Draft the complete orchestration YAML ─────────────────────
+      # ─── Step 3: Draft the complete orchestration YAML ───────────────────────
       # Assembles a complete Circuitry orchestration file using the structured
-      # intent analysis and branching guidance as context.
-      # Note: the steps field is rendered as a Python list representation by
-      # the Mustache engine (e.g. ['step1: ...', 'step2: ...']) — treat each
-      # quoted entry as a separate planned step.
-      # Per-step YAML stubs elaborated in Step 2 are available in state at
-      # prime.generate.elaborate_steps.iter_N.yaml_stub.value for reference.
+      # intent analysis as context. Per-step stubs from Step 2 are available in
+      # state at prime.generate.elaborate_steps.iter_N.yaml_stub.value (N from 0)
+      # and are referenced conceptually when composing the full YAML.
       - type: prompt
         name: draft_yaml
         template: |
           You are a Circuitry YAML expert. Write a complete, runnable Circuitry orchestration file based on the design plan below.
 
-          User request: "{{user_prompt}}"
+          User request: "{{user_request}}"
           Goal: {{prime.generate.analyze_intent.value.goal}}
-          Planned steps (rendered as a list — each quoted string is one step): {{prime.generate.analyze_intent.value.steps}}
+          Planned steps (each quoted string is one step): {{prime.generate.analyze_intent.value.steps}}
           Requires loop: {{prime.generate.analyze_intent.value.requires_loop}}
           Requires branching: {{prime.generate.analyze_intent.value.requires_branching}}
           Input state keys the user provides: {{prime.generate.analyze_intent.value.input_schema}}
           Expected primary output state path: {{prime.generate.analyze_intent.value.output_path}}
-          Design guidance: {{prime.generate.branching_guidance.guidance.value}}
 
           Note: Per-step YAML stubs were elaborated during Step 2 and are stored in state at
           prime.generate.elaborate_steps.iter_N.yaml_stub.value (N starts at 0). Use the planned
           steps above as your primary structural guide when writing the orchestration.
 
           CIRCUITRY YAML RULES — follow these exactly:
-          - Top-level fields: adapter, model, effects
+          - Top-level fields: adapter, model, effects (no other top-level keys)
           - adapter options: ollama, openai, anthropic, litellm
-          - prompt: { type: prompt, name: str, template: str, prompt_type: text|json|boolean|number, schema: {...} (only for json) }
+          - prompt: { type: prompt, name: str, template: str, prompt_type: text|json|boolean|number, schema: {...} (json only) }
           - dynamic: { type: dynamic, name: str, flow: chain|tree, effects: [...] }
           - if: { type: if, name: str, if: { mode: cel, expr: "state.prime.name.value == 'x'" }, then: [...], else: [...] }
           - loop: { type: loop, name: str, each: { in: prime.effect_name.value, as: var_name }, body: [...] }
           - Templates use Mustache: {{variable}} for initial state keys, {{prime.name.value}} for effect outputs
+          - Nested effect outputs include parent dynamic name: {{prime.dynamic_name.effect_name.value}}
           - CEL expressions MUST use the full path prefix: state.prime.<name>.value
           - Loop each.in MUST point to a prompt_type: json effect whose output is an array
           - Use the same inner effect name in both then and else branches of any if effect
 
-          Write the complete YAML. Add # comments explaining each section. Include a brief header comment block describing what the orchestration does, what input state keys are required, and what state path holds the primary output.
+          Write the complete YAML. Add # comments explaining each section. Include a header comment block
+          describing what the orchestration does, its input state keys, and primary output path.
 
-          Start with: adapter: <adapter>
+          Start with: adapter: ollama
 
           Return ONLY the YAML. No markdown fences. No explanation outside of YAML comments.
 
-      # ─── Step 5: Self-review and produce final output ──────────────────────
-      # Best-effort review pass: asks the model to systematically check the
-      # draft for common Circuitry errors and correct any it finds before
-      # returning the final YAML. Note: this is not a structural guarantee —
-      # a model that produced broken YAML may not catch all its own errors.
-      # Always inspect the output before using it as a production orchestration.
+      # ─── Step 4: Self-review and produce final output ────────────────────────
+      # Best-effort structural review — catches common Circuitry errors in the
+      # draft before returning the final output.
       # PRIMARY OUTPUT: prime.generate.final_yaml.value
       - type: prompt
         name: final_yaml
         template: |
           You are reviewing a Circuitry orchestration YAML for correctness. Work through each check below in order, fix any errors found, then output the complete final YAML.
 
-          Original user request: "{{user_prompt}}"
+          Original user request: "{{user_request}}"
 
           Draft YAML to review:
           <<< BEGIN DRAFT YAML >>>
