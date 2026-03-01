@@ -1,5 +1,4 @@
 adapter: ollama
-model: qwen3:8b
 
 # Demonstrates all primitives working together:
 # dynamic(tree) → dynamic(chain) → prompt(json) → loop(each) → if(cel) → prompt

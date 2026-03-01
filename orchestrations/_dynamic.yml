@@ -1,5 +1,4 @@
 adapter: ollama
-model: qwen3:8b
 
 effects:
   # flow: chain — each step executes sequentially and sees outputs from prior steps

@@ -35,6 +35,7 @@
 #   Key              Type     Description
 #   input_yaml       string   The current orchestration YAML to improve
 #   original_prompt  string   The original intent/goal the orchestration was built for
+#   rules            string   LLM authoring rules injected from docs/orchestration-reference.md
 #
 # ─── OUTPUT STATE PATHS ──────────────────────────────────────────────────────
 #
@@ -63,7 +64,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 adapter: ollama
-model: llama3
 
 effects:
   - type: dynamic
@@ -157,18 +157,7 @@ effects:
           4. More fully and richly achieves the original intent
           5. If the orchestration includes complex effect trees, split them into staged prompts (e.g., list running effect trees → build each tree → combine) rather than a single-shot generation, when this improves clarity or quality.
 
-          CIRCUITRY YAML RULES — follow exactly:
-          - Top-level fields: adapter, model, effects (no other top-level keys)
-          - adapter options: ollama, openai, anthropic, litellm
-          - prompt: { type: prompt, name: str, template: str, prompt_type: text|json|boolean|number, schema: {...} (json only) }
-          - dynamic: { type: dynamic, name: str, flow: chain|tree, effects: [...] }
-          - if: { type: if, name: str, if: { mode: cel, expr: "state.prime.name.value == 'x'" }, then: [...], else: [...] }
-          - loop: { type: loop, name: str, each: { in: prime.effect_name.value, as: var_name }, body: [...] }
-          - Templates use Mustache: {{variable}} for initial state keys, {{prime.name.value}} for effect outputs
-          - Nested effect outputs include parent dynamic name: {{prime.dynamic_name.effect_name.value}}
-          - CEL expressions MUST use the full path prefix: state.prime.<name>.value
-          - Loop each.in MUST point to a prompt_type: json effect whose output is an array
-          - Use the same inner effect name in both then and else branches of any if effect
+          {{rules}}
 
           Write the complete improved YAML. Add # comments explaining each section and include additional comments where relevant to clarify intent or behavior. Include a header comment block describing what the orchestration does, its inputs, and its primary output path.
 
@@ -195,16 +184,8 @@ effects:
           {{prime.generate.draft_yaml.value}}
           <<< END DRAFT YAML >>>
 
-          Work through each check systematically before producing output:
-          1. Does the file start with `adapter:` and include a `model:` field at the top level?
-          2. Are all state path references in templates formatted as `prime.<name>.value` (not just `<name>` or `<name>.value`)?
-          3. Does every loop effect.each.in point to a prompt_type: json effect that outputs an array?
-          4. Do all CEL expressions use the full `state.prime.<name>.value` prefix (not `prime.<name>.value`)?
-          5. Do all Mustache variables in templates correspond to real initial state keys or real effect outputs?
-          6. Does every prompt have name + template? Every dynamic have effects? Every loop have body + each? Every if have if + then?
-          7. Do nested effects inside a dynamic reference sibling outputs using the parent dynamic name in the path (e.g. prime.<dynamic_name>.<effect_name>.value)?
-          8. Preserve and keep relevant comments that clarify sections, inputs, outputs, or behavior; add any missing relevant comments only if necessary to maintain clarity.
+          Use the rules below as an internal checklist only. Do NOT write out your review or explain your reasoning. Silently fix any violations and preserve all relevant comments, then output the corrected YAML.
 
-          After checking all seven items: if you found errors, output the corrected YAML. If the draft is correct, output it unchanged.
+          {{rules}}
 
-          Return ONLY the final YAML. No markdown fences. No explanations. No preamble.
+          Return ONLY the final YAML. No markdown fences. No explanations. No preamble. Start with `adapter:`.

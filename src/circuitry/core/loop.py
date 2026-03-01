@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, Union
@@ -72,6 +73,18 @@ class LoopDefinition:
 
     # Error behavior
     on_error: Literal["fail", "break", "continue"] = "fail"
+
+    # Collection output: if set, aggregate this body effect's .value across all
+    # iterations into an array written to prime.<loop_name>.collected.value
+    collect: Optional[str] = None
+
+    # Execution topology for each-loops: "chain" = sequential (default),
+    # "tree" = parallel iterations via ThreadPoolExecutor.
+    # while-loops always run sequentially regardless of this setting.
+    flow: Literal["chain", "tree"] = "chain"
+
+    # Maximum parallel workers when flow="tree". None = unbounded.
+    max_concurrency: Optional[int] = None
 
 
 class LoopRuntime:
@@ -145,7 +158,58 @@ class LoopRuntime:
 
                 if not collection:
                     termination_reason = "collection_exhausted"
+                elif self.defn.flow == "tree":
+                    # Parallel iteration: submit all at once, collect results in order
+                    capped = collection[: self.defn.max_iterations]
+                    total = len(capped)
+
+                    iter_ctxs: list[tuple[int, dict[str, Any]]] = []
+                    for idx, item in enumerate(capped):
+                        iter_ctx = dict(ctx)
+                        iter_ctx[self.defn.each_def.as_name] = item
+                        iter_ctx["_loop_index"] = idx
+                        iter_ctxs.append((idx, iter_ctx))
+
+                    results: dict[int, dict[str, Any]] = {}
+                    errors: dict[int, Exception] = {}
+
+                    with ThreadPoolExecutor(
+                        max_workers=self.defn.max_concurrency
+                    ) as executor:
+                        future_to_idx = {
+                            executor.submit(
+                                self._execute_body,
+                                store=child_store,
+                                ctx=iter_ctx,
+                                iteration=idx,
+                                parallel=True,
+                            ): idx
+                            for idx, iter_ctx in iter_ctxs
+                        }
+                        for future in as_completed(future_to_idx):
+                            i = future_to_idx[future]
+                            try:
+                                results[i] = future.result()
+                            except Exception as exc:
+                                errors[i] = exc
+
+                    # Assemble results in original order
+                    for idx in range(total):
+                        if idx in results:
+                            iterations_effects.append(results[idx])
+                            iteration_count += 1
+
+                    if errors:
+                        if self.defn.on_error == "fail":
+                            termination_reason = "error"
+                            raise next(iter(errors.values()))
+                        elif self.defn.on_error == "break":
+                            termination_reason = "error"
+                        # continue: already skipped failed iterations above
+                    else:
+                        termination_reason = "collection_exhausted"
                 else:
+                    # Sequential iteration (default)
                     total = len(collection)
                     for idx, item in enumerate(collection):
                         if idx >= self.defn.max_iterations:
@@ -231,6 +295,17 @@ class LoopRuntime:
                 if meta:
                     meta["completed_at"] = _now_iso()
 
+                # collect: aggregate the named body effect's .value across all iterations
+                if self.defn.collect:
+                    collected: list[Any] = []
+                    for i in range(iteration_count):
+                        iter_node = node.get(f"iter_{i}")
+                        if isinstance(iter_node, dict):
+                            effect_node = iter_node.get(self.defn.collect)
+                            if isinstance(effect_node, dict):
+                                collected.append(effect_node.get("value"))
+                    node["collected"] = {"value": collected}
+
         except Exception as e:
             if meta:
                 meta["error"] = str(e)
@@ -244,6 +319,15 @@ class LoopRuntime:
                     },
                     "effects_by_iteration": iterations_effects,
                 }
+                if self.defn.collect:
+                    collected_err: list[Any] = []
+                    for i in range(iteration_count):
+                        iter_node = node.get(f"iter_{i}")
+                        if isinstance(iter_node, dict):
+                            effect_node = iter_node.get(self.defn.collect)
+                            if isinstance(effect_node, dict):
+                                collected_err.append(effect_node.get("value"))
+                    node["collected"] = {"value": collected_err}
             raise
 
     def _resolve_collection(self, ctx: dict[str, Any]) -> list[Any]:
@@ -360,6 +444,7 @@ Should the loop continue? Answer (yes/no):"""
         store: Store,
         ctx: dict[str, Any],
         iteration: int,
+        parallel: bool = False,
     ) -> dict[str, Any]:
         """Execute all effects in the loop body for one iteration."""
         from .conditional import ConditionalDefinition, ConditionalRuntime
@@ -407,6 +492,15 @@ Should the loop continue? Answer (yes/no):"""
                         timeout_seconds=self.timeout_seconds,
                         verbose=self.verbose,
                         depth=self.depth + 1,
+                        # In parallel mode: print a static "→" start line instead of
+                        # an animated Live spinner (multiple concurrent Live instances conflict).
+                        cb_start=(
+                            lambda _n=name, _ico=icon, _col=color, _ind=body_indent: _console.print(
+                                f"{_ind}[info]→[/info] [{_col}]{_ico}[/{_col}] {_n}"
+                            )
+                        ) if parallel else None,
+                        cb_done=_console.print if parallel else None,
+                        cb_error=_console.print if parallel else None,
                     ).execute(store=iter_store, ctx=ctx)
 
                 elif isinstance(effect, DynamicDefinition):

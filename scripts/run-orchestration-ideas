@@ -45,6 +45,23 @@ IDEAS_DIR = PROJECT_ROOT / "tmp" / "ideas"
 _CFG = load_config(find_config_path(explicit_path=None, cwd=PROJECT_ROOT))
 
 
+def _load_rules(project_root: Path) -> str:
+    """Extract the '## LLM Authoring Rules' section from the reference doc."""
+    ref = project_root / "docs" / "orchestration-reference.md"
+    try:
+        text = ref.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+    marker = "## LLM Authoring Rules"
+    idx = text.find(marker)
+    if idx == -1:
+        return ""
+    return text[idx:].strip()
+
+
+RULES = _load_rules(PROJECT_ROOT)
+
+
 def _slugify(text: str, max_len: int = 60) -> str:
     import re
     slug = text.lower()
@@ -90,13 +107,14 @@ def _load_ideas(path: Path) -> list[str]:
 def _generate_orchestration(idea: str, idea_dir: Path, max_retries: int = 3) -> bool:
     """Run meta_orchestrator for the idea, retrying with validation feedback. Returns True on success."""
     prev_errors: list[str] = []
+    prev_run_error: str = ""
 
     for attempt in range(1, max_retries + 1):
         attempt_label = f" (attempt {attempt}/{max_retries})" if max_retries > 1 else ""
         print(f"  [1/2] Generating initial orchestration via meta_orchestrator{attempt_label}...")
 
-        # On retry, augment the user_request with errors from the previous attempt so the
-        # model knows exactly what structural issues to fix rather than guessing.
+        # On retry, augment the user_request with feedback from the previous attempt so the
+        # model knows exactly what went wrong rather than guessing.
         if prev_errors:
             error_lines = "\n".join(f"  - {e}" for e in prev_errors[:5])
             user_request = (
@@ -105,20 +123,45 @@ def _generate_orchestration(idea: str, idea_dir: Path, max_retries: int = 3) -> 
                 f"validation with {len(prev_errors)} error(s):\n{error_lines}\n\n"
                 f"Fix ALL of these errors in your new attempt."
             )
+        elif prev_run_error:
+            # Craft a human-readable diagnosis rather than exposing the raw schema error.
+            if "is not of type 'object'" in prev_run_error:
+                diagnosis = (
+                    "You returned a JSON array or non-object value instead of a JSON object. "
+                    "Your entire response must be a single JSON object with EXACTLY these 6 keys: "
+                    "goal, steps, requires_loop, requires_branching, input_schema, output_path. "
+                    "Start your response with { and end with }."
+                )
+            elif "is not of type 'string'" in prev_run_error and "input_schema" in prev_run_error:
+                diagnosis = (
+                    "The 'input_schema' field must be a plain English string like "
+                    "'article_text: string, max_words: number' — not a JSON schema object or array."
+                )
+            else:
+                diagnosis = f"Error: {prev_run_error}"
+            user_request = (
+                f"{idea}\n\n"
+                f"IMPORTANT — your previous attempt failed. {diagnosis}\n\n"
+                f"Fix this in your new attempt."
+            )
         else:
             user_request = idea
 
         result = run_orchestration(
             orchestration_path=META_ORCHESTRATOR,
-            state={"user_request": user_request},
+            state={"user_request": user_request, "rules": RULES},
             config=_CFG,
             verbose=True,
             raise_on_error=False,
         )
 
         if not result.ok:
+            prev_run_error = result.error or "unknown error"
+            prev_errors = []
             print(f"  ✗ meta_orchestrator failed: {result.error}")
-            return False
+            if attempt < max_retries:
+                print(f"  ↻ Retrying with error as context...")
+            continue
 
         yaml_val: str = (
             result.state
@@ -130,15 +173,19 @@ def _generate_orchestration(idea: str, idea_dir: Path, max_retries: int = 3) -> 
 
         yaml_val = _extract_yaml(yaml_val)
         if not yaml_val:
-            print(f"  ✗ No valid YAML produced (could not find 'adapter:' line in output)")
             raw = (
                 result.state
                 .get("prime", {}).get("generate", {}).get("final_yaml", {}).get("value", "") or ""
             )
-            if raw.strip():
-                preview = raw.strip()[:120].replace("\n", " ")
+            preview = raw.strip()[:120].replace("\n", " ") if raw.strip() else ""
+            prev_run_error = f"No valid YAML produced (output started with: {preview!r})" if preview else "No valid YAML produced (empty output)"
+            prev_errors = []
+            print(f"  ✗ No valid YAML produced (could not find 'adapter:' line in output)")
+            if preview:
                 print(f"    Got: {preview}...")
-            return False
+            if attempt < max_retries:
+                print(f"  ↻ Retrying with error as context...")
+            continue
 
         # Validate the generated YAML structure before saving.
         with tempfile.NamedTemporaryFile(
@@ -153,6 +200,7 @@ def _generate_orchestration(idea: str, idea_dir: Path, max_retries: int = 3) -> 
 
         if not vresult.get("ok", False):
             prev_errors = vresult.get("errors", [])
+            prev_run_error = ""
             print(f"  ✗ Validation failed ({len(prev_errors)} error(s))")
             for err in prev_errors[:3]:
                 print(f"    • {err}")

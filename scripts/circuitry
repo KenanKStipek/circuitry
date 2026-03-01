@@ -1,15 +1,69 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/usr/bin/env python3
+"""circuitry — Circuitry CLI wrapper with project-aware defaults.
 
-# Run the Circuitry CLI via python module.
-# Usage:
-#   ./scripts/circuitry --help
-#   ./scripts/circuitry run path/to/orch.yml --state state.json
+Usage:
+    scripts/circuitry run path/to/orch.yml
+    scripts/circuitry run path/to/orch.yml --state state.json --out out.json
+    scripts/circuitry run path/to/orch.yml --no-verbose
+    scripts/circuitry run path/to/orch.yml --dry-run
+    scripts/circuitry validate path/to/orch.yml
+    scripts/circuitry inspect path/to/orch.yml
+    scripts/circuitry --help
 
-if [[ -x ".venv/bin/python" ]]; then
-  PYTHON_BIN=".venv/bin/python"
-else
-  PYTHON_BIN="python"
-fi
+Differences from calling the CLI directly:
+    - Auto-discovers config.json in the project root and injects --config if not set
+    - Defaults --verbose for the run subcommand (use --no-verbose to disable)
+"""
 
-"${PYTHON_BIN}" -m circuitry.cli.app "$@"
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+if sys.version_info < (3, 9):
+    print(
+        f"Error: Python 3.9+ required (found {sys.version_info.major}.{sys.version_info.minor}).",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+
+
+def _find_python() -> str:
+    venv_python = PROJECT_ROOT / ".venv" / "bin" / "python"
+    if venv_python.is_file() and os.access(str(venv_python), os.X_OK):
+        return str(venv_python)
+    return sys.executable
+
+
+def main() -> None:
+    args = list(sys.argv[1:])
+
+    # Auto-inject --config if config.json exists in project root and not already set.
+    config_path = PROJECT_ROOT / "config.json"
+    if config_path.exists() and "--config" not in args and "-c" not in args:
+        # Insert right after the subcommand name (first non-flag arg).
+        insert_at = next(
+            (i + 1 for i, a in enumerate(args) if not a.startswith("-")), 0
+        )
+        args = args[:insert_at] + ["--config", str(config_path)] + args[insert_at:]
+
+    # Default --verbose for the run subcommand.
+    # Accept --no-verbose as our synthetic flag to opt out; strip it before forwarding.
+    if args and args[0] == "run":
+        if "--no-verbose" in args:
+            args.remove("--no-verbose")
+        elif "--verbose" not in args and "-v" not in args:
+            args.insert(1, "--verbose")
+
+    python = _find_python()
+    result = subprocess.run([python, "-m", "circuitry.cli.app"] + args)
+    sys.exit(result.returncode)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,11 +1,28 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
+
+try:
+    import jsonschema as _jsonschema
+except ImportError:
+    _jsonschema = None  # type: ignore[assignment]
+
+_SCHEMA_PATH = Path(__file__).parent.parent / "schema" / "orchestration.schema.json"
+
+
+def _load_schema() -> dict[str, Any] | None:
+    if _jsonschema is None:
+        return None
+    try:
+        return json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
 
 from ..adapters import build_adapter
 from ..core.compiler import compile_orchestration
@@ -56,8 +73,6 @@ def _load_state(
         return deepcopy(initial_state)
     if not path or not path.exists():
         return {}
-    import json
-
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -273,6 +288,14 @@ def validate(orchestration_path: Path) -> dict[str, Any]:
 
     try:
         orch = load_orchestration_file(orchestration_path)
+
+        schema = _load_schema()
+        if schema is not None:
+            validator = _jsonschema.Draft7Validator(schema)
+            schema_errors = sorted(validator.iter_errors(orch), key=str)
+            if schema_errors:
+                return {"ok": False, "errors": [e.message for e in schema_errors]}
+
         compile_orchestration(orch=orch, root_name="prime")
         return {"ok": True, "errors": []}
     except Exception as e:

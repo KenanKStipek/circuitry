@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""generate-orchestration — generate a Circuitry orchestration from a natural language prompt.
+
+Usage:
+    scripts/generate-orchestration --prompt "Build an orchestration that summarizes articles"
+    scripts/generate-orchestration --prompt "..." --out orchestrations/my_orch.yml
+    scripts/generate-orchestration --prompt "..." --out orchestrations/my_orch.yml --verbose
+    scripts/generate-orchestration --prompt "..." --dry-run
+
+Output:
+    Prints the generated YAML to stdout by default.
+    Use --out to save directly to a file.
+    Use --validate to run the validator on the output (default: on).
+
+Options:
+    --prompt, -p     Natural language description of the orchestration to build (required)
+    --out, -o        Save generated YAML to this file path (optional; defaults to stdout)
+    --validate       Validate the output after generation (default: on; use --no-validate to skip)
+    --verbose        Show orchestration execution logs (default: on)
+    --dry-run        Dry-run mode — exercises structure without real LLM calls
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+if sys.version_info < (3, 9):
+    print(
+        f"Error: Python 3.9+ required (found {sys.version_info.major}.{sys.version_info.minor}).",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+from circuitry import run_orchestration  # noqa: E402
+from circuitry.cli.config import find_config_path, load_config  # noqa: E402
+from circuitry.cli.runtime_shim import validate  # noqa: E402
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+META_ORCHESTRATOR = PROJECT_ROOT / "orchestrations" / "meta_orchestrator.yml"
+
+_CFG = load_config(find_config_path(explicit_path=None, cwd=PROJECT_ROOT))
+
+
+def _load_rules(project_root: Path) -> str:
+    """Extract the '## LLM Authoring Rules' section from the reference doc."""
+    ref = project_root / "docs" / "orchestration-reference.md"
+    try:
+        text = ref.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+    marker = "## LLM Authoring Rules"
+    idx = text.find(marker)
+    if idx == -1:
+        return ""
+    return text[idx:].strip()
+
+
+RULES = _load_rules(PROJECT_ROOT)
+
+
+def _extract_yaml(text: str) -> str:
+    """Strip markdown fences and leading prose, return from first adapter: line."""
+    lines = text.splitlines()
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    for i, line in enumerate(lines):
+        if line.startswith("adapter:"):
+            return "\n".join(lines[i:]).strip()
+    return "\n".join(lines).strip()
+
+
+def _eprint(*args: object) -> None:
+    print(*args, file=sys.stderr)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Generate a Circuitry orchestration from a natural language prompt.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument("--prompt", "-p", required=True, help="What the orchestration should do")
+    parser.add_argument(
+        "--out", "-o", type=Path, default=None,
+        help="Save generated YAML to this path (default: print to stdout)",
+    )
+    parser.add_argument(
+        "--validate",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Validate the generated YAML (default: on)",
+    )
+    parser.add_argument(
+        "--verbose", "-v",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Show orchestration execution logs (default: on)",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="No real LLM calls")
+    args = parser.parse_args()
+
+    if not META_ORCHESTRATOR.exists():
+        _eprint(f"Error: meta_orchestrator not found: {META_ORCHESTRATOR}")
+        sys.exit(1)
+
+    _eprint(f"Generating orchestration for: {args.prompt[:80]}{'...' if len(args.prompt) > 80 else ''}")
+    _eprint("")
+
+    result = run_orchestration(
+        orchestration_path=META_ORCHESTRATOR,
+        state={"user_request": args.prompt, "rules": RULES},
+        verbose=args.verbose,
+        dry_run=args.dry_run,
+        config=_CFG,
+        raise_on_error=False,
+    )
+
+    if not result.ok:
+        _eprint(f"Error: generation failed — {result.error}")
+        sys.exit(1)
+
+    raw: str = (
+        result.state
+        .get("prime", {})
+        .get("generate", {})
+        .get("final_yaml", {})
+        .get("value", "")
+    ) or ""
+
+    yaml_text = _extract_yaml(raw)
+
+    if not yaml_text:
+        _eprint("Error: no YAML output produced.")
+        sys.exit(1)
+
+    if args.validate:
+        import tempfile
+        tmp = Path(tempfile.mktemp(suffix=".yml"))
+        tmp.write_text(yaml_text + "\n", encoding="utf-8")
+        vresult = validate(tmp)
+        tmp.unlink(missing_ok=True)
+        if vresult["ok"]:
+            _eprint("Validated: OK")
+        else:
+            _eprint(f"Validated: INVALID ({len(vresult['errors'])} error(s))")
+            for err in vresult["errors"]:
+                _eprint(f"  • {err}")
+        _eprint("")
+
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(yaml_text + "\n", encoding="utf-8")
+        _eprint(f"Saved: {args.out}")
+    else:
+        print(yaml_text)
+
+
+if __name__ == "__main__":
+    main()

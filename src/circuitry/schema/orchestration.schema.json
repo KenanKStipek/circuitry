@@ -1,0 +1,365 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CircuitryOrchestration",
+  "description": "JSON Schema for Circuitry orchestration YAML files (DOL — Domain Object Language).",
+  "type": "object",
+  "required": ["effects"],
+  "properties": {
+    "adapter": {
+      "type": "string",
+      "description": "Adapter to use for model invocations. Options: ollama, openai, anthropic, litellm. Optional — can be set in config.json."
+    },
+    "model": {
+      "type": "string",
+      "description": "Model identifier. Optional — can be set in config.json."
+    },
+    "flow": {
+      "$ref": "#/$defs/FlowModel",
+      "description": "Top-level flow for the implicit root dynamic. Defaults to chain."
+    },
+    "version": {
+      "type": "number",
+      "description": "Optional schema/compatibility version number."
+    },
+    "effects": {
+      "type": "array",
+      "description": "Ordered list of top-level effects to execute.",
+      "items": { "$ref": "#/$defs/EffectDef" }
+    }
+  },
+  "additionalProperties": true,
+
+  "$defs": {
+    "NamePattern": {
+      "type": "string",
+      "allOf": [
+        {
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Names must start with a letter or underscore, followed by letters, digits, or underscores. No spaces or dots."
+        },
+        {
+          "not": { "pattern": "^iter_\\d+$" },
+          "description": "Names matching iter_<N> are reserved for loop iteration segments."
+        }
+      ]
+    },
+
+    "FlowModel": {
+      "type": "string",
+      "enum": ["chain", "chain_of_thought", "cot", "tree", "tree_of_thought", "tot"],
+      "description": "Execution topology. chain/chain_of_thought/cot = sequential (each effect sees prior outputs). tree/tree_of_thought/tot = parallel (all effects see input snapshot)."
+    },
+
+    "OnErrorDefault": {
+      "type": "string",
+      "enum": ["fail", "skip", "continue"],
+      "description": "Error handling policy. fail = abort; skip = omit this effect and continue; continue = record error and continue."
+    },
+
+    "OnErrorLoop": {
+      "type": "string",
+      "enum": ["fail", "break", "continue"],
+      "description": "Loop-specific error policy. fail = abort; break = exit loop; continue = skip iteration and continue."
+    },
+
+    "ConditionDef": {
+      "type": "object",
+      "description": "Condition definition for if/conditional and while loop.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["model", "cel"],
+          "description": "model = LLM evaluates template and returns boolean. cel = CEL expression evaluated against state."
+        },
+        "template": {
+          "type": "string",
+          "description": "Prompt template for model-based evaluation. Required when mode is model."
+        },
+        "expr": {
+          "type": "string",
+          "description": "CEL expression for deterministic evaluation. Must use state.prime.<name>.value prefix. Required when mode is cel."
+        }
+      }
+    },
+
+    "MessageDef": {
+      "type": "object",
+      "required": ["role", "content"],
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": ["system", "user", "assistant", "tool"]
+        },
+        "content": { "type": "string" }
+      }
+    },
+
+    "AssetRefDef": {
+      "type": "object",
+      "required": ["kind", "ref"],
+      "properties": {
+        "kind": { "type": "string", "description": "Asset type, e.g. image, file, audio." },
+        "ref": { "type": "string", "description": "Resolvable identifier or path." }
+      }
+    },
+
+    "RetryPolicyDef": {
+      "type": "object",
+      "properties": {
+        "max_attempts": { "type": "integer", "minimum": 1 },
+        "backoff_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "EffectDef": {
+      "type": "object",
+      "required": ["type"],
+      "description": "A single executable effect. Discriminated by the 'type' field.",
+      "if": { "properties": { "type": { "const": "prompt" } } },
+      "then": { "$ref": "#/$defs/PromptEffect" },
+      "else": {
+        "if": { "properties": { "type": { "const": "dynamic" } } },
+        "then": { "$ref": "#/$defs/DynamicEffect" },
+        "else": {
+          "if": { "properties": { "type": { "enum": ["if", "conditional"] } } },
+          "then": { "$ref": "#/$defs/ConditionalEffect" },
+          "else": {
+            "if": { "properties": { "type": { "const": "loop" } } },
+            "then": { "$ref": "#/$defs/LoopEffect" },
+            "else": {
+              "if": { "properties": { "type": { "const": "reflector" } } },
+              "then": { "$ref": "#/$defs/ReflectorEffect" },
+              "else": {
+                "properties": {
+                  "type": {
+                    "enum": ["prompt", "dynamic", "if", "conditional", "loop", "reflector"],
+                    "description": "Unknown effect type. Must be one of: prompt, dynamic, if, conditional, loop, reflector."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "PromptEffect": {
+      "type": "object",
+      "required": ["type", "name"],
+      "description": "Atomic model invocation. Produces a typed value at prime.<name>.value.",
+      "properties": {
+        "type": { "const": "prompt" },
+        "name": { "$ref": "#/$defs/NamePattern" },
+        "description": { "type": "string" },
+        "prompt_type": {
+          "type": "string",
+          "enum": ["text", "json", "boolean", "tool", "number", "array", "object"],
+          "description": "Output type. Defaults to text. Use json when output needs to be an array or object used by downstream effects."
+        },
+        "schema": {
+          "type": "object",
+          "description": "JSON Schema for validating structured output. Required when prompt_type is json."
+        },
+        "template": {
+          "type": "string",
+          "description": "Mustache template string. Use {{key}} for initial state, {{prime.name.value}} for effect outputs."
+        },
+        "messages": {
+          "type": "array",
+          "description": "Role-based message array. Mutually exclusive with template.",
+          "items": { "$ref": "#/$defs/MessageDef" }
+        },
+        "model": { "type": "string", "description": "Per-effect model override." },
+        "provider": { "type": "string", "description": "Per-effect provider override." },
+        "provider_fallbacks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Ordered list of fallback providers."
+        },
+        "params": { "type": "object", "description": "Provider-specific generation parameters." },
+        "timeout_ms": { "type": "integer", "minimum": 0 },
+        "deterministic": { "type": "boolean", "description": "If true, use temperature=0 or equivalent." },
+        "inputs": { "type": "object", "description": "Prompt-local key/value pairs available in template rendering." },
+        "assets": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/AssetRefDef" }
+        },
+        "retries": { "$ref": "#/$defs/RetryPolicyDef" },
+        "on_error": { "$ref": "#/$defs/OnErrorDefault" }
+      },
+      "oneOf": [
+        { "required": ["template"] },
+        { "required": ["messages"] }
+      ]
+    },
+
+    "DynamicEffect": {
+      "type": "object",
+      "required": ["type", "name", "effects"],
+      "description": "Named container that executes child effects as a chain or tree. Outputs at prime.<name>.<child_name>.value.",
+      "properties": {
+        "type": { "const": "dynamic" },
+        "name": { "$ref": "#/$defs/NamePattern" },
+        "description": { "type": "string" },
+        "flow": { "$ref": "#/$defs/FlowModel" },
+        "effects": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EffectDef" },
+          "minItems": 1,
+          "description": "Child effects to execute. Must be non-empty."
+        },
+        "max_concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum parallel executions for tree flow."
+        },
+        "stop_on_error": { "type": "boolean" },
+        "on_error": { "$ref": "#/$defs/OnErrorDefault" },
+        "labels": { "type": "object" }
+      }
+    },
+
+    "ConditionalEffect": {
+      "type": "object",
+      "required": ["type", "if", "then"],
+      "description": "Evaluates a condition and executes exactly one branch. Name is optional — named conditionals record decision metadata.",
+      "properties": {
+        "type": { "type": "string", "enum": ["if", "conditional"] },
+        "name": { "$ref": "#/$defs/NamePattern" },
+        "description": { "type": "string" },
+        "if": { "$ref": "#/$defs/ConditionDef" },
+        "then": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EffectDef" },
+          "description": "Effects to execute when condition is true."
+        },
+        "else": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EffectDef" },
+          "description": "Effects to execute when condition is false. Use the same inner effect names as then for deterministic state paths."
+        },
+        "threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confidence threshold for model-based evaluation. Default 0.5."
+        },
+        "on_error": {
+          "type": "string",
+          "enum": ["fail", "continue", "skip"]
+        },
+        "labels": { "type": "object" }
+      }
+    },
+
+    "LoopEffect": {
+      "type": "object",
+      "required": ["type", "body"],
+      "description": "Iterates over a collection (each) or repeats while a condition holds (while). Name is optional.",
+      "properties": {
+        "type": { "const": "loop" },
+        "name": { "$ref": "#/$defs/NamePattern" },
+        "description": { "type": "string" },
+        "collect": {
+          "type": "string",
+          "description": "Name of a body effect whose .value is aggregated across all iterations into an array. Written to prime.<loop_name>.collected.value after the loop completes. Requires a named loop."
+        },
+        "flow": {
+          "$ref": "#/$defs/FlowModel",
+          "description": "Execution topology for each-loops. chain (default) = sequential. tree = all iterations run in parallel via ThreadPoolExecutor. while-loops always run sequentially."
+        },
+        "max_concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum parallel workers when flow is tree. Default: unbounded."
+        },
+        "body": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EffectDef" },
+          "minItems": 1,
+          "description": "Effects to execute each iteration."
+        },
+        "each": {
+          "type": "object",
+          "required": ["in"],
+          "description": "Collection iteration config. each.in must point to a prompt_type: json effect whose output is an array.",
+          "properties": {
+            "in": {
+              "type": "string",
+              "description": "Dot-delimited state path resolving to a JSON array, e.g. prime.my_prompt.value."
+            },
+            "as": {
+              "type": "string",
+              "description": "Variable name for the current element. Defaults to 'item'. Accessible in body as {{as_name}}."
+            }
+          }
+        },
+        "while": {
+          "$ref": "#/$defs/ConditionDef",
+          "description": "Continuation condition. Loop repeats while condition is true."
+        },
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum iteration cap. Default 100."
+        },
+        "min_iterations": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Minimum iterations before condition is checked."
+        },
+        "on_error": { "$ref": "#/$defs/OnErrorLoop" },
+        "labels": { "type": "object" }
+      }
+    },
+
+    "ReflectorEffect": {
+      "type": "object",
+      "required": ["type", "name", "effects"],
+      "description": "Planning-time effect. Reads state, generates a Dynamic plan, executes it. Repeats for max_iterations cycles.",
+      "properties": {
+        "type": { "const": "reflector" },
+        "name": { "$ref": "#/$defs/NamePattern" },
+        "description": { "type": "string" },
+        "flow": { "$ref": "#/$defs/FlowModel" },
+        "effects": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EffectDef" },
+          "minItems": 1,
+          "description": "Inner effects template used as the base dynamic per planning cycle."
+        },
+        "plan_from_step": {
+          "type": "string",
+          "description": "Name of the inner effect whose output drives the reflector plan. Default: propose_steps."
+        },
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum planning cycles. Default 1."
+        },
+        "generated_key": {
+          "type": "string",
+          "description": "State key under which generated effects are recorded. Default: generated."
+        },
+        "stop_on_done": {
+          "type": "boolean",
+          "description": "Stop when the plan signals completion. Default true."
+        },
+        "max_effects": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum effects the reflector can generate per cycle. Default 8. Alias: max_steps."
+        },
+        "max_steps": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Alias for max_effects."
+        },
+        "prime_template": {
+          "type": "string",
+          "description": "Custom prime template for reflector planning. Overrides the built-in REFLECTOR_PRIME_V1."
+        }
+      }
+    }
+  }
+}

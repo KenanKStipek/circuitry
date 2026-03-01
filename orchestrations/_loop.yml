@@ -1,6 +1,3 @@
-adapter: ollama
-model: qwen3:8b
-
 effects:
   # Produce the collection to iterate over
   - type: prompt
@@ -12,6 +9,19 @@ effects:
   # each.as — name bound to the current element inside the body
   - type: loop
     name: explain
+    each:
+      in: prime.topics.value
+      as: topic
+    body:
+      - type: prompt
+        name: summary
+        template: "Explain {{topic}} in one sentence."
+
+  # each.in — dot-delimited state path to the array
+  # each.as — name bound to the current element inside the body
+  - type: loop
+    name: explain_tree
+    flow: tree
     each:
       in: prime.topics.value
       as: topic

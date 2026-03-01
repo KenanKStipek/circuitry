@@ -1,12 +1,12 @@
 {
-  "default_model": "qwen3:8b",
+  "default_model": "gpt-oss:20b",
   "default_adapter": "ollama",
   "plugins": [],
   "runtime": {
     "adapters": {
       "ollama": {
         "base_url": "http://192.168.1.173:11434",
-        "timeout_seconds": 120
+        "timeout_seconds": 480
       }
     }
   }

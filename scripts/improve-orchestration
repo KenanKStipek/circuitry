@@ -69,6 +69,23 @@ JUDGE = PROJECT_ROOT / "orchestrations" / "orchestration_improver_judge.yml"
 _CFG = load_config(find_config_path(explicit_path=None, cwd=PROJECT_ROOT))
 
 
+def _load_rules(project_root: Path) -> str:
+    """Extract the '## LLM Authoring Rules' section from the reference doc."""
+    ref = project_root / "docs" / "orchestration-reference.md"
+    try:
+        text = ref.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+    marker = "## LLM Authoring Rules"
+    idx = text.find(marker)
+    if idx == -1:
+        return ""
+    return text[idx:].strip()
+
+
+RULES = _load_rules(PROJECT_ROOT)
+
+
 def _hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
@@ -227,7 +244,7 @@ def main() -> None:
 
             result = run_orchestration(
                 orchestration_path=IMPROVER,
-                state={"input_yaml": current_yaml, "original_prompt": prompt_for_iter},
+                state={"input_yaml": current_yaml, "original_prompt": prompt_for_iter, "rules": RULES},
                 verbose=args.verbose,
                 dry_run=args.dry_run,
                 config=_CFG,

@@ -406,6 +406,19 @@ def _compile_loop(
         else "fail"
     )
 
+    # Collection output: name of the body effect whose .value to aggregate
+    collect_raw = effect.get("collect")
+    collect: str | None = str(collect_raw).strip() if collect_raw is not None else None
+
+    # Execution topology for each-loops
+    flow = _normalize_flow(effect.get("flow") or "chain")
+
+    # Max parallel workers (only meaningful when flow="tree")
+    max_concurrency_raw = effect.get("max_concurrency")
+    max_concurrency: int | None = (
+        int(max_concurrency_raw) if max_concurrency_raw is not None else None
+    )
+
     return LoopDefinition(
         name=validated_name,
         body=tuple(compiled_body),
@@ -414,6 +427,9 @@ def _compile_loop(
         max_iterations=max_iterations,
         min_iterations=min_iterations,
         on_error=on_error,
+        collect=collect,
+        flow=flow,
+        max_concurrency=max_concurrency,
     )
 
 

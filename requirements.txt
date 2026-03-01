@@ -4,6 +4,7 @@ rich>=13.7
 
 # Orchestration formats
 pyyaml>=6.0
+jsonschema>=4.0
 
 # Template rendering (you’re already aligned here)
 chevron>=0.14
