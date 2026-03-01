@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Sequence, Union
 
 from ..adapters import Adapter
 from ..output import console as _console
@@ -173,25 +175,54 @@ class LoopRuntime:
                     results: dict[int, dict[str, Any]] = {}
                     errors: dict[int, Exception] = {}
 
-                    with ThreadPoolExecutor(
-                        max_workers=self.defn.max_concurrency
-                    ) as executor:
-                        future_to_idx = {
-                            executor.submit(
-                                self._execute_body,
-                                store=child_store,
-                                ctx=iter_ctx,
-                                iteration=idx,
-                                parallel=True,
-                            ): idx
-                            for idx, iter_ctx in iter_ctxs
-                        }
-                        for future in as_completed(future_to_idx):
-                            i = future_to_idx[future]
-                            try:
-                                results[i] = future.result()
-                            except Exception as exc:
-                                errors[i] = exc
+                    # Build animated per-iteration tracker for verbose display
+                    tree_tracker: _LoopIterTracker | None = None
+                    if self.verbose and total > 0 and self.defn.body:
+                        from .dynamic import _EFFECT_STYLE, _effect_type_label
+                        _tl = _effect_type_label(self.defn.body[0])
+                        _icon, _color = _EFFECT_STYLE.get(_tl, ("◆", "cyan"))
+                        _bname = getattr(self.defn.body[0], "name", None) or "?"
+                        tree_tracker = _LoopIterTracker(
+                            total=total,
+                            name=_bname,
+                            indent="  " * (self.depth + 1),
+                            icon=_icon,
+                            color=_color,
+                        )
+
+                    if tree_tracker is not None:
+                        from rich.live import Live
+                        live_ctx: Any = Live(
+                            tree_tracker,
+                            refresh_per_second=10,
+                            transient=True,
+                            console=_console,
+                        )
+                    else:
+                        live_ctx = nullcontext()
+
+                    with live_ctx:
+                        with ThreadPoolExecutor(
+                            max_workers=self.defn.max_concurrency
+                        ) as executor:
+                            future_to_idx = {
+                                executor.submit(
+                                    self._execute_body,
+                                    store=child_store,
+                                    ctx=iter_ctx,
+                                    iteration=idx,
+                                    parallel=True,
+                                    tracker=tree_tracker,
+                                    iter_label=f"[{idx}]",
+                                ): idx
+                                for idx, iter_ctx in iter_ctxs
+                            }
+                            for future in as_completed(future_to_idx):
+                                i = future_to_idx[future]
+                                try:
+                                    results[i] = future.result()
+                                except Exception as exc:
+                                    errors[i] = exc
 
                     # Assemble results in original order
                     for idx in range(total):
@@ -216,10 +247,6 @@ class LoopRuntime:
                             termination_reason = "max_iterations"
                             break
 
-                        if self.verbose:
-                            iter_indent = "  " * (self.depth + 1)
-                            _console.print(f"{iter_indent}[info]iter {idx + 1}/{total}[/info]")
-
                         # Bind current item to context
                         iter_ctx = dict(ctx)
                         iter_ctx[self.defn.each_def.as_name] = item
@@ -230,6 +257,7 @@ class LoopRuntime:
                                 store=child_store,
                                 ctx=iter_ctx,
                                 iteration=idx,
+                                iter_label=f"[{idx}]",
                             )
                             iterations_effects.append(iter_effects)
                             iteration_count += 1
@@ -260,17 +288,12 @@ class LoopRuntime:
                         termination_reason = "condition_false"
                         break
 
-                    if self.verbose:
-                        iter_indent = "  " * (self.depth + 1)
-                        _console.print(
-                            f"{iter_indent}[info]iter {iteration_count + 1}[/info]"
-                        )
-
                     try:
                         iter_effects = self._execute_body(
                             store=child_store,
                             ctx=ctx,
                             iteration=iteration_count,
+                            iter_label=f"[{iteration_count}]",
                         )
                         iterations_effects.append(iter_effects)
                         iteration_count += 1
@@ -445,6 +468,8 @@ Should the loop continue? Answer (yes/no):"""
         ctx: dict[str, Any],
         iteration: int,
         parallel: bool = False,
+        tracker: _LoopIterTracker | None = None,
+        iter_label: str | None = None,
     ) -> dict[str, Any]:
         """Execute all effects in the loop body for one iteration."""
         from .conditional import ConditionalDefinition, ConditionalRuntime
@@ -483,6 +508,34 @@ Should the loop continue? Answer (yes/no):"""
             t0 = time.monotonic()
             try:
                 if is_prompt:
+                    if tracker is not None:
+                        _cb_start: Callable[[], None] | None = (
+                            lambda _i=iteration: tracker.on_start(_i)
+                        )
+                        _cb_done: Callable[[str], None] | None = (
+                            lambda line, _i=iteration: tracker.on_done(_i, line)
+                        )
+                        _cb_error: Callable[[str], None] | None = (
+                            lambda line, _i=iteration: tracker.on_error(_i, line)
+                        )
+                        _cb_running: Callable[[str, int], None] | None = (
+                            lambda t, e, _i=iteration: tracker.on_running(_i, t, e)
+                        )
+                    elif parallel:
+                        _cb_start = (
+                            lambda _n=name, _ico=icon, _col=color, _ind=body_indent: _console.print(
+                                f"{_ind}[info]→[/info] [{_col}]{_ico}[/{_col}] {_n}"
+                            )
+                        )
+                        _cb_done = _console.print
+                        _cb_error = _console.print
+                        _cb_running = None
+                    else:
+                        _cb_start = None
+                        _cb_done = None
+                        _cb_error = None
+                        _cb_running = None
+
                     PromptRuntime(
                         effect,
                         adapter=self.adapter,
@@ -492,15 +545,11 @@ Should the loop continue? Answer (yes/no):"""
                         timeout_seconds=self.timeout_seconds,
                         verbose=self.verbose,
                         depth=self.depth + 1,
-                        # In parallel mode: print a static "→" start line instead of
-                        # an animated Live spinner (multiple concurrent Live instances conflict).
-                        cb_start=(
-                            lambda _n=name, _ico=icon, _col=color, _ind=body_indent: _console.print(
-                                f"{_ind}[info]→[/info] [{_col}]{_ico}[/{_col}] {_n}"
-                            )
-                        ) if parallel else None,
-                        cb_done=_console.print if parallel else None,
-                        cb_error=_console.print if parallel else None,
+                        cb_start=_cb_start,
+                        cb_done=_cb_done,
+                        cb_error=_cb_error,
+                        cb_running=_cb_running,
+                        display_name=f"{name} {iter_label}" if iter_label else None,
                     ).execute(store=iter_store, ctx=ctx)
 
                 elif isinstance(effect, DynamicDefinition):
@@ -572,3 +621,79 @@ Should the loop continue? Answer (yes/no):"""
             "executed_effects": executed,
             "count": len(executed),
         }
+
+
+class _LoopIterTracker:
+    """
+    Tracks running state for parallel loop iterations.
+    Rendered as a multi-line animated block inside a single rich.live.Live context.
+    After Live exits (transient), done_lines are printed as static output.
+    """
+
+    _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(
+        self,
+        total: int,
+        name: str,
+        indent: str,
+        icon: str,
+        color: str,
+    ) -> None:
+        self._lock = threading.Lock()
+        self._total = total
+        self._name = name
+        self._states: list[str] = ["pending"] * total
+        self._targets: list[str] = [""] * total
+        self._estimated: list[int] = [0] * total
+        self._start = time.monotonic()
+        self._indent = indent
+        self._icon = icon
+        self._color = color
+
+    def on_start(self, idx: int) -> None:
+        with self._lock:
+            if idx < self._total:
+                self._states[idx] = "running"
+
+    def on_running(self, idx: int, target: str, estimated_out: int) -> None:
+        with self._lock:
+            if idx < self._total:
+                self._targets[idx] = target
+                self._estimated[idx] = estimated_out
+
+    def on_done(self, idx: int, line: str) -> None:
+        with self._lock:
+            if idx < self._total:
+                self._states[idx] = "done"
+        _console.print(line)
+
+    def on_error(self, idx: int, line: str) -> None:
+        with self._lock:
+            if idx < self._total:
+                self._states[idx] = "error"
+        _console.print(line)
+
+    def __rich__(self) -> str:
+        elapsed = time.monotonic() - self._start
+        spinner_char = self._SPINNER[int(elapsed * 8) % len(self._SPINNER)]
+        with self._lock:
+            states = list(self._states)
+            targets = list(self._targets)
+            estimated = list(self._estimated)
+        ic = self._icon
+        co = self._color
+        lines: list[str] = []
+        for idx, state in enumerate(states):
+            label = self._name if self._total == 1 else f"{self._name} [{idx}]"
+            if state == "running":
+                t = targets[idx]
+                e = estimated[idx]
+                dim_suffix = f" [dim]~{e}tok ↑  {t}[/dim]" if (t or e) else ""
+                lines.append(
+                    f"{self._indent}[info]{spinner_char}[/info] [{co}]{ic}[/{co}] {label}{dim_suffix}"
+                )
+            elif state == "pending":
+                lines.append(f"{self._indent}[dim]· {ic} {label}[/dim]")
+            # done/error: already printed above via on_done/on_error; omit from live display
+        return "\n".join(lines)

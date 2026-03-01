@@ -155,6 +155,8 @@ class PromptRuntime:
         cb_start: Callable[[], None] | None = None,
         cb_done: Callable[[str], None] | None = None,
         cb_error: Callable[[str], None] | None = None,
+        cb_running: Callable[[str, int], None] | None = None,
+        display_name: str | None = None,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -167,6 +169,8 @@ class PromptRuntime:
         self.cb_start = cb_start
         self.cb_done = cb_done
         self.cb_error = cb_error
+        self.cb_running = cb_running
+        self.display_name = display_name or definition.name
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         node = store.ensure_dict(self.defn.name)
@@ -206,6 +210,8 @@ class PromptRuntime:
 
         if self.verbose and self.cb_start is not None:
             self.cb_start()
+        if self.verbose and self.cb_running is not None:
+            self.cb_running(target, estimated_out)
 
         if self.dry_run:
             node["value"] = None
@@ -214,13 +220,13 @@ class PromptRuntime:
                 elapsed = time.monotonic() - t0
                 if self.cb_done is not None:
                     line = (
-                        f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.defn.name}"
+                        f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.display_name}"
                         f" [dim]{target} | {_elapsed_str(elapsed)}[/dim]"
                     )
                     self.cb_done(line)
                 else:
                     _console.print(
-                        f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.defn.name}"
+                        f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.display_name}"
                         f" [dim]{_elapsed_str(elapsed)}[/dim]"
                     )
             return
@@ -234,7 +240,7 @@ class PromptRuntime:
 
                 live_cm = Live(
                     _PromptSpinner(
-                        f"{self.defn.name} [dim]~{estimated_out}tok ↑  {target}[/dim]",
+                        f"{self.display_name} [dim]~{estimated_out}tok ↑  {target}[/dim]",
                         indent=indent,
                     ),
                     refresh_per_second=10,
@@ -282,7 +288,7 @@ class PromptRuntime:
                 if sent is not None or recv is not None:
                     suffix += f" | ↑{sent or 0} ↓{recv or 0} tok"
                 line = (
-                    f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.defn.name}"
+                    f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.display_name}"
                     f" [dim]{target} | {suffix}[/dim]"
                 )
                 if self.cb_done is not None:
@@ -294,7 +300,7 @@ class PromptRuntime:
             if self.verbose:
                 elapsed = time.monotonic() - t0
                 line = (
-                    f"{indent}[err]✗[/err] [cyan]◆[/cyan] {self.defn.name}"
+                    f"{indent}[err]✗[/err] [cyan]◆[/cyan] {self.display_name}"
                     f" [dim]{target} | {_elapsed_str(elapsed)}[/dim]"
                 )
                 if self.cb_error is not None:

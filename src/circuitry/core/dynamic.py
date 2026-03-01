@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -116,27 +117,51 @@ class DynamicRuntime:
 
                 tree_errors: list[Exception] = []
 
-                with ThreadPoolExecutor(
-                    max_workers=len(self.defn.effects)
-                ) as executor:
-                    futures: dict = {
-                        executor.submit(
-                            self._execute_effect,
-                            effect,
-                            store=child_store,
-                            ctx=tree_ctx,
-                            # Print a static "→" start line; suppresses per-prompt Live spinner.
-                            cb_start=_make_start_cb(effect, self.depth),
-                            cb_done=_console.print,
-                            cb_error=_console.print,
-                        ): self._effect_path(effect=effect, index=idx)
-                        for idx, effect in enumerate(self.defn.effects)
-                    }
-                    for future in as_completed(futures):
-                        try:
-                            future.result()
-                        except Exception as e:
-                            tree_errors.append(e)
+                # Build animated per-effect tracker for verbose display
+                tree_tracker: _TreeStatus | None = None
+                if self.verbose and self.defn.effects:
+                    tracker_items = []
+                    for effect in self.defn.effects:
+                        _tl = _effect_type_label(effect)
+                        _icon, _color = _EFFECT_STYLE.get(_tl, ("·", "white"))
+                        _ename = getattr(effect, "name", None) or "?"
+                        tracker_items.append((_ename, _icon, _color))
+                    tree_tracker = _TreeStatus(
+                        items=tracker_items,
+                        indent="  " * self.depth,
+                    )
+
+                if tree_tracker is not None:
+                    from rich.live import Live
+
+                    live_ctx: Any = Live(
+                        tree_tracker,
+                        refresh_per_second=10,
+                        transient=True,
+                        console=_console,
+                    )
+                else:
+                    live_ctx = nullcontext()
+
+                with live_ctx:
+                    with ThreadPoolExecutor(
+                        max_workers=len(self.defn.effects)
+                    ) as executor:
+                        futures: dict = {
+                            executor.submit(
+                                self._execute_effect,
+                                effect,
+                                store=child_store,
+                                ctx=tree_ctx,
+                                tracker=tree_tracker,
+                            ): self._effect_path(effect=effect, index=idx)
+                            for idx, effect in enumerate(self.defn.effects)
+                        }
+                        for future in as_completed(futures):
+                            try:
+                                future.result()
+                            except Exception as e:
+                                tree_errors.append(e)
 
                 if tree_errors:
                     raise tree_errors[0]
@@ -159,6 +184,7 @@ class DynamicRuntime:
         cb_start: Callable[[], None] | None = None,
         cb_done: Callable[[str], None] | None = None,
         cb_error: Callable[[str], None] | None = None,
+        tracker: "_TreeStatus | None" = None,
     ) -> None:
         """Execute a single effect within the dynamic."""
         # Local imports to avoid circular imports at module load time
@@ -172,10 +198,22 @@ class DynamicRuntime:
         name = getattr(effect, "name", None) or "?"
         is_prompt = isinstance(effect, PromptDefinition)
 
+        # If a tracker is provided, derive all callbacks from it
+        _cb_running: Callable[[str, int], None] | None = None
+        if tracker is not None:
+            _n = name
+            cb_start = lambda _k=_n: tracker.on_start(_k)
+            cb_done = lambda line, _k=_n: tracker.on_done(_k, line)
+            cb_error = lambda line, _k=_n: tracker.on_error(_k, line)
+            _cb_running = lambda t, e, _k=_n: tracker.on_running(_k, t, e)
+
         if self.verbose and not is_prompt:
-            _console.print(
-                f"{indent}[info]→[/info] [{color}]{icon}[/{color}] {name}"
-            )
+            if cb_start is not None:
+                cb_start()
+            else:
+                _console.print(
+                    f"{indent}[info]→[/info] [{color}]{icon}[/{color}] {name}"
+                )
 
         t0 = time.monotonic()
         try:
@@ -192,6 +230,7 @@ class DynamicRuntime:
                     cb_start=cb_start,
                     cb_done=cb_done,
                     cb_error=cb_error,
+                    cb_running=_cb_running,
                 ).execute(store=store, ctx=ctx)
 
             elif isinstance(effect, DynamicDefinition):
@@ -251,10 +290,14 @@ class DynamicRuntime:
                     sent, recv = _sum_tokens(store.state.get(name, {}))
                     if sent or recv:
                         suffix += f" | ↑{_fmt_tokens(sent)} ↓{_fmt_tokens(recv)} tok"
-                _console.print(
+                line = (
                     f"{indent}[ok]✓[/ok] [{color}]{icon}[/{color}]"
                     f" {name} [dim]{suffix}[/dim]"
                 )
+                if cb_done is not None:
+                    cb_done(line)
+                else:
+                    _console.print(line)
 
         except Exception:
             if self.verbose and not is_prompt:
@@ -264,10 +307,14 @@ class DynamicRuntime:
                     sent, recv = _sum_tokens(store.state.get(name, {}))
                     if sent or recv:
                         suffix += f" | ↑{_fmt_tokens(sent)} ↓{_fmt_tokens(recv)} tok"
-                _console.print(
+                line = (
                     f"{indent}[err]✗[/err] [{color}]{icon}[/{color}]"
                     f" {name} [dim]{suffix}[/dim]"
                 )
+                if cb_error is not None:
+                    cb_error(line)
+                else:
+                    _console.print(line)
             raise
 
     def _effect_path(self, *, effect: EffectDef, index: int) -> str:
@@ -353,57 +400,66 @@ def _sum_tokens(d: dict) -> tuple[int, int]:
 
 
 class _TreeStatus:
-    """Renders concurrent effect statuses on a single animated line for tree flow."""
+    """
+    Tracks running state for parallel dynamic tree effects.
+    Rendered as a multi-line animated block inside a single rich.live.Live context.
+    Done/error lines are printed immediately; they are omitted from __rich__ to avoid duplicates.
+    """
 
     _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
     def __init__(
         self,
-        names: list[str],
+        items: list[tuple[str, str, str]],  # (name, icon, color)
         indent: str = "",
-        icon: str = "◆",
-        color: str = "cyan",
     ) -> None:
         self._lock = threading.Lock()
-        self._names = list(names)
-        self._states: dict[str, str] = {n: "pending" for n in names}
+        self._items = list(items)  # (name, icon, color)
+        self._names = [name for name, _, _ in items]
+        self._states: dict[str, str] = {name: "pending" for name, _, _ in items}
+        self._targets: dict[str, str] = {name: "" for name, _, _ in items}
+        self._estimated: dict[str, int] = {name: 0 for name, _, _ in items}
         self._start = time.monotonic()
         self._indent = indent
-        self._icon = icon
-        self._color = color
-        self.done_lines: list[str] = []
 
     def on_start(self, name: str) -> None:
         with self._lock:
             self._states[name] = "running"
 
+    def on_running(self, name: str, target: str, estimated_out: int) -> None:
+        with self._lock:
+            self._targets[name] = target
+            self._estimated[name] = estimated_out
+
     def on_done(self, name: str, line: str) -> None:
         with self._lock:
             self._states[name] = "done"
-            self.done_lines.append(line)
+        _console.print(line)
 
     def on_error(self, name: str, line: str) -> None:
         with self._lock:
             self._states[name] = "error"
-            self.done_lines.append(line)
+        _console.print(line)
 
     def __rich__(self) -> str:
         elapsed = time.monotonic() - self._start
         spinner_char = self._SPINNER[int(elapsed * 8) % len(self._SPINNER)]
-        parts: list[str] = []
         with self._lock:
             states = dict(self._states)
-        ic = self._icon
-        co = self._color
-        for name in self._names:
+            targets = dict(self._targets)
+            estimated = dict(self._estimated)
+        lines: list[str] = []
+        for name, icon, color in self._items:
             state = states.get(name, "pending")
             if state == "running":
-                parts.append(f"[info]{spinner_char}[/info] [{co}]{ic}[/{co}] {name}")
-            elif state == "done":
-                parts.append(f"[ok]✓[/ok] [{co}]{ic}[/{co}] {name}")
-            elif state == "error":
-                parts.append(f"[err]✗[/err] [{co}]{ic}[/{co}] {name}")
-            else:
-                parts.append(f"[dim]· {ic} {name}[/dim]")
-        return self._indent + "   ".join(parts)
+                t = targets.get(name, "")
+                e = estimated.get(name, 0)
+                dim_suffix = f" [dim]~{e}tok ↑  {t}[/dim]" if (t or e) else ""
+                lines.append(
+                    f"{self._indent}[info]{spinner_char}[/info] [{color}]{icon}[/{color}] {name}{dim_suffix}"
+                )
+            elif state == "pending":
+                lines.append(f"{self._indent}[dim]· {icon} {name}[/dim]")
+            # done/error: already printed via on_done/on_error; omit from live display
+        return "\n".join(lines)
 
