@@ -480,8 +480,13 @@ class PromptRuntime:
 
     def _validate_schema(self, value: Any) -> None:
         """Validate value against JSON schema if provided."""
-        if not self.defn.schema or value is None:
+        if not self.defn.schema:
             return
+        if value is None:
+            raise ValueError(
+                "JSON schema validation failed: model returned None (JSON could not be parsed). "
+                "Check the model's response format."
+            )
 
         try:
             import jsonschema  # type: ignore[import-untyped]

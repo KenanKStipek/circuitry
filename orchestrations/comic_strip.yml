@@ -2,94 +2,301 @@ name: comic_strip
 description: |
   Generates a 3-panel Joking Hazard style comic strip from a prompt.
   Inputs: {{prompt}}
-  Outputs: script JSON + 3 panel images in ./output/comics/
+  Outputs: ./output/comics/{{_timestamp}}/ (backdrop, character ref images, raw panels, text panels, final strip)
 
-adapter: ollama
 model: llama3:latest
 
 effects:
-  - name: generate_script
+  # ── Step 1: Analyze premise ────────────────────────────────────────────────
+  # Extracts title, setting, tone, art style, and a typed characters array.
+  # Characters array drives the per-character design loop in step 2.
+  - name: analyze_premise
     type: prompt
     prompt_type: json
     template: |
-      You are a comedy writer creating a Joking Hazard style 3-panel comic strip.
+      You are a comedy writer creating a Joking Hazard-style comic strip.
 
-      Premise: {{prompt}}
+      {{#prompt}}Premise: {{prompt}}{{/prompt}}
+      {{^prompt}}No premise was provided. Use the timestamp {{_timestamp}} as a random seed —
+      let its digits suggest a theme, setting, character, or absurd situation in some unexpected
+      way. Invent a completely original dark comedy premise from it.{{/prompt}}
 
-      Write a dark, subversive, funny 3-panel comic strip script.
-      Each panel has a visual scene (for image generation) and dialogue or caption text.
-      The humor should be absurdist, crude, and unexpected — like Joking Hazard.
-
-      Return ONLY valid JSON:
+      Analyze the premise and plan the strip. Return ONLY valid JSON:
       {
-        "title": "short comic title",
-        "panel_1_scene": "what is visually depicted in panel 1, described for an image model — no text or speech bubbles",
-        "panel_1_text": "dialogue or caption text for panel 1",
-        "panel_2_scene": "what is visually depicted in panel 2",
-        "panel_2_text": "dialogue or caption text for panel 2",
-        "panel_3_scene": "what is visually depicted in panel 3",
-        "panel_3_text": "dialogue or caption text for panel 3"
+        "title": "short comic title (4–6 words)",
+        "setting": "one sentence — specific location with visual details (e.g. grimy diner kitchen with stainless counters and flickering fluorescent lights, or cluttered open-plan office with beige cubicles)",
+        "tone": "dark absurdist / crude / deadpan (pick one or combine)",
+        "art_style": "crude hand-drawn webcomic, thick black outlines, exaggerated expressions, flat colors, no shading",
+        "characters": [
+          {
+            "name": "character name",
+            "description": "detailed visual — body type and size, exact skin tone, exact hair color/length/style, eye color, exact clothing color and cut (NO text, logos, or slogans on any clothing), any notable features like glasses or scars"
+          }
+        ]
       }
+
+      Characters rules:
+      - Be specific about exact colors (use color names: 'bright orange', not 'colorful')
+      - Clothing: describe color and style only — NO brand names, slogans, or text
+      - 1–3 characters max for a 3-panel strip
     schema:
       type: object
-      required: [title, panel_1_scene, panel_1_text, panel_2_scene, panel_2_text, panel_3_scene, panel_3_text]
+      required: [title, setting, tone, art_style, characters]
       properties:
         title: {type: string}
-        panel_1_scene: {type: string}
-        panel_1_text: {type: string}
-        panel_2_scene: {type: string}
-        panel_2_text: {type: string}
-        panel_3_scene: {type: string}
-        panel_3_text: {type: string}
+        setting: {type: string}
+        tone: {type: string}
+        art_style: {type: string}
+        characters:
+          type: array
+          minItems: 1
+          maxItems: 3
+          items:
+            type: object
+            required: [name, description]
+            properties:
+              name: {type: string}
+              description: {type: string}
 
-  - name: draw_panels
+  # ── Step 2: Design characters (loop, sequential) ─────────────────────────
+  # Per character: (1) text anchor for image prompts, (2) ComfyUI reference
+  # sheet used as img2img input for panel generation. Sequential because
+  # ComfyUI processes one generation at a time.
+  - name: design_characters
+    type: loop
+    flow: chain
+    collect: anchor
+    each:
+      in: prime.analyze_premise.value.characters
+      as: char
+    body:
+      - name: anchor
+        type: prompt
+        prompt_type: text
+        template: |
+          Expand this character into a precise visual anchor for consistent image generation.
+          Character: {{char.name}} — {{char.description}}
+
+          Write ONE dense sentence (max 40 words) covering:
+          - Exact hair color, length, style
+          - Skin tone and eye color
+          - Exact clothing: color and cut ONLY — NO text, logos, or writing
+          - Body type and one notable feature
+
+          Start with the character description immediately. No preamble.
+
+      - name: ref_image
+        type: tool
+        provider: comfyui
+        prompt: "{{prime.analyze_premise.value.art_style}}. {{char.description}} full body portrait, character reference sheet, neutral light-gray background, standing pose, clean linework, flat colors, thick black outlines, no text, no speech bubbles, no writing"
+        model: flux1-dev-fp8.safetensors
+        params:
+          image_output: path
+          image_dir: "./output/comics/{{_timestamp}}"
+          negative_prompt: "text, words, letters, speech bubble, dialogue box, writing, watermark, signature, logo, background scene, environment"
+          steps: 20
+          cfg: 3.5
+          sampler_name: euler
+          scheduler: beta
+          width: 512
+          height: 768
+
+  # ── Step 3: Merge character anchors ───────────────────────────────────────
+  # Combines per-character anchor paragraphs into a single string for use
+  # in all image generation prompts.
+  - name: merge_anchors
+    type: prompt
+    prompt_type: text
+    template: |
+      You have visual anchor descriptions for the character(s) in a comic strip:
+      {{prime.design_characters.collected.value}}
+
+      Combine into one concise sentence per character (max 60 words total).
+      - If one character: return their anchor unchanged.
+      - If multiple: one sentence per character, joined into one paragraph.
+      - NO text, logos, or writing on any clothing.
+      Start with the first word of the description. No preamble.
+
+  # ── Steps 4–5: Write story (scenes) then dialogue (text + bubble) ──────────
+  # Separated concerns: scenes know each other (chain), dialogue runs in
+  # parallel after scenes complete (tree). Each prompt does ONE thing.
+
+  # Step 4: write_story — three focused text prompts, each producing one scene.
+  # Chain so panel 2 knows panel 1, panel 3 knows both.
+  - name: write_story
+    type: dynamic
+    flow: chain
+    effects:
+      - name: setup
+        type: prompt
+        prompt_type: text
+        template: |
+          You are writing panel 1 of a 3-panel Joking Hazard-style dark comedy comic.
+          Title: {{prime.analyze_premise.value.title}}
+          Setting: {{prime.analyze_premise.value.setting}}
+          Characters: {{prime.merge_anchors.value}}
+          Tone: {{prime.analyze_premise.value.tone}}
+
+          Write a 1–2 sentence scene description for panel 1 (normal setup — character
+          in their ordinary situation). Describe exactly what to draw: character pose,
+          expression, action. NO text, writing, or logos visible in the image.
+          Start the description immediately. No "Here is...", no "Please draw", no preamble.
+
+      - name: escalation
+        type: prompt
+        prompt_type: text
+        template: |
+          You are writing panel 2 of a 3-panel Joking Hazard-style dark comedy comic.
+          Panel 1 (setup): {{prime.write_story.setup.value}}
+          Characters: {{prime.merge_anchors.value}}
+
+          Write a 1–2 sentence scene description for panel 2 (escalation — something
+          goes wrong or gets weird). Same characters, same look. Describe pose, expression,
+          action. NO text, writing, or logos visible in the image.
+          Start the description immediately. No "Here is...", no "Please draw", no preamble.
+
+      - name: punchline
+        type: prompt
+        prompt_type: text
+        template: |
+          You are writing panel 3 of a 3-panel Joking Hazard-style dark comedy comic.
+          Panel 1 (setup): {{prime.write_story.setup.value}}
+          Panel 2 (escalation): {{prime.write_story.escalation.value}}
+          Characters: {{prime.merge_anchors.value}}
+          Tone: {{prime.analyze_premise.value.tone}}
+
+          Write a 1–2 sentence scene description for panel 3 (dark/absurd punchline —
+          subverts expectations completely). Same characters, same look. Describe pose,
+          expression, action. NO text, writing, or logos visible in the image.
+          Start the description immediately. No "Here is...", no "Please draw", no preamble.
+
+  # Step 5: write_dialogue — three parallel text prompts, one per panel.
+  # Plain text output only — no JSON, no schema, nothing to fail.
+  # Bubble style is hardcoded per position in overlay_text below:
+  #   panel_1 = speech (top, white box)
+  #   panel_2 = thought (top, gray box)
+  #   panel_3 = caption (bottom, black box)
+  - name: write_dialogue
     type: dynamic
     flow: tree
     effects:
       - name: panel_1
+        type: prompt
+        prompt_type: text
+        template: |
+          Comic panel 1 scene (setup): {{prime.write_story.setup.value}}
+
+          Write what the character says aloud. First person, max 6 words, no quotes.
+          GOOD: This is fine. / Worth it. / Nobody needs to know.
+          BAD: Chaos ensues. / The situation worsens.
+          Write ONLY the dialogue line.
+
+      - name: panel_2
+        type: prompt
+        prompt_type: text
+        template: |
+          Comic panel 2 scene (escalation): {{prime.write_story.escalation.value}}
+
+          Write what the character thinks to themselves. First person, max 6 words, no quotes.
+          GOOD: I have no regrets. / Nailed it. / Hold on.
+          BAD: Things escalate. / Consequences arrive.
+          Write ONLY the inner thought.
+
+      - name: panel_3
+        type: prompt
+        prompt_type: text
+        template: |
+          Comic panel 3 scene (dark punchline): {{prime.write_story.punchline.value}}
+
+          Write the deadpan caption punchline. First person, max 6 words, no quotes. Dark/absurd.
+          GOOD: Technically still alive. / Career ending, probably. / He did not survive.
+          BAD: The truth revealed. / Drama unfolds.
+          Write ONLY the caption line.
+
+  # ── Step 6: Generate backdrop ─────────────────────────────────────────────
+  # Generates a setting/environment reference image with no characters.
+  # Used as a visual artifact to establish the comic's color palette and
+  # setting. Panel image prompts reference this setting via text description.
+  - name: generate_backdrop
+    type: tool
+    provider: comfyui
+    prompt: "{{prime.analyze_premise.value.art_style}}. {{prime.analyze_premise.value.setting}}, empty scene, no characters, no people, establishing shot, environment only, wide angle, flat colors, thick black outlines"
+    model: flux1-dev-fp8.safetensors
+    params:
+      image_output: path
+      image_dir: "./output/comics/{{_timestamp}}"
+      negative_prompt: "person, character, human, face, body, figure, text, words, letters, speech bubble, dialogue, writing, watermark, logo"
+      steps: 20
+      cfg: 3.5
+      sampler_name: euler
+      scheduler: beta
+      width: 768
+      height: 768
+
+  # ── Step 7: Draw panels (sequential img2img) ─────────────────────────────
+  # flow: chain = sequential execution.
+  # panel_1 uses the first character's reference sheet from design_characters
+  # (denoise: 0.85) to anchor appearance. Panels 2+3 chain from panel_1
+  # (denoise: 0.82) so character consistency is inherited across the strip.
+  - name: draw_panels
+    type: dynamic
+    flow: chain
+    effects:
+      - name: panel_1
         type: tool
         provider: comfyui
-        prompt: "{{prime.generate_script.value.panel_1_scene}}, joking hazard comic style, simple black and white cartoon panel, crude humor, minimal background, expressive characters"
+        prompt: "{{prime.analyze_premise.value.art_style}}. {{prime.merge_anchors.value}} {{prime.write_story.setup.value}} same recurring character, consistent character design, clean linework, flat colors, no text, no speech bubbles, no writing, no product labels"
         model: flux1-dev-fp8.safetensors
         params:
           image_output: path
-          image_dir: ./output/comics
+          image_dir: "./output/comics/{{_timestamp}}"
+          reference_image: "{{prime.design_characters.iter_0.ref_image.value}}"
+          denoise: 0.85
+          negative_prompt: "text, words, letters, speech bubble, dialogue box, caption, writing, watermark, signature, label, text on clothing, shirt text, t-shirt text, logo on shirt, printed text on shirt, brand name, product label"
           steps: 20
           cfg: 3.5
           sampler_name: euler
           scheduler: beta
-          width: 512
-          height: 512
+          width: 768
+          height: 768
 
       - name: panel_2
         type: tool
         provider: comfyui
-        prompt: "{{prime.generate_script.value.panel_2_scene}}, joking hazard comic style, simple black and white cartoon panel, crude humor, minimal background, expressive characters"
+        prompt: "{{prime.analyze_premise.value.art_style}}. {{prime.merge_anchors.value}} {{prime.write_story.escalation.value}} same recurring character, consistent character design, clean linework, flat colors, no text, no speech bubbles, no writing, no product labels"
         model: flux1-dev-fp8.safetensors
         params:
           image_output: path
-          image_dir: ./output/comics
+          image_dir: "./output/comics/{{_timestamp}}"
+          reference_image: "{{prime.draw_panels.panel_1.value}}"
+          denoise: 0.82
+          negative_prompt: "text, words, letters, speech bubble, dialogue box, caption, writing, watermark, signature, label, text on clothing, shirt text, t-shirt text, logo on shirt, printed text on shirt, brand name, product label"
           steps: 20
           cfg: 3.5
           sampler_name: euler
           scheduler: beta
-          width: 512
-          height: 512
+          width: 768
+          height: 768
 
       - name: panel_3
         type: tool
         provider: comfyui
-        prompt: "{{prime.generate_script.value.panel_3_scene}}, joking hazard comic style, simple black and white cartoon panel, crude humor, minimal background, expressive characters"
+        prompt: "{{prime.analyze_premise.value.art_style}}. {{prime.merge_anchors.value}} {{prime.write_story.punchline.value}} same recurring character, consistent character design, clean linework, flat colors, no text, no speech bubbles, no writing, no product labels"
         model: flux1-dev-fp8.safetensors
         params:
           image_output: path
-          image_dir: ./output/comics
+          image_dir: "./output/comics/{{_timestamp}}"
+          reference_image: "{{prime.draw_panels.panel_1.value}}"
+          denoise: 0.82
+          negative_prompt: "text, words, letters, speech bubble, dialogue box, caption, writing, watermark, signature, label, text on clothing, shirt text, t-shirt text, logo on shirt, printed text on shirt, brand name, product label"
           steps: 20
           cfg: 3.5
           sampler_name: euler
           scheduler: beta
-          width: 512
-          height: 512
+          width: 768
+          height: 768
+
+  # ── Post-processing (text overlay + compositing) ──────────────────────────
 
   - name: overlay_text
     type: dynamic
@@ -101,15 +308,16 @@ effects:
         params:
           input: "{{prime.draw_panels.panel_1.value}}"
           vf_drawtext:
-            text: "{{prime.generate_script.value.panel_1_text}}"
+            text: "{{prime.write_dialogue.panel_1.value}}"
+            fontfile: /System/Library/Fonts/Helvetica.ttc
             x: (w-tw)/2
-            y: h-th-20
-            fontsize: 22
-            fontcolor: white
+            y: "10"
+            fontsize: 28
+            fontcolor: black
             box: 1
-            boxcolor: "black@0.75"
-            boxborderw: 8
-          output: "./output/comics/panel_1_with_text_{{_timestamp}}.png"
+            boxcolor: "white@0.92"
+            boxborderw: 10
+          output: "./output/comics/{{_timestamp}}/panel_1_with_text.png"
 
       - name: panel_2_text
         type: tool
@@ -117,15 +325,16 @@ effects:
         params:
           input: "{{prime.draw_panels.panel_2.value}}"
           vf_drawtext:
-            text: "{{prime.generate_script.value.panel_2_text}}"
+            text: "{{prime.write_dialogue.panel_2.value}}"
+            fontfile: /System/Library/Fonts/Helvetica.ttc
             x: (w-tw)/2
-            y: h-th-20
-            fontsize: 22
-            fontcolor: white
+            y: "10"
+            fontsize: 24
+            fontcolor: black
             box: 1
-            boxcolor: "black@0.75"
-            boxborderw: 8
-          output: "./output/comics/panel_2_with_text_{{_timestamp}}.png"
+            boxcolor: "gray@0.80"
+            boxborderw: 10
+          output: "./output/comics/{{_timestamp}}/panel_2_with_text.png"
 
       - name: panel_3_text
         type: tool
@@ -133,15 +342,16 @@ effects:
         params:
           input: "{{prime.draw_panels.panel_3.value}}"
           vf_drawtext:
-            text: "{{prime.generate_script.value.panel_3_text}}"
+            text: "{{prime.write_dialogue.panel_3.value}}"
+            fontfile: /System/Library/Fonts/Helvetica.ttc
             x: (w-tw)/2
-            y: h-th-20
+            y: (h-th-50)
             fontsize: 22
             fontcolor: white
             box: 1
             boxcolor: "black@0.75"
-            boxborderw: 8
-          output: "./output/comics/panel_3_with_text_{{_timestamp}}.png"
+            boxborderw: 10
+          output: "./output/comics/{{_timestamp}}/panel_3_with_text.png"
 
   - name: combine_panels
     type: tool
@@ -151,5 +361,31 @@ effects:
       extra_inputs:
         - "{{prime.overlay_text.panel_2_text.value}}"
         - "{{prime.overlay_text.panel_3_text.value}}"
-      filter_complex: "hstack=inputs=3"
-      output: "./output/comics/strip_{{_timestamp}}.png"
+      # Add 4px black border around each panel, then hstack, then 8px outer border on the strip
+      filter_complex: "[0:v]pad=iw+8:ih+8:4:4:black[p0];[1:v]pad=iw+8:ih+8:4:4:black[p1];[2:v]pad=iw+8:ih+8:4:4:black[p2];[p0][p1][p2]hstack=inputs=3[strip];[strip]pad=iw+16:ih+16:8:8:black"
+      output: "./output/comics/{{_timestamp}}/strip_panels.png"
+
+  # Add a 60px black title bar at the top of the strip
+  - name: pad_for_title
+    type: tool
+    provider: ffmpeg
+    params:
+      input: "{{prime.combine_panels.value}}"
+      flags: "-vf pad=iw:ih+60:0:60:black"
+      output: "./output/comics/{{_timestamp}}/strip_padded.png"
+
+  # Draw the comic title centered in the title bar
+  - name: add_title
+    type: tool
+    provider: ffmpeg
+    params:
+      input: "{{prime.pad_for_title.value}}"
+      vf_drawtext:
+        text: "{{prime.analyze_premise.value.title}}"
+        fontfile: /System/Library/Fonts/Helvetica.ttc
+        x: (w-tw)/2
+        y: 15
+        fontsize: 32
+        fontcolor: white
+        box: 0
+      output: "./output/comics/{{_timestamp}}/strip.png"

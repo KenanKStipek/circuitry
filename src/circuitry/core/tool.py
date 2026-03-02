@@ -20,6 +20,52 @@ def _elapsed_str(seconds: float) -> str:
     return f"{seconds * 1000:.0f}ms"
 
 
+def _plugin_target(plugin: Any, mtag: str = "") -> str:
+    """Return 'name · model @ host' or 'name @ host' mirroring _adapter_target in prompt.py."""
+    from urllib.parse import urlparse
+
+    name = getattr(plugin, "name", "unknown")
+    base_url = getattr(plugin, "base_url", None)
+    label = f"{name} · {mtag}" if mtag else name
+    if base_url:
+        host = urlparse(str(base_url)).hostname or str(base_url)
+        return f"{label} @ {host}"
+    return label
+
+
+def _model_tag(rendered: dict[str, Any]) -> str:
+    """Return a short model name from rendered params, stripping the file extension."""
+    import os
+    model = rendered.get("model")
+    if not model:
+        return ""
+    name = os.path.basename(str(model))
+    for ext in (".safetensors", ".ckpt", ".pt", ".bin", ".gguf"):
+        if name.endswith(ext):
+            name = name[: -len(ext)]
+            break
+    return name
+
+
+def _format_output(value: Any) -> str:
+    """Format a result value for the done line (e.g. file path, with size if it's a file)."""
+    if value is None:
+        return ""
+    s = str(value)
+    try:
+        import os
+        size = os.path.getsize(s)
+        if size >= 1_048_576:
+            size_str = f"{size / 1_048_576:.1f} MB"
+        elif size >= 1024:
+            size_str = f"{size / 1024:.0f} KB"
+        else:
+            size_str = f"{size} B"
+        return f"{s} ({size_str})"
+    except OSError:
+        return s
+
+
 def _render_params(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     """Recursively Mustache-render all string values in params against ctx."""
     try:
@@ -87,6 +133,7 @@ class ToolRuntime:
         cb_start: Callable[[], None] | None = None,
         cb_done: Callable[[str], None] | None = None,
         cb_error: Callable[[str], None] | None = None,
+        cb_running: Callable[[str, int], None] | None = None,
         display_name: str | None = None,
     ):
         self.defn = definition
@@ -98,6 +145,7 @@ class ToolRuntime:
         self.cb_start = cb_start
         self.cb_done = cb_done
         self.cb_error = cb_error
+        self.cb_running = cb_running
         self.display_name = display_name or definition.name
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
@@ -130,9 +178,10 @@ class ToolRuntime:
             meta["dry_run"] = True
             if self.verbose:
                 elapsed = time.monotonic() - t0
+                _label = f"{self.defn.provider} · {mtag}" if mtag else self.defn.provider
                 line = (
                     f"{indent}[ok]✓[/ok] [white]⚙[/white] {self.display_name}"
-                    f" [dim]{self.defn.provider} | {_elapsed_str(elapsed)}[/dim]"
+                    f" [dim]{_label} | {_elapsed_str(elapsed)}[/dim]"
                 )
                 if self.cb_done is not None:
                     self.cb_done(line)
@@ -153,15 +202,27 @@ class ToolRuntime:
 
         rendered = {**top_level, **_render_params(self.defn.params, ctx)}
         meta["params_rendered"] = rendered
+        mtag = _model_tag(rendered)
 
+        target = self.defn.provider  # fallback if build_plugin fails before we can compute it
         try:
+            # Build plugin early so we can use its target string in the spinner
+            plugin = build_plugin(
+                plugin_name=self.defn.provider,
+                runtime=self.runtime_config,
+            )
+            target = _plugin_target(plugin, mtag)
+
+            if self.cb_running is not None:
+                self.cb_running(target, 0)
+
             # Show spinner while running (if verbose and no external cb_start — same pattern as PromptRuntime)
             if self.verbose and self.cb_start is None:
                 from rich.live import Live
 
                 live_cm = Live(
                     _ToolSpinner(
-                        f"{self.display_name} [dim]{self.defn.provider}[/dim]",
+                        f"{self.display_name} [dim]{target}[/dim]",
                         indent=indent,
                     ),
                     refresh_per_second=10,
@@ -172,10 +233,6 @@ class ToolRuntime:
                 live_cm = nullcontext()
 
             with live_cm:
-                plugin = build_plugin(
-                    plugin_name=self.defn.provider,
-                    runtime=self.runtime_config,
-                )
                 result = plugin.execute(params=rendered, timeout_seconds=timeout_seconds)
 
             node["value"] = result.value
@@ -186,9 +243,13 @@ class ToolRuntime:
 
             if self.verbose:
                 elapsed = time.monotonic() - t0
+                suffix = _elapsed_str(elapsed)
+                out = _format_output(result.value)
+                if out:
+                    suffix += f" → {out}"
                 line = (
                     f"{indent}[ok]✓[/ok] [white]⚙[/white] {self.display_name}"
-                    f" [dim]{self.defn.provider} | {_elapsed_str(elapsed)}[/dim]"
+                    f" [dim]{target} | {suffix}[/dim]"
                 )
                 if self.cb_done is not None:
                     self.cb_done(line)
@@ -198,9 +259,10 @@ class ToolRuntime:
         except Exception as e:
             if self.verbose:
                 elapsed = time.monotonic() - t0
+                _tgt = f"{self.defn.provider} · {mtag}" if mtag else self.defn.provider
                 line = (
                     f"{indent}[err]✗[/err] [white]⚙[/white] {self.display_name}"
-                    f" [dim]{self.defn.provider} | {_elapsed_str(elapsed)}[/dim]"
+                    f" [dim]{_tgt} | {_elapsed_str(elapsed)}[/dim]"
                 )
                 if self.cb_error is not None:
                     self.cb_error(line)

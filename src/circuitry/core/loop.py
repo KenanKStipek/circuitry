@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from .dynamic import DynamicDefinition
     from .prompt import PromptDefinition
     from .reflector import ReflectorDefinition
+    from .tool import ToolDefinition
 
 
 def _now_iso() -> str:
@@ -29,6 +30,7 @@ EffectDef = Union[
     "ConditionalDefinition",
     "LoopDefinition",
     "ReflectorDefinition",
+    "ToolDefinition",
 ]
 
 
@@ -476,6 +478,7 @@ Should the loop continue? Answer (yes/no):"""
         from .dynamic import DynamicDefinition, DynamicRuntime, _effect_type_label
         from .prompt import PromptDefinition, PromptRuntime
         from .reflector import ReflectorDefinition, ReflectorRuntime
+        from .tool import ToolDefinition, ToolRuntime
 
         # Create iteration-specific store if named
         if self.defn.name:
@@ -498,8 +501,9 @@ Should the loop continue? Answer (yes/no):"""
             icon, color = _EFFECT_STYLE.get(type_label, ("·", "white"))
             name = getattr(effect, "name", None) or "?"
             is_prompt = isinstance(effect, PromptDefinition)
+            is_tool = isinstance(effect, ToolDefinition)
 
-            if self.verbose and not is_prompt:
+            if self.verbose and not is_prompt and not is_tool:
                 _console.print(
                     f"{body_indent}[info]→[/info] [{color}]{icon}[/{color}]"
                     f" {name}"
@@ -599,7 +603,18 @@ Should the loop continue? Answer (yes/no):"""
                         verbose=self.verbose,
                     ).execute(store=iter_store)
 
-                if self.verbose and not is_prompt:
+                elif is_tool:
+                    ToolRuntime(
+                        effect,
+                        runtime_config=self.runtime_config,
+                        dry_run=self.dry_run,
+                        timeout_seconds=self.timeout_seconds,
+                        verbose=self.verbose,
+                        depth=self.depth + 1,
+                        display_name=f"{name} {iter_label}" if iter_label else None,
+                    ).execute(store=iter_store, ctx=ctx)
+
+                if self.verbose and not is_prompt and not is_tool:
                     elapsed = time.monotonic() - t0
                     _console.print(
                         f"{body_indent}[ok]✓[/ok] [{color}]{icon}[/{color}]"
@@ -607,7 +622,7 @@ Should the loop continue? Answer (yes/no):"""
                     )
 
             except Exception:
-                if self.verbose and not is_prompt:
+                if self.verbose and not is_prompt and not is_tool:
                     elapsed = time.monotonic() - t0
                     _console.print(
                         f"{body_indent}[err]✗[/err] [{color}]{icon}[/{color}]"

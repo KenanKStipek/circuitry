@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -33,19 +34,42 @@ def _check_filter_safe(value: str, field: str) -> None:
 
 
 def _escape_drawtext_text(text: str) -> str:
-    """Escape text for use in an ffmpeg drawtext filter (unquoted form)."""
-    text = text.replace("\\", "\\\\")
-    text = text.replace("\n", " ")
-    text = text.replace("'", "\\'")
-    text = text.replace(":", "\\:")
-    return text
+    """Produce a double-quoted drawtext text= value for ffmpeg filter parsing.
+
+    ffmpeg's filter parser is invoked via subprocess (no shell layer) so the
+    argument is the raw filter string. Without quoting, ffmpeg's drawtext reads
+    text= until the end of the filter string rather than stopping at ':', making
+    unquoted values unreliable. Double-quote wrapping delimits the value cleanly:
+    colons, apostrophes, and semicolons inside double quotes are safe literals.
+    Only backslash, %, and the double-quote character itself need escaping.
+
+    See: https://ffmpeg.org/ffmpeg-filters.html#Filtering-Guide
+    """
+    text = re.sub(r"[\r\n\x0b\x0c\x85\u2028\u2029]+", " ", text)  # Unicode line endings → space
+    text = text.replace("\\", "\\\\")  # \ → \\ (must come before all others)
+    text = text.replace("%", "%%")     # % → %%  (prevent strftime expansion)
+    text = text.replace('"', '\\"')    # " → \"  (escape for double-quote wrapper)
+    return f'"{text}"'
 
 
 def _build_drawtext_filter(cfg: dict[str, Any]) -> str:
     """Build a drawtext= filter string from a config dict, with text properly escaped."""
-    text_escaped = _escape_drawtext_text(str(cfg.get("text", "")))
+    raw_text = str(cfg.get("text", "")).strip()
+    # Strip any leading/trailing quote characters LLMs include in text values.
+    # Done independently so "I have no regrets." (period before closing quote) is handled
+    # correctly — we don't require the first and last chars to match.
+    if raw_text and raw_text[0] in ('"', "'"):
+        raw_text = raw_text[1:]
+    if raw_text and raw_text[-1] in ('"', "'"):
+        raw_text = raw_text[:-1]
+    text_escaped = _escape_drawtext_text(raw_text)
     parts = [f"text={text_escaped}"]
-    for key in ("x", "y", "fontsize", "fontfile", "fontcolor", "box", "boxcolor", "boxborderw"):
+    for key in (
+        "x", "y", "fontsize", "fontfile", "fontcolor",
+        "box", "boxcolor", "boxborderw",
+        "shadowx", "shadowy", "shadowcolor",
+        "borderw", "bordercolor",
+    ):
         if key in cfg:
             parts.append(f"{key}={cfg[key]}")
     return "drawtext=" + ":".join(parts)
@@ -123,8 +147,11 @@ class FfmpegPlugin:
             ) from e
 
         if proc.returncode != 0:
+            cmd_str = " ".join(shlex.quote(a) for a in cmd)
             raise RuntimeError(
-                f"ffmpeg failed (exit {proc.returncode}): {proc.stderr.strip()}"
+                f"ffmpeg failed (exit {proc.returncode})\n"
+                f"cmd: {cmd_str}\n"
+                f"stderr: {proc.stderr.strip()}"
             )
 
         return ToolResult(

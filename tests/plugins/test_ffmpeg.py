@@ -230,7 +230,8 @@ def test_ffmpeg_vf_drawtext_builds_drawtext_filter(monkeypatch: pytest.MonkeyPat
     vf_idx = cmd.index("-vf")
     vf_value = cmd[vf_idx + 1]
     assert vf_value.startswith("drawtext=")
-    assert "text=Hello world" in vf_value
+    # text is wrapped in double quotes
+    assert 'text="Hello world"' in vf_value
     assert "fontsize=24" in vf_value
     assert "fontcolor=white" in vf_value
 
@@ -254,6 +255,80 @@ def test_ffmpeg_vf_drawtext_escapes_colon_and_apostrophe(monkeypatch: pytest.Mon
 
     cmd = captured_cmd[0]
     vf_value = cmd[cmd.index("-vf") + 1]
-    # colon must be escaped, apostrophe must be escaped
-    assert "\\:" in vf_value
-    assert "\\'" in vf_value
+    # double-quote wrapping: apostrophes and colons are safe literals inside double quotes
+    assert "text=\"It's time: now\"" in vf_value
+
+
+def test_ffmpeg_vf_drawtext_strips_surrounding_quotes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LLMs sometimes include surrounding quotes in text values; they should be stripped."""
+    captured_cmd: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        captured_cmd.append(cmd)
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", fake_run)
+
+    for text_with_quotes in ['"Should I be concerned?"', "'Nailed it.'"]:
+        captured_cmd.clear()
+        FfmpegPlugin().execute(
+            params={"input": "p.png", "vf_drawtext": {"text": text_with_quotes}, "output": "o.png"}
+        )
+        vf_value = captured_cmd[0][captured_cmd[0].index("-vf") + 1]
+        # outer quotes stripped — the rendered text should not start/end with quote chars
+        assert '\\"' not in vf_value  # no escaped double-quote at start
+        assert "text=\"Should I be" in vf_value or "text=\"Nailed it" in vf_value
+
+
+def test_ffmpeg_vf_drawtext_strips_quote_before_trailing_period(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """'\"I have no regrets.\"' — period lands before the closing quote; both must be stripped."""
+    captured_cmd: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        captured_cmd.append(cmd)
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", fake_run)
+
+    FfmpegPlugin().execute(
+        params={"input": "p.png", "vf_drawtext": {"text": '"I have no regrets."'}, "output": "o.png"}
+    )
+    vf_value = captured_cmd[0][captured_cmd[0].index("-vf") + 1]
+    assert "text=\"I have no regrets.\"" in vf_value
+    # No extra escaped quote at the very start or end of the text value
+    assert 'text="\\"' not in vf_value
+
+
+def test_ffmpeg_vf_drawtext_collapses_newlines(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Multiline LLM text must be collapsed to a single line to avoid breaking the filter parser."""
+    captured_cmd: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        captured_cmd.append(cmd)
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", fake_run)
+
+    FfmpegPlugin().execute(
+        params={
+            "input": "panel.png",
+            "vf_drawtext": {
+                "text": "Flesh and blood\nnow just a\nsnack.",
+                "x": "(w-tw)/2",
+                "y": "(h-th-50)",
+                "fontsize": 22,
+                "fontcolor": "white",
+            },
+            "output": "panel_text.png",
+        }
+    )
+
+    cmd = captured_cmd[0]
+    vf_value = cmd[cmd.index("-vf") + 1]
+    # Newlines must be replaced with spaces
+    assert "\n" not in vf_value
+    assert 'text="Flesh and blood now just a snack."' in vf_value
+    # Subsequent params must be intact
+    assert "y=(h-th-50)" in vf_value

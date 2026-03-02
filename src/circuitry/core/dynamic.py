@@ -296,6 +296,7 @@ class DynamicRuntime:
                     cb_start=cb_start,
                     cb_done=cb_done,
                     cb_error=cb_error,
+                    cb_running=_cb_running,
                 ).execute(store=store, ctx=ctx)
 
             else:
@@ -476,7 +477,14 @@ class _TreeStatus:
             if state == "running":
                 t = targets.get(name, "")
                 e = estimated.get(name, 0)
-                dim_suffix = f" [dim]~{e}tok ↑  {t}[/dim]" if (t or e) else ""
+                if e and t:
+                    dim_suffix = f" [dim]~{e}tok ↑  {t}[/dim]"
+                elif t:
+                    dim_suffix = f" [dim]{t}[/dim]"
+                elif e:
+                    dim_suffix = f" [dim]~{e}tok ↑[/dim]"
+                else:
+                    dim_suffix = ""
                 lines.append(
                     f"{self._indent}[info]{spinner_char}[/info] [{color}]{icon}[/{color}] {name}{dim_suffix}"
                 )
