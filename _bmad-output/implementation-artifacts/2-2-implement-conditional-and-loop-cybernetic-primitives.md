@@ -1,6 +1,6 @@
 # Story 2.2: Implement Conditional and Loop Cybernetic Primitives
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -24,11 +24,11 @@ so that I can encode dynamic control flow for real-time decision and iteration b
 
 ## Tasks / Subtasks
 
-- [ ] Tighten conditional mode behavior (`model` and `cel`) and branch selection metadata (AC: 1, 2)
-- [ ] Tighten loop mode behavior (`each` and `while`) including termination and bounds metadata (AC: 1, 2)
-- [ ] Ensure named vs transparent control writes match State Path Contract (AC: 3)
-- [ ] Add tests for branch selection, loop iteration indexing, and termination reasons (AC: 1, 2, 3)
-- [ ] Add troubleshooting notes for diagnosing branch and loop outcomes via state inspection (AC: 2, 3)
+- [x] Tighten conditional mode behavior (`model` and `cel`) and branch selection metadata (AC: 1, 2)
+- [x] Tighten loop mode behavior (`each` and `while`) including termination and bounds metadata (AC: 1, 2)
+- [x] Ensure named vs transparent control writes match State Path Contract (AC: 3)
+- [x] Add tests for branch selection, loop iteration indexing, and termination reasons (AC: 1, 2, 3)
+- [x] Add troubleshooting notes for diagnosing branch and loop outcomes via state inspection (AC: 2, 3)
 
 ## Dev Notes
 
@@ -115,10 +115,20 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 2 source and architecture constraints.
-- Included existing-code cross-reference with present capabilities and concrete gaps.
-- Ready for `dev-story` implementation workflow.
+- Conditional mode behavior tightened for `model` and `cel` modes with branch selection metadata recording (`executed_effects`, mode, threshold, branch, result) in `src/circuitry/core/conditional.py`.
+- Loop mode behavior tightened for `each` and `while` with termination metadata, iteration indexing (`iter_<n>`), and `effects_by_iteration` diagnostic payload in `src/circuitry/core/loop.py`.
+- Named vs transparent control writes aligned to State Path Contract: named conditionals/loops create wrapper segments; transparent ones write directly.
+- Added 8 tests in `tests/core/test_conditional_loop_metadata.py`: conditional metadata, loop iteration tracking, collect aggregation, parallel loop execution, order preservation, context sharing, max_concurrency.
+- Added 6 state path contract tests in `tests/core/test_state_path_contract.py` for named/transparent conditional and loop wrapper segment behavior.
+- Added troubleshooting guidance in `docs/troubleshooting-state-paths.md`.
+- Quality gates pass: `pytest`, `ruff check .`, `mypy src`.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/2-2-implement-conditional-and-loop-cybernetic-primitives.md`
+- `src/circuitry/core/conditional.py`
+- `src/circuitry/core/loop.py`
+- `src/circuitry/core/compiler.py`
+- `tests/core/test_conditional_loop_metadata.py`
+- `tests/core/test_state_path_contract.py`
+- `docs/troubleshooting-state-paths.md`

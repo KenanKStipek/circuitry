@@ -28,7 +28,7 @@ effects:
     )
 
     cfg = CircuitryConfig(
-        plugins=["circuitry.dev_plugin_fixtures:make_recording_plugin"]
+        plugins=["plugin_fixtures:make_recording_plugin"]
     )
     result = run(
         RunRequest(
@@ -70,7 +70,7 @@ effects:
         + "\n",
     )
 
-    cfg = CircuitryConfig(plugins=["circuitry.dev_plugin_fixtures:make_failing_plugin"])
+    cfg = CircuitryConfig(plugins=["plugin_fixtures:make_failing_plugin"])
     result = run(
         RunRequest(
             orchestration_path=orch,
@@ -105,7 +105,7 @@ effects:
         + "\n",
     )
 
-    cfg = CircuitryConfig(plugins=["circuitry.dev_plugin_fixtures:does_not_exist"])
+    cfg = CircuitryConfig(plugins=["plugin_fixtures:does_not_exist"])
     result = run(
         RunRequest(
             orchestration_path=orch,
@@ -144,7 +144,7 @@ effects:
     )
 
     cfg = CircuitryConfig(
-        plugins=["circuitry.dev_plugin_fixtures:make_recording_plugin"]
+        plugins=["plugin_fixtures:make_recording_plugin"]
     )
     result = run(
         RunRequest(

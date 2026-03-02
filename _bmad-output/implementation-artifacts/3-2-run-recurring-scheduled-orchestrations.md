@@ -1,6 +1,6 @@
 # Story 3.2: Run Recurring Scheduled Orchestrations
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 

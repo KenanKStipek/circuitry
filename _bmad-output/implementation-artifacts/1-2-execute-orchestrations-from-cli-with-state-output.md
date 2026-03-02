@@ -1,6 +1,6 @@
 # Story 1.2: Execute Orchestrations from CLI with State Output
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -24,11 +24,11 @@ so that I can see execution outputs and metadata persisted in deterministic stat
 
 ## Tasks / Subtasks
 
-- [ ] Ensure `run` command persistently writes complete state JSON to `--out` and supports readable inspection flow (AC: 1, 2)
-- [ ] Standardize runtime metadata capture in `runtime.last_run` and `runtime.effective_settings` for every run outcome (AC: 1, 2)
-- [ ] Ensure error path still writes usable runtime metadata and clear CLI error output (AC: 2)
-- [ ] Add/update docs/examples showing exact path mapping from orchestration names to state keys (AC: 3)
-- [ ] Add regression tests for CLI run state-output behavior with dynamic/conditional/loop examples (AC: 1, 3)
+- [x] Ensure `run` command persistently writes complete state JSON to `--out` and supports readable inspection flow (AC: 1, 2)
+- [x] Standardize runtime metadata capture in `runtime.last_run` and `runtime.effective_settings` for every run outcome (AC: 1, 2)
+- [x] Ensure error path still writes usable runtime metadata and clear CLI error output (AC: 2)
+- [x] Add/update docs/examples showing exact path mapping from orchestration names to state keys (AC: 3)
+- [x] Add regression tests for CLI run state-output behavior with dynamic/conditional/loop examples (AC: 1, 3)
 
 ## Dev Notes
 
@@ -114,10 +114,18 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 1 source and architecture constraints.
-- Deterministic state-path guardrails included where applicable.
-- Ready for `dev-story` implementation workflow.
+- CLI `run` command writes complete state JSON via `--out` with `runtime.last_run` and `runtime.effective_settings` metadata on every outcome (success and failure).
+- Error paths write usable runtime metadata before surfacing CLI error output.
+- State-path mapping documented via `docs/troubleshooting-state-paths.md` and example orchestrations under `examples/`.
+- Added CLI run/inspect tests in `tests/cli/test_run_and_inspect.py` covering state-output behavior and parity between CLI and API execution.
+- Quality gates pass: `pytest`, `ruff check .`, `mypy src`.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/1-2-execute-orchestrations-from-cli-with-state-output.md`
+- `src/circuitry/cli/app.py`
+- `src/circuitry/cli/runtime_shim.py`
+- `src/circuitry/core/dynamic.py`
+- `src/circuitry/core/store/store.py`
+- `tests/cli/test_run_and_inspect.py`
+- `docs/troubleshooting-state-paths.md`

@@ -1,6 +1,6 @@
 # Story 1.1: Define and Validate Basic DOL Orchestrations
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -24,12 +24,12 @@ so that I can author valid orchestration plans quickly.
 
 ## Tasks / Subtasks
 
-- [ ] Add compile-time structural validation for DOL naming and scope rules (AC: 1, 2, 3)
-- [ ] Ensure required fields for Prompt and Dynamic are validated consistently in compiler flow (AC: 1, 2)
-- [ ] Add scope-aware diagnostics that include failing effect path/scope (AC: 2, 3)
-- [ ] Improve CLI validation behavior so `validate` executes real orchestration validation path (not only non-empty check) (AC: 1, 2)
-- [ ] Add regression tests for valid and invalid DOL samples (duplicate names, invalid names, missing fields) (AC: 1, 2, 3)
-- [ ] Verify existing examples remain valid after stricter validation rules (AC: 1)
+- [x] Add compile-time structural validation for DOL naming and scope rules (AC: 1, 2, 3)
+- [x] Ensure required fields for Prompt and Dynamic are validated consistently in compiler flow (AC: 1, 2)
+- [x] Add scope-aware diagnostics that include failing effect path/scope (AC: 2, 3)
+- [x] Improve CLI validation behavior so `validate` executes real orchestration validation path (not only non-empty check) (AC: 1, 2)
+- [x] Add regression tests for valid and invalid DOL samples (duplicate names, invalid names, missing fields) (AC: 1, 2, 3)
+- [x] Verify existing examples remain valid after stricter validation rules (AC: 1)
 
 ## Dev Notes
 
@@ -138,10 +138,20 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Extracted and aligned Story 1.1 from epic source.
-- Added architecture and state-path guardrails specific to this story.
-- Included latest dependency/version intelligence for implementation safety.
+- Implemented `_validate_name()` in `src/circuitry/core/compiler.py` with path-safe naming rules: rejects dots, whitespace, reserved `iter_<n>` patterns, and enforces `[A-Za-z_][A-Za-z0-9_]*` regex.
+- Added sibling duplicate name guards at compile time with scope-aware error messages (e.g., "Duplicate effect name 'step' in scope 'prime.outer'").
+- Upgraded `validate()` in `src/circuitry/cli/runtime_shim.py` from shallow non-empty check to full JSON Schema validation + compile-based validation.
+- Added JSON Schema validation via `jsonschema.Draft7Validator` against `orchestration.schema.json`.
+- Added 9 compiler validation tests in `tests/core/test_compiler_validation.py` and 6 CLI validation tests in `tests/cli/test_validate.py`.
+- Verified existing examples remain valid under stricter rules via `tests/orchestrations/test_examples_smoke.py`.
+- Quality gates pass: `pytest`, `ruff check .`, `mypy src`.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/1-1-define-and-validate-basic-dol-orchestrations.md`
+- `src/circuitry/core/compiler.py`
+- `src/circuitry/cli/runtime_shim.py`
+- `src/circuitry/schema/orchestration.schema.json`
+- `tests/core/test_compiler_validation.py`
+- `tests/cli/test_validate.py`
+- `tests/orchestrations/test_examples_smoke.py`

@@ -1,6 +1,6 @@
 # Story 2.1: Implement Chain and Tree Effect Topologies
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -24,11 +24,11 @@ so that I can encode different execution structures explicitly in DOL.
 
 ## Tasks / Subtasks
 
-- [ ] Validate and harden flow normalization behavior for root and nested dynamics (AC: 1, 2)
-- [ ] Ensure runtime semantics for chain/tree are explicit and testable (AC: 1)
-- [ ] Ensure dynamic metadata records canonical flow value and execution outcome (AC: 3)
-- [ ] Add test fixtures covering chain/tree aliases and nested flow combinations (AC: 1, 2, 3)
-- [ ] Document topology behavior with at least one chain and one tree example path walk (AC: 3)
+- [x] Validate and harden flow normalization behavior for root and nested dynamics (AC: 1, 2)
+- [x] Ensure runtime semantics for chain/tree are explicit and testable (AC: 1)
+- [x] Ensure dynamic metadata records canonical flow value and execution outcome (AC: 3)
+- [x] Add test fixtures covering chain/tree aliases and nested flow combinations (AC: 1, 2, 3)
+- [x] Document topology behavior with at least one chain and one tree example path walk (AC: 3)
 
 ## Dev Notes
 
@@ -114,10 +114,15 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 2 source and architecture constraints.
-- Included existing-code cross-reference with present capabilities and concrete gaps.
-- Ready for `dev-story` implementation workflow.
+- Implemented distinct chain vs tree execution semantics in `src/circuitry/core/dynamic.py`: chain runs effects sequentially with sibling writes visible; tree runs effects in parallel via `ThreadPoolExecutor` against a deterministic snapshot (no cross-sibling visibility).
+- Flow alias normalization hardened in compiler (`_normalize_flow`) for `chain_of_thought`→`chain`, `tree_of_thought`→`tree`.
+- Dynamic metadata records canonical flow value and execution outcome per run.
+- Added 3 topology tests in `tests/core/test_dynamic_topologies.py`: flow alias normalization, chain vs tree context semantics, and metadata recording.
+- Quality gates pass: `pytest`, `ruff check .`, `mypy src`.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/2-1-implement-chain-and-tree-effect-topologies.md`
+- `src/circuitry/core/dynamic.py`
+- `src/circuitry/core/compiler.py`
+- `tests/core/test_dynamic_topologies.py`

@@ -1,6 +1,6 @@
 # Story 2.3: Support Nested Dynamic Composition
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -24,11 +24,11 @@ so that I can model complex orchestration logic while preserving readability and
 
 ## Tasks / Subtasks
 
-- [ ] Validate nested composition execution for prompt/dynamic/conditional/loop combinations (AC: 1, 3)
-- [ ] Improve error context propagation to include nested scope/path where failures occur (AC: 2)
-- [ ] Ensure context handling across nested loops/conditionals is deterministic and non-leaky (AC: 1)
-- [ ] Add deep nested fixture tests with path assertions for all nested levels (AC: 1, 3)
-- [ ] Document nested composition patterns and anti-patterns for implementation consistency (AC: 2, 3)
+- [x] Validate nested composition execution for prompt/dynamic/conditional/loop combinations (AC: 1, 3)
+- [x] Improve error context propagation to include nested scope/path where failures occur (AC: 2)
+- [x] Ensure context handling across nested loops/conditionals is deterministic and non-leaky (AC: 1)
+- [x] Add deep nested fixture tests with path assertions for all nested levels (AC: 1, 3)
+- [x] Document nested composition patterns and anti-patterns for implementation consistency (AC: 2, 3)
 
 ## Dev Notes
 
@@ -114,10 +114,19 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 2 source and architecture constraints.
-- Included existing-code cross-reference with present capabilities and concrete gaps.
-- Ready for `dev-story` implementation workflow.
+- Nested composition execution validated across prompt/dynamic/conditional/loop combinations with deterministic store composition via child stores + `ensure_dict`.
+- Error context propagation improved with hierarchical path breadcrumbs in `DynamicRuntime._execute_effect` (e.g., `"prime.outer.inner: <error>"`).
+- Context handling across nested loops/conditionals verified as deterministic and non-leaky via `deepcopy` isolation in tree mode.
+- Added nested error path test in `tests/core/test_nested_error_paths.py` asserting hierarchical error diagnostics.
+- State path contract tests in `tests/core/test_state_path_contract.py` verify path composition for nested levels.
+- Quality gates pass: `pytest`, `ruff check .`, `mypy src`.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/2-3-support-nested-dynamic-composition.md`
+- `src/circuitry/core/dynamic.py`
+- `src/circuitry/core/conditional.py`
+- `src/circuitry/core/loop.py`
+- `src/circuitry/core/store/store.py`
+- `tests/core/test_nested_error_paths.py`
+- `tests/core/test_state_path_contract.py`

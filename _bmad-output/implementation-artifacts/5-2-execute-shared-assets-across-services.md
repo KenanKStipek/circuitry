@@ -1,6 +1,6 @@
 # Story 5.2: Execute Shared Assets Across Services
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 

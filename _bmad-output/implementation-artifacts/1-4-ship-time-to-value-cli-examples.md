@@ -1,6 +1,6 @@
 # Story 1.4: Ship Time-to-Value CLI Examples
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -24,11 +24,11 @@ so that I can confirm the framework works before writing custom orchestration lo
 
 ## Tasks / Subtasks
 
-- [ ] Define a canonical quick-start command and ensure it uses a reliable local example orchestration (AC: 1, 2)
-- [ ] Tighten README quick-start sequence with prerequisites, expected outputs, and state file inspection path (AC: 2)
-- [ ] Validate and refresh `examples/*.yml` so they execute under current compiler/runtime behavior (AC: 1, 3)
-- [ ] Add lightweight automated smoke checks for representative examples (prompt, dynamic, conditional, loop) (AC: 3)
-- [ ] Document expected completion time and common setup pitfalls with direct remediation steps (AC: 1, 2)
+- [x] Define a canonical quick-start command and ensure it uses a reliable local example orchestration (AC: 1, 2)
+- [x] Tighten README quick-start sequence with prerequisites, expected outputs, and state file inspection path (AC: 2)
+- [x] Validate and refresh `examples/*.yml` so they execute under current compiler/runtime behavior (AC: 1, 3)
+- [x] Add lightweight automated smoke checks for representative examples (prompt, dynamic, conditional, loop) (AC: 3)
+- [x] Document expected completion time and common setup pitfalls with direct remediation steps (AC: 1, 2)
 
 ## Dev Notes
 
@@ -116,10 +116,19 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 1 source and architecture constraints.
-- Deterministic state-path guardrails included where applicable.
-- Ready for `dev-story` implementation workflow.
+- Example orchestrations under `examples/` validated and refreshed to execute under current compiler/runtime.
+- README quick-start updated with canonical run command, prerequisites, expected outputs, and state inspection path. Fixed API drift (`create_adapter` → `build_adapter`).
+- Added parameterized smoke tests in `tests/orchestrations/test_examples_smoke.py` covering 7 example orchestrations (validate, inspect, dry-run).
+- Added documentation contract tests in `tests/docs/test_documentation_contracts.py` verifying README quick-start and API reference symbol accuracy.
+- Quality gates pass: `pytest`, `ruff check .`, `mypy src`.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/1-4-ship-time-to-value-cli-examples.md`
+- `README.md`
+- `examples/hello.yml`
+- `examples/dynamic_hello.yml`
+- `examples/conditional_example.yml`
+- `examples/loop_example.yml`
+- `tests/orchestrations/test_examples_smoke.py`
+- `tests/docs/test_documentation_contracts.py`

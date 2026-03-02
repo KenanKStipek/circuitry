@@ -27,7 +27,7 @@ def _load_schema() -> dict[str, Any] | None:
 from ..adapters import Adapter, build_adapter
 from ..core.compiler import compile_orchestration
 from ..core.dynamic import DynamicRuntime
-from ..core.plugins import (
+from ..core.runtime_plugins import (
     PLUGIN_CONTRACT_VERSION,
     PluginContext,
     RuntimePlugin,

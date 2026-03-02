@@ -1,6 +1,6 @@
 # Story 1.3: Execute Orchestrations via Embedded Python API
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -24,11 +24,11 @@ so that I can embed Circuitry in other Python systems without shelling out to CL
 
 ## Tasks / Subtasks
 
-- [ ] Define/confirm stable embedded API entrypoints for run/validate/inspect use cases (AC: 1, 2)
-- [ ] Ensure API execution path reuses core compile/runtime flow used by CLI (AC: 1, 3)
-- [ ] Add API-level tests comparing CLI and embedded execution state outputs on the same fixture orchestration (AC: 1, 3)
-- [ ] Add documentation snippet for package consumers with minimal runnable examples (AC: 2)
-- [ ] Ensure API errors surface actionable exceptions without hiding core compiler/runtime context (AC: 1)
+- [x] Define/confirm stable embedded API entrypoints for run/validate/inspect use cases (AC: 1, 2)
+- [x] Ensure API execution path reuses core compile/runtime flow used by CLI (AC: 1, 3)
+- [x] Add API-level tests comparing CLI and embedded execution state outputs on the same fixture orchestration (AC: 1, 3)
+- [x] Add documentation snippet for package consumers with minimal runnable examples (AC: 2)
+- [x] Ensure API errors surface actionable exceptions without hiding core compiler/runtime context (AC: 1)
 
 ## Dev Notes
 
@@ -115,10 +115,21 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 1 source and architecture constraints.
-- Deterministic state-path guardrails included where applicable.
-- Ready for `dev-story` implementation workflow.
+- Defined stable embedded API in `src/circuitry/api.py` with public entrypoints: `run_orchestration()`, `validate_orchestration()`, `inspect_orchestration()`, `inspect_divergence_paths()`.
+- Exported all public API functions via `src/circuitry/__init__.py` for clean `from circuitry import run_orchestration` usage.
+- API execution path reuses `compile_orchestration` + `DynamicRuntime` from core — identical to CLI path.
+- Added `CircuitryExecutionError` for actionable exception surfacing without hiding compiler/runtime context.
+- Added embedded API tests in `tests/api/test_embedded_api.py` covering run, validate, inspect, and divergence path operations.
+- Added CLI/API parity assertions in `tests/cli/test_run_and_inspect.py`.
+- Updated `docs/api-reference.md` with usage examples.
+- Quality gates pass: `pytest`, `ruff check .`, `mypy src`.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/1-3-execute-orchestrations-via-embedded-python-api.md`
+- `src/circuitry/api.py`
+- `src/circuitry/__init__.py`
+- `src/circuitry/core/__init__.py`
+- `tests/api/test_embedded_api.py`
+- `tests/cli/test_run_and_inspect.py`
+- `docs/api-reference.md`

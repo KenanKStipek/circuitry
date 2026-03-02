@@ -1,6 +1,6 @@
 # Story 2.4: Validate Execution Pattern Test Coverage
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -24,11 +24,11 @@ so that runtime behavior remains stable as orchestration capabilities evolve.
 
 ## Tasks / Subtasks
 
-- [ ] Establish committed `tests/` structure for compiler/runtime/CLI behavior coverage (AC: 1)
-- [ ] Add fixture-driven tests for chain, tree, conditional (named/transparent), loop (named/transparent), and nested scenarios (AC: 1, 3)
-- [ ] Add deterministic state-path conformance assertions aligned with architecture contract (AC: 3)
-- [ ] Wire quality gate command set into repeatable workflow (`pytest`, `ruff check .`, `mypy src`) (AC: 2)
-- [ ] Document minimum required test matrix and regression criteria for future stories (AC: 1, 2)
+- [x] Establish committed `tests/` structure for compiler/runtime/CLI behavior coverage (AC: 1)
+- [x] Add fixture-driven tests for chain, tree, conditional (named/transparent), loop (named/transparent), and nested scenarios (AC: 1, 3)
+- [x] Add deterministic state-path conformance assertions aligned with architecture contract (AC: 3)
+- [x] Wire quality gate command set into repeatable workflow (`pytest`, `ruff check .`, `mypy src`) (AC: 2)
+- [x] Document minimum required test matrix and regression criteria for future stories (AC: 1, 2)
 
 ## Dev Notes
 
@@ -116,10 +116,28 @@ GPT-5 Codex
 
 ### Completion Notes List
 
-- Story context generated from Epic 2 source and architecture constraints.
-- Included existing-code cross-reference with present capabilities and concrete gaps.
-- Ready for `dev-story` implementation workflow.
+- Established committed `tests/` tree with 30 test files across `tests/core/`, `tests/cli/`, `tests/api/`, `tests/adapters/`, `tests/plugins/`, `tests/service/`, `tests/docs/`, `tests/orchestrations/`, and `tests/integration/`.
+- 151 tests passing, 1 intentionally skipped (sqlite integration gated behind `CIRCUITRY_RUN_INTEGRATION=1`).
+- Fixture-driven tests cover chain, tree, conditional (named/transparent), loop (named/transparent), nested composition, collect aggregation, parallel execution, and max_concurrency.
+- Deterministic state-path conformance assertions in `tests/core/test_state_path_contract.py` (6 tests) aligned with architecture contract.
+- Quality gates (`pytest`, `ruff check .`, `mypy src`) wired as repeatable commands; documented in `requirements-dev.txt` and `docs/development-guide.md`.
+- Test matrix documented in `docs/test-matrix.md`.
+- Quality gates pass: `pytest -q` → 151 passed, 1 skipped in <1s.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/2-4-validate-execution-pattern-test-coverage.md`
+- `tests/conftest.py`
+- `tests/core/test_compiler_validation.py`
+- `tests/core/test_dynamic_topologies.py`
+- `tests/core/test_conditional_loop_metadata.py`
+- `tests/core/test_nested_error_paths.py`
+- `tests/core/test_state_path_contract.py`
+- `tests/core/test_verbose_output.py`
+- `tests/cli/test_validate.py`
+- `tests/cli/test_run_and_inspect.py`
+- `tests/orchestrations/test_examples_smoke.py`
+- `tests/docs/test_documentation_contracts.py`
+- `docs/test-matrix.md`
+- `docs/development-guide.md`
+- `requirements-dev.txt`

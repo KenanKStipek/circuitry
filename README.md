@@ -1,131 +1,199 @@
 # Circuitry
 
-Circuitry is a deterministic orchestration framework for AI model invocations. It provides a declarative YAML-based DSL for composing prompts, dynamics, conditionals, loops, and reflectors into auditable execution plans.
+A cybernetic orchestration framework for AI systems.
 
-## Core Concepts
+Circuitry structures AI model invocations as closed-loop control systems. Each effect writes to a deterministic state path, and downstream effects observe that state through interpolation to decide what happens next. This creates genuine feedback: loops that re-evaluate continuation based on what the model just produced, conditionals that branch on accumulated output, and reflectors that plan from observed state.
 
-### State
+## How It Works
 
-State is the single source of truth. It is a hierarchical, serializable structure containing **domain state** and **runtime state**. Circuitry writes only to runtime state; domain state is never mutated implicitly.
+An orchestration is a YAML file declaring **effects** that execute in order. Each effect writes its output to a **deterministic state path** derived from its name. Subsequent effects read that state through **template interpolation**, creating feedback chains.
+
+```yaml
+adapter: ollama
+model: llama3
+effects:
+  - type: prompt
+    name: draft
+    template: "Write a short intro for {{input.topic}}."
+
+  - type: prompt
+    name: critique
+    template: "Critique this draft and suggest improvements: {{prime.draft.value}}"
+
+  - type: prompt
+    name: revise
+    template: |
+      Original: {{prime.draft.value}}
+      Feedback: {{prime.critique.value}}
+      Write the final version incorporating the feedback.
+```
+
+The second prompt reads the first prompt's output. The third reads both. Each step adapts based on what came before — this is the feedback loop that makes orchestrations cybernetic rather than static pipelines.
+
+## Core Primitives
 
 ### Prompt
 
-A Prompt is the atomic execution unit. It performs exactly one model invocation, produces a typed result, and writes both its value and execution metadata to state at a deterministic path.
+The atomic unit. One model invocation, one typed result, written to state at a deterministic path.
 
 ```yaml
-effects:
-  - type: prompt
-    name: greet_user
-    template: "Say hello to {{input.user_name}} in one sentence."
+- type: prompt
+  name: greet_user
+  template: "Say hello to {{input.user_name}} in one sentence."
 ```
+
+State path: `prime.greet_user.value`
 
 ### Dynamic
 
-A Dynamic is a named execution structure that composes Prompts, Conditionals, Loops, and other Dynamics. It defines control flow topology and aggregates execution metadata.
+A named scope that composes effects with explicit control flow topology.
 
 ```yaml
-effects:
-  - type: dynamic
-    name: onboarding
-    flow: chain
-    effects:
-      - type: prompt
-        name: ask_name
-        template: "What is your name?"
-      - type: prompt
-        name: greet
-        template: "Nice to meet you, {{onboarding.ask_name.value}}!"
+- type: dynamic
+  name: onboarding
+  flow: chain
+  effects:
+    - type: prompt
+      name: ask_name
+      template: "What is your name?"
+    - type: prompt
+      name: greet
+      template: "Nice to meet you, {{onboarding.ask_name.value}}!"
 ```
 
-### Flow Models
-
-Dynamics support explicit control flow models:
-
-- **chain** (aliases: `chain_of_thought`, `cot`) - Sequential execution
-- **tree** (aliases: `tree_of_thought`, `tot`) - Parallel execution
+Flow models:
+- **chain** (aliases: `chain_of_thought`, `cot`) — sequential, each effect sees prior state
+- **tree** (aliases: `tree_of_thought`, `tot`) — parallel execution
 
 ### Conditional
 
-A Conditional evaluates an `if` condition and selects exactly one branch to execute.
+Cybernetic branching. The system inspects its own state and selects a path.
 
 ```yaml
-effects:
-  - type: if
-    name: check_role
-    if:
-      mode: cel
-      expr: "state.input.role == 'admin'"
-    then:
-      - type: prompt
-        name: admin_view
-        template: "Render admin panel."
-    else:
-      - type: prompt
-        name: user_view
-        template: "Render user panel."
+- type: if
+  name: check_role
+  if:
+    mode: cel
+    expr: "state.input.role == 'admin'"
+  then:
+    - type: prompt
+      name: admin_view
+      template: "Render admin panel."
+  else:
+    - type: prompt
+      name: user_view
+      template: "Render user panel."
 ```
 
 Evaluation modes:
-- **model** - Cybernetic evaluation using a model invocation
-- **cel** - Deterministic evaluation using CEL expressions
+- **model** — the LLM reads state and decides the branch (cybernetic evaluation)
+- **cel** — deterministic evaluation using CEL expressions
 
 ### Loop
 
-A Loop repeatedly executes effects while a condition is true or over a collection.
+Cybernetic iteration. The loop body executes, writes state, and the continuation condition evaluates against that new state.
 
 ```yaml
-effects:
-  - type: loop
-    name: process_items
-    each:
-      in: state.input.items
-      as: item
-    body:
-      - type: prompt
-        name: process
-        template: "Process item: {{item}}"
+- type: loop
+  name: refine
+  while:
+    mode: model
+    condition: "Is the draft still below quality threshold? {{prime.refine.iter_{{_iter}}.improve.value}}"
+  body:
+    - type: prompt
+      name: improve
+      template: "Improve this draft: {{prime.refine.iter_{{_prev_iter}}.improve.value}}"
 ```
 
+A `while` loop with `mode: model` is the purest cybernetic primitive — the model observes accumulated state and decides whether to keep going.
+
 Loop modes:
-- **while** - Continue while condition is true (model or CEL)
-- **each** - Iterate over a collection
+- **while** — continue while condition holds (model or CEL evaluated)
+- **each** — iterate over a collection, optionally in parallel (`flow: tree`)
+
+Loops support `collect` to aggregate body outputs across iterations:
+
+```yaml
+- type: loop
+  name: process_items
+  each:
+    in: state.input.items
+    as: item
+  collect: process
+  body:
+    - type: prompt
+      name: process
+      template: "Process item: {{item}}"
+```
+
+Collected at: `prime.process_items.collected.value` (array)
 
 ### Reflector
 
-A Reflector is an optional planning component that reads state, applies heuristics, and produces Prime Dynamics. Reflectors do not execute effects directly.
+A planning component that reads state and produces execution plans. Reflectors observe the system's current state and generate dynamics — the highest-level cybernetic feedback.
 
 ```yaml
-effects:
-  - type: reflector
-    name: planner
-    max_effects: 5
-    effects:
-      - type: prompt
-        name: propose_steps
-        template: "Generate next steps based on: {{prime.goal.value}}"
+- type: reflector
+  name: planner
+  max_effects: 5
+  effects:
+    - type: prompt
+      name: propose_steps
+      template: "Generate next steps based on: {{prime.goal.value}}"
 ```
+
+### Tool
+
+Extends orchestrations beyond model invocations. Tool effects invoke external systems through plugins.
+
+```yaml
+- type: tool
+  name: render_video
+  provider: ffmpeg
+  params:
+    input: "{{prime.generate_frames.value}}"
+    output: "./output/video.mp4"
+```
+
+Built-in providers: `ffmpeg`, `comfyui`
 
 ### Prompt Types
 
 Prompts support typed outputs with optional schema validation:
 
 ```yaml
-effects:
-  - type: prompt
-    name: extract_data
-    prompt_type: json
-    schema:
-      type: object
-      properties:
+- type: prompt
+  name: extract_data
+  prompt_type: json
+  schema:
+    type: object
+    properties:
+      items:
+        type: array
         items:
-          type: array
-          items:
-            type: string
-      required: [items]
-    template: "Extract items as JSON..."
+          type: string
+    required: [items]
+  template: "Extract items as JSON..."
 ```
 
-Available types: `text`, `json`, `boolean`, `number`, `array`, `object`, `tool`
+Available types: `text`, `json`, `boolean`, `number`, `array`, `object`
+
+## State Paths
+
+Every effect writes to a deterministic path derived from its name. This is what makes interpolation — and therefore cybernetic feedback — reliable.
+
+```
+prime.<effect>.value                              # top-level prompt
+prime.<dynamic>.<effect>.value                    # inside a dynamic
+prime.<loop>.iter_<n>.<effect>.value              # inside a loop iteration
+prime.<loop>.collected.value                      # loop collect aggregation
+```
+
+Inspect paths from any run:
+
+```bash
+circuitry run orchestrations/loop_example.yml --out out.json --pretty
+```
 
 ## Installation
 
@@ -133,52 +201,34 @@ Available types: `text`, `json`, `boolean`, `number`, `array`, `object`, `tool`
 pip install -e .
 ```
 
-## Usage
+## Quick Start
 
-### Quick Start (2 Minutes)
-
-Use a dry run first to verify install and runtime wiring without requiring live model calls.
-
-Dry-run expectations:
-- No network/model provider required
-- Validates orchestration loading, compile path, and deterministic state writes
-
-Live-run expectations:
-- Adapter/provider credentials must be configured where applicable (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`)
-- Ollama must be running locally if using default runtime config
-
-Dry run command:
+Dry-run first to verify install without requiring a live model:
 
 ```bash
 circuitry run orchestrations/hello.yml --dry-run --out out.json --pretty
 ```
 
 Expected result:
-- Command exits successfully
+- Exits with code `0`
 - `out.json` contains `runtime.last_run`, `runtime.effective_settings`, and `prime.*` state keys
 
-Common setup pitfalls:
-- `circuitry: command not found`
-  - run via module: `python -m circuitry.cli.app run orchestrations/hello.yml --dry-run`
-- Import/runtime dependency issues
-  - install deps: `pip install -e . && pip install -r requirements-dev.txt`
+Then run live (requires a configured adapter):
 
-Quick verification checklist:
-1. `circuitry run orchestrations/hello.yml --dry-run` exits with code `0`.
-2. `out.json` (or stdout state) shows `prime.say_hello.value`.
-3. Programmatic snippet below returns `result.ok == True`.
-4. Optional live run (`circuitry run orchestrations/hello.yml`) works after adapter setup.
+```bash
+circuitry run orchestrations/hello.yml
+```
 
 ### CLI
 
 ```bash
-# Recommended first run (no model invocations)
+# Dry run (no model calls)
 circuitry run orchestrations/hello.yml --dry-run
 
-# Run with live model invocation
+# Live run
 circuitry run orchestrations/hello.yml
 
-# With verbose output
+# Verbose output
 circuitry run orchestrations/hello.yml --verbose
 ```
 
@@ -196,17 +246,17 @@ print(result.ok)                 # True/False
 print(result.state["runtime"])   # runtime metadata + outputs
 ```
 
-Additional embedded API surface:
-- `run_shared_orchestration` for shared-library assets
-- `validate_orchestration` for compiler-backed validation
-- `inspect_orchestration` for orchestration metadata
-- `inspect_divergence_paths` for deterministic failure-path diagnostics
+Additional embedded API:
+- `run_shared_orchestration` — shared-library assets
+- `validate_orchestration` — compiler-backed validation
+- `inspect_orchestration` — orchestration metadata
+- `inspect_divergence_paths` — deterministic failure-path diagnostics
 
 See `docs/api-reference.md` for signatures and integration guidance.
 
-### Multi-Provider Runtime Configuration
+### Multi-Provider Configuration
 
-Configure provider adapters in `config.json` under `runtime.adapters` and set defaults:
+Configure adapters in `config.json`:
 
 ```json
 {
@@ -240,62 +290,50 @@ Configure provider adapters in `config.json` under `runtime.adapters` and set de
 Selection precedence:
 - Model: CLI override > orchestration `model` > config `default_model`
 - Adapter: CLI override > orchestration `adapter` > config `default_adapter`
-- Runtime: orchestration `runtime` overrides config `runtime` (shallow merge)
 
-Every run records the resolved values and sources in `runtime.effective_settings`.
+Every run records resolved values in `runtime.effective_settings`.
 
 ## Orchestration Library
 
-See the `orchestrations/` directory for pre-built orchestrations:
+See `orchestrations/` for pre-built examples:
 
-- `hello.yml` - Simple single prompt
-- `dynamic_hello.yml` - Sequential prompts with interpolation
-- `conditional_example.yml` - Branching with CEL conditions
-- `loop_example.yml` - Collection iteration
-- `typed_prompt_example.yml` - Typed prompts with JSON schema
-- `reflector_v1.yml` - Reflector-driven planning
-- `multi_primitive_story.yml` - Combined dynamic + loop + conditional composition
-- `meta_orchestrator.yml` - Generate a new orchestration from a natural language prompt
+- `hello.yml` — single prompt
+- `dynamic_hello.yml` — sequential prompts with interpolation
+- `conditional_example.yml` — branching with CEL conditions
+- `loop_example.yml` — collection iteration
+- `typed_prompt_example.yml` — typed prompts with JSON schema
+- `reflector_v1.yml` — reflector-driven planning
+- `multi_primitive_story.yml` — dynamic + loop + conditional composition
+- `meta_orchestrator.yml` — generate new orchestrations from natural language
 
-Full index, expected outputs, and compatibility/versioning notes:
-- `orchestrations/README.md`
-- `orchestrations/manifest.json`
-
-### State Path Walkthrough
-
-Runtime state paths follow orchestration names under `prime`.
-
-- Prompt: `prime.say_hello.value`
-- Nested dynamic prompt: `prime.onboarding.ask_name.value`
-- Named loop iteration prompt: `prime.explain_topics.iter_0.explain.value`
-
-Use CLI output state files to inspect paths:
-
-```bash
-circuitry run orchestrations/loop_example.yml --out out.json --pretty
-```
+Full index: `orchestrations/README.md` and `orchestrations/manifest.json`
 
 ## Architecture
 
 ```
-State + Prime Dynamic --> Prime --> Runtime --> Updated State
-                           |
-                           v
-                    Adapter Layer --> Model Provider
+Orchestration YAML
+       |
+    Compiler ──> Definition Objects
+       |
+    Runtime ──> Effect Execution ──> State Writes
+       |              |
+    Store        Adapter Layer ──> Model Provider
+  (feedback)
 ```
 
-- **Compiler** - Parses YAML into definition objects
-- **Runtime** - Executes definitions deterministically
-- **Store** - Manages hierarchical state
-- **Adapters** - Translate to provider-specific APIs
+- **Compiler** — parses YAML into typed definition objects with JSON Schema validation
+- **Runtime** — executes definitions, manages state feedback between effects
+- **Store** — hierarchical state with deterministic path resolution
+- **Adapters** — normalize provider transport (Ollama, OpenAI, Anthropic, LiteLLM)
+- **Plugins** — tool effect providers (ffmpeg, ComfyUI) and runtime lifecycle hooks
 
 ## Design Principles
 
-1. **Deterministic Execution** - Given the same inputs, execution follows the same path
-2. **Explicit Control Flow** - No implicit branching or reasoning
-3. **Full Auditability** - All effects and metadata recorded to state
-4. **Separation of Concerns** - Planning (Reflectors) vs Execution (Runtime)
-5. **Model Agnostic** - Adapters abstract provider differences
+1. **Cybernetic Feedback** — effects observe state written by prior effects and adapt; the system steers itself
+2. **Deterministic State Paths** — orchestration structure maps to known state keys; feedback is reliable because paths are predictable
+3. **Explicit Control Flow** — no implicit branching or hidden reasoning; topology is declared in YAML
+4. **Full Auditability** — every effect, branch decision, and iteration is recorded to state
+5. **Model Agnostic** — adapters abstract provider differences; orchestrations are portable
 
 ## License
 
