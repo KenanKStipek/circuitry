@@ -24,7 +24,7 @@ def _load_schema() -> dict[str, Any] | None:
     except FileNotFoundError:
         return None
 
-from ..adapters import build_adapter
+from ..adapters import Adapter, build_adapter
 from ..core.compiler import compile_orchestration
 from ..core.dynamic import DynamicRuntime
 from ..core.plugins import (
@@ -174,25 +174,28 @@ def run(req: RunRequest) -> RunResult:
         # structural orchestration errors are surfaced deterministically.
         root_def = compile_orchestration(orch=orch, root_name="prime")
 
-        resolved_adapter, resolved_model = _require_resolved_settings(
-            effective=effective, orchestration_path=req.orchestration_path
-        )
-
-        adapter = build_adapter(
-            adapter_name=resolved_adapter, runtime=effective.runtime or {}
-        )
+        adapter: Adapter
+        timeout_seconds = 120
+        if _has_prompt_effects(root_def):
+            resolved_adapter, resolved_model = _require_resolved_settings(
+                effective=effective, orchestration_path=req.orchestration_path
+            )
+            adapter = build_adapter(
+                adapter_name=resolved_adapter, runtime=effective.runtime or {}
+            )
+            try:
+                adapters_cfg = (effective.runtime or {}).get("adapters") or {}
+                this_cfg = adapters_cfg.get(resolved_adapter) or {}
+                timeout_seconds = int(this_cfg.get("timeout_seconds") or 120)
+            except Exception:
+                timeout_seconds = 120
+        else:
+            resolved_adapter = "_noop"
+            resolved_model = effective.model or ""
+            adapter = _NoOpAdapter()
 
         # Execute using core runtime against Store
         store = Store(state)
-
-        # Pick a timeout for v0: prefer runtime.adapters.<name>.timeout_seconds, else 120
-        timeout_seconds = 120
-        try:
-            adapters_cfg = (effective.runtime or {}).get("adapters") or {}
-            this_cfg = adapters_cfg.get(resolved_adapter) or {}
-            timeout_seconds = int(this_cfg.get("timeout_seconds") or 120)
-        except Exception:
-            timeout_seconds = 120
 
         runtime = DynamicRuntime(
             root_def,
@@ -327,6 +330,42 @@ def inspect_orchestration(orchestration_path: Path) -> dict[str, Any]:
         summary["note"] = "Non-YAML inspection is currently shallow."
 
     return summary
+
+
+@dataclass(frozen=True)
+class _NoOpAdapter:
+    """Stub adapter for tool-only orchestrations that have no prompt effects."""
+
+    name: str = "_noop"
+
+    def generate(self, *, model: str, prompt: str, timeout_seconds: int = 120) -> Any:
+        raise RuntimeError(
+            "Attempted to call generate() on a tool-only orchestration. "
+            "No prompt effects should be present."
+        )
+
+
+def _has_prompt_effects(defn: Any) -> bool:
+    """Recursively check if any effect in the tree requires an LLM adapter."""
+    from ..core.conditional import ConditionalDefinition
+    from ..core.dynamic import DynamicDefinition
+    from ..core.loop import LoopDefinition
+    from ..core.prompt import PromptDefinition
+    from ..core.reflector import ReflectorDefinition
+
+    if isinstance(defn, PromptDefinition):
+        return True
+    if isinstance(defn, DynamicDefinition):
+        return any(_has_prompt_effects(e) for e in defn.effects)
+    if isinstance(defn, ConditionalDefinition):
+        return any(_has_prompt_effects(e) for e in defn.then_effects) or any(
+            _has_prompt_effects(e) for e in defn.else_effects
+        )
+    if isinstance(defn, LoopDefinition):
+        return any(_has_prompt_effects(e) for e in defn.body)
+    if isinstance(defn, ReflectorDefinition):
+        return _has_prompt_effects(defn.inner)
+    return False
 
 
 def _require_resolved_settings(

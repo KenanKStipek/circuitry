@@ -47,13 +47,13 @@ effects:
     flow: tree
     effects:
       - name: panel_1
-        type: prompt
-        prompt_type: image
-        provider: comfyui:flux1-dev-fp8.safetensors
+        type: tool
+        provider: comfyui
         prompt: "{{prime.generate_script.value.panel_1_scene}}, joking hazard comic style, simple black and white cartoon panel, crude humor, minimal background, expressive characters"
-        image_output: path
-        image_dir: ./output/comics
+        model: flux1-dev-fp8.safetensors
         params:
+          image_output: path
+          image_dir: ./output/comics
           steps: 20
           cfg: 3.5
           sampler_name: euler
@@ -62,13 +62,13 @@ effects:
           height: 512
 
       - name: panel_2
-        type: prompt
-        prompt_type: image
-        provider: comfyui:flux1-dev-fp8.safetensors
+        type: tool
+        provider: comfyui
         prompt: "{{prime.generate_script.value.panel_2_scene}}, joking hazard comic style, simple black and white cartoon panel, crude humor, minimal background, expressive characters"
-        image_output: path
-        image_dir: ./output/comics
+        model: flux1-dev-fp8.safetensors
         params:
+          image_output: path
+          image_dir: ./output/comics
           steps: 20
           cfg: 3.5
           sampler_name: euler
@@ -77,13 +77,13 @@ effects:
           height: 512
 
       - name: panel_3
-        type: prompt
-        prompt_type: image
-        provider: comfyui:flux1-dev-fp8.safetensors
+        type: tool
+        provider: comfyui
         prompt: "{{prime.generate_script.value.panel_3_scene}}, joking hazard comic style, simple black and white cartoon panel, crude humor, minimal background, expressive characters"
-        image_output: path
-        image_dir: ./output/comics
+        model: flux1-dev-fp8.safetensors
         params:
+          image_output: path
+          image_dir: ./output/comics
           steps: 20
           cfg: 3.5
           sampler_name: euler

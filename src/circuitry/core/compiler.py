@@ -15,6 +15,7 @@ from .prompt import (
     RetryPolicyDef,
 )
 from .reflector import ReflectorDefinition
+from .tool import ToolDefinition
 
 EffectDef = Union[
     DynamicDefinition,
@@ -22,6 +23,7 @@ EffectDef = Union[
     ReflectorDefinition,
     ConditionalDefinition,
     LoopDefinition,
+    ToolDefinition,
 ]
 
 _NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -220,6 +222,19 @@ def _compile_effect(
 
     if effect_type == "loop":
         return _compile_loop(effect, scope_path=scope_path, effect_path=effect_path)
+
+    if effect_type == "tool":
+        if name is None:
+            raise ValueError(
+                f"Tool effect at '{effect_path}' is missing required field 'name'."
+            )
+        _validate_name(
+            name=name,
+            effect_type="tool",
+            scope_path=scope_path,
+            effect_path=effect_path,
+        )
+        return _compile_tool(effect, scope_path=scope_path, effect_path=effect_path)
 
     if effect_type == "reflector":
         if name is None:
@@ -433,6 +448,60 @@ def _compile_loop(
     )
 
 
+def _compile_tool(
+    effect: dict[str, Any], *, scope_path: str, effect_path: str
+) -> ToolDefinition:
+    """Compile a tool effect."""
+    name = effect.get("name")
+    if not name:
+        raise ValueError(f"Tool effect at '{effect_path}' is missing 'name'.")
+
+    provider = effect.get("provider")
+    if not isinstance(provider, str) or not provider.strip():
+        raise ValueError(
+            f"Tool effect '{name}' at '{effect_path}' is missing required field 'provider'."
+        )
+
+    params = effect.get("params") or {}
+    if not isinstance(params, dict):
+        params = {}
+
+    prompt = effect.get("prompt")
+    if prompt is not None and not isinstance(prompt, str):
+        prompt = None
+
+    model = effect.get("model")
+    if model is not None and not isinstance(model, str):
+        model = None
+
+    timeout_ms = effect.get("timeout_ms")
+    if timeout_ms is not None:
+        timeout_ms = int(timeout_ms)
+
+    on_error_raw = str(effect.get("on_error") or "fail").strip().lower()
+    on_error: Literal["fail", "skip", "continue"] = (
+        cast(Literal["fail", "skip", "continue"], on_error_raw)
+        if on_error_raw in ("fail", "skip", "continue")
+        else "fail"
+    )
+
+    description = effect.get("description")
+    if description is not None and not isinstance(description, str):
+        description = None
+
+    _ = scope_path  # used by caller for deterministic addressing context
+    return ToolDefinition(
+        name=name,
+        provider=provider.strip(),
+        params=params,
+        prompt=prompt,
+        model=model,
+        timeout_ms=timeout_ms,
+        on_error=on_error,
+        description=description,
+    )
+
+
 def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
     """Compile a prompt effect with full spec support."""
     name = effect.get("name")
@@ -442,12 +511,15 @@ def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
     # Prompt type (read early — affects input form requirements)
     prompt_type_raw = str(effect.get("prompt_type") or "text").strip().lower()
 
-    # Primary input form: template or messages for text types; prompt for image type
-    # For image prompts, 'prompt' field is used as the generation prompt text
-    template = effect.get("template")
-    if not template and prompt_type_raw == "image":
-        template = effect.get("prompt")
+    if prompt_type_raw == "image":
+        raise ValueError(
+            f"Prompt '{name}': prompt_type 'image' is no longer supported. "
+            "Use a tool effect with provider: comfyui instead. "
+            "See the orchestration reference for migration instructions."
+        )
 
+    # Primary input form: template or messages
+    template = effect.get("template")
     messages_raw = effect.get("messages")
 
     messages = None
@@ -461,8 +533,7 @@ def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
             if isinstance(m, dict)
         )
 
-    # At least one input form must be provided (image prompt allows empty for adapter default)
-    if not template and not messages and prompt_type_raw != "image":
+    if not template and not messages:
         raise ValueError(f"Prompt '{name}' must have 'template' or 'messages'.")
     if prompt_type_raw not in (
         "text",
@@ -472,7 +543,6 @@ def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
         "number",
         "array",
         "object",
-        "image",
     ):
         prompt_type_raw = "text"
     prompt_type: PromptType = cast(PromptType, prompt_type_raw)
@@ -518,13 +588,6 @@ def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
             if isinstance(a, dict)
         )
 
-    # Image generation output control
-    image_output_raw = effect.get("image_output")
-    image_output = (
-        image_output_raw if image_output_raw in ("path", "base64", "url") else None
-    )
-    image_dir = str(effect.get("image_dir")) if effect.get("image_dir") else None
-
     # Retries
     retries_raw = effect.get("retries")
     retries = None
@@ -561,8 +624,6 @@ def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
         deterministic=deterministic,
         inputs=inputs,
         assets=assets,
-        image_output=image_output,
-        image_dir=image_dir,
         retries=retries,
         on_error=on_error,
         description=description,

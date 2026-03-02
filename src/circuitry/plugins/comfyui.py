@@ -1,18 +1,21 @@
 from __future__ import annotations
 
+import base64
 import json
+import os
 import shlex
 import subprocess
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
-from .base import ImageResult
+from .base import ToolResult
 
 
 @dataclass(frozen=True)
-class ComfyUIAdapter:
+class ComfyUIPlugin:
     name: str = "comfyui"
     base_url: str = "http://localhost:8188"
     default_model: str = ""
@@ -67,7 +70,6 @@ class ComfyUIAdapter:
             ) from e
 
     def _curl_bytes(self, *, url: str, timeout_seconds: int = 60) -> bytes:
-        """Download binary data (image bytes) via curl."""
         cmd = [
             "curl",
             "--silent",
@@ -95,7 +97,6 @@ class ComfyUIAdapter:
     def _build_workflow(
         self, *, checkpoint: str, prompt: str, params: dict[str, Any]
     ) -> dict[str, Any]:
-        """Build a minimal KSampler txt2img workflow."""
         return {
             "4": {
                 "class_type": "CheckpointLoaderSimple",
@@ -145,29 +146,29 @@ class ComfyUIAdapter:
             },
         }
 
-    def generate_image(
+    def execute(
         self,
         *,
-        model: str,
-        prompt: str,
-        params: dict[str, Any] | None,
-        timeout_seconds: int = 120,
-    ) -> ImageResult:
-        base = self.base_url.rstrip("/")
-        checkpoint = model or self.default_model
+        params: dict[str, Any],
+        timeout_seconds: int = 300,
+    ) -> ToolResult:
+        prompt_text = params.get("prompt")
+        if not prompt_text:
+            raise ValueError("ComfyUIPlugin requires 'prompt' in params.")
+
+        checkpoint = params.get("model") or self.default_model
         if not checkpoint:
             raise RuntimeError(
-                "ComfyUIAdapter requires a checkpoint name via the effect's 'provider' field "
-                "(e.g. provider: comfyui:v1-5-pruned-emaonly.safetensors) "
-                "or 'default_model' in adapter config."
+                "ComfyUIPlugin requires a checkpoint name via params['model'] "
+                "or 'default_model' in plugin config."
             )
 
-        p = params or {}
-        workflow = p.get("workflow") or self._build_workflow(
-            checkpoint=checkpoint, prompt=prompt, params=p
+        base = self.base_url.rstrip("/")
+        workflow = params.get("workflow") or self._build_workflow(
+            checkpoint=checkpoint, prompt=prompt_text, params=params
         )
 
-        # 1. Queue the prompt
+        # Queue the prompt
         client_id = str(uuid.uuid4())
         queue_resp = self._curl_json(
             url=f"{base}/prompt",
@@ -177,7 +178,7 @@ class ComfyUIAdapter:
         )
         prompt_id: str = queue_resp["prompt_id"]
 
-        # 2. Poll /history until the prompt completes
+        # Poll /history until complete
         deadline = time.monotonic() + timeout_seconds
         history: dict[str, Any] = {}
         while time.monotonic() < deadline:
@@ -192,7 +193,7 @@ class ComfyUIAdapter:
                 f"ComfyUI prompt {prompt_id!r} did not complete within {timeout_seconds}s"
             )
 
-        # 3. Find the first SaveImage output
+        # Find the first SaveImage output
         outputs = history[prompt_id].get("outputs", {})
         img_info: dict[str, Any] | None = None
         for node_output in outputs.values():
@@ -206,7 +207,7 @@ class ComfyUIAdapter:
                 f"ComfyUI prompt {prompt_id!r} completed but produced no image output"
             )
 
-        # 4. Download the image bytes
+        # Download image bytes
         view_url = (
             f"{base}/view"
             f"?filename={img_info['filename']}"
@@ -217,4 +218,31 @@ class ComfyUIAdapter:
             url=view_url, timeout_seconds=min(60, timeout_seconds)
         )
 
-        return ImageResult(image_bytes=image_bytes, image_url=None, raw=history[prompt_id])
+        # Determine output format
+        image_output = (
+            params.get("image_output")
+            or self.default_image_output
+            or "path"
+        )
+        image_dir = params.get("image_dir") or self.image_dir or "./output/images"
+
+        if image_output == "base64":
+            value: Any = base64.b64encode(image_bytes).decode()
+        elif image_output == "url":
+            value = view_url
+        else:  # path (default)
+            os.makedirs(image_dir, exist_ok=True)
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+            filename = f"comfyui_{timestamp}.png"
+            filepath = os.path.join(image_dir, filename)
+            with open(filepath, "wb") as f:
+                f.write(image_bytes)
+            value = filepath
+
+        return ToolResult(
+            value=value,
+            raw=history[prompt_id],
+            stdout=None,
+            stderr=None,
+            exit_code=None,
+        )

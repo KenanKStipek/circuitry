@@ -21,22 +21,3 @@ class Adapter(Protocol):
     ) -> GenerateResult: ...
 
 
-@dataclass(frozen=True)
-class ImageResult:
-    raw: dict[str, Any]
-    image_bytes: bytes | None = None
-    image_url: str | None = None
-
-
-class ImageAdapter(Protocol):
-    @property
-    def name(self) -> str: ...
-
-    def generate_image(
-        self,
-        *,
-        model: str,
-        prompt: str,
-        params: dict[str, Any] | None,
-        timeout_seconds: int = 120,
-    ) -> ImageResult: ...

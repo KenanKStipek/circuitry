@@ -130,10 +130,14 @@
               "if": { "properties": { "type": { "const": "reflector" } } },
               "then": { "$ref": "#/$defs/ReflectorEffect" },
               "else": {
-                "properties": {
-                  "type": {
-                    "enum": ["prompt", "dynamic", "if", "conditional", "loop", "reflector"],
-                    "description": "Unknown effect type. Must be one of: prompt, dynamic, if, conditional, loop, reflector."
+                "if": { "properties": { "type": { "const": "tool" } } },
+                "then": { "$ref": "#/$defs/ToolEffect" },
+                "else": {
+                  "properties": {
+                    "type": {
+                      "enum": ["prompt", "dynamic", "if", "conditional", "loop", "reflector", "tool"],
+                      "description": "Unknown effect type. Must be one of: prompt, dynamic, if, conditional, loop, reflector, tool."
+                    }
                   }
                 }
               }
@@ -153,8 +157,8 @@
         "description": { "type": "string" },
         "prompt_type": {
           "type": "string",
-          "enum": ["text", "json", "boolean", "tool", "number", "array", "object", "image"],
-          "description": "Output type. Defaults to text. Use json when output needs to be an array or object used by downstream effects. Use image for text-to-image generation via an ImageAdapter (e.g. automatic1111)."
+          "enum": ["text", "json", "boolean", "tool", "number", "array", "object"],
+          "description": "Output type. Defaults to text. Use json when output needs to be an array or object used by downstream effects."
         },
         "schema": {
           "type": "object",
@@ -185,25 +189,11 @@
           "items": { "$ref": "#/$defs/AssetRefDef" }
         },
         "retries": { "$ref": "#/$defs/RetryPolicyDef" },
-        "on_error": { "$ref": "#/$defs/OnErrorDefault" },
-        "image_output": {
-          "type": "string",
-          "enum": ["path", "base64", "url"],
-          "description": "How to store the generated image in state. path=save file and store path string; base64=store encoded string; url=store URL returned by adapter. Defaults to adapter config or 'path'. Only used when prompt_type is image."
-        },
-        "image_dir": {
-          "type": "string",
-          "description": "Directory to save images when image_output is 'path'. Created automatically if absent. Defaults to adapter config or './output/images'. Only used when prompt_type is image."
-        },
-        "prompt": {
-          "type": "string",
-          "description": "Image generation prompt text. Used when prompt_type is 'image' as an alternative to 'template'."
-        }
+        "on_error": { "$ref": "#/$defs/OnErrorDefault" }
       },
       "oneOf": [
         { "required": ["template"] },
-        { "required": ["messages"] },
-        { "required": ["prompt"], "properties": { "prompt_type": { "const": "image" } } }
+        { "required": ["messages"] }
       ]
     },
 
@@ -373,6 +363,35 @@
           "type": "string",
           "description": "Custom prime template for reflector planning. Overrides the built-in REFLECTOR_PRIME_V1."
         }
+      }
+    },
+
+    "ToolEffect": {
+      "type": "object",
+      "required": ["type", "name", "provider"],
+      "description": "Executes a non-LLM side-effect via a named plugin. Writes result at prime.<name>.value.",
+      "properties": {
+        "type": { "const": "tool" },
+        "name": { "$ref": "#/$defs/NamePattern" },
+        "description": { "type": "string" },
+        "provider": {
+          "type": "string",
+          "description": "Plugin name. Supported: ffmpeg, comfyui."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Primary prompt/input text for the plugin. Supports Mustache rendering. For comfyui: the image generation prompt."
+        },
+        "model": {
+          "type": "string",
+          "description": "Model or checkpoint name for the plugin. For comfyui: checkpoint filename (e.g. flux1-schnell-fp8.safetensors)."
+        },
+        "params": {
+          "type": "object",
+          "description": "Plugin-specific parameters. All string values support Mustache rendering against current state. Takes precedence over top-level prompt/model."
+        },
+        "timeout_ms": { "type": "integer", "minimum": 0 },
+        "on_error": { "$ref": "#/$defs/OnErrorDefault" }
       }
     }
   }

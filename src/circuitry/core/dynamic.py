@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .conditional import ConditionalDefinition
     from .loop import LoopDefinition
     from .reflector import ReflectorDefinition
+    from .tool import ToolDefinition
 
 
 def _now_iso() -> str:
@@ -31,6 +32,7 @@ EffectDef = Union[
     "ReflectorDefinition",
     "ConditionalDefinition",
     "LoopDefinition",
+    "ToolDefinition",
 ]
 
 
@@ -192,11 +194,14 @@ class DynamicRuntime:
         from .loop import LoopDefinition, LoopRuntime
         from .reflector import ReflectorDefinition, ReflectorRuntime
 
+        from .tool import ToolDefinition, ToolRuntime
+
         indent = "  " * self.depth
         type_label = _effect_type_label(effect)
         icon, color = _EFFECT_STYLE.get(type_label, ("·", "white"))
         name = getattr(effect, "name", None) or "?"
         is_prompt = isinstance(effect, PromptDefinition)
+        is_tool = isinstance(effect, ToolDefinition)
 
         # If a tracker is provided, derive all callbacks from it
         _cb_running: Callable[[str, int], None] | None = None
@@ -207,7 +212,7 @@ class DynamicRuntime:
             cb_error = lambda line, _k=_n: tracker.on_error(_k, line)
             _cb_running = lambda t, e, _k=_n: tracker.on_running(_k, t, e)
 
-        if self.verbose and not is_prompt:
+        if self.verbose and not is_prompt and not is_tool:
             if cb_start is not None:
                 cb_start()
             else:
@@ -280,10 +285,23 @@ class DynamicRuntime:
                     depth=self.depth,
                 ).execute(store=store, ctx=ctx)
 
+            elif isinstance(effect, ToolDefinition):
+                ToolRuntime(
+                    effect,
+                    runtime_config=self.runtime_config,
+                    dry_run=self.dry_run,
+                    timeout_seconds=self.timeout_seconds,
+                    verbose=self.verbose,
+                    depth=self.depth,
+                    cb_start=cb_start,
+                    cb_done=cb_done,
+                    cb_error=cb_error,
+                ).execute(store=store, ctx=ctx)
+
             else:
                 raise TypeError(f"Unsupported effect type: {type(effect)}")
 
-            if self.verbose and not is_prompt:
+            if self.verbose and not is_prompt and not is_tool:
                 elapsed = time.monotonic() - t0
                 suffix = _elapsed_str(elapsed)
                 if isinstance(effect, DynamicDefinition):
@@ -300,7 +318,7 @@ class DynamicRuntime:
                     _console.print(line)
 
         except Exception:
-            if self.verbose and not is_prompt:
+            if self.verbose and not is_prompt and not is_tool:
                 elapsed = time.monotonic() - t0
                 suffix = _elapsed_str(elapsed)
                 if isinstance(effect, DynamicDefinition):
@@ -330,6 +348,7 @@ def _effect_type_label(effect: Any) -> str:
     from .conditional import ConditionalDefinition
     from .loop import LoopDefinition
     from .reflector import ReflectorDefinition
+    from .tool import ToolDefinition
 
     if isinstance(effect, PromptDefinition):
         return "prompt"
@@ -341,6 +360,8 @@ def _effect_type_label(effect: Any) -> str:
         return "loop"
     if isinstance(effect, ReflectorDefinition):
         return "reflector"
+    if isinstance(effect, ToolDefinition):
+        return "tool"
     return type(effect).__name__.lower()
 
 
@@ -351,6 +372,7 @@ _EFFECT_STYLE: dict[str, tuple[str, str]] = {
     "loop": ("↻", "yellow"),
     "if": ("◇", "magenta"),
     "reflector": ("✺", "green"),
+    "tool": ("⚙", "white"),
 }
 
 

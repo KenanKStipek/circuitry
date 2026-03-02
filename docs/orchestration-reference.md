@@ -352,6 +352,77 @@ A planning-time effect. Instead of executing a fixed set of effects, the reflect
 
 ---
 
+### `tool`
+
+Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously and writes its result to state. Tool effects do not require an `adapter` or `model` at the orchestration level — those fields only need to be set if the orchestration also contains `prompt` effects.
+
+**State output path:** `prime.<name>.value`
+
+| Field | Type | Required | Default | Constraints |
+|-------|------|----------|---------|-------------|
+| `type` | `"tool"` | yes | — | |
+| `name` | string | yes | — | Pattern `^[A-Za-z_][A-Za-z0-9_]*$`; `iter_<N>` reserved |
+| `provider` | string | yes | — | Plugin name: `ffmpeg`, `comfyui` |
+| `prompt` | string | no | — | Primary input text. Mustache-rendered. For comfyui: the image generation prompt |
+| `model` | string | no | — | Model/checkpoint name. For comfyui: checkpoint filename |
+| `params` | object | no | `{}` | Plugin-specific parameters. All string values support Mustache rendering. Takes precedence over top-level `prompt`/`model` |
+| `timeout_ms` | integer | no | — | Per-effect timeout in milliseconds |
+| `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
+| `description` | string | no | — | |
+
+**Supported providers:**
+
+| Provider | Description | Required inputs | Result value |
+|----------|-------------|-----------------|--------------|
+| `ffmpeg` | Run an ffmpeg command | `params.input` (path), `params.output` (path), `params.flags` (optional) | Output file path |
+| `comfyui` | Generate an image via ComfyUI REST API | `prompt` (text), `model` (checkpoint filename) | Image path, base64, or URL |
+
+**ffmpeg example:**
+```yaml
+- type: tool
+  name: transcode
+  provider: ffmpeg
+  params:
+    input: "{{prime.download.value}}"
+    output: ./output/video.mp4
+    flags: "-c:v libx264 -crf 23"
+```
+
+**comfyui example:**
+```yaml
+- type: tool
+  name: generate_image
+  provider: comfyui
+  prompt: "a red apple on a wooden table, photorealistic"
+  model: flux1-schnell-fp8.safetensors
+  params:
+    image_output: path
+    image_dir: ./output/images
+    width: 512
+    height: 512
+    steps: 4
+```
+
+**comfyui params reference:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `prompt` (top-level) | string | — | Image generation prompt text. Mustache-rendered |
+| `model` (top-level) | string | plugin default | Checkpoint filename (e.g. `flux1-schnell-fp8.safetensors`) |
+| `image_output` | string | `path` | `path`, `base64`, or `url` |
+| `image_dir` | string | `./output/images` | Directory for `image_output: path` |
+| `width` | integer | `512` | Image width in pixels |
+| `height` | integer | `512` | Image height in pixels |
+| `steps` | integer | `20` | Sampling steps |
+| `cfg` | float | `7.0` | CFG scale |
+| `sampler_name` | string | `euler` | Sampler name |
+| `scheduler` | string | `normal` | Noise scheduler |
+| `seed` | integer | random | Seed; auto-generated if absent or negative |
+| `negative_prompt` | string | `""` | Negative prompt |
+| `workflow` | object | — | Optional: full custom ComfyUI workflow (overrides built-in) |
+
+---
+
 ## State Path Addressing
 
 ### Mustache Template Interpolation
@@ -491,25 +562,27 @@ The following rules are sufficient for generating structurally correct Circuitry
 
 **File structure:**
 1. Top-level fields: `adapter` (string), `model` (string), `effects` (array). Only `effects` is required. Additional top-level keys are allowed.
-2. Valid `adapter` values: `ollama`, `openai`, `anthropic`, `litellm`.
-3. Valid `flow` values: `chain`, `chain_of_thought`, `cot` (all sequential); `tree`, `tree_of_thought`, `tot` (all parallel).
+2. `adapter` and `model` are only required when the orchestration contains `prompt` or `reflector` effects. Tool-only orchestrations (`type: tool` effects only) do not need `adapter` or `model`.
+3. Valid `adapter` values: `ollama`, `openai`, `anthropic`, `litellm`.
+4. Valid `flow` values: `chain`, `chain_of_thought`, `cot` (all sequential); `tree`, `tree_of_thought`, `tot` (all parallel).
 
 **Effect types and required fields:**
-4. Valid `type` values: `prompt`, `dynamic`, `if`, `conditional`, `loop`, `reflector`.
-5. `prompt`: requires `name` and exactly one of `template` or `messages`. Optional: `prompt_type` (default `text`), `schema` (required when `prompt_type: json`).
-6. `dynamic`: requires `name`, `effects` (non-empty array), optional `flow` (default `chain`).
-7. `if` / `conditional`: requires `if` (condition object) and `then` (array). `name` is optional. `else` is optional.
-8. `loop`: requires `body` (non-empty array) and exactly one of `each` or `while`. `name` is optional.
-9. `reflector`: requires `name` and `effects` (non-empty array).
+5. Valid `type` values: `prompt`, `dynamic`, `if`, `conditional`, `loop`, `reflector`, `tool`.
+6. `prompt`: requires `name` and exactly one of `template` or `messages`. Optional: `prompt_type` (default `text`), `schema` (required when `prompt_type: json`). Do NOT use `prompt_type: image` — use `type: tool, provider: comfyui` for image generation.
+7. `dynamic`: requires `name`, `effects` (non-empty array), optional `flow` (default `chain`).
+8. `if` / `conditional`: requires `if` (condition object) and `then` (array). `name` is optional. `else` is optional.
+9. `loop`: requires `body` (non-empty array) and exactly one of `each` or `while`. `name` is optional.
+10. `reflector`: requires `name` and `effects` (non-empty array).
+11. `tool`: requires `name` and `provider`. Supported providers: `ffmpeg` (requires `params.input` and `params.output`), `comfyui` (requires `prompt` and `model` as top-level fields; `params` for sampler settings). Top-level `prompt` supports Mustache rendering. All string values in `params` also support Mustache rendering.
 
 **Naming:**
-10. All `name` values must match `^[A-Za-z_][A-Za-z0-9_]*$` — letters, digits, underscores; must start with letter or underscore; no spaces or dots. The pattern `iter_<N>` (e.g. `iter_0`) is reserved and must not be used as a name.
-11. Effect names must be unique among siblings within the same scope.
+12. All `name` values must match `^[A-Za-z_][A-Za-z0-9_]*$` — letters, digits, underscores; must start with letter or underscore; no spaces or dots. The pattern `iter_<N>` (e.g. `iter_0`) is reserved and must not be used as a name.
+13. Effect names must be unique among siblings within the same scope.
 
 **State path addressing:**
-12. In templates (Mustache): use `{{key}}` for initial state keys; use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
-13. In CEL expressions (`if.expr`, `while.expr`): always use the full prefix `state.prime.<name>.value`. Never omit `state.`.
-14. Loop `each.in` must point to a `prompt_type: json` effect whose output is a JSON array (e.g. `prime.my_prompt.value`).
+14. In templates (Mustache): use `{{key}}` for initial state keys; use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
+15. In CEL expressions (`if.expr`, `while.expr`): always use the full prefix `state.prime.<name>.value`. Never omit `state.`.
+16. Loop `each.in` must point to a `prompt_type: json` effect whose output is a JSON array (e.g. `prime.my_prompt.value`).
 
 **If/else branches:**
-15. Use the same inner effect `name` in both `then` and `else` branches of any `if` effect, so downstream state path references resolve regardless of which branch executed.
+17. Use the same inner effect `name` in both `then` and `else` branches of any `if` effect, so downstream state path references resolve regardless of which branch executed.

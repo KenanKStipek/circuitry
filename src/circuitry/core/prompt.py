@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import base64
 import json
-import os
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -10,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Literal, Optional, Sequence
 
 from ..adapters import Adapter, build_adapter
-from ..adapters.base import GenerateResult, ImageResult
+from ..adapters.base import GenerateResult
 from ..output import console as _console
 from .store import Store
 
@@ -63,7 +61,7 @@ def _render(template: str, ctx: dict[str, Any]) -> str:
 
 
 # Prompt types per the spec
-PromptType = Literal["text", "json", "boolean", "tool", "number", "array", "object", "image"]
+PromptType = Literal["text", "json", "boolean", "tool", "number", "array", "object"]
 
 
 @dataclass(frozen=True)
@@ -126,10 +124,6 @@ class PromptDefinition:
 
     # Non-text inputs
     assets: Optional[Sequence[AssetRefDef]] = None
-
-    # Image generation output control (only used when prompt_type == "image")
-    image_output: Optional[Literal["path", "base64", "url"]] = None
-    image_dir: Optional[str] = None
 
     # Reliability
     retries: Optional[RetryPolicyDef] = None
@@ -218,18 +212,6 @@ class PromptRuntime:
             self.cb_start()
         if self.verbose and self.cb_running is not None:
             self.cb_running(target, estimated_out)
-
-        if self.defn.prompt_type == "image":
-            self._execute_image(
-                store=store,
-                node=node,
-                meta=meta,
-                prompt_sent=prompt_sent,
-                t0=t0,
-                indent=indent,
-                target=target,
-            )
-            return
 
         if self.dry_run:
             node["value"] = None
@@ -511,118 +493,3 @@ class PromptRuntime:
         except jsonschema.ValidationError as e:
             raise ValueError(f"Schema validation failed: {e.message}")
 
-    def _execute_image(
-        self,
-        *,
-        store: Store,
-        node: dict[str, Any],
-        meta: dict[str, Any],
-        prompt_sent: str,
-        t0: float,
-        indent: str,
-        target: str,
-    ) -> None:
-        """Execute an image generation prompt and write the result to store."""
-        resolved_model = self.defn.model or self.model
-
-        # Resolve adapter — reuse the primary attempt from the standard chain
-        attempts = self._build_attempts(default_model=resolved_model)
-        adapter_name, model_name = attempts[0]
-        adapter = self._resolve_adapter(adapter_name)
-
-        # Recompute target with the actual image adapter (may differ from self.adapter)
-        if self.verbose:
-            target = _adapter_target(adapter, model_name)
-
-        if not hasattr(adapter, "generate_image"):
-            raise RuntimeError(
-                f"Adapter '{getattr(adapter, 'name', adapter_name)}' does not support "
-                "image generation (no generate_image method). "
-                "Use an ImageAdapter such as 'automatic1111'."
-            )
-
-        # Determine output format: effect field > adapter config > default
-        image_output = (
-            self.defn.image_output
-            or getattr(adapter, "default_image_output", None)
-            or "path"
-        )
-        image_dir = (
-            self.defn.image_dir
-            or getattr(adapter, "image_dir", None)
-            or "./output/images"
-        )
-
-        try:
-            result: ImageResult = adapter.generate_image(
-                model=model_name,
-                prompt=prompt_sent,
-                params=self.defn.params,
-                timeout_seconds=self.timeout_seconds,
-            )
-
-            # Convert result to store value based on output mode
-            if image_output == "base64":
-                if result.image_bytes is None:
-                    raise RuntimeError(
-                        "image_output: base64 requested but adapter returned no image_bytes"
-                    )
-                value: Any = base64.b64encode(result.image_bytes).decode()
-            elif image_output == "url":
-                if result.image_url is None:
-                    raise RuntimeError(
-                        "image_output: url requested but adapter returned no image_url"
-                    )
-                value = result.image_url
-            else:  # path (default)
-                if result.image_bytes is None:
-                    raise RuntimeError(
-                        "image_output: path requested but adapter returned no image_bytes"
-                    )
-                os.makedirs(image_dir, exist_ok=True)
-                timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-                filename = f"{self.defn.name}_{timestamp}.png"
-                filepath = os.path.join(image_dir, filename)
-                with open(filepath, "wb") as f:
-                    f.write(result.image_bytes)
-                value = filepath
-
-            node["value"] = value
-            meta["completed_at"] = _now_iso()
-            meta["adapter"] = adapter_name
-            meta["model"] = model_name
-            meta["image_output"] = image_output
-
-            if self.verbose:
-                elapsed = time.monotonic() - t0
-                img_bytes = result.image_bytes
-                size_suffix = ""
-                if img_bytes is not None:
-                    kb = len(img_bytes) / 1024
-                    size_suffix = f" | {kb:.0f}KB"
-                line = (
-                    f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.display_name}"
-                    f" [dim]{target} | {_elapsed_str(elapsed)}{size_suffix}[/dim]"
-                )
-                if self.cb_done is not None:
-                    self.cb_done(line)
-                else:
-                    _console.print(line)
-
-        except Exception as e:
-            if self.verbose:
-                elapsed = time.monotonic() - t0
-                line = (
-                    f"{indent}[err]✗[/err] [cyan]◆[/cyan] {self.display_name}"
-                    f" [dim]{target} | {_elapsed_str(elapsed)}[/dim]"
-                )
-                if self.cb_error is not None:
-                    self.cb_error(line)
-                else:
-                    _console.print(line)
-            meta["error"] = str(e)
-            meta["completed_at"] = _now_iso()
-            if self.defn.on_error == "fail":
-                raise
-            elif self.defn.on_error == "skip":
-                node["value"] = None
