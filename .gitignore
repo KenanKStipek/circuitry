@@ -21,6 +21,7 @@ ENV/
 build/
 dist/
 pip-wheel-metadata/
+output/
 
 # ================================
 # Test / tooling

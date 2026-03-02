@@ -132,10 +132,9 @@ def test_loop_each_emits_iter_and_body_messages() -> None:
         ]
     }
     msgs = _run(orch, verbose=True, dry_run=False)
-    # iter lines present
-    assert any("iter" in m for m in msgs), msgs
-    # body prompt done lines present (start is a Live spinner, not a print)
-    assert any("✓" in m and "do" in m for m in msgs), msgs
+    # body prompt done lines carry iteration index labels e.g. "do [0]", "do [1]"
+    assert any("✓" in m and "do [0]" in m for m in msgs), msgs
+    assert any("✓" in m and "do [1]" in m for m in msgs), msgs
 
 
 # ---------------------------------------------------------------------------

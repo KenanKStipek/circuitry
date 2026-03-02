@@ -4,11 +4,12 @@ from typing import Any
 
 from .anthropic import AnthropicAdapter
 from .base import Adapter
+from .comfyui import ComfyUIAdapter
 from .litellm import LiteLLMAdapter
 from .ollama import OllamaAdapter
 from .openai import OpenAIAdapter
 
-SUPPORTED_ADAPTERS = ("ollama", "openai", "anthropic", "litellm")
+SUPPORTED_ADAPTERS = ("ollama", "openai", "anthropic", "litellm", "comfyui")
 
 
 def build_adapter(*, adapter_name: str, runtime: dict[str, Any]) -> Adapter:
@@ -52,6 +53,16 @@ def build_adapter(*, adapter_name: str, runtime: dict[str, Any]) -> Adapter:
             default_model=cfg.get("default_model") or "openai/gpt-4o-mini",
             api_base=cfg.get("api_base") or "",
             timeout=int(cfg.get("timeout") or 120),
+        )
+
+    if adapter_name == "comfyui":
+        cfg = adapters_cfg.get("comfyui") or {}
+        return ComfyUIAdapter(
+            base_url=cfg.get("base_url") or "http://localhost:8188",
+            default_model=cfg.get("default_model") or "",
+            default_image_output=cfg.get("default_image_output") or "path",
+            image_dir=cfg.get("image_dir") or "./output/images",
+            poll_interval=float(cfg.get("poll_interval") or 2.0),
         )
 
     supported = ", ".join(SUPPORTED_ADAPTERS)

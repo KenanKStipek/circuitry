@@ -153,8 +153,8 @@
         "description": { "type": "string" },
         "prompt_type": {
           "type": "string",
-          "enum": ["text", "json", "boolean", "tool", "number", "array", "object"],
-          "description": "Output type. Defaults to text. Use json when output needs to be an array or object used by downstream effects."
+          "enum": ["text", "json", "boolean", "tool", "number", "array", "object", "image"],
+          "description": "Output type. Defaults to text. Use json when output needs to be an array or object used by downstream effects. Use image for text-to-image generation via an ImageAdapter (e.g. automatic1111)."
         },
         "schema": {
           "type": "object",
@@ -185,11 +185,25 @@
           "items": { "$ref": "#/$defs/AssetRefDef" }
         },
         "retries": { "$ref": "#/$defs/RetryPolicyDef" },
-        "on_error": { "$ref": "#/$defs/OnErrorDefault" }
+        "on_error": { "$ref": "#/$defs/OnErrorDefault" },
+        "image_output": {
+          "type": "string",
+          "enum": ["path", "base64", "url"],
+          "description": "How to store the generated image in state. path=save file and store path string; base64=store encoded string; url=store URL returned by adapter. Defaults to adapter config or 'path'. Only used when prompt_type is image."
+        },
+        "image_dir": {
+          "type": "string",
+          "description": "Directory to save images when image_output is 'path'. Created automatically if absent. Defaults to adapter config or './output/images'. Only used when prompt_type is image."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Image generation prompt text. Used when prompt_type is 'image' as an alternative to 'template'."
+        }
       },
       "oneOf": [
         { "required": ["template"] },
-        { "required": ["messages"] }
+        { "required": ["messages"] },
+        { "required": ["prompt"], "properties": { "prompt_type": { "const": "image" } } }
       ]
     },
 

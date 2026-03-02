@@ -1,0 +1,220 @@
+from __future__ import annotations
+
+import json
+import shlex
+import subprocess
+import time
+import uuid
+from dataclasses import dataclass, field
+from typing import Any
+
+from .base import ImageResult
+
+
+@dataclass(frozen=True)
+class ComfyUIAdapter:
+    name: str = "comfyui"
+    base_url: str = "http://localhost:8188"
+    default_model: str = ""
+    default_image_output: str = "path"
+    image_dir: str = "./output/images"
+    poll_interval: float = 2.0
+
+    def _curl_json(
+        self,
+        *,
+        url: str,
+        method: str = "GET",
+        payload: dict[str, Any] | None = None,
+        timeout_seconds: int = 30,
+    ) -> dict[str, Any]:
+        cmd = [
+            "curl",
+            "--silent",
+            "--show-error",
+            "--fail-with-body",
+            "--max-time",
+            str(int(timeout_seconds)),
+        ]
+
+        if method.upper() == "POST":
+            cmd += [
+                "-H",
+                "Content-Type: application/json",
+                "-d",
+                json.dumps(payload or {}),
+            ]
+
+        cmd.append(url)
+
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        except FileNotFoundError as e:
+            raise RuntimeError("curl is not installed or not on PATH") from e
+
+        if proc.returncode != 0:
+            cmd_str = " ".join(shlex.quote(c) for c in cmd)
+            err = (proc.stderr or proc.stdout or "").strip()
+            raise RuntimeError(
+                f"curl failed (exit {proc.returncode}). cmd={cmd_str}. error={err}"
+            )
+
+        try:
+            return json.loads(proc.stdout)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                f"curl returned non-JSON response: {proc.stdout[:200]}"
+            ) from e
+
+    def _curl_bytes(self, *, url: str, timeout_seconds: int = 60) -> bytes:
+        """Download binary data (image bytes) via curl."""
+        cmd = [
+            "curl",
+            "--silent",
+            "--show-error",
+            "--fail-with-body",
+            "--max-time",
+            str(int(timeout_seconds)),
+            url,
+        ]
+
+        try:
+            proc = subprocess.run(cmd, capture_output=True, check=False)
+        except FileNotFoundError as e:
+            raise RuntimeError("curl is not installed or not on PATH") from e
+
+        if proc.returncode != 0:
+            cmd_str = " ".join(shlex.quote(c) for c in cmd)
+            err = (proc.stderr or b"").decode(errors="replace").strip()
+            raise RuntimeError(
+                f"curl failed (exit {proc.returncode}). cmd={cmd_str}. error={err}"
+            )
+
+        return proc.stdout
+
+    def _build_workflow(
+        self, *, checkpoint: str, prompt: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Build a minimal KSampler txt2img workflow."""
+        return {
+            "4": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": checkpoint},
+            },
+            "5": {
+                "class_type": "EmptyLatentImage",
+                "inputs": {
+                    "width": params.get("width", 512),
+                    "height": params.get("height", 512),
+                    "batch_size": 1,
+                },
+            },
+            "6": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"text": prompt, "clip": ["4", 1]},
+            },
+            "7": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {
+                    "text": params.get("negative_prompt", ""),
+                    "clip": ["4", 1],
+                },
+            },
+            "3": {
+                "class_type": "KSampler",
+                "inputs": {
+                    "model": ["4", 0],
+                    "positive": ["6", 0],
+                    "negative": ["7", 0],
+                    "latent_image": ["5", 0],
+                    "seed": params.get("seed") if params.get("seed") is not None and params.get("seed") >= 0 else int(time.time() * 1000) % (2**32),
+                    "steps": params.get("steps", 20),
+                    "cfg": params.get("cfg", 7.0),
+                    "sampler_name": params.get("sampler_name", "euler"),
+                    "scheduler": params.get("scheduler", "normal"),
+                    "denoise": 1.0,
+                },
+            },
+            "8": {
+                "class_type": "VAEDecode",
+                "inputs": {"samples": ["3", 0], "vae": ["4", 2]},
+            },
+            "9": {
+                "class_type": "SaveImage",
+                "inputs": {"filename_prefix": "circuitry", "images": ["8", 0]},
+            },
+        }
+
+    def generate_image(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        params: dict[str, Any] | None,
+        timeout_seconds: int = 120,
+    ) -> ImageResult:
+        base = self.base_url.rstrip("/")
+        checkpoint = model or self.default_model
+        if not checkpoint:
+            raise RuntimeError(
+                "ComfyUIAdapter requires a checkpoint name via the effect's 'provider' field "
+                "(e.g. provider: comfyui:v1-5-pruned-emaonly.safetensors) "
+                "or 'default_model' in adapter config."
+            )
+
+        p = params or {}
+        workflow = p.get("workflow") or self._build_workflow(
+            checkpoint=checkpoint, prompt=prompt, params=p
+        )
+
+        # 1. Queue the prompt
+        client_id = str(uuid.uuid4())
+        queue_resp = self._curl_json(
+            url=f"{base}/prompt",
+            method="POST",
+            payload={"prompt": workflow, "client_id": client_id},
+            timeout_seconds=30,
+        )
+        prompt_id: str = queue_resp["prompt_id"]
+
+        # 2. Poll /history until the prompt completes
+        deadline = time.monotonic() + timeout_seconds
+        history: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            history = self._curl_json(
+                url=f"{base}/history/{prompt_id}", timeout_seconds=10
+            )
+            if prompt_id in history:
+                break
+            time.sleep(self.poll_interval)
+        else:
+            raise RuntimeError(
+                f"ComfyUI prompt {prompt_id!r} did not complete within {timeout_seconds}s"
+            )
+
+        # 3. Find the first SaveImage output
+        outputs = history[prompt_id].get("outputs", {})
+        img_info: dict[str, Any] | None = None
+        for node_output in outputs.values():
+            images = node_output.get("images")
+            if images:
+                img_info = images[0]
+                break
+
+        if img_info is None:
+            raise RuntimeError(
+                f"ComfyUI prompt {prompt_id!r} completed but produced no image output"
+            )
+
+        # 4. Download the image bytes
+        view_url = (
+            f"{base}/view"
+            f"?filename={img_info['filename']}"
+            f"&subfolder={img_info.get('subfolder', '')}"
+            f"&type={img_info.get('type', 'output')}"
+        )
+        image_bytes = self._curl_bytes(
+            url=view_url, timeout_seconds=min(60, timeout_seconds)
+        )
+
+        return ImageResult(image_bytes=image_bytes, image_url=None, raw=history[prompt_id])

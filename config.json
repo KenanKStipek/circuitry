@@ -6,7 +6,12 @@
     "adapters": {
       "ollama": {
         "base_url": "http://192.168.1.173:11434",
-        "timeout_seconds": 480
+        "timeout_seconds": 6000
+      },
+      "comfyui": {
+        "base_url": "http://192.168.1.173:8188",
+        "default_image_output": "path",
+        "image_dir": "./output/images"
       }
     }
   }

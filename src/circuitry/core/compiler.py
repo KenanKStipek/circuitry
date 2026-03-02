@@ -439,8 +439,15 @@ def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
     if not name:
         raise ValueError("Prompt effect is missing 'name'.")
 
-    # Primary input form: exactly one of template or messages
+    # Prompt type (read early — affects input form requirements)
+    prompt_type_raw = str(effect.get("prompt_type") or "text").strip().lower()
+
+    # Primary input form: template or messages for text types; prompt for image type
+    # For image prompts, 'prompt' field is used as the generation prompt text
     template = effect.get("template")
+    if not template and prompt_type_raw == "image":
+        template = effect.get("prompt")
+
     messages_raw = effect.get("messages")
 
     messages = None
@@ -454,12 +461,9 @@ def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
             if isinstance(m, dict)
         )
 
-    # At least one input form must be provided
-    if not template and not messages:
+    # At least one input form must be provided (image prompt allows empty for adapter default)
+    if not template and not messages and prompt_type_raw != "image":
         raise ValueError(f"Prompt '{name}' must have 'template' or 'messages'.")
-
-    # Prompt type
-    prompt_type_raw = str(effect.get("prompt_type") or "text").strip().lower()
     if prompt_type_raw not in (
         "text",
         "json",
@@ -468,6 +472,7 @@ def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
         "number",
         "array",
         "object",
+        "image",
     ):
         prompt_type_raw = "text"
     prompt_type: PromptType = cast(PromptType, prompt_type_raw)
@@ -513,6 +518,13 @@ def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
             if isinstance(a, dict)
         )
 
+    # Image generation output control
+    image_output_raw = effect.get("image_output")
+    image_output = (
+        image_output_raw if image_output_raw in ("path", "base64", "url") else None
+    )
+    image_dir = str(effect.get("image_dir")) if effect.get("image_dir") else None
+
     # Retries
     retries_raw = effect.get("retries")
     retries = None
@@ -549,6 +561,8 @@ def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
         deterministic=deterministic,
         inputs=inputs,
         assets=assets,
+        image_output=image_output,
+        image_dir=image_dir,
         retries=retries,
         on_error=on_error,
         description=description,
