@@ -210,6 +210,35 @@ def test_parallel_loop_order_preserved() -> None:
     assert collected[2] == "third"
 
 
+def test_loop_body_context_sharing_between_effects() -> None:
+    """Body effect 2 can reference body effect 1's output via {{effect_name.value}}."""
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "process",
+                "each": {"in": "input.items", "as": "item"},
+                "body": [
+                    {"type": "prompt", "name": "step_one", "template": "result_{{item}}"},
+                    {
+                        "type": "prompt",
+                        "name": "step_two",
+                        "template": "got:{{step_one.value}}",
+                    },
+                ],
+            }
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({"input": {"items": ["a", "b"]}})
+
+    DynamicRuntime(root, adapter=EchoAdapter(), model="unit-test").execute(store=store)
+
+    # step_two should have seen step_one's value via body context sharing
+    assert store.get("prime.process.iter_0.step_two.value") == "got:result_a"
+    assert store.get("prime.process.iter_1.step_two.value") == "got:result_b"
+
+
 def test_parallel_loop_max_concurrency_respected() -> None:
     """max_concurrency limits the number of simultaneously running workers."""
     import threading

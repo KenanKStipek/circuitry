@@ -632,6 +632,13 @@ Should the loop continue? Answer (yes/no):"""
 
             executed.append(effect_record)
 
+            # Make prior body effects' outputs available to subsequent body
+            # effects via short paths (e.g. {{backdrop.value}}).  This mirrors
+            # how DynamicRuntime chain flow exposes sibling writes through the
+            # shared root context dict.
+            if self.defn.name:
+                ctx = {**ctx, **iter_store.state}
+
         return {
             "executed_effects": executed,
             "count": len(executed),

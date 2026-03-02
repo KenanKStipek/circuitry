@@ -255,8 +255,9 @@ def test_ffmpeg_vf_drawtext_escapes_colon_and_apostrophe(monkeypatch: pytest.Mon
 
     cmd = captured_cmd[0]
     vf_value = cmd[cmd.index("-vf") + 1]
-    # double-quote wrapping: apostrophes and colons are safe literals inside double quotes
-    assert "text=\"It's time: now\"" in vf_value
+    # Apostrophes are converted to Unicode right single quote to avoid ffmpeg avfilter quote parsing.
+    # Colons inside double quotes are safe literals.
+    assert 'text="It\u2019s time: now"' in vf_value
 
 
 def test_ffmpeg_vf_drawtext_strips_surrounding_quotes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -330,5 +331,75 @@ def test_ffmpeg_vf_drawtext_collapses_newlines(monkeypatch: pytest.MonkeyPatch) 
     # Newlines must be replaced with spaces
     assert "\n" not in vf_value
     assert 'text="Flesh and blood now just a snack."' in vf_value
-    # Subsequent params must be intact
+    # Subsequent params must be intact (sanitized, no newlines)
     assert "y=(h-th-50)" in vf_value
+
+
+def test_ffmpeg_vf_drawtext_apostrophe_with_newline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reproduces the exact error: apostrophe + newline in dialogue broke ffmpeg filter parsing."""
+    captured_cmd: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        captured_cmd.append(cmd)
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", fake_run)
+
+    FfmpegPlugin().execute(
+        params={
+            "input": "panel.png",
+            "vf_drawtext": {
+                "text": "Wait, can't I...\ntalk?",
+                "x": "(w-tw)/2",
+                "y": 10,
+                "fontsize": 24,
+                "fontcolor": "black",
+                "box": 1,
+                "boxcolor": "gray@0.80",
+                "boxborderw": 10,
+            },
+            "output": "panel_text.png",
+        }
+    )
+
+    cmd = captured_cmd[0]
+    vf_value = cmd[cmd.index("-vf") + 1]
+    # No newlines anywhere in the filter string
+    assert "\n" not in vf_value
+    # Apostrophe replaced with Unicode right single quote
+    assert "'" not in vf_value
+    assert "\u2019" in vf_value
+    # All params present and intact
+    assert "y=10" in vf_value
+    assert "fontsize=24" in vf_value
+
+
+def test_ffmpeg_vf_drawtext_sanitizes_non_text_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Newlines in non-text fields (e.g. y, fontsize) must be sanitized."""
+    captured_cmd: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        captured_cmd.append(cmd)
+        return FakeProc(returncode=0)
+
+    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", fake_run)
+
+    FfmpegPlugin().execute(
+        params={
+            "input": "panel.png",
+            "vf_drawtext": {
+                "text": "Hello",
+                "y": "10\n",
+                "fontsize": "24\r\n",
+                "fontcolor": "white",
+            },
+            "output": "panel_text.png",
+        }
+    )
+
+    cmd = captured_cmd[0]
+    vf_value = cmd[cmd.index("-vf") + 1]
+    assert "\n" not in vf_value
+    assert "\r" not in vf_value
+    assert "y=10" in vf_value
+    assert "fontsize=24" in vf_value

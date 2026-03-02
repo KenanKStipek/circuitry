@@ -40,16 +40,22 @@ def _escape_drawtext_text(text: str) -> str:
     argument is the raw filter string. Without quoting, ffmpeg's drawtext reads
     text= until the end of the filter string rather than stopping at ':', making
     unquoted values unreliable. Double-quote wrapping delimits the value cleanly:
-    colons, apostrophes, and semicolons inside double quotes are safe literals.
-    Only backslash, %, and the double-quote character itself need escaping.
+    colons and semicolons inside double quotes are safe literals.
 
     See: https://ffmpeg.org/ffmpeg-filters.html#Filtering-Guide
     """
     text = re.sub(r"[\r\n\x0b\x0c\x85\u2028\u2029]+", " ", text)  # Unicode line endings → space
     text = text.replace("\\", "\\\\")  # \ → \\ (must come before all others)
     text = text.replace("%", "%%")     # % → %%  (prevent strftime expansion)
+    text = text.replace("'", "\u2019") # ' → ' (right single quote — avoids ffmpeg avfilter quote parsing)
     text = text.replace('"', '\\"')    # " → \"  (escape for double-quote wrapper)
     return f'"{text}"'
+
+
+def _sanitize_drawtext_value(value: Any) -> str:
+    """Collapse newlines and strip whitespace from a drawtext option value."""
+    s = str(value).strip()
+    return re.sub(r"[\r\n]+", " ", s)
 
 
 def _build_drawtext_filter(cfg: dict[str, Any]) -> str:
@@ -71,7 +77,7 @@ def _build_drawtext_filter(cfg: dict[str, Any]) -> str:
         "borderw", "bordercolor",
     ):
         if key in cfg:
-            parts.append(f"{key}={cfg[key]}")
+            parts.append(f"{key}={_sanitize_drawtext_value(cfg[key])}")
     return "drawtext=" + ":".join(parts)
 
 
