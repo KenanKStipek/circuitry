@@ -194,6 +194,10 @@ def run(req: RunRequest) -> RunResult:
             resolved_model = effective.model or ""
             adapter = _NoOpAdapter()
 
+        # Inject built-in template variables available in all orchestrations.
+        state.setdefault("_run_id", run_id)
+        state.setdefault("_timestamp", datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"))
+
         # Execute using core runtime against Store
         store = Store(state)
 

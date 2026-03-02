@@ -90,3 +90,66 @@ effects:
           scheduler: beta
           width: 512
           height: 512
+
+  - name: overlay_text
+    type: dynamic
+    flow: tree
+    effects:
+      - name: panel_1_text
+        type: tool
+        provider: ffmpeg
+        params:
+          input: "{{prime.draw_panels.panel_1.value}}"
+          vf_drawtext:
+            text: "{{prime.generate_script.value.panel_1_text}}"
+            x: (w-tw)/2
+            y: h-th-20
+            fontsize: 22
+            fontcolor: white
+            box: 1
+            boxcolor: "black@0.75"
+            boxborderw: 8
+          output: "./output/comics/panel_1_with_text_{{_timestamp}}.png"
+
+      - name: panel_2_text
+        type: tool
+        provider: ffmpeg
+        params:
+          input: "{{prime.draw_panels.panel_2.value}}"
+          vf_drawtext:
+            text: "{{prime.generate_script.value.panel_2_text}}"
+            x: (w-tw)/2
+            y: h-th-20
+            fontsize: 22
+            fontcolor: white
+            box: 1
+            boxcolor: "black@0.75"
+            boxborderw: 8
+          output: "./output/comics/panel_2_with_text_{{_timestamp}}.png"
+
+      - name: panel_3_text
+        type: tool
+        provider: ffmpeg
+        params:
+          input: "{{prime.draw_panels.panel_3.value}}"
+          vf_drawtext:
+            text: "{{prime.generate_script.value.panel_3_text}}"
+            x: (w-tw)/2
+            y: h-th-20
+            fontsize: 22
+            fontcolor: white
+            box: 1
+            boxcolor: "black@0.75"
+            boxborderw: 8
+          output: "./output/comics/panel_3_with_text_{{_timestamp}}.png"
+
+  - name: combine_panels
+    type: tool
+    provider: ffmpeg
+    params:
+      input: "{{prime.overlay_text.panel_1_text.value}}"
+      extra_inputs:
+        - "{{prime.overlay_text.panel_2_text.value}}"
+        - "{{prime.overlay_text.panel_3_text.value}}"
+      filter_complex: "hstack=inputs=3"
+      output: "./output/comics/strip_{{_timestamp}}.png"
