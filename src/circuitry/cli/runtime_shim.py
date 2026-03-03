@@ -37,7 +37,7 @@ from ..core.runtime_plugins import (
 from ..core.store import Store, build_persistence_backend
 from .config import CircuitryConfig
 from .effective_settings import EffectiveSettings, resolve_effective_settings
-from .orchestration_loader import load_orchestration_file
+from .orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
 
 
 @dataclass(frozen=True)
@@ -325,7 +325,7 @@ def inspect_orchestration(orchestration_path: Path) -> dict[str, Any]:
         "size_bytes": orchestration_path.stat().st_size,
     }
 
-    if suffix in {".yml", ".yaml"}:
+    if suffix in ORCHESTRATION_SUFFIXES:
         data = load_orchestration_file(orchestration_path)
         effects = data.get("effects") or data.get("steps") or []
         effect_names = [
@@ -339,7 +339,7 @@ def inspect_orchestration(orchestration_path: Path) -> dict[str, Any]:
         summary["steps_count"] = summary["effects_count"]
         summary["step_names"] = effect_names
     else:
-        summary["note"] = "Non-YAML inspection is currently shallow."
+        summary["note"] = f"Unsupported format for deep inspection: {suffix}"
 
     return summary
 

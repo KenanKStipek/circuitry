@@ -120,6 +120,93 @@ def test_gen_injects_rules():
         assert "LLM Authoring Rules" in captured_req["rules"]
 
 
+def test_gen_format_json():
+    """gen --format json should produce valid JSON output."""
+    import json
+
+    with patch("circuitry.cli.app.run", _make_fake_run()):
+        with patch("circuitry.cli.app.resolve_config") as mock_cfg:
+            from circuitry.cli.config import CircuitryConfig
+
+            mock_cfg.return_value = CircuitryConfig()
+            result = runner.invoke(app, ["gen", "make a bot", "--format", "json"])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.output.strip())
+    assert "effects" in parsed
+    assert parsed["effects"][0]["name"] == "hello"
+
+
+def test_gen_format_toon():
+    """gen --format toon should produce valid TOON output."""
+    from toon_format import decode
+
+    with patch("circuitry.cli.app.run", _make_fake_run()):
+        with patch("circuitry.cli.app.resolve_config") as mock_cfg:
+            from circuitry.cli.config import CircuitryConfig
+
+            mock_cfg.return_value = CircuitryConfig()
+            result = runner.invoke(app, ["gen", "make a bot", "--format", "toon"])
+
+    assert result.exit_code == 0, result.output
+    parsed = decode(result.output.strip())
+    assert "effects" in parsed
+    assert parsed["effects"][0]["name"] == "hello"
+
+
+def test_gen_format_yaml_default():
+    """gen with no --format flag should produce YAML (default)."""
+    with patch("circuitry.cli.app.run", _make_fake_run()):
+        with patch("circuitry.cli.app.resolve_config") as mock_cfg:
+            from circuitry.cli.config import CircuitryConfig
+
+            mock_cfg.return_value = CircuitryConfig()
+            result = runner.invoke(app, ["gen", "make a bot"])
+
+    assert result.exit_code == 0, result.output
+    assert "effects:" in result.output
+
+
+def test_gen_format_json_writes_to_file(tmp_path: Path):
+    """gen --format json --out writes valid JSON to file."""
+    import json
+
+    out = tmp_path / "generated.json"
+
+    with patch("circuitry.cli.app.run", _make_fake_run()):
+        with patch("circuitry.cli.app.resolve_config") as mock_cfg:
+            from circuitry.cli.config import CircuitryConfig
+
+            mock_cfg.return_value = CircuitryConfig()
+            result = runner.invoke(
+                app, ["gen", "make a bot", "--format", "json", "--out", str(out)]
+            )
+
+    assert result.exit_code == 0, result.output
+    assert out.exists()
+    parsed = json.loads(out.read_text(encoding="utf-8"))
+    assert "effects" in parsed
+
+
+def test_gen_strips_markdown_fences():
+    """gen should strip markdown code fences from LLM output before parsing."""
+    import json
+
+    fenced_yaml = "```yaml\neffects:\n  - type: prompt\n    name: hello\n    template: Hi\n```"
+
+    with patch("circuitry.cli.app.run", _make_fake_run(generated_yaml=fenced_yaml)):
+        with patch("circuitry.cli.app.resolve_config") as mock_cfg:
+            from circuitry.cli.config import CircuitryConfig
+
+            mock_cfg.return_value = CircuitryConfig()
+            result = runner.invoke(app, ["gen", "make a bot", "--format", "json"])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.output.strip())
+    assert "effects" in parsed
+    assert parsed["effects"][0]["name"] == "hello"
+
+
 def test_gen_failure_shows_error():
     """gen should show error and exit 1 when run fails."""
     from circuitry.cli.runtime_shim import RunResult

@@ -27,7 +27,7 @@ def register_doctor(app: typer.Typer) -> None:
         orchestration: Optional[Path] = typer.Option(
             None,
             "--orch",
-            help="Optional orchestration YAML to include in effective settings.",
+            help="Optional orchestration file to include in effective settings.",
         ),
         generate: bool = typer.Option(
             False, "--generate", help="Also run a tiny generate call."

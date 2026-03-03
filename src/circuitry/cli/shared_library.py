@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import CircuitryConfig
-from .orchestration_loader import load_orchestration_file
+from .orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
 
 
 @dataclass(frozen=True)
@@ -175,9 +175,14 @@ def _resolve_asset_version(
 ) -> tuple[str, Path]:
     candidates: dict[str, Path] = {}
     for file_path in asset_path.iterdir():
-        if not file_path.is_file() or file_path.suffix.lower() not in {".yml", ".yaml"}:
+        if not file_path.is_file() or file_path.suffix.lower() not in ORCHESTRATION_SUFFIXES:
             continue
         version = file_path.stem
+        existing = candidates.get(version)
+        if existing is not None and file_path.suffix.lower() == ".json":
+            # A .json file sharing a stem with an existing candidate is a
+            # metadata sidecar, not an orchestration.  Skip it.
+            continue
         candidates[version] = file_path
 
     if not candidates:
@@ -208,6 +213,8 @@ def _version_sort_key(version: str) -> tuple[Any, ...]:
 
 
 def _load_metadata_sidecar(orchestration_file: Path) -> dict[str, Any]:
+    if orchestration_file.suffix.lower() == ".json":
+        return {}
     metadata_file = orchestration_file.with_suffix(".json")
     if not metadata_file.exists():
         return {}

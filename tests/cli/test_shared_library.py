@@ -127,6 +127,98 @@ def test_run_library_executes_retrieved_asset_and_records_metadata(tmp_path: Pat
     assert state["runtime"]["last_run"]["completed_at"] is not None
 
 
+def _write_library_asset_json(lib_root: Path, asset_id: str, version: str) -> None:
+    """Write a JSON orchestration asset (no metadata sidecar — would collide)."""
+    orch = {
+        "adapter": "openai",
+        "model": "gpt-4o-mini",
+        "effects": [
+            {"type": "prompt", "name": "greet", "template": "hello-json", "format": "text"}
+        ],
+    }
+    path = lib_root / asset_id / f"{version}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(orch, indent=2), encoding="utf-8")
+
+
+def _write_library_asset_toon(lib_root: Path, asset_id: str, version: str) -> None:
+    """Write a TOON orchestration asset."""
+    from toon_format import encode
+
+    orch = {
+        "adapter": "openai",
+        "model": "gpt-4o-mini",
+        "effects": [
+            {"type": "prompt", "name": "greet", "template": "hello-toon", "format": "text"}
+        ],
+    }
+    path = lib_root / asset_id / f"{version}.toon"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(encode(orch), encoding="utf-8")
+
+
+def test_fetch_json_orchestration_asset(tmp_path: Path) -> None:
+    lib_root = tmp_path / "library"
+    config_path = tmp_path / "config.json"
+    out_path = tmp_path / "out.json"
+
+    _write_library_asset_json(lib_root, "welcome", "1.0.0")
+    _write_config(config_path, lib_root)
+
+    result = runner.invoke(
+        app,
+        ["fetch", "welcome", "--config", str(config_path), "--out", str(out_path)],
+    )
+    assert result.exit_code == 0
+    content = out_path.read_text(encoding="utf-8")
+    assert "hello-json" in content
+
+
+def test_fetch_toon_orchestration_asset(tmp_path: Path) -> None:
+    lib_root = tmp_path / "library"
+    config_path = tmp_path / "config.json"
+    out_path = tmp_path / "out.toon"
+
+    _write_library_asset_toon(lib_root, "welcome", "2.0.0")
+    _write_config(config_path, lib_root)
+
+    result = runner.invoke(
+        app,
+        ["fetch", "welcome", "--config", str(config_path), "--out", str(out_path)],
+    )
+    assert result.exit_code == 0
+
+
+def test_json_orchestration_skips_metadata_sidecar(tmp_path: Path) -> None:
+    """A .json orchestration must not load itself as its own metadata sidecar."""
+    from circuitry.cli.shared_library import _load_metadata_sidecar
+
+    orch_file = tmp_path / "1.0.0.json"
+    orch_file.write_text('{"effects": []}', encoding="utf-8")
+    metadata = _load_metadata_sidecar(orch_file)
+    assert metadata == {}
+
+
+def test_shared_library_discovers_mixed_formats(tmp_path: Path) -> None:
+    """Asset directory with .yml and .json should both be candidates."""
+    lib_root = tmp_path / "library"
+    _write_library_asset(lib_root, "multi", "1.0.0", "yaml-version")
+    _write_library_asset_json(lib_root, "multi", "2.0.0")
+
+    config_path = tmp_path / "config.json"
+    _write_config(config_path, lib_root)
+
+    # Latest should be 2.0.0 (JSON)
+    out_path = tmp_path / "latest.json"
+    result = runner.invoke(
+        app,
+        ["fetch", "multi", "--config", str(config_path), "--out", str(out_path)],
+    )
+    assert result.exit_code == 0
+    content = out_path.read_text(encoding="utf-8")
+    assert "hello-json" in content
+
+
 def test_fetch_reports_unauthorized_and_missing_assets(tmp_path: Path) -> None:
     lib_root = tmp_path / "library"
     config_path = tmp_path / "config.json"

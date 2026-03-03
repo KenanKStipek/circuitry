@@ -15,6 +15,7 @@ from rich.table import Table
 
 from .config import GLOBAL_CONFIG_DIR, find_config_path, load_config, resolve_config
 from .doctor import register_doctor
+from .orchestration_loader import serialize_orchestration
 from .runtime_shim import RunRequest, inspect_orchestration, run, validate
 from .shared_library import (
     apply_service_profile,
@@ -156,7 +157,7 @@ RUN_EPILOG = """
 def run_cmd(
     orchestration: Optional[Path] = typer.Argument(
         None, exists=True, dir_okay=False, readable=True,
-        help="Path to orchestration YAML file.",
+        help="Path to orchestration file.",
     ),
     config: Optional[Path] = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
@@ -347,7 +348,7 @@ def fetch_cmd(
         ...,
         "--out",
         "-o",
-        help="Output path for fetched orchestration YAML.",
+        help="Output path for fetched orchestration.",
     ),
     config: Optional[Path] = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
@@ -554,11 +555,11 @@ def run_library_cmd(
             console.print(f"[yellow]Warning:[/yellow] {w}")
 
 
-@app.command("validate", help="Validate orchestration YAML against schema.")
+@app.command("validate", help="Validate an orchestration file against the schema.")
 def validate_cmd(
     orchestration: Path = typer.Argument(
         ..., exists=True, dir_okay=False, readable=True,
-        help="Path to orchestration YAML file.",
+        help="Path to orchestration file.",
     ),
     json_out: bool = typer.Option(
         False, "--json", help="Output machine-readable JSON only."
@@ -567,11 +568,11 @@ def validate_cmd(
     _do_validate(orchestration, json_out)
 
 
-@app.command("check", help="Validate orchestration YAML against schema.")
+@app.command("check", help="Validate an orchestration file against the schema.")
 def check_cmd(
     orchestration: Path = typer.Argument(
         ..., exists=True, dir_okay=False, readable=True,
-        help="Path to orchestration YAML file.",
+        help="Path to orchestration file.",
     ),
     json_out: bool = typer.Option(
         False, "--json", help="Output machine-readable JSON only."
@@ -584,7 +585,7 @@ def check_cmd(
 def inspect_cmd(
     orchestration: Path = typer.Argument(
         ..., exists=True, dir_okay=False, readable=True,
-        help="Path to orchestration YAML file.",
+        help="Path to orchestration file.",
     ),
 ):
     _print_header("Circuitry · Inspect")
@@ -610,13 +611,24 @@ def gen_cmd(
         ..., help="Natural language description of the orchestration to generate."
     ),
     out: Optional[Path] = typer.Option(
-        None, "--out", "-o", help="Write generated YAML to this file."
+        None, "--out", "-o", help="Write generated orchestration to this file."
     ),
     config: Optional[Path] = typer.Option(
         None, "--config", "-c", help="Path to config JSON."
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed progress."),
+    output_format: str = typer.Option(
+        "yaml", "--format", "-f", help="Output format: yaml, json, or toon.",
+    ),
 ):
+    _VALID_FORMATS = {"yaml", "json", "toon"}
+    if output_format not in _VALID_FORMATS:
+        console.print(
+            f"[red]Error:[/red] Unsupported format: {output_format!r}. "
+            f"Supported: {', '.join(sorted(_VALID_FORMATS))}"
+        )
+        raise typer.Exit(code=1)
+
     cfg = resolve_config(explicit_path=config)
 
     # Locate bundled meta_orchestrator
@@ -674,12 +686,26 @@ def gen_cmd(
 
     yaml_text = str(generated)
 
+    # Strip markdown code fences the LLM may wrap around its output
+    _fence_lines = []
+    for _line in yaml_text.splitlines():
+        if _line.strip().startswith("```"):
+            continue
+        _fence_lines.append(_line)
+    yaml_text = "\n".join(_fence_lines).strip()
+
+    import yaml as _yaml  # type: ignore[import-untyped]
+    parsed = _yaml.safe_load(yaml_text)
+    if not isinstance(parsed, dict):
+        parsed = {"raw": yaml_text}
+    output_text = serialize_orchestration(parsed, output_format).rstrip("\n")
+
     if out:
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(yaml_text + "\n", encoding="utf-8")
+        out.write_text(output_text + "\n", encoding="utf-8")
         console.print(f"[green]Generated:[/green] {out}")
     else:
-        print(yaml_text)
+        print(output_text)
 
 
 @app.command("init", help="Initialize a new circuitry project in the current directory.")
