@@ -51,6 +51,7 @@ class RunRequest:
     shared_library_metadata: dict[str, Any] | None = None
     verbose: bool = False
     config: CircuitryConfig | None = None
+    live_state_path: Optional[Path] = None
 
 
 @dataclass(frozen=True)
@@ -199,7 +200,14 @@ def run(req: RunRequest) -> RunResult:
         state.setdefault("_timestamp", datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"))
 
         # Execute using core runtime against Store
-        store = Store(state)
+        on_write = None
+        if req.live_state_path is not None:
+            from .live_state import make_live_state_callback
+
+            on_write = make_live_state_callback(req.live_state_path)
+            # Write initial snapshot so watchers see the pending state
+            on_write(state)
+        store = Store(state, on_write=on_write)
 
         runtime = DynamicRuntime(
             root_def,

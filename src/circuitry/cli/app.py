@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import importlib.resources
 import json
 import os
+import sys
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .config import find_config_path, load_config
+from .config import GLOBAL_CONFIG_DIR, find_config_path, load_config, resolve_config
 from .doctor import register_doctor
 from .runtime_shim import RunRequest, inspect_orchestration, run, validate
 from .shared_library import (
@@ -20,10 +22,16 @@ from .shared_library import (
     resolve_service_profile,
 )
 
-app = typer.Typer(add_completion=False)
+app = typer.Typer(
+    add_completion=False,
+    help="Circuitry — Cybernetic orchestration framework. (cof)",
+    rich_markup_mode="rich",
+)
 console = Console()
 
 register_doctor(app)
+
+_LAST_RUN_PATH = GLOBAL_CONFIG_DIR / "last-run.json"
 
 
 def _print_header(title: str) -> None:
@@ -41,10 +49,114 @@ def _write_state_json(*, out: Path, state: dict, pretty: bool) -> None:
         out.write_text(json.dumps(state) + "\n", encoding="utf-8")
 
 
-@app.command("run")
+def _parse_env_vars(env_vars: list[str] | None) -> dict[str, Any]:
+    """Parse -e KEY=VALUE entries into a state dict."""
+    if not env_vars:
+        return {}
+    result: dict[str, Any] = {}
+    for entry in env_vars:
+        if "=" not in entry:
+            raise typer.BadParameter(f"Invalid -e format: {entry!r} (expected KEY=VALUE)")
+        key, value = entry.split("=", 1)
+        # Try parsing as JSON for structured values
+        try:
+            parsed = json.loads(value)
+            result[key] = parsed
+        except (json.JSONDecodeError, ValueError):
+            result[key] = value
+    return result
+
+
+def _find_last_effect_value(state: dict[str, Any]) -> Any:
+    """Walk prime to find the last completed effect's value, recursing into dynamics."""
+    prime = state.get("prime")
+    if not isinstance(prime, dict):
+        return None
+    last_val = None
+    for key, val in prime.items():
+        if key in ("value", "meta"):
+            continue
+        if isinstance(val, dict):
+            # If this child is a dynamic/scope container, recurse into it
+            # to find the deepest leaf value.
+            inner = _find_deepest_value(val)
+            if inner is not None:
+                last_val = inner
+    return last_val
+
+
+def _find_deepest_value(node: dict[str, Any]) -> Any:
+    """Recursively find the last 'value' in a nested effect tree."""
+    last_val = None
+    if "value" in node:
+        # Check if this is a leaf (value is not just a container marker like True)
+        candidate = node["value"]
+        if not isinstance(candidate, bool):
+            last_val = candidate
+    for key, val in node.items():
+        if key in ("value", "meta"):
+            continue
+        if isinstance(val, dict):
+            inner = _find_deepest_value(val)
+            if inner is not None:
+                last_val = inner
+    return last_val
+
+
+def _save_last_run(args: dict[str, Any]) -> None:
+    """Stash the current run args for --last replay."""
+    try:
+        GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        _LAST_RUN_PATH.write_text(json.dumps(args) + "\n", encoding="utf-8")
+    except Exception:
+        pass  # Best-effort; don't fail the run
+
+
+def _load_last_run() -> dict[str, Any]:
+    """Load the stashed last-run args."""
+    if not _LAST_RUN_PATH.exists():
+        raise typer.BadParameter("No previous run found. Run an orchestration first.")
+    return json.loads(_LAST_RUN_PATH.read_text(encoding="utf-8"))
+
+
+def _do_validate(orchestration: Path, json_out: bool) -> None:
+    """Shared validation logic for validate and check commands."""
+    if not json_out:
+        _print_header("Circuitry · Validate")
+    with console.status("[cyan]Validating…[/cyan]") if not json_out else nullcontext():
+        result = validate(orchestration)
+
+    if json_out:
+        console.print_json(json.dumps(result, ensure_ascii=False))
+        raise typer.Exit(code=0 if result["ok"] else 1)
+
+    if result["ok"]:
+        console.print("[green]Valid[/green]")
+    else:
+        console.print("[red]Invalid[/red]")
+        for e in result.get("errors", []):
+            console.print(f" - {e}")
+        raise typer.Exit(code=1)
+
+
+RUN_EPILOG = """
+[bold]Examples:[/bold]
+  cof run ./my-orch.yml
+  cof run ./my-orch.yml -e topic=cats --tail
+  cof run ./my-orch.yml --live-state ./state.json
+  cof run --last
+"""
+
+
+@app.command(
+    "run",
+    help="Execute an orchestration.",
+    epilog=RUN_EPILOG,
+)
 def run_cmd(
-    orchestration: Path = typer.Argument(
-        ..., exists=True, dir_okay=False, readable=True
+    orchestration: Optional[Path] = typer.Argument(
+        None, exists=True, dir_okay=False, readable=True,
+        help="Path to orchestration YAML file.",
     ),
     config: Optional[Path] = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
@@ -68,30 +180,94 @@ def run_cmd(
         False, "--json", help="Machine-readable output only (minimal logs)."
     ),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress non-essential output."),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="More logs."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed progress."),
+    live_state: Optional[Path] = typer.Option(
+        None, "--live-state",
+        help="Write state atomically to this file after each effect. For live monitoring.",
+    ),
+    env_vars: Optional[list[str]] = typer.Option(
+        None, "-e",
+        help="Inline state variable (KEY=VALUE). Repeatable.",
+    ),
+    tail: bool = typer.Option(
+        False, "--tail",
+        help="Print only the final effect's value as plain text. Ideal for piping.",
+    ),
+    last: bool = typer.Option(
+        False, "--last",
+        help="Re-run the most recent orchestration with the same arguments.",
+    ),
 ):
-    cfg_path = find_config_path(explicit_path=config)
-    cfg = load_config(cfg_path)
+    # --last: replay stashed args
+    if last:
+        stashed = _load_last_run()
+        orchestration = Path(stashed["orchestration"])
+        config = Path(stashed["config"]) if stashed.get("config") else None
+        state = Path(stashed["state"]) if stashed.get("state") else None
+        out = Path(stashed["out"]) if stashed.get("out") else None
+        pretty = stashed.get("pretty", False)
+        print_state = stashed.get("print_state", False)
+        dry_run = stashed.get("dry_run", False)
+        json_out = stashed.get("json_out", False)
+        quiet = stashed.get("quiet", False)
+        verbose = stashed.get("verbose", False)
+        live_state = Path(stashed["live_state"]) if stashed.get("live_state") else None
+        env_vars = stashed.get("env_vars")
+        tail = stashed.get("tail", False)
+
+    if orchestration is None:
+        console.print("[red]Error:[/red] Missing orchestration path. Use --last or provide a path.")
+        raise typer.Exit(code=1)
+
+    # Validate orchestration path exists (--last bypasses Typer's exists=True check)
+    if not orchestration.exists():
+        console.print(f"[red]Error:[/red] Orchestration file not found: {orchestration}")
+        raise typer.Exit(code=1)
+
+    # Auto-pipe detection (before mutual exclusivity check so --tail wins in pipes)
+    if not sys.stdout.isatty() and not tail:
+        json_out = True
+        quiet = True
+
+    # Mutual exclusivity: --tail vs --print/--json
+    if tail and (print_state or json_out):
+        console.print("[red]Error:[/red] --tail is mutually exclusive with --print and --json.")
+        raise typer.Exit(code=1)
+
+    cfg = resolve_config(explicit_path=config)
 
     if not (quiet or json_out):
         _print_header("Circuitry · Run")
         console.print(
-            f"[bold]Config:[/bold] {cfg_path if cfg_path else '— (defaults)'}"
+            f"[bold]Config:[/bold] {config if config else '— (resolved)'}"
         )
         console.print(f"[bold]Orchestration:[/bold] {orchestration}")
         console.print(f"[bold]State (in):[/bold] {state if state else '—'}")
         console.print(f"[bold]State (out):[/bold] {out if out else '—'}")
+        if live_state:
+            console.print(f"[bold]Live state:[/bold] {live_state}")
         console.print(f"[bold]Dry run:[/bold] {dry_run}")
+
+    # Build initial state from --state file + -e overrides
+    initial_state: dict[str, Any] | None = None
+    inline = _parse_env_vars(env_vars)
+    if inline:
+        if state:
+            initial_state = json.loads(state.read_text(encoding="utf-8"))
+            initial_state.update(inline)
+        else:
+            initial_state = inline
 
     req = RunRequest(
         orchestration_path=orchestration,
-        state_path=state,
-        initial_state=None,
+        state_path=state if initial_state is None else None,
+        initial_state=initial_state,
         out_path=out,
         dry_run=dry_run,
         validate_only=False,
         verbose=verbose,
         config=cfg,
+        live_state_path=live_state,
     )
 
     with (
@@ -121,13 +297,35 @@ def run_cmd(
                 console.print(f"[bold]State written:[/bold] {out}")
         raise typer.Exit(code=1)
 
-    if not (quiet or json_out):
+    # Stash for --last (only on success, skip if replaying via --last)
+    if not last:
+        _save_last_run({
+            "orchestration": str(orchestration),
+            "config": str(config) if config else None,
+            "state": str(state) if state else None,
+            "out": str(out) if out else None,
+            "pretty": pretty,
+            "print_state": print_state,
+            "dry_run": dry_run,
+            "json_out": json_out,
+            "quiet": quiet,
+            "verbose": verbose,
+            "live_state": str(live_state) if live_state else None,
+            "env_vars": env_vars,
+            "tail": tail,
+        })
+
+    if tail:
+        val = _find_last_effect_value(result.state)
+        if val is not None:
+            print(val if isinstance(val, str) else json.dumps(val))
+    elif not (quiet or json_out):
         console.print("[green]Run succeeded[/green]")
         if out:
             console.print(f"[bold]State written:[/bold] {out}")
 
     # Print --print (or default print for --json with no --out)
-    if print_state or (not out and json_out):
+    if not tail and (print_state or (not out and json_out)):
         if pretty:
             console.print_json(json.dumps(result.state, indent=2, sort_keys=True))
         else:
@@ -139,7 +337,7 @@ def run_cmd(
             console.print(f"[yellow]Warning:[/yellow] {w}")
 
 
-@app.command("fetch")
+@app.command("fetch", help="Fetch a shared library orchestration.")
 def fetch_cmd(
     asset_id: str = typer.Argument(..., help="Shared library asset identifier."),
     version: Optional[str] = typer.Option(
@@ -163,8 +361,7 @@ def fetch_cmd(
         False, "--json", help="Machine-readable output only (minimal logs)."
     ),
 ):
-    cfg_path = find_config_path(explicit_path=config)
-    cfg = load_config(cfg_path)
+    cfg = resolve_config(explicit_path=config)
     token = auth_token or os.getenv("CIRCUITRY_LIBRARY_TOKEN")
 
     try:
@@ -192,7 +389,7 @@ def fetch_cmd(
     console.print(f"[bold]Written:[/bold] {out}")
 
 
-@app.command("run-library")
+@app.command("run-library", help="Fetch and run a shared library orchestration.")
 def run_library_cmd(
     asset_id: str = typer.Argument(..., help="Shared library asset identifier."),
     version: Optional[str] = typer.Option(
@@ -230,17 +427,37 @@ def run_library_cmd(
         False, "--json", help="Machine-readable output only (minimal logs)."
     ),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress non-essential output."),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="More logs."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed progress."),
+    live_state: Optional[Path] = typer.Option(
+        None, "--live-state",
+        help="Write state atomically to this file after each effect. For live monitoring.",
+    ),
+    env_vars: Optional[list[str]] = typer.Option(
+        None, "-e",
+        help="Inline state variable (KEY=VALUE). Repeatable.",
+    ),
+    tail: bool = typer.Option(
+        False, "--tail",
+        help="Print only the final effect's value as plain text. Ideal for piping.",
+    ),
 ):
-    cfg_path = find_config_path(explicit_path=config)
-    base_cfg = load_config(cfg_path)
+    # Auto-pipe detection
+    if not sys.stdout.isatty():
+        json_out = True
+        quiet = True
+
+    if tail and (print_state or json_out):
+        console.print("[red]Error:[/red] --tail is mutually exclusive with --print and --json.")
+        raise typer.Exit(code=1)
+
+    cfg = resolve_config(explicit_path=config)
     token = auth_token or os.getenv("CIRCUITRY_LIBRARY_TOKEN")
 
     try:
-        profile = resolve_service_profile(cfg=base_cfg, profile_name=service_profile)
-        cfg = apply_service_profile(cfg=base_cfg, profile=profile)
+        profile = resolve_service_profile(cfg=cfg, profile_name=service_profile)
+        effective_cfg = apply_service_profile(cfg=cfg, profile=profile)
         asset = fetch_shared_orchestration(
-            cfg=cfg,
+            cfg=effective_cfg,
             asset_id=asset_id,
             version=version,
             auth_token=token,
@@ -264,18 +481,31 @@ def run_library_cmd(
         )
         console.print(f"[bold]State (in):[/bold] {state if state else '—'}")
         console.print(f"[bold]State (out):[/bold] {out if out else '—'}")
+        if live_state:
+            console.print(f"[bold]Live state:[/bold] {live_state}")
         console.print(f"[bold]Dry run:[/bold] {dry_run}")
+
+    # Build initial state from --state file + -e overrides
+    initial_state: dict[str, Any] | None = None
+    inline = _parse_env_vars(env_vars)
+    if inline:
+        if state:
+            initial_state = json.loads(state.read_text(encoding="utf-8"))
+            initial_state.update(inline)
+        else:
+            initial_state = inline
 
     req = RunRequest(
         orchestration_path=asset.file_path,
-        state_path=state,
-        initial_state=None,
+        state_path=state if initial_state is None else None,
+        initial_state=initial_state,
         out_path=out,
         dry_run=dry_run,
         validate_only=False,
         shared_library_metadata=asset.metadata,
         verbose=verbose,
-        config=cfg,
+        config=effective_cfg,
+        live_state_path=live_state,
     )
 
     with (
@@ -304,12 +534,16 @@ def run_library_cmd(
                 console.print(f"[bold]State written:[/bold] {out}")
         raise typer.Exit(code=1)
 
-    if not (quiet or json_out):
+    if tail:
+        val = _find_last_effect_value(result.state)
+        if val is not None:
+            print(val if isinstance(val, str) else json.dumps(val))
+    elif not (quiet or json_out):
         console.print("[green]Run succeeded[/green]")
         if out:
             console.print(f"[bold]State written:[/bold] {out}")
 
-    if print_state or (not out and json_out):
+    if not tail and (print_state or (not out and json_out)):
         if pretty:
             console.print_json(json.dumps(result.state, indent=2, sort_keys=True))
         else:
@@ -320,36 +554,37 @@ def run_library_cmd(
             console.print(f"[yellow]Warning:[/yellow] {w}")
 
 
-@app.command("validate")
+@app.command("validate", help="Validate orchestration YAML against schema.")
 def validate_cmd(
     orchestration: Path = typer.Argument(
-        ..., exists=True, dir_okay=False, readable=True
+        ..., exists=True, dir_okay=False, readable=True,
+        help="Path to orchestration YAML file.",
     ),
     json_out: bool = typer.Option(
         False, "--json", help="Output machine-readable JSON only."
     ),
 ):
-    _print_header("Circuitry · Validate")
-    with console.status("[cyan]Validating…[/cyan]"):
-        result = validate(orchestration)
-
-    if json_out:
-        console.print_json(json.dumps(result, ensure_ascii=False))
-        raise typer.Exit(code=0 if result["ok"] else 1)
-
-    if result["ok"]:
-        console.print("[green]Valid[/green]")
-    else:
-        console.print("[red]Invalid[/red]")
-        for e in result.get("errors", []):
-            console.print(f" - {e}")
-        raise typer.Exit(code=1)
+    _do_validate(orchestration, json_out)
 
 
-@app.command("inspect")
+@app.command("check", help="Validate orchestration YAML against schema.")
+def check_cmd(
+    orchestration: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, readable=True,
+        help="Path to orchestration YAML file.",
+    ),
+    json_out: bool = typer.Option(
+        False, "--json", help="Output machine-readable JSON only."
+    ),
+):
+    _do_validate(orchestration, json_out)
+
+
+@app.command("inspect", help="Show orchestration metadata.")
 def inspect_cmd(
     orchestration: Path = typer.Argument(
-        ..., exists=True, dir_okay=False, readable=True
+        ..., exists=True, dir_okay=False, readable=True,
+        help="Path to orchestration YAML file.",
     ),
 ):
     _print_header("Circuitry · Inspect")
@@ -369,9 +604,134 @@ def inspect_cmd(
     console.print(table)
 
 
-@app.command("version")
+@app.command("gen", help="Generate an orchestration from a natural language prompt.")
+def gen_cmd(
+    prompt: str = typer.Argument(
+        ..., help="Natural language description of the orchestration to generate."
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out", "-o", help="Write generated YAML to this file."
+    ),
+    config: Optional[Path] = typer.Option(
+        None, "--config", "-c", help="Path to config JSON."
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed progress."),
+):
+    cfg = resolve_config(explicit_path=config)
+
+    # Locate bundled meta_orchestrator
+    try:
+        pkg = importlib.resources.files("circuitry") / "bundled" / "orchestrations" / "meta_orchestrator.yml"
+        meta_orch_path = Path(str(pkg))
+    except Exception:
+        console.print("[red]Error:[/red] Could not locate bundled meta_orchestrator.yml")
+        raise typer.Exit(code=1)
+
+    if not meta_orch_path.exists():
+        console.print("[red]Error:[/red] Bundled meta_orchestrator.yml not found.")
+        raise typer.Exit(code=1)
+
+    # Load rules from bundled docs for better generation quality
+    initial_state: dict[str, Any] = {"user_request": prompt}
+    try:
+        rules_pkg = importlib.resources.files("circuitry") / "bundled" / "docs" / "orchestration-reference.md"
+        rules_path = Path(str(rules_pkg))
+        if rules_path.exists():
+            rules_text = rules_path.read_text(encoding="utf-8")
+            # Extract the LLM Authoring Rules section
+            marker = "## LLM Authoring Rules"
+            if marker in rules_text:
+                initial_state["rules"] = rules_text[rules_text.index(marker):]
+    except Exception:
+        pass  # Best-effort; gen still works without rules
+
+    req = RunRequest(
+        orchestration_path=meta_orch_path,
+        state_path=None,
+        initial_state=initial_state,
+        out_path=None,
+        dry_run=False,
+        validate_only=False,
+        verbose=verbose,
+        config=cfg,
+    )
+
+    if not verbose:
+        with console.status("[cyan]Generating orchestration…[/cyan]"):
+            result = run(req)
+    else:
+        result = run(req)
+
+    if not result.ok:
+        console.print(f"[red]Generation failed:[/red] {result.error}")
+        raise typer.Exit(code=1)
+
+    # Extract generated YAML from the final effect
+    generated = _find_last_effect_value(result.state)
+    if generated is None:
+        console.print("[red]Error:[/red] No output generated.")
+        raise typer.Exit(code=1)
+
+    yaml_text = str(generated)
+
+    if out:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(yaml_text + "\n", encoding="utf-8")
+        console.print(f"[green]Generated:[/green] {out}")
+    else:
+        print(yaml_text)
+
+
+@app.command("init", help="Initialize a new circuitry project in the current directory.")
+def init_cmd():
+    config_path = Path.cwd() / "circuitry.config.json"
+    hello_path = Path.cwd() / "hello.yml"
+
+    if config_path.exists():
+        console.print(f"[yellow]Warning:[/yellow] {config_path} already exists. Aborting.")
+        raise typer.Exit(code=1)
+
+    adapter = typer.prompt("Adapter", default="ollama")
+    adapter_url = typer.prompt("Adapter URL", default="http://localhost:11434")
+    model = typer.prompt("Model", default="llama3.1:8b")
+
+    config_data = {
+        "default_model": model,
+        "default_adapter": adapter,
+        "runtime": {
+            "adapters": {
+                adapter: {
+                    "base_url": adapter_url,
+                },
+            },
+        },
+    }
+    config_path.write_text(
+        json.dumps(config_data, indent=2) + "\n", encoding="utf-8"
+    )
+
+    hello_yaml = """effects:
+  - type: prompt
+    name: greet
+    template: "Say hello to {{name}} in a creative way."
+    format: text
+"""
+    hello_path.write_text(hello_yaml, encoding="utf-8")
+
+    console.print(f"[green]Created:[/green] {config_path.name}")
+    console.print(f"[green]Created:[/green] {hello_path.name}")
+    console.print()
+    console.print("Try: [bold]cof run hello.yml -e name=World[/bold]")
+
+
+@app.command("version", help="Print version.")
 def version_cmd():
-    console.print("circuitry 0.1.0")
+    try:
+        from importlib.metadata import version as pkg_version
+        ver = pkg_version("circuitry")
+    except Exception:
+        ver = "0.1.0"
+    console.print(f"Circuitry {ver}")
 
 
 def main() -> None:

@@ -1,5 +1,3 @@
-adapter: ollama
-
 # Demonstrates all primitives working together:
 # dynamic(tree) → dynamic(chain) → prompt(json) → loop(each) → if(cel) → prompt
 effects:

@@ -71,5 +71,9 @@ effects:
     assert "runtime" in state
     assert "last_run" in state["runtime"]
     assert state["runtime"]["last_run"]["completed_at"] is not None
+    # CliRunner stdout is not a TTY, so auto-pipe detection produces JSON output.
     assert "Duplicate effect name 'dup'" in result.stdout
-    assert "State written:" in result.stdout
+    # In JSON mode, state_out is reported in the payload instead of "State written:".
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert str(out) == payload["state_out"]

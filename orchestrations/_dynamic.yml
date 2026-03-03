@@ -1,5 +1,3 @@
-adapter: ollama
-
 effects:
   # flow: chain — each step executes sequentially and sees outputs from prior steps
   - type: dynamic

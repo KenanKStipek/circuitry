@@ -1,5 +1,3 @@
-adapter: ollama
-
 effects:
   # flow: tree — all steps share the same state snapshot from the start of the dynamic;
   # sibling outputs are NOT visible to each other, enabling independent parallel perspectives

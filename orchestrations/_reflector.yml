@@ -1,5 +1,3 @@
-adapter: ollama
-
 effects:
   - type: prompt
     name: goal

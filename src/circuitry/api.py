@@ -48,12 +48,16 @@ def run_orchestration(
     verbose: bool = False,
     config: CircuitryConfig | None = None,
     raise_on_error: bool = True,
+    live_state_path: str | Path | None = None,
 ) -> RunResult:
     """
     Execute an orchestration from embedded Python.
 
     This function intentionally reuses the CLI runtime path so behavior remains
     equivalent across interfaces.
+
+    Set *live_state_path* to enable atomic incremental state file writes
+    after each effect completes, suitable for external tools (e.g. Perceptron).
     """
     if state is not None and state_path is not None:
         raise ValueError("Provide either 'state' or 'state_path', not both.")
@@ -67,6 +71,7 @@ def run_orchestration(
         validate_only=validate_only,
         verbose=verbose,
         config=config,
+        live_state_path=Path(live_state_path) if live_state_path is not None else None,
     )
     result = _run(req)
 
@@ -93,6 +98,7 @@ def run_shared_orchestration(
     validate_only: bool = False,
     verbose: bool = False,
     raise_on_error: bool = True,
+    live_state_path: str | Path | None = None,
 ) -> RunResult:
     """Fetch and run a shared-library orchestration using embedded API."""
     if state is not None and state_path is not None:
@@ -119,6 +125,7 @@ def run_shared_orchestration(
         shared_library_metadata=asset.metadata,
         verbose=verbose,
         config=effective_config,
+        live_state_path=Path(live_state_path) if live_state_path is not None else None,
     )
     result = _run(req)
 

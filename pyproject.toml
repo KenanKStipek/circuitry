@@ -5,7 +5,29 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "circuitry"
 version = "0.1.0"
-dependencies = []
+description = "Circuitry — Cybernetic orchestration framework (COF)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+dependencies = [
+    "typer[all]>=0.12",
+    "rich>=13.7",
+    "pyyaml>=6.0",
+    "jsonschema>=4.0",
+    "chevron>=0.14",
+    "python-dotenv>=1.0",
+    "ollama>=0.1.8",
+]
+
+[project.scripts]
+cof = "circuitry.cli.app:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+circuitry = [
+    "schema/*.json",
+    "bundled/orchestrations/*.yml",
+    "bundled/docs/*.md",
+]

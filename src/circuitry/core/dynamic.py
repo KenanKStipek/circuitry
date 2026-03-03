@@ -106,6 +106,9 @@ class DynamicRuntime:
                         self._execute_effect(effect, store=child_store, ctx=ctx)
                     except Exception as e:
                         raise RuntimeError(f"{effect_path}: {e}") from e
+                    finally:
+                        if store.on_write:
+                            store.on_write(store.state)
             else:
                 # Tree semantics: all effects run concurrently against the same
                 # deterministic snapshot from dynamic start, not sibling writes.
@@ -164,6 +167,9 @@ class DynamicRuntime:
                                 future.result()
                             except Exception as e:
                                 tree_errors.append(e)
+
+                if store.on_write:
+                    store.on_write(store.state)
 
                 if tree_errors:
                     raise tree_errors[0]

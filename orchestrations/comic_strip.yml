@@ -4,8 +4,6 @@ description: |
   Inputs: {{prompt}} (optional), {{panel_count}} (0=random, 2–4), {{genre}} (optional)
   Outputs: ./output/comics/{{_timestamp}}/ (ref sheets, backdrops, characters, composites, final strip)
 
-model: llama3:latest
-
 effects:
   # ── Step 1: Write the concept ────────────────────────────────────────────
   # High-level creative decisions: what kind of strip is this?

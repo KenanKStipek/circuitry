@@ -1,5 +1,3 @@
-adapter: ollama
-model: llama3
 effects:
   - type: prompt
     name: step1

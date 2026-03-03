@@ -1,16 +1,65 @@
 # Circuitry
 
-A cybernetic orchestration framework for AI systems.
+Cybernetic orchestration framework. **COF** (**C**ybernetic **O**rchestration **F**ramework).
 
-Circuitry structures AI model invocations as closed-loop control systems. Each effect writes to a deterministic state path, and downstream effects observe that state through interpolation to decide what happens next. This creates genuine feedback: loops that re-evaluate continuation based on what the model just produced, conditionals that branch on accumulated output, and reflectors that plan from observed state.
+> **Cybernetics** — control theory as it is applied to complex systems. A monitor compares what is happening to a system at various sampling times with some standard of what should be happening, and a controller adjusts the system's behaviour accordingly.
+> — [Britannica](https://www.britannica.com/science/cybernetics)
+
+Circuitry applies this principle to AI orchestration. Each effect writes to a deterministic state path, and downstream effects observe that state through interpolation to decide what happens next. This creates genuine feedback: loops that re-evaluate continuation based on what the model just produced, conditionals that branch on accumulated output, and reflectors that plan from observed state. The orchestration monitors its own outputs and adjusts — a closed-loop control system for model invocations.
+
+## Install
+
+One-line install via pipx (isolated, no virtual env needed):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kenankstipek/circuitry/main/scripts/install.sh | sh
+```
+
+Or install manually:
+
+```bash
+pipx install git+https://github.com/kenankstipek/circuitry.git
+```
+
+Or for development:
+
+```bash
+pip install -e .
+```
+
+This gives you the `cof` command.
+
+## Quick Start
+
+```bash
+# Initialize a project (creates config + hello.yml)
+cof init
+
+# Dry-run to verify install (no model calls)
+cof run hello.yml --dry-run -e name=World --out out.json --pretty
+
+# Live run (requires a configured adapter)
+cof run hello.yml -e name=World
+
+# Just the output value
+cof run hello.yml -e name=World --tail
+```
+
+Expected dry-run result:
+- Exits with code `0`
+- `out.json` contains `runtime.last_run`, `runtime.effective_settings`, and `prime.*` state keys
+
+The repo also ships ready-made examples in `orchestrations/`:
+
+```bash
+cof run orchestrations/hello.yml -e name=World --dry-run
+```
 
 ## How It Works
 
 An orchestration is a YAML file declaring **effects** that execute in order. Each effect writes its output to a **deterministic state path** derived from its name. Subsequent effects read that state through **template interpolation**, creating feedback chains.
 
 ```yaml
-adapter: ollama
-model: llama3
 effects:
   - type: prompt
     name: draft
@@ -28,7 +77,97 @@ effects:
       Write the final version incorporating the feedback.
 ```
 
+The adapter and model come from your config (see [Configuration](#configuration) below) — orchestrations stay portable.
+
 The second prompt reads the first prompt's output. The third reads both. Each step adapts based on what came before — this is the feedback loop that makes orchestrations cybernetic rather than static pipelines.
+
+## CLI Reference
+
+```bash
+# Run an orchestration
+cof run orchestrations/hello.yml
+
+# With options
+cof run orchestrations/hello.yml --verbose --out state.json --pretty
+
+# Pipe-friendly: just the final value
+cof run orchestrations/hello.yml --tail
+
+# Re-run the last orchestration
+cof run --last
+
+# Pass inline state
+cof run orchestrations/hello.yml -e topic="quantum computing" -e tone=casual
+
+# JSON output (auto-detected when piped)
+cof run orchestrations/hello.yml --json | jq '.prime'
+
+# Live state for external tools (e.g., Perceptron)
+cof run orchestrations/hello.yml --live-state ./state.live.json
+
+# Validate an orchestration
+cof check orchestrations/hello.yml
+cof check orchestrations/hello.yml --json
+
+# Generate an orchestration from natural language
+cof gen "Build a pipeline that drafts, critiques, and revises a blog post"
+cof gen "Summarize a PDF" --out summarizer.yml
+
+# Project setup
+cof init
+
+# System check
+cof doctor
+
+# Version
+cof version
+```
+
+### Auto-Pipe Detection
+
+When stdout is not a TTY (e.g., piped to `jq`), `cof run` automatically switches to `--json` mode with quiet output. `--tail` overrides this when you want just the raw value.
+
+## Configuration
+
+Circuitry uses layered config resolution (highest priority wins):
+
+1. CLI flags (`--config`, inline `-e`)
+2. Environment variables (`CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER`, `CIRCUITRY_ADAPTER_URL`)
+3. Project-local config (`circuitry.config.json` or `config.json` in cwd)
+4. Global config (`~/.config/circuitry/config.json`)
+5. Sane defaults (ollama at localhost:11434)
+
+```json
+{
+  "default_adapter": "ollama",
+  "default_model": "llama3.1:8b",
+  "runtime": {
+    "adapters": {
+      "ollama": {
+        "base_url": "http://localhost:11434"
+      },
+      "openai": {
+        "base_url": "https://api.openai.com/v1",
+        "default_model": "gpt-4o-mini"
+      },
+      "anthropic": {
+        "base_url": "https://api.anthropic.com",
+        "default_model": "claude-sonnet-4-20250514",
+        "max_tokens": 4096
+      },
+      "litellm": {
+        "default_model": "openai/gpt-4o-mini"
+      }
+    }
+  }
+}
+```
+
+Selection precedence per run:
+- Model: CLI override > orchestration `model` > config `default_model`
+- Adapter: CLI override > orchestration `adapter` > config `default_adapter`
+
+Every run records resolved values in `runtime.effective_settings`.
 
 ## Core Primitives
 
@@ -192,54 +331,17 @@ prime.<loop>.collected.value                      # loop collect aggregation
 Inspect paths from any run:
 
 ```bash
-circuitry run orchestrations/loop_example.yml --out out.json --pretty
+cof run orchestrations/_loop.yml --out out.json --pretty
 ```
 
-## Installation
-
-```bash
-pip install -e .
-```
-
-## Quick Start
-
-Dry-run first to verify install without requiring a live model:
-
-```bash
-circuitry run orchestrations/hello.yml --dry-run --out out.json --pretty
-```
-
-Expected result:
-- Exits with code `0`
-- `out.json` contains `runtime.last_run`, `runtime.effective_settings`, and `prime.*` state keys
-
-Then run live (requires a configured adapter):
-
-```bash
-circuitry run orchestrations/hello.yml
-```
-
-### CLI
-
-```bash
-# Dry run (no model calls)
-circuitry run orchestrations/hello.yml --dry-run
-
-# Live run
-circuitry run orchestrations/hello.yml
-
-# Verbose output
-circuitry run orchestrations/hello.yml --verbose
-```
-
-### Programmatic
+## Programmatic API
 
 ```python
 from circuitry import run_orchestration
 
 result = run_orchestration(
-    orchestration_path="orchestrations/hello.yml",
-    state={"input": {"user_name": "World"}},
+    orchestration_path="hello.yml",
+    state={"name": "World"},
     dry_run=True,
 )
 print(result.ok)                 # True/False
@@ -254,59 +356,21 @@ Additional embedded API:
 
 See `docs/api-reference.md` for signatures and integration guidance.
 
-### Multi-Provider Configuration
-
-Configure adapters in `config.json`:
-
-```json
-{
-  "default_adapter": "openai",
-  "default_model": "gpt-4o-mini",
-  "runtime": {
-    "adapters": {
-      "ollama": {
-        "base_url": "http://localhost:11434",
-        "timeout_seconds": 120
-      },
-      "openai": {
-        "base_url": "https://api.openai.com/v1",
-        "default_model": "gpt-4o-mini",
-        "timeout_seconds": 60
-      },
-      "anthropic": {
-        "base_url": "https://api.anthropic.com",
-        "default_model": "claude-sonnet-4-20250514",
-        "max_tokens": 4096
-      },
-      "litellm": {
-        "default_model": "openai/gpt-4o-mini",
-        "timeout": 120
-      }
-    }
-  }
-}
-```
-
-Selection precedence:
-- Model: CLI override > orchestration `model` > config `default_model`
-- Adapter: CLI override > orchestration `adapter` > config `default_adapter`
-
-Every run records resolved values in `runtime.effective_settings`.
-
 ## Orchestration Library
 
 See `orchestrations/` for pre-built examples:
 
-- `hello.yml` — single prompt
-- `dynamic_hello.yml` — sequential prompts with interpolation
-- `conditional_example.yml` — branching with CEL conditions
-- `loop_example.yml` — collection iteration
-- `typed_prompt_example.yml` — typed prompts with JSON schema
-- `reflector_v1.yml` — reflector-driven planning
-- `multi_primitive_story.yml` — dynamic + loop + conditional composition
+- `hello.yml` — single prompt hello world
+- `_prompt.yml` — prompt types (text, json, number, boolean)
+- `_dynamic.yml` — sequential chain with interpolation
+- `_dynamic_tree.yml` — parallel execution
+- `_conditional.yml` — branching with CEL conditions
+- `_loop.yml` — collection iteration with collect
+- `_reflector.yml` — reflector-driven planning
+- `_composition.yml` — dynamic + loop + conditional composition
+- `article_summarizer.yml` — real-world summarization pipeline
 - `meta_orchestrator.yml` — generate new orchestrations from natural language
-
-Full index: `orchestrations/README.md` and `orchestrations/manifest.json`
+- `comic_strip.yml` — multi-step image generation with ffmpeg + ComfyUI
 
 ## Architecture
 
