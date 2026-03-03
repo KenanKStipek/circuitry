@@ -34,6 +34,7 @@ if sys.version_info < (3, 9):
 
 from circuitry import run_orchestration, validate_orchestration  # noqa: E402
 from circuitry.cli.config import find_config_path, load_config  # noqa: E402
+from circuitry.rules import load_all_rules, load_rules_for  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -45,21 +46,28 @@ IDEAS_DIR = PROJECT_ROOT / "tmp" / "ideas"
 _CFG = load_config(find_config_path(explicit_path=None, cwd=PROJECT_ROOT))
 
 
-def _load_rules(project_root: Path) -> str:
-    """Extract the '## LLM Authoring Rules' section from the reference doc."""
-    ref = project_root / "docs" / "orchestration-reference.md"
-    try:
-        text = ref.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return ""
-    marker = "## LLM Authoring Rules"
-    idx = text.find(marker)
-    if idx == -1:
-        return ""
-    return text[idx:].strip()
+RULES_DIR = PROJECT_ROOT / "rules"
+RULES = load_all_rules(RULES_DIR)
+RULES_PROMPT = load_rules_for("prompt", rules_dir=RULES_DIR)
+RULES_DYNAMIC = load_rules_for("dynamic", rules_dir=RULES_DIR)
+RULES_LOOP = load_rules_for("loop", rules_dir=RULES_DIR)
+RULES_CONDITIONAL = load_rules_for("conditional", rules_dir=RULES_DIR)
+RULES_TOOL = load_rules_for("tool", rules_dir=RULES_DIR)
+RULES_REFLECTOR = load_rules_for("reflector", rules_dir=RULES_DIR)
 
 
-RULES = _load_rules(PROJECT_ROOT)
+def _load_plugins(project_root: Path) -> str:
+    """Load all plugin description files from docs/plugins/."""
+    plugins_dir = project_root / "docs" / "plugins"
+    if not plugins_dir.is_dir():
+        return ""
+    parts = []
+    for md_file in sorted(plugins_dir.glob("*.md")):
+        parts.append(md_file.read_text(encoding="utf-8").strip())
+    return "\n\n---\n\n".join(parts)
+
+
+PLUGINS = _load_plugins(PROJECT_ROOT)
 
 
 def _slugify(text: str, max_len: int = 60) -> str:
@@ -90,7 +98,7 @@ def _extract_yaml(text: str) -> str:
 
     # Find the first line that starts the YAML document.
     for i, line in enumerate(lines):
-        if line.startswith("adapter:"):
+        if line.startswith("adapter:") or line.startswith("effects:"):
             return "\n".join(lines[i:]).strip()
     return ""
 
@@ -149,7 +157,17 @@ def _generate_orchestration(idea: str, idea_dir: Path, max_retries: int = 3) -> 
 
         result = run_orchestration(
             orchestration_path=META_ORCHESTRATOR,
-            state={"user_request": user_request, "rules": RULES},
+            state={
+                "user_request": user_request,
+                "rules": RULES,
+                "rules_prompt": RULES_PROMPT,
+                "rules_dynamic": RULES_DYNAMIC,
+                "rules_loop": RULES_LOOP,
+                "rules_conditional": RULES_CONDITIONAL,
+                "rules_tool": RULES_TOOL,
+                "rules_reflector": RULES_REFLECTOR,
+                "plugins": PLUGINS,
+            },
             config=_CFG,
             verbose=True,
             raise_on_error=False,
@@ -167,7 +185,7 @@ def _generate_orchestration(idea: str, idea_dir: Path, max_retries: int = 3) -> 
             result.state
             .get("prime", {})
             .get("generate", {})
-            .get("final_yaml", {})
+            .get("review_semantics", {})
             .get("value", "")
         ) or ""
 
@@ -175,12 +193,12 @@ def _generate_orchestration(idea: str, idea_dir: Path, max_retries: int = 3) -> 
         if not yaml_val:
             raw = (
                 result.state
-                .get("prime", {}).get("generate", {}).get("final_yaml", {}).get("value", "") or ""
+                .get("prime", {}).get("generate", {}).get("review_semantics", {}).get("value", "") or ""
             )
             preview = raw.strip()[:120].replace("\n", " ") if raw.strip() else ""
             prev_run_error = f"No valid YAML produced (output started with: {preview!r})" if preview else "No valid YAML produced (empty output)"
             prev_errors = []
-            print(f"  ✗ No valid YAML produced (could not find 'adapter:' line in output)")
+            print(f"  ✗ No valid YAML produced (could not find 'adapter:' or 'effects:' line in output)")
             if preview:
                 print(f"    Got: {preview}...")
             if attempt < max_retries:

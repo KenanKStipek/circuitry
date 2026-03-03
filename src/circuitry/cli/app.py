@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .config import GLOBAL_CONFIG_DIR, find_config_path, load_config, resolve_config
+from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, find_config_path, load_config, resolve_config
 from .doctor import register_doctor
 from .orchestration_loader import serialize_orchestration
 from .runtime_shim import RunRequest, inspect_orchestration, run, validate
@@ -607,11 +607,14 @@ def inspect_cmd(
 
 @app.command("gen", help="Generate an orchestration from a natural language prompt.")
 def gen_cmd(
+    name: str = typer.Argument(
+        ..., help="Name for the generated orchestration (used as filename)."
+    ),
     prompt: str = typer.Argument(
         ..., help="Natural language description of the orchestration to generate."
     ),
     out: Optional[Path] = typer.Option(
-        None, "--out", "-o", help="Write generated orchestration to this file."
+        None, "--out", "-o", help="Write resulting state JSON to this file (live-updated during run)."
     ),
     config: Optional[Path] = typer.Option(
         None, "--config", "-c", help="Path to config JSON."
@@ -619,6 +622,9 @@ def gen_cmd(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed progress."),
     output_format: str = typer.Option(
         "yaml", "--format", "-f", help="Output format: yaml, json, or toon.",
+    ),
+    retries: int = typer.Option(
+        3, "--retries", "-r", help="Max retry attempts per prompt on failure.",
     ),
 ):
     _VALID_FORMATS = {"yaml", "json", "toon"}
@@ -630,6 +636,15 @@ def gen_cmd(
         raise typer.Exit(code=1)
 
     cfg = resolve_config(explicit_path=config)
+
+    # Inject retry config into runtime so PromptRuntime picks it up
+    if retries > 1:
+        cfg = CircuitryConfig(
+            default_model=cfg.default_model,
+            default_adapter=cfg.default_adapter,
+            plugins=cfg.plugins,
+            runtime={**cfg.runtime, "default_prompt_retries": retries},
+        )
 
     # Locate bundled meta_orchestrator
     try:
@@ -643,19 +658,42 @@ def gen_cmd(
         console.print("[red]Error:[/red] Bundled meta_orchestrator.yml not found.")
         raise typer.Exit(code=1)
 
-    # Load rules from bundled docs for better generation quality
+    # Load structured rules from bundled rules/ directory
     initial_state: dict[str, Any] = {"user_request": prompt}
     try:
-        rules_pkg = importlib.resources.files("circuitry") / "bundled" / "docs" / "orchestration-reference.md"
-        rules_path = Path(str(rules_pkg))
-        if rules_path.exists():
-            rules_text = rules_path.read_text(encoding="utf-8")
-            # Extract the LLM Authoring Rules section
-            marker = "## LLM Authoring Rules"
-            if marker in rules_text:
-                initial_state["rules"] = rules_text[rules_text.index(marker):]
+        from circuitry.rules import load_all_rules, load_rules_for
+
+        rules_pkg = importlib.resources.files("circuitry") / "bundled" / "rules"
+        rules_dir = Path(str(rules_pkg))
+        if rules_dir.is_dir():
+            initial_state["rules"] = load_all_rules(rules_dir)
+            for etype in ("prompt", "dynamic", "loop", "conditional", "tool", "reflector"):
+                initial_state[f"rules_{etype}"] = load_rules_for(etype, rules_dir=rules_dir)
     except Exception:
         pass  # Best-effort; gen still works without rules
+
+    # Load plugin descriptions from bundled docs/plugins/
+    try:
+        plugins_pkg = importlib.resources.files("circuitry") / "bundled" / "docs" / "plugins"
+        plugins_dir = Path(str(plugins_pkg))
+        if plugins_dir.is_dir():
+            parts = []
+            for md_file in sorted(plugins_dir.glob("*.md")):
+                parts.append(md_file.read_text(encoding="utf-8").strip())
+            if parts:
+                initial_state["plugins"] = "\n\n---\n\n".join(parts)
+    except Exception:
+        pass  # Best-effort
+
+    # Determine orchestration output path from name + format
+    _ext = {"yaml": ".yml", "json": ".json", "toon": ".toon"}
+    orch_out = Path(f"{name}{_ext.get(output_format, '.yml')}")
+
+    # --out is for live state / resulting state JSON
+    live_state_path = None
+    if out:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        live_state_path = out
 
     req = RunRequest(
         orchestration_path=meta_orch_path,
@@ -666,13 +704,21 @@ def gen_cmd(
         validate_only=False,
         verbose=verbose,
         config=cfg,
+        live_state_path=live_state_path,
     )
+
+    if live_state_path:
+        console.print(f"[bold]Live state:[/bold] {live_state_path}")
 
     if not verbose:
         with console.status("[cyan]Generating orchestration…[/cyan]"):
             result = run(req)
     else:
         result = run(req)
+
+    # Write resulting state to --out
+    if out:
+        _write_state_json(out=out, state=result.state, pretty=False)
 
     if not result.ok:
         console.print(f"[red]Generation failed:[/red] {result.error}")
@@ -686,13 +732,22 @@ def gen_cmd(
 
     yaml_text = str(generated)
 
-    # Strip markdown code fences the LLM may wrap around its output
-    _fence_lines = []
+    # Clean up LLM output: strip fences, preamble, and document separators
+    _clean = []
     for _line in yaml_text.splitlines():
         if _line.strip().startswith("```"):
             continue
-        _fence_lines.append(_line)
-    yaml_text = "\n".join(_fence_lines).strip()
+        if _line.strip() == "---":
+            continue
+        _clean.append(_line)
+    yaml_text = "\n".join(_clean).strip()
+
+    # Strip preamble text before the first effects: or adapter: line
+    _clean_lines = yaml_text.splitlines()
+    for _i, _line in enumerate(_clean_lines):
+        if _line.startswith("effects:") or _line.startswith("adapter:"):
+            yaml_text = "\n".join(_clean_lines[_i:]).strip()
+            break
 
     import yaml as _yaml  # type: ignore[import-untyped]
     parsed = _yaml.safe_load(yaml_text)
@@ -700,12 +755,9 @@ def gen_cmd(
         parsed = {"raw": yaml_text}
     output_text = serialize_orchestration(parsed, output_format).rstrip("\n")
 
-    if out:
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(output_text + "\n", encoding="utf-8")
-        console.print(f"[green]Generated:[/green] {out}")
-    else:
-        print(output_text)
+    orch_out.parent.mkdir(parents=True, exist_ok=True)
+    orch_out.write_text(output_text + "\n", encoding="utf-8")
+    console.print(f"[green]Generated:[/green] {orch_out}")
 
 
 @app.command("init", help="Initialize a new circuitry project in the current directory.")

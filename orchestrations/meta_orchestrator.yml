@@ -1,15 +1,17 @@
-# Meta-Orchestrator
+# Meta-Orchestrator v2
 # ─────────────────────────────────────────────────────────────────────────────
 # Uses Circuitry to build Circuitry. Given a natural language description of
-# what you want an orchestration to do, this workflow:
-#   1. Analyzes your intent into a structured design plan (JSON)
-#   2. Plans details in parallel: state flow map + JSON schema decisions
-#   3. Generates ONE YAML effect block per step (loop) — each call is focused
-#      and low-context; blocks are collected into a single array automatically
-#   4. Assembles collected blocks into a complete orchestration YAML
-#   5. Self-reviews and corrects common errors (best-effort pass)
+# what you want an orchestration to do, this workflow runs 8 atomic steps:
+#   1. classify_request    — classify goal, complexity, tool needs (JSON)
+#   2. plan_tooling        — pick relevant plugins from {{plugins}} (JSON)
+#   3. plan_decomposition  — break goal into 2–8 atomic steps (JSON array)
+#   4. plan_state_flow     — map data dependencies + schema needs per effect
+#   5. draft_effects       — one effect block per step (loop+collect+tree)
+#   6. assemble            — mechanical assembly of collected blocks
+#   7. review_structure    — structural correctness check against {{rules}}
+#   8. review_semantics    — semantic check: does it solve the problem atomically?
 #
-# Primary output: prime.generate.final_yaml.value
+# Primary output: prime.generate.review_semantics.value
 #
 # ─── USAGE ───────────────────────────────────────────────────────────────────
 #
@@ -23,48 +25,47 @@
 #   3. Extract the generated YAML:
 #        cat out.json | python3 -c "
 #          import sys, json
-#          print(json.load(sys.stdin)['prime']['generate']['final_yaml']['value'])
+#          print(json.load(sys.stdin)['prime']['generate']['review_semantics']['value'])
 #        "
 #
 # ─── INPUT STATE ─────────────────────────────────────────────────────────────
 #
-#   Key           Type     Description
-#   user_request  string   Natural language description of the orchestration to build
-#   rules         string   LLM authoring rules injected from docs/orchestration-reference.md
+#   Key                Type     Description
+#   user_request       string   Natural language description of the orchestration to build
+#   rules              string   Full ruleset from rules/*.yml (all effect types + patterns)
+#   rules_prompt       string   Common + prompt effect rules only
+#   rules_dynamic      string   Common + dynamic effect rules only
+#   rules_loop         string   Common + loop effect rules only
+#   rules_conditional  string   Common + conditional effect rules only
+#   rules_tool         string   Common + tool effect rules only
+#   rules_reflector    string   Common + reflector effect rules only
+#   plugins            string   Plugin descriptions from docs/plugins/*.md
 #
 # ─── OUTPUT STATE PATHS ──────────────────────────────────────────────────────
 #
-#   prime.generate.final_yaml.value
+#   prime.generate.review_semantics.value
 #     → The complete generated orchestration YAML (primary output)
 #
-#   prime.generate.analyze_intent.value
-#     → Structured intent analysis: goal, steps, requires_loop, requires_branching
+#   prime.generate.classify_request.value
+#     → Classification: goal, complexity, requires_tools, input_schema, output_path
 #
-#   prime.generate.plan_details.plan_state_flow.value
-#     → Explicit state flow map: what each effect reads and writes
+#   prime.generate.plan_tooling.value
+#     → Plugin selection: relevant_plugins array with name, reason, use_case
 #
-#   prime.generate.plan_details.identify_schemas.value
-#     → JSON schema planning: which effects need prompt_type:json
+#   prime.generate.plan_decomposition.value
+#     → Step plan: steps array with name, type, purpose, needs_tool, plugin
 #
-#   prime.generate.draft_effects.iter_N.draft_effect.value
-#     → The YAML effect block produced for step N
+#   prime.generate.plan_state_flow.value
+#     → Data flow map + schema decisions per effect
 #
 #   prime.generate.draft_effects.collected.value
 #     → Array of all per-step effect blocks (from collect: draft_effect)
 #
-#   prime.generate.assemble_yaml.value
-#     → Complete orchestration YAML assembled from collected blocks
+#   prime.generate.assemble.value
+#     → Complete orchestration assembled from collected blocks
 #
-# ─── MODEL RECOMMENDATION ────────────────────────────────────────────────────
-#
-#   A capable model is strongly recommended for reliable YAML generation.
-#
-#   Ollama:   model: llama3         (default)
-#             model: qwen3:8b       → better quality
-#             model: qwen3-coder:30b → best quality
-#
-#   Hosted:   model: claude-haiku-20240307   adapter: anthropic
-#             model: gpt-4o-mini             adapter: openai
+#   prime.generate.review_structure.value
+#     → Structurally corrected YAML
 #
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -73,27 +74,22 @@ effects:
     name: generate
     flow: chain
     effects:
-      # ─── Step 1: Analyze user intent ─────────────────────────────────────────
-      # Parses the natural language request into a structured design plan.
-      # Produces goal, a steps array (2–5 entries), boolean flags for loop and
-      # branching requirements, input key descriptions, and the output state path.
+      # ─── Step 1: Classify the request ────────────────────────────────────────
+      # Analyzes the user request to determine goal, complexity, whether tools
+      # are needed, what inputs the orchestration expects, and where its output
+      # will land. This is classification only — no step planning here.
       - type: prompt
-        name: analyze_intent
+        name: classify_request
         prompt_type: json
         schema:
           type: object
           properties:
             goal:
               type: string
-            steps:
-              type: array
-              items:
-                type: string
-              minItems: 2
-              maxItems: 5
-            requires_loop:
-              type: boolean
-            requires_branching:
+            complexity:
+              type: string
+              enum: [simple, moderate, complex]
+            requires_tools:
               type: boolean
             input_schema:
               type: string
@@ -102,158 +98,242 @@ effects:
               type: string
           required:
             - goal
-            - steps
-            - requires_loop
-            - requires_branching
+            - complexity
+            - requires_tools
             - input_schema
             - output_path
           additionalProperties: true
         template: |
           CRITICAL: Your response MUST be a single JSON object (starts with `{`, ends with `}`).
-          Do NOT return a JSON array (starts with `[`). Do NOT return just the steps list.
+          Do NOT return a JSON array. Do NOT return just a string.
 
-          You are a Circuitry orchestration designer. Analyze the user request and fill in ALL 6 fields of this JSON object:
+          You are a Circuitry orchestration designer. Classify the following user request.
 
           User request: "{{user_request}}"
 
-          Available effect types: prompt (model call), dynamic (container), loop (iterate), if (branch)
+          Available effect types: prompt (LLM call), dynamic (container), loop (iterate), if (branch), tool (non-LLM side-effect for image/video/audio processing), reflector (self-improving loop)
 
-          Your complete response — fill in every field:
+          Fill in ALL 5 fields:
           {
             "goal": "<one sentence: what this orchestration does>",
-            "steps": ["step1: prompt - <action>", "step2: loop - <action>", "step3: prompt - <action>"],
-            "requires_loop": <true or false>,
-            "requires_branching": <true or false>,
+            "complexity": "<simple | moderate | complex>",
+            "requires_tools": <true if the request needs non-LLM side-effects like image generation, video processing, file operations — false if pure text/data>,
             "input_schema": "<plain English e.g. article_text: string, max_words: number>",
             "output_path": "prime.<final_effect_name>.value"
           }
 
-          Rules for each field:
-          - goal: one sentence string
-          - steps: 2–5 strings, each "<step_N>: <effect_type> - <what it does>"
-          - requires_loop: boolean (true/false)
-          - requires_branching: boolean (true/false)
-          - input_schema: plain English string — NOT a JSON schema object, NOT an array
-          - output_path: string like "prime.summarize.value"
+          Rules:
+          - goal: one sentence describing the orchestration's purpose
+          - complexity: simple (1-2 effects), moderate (3-5 effects), complex (6+ effects)
+          - requires_tools: almost always false. Set true ONLY if the request explicitly involves generating images, processing video/audio, or file conversion. Text summarization, analysis, writing, coding, data extraction = false.
+          - input_schema: plain English string — NOT a JSON schema object
+          - output_path: state path of the final output, like "prime.final_result.value"
 
-          Return ONLY the JSON object above with all 6 fields filled in. No explanation. No markdown.
+          Return ONLY the JSON object. No explanation. No markdown.
 
-      # ─── Step 2: Plan details in parallel (tree) ─────────────────────────────
-      # Two planning prompts run simultaneously — each sees the analyze_intent
-      # output but not each other's results. Together they give each per-step
-      # draft_effect call all the context it needs:
-      #   a. plan_state_flow  → explicit input→output state path map
-      #   b. identify_schemas → which effects need prompt_type:json + draft schemas
-      - type: dynamic
-        name: plan_details
-        flow: tree
-        effects:
-          # ─ a. State flow: explicit data dependency map ────────────────────────
-          - type: prompt
-            name: plan_state_flow
-            template: |
-              You are mapping the data flow for a Circuitry orchestration.
+      # ─── Step 2: Select relevant plugins ─────────────────────────────────────
+      # Given the available plugins and the classification, determine which
+      # plugins (if any) are relevant. Returns empty array if no tools needed.
+      - type: prompt
+        name: plan_tooling
+        prompt_type: json
+        schema:
+          type: object
+          properties:
+            relevant_plugins:
+              type: array
+              items:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  reason:
+                    type: string
+                  use_case:
+                    type: string
+                required:
+                  - name
+                  - reason
+                  - use_case
+            tool_guidance:
+              type: string
+          required:
+            - relevant_plugins
+            - tool_guidance
+          additionalProperties: true
+        template: |
+          CRITICAL: Return a single JSON object with keys "relevant_plugins" and "tool_guidance".
 
-              User request: "{{user_request}}"
-              Goal: {{prime.generate.analyze_intent.value.goal}}
-              Planned steps: {{prime.generate.analyze_intent.value.steps}}
-              Input keys the user provides: {{prime.generate.analyze_intent.value.input_schema}}
-              Expected primary output: {{prime.generate.analyze_intent.value.output_path}}
+          Requires tools: {{prime.generate.classify_request.value.requires_tools}}
 
-              Circuitry state path conventions:
-                Top-level effect output:          prime.<effect_name>.value
-                Inside a named dynamic container: prime.<dynamic_name>.<effect_name>.value
-                Loop body effect output:          prime.<loop_name>.iter_N.<body_name>.value
-                User-provided state key:          accessed directly as {{key_name}} (no prime. prefix)
+          RULE: If requires_tools is false, you MUST return:
+          {"relevant_plugins": [], "tool_guidance": "No tools needed"}
 
-              Produce a precise data flow map:
-              1. For each planned step, list:
-                 - The state path it WRITES (its output location)
-                 - The state paths and input keys it READS (its data dependencies)
-              2. Flag effects that read loop-iteration variables (e.g., {{item}} or a named loop variable)
-              3. Confirm no effect reads from an output written AFTER it in chain order
-              4. Identify the final output path — this is the primary result returned to the user
+          Do NOT add plugins when requires_tools is false. Stop here and return the empty version.
 
-              Be precise about path syntax. This map will guide state path references in each effect block.
+          Only if requires_tools is true, select from these plugins:
+          {{plugins}}
 
-          # ─ b. Schema plan: identify JSON-typed effects and draft their schemas ─
-          - type: prompt
-            name: identify_schemas
-            template: |
-              You are planning the structured JSON outputs for a Circuitry orchestration.
+          User request: "{{user_request}}"
+          Goal: {{prime.generate.classify_request.value.goal}}
 
-              User request: "{{user_request}}"
-              Goal: {{prime.generate.analyze_intent.value.goal}}
-              Planned steps: {{prime.generate.analyze_intent.value.steps}}
+          Return: {"relevant_plugins": [{"name": "...", "reason": "...", "use_case": "..."}], "tool_guidance": "..."}
 
-              In Circuitry, a prompt effect can request structured JSON output by setting:
-                prompt_type: json
-                schema:
-                  type: object
-                  properties: { ... }
-                  required: [...]
+          Return ONLY the JSON object. Start with `{`.
 
-              Review every planned step and specify:
-              1. Should this effect use prompt_type: json?
-                 Use json for: extracting structured data, producing lists for downstream loops,
-                 decisions requiring reliable boolean/number output, any output read via .value.<field>.
-              2. If yes: draft a minimal JSON schema (type: object, properties, required array).
-              3. If no (plain text): briefly note why plain text is appropriate here.
+      # ─── Step 3: Plan atomic steps ───────────────────────────────────────────
+      # Break the goal into 2–8 atomic steps. Each step becomes one effect.
+      # Tag each with its effect type and whether it needs a tool plugin.
+      - type: prompt
+        name: plan_decomposition
+        prompt_type: json
+        schema:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              type:
+                type: string
+              purpose:
+                type: string
+              needs_tool:
+                type: boolean
+              plugin:
+                type: string
+            required:
+              - name
+              - type
+              - purpose
+          minItems: 2
+          maxItems: 8
+        template: |
+          CRITICAL: Your response MUST be a JSON array. Start with `[` and end with `]`.
 
-              Format as a numbered list, one entry per planned step. This will be used when each
-              effect block is drafted to set the correct prompt_type and schema.
+          You are planning the atomic steps for a Circuitry orchestration.
 
-      # ─── Step 3: Generate one effect block per step (loop + collect) ──────────
-      # Iterates over the planned steps array. Each iteration produces EXACTLY
-      # ONE YAML effect block — a single focused LLM call with minimal context.
+          User request: "{{user_request}}"
+          Goal: {{prime.generate.classify_request.value.goal}}
+          Complexity: {{prime.generate.classify_request.value.complexity}}
+          Input keys: {{prime.generate.classify_request.value.input_schema}}
+          Requires tools: {{prime.generate.classify_request.value.requires_tools}}
+          Selected plugins: {{prime.generate.plan_tooling.value.relevant_plugins}}
+          Tool guidance: {{prime.generate.plan_tooling.value.tool_guidance}}
+
+          Available effect types:
+          - prompt: LLM call (use prompt_type: json for structured output, text for free-form)
+          - dynamic: container grouping effects (flow: chain for sequential, tree for parallel)
+          - loop: iterate over an array (each) or condition (while); use collect to aggregate
+          - if: branch based on state (CEL expression)
+          - tool: non-LLM side-effect ONLY for image generation, video/audio processing, file conversion. NEVER use tool for text/data tasks.
+          - reflector: self-improving loop
+
+          Design philosophy:
+          - Each step should do ONE thing — classify, plan, generate one item, review, etc.
+          - Use prompt(json) to produce structured data that feeds downstream steps via state
+          - Use loop+collect when processing multiple items (e.g. each article, each image)
+          - Use a prompt BEFORE a tool to generate the tool's parameters via state interpolation
+          - End with a review step when generating structured output like YAML or code
+          - Only use tool effects when selected_plugins is non-empty. If relevant_plugins is [], use ONLY prompt/dynamic/loop/if effects.
+
+          {{rules}}
+
+          Return a JSON array:
+          [
+            {"name": "step_name", "type": "prompt|dynamic|loop|if|tool", "purpose": "<what this step does>", "needs_tool": false, "plugin": ""},
+            ...
+          ]
+
+          Rules for each step:
+          - 2–8 steps total
+          - name: snake_case, unique, descriptive (e.g. classify_input, generate_summary, render_image)
+          - type: one of prompt, dynamic, loop, if, tool, reflector
+          - purpose: one sentence describing what this step does
+          - needs_tool: true if this step uses a tool plugin
+          - plugin: plugin name if needs_tool is true, empty string otherwise
+
+          Return ONLY the JSON array. No explanation. No markdown. Start with `[`.
+
+      # ─── Step 4: Map state flow between effects ─────────────────────────────
+      # Produces an explicit data dependency map so draft_effect knows what
+      # each effect reads and writes. Runs as a single focused prompt.
+      - type: prompt
+        name: plan_state_flow
+        template: |
+          You are mapping the data flow for a Circuitry orchestration.
+
+          User request: "{{user_request}}"
+          Goal: {{prime.generate.classify_request.value.goal}}
+          Input keys: {{prime.generate.classify_request.value.input_schema}}
+          Output path: {{prime.generate.classify_request.value.output_path}}
+          Planned steps: {{prime.generate.plan_decomposition.value}}
+          Selected plugins: {{prime.generate.plan_tooling.value.relevant_plugins}}
+
+          Circuitry state path conventions:
+            Top-level effect output:          prime.<effect_name>.value
+            Inside a named dynamic container: prime.<dynamic_name>.<effect_name>.value
+            Loop body effect output:          prime.<loop_name>.iter_N.<body_name>.value
+            Loop collected array:             prime.<loop_name>.collected.value
+            User-provided state key:          accessed directly as {{key_name}} (no prime. prefix)
+
+          Produce a precise data flow map:
+          1. For each planned step, list:
+             - The state path it WRITES (its output location)
+             - The state paths and input keys it READS (its data dependencies)
+             - Whether it needs prompt_type: json (structured output read via .value.<field>)
+               and if so, a minimal JSON schema (type: object, properties, required)
+          2. For tool effects, list what params they need and which prior effect provides each param value
+          3. Flag effects that read loop-iteration variables (e.g., {{item}} or a named loop variable)
+          4. Confirm no effect reads from an output written AFTER it in chain order
+          5. Identify the final output path — this is the primary result returned to the user
+
+          Be precise about path syntax. This map will guide state path references in each effect block.
+
+      # ─── Step 5: Generate one effect block per step (loop + collect) ──────────
+      # Iterates over the planned steps. Each iteration produces EXACTLY ONE
+      # YAML effect block — a single focused LLM call with minimal context.
       # flow: tree runs all iterations in parallel (order preserved in collected).
-      # The collect field aggregates all blocks into:
-      #   prime.generate.draft_effects.collected.value → [block_0, block_1, ...]
       - type: loop
         name: draft_effects
         flow: tree
         collect: draft_effect
         each:
-          in: prime.generate.analyze_intent.value.steps
+          in: prime.generate.plan_decomposition.value
           as: step
         body:
           - type: prompt
             name: draft_effect
             template: |
-              You are writing a single Circuitry YAML effect block. Write ONLY this one block.
+              Write a single Circuitry YAML effect block for this step:
+                name: {{step.name}}
+                type: {{step.type}}
+                purpose: {{step.purpose}}
 
-              Step to implement: "{{step}}"
-              Overall goal: {{prime.generate.analyze_intent.value.goal}}
-              All planned steps (for context on ordering and naming):
-              {{prime.generate.analyze_intent.value.steps}}
+              State flow and schema plan (what this effect reads/writes, whether it needs JSON output):
+              {{prime.generate.plan_state_flow.value}}
 
-              State flow map (what each step reads and writes — use this for correct state path references):
-              {{prime.generate.plan_details.plan_state_flow.value}}
-
-              JSON schema plan (use this to set prompt_type and schema for this step if needed):
-              {{prime.generate.plan_details.identify_schemas.value}}
-
+              === Rules for type "{{step.type}}" ===
               {{rules}}
 
-              Write one complete YAML effect block for this step using the rules above.
-              Include a rich, specific prompt template — be precise about role, context, task, and output format.
+              HARD RULES:
+              - name: use exactly "{{step.name}}" — a simple snake_case identifier. NO dots. NO "prime." prefix.
+              - type: use exactly "{{step.type}}". Valid types: prompt, dynamic, loop, if, tool, reflector.
+              - Do NOT add model: or adapter: fields.
 
-              Return ONLY the YAML block for this one step.
-              No markdown fences. No full orchestration file. No explanation. No preamble.
+              Return ONLY the YAML block. Start with "- type:".
 
-      # ─── Step 4: Assemble collected blocks into a complete YAML file ──────────
-      # Low-context mechanical step: receives the collected array of effect blocks
-      # and wraps them in the standard orchestration file header.
-      # The heavy lifting (writing effect content) was done in Step 3.
+      # ─── Step 6: Assemble collected blocks into a complete orchestration ─────
+      # Mechanical assembly: wraps collected blocks in effects: header with comments.
       - type: prompt
-        name: assemble_yaml
+        name: assemble
         template: |
           You are assembling a complete Circuitry orchestration YAML file from pre-written effect blocks.
 
           User request: "{{user_request}}"
-          Goal: {{prime.generate.analyze_intent.value.goal}}
-          Input keys: {{prime.generate.analyze_intent.value.input_schema}}
-          Primary output path: {{prime.generate.analyze_intent.value.output_path}}
+          Goal: {{prime.generate.classify_request.value.goal}}
+          Input keys: {{prime.generate.classify_request.value.input_schema}}
+          Output path: {{prime.generate.classify_request.value.output_path}}
 
           The following effect blocks were each generated individually and are ready to use:
           <<< BEGIN EFFECT BLOCKS >>>
@@ -270,35 +350,70 @@ effects:
           Do NOT include adapter: or model: keys — those come from user config.
 
           Return ONLY the assembled YAML. No markdown fences. No explanation outside YAML comments.
+          Start with a # comment line.
 
-      # ─── Step 5: Self-review and produce final output ────────────────────────
-      # Best-effort structural review — catches common Circuitry errors before
-      # returning the final output. Uses a compact checklist rather than the
-      # full rules to stay within model context limits.
-      # PRIMARY OUTPUT: prime.generate.final_yaml.value
+      # ─── Step 7: Structural review against rules ─────────────────────────────
+      # Checks the assembled YAML against the authoring rules. Silently fixes
+      # violations. Focused only on structural correctness, not semantics.
       - type: prompt
-        name: final_yaml
+        name: review_structure
         template: |
-          You are doing a structural review of a Circuitry orchestration YAML. Silently fix any issues found, then output the complete corrected YAML.
+          You are doing a structural review of a Circuitry orchestration YAML.
+          Silently fix any issues found, then output the complete corrected YAML.
 
-          Original user request: "{{user_request}}"
+          {{rules}}
 
           Draft YAML to review:
           <<< BEGIN DRAFT YAML >>>
-          {{prime.generate.assemble_yaml.value}}
+          {{prime.generate.assemble.value}}
           <<< END DRAFT YAML >>>
 
-          Checklist — silently fix any violations:
-          1. Every effect has a valid type: prompt | dynamic | loop | if | reflector
-          2. Every effect has a name (snake_case, no spaces, no dots)
+          Structural checklist — silently fix any violations:
+          1. Every effect has a valid type: prompt | dynamic | loop | if | reflector | tool
+          2. Every effect has a name (snake_case, no spaces, no dots, no reserved iter_N pattern)
           3. Every prompt effect has a template or messages field
-          4. State paths use the correct prefix: prime.<effect_name>.value for top-level,
-             prime.<dynamic_name>.<effect_name>.value for effects inside a named dynamic,
-             prime.<loop_name>.iter_N.<body_name>.value for loop body effects
-          5. User-provided input keys (from the request) are referenced as {{key_name}} directly (no prime. prefix)
-          6. Loop each.in points to an existing state path; body effects are a list
-          7. Dynamic effects have a non-empty effects: list
-          8. No duplicate sibling effect names within the same container
+          4. Every prompt with prompt_type: json has a schema field
+          5. State paths in templates use {{prime.<name>.value}} (with double braces)
+          6. State paths in CEL expressions use state.prime.<name>.value (with state. prefix)
+          7. Loop each.in points to an existing effect's output path
+          8. Dynamic effects have a non-empty effects: list
+          9. No duplicate sibling effect names within the same container
+          10. Tool effects have provider and required params for that provider
+          11. No adapter: or model: at top level (inherited from config)
+          12. If/else branches use the same inner effect name
 
-          Do NOT rewrite or replace the orchestration — only fix what violates the checklist above.
-          Return ONLY the final YAML. No markdown fences. No explanations. No preamble. Start with `effects:`.
+          Do NOT rewrite or replace the orchestration — only fix what violates the checklist.
+          Return ONLY the corrected YAML. No markdown fences. No explanations. No preamble.
+          Start with a # comment or effects:.
+
+      # ─── Step 8: Semantic review — does it solve the problem? ─────────────────
+      # Checks whether the orchestration actually solves the user's request
+      # with atomic, focused steps. Silently fixes semantic issues.
+      # PRIMARY OUTPUT: prime.generate.review_semantics.value
+      - type: prompt
+        name: review_semantics
+        template: |
+          You are doing a semantic review of a Circuitry orchestration YAML.
+          Silently fix any issues found, then output the complete corrected YAML.
+
+          Original user request: "{{user_request}}"
+          Goal: {{prime.generate.classify_request.value.goal}}
+          Selected plugins: {{prime.generate.plan_tooling.value.relevant_plugins}}
+
+          YAML to review:
+          <<< BEGIN YAML >>>
+          {{prime.generate.review_structure.value}}
+          <<< END YAML >>>
+
+          Semantic checklist — silently fix any issues:
+          1. Does the orchestration actually solve the user's request end-to-end?
+          2. Is each LLM call (prompt effect) focused on one thing? Split any that try to do too much.
+          3. Are tool effects used where the selected plugins would help? (Don't add tools if none selected.)
+          4. Is state interpolation correct? Each {{prime.<name>.value}} must reference an effect that runs BEFORE this one in chain order.
+          5. For loops: does each.in point to a JSON array output? Is collect set if results are needed downstream?
+          6. Are prompt templates specific enough? Each should include role, context, task, and output format.
+          7. Do prompt templates for intermediate steps include "Return ONLY..." instructions to keep output clean?
+
+          Do NOT add adapter: or model: — those come from config.
+          Return ONLY the final corrected YAML. No markdown fences. No explanations. No preamble.
+          Start with a # comment or effects:.

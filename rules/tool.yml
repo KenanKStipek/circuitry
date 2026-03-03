@@ -1,0 +1,50 @@
+type: tool
+summary: Executes a non-LLM side-effect via a named plugin. For image generation, video/audio processing, file conversion ONLY.
+required: [type, name, provider]
+fields:
+  name:
+    type: string
+    pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+  provider:
+    type: string
+    note: "Plugin name. Supported: ffmpeg, comfyui. Must match an installed plugin."
+  prompt:
+    type: string
+    note: "Primary prompt/input for the plugin. Supports Mustache rendering. For comfyui: the image generation prompt."
+  model:
+    type: string
+    note: "Model/checkpoint for the plugin. For comfyui: checkpoint filename (e.g. flux1-dev-fp8.safetensors)."
+  params:
+    type: object
+    note: "Plugin-specific parameters. All string values support Mustache rendering."
+  timeout_ms:
+    type: integer
+  on_error:
+    enum: [fail, skip, continue]
+    default: fail
+state_paths:
+  output: "prime.<name>.value"
+  template_ref: "{{prime.<name>.value}}"
+constraints:
+  - "NEVER use tool effects for text tasks (summarization, analysis, writing, coding, data extraction). Those are prompt effects."
+  - "Tool effects are ONLY for non-LLM side-effects: generating images, processing video/audio, file conversion."
+  - "Always use a prompt effect before a tool to generate the tool's parameters via state interpolation."
+  - "Available plugin descriptions are injected separately via {{plugins}}."
+providers:
+  ffmpeg:
+    required_params: [input, output]
+    note: "input and output are file paths. Shell metacharacters are rejected."
+  comfyui:
+    required_fields: [prompt, model]
+    note: "prompt is the image generation text. model is the checkpoint filename."
+example: |
+  - type: tool
+    name: generate_image
+    provider: comfyui
+    prompt: "{{prime.expand_prompt.value}}"
+    model: flux1-dev-fp8.safetensors
+    params:
+      width: 768
+      height: 768
+      steps: 20
+      image_dir: "./output/images"

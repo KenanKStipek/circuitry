@@ -1,0 +1,78 @@
+effects:
+- type: prompt
+  name: classify_input
+  prompt_type: json
+  template: 'Classify this text into a category.
+
+    Text: "{{article_text}}"
+
+    Return ONLY a JSON object with "category" and "confidence".
+
+    '
+- type: dynamic
+  name: plan_state_flow
+  flow: chain
+  effects:
+  - type: prompt
+    name: map_data_flow
+    template: 'Map the data flow for each step...
+
+      '
+- type: loop
+  name: summarize_articles
+  body:
+  - type: prompt
+    name: summarize_article
+    template: 'Summarize this article in 2-3 sentences: "{{article_text}}"
+
+      '
+- type: if
+  name: check_complexity
+  if:
+    mode: cel
+    expr: state.prime.classify.value.complexity == 'complex'
+  then:
+  - type: prompt
+    name: handle_result_complex
+    template: 'This is a complex request. Break it into sub-tasks...
+
+      '
+  else:
+  - type: prompt
+    name: handle_result_simple
+    template: 'This is a simple request. Handle directly...
+
+      '
+- type: if
+  name: use_comfyui
+  if:
+    mode: cel
+    expr: selected_plugins[0].name == 'comfyui'
+  then:
+  - type: tool
+    name: generate_image
+    provider: comfyui
+    prompt: '{{prime.expand_prompt.value}}'
+    model: flux1-dev-fp8.safetensors
+    params:
+      width: 768
+      height: 768
+      steps: 20
+      image_dir: ./output/images
+  else:
+  - type: no-op
+- type: reflector
+  name: self_improve
+  flow: chain
+  effects:
+  - type: prompt
+    name: plan_state_flow
+    template: 'Plan a self-improvement loop...
+
+      '
+  - type: dynamic
+    name: improve_self
+    flow: tree
+    max_concurrency: 8
+    effects:
+    - type: no-op

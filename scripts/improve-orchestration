@@ -56,6 +56,7 @@ if sys.version_info < (3, 9):
 
 from circuitry import run_orchestration, validate_orchestration  # noqa: E402 (import after version guard)
 from circuitry.cli.config import find_config_path, load_config  # noqa: E402
+from circuitry.rules import load_all_rules, load_rules_for  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -69,21 +70,28 @@ JUDGE = PROJECT_ROOT / "orchestrations" / "orchestration_improver_judge.yml"
 _CFG = load_config(find_config_path(explicit_path=None, cwd=PROJECT_ROOT))
 
 
-def _load_rules(project_root: Path) -> str:
-    """Extract the '## LLM Authoring Rules' section from the reference doc."""
-    ref = project_root / "docs" / "orchestration-reference.md"
-    try:
-        text = ref.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return ""
-    marker = "## LLM Authoring Rules"
-    idx = text.find(marker)
-    if idx == -1:
-        return ""
-    return text[idx:].strip()
+RULES_DIR = PROJECT_ROOT / "rules"
+RULES = load_all_rules(RULES_DIR)
+RULES_PROMPT = load_rules_for("prompt", rules_dir=RULES_DIR)
+RULES_DYNAMIC = load_rules_for("dynamic", rules_dir=RULES_DIR)
+RULES_LOOP = load_rules_for("loop", rules_dir=RULES_DIR)
+RULES_CONDITIONAL = load_rules_for("conditional", rules_dir=RULES_DIR)
+RULES_TOOL = load_rules_for("tool", rules_dir=RULES_DIR)
+RULES_REFLECTOR = load_rules_for("reflector", rules_dir=RULES_DIR)
 
 
-RULES = _load_rules(PROJECT_ROOT)
+def _load_plugins(project_root: Path) -> str:
+    """Load all plugin description files from docs/plugins/."""
+    plugins_dir = project_root / "docs" / "plugins"
+    if not plugins_dir.is_dir():
+        return ""
+    parts = []
+    for md_file in sorted(plugins_dir.glob("*.md")):
+        parts.append(md_file.read_text(encoding="utf-8").strip())
+    return "\n\n---\n\n".join(parts)
+
+
+PLUGINS = _load_plugins(PROJECT_ROOT)
 
 
 def _hash(text: str) -> str:
@@ -109,7 +117,7 @@ def _extract_yaml(text: str) -> str:
         lines = lines[:-1]
 
     for i, line in enumerate(lines):
-        if line.startswith("adapter:"):
+        if line.startswith("adapter:") or line.startswith("effects:"):
             return "\n".join(lines[i:]).strip()
 
     # No adapter: line found — return the stripped text so the caller can show a useful error.
@@ -244,7 +252,18 @@ def main() -> None:
 
             result = run_orchestration(
                 orchestration_path=IMPROVER,
-                state={"input_yaml": current_yaml, "original_prompt": prompt_for_iter, "rules": RULES},
+                state={
+                    "input_yaml": current_yaml,
+                    "original_prompt": prompt_for_iter,
+                    "rules": RULES,
+                    "rules_prompt": RULES_PROMPT,
+                    "rules_dynamic": RULES_DYNAMIC,
+                    "rules_loop": RULES_LOOP,
+                    "rules_conditional": RULES_CONDITIONAL,
+                    "rules_tool": RULES_TOOL,
+                    "rules_reflector": RULES_REFLECTOR,
+                    "plugins": PLUGINS,
+                },
                 verbose=args.verbose,
                 dry_run=args.dry_run,
                 config=_CFG,

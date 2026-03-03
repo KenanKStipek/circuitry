@@ -1,0 +1,43 @@
+type: dynamic
+summary: Named container that groups child effects. Executes as chain (sequential) or tree (parallel).
+required: [type, name, effects]
+fields:
+  name:
+    type: string
+    pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+  effects:
+    type: array
+    min_items: 1
+    note: "Child effects to execute. Must be non-empty."
+  flow:
+    type: string
+    enum: [chain, chain_of_thought, cot, tree, tree_of_thought, tot]
+    default: chain
+    note: "chain = sequential (each child sees prior outputs). tree = parallel (all children see same input snapshot)."
+  max_concurrency:
+    type: integer
+    min: 1
+    note: "Maximum parallel workers for tree flow."
+  on_error:
+    enum: [fail, skip, continue]
+    default: fail
+state_paths:
+  child_output: "prime.<dynamic_name>.<child_name>.value"
+  template_ref: "{{prime.<dynamic_name>.<child_name>.value}}"
+  cel_ref: "state.prime.<dynamic_name>.<child_name>.value"
+constraints:
+  - "effects array must contain at least one effect."
+  - "Do not prescribe a fixed number of children — let the problem dictate the decomposition."
+example: |
+  - type: dynamic
+    name: plan_details
+    flow: tree
+    effects:
+      - type: prompt
+        name: plan_state_flow
+        template: |
+          Map the data flow for each step...
+      - type: prompt
+        name: plan_schemas
+        template: |
+          Identify which steps need prompt_type: json...

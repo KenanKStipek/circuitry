@@ -81,6 +81,7 @@ class ConditionalRuntime:
         timeout_seconds: int = 120,
         verbose: bool = False,
         depth: int = 0,
+        ancestors: list | None = None,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -90,6 +91,7 @@ class ConditionalRuntime:
         self.timeout_seconds = timeout_seconds
         self.verbose = verbose
         self.depth = depth
+        self._ancestors = ancestors or []
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         from .dynamic import DynamicDefinition, DynamicRuntime
@@ -176,6 +178,7 @@ class ConditionalRuntime:
                             timeout_seconds=self.timeout_seconds,
                             verbose=self.verbose,
                             depth=self.depth + 1,
+                            ancestors=self._ancestors,
                         ).execute(store=child_store, ctx=ctx)
 
                     elif isinstance(effect, DynamicDefinition):
@@ -188,6 +191,7 @@ class ConditionalRuntime:
                             timeout_seconds=self.timeout_seconds,
                             verbose=self.verbose,
                             depth=self.depth + 2,
+                            ancestors=self._ancestors,
                         ).execute(store=child_store)
 
                     elif isinstance(effect, ConditionalDefinition):
@@ -200,6 +204,7 @@ class ConditionalRuntime:
                             timeout_seconds=self.timeout_seconds,
                             verbose=self.verbose,
                             depth=self.depth + 1,
+                            ancestors=self._ancestors,
                         ).execute(store=child_store, ctx=ctx)
 
                     elif isinstance(effect, LoopDefinition):
@@ -212,6 +217,7 @@ class ConditionalRuntime:
                             timeout_seconds=self.timeout_seconds,
                             verbose=self.verbose,
                             depth=self.depth + 1,
+                            ancestors=self._ancestors,
                         ).execute(store=child_store, ctx=ctx)
 
                     elif isinstance(effect, ReflectorDefinition):

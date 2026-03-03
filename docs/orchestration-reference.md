@@ -573,7 +573,7 @@ The following rules are sufficient for generating structurally correct Circuitry
 8. `if` / `conditional`: requires `if` (condition object) and `then` (array). `name` is optional. `else` is optional.
 9. `loop`: requires `body` (non-empty array) and exactly one of `each` or `while`. `name` is optional.
 10. `reflector`: requires `name` and `effects` (non-empty array).
-11. `tool`: requires `name` and `provider`. Supported providers: `ffmpeg` (requires `params.input` and `params.output`), `comfyui` (requires `prompt` and `model` as top-level fields; `params` for sampler settings). Top-level `prompt` supports Mustache rendering. All string values in `params` also support Mustache rendering.
+11. `tool`: requires `name` and `provider`. Tool effects are for non-LLM side-effects only — generating images, processing video/audio, file conversion. Never use a tool effect for text summarization, analysis, writing, coding, or data extraction — those are `prompt` effects. Supported providers: `ffmpeg` (requires `params.input` and `params.output`), `comfyui` (requires `prompt` and `model` as top-level fields; `params` for sampler settings). Top-level `prompt` supports Mustache rendering. All string values in `params` also support Mustache rendering.
 
 **Naming:**
 12. All `name` values must match `^[A-Za-z_][A-Za-z0-9_]*$` — letters, digits, underscores; must start with letter or underscore; no spaces or dots. The pattern `iter_<N>` (e.g. `iter_0`) is reserved and must not be used as a name.
@@ -586,3 +586,15 @@ The following rules are sufficient for generating structurally correct Circuitry
 
 **If/else branches:**
 17. Use the same inner effect `name` in both `then` and `else` branches of any `if` effect, so downstream state path references resolve regardless of which branch executed.
+
+**Atomic design philosophy:**
+18. Prefer many small effects over few large ones — each LLM call should do one focused thing (classify, plan, draft one block, review). If a prompt template asks the model to analyze AND generate AND review, split it into separate effects.
+19. Use `prompt_type: json` to produce structured data that downstream effects consume via state interpolation. This is how effects pass typed data to each other.
+20. A complex JSON schema is a smell. If a prompt needs more than 3–4 schema properties, split it into multiple smaller prompts that each produce a simpler schema, then interpolate the results downstream. Do not prescribe a fixed number of effects per dynamic — let the problem dictate the decomposition.
+21. Use `dynamic(chain)` to sequence dependent atomic steps; `dynamic(tree)` for independent parallel work. Use `loop(each) + collect` to process items individually and aggregate results into an array.
+22. Use `if(cel)` to make decisions based on state values from prior effects — route the orchestration dynamically rather than hardcoding assumptions.
+
+**Design patterns:**
+23. **Prompt-then-tool pipeline:** Use a prompt effect to generate parameters (e.g. ffmpeg flags, image prompts), then a tool effect to execute with those parameters. The prompt's structured output feeds the tool's params via Mustache interpolation (e.g. `{{prime.plan_flags.value.output_path}}`).
+24. **Staged decomposition:** Break complex generation into: plan (json) → per-item generation (loop+collect) → assembly (prompt) → review (prompt). Each stage is a small, focused LLM call.
+25. **State-based branching:** Use `if(cel)` with `state.prime.<name>.value.<field>` to branch on structured output from prior effects. Use the same effect name in both `then` and `else` branches for consistent downstream state paths.

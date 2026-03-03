@@ -36,6 +36,31 @@ EffectDef = Union[
 ]
 
 
+@dataclass
+class AncestorContext:
+    """Tracks a running parent/grandparent container for live elapsed-time display."""
+
+    name: str
+    icon: str
+    color: str
+    start: float  # time.monotonic()
+    indent: str
+
+
+def _render_ancestors(ancestors: list[AncestorContext], spinner_chars: str) -> list[str]:
+    """Render ancestor context lines with live count-up timers."""
+    now = time.monotonic()
+    char = spinner_chars[int(now * 8) % len(spinner_chars)]
+    lines: list[str] = []
+    for a in ancestors:
+        elapsed = _elapsed_str(now - a.start)
+        lines.append(
+            f"{a.indent}[info]{char}[/info] [{a.color}]{a.icon}[/{a.color}]"
+            f" {a.name} [dim]{elapsed}[/dim]"
+        )
+    return lines
+
+
 @dataclass(frozen=True)
 class DynamicDefinition:
     name: str
@@ -55,6 +80,7 @@ class DynamicRuntime:
         timeout_seconds: int = 120,
         verbose: bool = False,
         depth: int = 0,
+        ancestors: list[AncestorContext] | None = None,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -64,6 +90,7 @@ class DynamicRuntime:
         self.timeout_seconds = timeout_seconds
         self.verbose = verbose
         self.depth = depth
+        self._ancestors = ancestors or []
 
     def execute(
         self, *, store: Store, ctx_override: dict[str, Any] | None = None
@@ -97,6 +124,20 @@ class DynamicRuntime:
 
         ctx = ctx_override if ctx_override is not None else store.state
         child_store = Store(dyn, on_write=store.on_write)
+
+        # Build ancestor context for children (this dynamic is now a parent).
+        # Skip depth 0 — that's the invisible root "prime" container.
+        t0 = time.monotonic()
+        self._child_ancestors = list(self._ancestors)
+        if self.depth > 0:
+            icon, color = _EFFECT_STYLE.get(f"dynamic:{self.defn.flow}", ("⬡", "blue"))
+            self._child_ancestors.append(AncestorContext(
+                name=self.defn.name,
+                icon=icon,
+                color=color,
+                start=t0,
+                indent="  " * (self.depth - 1),
+            ))
 
         try:
             if self.defn.flow == "chain":
@@ -134,6 +175,7 @@ class DynamicRuntime:
                     tree_tracker = _TreeStatus(
                         items=tracker_items,
                         indent="  " * self.depth,
+                        ancestors=self._child_ancestors,
                     )
 
                 if tree_tracker is not None:
@@ -242,6 +284,7 @@ class DynamicRuntime:
                     cb_done=cb_done,
                     cb_error=cb_error,
                     cb_running=_cb_running,
+                    ancestors=self._child_ancestors if tracker is None else None,
                 ).execute(store=store, ctx=ctx)
 
             elif isinstance(effect, DynamicDefinition):
@@ -254,6 +297,7 @@ class DynamicRuntime:
                     timeout_seconds=self.timeout_seconds,
                     verbose=self.verbose,
                     depth=self.depth + 1,
+                    ancestors=self._child_ancestors,
                 ).execute(store=store, ctx_override=ctx)
 
             elif isinstance(effect, ReflectorDefinition):
@@ -277,6 +321,7 @@ class DynamicRuntime:
                     timeout_seconds=self.timeout_seconds,
                     verbose=self.verbose,
                     depth=self.depth,
+                    ancestors=self._child_ancestors,
                 ).execute(store=store, ctx=ctx)
 
             elif isinstance(effect, LoopDefinition):
@@ -289,6 +334,7 @@ class DynamicRuntime:
                     timeout_seconds=self.timeout_seconds,
                     verbose=self.verbose,
                     depth=self.depth,
+                    ancestors=self._child_ancestors,
                 ).execute(store=store, ctx=ctx)
 
             elif isinstance(effect, ToolDefinition):
@@ -303,6 +349,7 @@ class DynamicRuntime:
                     cb_done=cb_done,
                     cb_error=cb_error,
                     cb_running=_cb_running,
+                    ancestors=self._child_ancestors if tracker is None else None,
                 ).execute(store=store, ctx=ctx)
 
             else:
@@ -350,7 +397,12 @@ class DynamicRuntime:
 
 
 def _effect_type_label(effect: Any) -> str:
-    """Return a short human-readable type label for verbose output."""
+    """Return a short human-readable type label for verbose output.
+
+    For dynamic and loop effects the label includes the flow topology
+    (e.g. ``"dynamic:tree"``, ``"loop:chain"``) so callers can pick
+    distinct icons for parallel vs sequential execution.
+    """
     # Deferred imports to avoid circular dependency at module level
     from .conditional import ConditionalDefinition
     from .loop import LoopDefinition
@@ -360,11 +412,11 @@ def _effect_type_label(effect: Any) -> str:
     if isinstance(effect, PromptDefinition):
         return "prompt"
     if isinstance(effect, DynamicDefinition):
-        return "dynamic"
+        return f"dynamic:{effect.flow}"
     if isinstance(effect, ConditionalDefinition):
         return "if"
     if isinstance(effect, LoopDefinition):
-        return "loop"
+        return f"loop:{effect.flow}"
     if isinstance(effect, ReflectorDefinition):
         return "reflector"
     if isinstance(effect, ToolDefinition):
@@ -372,11 +424,14 @@ def _effect_type_label(effect: Any) -> str:
     return type(effect).__name__.lower()
 
 
-# (icon, rich color) per primitive type
+# (icon, rich color) per primitive type.
+# Dynamic and loop have distinct icons for chain (sequential) vs tree (parallel).
 _EFFECT_STYLE: dict[str, tuple[str, str]] = {
     "prompt": ("◆", "cyan"),
-    "dynamic": ("⬡", "blue"),
-    "loop": ("↻", "yellow"),
+    "dynamic:chain": ("⬡", "blue"),
+    "dynamic:tree": ("⬢", "blue"),
+    "loop:chain": ("↻", "yellow"),
+    "loop:tree": ("⇶", "yellow"),
     "if": ("◇", "magenta"),
     "reflector": ("✺", "green"),
     "tool": ("⚙", "white"),
@@ -441,6 +496,7 @@ class _TreeStatus:
         self,
         items: list[tuple[str, str, str]],  # (name, icon, color)
         indent: str = "",
+        ancestors: list[AncestorContext] | None = None,
     ) -> None:
         self._lock = threading.Lock()
         self._items = list(items)  # (name, icon, color)
@@ -448,12 +504,15 @@ class _TreeStatus:
         self._states: dict[str, str] = {name: "pending" for name, _, _ in items}
         self._targets: dict[str, str] = {name: "" for name, _, _ in items}
         self._estimated: dict[str, int] = {name: 0 for name, _, _ in items}
+        self._item_starts: dict[str, float] = {}
         self._start = time.monotonic()
         self._indent = indent
+        self._ancestors = ancestors or []
 
     def on_start(self, name: str) -> None:
         with self._lock:
             self._states[name] = "running"
+            self._item_starts[name] = time.monotonic()
 
     def on_running(self, name: str, target: str, estimated_out: int) -> None:
         with self._lock:
@@ -471,26 +530,30 @@ class _TreeStatus:
         _console.print(line)
 
     def __rich__(self) -> str:
-        elapsed = time.monotonic() - self._start
-        spinner_char = self._SPINNER[int(elapsed * 8) % len(self._SPINNER)]
+        now = time.monotonic()
+        spinner_char = self._SPINNER[int(now * 8) % len(self._SPINNER)]
         with self._lock:
             states = dict(self._states)
             targets = dict(self._targets)
             estimated = dict(self._estimated)
-        lines: list[str] = []
+            item_starts = dict(self._item_starts)
+
+        # Render ancestor context lines above the tree items
+        lines = _render_ancestors(self._ancestors, self._SPINNER)
+
         for name, icon, color in self._items:
             state = states.get(name, "pending")
             if state == "running":
                 t = targets.get(name, "")
                 e = estimated.get(name, 0)
-                if e and t:
-                    dim_suffix = f" [dim]~{e}tok ↑  {t}[/dim]"
-                elif t:
-                    dim_suffix = f" [dim]{t}[/dim]"
-                elif e:
-                    dim_suffix = f" [dim]~{e}tok ↑[/dim]"
-                else:
-                    dim_suffix = ""
+                parts: list[str] = []
+                if t:
+                    parts.append(t)
+                if name in item_starts:
+                    parts.append(_elapsed_str(now - item_starts[name]))
+                if e:
+                    parts.append(f"~{e}tok ↑")
+                dim_suffix = f" [dim]{' | '.join(parts)}[/dim]" if parts else ""
                 lines.append(
                     f"{self._indent}[info]{spinner_char}[/info] [{color}]{icon}[/{color}] {name}{dim_suffix}"
                 )

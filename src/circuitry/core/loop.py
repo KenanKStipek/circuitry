@@ -113,6 +113,7 @@ class LoopRuntime:
         timeout_seconds: int = 120,
         verbose: bool = False,
         depth: int = 0,
+        ancestors: list | None = None,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -122,6 +123,7 @@ class LoopRuntime:
         self.timeout_seconds = timeout_seconds
         self.verbose = verbose
         self.depth = depth
+        self._ancestors = ancestors or []
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         # Named loop: create a node for this loop
@@ -149,6 +151,20 @@ class LoopRuntime:
 
         iteration_count = 0
         termination_reason = "max_iterations"
+
+        # Build ancestor context for children (this loop is now a parent)
+        from .dynamic import AncestorContext, _EFFECT_STYLE as _ES
+
+        _loop_t0 = time.monotonic()
+        _loop_icon, _loop_color = _ES.get(f"loop:{self.defn.flow}", ("↻", "yellow"))
+        self._child_ancestors = list(self._ancestors)
+        self._child_ancestors.append(AncestorContext(
+            name=self.defn.name or "loop",
+            icon=_loop_icon,
+            color=_loop_color,
+            start=_loop_t0,
+            indent="  " * self.depth,
+        ))
 
         try:
             if self.defn.each_def:
@@ -190,6 +206,7 @@ class LoopRuntime:
                             indent="  " * (self.depth + 1),
                             icon=_icon,
                             color=_color,
+                            ancestors=self._child_ancestors,
                         )
 
                     if tree_tracker is not None:
@@ -554,6 +571,7 @@ Should the loop continue? Answer (yes/no):"""
                         cb_error=_cb_error,
                         cb_running=_cb_running,
                         display_name=f"{name} {iter_label}" if iter_label else None,
+                        ancestors=self._child_ancestors if tracker is None else None,
                     ).execute(store=iter_store, ctx=ctx)
 
                 elif isinstance(effect, DynamicDefinition):
@@ -566,6 +584,7 @@ Should the loop continue? Answer (yes/no):"""
                         timeout_seconds=self.timeout_seconds,
                         verbose=self.verbose,
                         depth=self.depth + 2,
+                        ancestors=self._child_ancestors,
                     ).execute(store=iter_store)
 
                 elif isinstance(effect, ConditionalDefinition):
@@ -578,6 +597,7 @@ Should the loop continue? Answer (yes/no):"""
                         timeout_seconds=self.timeout_seconds,
                         verbose=self.verbose,
                         depth=self.depth + 1,
+                        ancestors=self._child_ancestors,
                     ).execute(store=iter_store, ctx=ctx)
 
                 elif isinstance(effect, LoopDefinition):
@@ -590,6 +610,7 @@ Should the loop continue? Answer (yes/no):"""
                         timeout_seconds=self.timeout_seconds,
                         verbose=self.verbose,
                         depth=self.depth + 1,
+                        ancestors=self._child_ancestors,
                     ).execute(store=iter_store, ctx=ctx)
 
                 elif isinstance(effect, ReflectorDefinition):
@@ -612,6 +633,7 @@ Should the loop continue? Answer (yes/no):"""
                         verbose=self.verbose,
                         depth=self.depth + 1,
                         display_name=f"{name} {iter_label}" if iter_label else None,
+                        ancestors=self._child_ancestors if tracker is None else None,
                     ).execute(store=iter_store, ctx=ctx)
 
                 if self.verbose and not is_prompt and not is_tool:
@@ -661,6 +683,7 @@ class _LoopIterTracker:
         indent: str,
         icon: str,
         color: str,
+        ancestors: list | None = None,
     ) -> None:
         self._lock = threading.Lock()
         self._total = total
@@ -668,15 +691,18 @@ class _LoopIterTracker:
         self._states: list[str] = ["pending"] * total
         self._targets: list[str] = [""] * total
         self._estimated: list[int] = [0] * total
+        self._item_starts: list[float | None] = [None] * total
         self._start = time.monotonic()
         self._indent = indent
         self._icon = icon
         self._color = color
+        self._ancestors = ancestors or []
 
     def on_start(self, idx: int) -> None:
         with self._lock:
             if idx < self._total:
                 self._states[idx] = "running"
+                self._item_starts[idx] = time.monotonic()
 
     def on_running(self, idx: int, target: str, estimated_out: int) -> None:
         with self._lock:
@@ -697,21 +723,34 @@ class _LoopIterTracker:
         _console.print(line)
 
     def __rich__(self) -> str:
-        elapsed = time.monotonic() - self._start
-        spinner_char = self._SPINNER[int(elapsed * 8) % len(self._SPINNER)]
+        from .dynamic import _elapsed_str, _render_ancestors
+
+        now = time.monotonic()
+        spinner_char = self._SPINNER[int(now * 8) % len(self._SPINNER)]
         with self._lock:
             states = list(self._states)
             targets = list(self._targets)
             estimated = list(self._estimated)
+            item_starts = list(self._item_starts)
         ic = self._icon
         co = self._color
-        lines: list[str] = []
+
+        # Render ancestor context lines above the iteration items
+        lines = _render_ancestors(self._ancestors, self._SPINNER)
+
         for idx, state in enumerate(states):
             label = self._name if self._total == 1 else f"{self._name} [{idx}]"
             if state == "running":
                 t = targets[idx]
                 e = estimated[idx]
-                dim_suffix = f" [dim]~{e}tok ↑  {t}[/dim]" if (t or e) else ""
+                parts: list[str] = []
+                if t:
+                    parts.append(t)
+                if item_starts[idx] is not None:
+                    parts.append(_elapsed_str(now - item_starts[idx]))
+                if e:
+                    parts.append(f"~{e}tok ↑")
+                dim_suffix = f" [dim]{' | '.join(parts)}[/dim]" if parts else ""
                 lines.append(
                     f"{self._indent}[info]{spinner_char}[/info] [{co}]{ic}[/{co}] {label}{dim_suffix}"
                 )

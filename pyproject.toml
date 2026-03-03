@@ -33,4 +33,6 @@ circuitry = [
     "schema/*.json",
     "bundled/orchestrations/*.yml",
     "bundled/docs/*.md",
+    "bundled/docs/plugins/*.md",
+    "bundled/rules/*.yml",
 ]

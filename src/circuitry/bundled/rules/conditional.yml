@@ -1,0 +1,52 @@
+type: if
+aliases: [conditional]
+summary: Evaluates a condition and executes exactly one branch (then or else).
+required: [type, if, then]
+fields:
+  name:
+    type: string
+    pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+    note: "Optional. Named conditionals record decision metadata."
+  if:
+    type: object
+    properties:
+      mode: "model (LLM evaluates) or cel (CEL expression)"
+      template: "Prompt template for model-based evaluation (required when mode: model)"
+      expr: "CEL expression (required when mode: cel). Must use state.prime.<name>.value prefix."
+    note: "Determines which branch executes."
+  then:
+    type: array
+    note: "Effects to execute when condition is true."
+  else:
+    type: array
+    note: "Effects to execute when condition is false. Optional."
+  threshold:
+    type: number
+    range: "0-1"
+    default: 0.5
+    note: "Confidence threshold for model-based evaluation."
+  on_error:
+    enum: [fail, continue, skip]
+    default: fail
+state_paths:
+  branch_output: "prime.<inner_effect_name>.value"
+  note: "State path is determined by the inner effect names, not the if effect itself."
+constraints:
+  - "Use the same inner effect name in both then and else branches, so downstream state paths resolve regardless of which branch ran."
+  - "In CEL expressions, always use the state. prefix: state.prime.<name>.value."
+example: |
+  - type: if
+    name: check_complexity
+    if:
+      mode: cel
+      expr: "state.prime.classify.value.complexity == 'complex'"
+    then:
+      - type: prompt
+        name: handle_result
+        template: |
+          This is a complex request. Break it into sub-tasks...
+    else:
+      - type: prompt
+        name: handle_result
+        template: |
+          This is a simple request. Handle directly...

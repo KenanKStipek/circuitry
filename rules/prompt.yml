@@ -1,0 +1,64 @@
+type: prompt
+summary: Atomic LLM call. Produces a typed value at prime.<name>.value.
+required: [type, name]
+one_of: [template, messages]
+fields:
+  name:
+    type: string
+    pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+    note: "snake_case, unique among siblings. iter_N is reserved."
+  template:
+    type: string
+    note: "Mustache template. {{key}} for input state, {{prime.<name>.value}} for effect outputs."
+    conflicts_with: messages
+  messages:
+    type: array
+    items: "{role: system|user|assistant|tool, content: string}"
+    note: "Role-based message array. Mutually exclusive with template."
+    conflicts_with: template
+  prompt_type:
+    type: string
+    enum: [text, json, boolean, number, array, object]
+    default: text
+    note: "Use json when output feeds downstream effects via .value.<field>."
+  schema:
+    type: object
+    required_when: "prompt_type is json"
+    note: "Keep to 3-4 properties max. If more complex, split into multiple smaller prompts."
+  model:
+    type: string
+    note: "Per-effect model override. Usually omitted (inherited from config)."
+  params:
+    type: object
+    note: "Provider-specific generation parameters (temperature, top_p, etc.)."
+  deterministic:
+    type: boolean
+    note: "If true, use temperature=0."
+  timeout_ms:
+    type: integer
+  on_error:
+    enum: [fail, skip, continue]
+    default: fail
+state_paths:
+  output: "prime.<name>.value"
+  in_dynamic: "prime.<dynamic_name>.<name>.value"
+  template_ref: "{{prime.<name>.value}}"
+  cel_ref: "state.prime.<name>.value"
+constraints:
+  - "Never use prompt_type: image — use type: tool, provider: comfyui instead."
+  - "A complex schema (>3-4 properties) is a smell. Split into multiple prompts with simpler schemas."
+  - "Exactly one of template or messages is required, never both."
+example: |
+  - type: prompt
+    name: classify_input
+    prompt_type: json
+    schema:
+      type: object
+      properties:
+        category: {type: string}
+        confidence: {type: number}
+      required: [category, confidence]
+    template: |
+      Classify this text into a category.
+      Text: "{{user_input}}"
+      Return ONLY a JSON object with "category" and "confidence".

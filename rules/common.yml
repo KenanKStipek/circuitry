@@ -1,0 +1,37 @@
+section: common
+summary: Rules that apply to all effect types.
+
+file_structure:
+  top_level_fields:
+    - effects (array, required)
+    - adapter (string, optional — inherited from config)
+    - model (string, optional — inherited from config)
+    - flow (string, optional — default chain)
+  notes:
+    - "adapter and model are only needed when the orchestration contains prompt or reflector effects."
+    - "Tool-only orchestrations do not need adapter or model."
+  valid_adapters: [ollama, openai, anthropic, litellm]
+  valid_flows:
+    sequential: [chain, chain_of_thought, cot]
+    parallel: [tree, tree_of_thought, tot]
+
+naming:
+  pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+  rules:
+    - "snake_case: letters, digits, underscores only."
+    - "Must start with a letter or underscore."
+    - "iter_N (e.g. iter_0) is reserved — never use it as a name."
+    - "Names must be unique among siblings in the same scope."
+    - "Prefer singular names (summarize_article, draft_section). A plural name (summarize_articles, extract_points) is a smell — the effect likely does multiple things and should be split into a loop or tree dynamic with a singular-named body effect."
+
+state_paths:
+  in_templates:
+    input_key: "{{key_name}}"
+    top_level_output: "{{prime.<effect_name>.value}}"
+    inside_dynamic: "{{prime.<dynamic_name>.<child_name>.value}}"
+    loop_iteration: "{{prime.<loop_name>.iter_N.<body_name>.value}}"
+    loop_collected: "{{prime.<loop_name>.collected.value}}"
+  in_cel_expressions:
+    prefix: "state."
+    example: "state.prime.<effect_name>.value"
+    note: "Always include the state. prefix in CEL. Never omit it."

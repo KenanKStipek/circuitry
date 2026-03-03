@@ -110,8 +110,9 @@ cof check orchestrations/hello.yml
 cof check orchestrations/hello.yml --json
 
 # Generate an orchestration from natural language
-cof gen "Build a pipeline that drafts, critiques, and revises a blog post"
-cof gen "Summarize a PDF" --out summarizer.yml
+cof gen blog_pipeline "Build a pipeline that drafts, critiques, and revises a blog post"
+cof gen summarizer "Summarize a PDF" --format toon
+cof gen summarizer "Summarize a PDF" --out state.json  # live state during run
 
 # Project setup
 cof init

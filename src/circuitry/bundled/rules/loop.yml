@@ -1,0 +1,68 @@
+type: loop
+summary: Iterates over a collection (each) or repeats while a condition holds (while).
+required: [type, body]
+one_of: [each, while]
+fields:
+  name:
+    type: string
+    pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+    note: "Optional. Required if using collect."
+  body:
+    type: array
+    min_items: 1
+    note: "Effects to execute each iteration."
+  each:
+    type: object
+    properties:
+      in: "Dot-delimited state path to a JSON array (e.g. prime.my_list.value)"
+      as: "Variable name for current element (default: item). Accessible as {{as_name}}."
+    required: [in]
+    note: "each.in must point to a prompt_type: json effect that outputs an array."
+  while:
+    type: object
+    properties:
+      mode: "model or cel"
+      template: "Prompt template (when mode: model)"
+      expr: "CEL expression (when mode: cel). Use state.prime.<name>.value prefix."
+    note: "Loop repeats while condition is true. while-loops always run sequentially."
+  collect:
+    type: string
+    note: "Name of a body effect whose .value is aggregated across iterations into an array at prime.<loop_name>.collected.value. Requires a named loop."
+  flow:
+    type: string
+    enum: [chain, tree]
+    default: chain
+    note: "tree runs all each-iterations in parallel (order preserved). while-loops ignore this."
+  max_concurrency:
+    type: integer
+    min: 1
+    note: "Max parallel workers when flow is tree."
+  max_iterations:
+    type: integer
+    default: 100
+  on_error:
+    enum: [fail, break, continue]
+    default: fail
+    note: "break exits the loop. continue skips the iteration."
+state_paths:
+  iteration_output: "prime.<loop_name>.iter_N.<body_name>.value"
+  collected_array: "prime.<loop_name>.collected.value"
+  loop_variable: "{{as_name}}"
+constraints:
+  - "Exactly one of each or while is required, never both."
+  - "each.in must point to a prompt_type: json effect whose output is a JSON array."
+  - "collect requires the loop to have a name."
+example: |
+  - type: loop
+    name: summarize_articles
+    flow: tree
+    collect: article_summary
+    each:
+      in: prime.extract_articles.value
+      as: article
+    body:
+      - type: prompt
+        name: article_summary
+        template: |
+          Summarize this article in 2-3 sentences:
+          {{article}}

@@ -1,0 +1,51 @@
+type: reflector
+summary: Planning-time effect. Reads state, generates a dynamic plan, executes it. Repeats for max_iterations cycles.
+required: [type, name, effects]
+fields:
+  name:
+    type: string
+    pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+  effects:
+    type: array
+    min_items: 1
+    note: "Inner effects template used as the base dynamic per planning cycle."
+  flow:
+    type: string
+    enum: [chain, tree]
+    default: chain
+  plan_from_step:
+    type: string
+    note: "Name of the inner effect whose output drives the plan. Default: propose_steps."
+  max_iterations:
+    type: integer
+    min: 1
+    default: 1
+    note: "Maximum planning cycles."
+  max_effects:
+    type: integer
+    min: 1
+    default: 8
+    note: "Maximum effects the reflector can generate per cycle. Alias: max_steps."
+  stop_on_done:
+    type: boolean
+    default: true
+    note: "Stop when the plan signals completion."
+  generated_key:
+    type: string
+    default: generated
+    note: "State key where generated effects are recorded."
+state_paths:
+  output: "prime.<name>.value"
+constraints:
+  - "Requires adapter and model (uses LLM for planning)."
+  - "Max 8 effects per cycle by default."
+example: |
+  - type: reflector
+    name: self_improve
+    max_iterations: 3
+    effects:
+      - type: prompt
+        name: propose_steps
+        prompt_type: json
+        template: |
+          Analyze the current state and propose next steps...

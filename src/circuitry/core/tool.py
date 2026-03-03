@@ -90,15 +90,35 @@ class _ToolSpinner:
 
     _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
-    def __init__(self, text: str, indent: str = "") -> None:
-        self._text = text
+    def __init__(
+        self,
+        name: str,
+        target: str = "",
+        indent: str = "",
+        ancestors: list | None = None,
+    ) -> None:
+        self._name = name
+        self._target = target
         self._indent = indent
         self._start = time.monotonic()
+        self._ancestors = ancestors or []
 
     def __rich__(self) -> str:
+        from .dynamic import _render_ancestors
+
         elapsed = time.monotonic() - self._start
         char = self._SPINNER[int(elapsed * 8) % len(self._SPINNER)]
-        return f"{self._indent}[info]{char}[/info] [white]⚙[/white] {self._text}"
+        parts: list[str] = []
+        if self._target:
+            parts.append(self._target)
+        parts.append(_elapsed_str(elapsed))
+        suffix = " | ".join(parts)
+        lines = _render_ancestors(self._ancestors, self._SPINNER)
+        lines.append(
+            f"{self._indent}[info]{char}[/info] [white]⚙[/white]"
+            f" {self._name} [dim]{suffix}[/dim]"
+        )
+        return "\n".join(lines)
 
 
 @dataclass(frozen=True)
@@ -135,6 +155,7 @@ class ToolRuntime:
         cb_error: Callable[[str], None] | None = None,
         cb_running: Callable[[str, int], None] | None = None,
         display_name: str | None = None,
+        ancestors: list | None = None,
     ):
         self.defn = definition
         self.runtime_config = runtime_config or {}
@@ -147,6 +168,7 @@ class ToolRuntime:
         self.cb_error = cb_error
         self.cb_running = cb_running
         self.display_name = display_name or definition.name
+        self._ancestors = ancestors or []
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         from ..plugins.factory import build_plugin
@@ -222,8 +244,10 @@ class ToolRuntime:
 
                 live_cm = Live(
                     _ToolSpinner(
-                        f"{self.display_name} [dim]{target}[/dim]",
+                        name=self.display_name,
+                        target=target,
                         indent=indent,
+                        ancestors=self._ancestors,
                     ),
                     refresh_per_second=10,
                     transient=True,

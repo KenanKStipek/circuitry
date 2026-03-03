@@ -40,15 +40,39 @@ class _PromptSpinner:
 
     _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
-    def __init__(self, text: str, indent: str = "") -> None:
-        self._text = text
+    def __init__(
+        self,
+        name: str,
+        target: str = "",
+        token_hint: str = "",
+        indent: str = "",
+        ancestors: list | None = None,
+    ) -> None:
+        self._name = name
+        self._target = target  # e.g. "ollama · model @ host"
+        self._token_hint = token_hint  # e.g. "~374tok ↑"
         self._indent = indent
         self._start = time.monotonic()
+        self._ancestors = ancestors or []
 
     def __rich__(self) -> str:
+        from .dynamic import _render_ancestors
+
         elapsed = time.monotonic() - self._start
         char = self._SPINNER[int(elapsed * 8) % len(self._SPINNER)]
-        return f"{self._indent}[info]{char}[/info] [cyan]◆[/cyan] {self._text}"
+        parts: list[str] = []
+        if self._target:
+            parts.append(self._target)
+        parts.append(_elapsed_str(elapsed))
+        if self._token_hint:
+            parts.append(self._token_hint)
+        suffix = " | ".join(parts)
+        lines = _render_ancestors(self._ancestors, self._SPINNER)
+        lines.append(
+            f"{self._indent}[info]{char}[/info] [cyan]◆[/cyan]"
+            f" {self._name} [dim]{suffix}[/dim]"
+        )
+        return "\n".join(lines)
 
 
 def _render(template: str, ctx: dict[str, Any]) -> str:
@@ -157,6 +181,7 @@ class PromptRuntime:
         cb_error: Callable[[str], None] | None = None,
         cb_running: Callable[[str, int], None] | None = None,
         display_name: str | None = None,
+        ancestors: list | None = None,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -171,6 +196,7 @@ class PromptRuntime:
         self.cb_error = cb_error
         self.cb_running = cb_running
         self.display_name = display_name or definition.name
+        self._ancestors = ancestors or []
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         node = store.ensure_dict(self.defn.name)
@@ -231,70 +257,118 @@ class PromptRuntime:
                     )
             return
 
+        # Determine retry policy: per-prompt config > runtime default > 1 (no retry)
+        if self.defn.retries is not None:
+            max_attempts = self.defn.retries.max_attempts
+            backoff_ms = self.defn.retries.backoff_ms
+        else:
+            max_attempts = int(self.runtime_config.get("default_prompt_retries", 1))
+            backoff_ms = 1000
+
         attempts_meta: list[dict[str, Any]] = []
         try:
             resolved_model = self.defn.model or self.model
             attempts = self._build_attempts(default_model=resolved_model)
-            if self.verbose and self.cb_start is None:
-                from rich.live import Live
 
-                live_cm = Live(
-                    _PromptSpinner(
-                        f"{self.display_name} [dim]~{estimated_out}tok ↑  {target}[/dim]",
-                        indent=indent,
-                    ),
-                    refresh_per_second=10,
-                    transient=True,
-                    console=_console,
-                )
-            else:
-                live_cm = nullcontext()
-            with live_cm:
-                res, attempts_meta, generation_error = self._generate_with_fallbacks(
-                    prompt=prompt_sent, attempts=attempts
-                )
-            if generation_error is not None or res is None:
-                raise RuntimeError(
-                    f"All adapter attempts failed: {attempts_meta}"
-                ) from generation_error
+            for _attempt in range(max_attempts):
+                if _attempt > 0:
+                    time.sleep(backoff_ms / 1000)
+                    t0 = time.monotonic()
+                    if self.verbose:
+                        retry_line = (
+                            f"{indent}[yellow]↺[/yellow] [cyan]◆[/cyan]"
+                            f" {self.display_name} [dim]retry {_attempt}/{max_attempts - 1}[/dim]"
+                        )
+                        if self.cb_done is not None:
+                            self.cb_done(retry_line)
+                        else:
+                            _console.print(retry_line)
 
-            # Decode and validate output based on prompt_type
-            decoded_value = self._decode_output(res.text)
+                try:
+                    if self.verbose and self.cb_start is None:
+                        from rich.live import Live
 
-            # Validate against schema if provided
-            if self.defn.schema and self.defn.prompt_type in (
-                "json",
-                "object",
-                "array",
-            ):
-                self._validate_schema(decoded_value)
+                        live_cm = Live(
+                            _PromptSpinner(
+                                name=self.display_name,
+                                target=target,
+                                token_hint=f"~{estimated_out}tok ↑",
+                                indent=indent,
+                                ancestors=self._ancestors,
+                            ),
+                            refresh_per_second=10,
+                            transient=True,
+                            console=_console,
+                        )
+                    else:
+                        live_cm = nullcontext()
+                    with live_cm:
+                        res, attempts_meta, generation_error = self._generate_with_fallbacks(
+                            prompt=prompt_sent, attempts=attempts
+                        )
+                    if generation_error is not None or res is None:
+                        raise RuntimeError(
+                            f"All adapter attempts failed: {attempts_meta}"
+                        ) from generation_error
 
-            node["value"] = decoded_value
-            meta["tokens_sent"] = res.tokens_sent
-            meta["tokens_received"] = res.tokens_received
-            meta["fallback_attempts"] = attempts_meta
-            meta["fallback_recovered"] = len(attempts_meta) > 1
-            meta["completed_at"] = _now_iso()
-            if attempts_meta:
-                last = attempts_meta[-1]
-                meta["adapter"] = last["adapter"]
-                meta["model"] = last["model"]
+                    # Decode and validate output based on prompt_type
+                    decoded_value = self._decode_output(res.text)
 
-            if self.verbose:
-                elapsed = time.monotonic() - t0
-                suffix = _elapsed_str(elapsed)
-                sent = res.tokens_sent
-                recv = res.tokens_received
-                if sent is not None or recv is not None:
-                    suffix += f" | ↑{sent or 0} ↓{recv or 0} tok"
-                line = (
-                    f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.display_name}"
-                    f" [dim]{target} | {suffix}[/dim]"
-                )
-                if self.cb_done is not None:
-                    self.cb_done(line)
-                else:
-                    _console.print(line)
+                    # Validate against schema if provided
+                    if self.defn.schema and self.defn.prompt_type in (
+                        "json",
+                        "object",
+                        "array",
+                    ):
+                        self._validate_schema(decoded_value)
+
+                    # Success
+                    node["value"] = decoded_value
+                    meta["tokens_sent"] = res.tokens_sent
+                    meta["tokens_received"] = res.tokens_received
+                    meta["fallback_attempts"] = attempts_meta
+                    meta["fallback_recovered"] = len(attempts_meta) > 1
+                    meta["completed_at"] = _now_iso()
+                    if attempts_meta:
+                        last = attempts_meta[-1]
+                        meta["adapter"] = last["adapter"]
+                        meta["model"] = last["model"]
+                    if _attempt > 0:
+                        meta["retries_used"] = _attempt
+
+                    if self.verbose:
+                        elapsed = time.monotonic() - t0
+                        suffix = _elapsed_str(elapsed)
+                        sent = res.tokens_sent
+                        recv = res.tokens_received
+                        if sent is not None or recv is not None:
+                            suffix += f" | ↑{sent or 0} ↓{recv or 0} tok"
+                        line = (
+                            f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.display_name}"
+                            f" [dim]{target} | {suffix}[/dim]"
+                        )
+                        if self.cb_done is not None:
+                            self.cb_done(line)
+                        else:
+                            _console.print(line)
+
+                    return
+
+                except Exception:
+                    if _attempt < max_attempts - 1:
+                        # Show failure for this attempt, then retry
+                        if self.verbose:
+                            elapsed = time.monotonic() - t0
+                            line = (
+                                f"{indent}[err]✗[/err] [cyan]◆[/cyan] {self.display_name}"
+                                f" [dim]{target} | {_elapsed_str(elapsed)}[/dim]"
+                            )
+                            if self.cb_error is not None:
+                                self.cb_error(line)
+                            else:
+                                _console.print(line)
+                        continue
+                    raise  # Last attempt — propagate to outer handler
 
         except Exception as e:
             if self.verbose:

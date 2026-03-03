@@ -1,0 +1,33 @@
+section: patterns
+summary: Design patterns for composing orchestrations from atomic effects.
+
+atomic_philosophy:
+  - "Each LLM call should do one focused thing: classify, plan, draft one block, review."
+  - "If a prompt template asks the model to analyze AND generate AND review, split it into separate effects."
+  - "A complex JSON schema (>3-4 properties) is a smell. Split into multiple prompts with simpler schemas."
+  - "Do not prescribe a fixed number of effects per dynamic — let the problem dictate the decomposition."
+  - "Use prompt_type: json to produce structured data that downstream effects consume via state interpolation."
+  - "A plural effect name (e.g. summarize_articles) signals the effect is doing multiple things. Split it: use a loop over items with a singular-named body (summarize_article), or a tree dynamic with focused children."
+
+prompt_then_tool:
+  description: "Use a prompt to generate parameters, then a tool to execute with those parameters."
+  pattern:
+    - "prompt (json) → produces structured params (e.g. image prompt, ffmpeg flags)"
+    - "tool → reads params via Mustache: {{prime.<prompt_name>.value.<field>}}"
+  note: "The prompt's structured output feeds the tool's params via state interpolation."
+
+staged_decomposition:
+  description: "Break complex generation into focused stages."
+  pattern:
+    - "plan (prompt, json) → structured plan with steps/items"
+    - "per-item generation (loop + collect) → one output per item"
+    - "assembly (prompt) → combine collected results"
+    - "review (prompt) → validate and fix"
+  note: "Each stage is a small, focused LLM call."
+
+state_based_branching:
+  description: "Use if(cel) to route the orchestration based on prior effect outputs."
+  pattern:
+    - "prompt (json) → produces structured data with a decision field"
+    - "if (cel) → branches on state.prime.<name>.value.<field>"
+    - "Use same inner effect name in both then and else for consistent downstream paths."

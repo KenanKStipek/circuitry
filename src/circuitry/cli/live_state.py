@@ -7,10 +7,18 @@ from typing import Any, Callable
 
 
 def write_live_state(path: Path, state: dict[str, Any]) -> None:
-    """Write state JSON atomically via tmp-file + rename."""
+    """Write state JSON atomically via tmp-file + rename.
+
+    Silently skips the write if the state cannot be serialized to valid JSON
+    (e.g. contains non-serializable objects mid-execution).
+    """
+    try:
+        payload = json.dumps(state) + "\n"
+    except (TypeError, ValueError, OverflowError):
+        return  # Skip — not valid JSON yet
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state) + "\n", encoding="utf-8")
+    tmp.write_text(payload, encoding="utf-8")
     os.replace(str(tmp), str(path))
 
 
