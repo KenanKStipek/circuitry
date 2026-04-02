@@ -53,12 +53,61 @@ def _render_inputs(inputs: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any
     return rendered
 
 
+def _validate_inline_yaml(yaml_text: str) -> tuple[bool, list[str]]:
+    """Validate an inline YAML string against the orchestration schema.
+
+    Returns (ok, errors) where errors is a list of human-readable messages.
+    """
+    import importlib.resources
+    import json
+
+    import jsonschema  # type: ignore[import-untyped]
+    import yaml as _yaml  # type: ignore[import-untyped]
+
+    try:
+        parsed = _yaml.safe_load(yaml_text)
+    except _yaml.YAMLError as e:
+        return False, [f"YAML parse error: {e}"]
+
+    if not isinstance(parsed, dict):
+        return False, ["Inline orchestration must be a YAML mapping with an 'effects' key."]
+
+    if "effects" not in parsed:
+        return False, ["Inline orchestration is missing required 'effects' key."]
+
+    try:
+        schema_path = importlib.resources.files("circuitry") / "schema" / "orchestration.schema.json"
+        schema = json.loads(Path(str(schema_path)).read_text(encoding="utf-8"))
+        validator = jsonschema.Draft7Validator(schema)
+        errors = [e.message for e in validator.iter_errors(parsed)]
+        return (len(errors) == 0), errors
+    except Exception as e:
+        # If schema loading fails, skip validation (best-effort)
+        logger.warning("Schema validation skipped: %s", e)
+        return True, []
+
+
+def _clean_yaml_fences(text: str) -> str:
+    """Strip markdown code fences and YAML document separators from LLM output."""
+    lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            continue
+        if stripped == "---":
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
 @dataclass(frozen=True)
 class UseDefinition:
     name: str
-    orchestration: str
+    orchestration: str | None = None
+    inline: str | None = None
     inputs: dict[str, Any] | None = None
     outputs: dict[str, str] | None = None
+    validate: bool = True
     on_error: Literal["fail", "skip", "continue"] = "fail"
     description: str | None = None
 
@@ -127,9 +176,43 @@ class UseRuntime:
             "(run `cof list` to see available names)."
         )
 
-    def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
-        # Late imports to avoid circular dependencies
+    def _load_child_orch(self, ctx: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        """Load the child orchestration dict and a label for display.
+
+        Returns (orch_dict, label).
+        For file-based: loads from resolved path.
+        For inline: renders Mustache template, cleans fences, parses YAML, validates.
+        """
+        import yaml as _yaml  # type: ignore[import-untyped]
+
+        if self.defn.inline is not None:
+            import chevron  # type: ignore
+
+            # Render Mustache template against parent context
+            raw_yaml = chevron.render(self.defn.inline, ctx)
+            cleaned = _clean_yaml_fences(raw_yaml)
+
+            # Validate against schema
+            if self.defn.validate:
+                ok, errors = _validate_inline_yaml(cleaned)
+                if not ok:
+                    raise ValueError(
+                        f"Inline orchestration validation failed:\n"
+                        + "\n".join(f"  - {e}" for e in errors)
+                    )
+
+            parsed = _yaml.safe_load(cleaned)
+            if not isinstance(parsed, dict):
+                raise ValueError("Inline orchestration must be a YAML mapping with an 'effects' key.")
+            return parsed, "inline"
+
+        # File-based resolution
         from ..cli.orchestration_loader import load_orchestration_file
+
+        resolved_path = self._resolve_orchestration()
+        return load_orchestration_file(resolved_path), str(resolved_path)
+
+    def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         from .compiler import compile_orchestration
         from .dynamic import DynamicRuntime
 
@@ -140,20 +223,19 @@ class UseRuntime:
             meta = {}
             node["meta"] = meta
 
+        label = self.defn.orchestration or "inline"
         meta["created_at"] = _now_iso()
         meta["completed_at"] = None
         meta["orchestration"] = self.defn.orchestration
+        meta["inline"] = self.defn.inline is not None
         meta["resolved_path"] = None
+        meta["validation_errors"] = None
         meta["error"] = None
 
         indent = "  " * self.depth
         t0 = time.monotonic()
 
         try:
-            # Resolve
-            resolved_path = self._resolve_orchestration()
-            meta["resolved_path"] = str(resolved_path)
-
             if self.dry_run:
                 node["value"] = None
                 meta["completed_at"] = _now_iso()
@@ -162,12 +244,16 @@ class UseRuntime:
                     elapsed = time.monotonic() - t0
                     _console.print(
                         f"{indent}[ok]✓[/ok] [green]⊕[/green] {self.defn.name}"
-                        f" [dim]{self.defn.orchestration} | {_elapsed_str(elapsed)} (dry)[/dim]"
+                        f" [dim]{label} | {_elapsed_str(elapsed)} (dry)[/dim]"
                     )
                 return
 
-            # Load and compile child orchestration
-            child_orch = load_orchestration_file(resolved_path)
+            # Load (file or inline) and compile
+            child_orch, resolved_label = self._load_child_orch(ctx)
+            label = resolved_label
+            if not meta["inline"]:
+                meta["resolved_path"] = resolved_label
+
             child_root = compile_orchestration(orch=child_orch, root_name="prime")
 
             # Build isolated child state from inputs
@@ -205,23 +291,28 @@ class UseRuntime:
                 elapsed = time.monotonic() - t0
                 _console.print(
                     f"{indent}[ok]✓[/ok] [green]⊕[/green] {self.defn.name}"
-                    f" [dim]{self.defn.orchestration} | {_elapsed_str(elapsed)}[/dim]"
+                    f" [dim]{label} | {_elapsed_str(elapsed)}[/dim]"
                 )
 
         except Exception as e:
-            meta["error"] = str(e)
+            error_msg = str(e)
+            meta["error"] = error_msg
             meta["completed_at"] = _now_iso()
+
+            # Capture validation errors separately for introspection
+            if "validation failed" in error_msg.lower():
+                meta["validation_errors"] = error_msg
 
             if self.verbose:
                 elapsed = time.monotonic() - t0
                 _console.print(
                     f"{indent}[err]✗[/err] [green]⊕[/green] {self.defn.name}"
-                    f" [dim]{self.defn.orchestration} | {_elapsed_str(elapsed)}[/dim]"
+                    f" [dim]{label} | {_elapsed_str(elapsed)}[/dim]"
                 )
 
             if self.defn.on_error == "fail":
                 raise RuntimeError(
-                    f"use '{self.defn.name}' -> orchestration '{self.defn.orchestration}': {e}"
+                    f"use '{self.defn.name}' -> {label}: {e}"
                 ) from e
             elif self.defn.on_error == "skip":
                 node["value"] = None

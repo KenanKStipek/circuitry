@@ -549,9 +549,21 @@ def _compile_use(
         raise ValueError(f"Use effect at '{effect_path}' is missing 'name'.")
 
     orchestration = effect.get("orchestration")
-    if not isinstance(orchestration, str) or not orchestration.strip():
+    inline = effect.get("inline")
+
+    # Must have exactly one of orchestration or inline
+    has_orch = isinstance(orchestration, str) and orchestration.strip()
+    has_inline = isinstance(inline, str) and inline.strip()
+
+    if not has_orch and not has_inline:
         raise ValueError(
-            f"Use effect '{name}' at '{effect_path}' is missing required field 'orchestration'."
+            f"Use effect '{name}' at '{effect_path}' requires either "
+            "'orchestration' (name/path) or 'inline' (Mustache template yielding YAML)."
+        )
+    if has_orch and has_inline:
+        raise ValueError(
+            f"Use effect '{name}' at '{effect_path}' has both 'orchestration' and 'inline'. "
+            "Use one or the other."
         )
 
     inputs = effect.get("inputs") or None
@@ -561,6 +573,8 @@ def _compile_use(
     outputs = effect.get("outputs") or None
     if outputs is not None and not isinstance(outputs, dict):
         outputs = None
+
+    validate_flag = bool(effect.get("validate", True))
 
     on_error_raw = str(effect.get("on_error") or "fail").strip().lower()
     on_error: Literal["fail", "skip", "continue"] = (
@@ -576,9 +590,11 @@ def _compile_use(
     _ = scope_path
     return UseDefinition(
         name=name,
-        orchestration=orchestration.strip(),
+        orchestration=orchestration.strip() if has_orch else None,
+        inline=inline.strip() if has_inline else None,
         inputs=inputs,
         outputs=outputs,
+        validate=validate_flag,
         on_error=on_error,
         description=description,
     )

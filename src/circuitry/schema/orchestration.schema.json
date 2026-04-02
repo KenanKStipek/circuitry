@@ -421,15 +421,24 @@
 
     "UseEffect": {
       "type": "object",
-      "required": ["type", "name", "orchestration"],
-      "description": "Runs another orchestration as an isolated sub-step. Inputs are mapped in, outputs are mapped out. State is fully isolated.",
+      "required": ["type", "name"],
+      "description": "Runs another orchestration as an isolated sub-step. Provide 'orchestration' (name/path) or 'inline' (Mustache template yielding YAML). State is fully isolated.",
       "properties": {
         "type": { "const": "use" },
         "name": { "$ref": "#/$defs/NamePattern" },
         "description": { "type": "string" },
         "orchestration": {
           "type": "string",
-          "description": "Orchestration reference: a bundled name (e.g. 'article-summarizer') or a file path."
+          "description": "Orchestration reference: a bundled name (e.g. 'article-summarizer') or a file path. Mutually exclusive with 'inline'."
+        },
+        "inline": {
+          "type": "string",
+          "description": "Mustache template that renders to orchestration YAML at runtime. Typically references a prior prompt output (e.g. '{{prime.plan.value}}'). Mutually exclusive with 'orchestration'."
+        },
+        "validate": {
+          "type": "boolean",
+          "description": "Validate inline YAML against the orchestration schema before execution. Default true. Set false to skip validation for LLM-generated YAML that may use loose formatting.",
+          "default": true
         },
         "inputs": {
           "type": "object",
@@ -442,7 +451,11 @@
           "additionalProperties": { "type": "string" }
         },
         "on_error": { "$ref": "#/$defs/OnErrorDefault" }
-      }
+      },
+      "oneOf": [
+        { "required": ["orchestration"] },
+        { "required": ["inline"] }
+      ]
     }
   }
 }
