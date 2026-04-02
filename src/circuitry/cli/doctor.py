@@ -7,16 +7,17 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from .config import find_config_path, load_config
-from .orchestration_loader import load_orchestration_file
+from .config import find_config_path, load_config, resolve_config
+from .detect import detect_all
 from .effective_settings import resolve_effective_settings
+from .orchestration_loader import load_orchestration_file
 from ..adapters import build_adapter
 
 console = Console()
 
 
 def register_doctor(app: typer.Typer) -> None:
-    @app.command("doctor")
+    @app.command("doctor", help="System diagnostics — check backends, config, and connectivity.")
     def doctor_cmd(
         config: Optional[Path] = typer.Option(
             None,
@@ -30,11 +31,12 @@ def register_doctor(app: typer.Typer) -> None:
             help="Optional orchestration file to include in effective settings.",
         ),
         generate: bool = typer.Option(
-            False, "--generate", help="Also run a tiny generate call."
+            False, "--generate", help="Also run a tiny generate call to test the adapter."
         ),
     ) -> None:
         cfg_path = find_config_path(explicit_path=config)
         cfg = load_config(cfg_path)
+        resolved_cfg = resolve_config(explicit_path=config)
 
         orch_obj = {}
         if orchestration:
@@ -46,6 +48,7 @@ def register_doctor(app: typer.Typer) -> None:
         table.add_column("Check")
         table.add_column("Result")
 
+        # Config
         table.add_row("Config path", str(cfg_path) if cfg_path else "— (defaults)")
         table.add_row(
             "Effective adapter",
@@ -56,27 +59,29 @@ def register_doctor(app: typer.Typer) -> None:
             f"{effective.model} (source: {effective.sources.get('model')})",
         )
 
-        adapter = build_adapter(
-            adapter_name=effective.adapter or "", runtime=effective.runtime or {}
-        )
+        # Backend detection
+        ollama_url = resolved_cfg.runtime.get("adapters", {}).get("ollama", {}).get("base_url", "http://localhost:11434")
+        comfyui_url = resolved_cfg.runtime.get("plugins", {}).get("comfyui", {}).get("base_url", "http://localhost:8188")
 
-        # tags / list models
-        try:
-            tags = adapter.list_models(timeout_seconds=5)  # type: ignore[attr-defined]
-            names = [
-                m.get("name") for m in (tags.get("models") or []) if isinstance(m, dict)
-            ]
-            table.add_row("Ollama /api/tags", f"OK ({len(names)} models)")
-            if effective.model and effective.model not in names:
-                table.add_row("Model present", f"NO (missing: {effective.model})")
-            else:
+        result = detect_all(ollama_url=ollama_url, comfyui_url=comfyui_url)
+
+        for backend in result.backends:
+            status = f"OK ({backend.detail})" if backend.available else f"NOT FOUND ({backend.detail})"
+            table.add_row(backend.name, status)
+
+        # Model check (if Ollama available, check if effective model is present)
+        ollama = result.get("ollama")
+        if ollama and ollama.available and effective.model:
+            if effective.model in ollama.models:
                 table.add_row("Model present", "YES")
-        except Exception as e:
-            table.add_row("Ollama /api/tags", f"FAIL ({e})")
-            console.print(table)
-            raise typer.Exit(code=1)
+            else:
+                table.add_row("Model present", f"NO (missing: {effective.model})")
 
+        # Generate test
         if generate:
+            adapter = build_adapter(
+                adapter_name=effective.adapter or "", runtime=effective.runtime or {}
+            )
             try:
                 if not effective.model:
                     raise RuntimeError(
@@ -87,9 +92,9 @@ def register_doctor(app: typer.Typer) -> None:
                     prompt="Say hello in 5 words.",
                     timeout_seconds=15,
                 )
-                table.add_row("Ollama /api/generate", f"OK ({res.text})")
+                table.add_row("Generate test", f"OK ({res.text})")
             except Exception as e:
-                table.add_row("Ollama /api/generate", f"FAIL ({e})")
+                table.add_row("Generate test", f"FAIL ({e})")
                 console.print(table)
                 raise typer.Exit(code=1)
 
