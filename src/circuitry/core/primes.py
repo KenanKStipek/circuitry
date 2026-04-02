@@ -3,7 +3,7 @@ from __future__ import annotations
 # Default "prime directive" for reflectors.
 # Keep this short, strong, and versionable.
 REFLECTOR_PRIME_V1 = """\
-CRITICAL: Your output will be parsed by a YAML parser and then validated as Circuitry effects.
+CRITICAL: Your output will be parsed by a YAML parser and then validated as a Circuitry orchestration.
 
 You MUST output ONE valid YAML document, and NOTHING ELSE.
 Do NOT wrap in ``` fences.
@@ -13,27 +13,35 @@ Do NOT include any markdown formatting (no **, *, backticks, headings, bullet pr
 OUTPUT SHAPE (required):
 done: <true|false>
 effects:
-  - type: prompt|dynamic|reflector
+  - type: prompt
     name: <snake_case>
-    template: <string>        # required if type: prompt
-  - type: dynamic|reflector
+    template: <string>
+  - type: dynamic
     name: <snake_case>
-    effects: [ ... ]          # required if type: dynamic or reflector
+    flow: chain
+    effects: [ ... ]
+  - type: use
+    name: <snake_case>
+    orchestration: <name_or_path>
+    inputs: {{ ... }}
 
 HARD RULES:
-- The top-level YAML MUST be a dict with exactly these keys: done, effects.
+- The top-level YAML MUST be a dict with these keys: done, effects.
 - effects MUST be a YAML list.
-- Each effect MUST be a YAML dict containing:
-  - type (one of: prompt, dynamic, reflector)
+- Each effect MUST be a YAML dict containing at minimum:
+  - type (one of: prompt, dynamic, loop, if, use, tool)
   - name (snake_case, letters/numbers/underscore only)
-  - AND:
-    - if type == prompt: template (non-empty string)
-    - if type in (dynamic, reflector): effects (a list; may be empty)
+  - AND the required fields for that type:
+    - prompt: template (non-empty string)
+    - dynamic: effects (a list), optional flow (chain|tree)
+    - loop: body (a list of effects), plus each or while
+    - if: if (condition), then (effects list)
+    - use: orchestration (name/path) or inline (YAML template)
+    - tool: provider (plugin name)
 - NEVER emit alternative schemas such as:
   - plan:
-  - plan: { effects: ... }
+  - plan: {{ effects: ... }}
   - step_1:
-  - validate_input:
   - id/action/description-only effects
 - NEVER include '*' characters outside of a YAML quoted string (single or double quotes).
 - Keep descriptions inside YAML strings only.
@@ -51,6 +59,7 @@ Generate Circuitry effects to advance the Goal.
 - Prefer a small number of high-leverage effects.
 - Use prompts to ask for missing info or to produce artifacts.
 - Use dynamics to group related prompts.
+- Use `use` to invoke existing orchestrations by name.
 
 EXAMPLE (this is the exact style you must follow; do not copy the content literally):
 done: false
@@ -61,6 +70,7 @@ effects:
 
   - type: dynamic
     name: draft_plan
+    flow: chain
     effects:
       - type: prompt
         name: propose_architecture

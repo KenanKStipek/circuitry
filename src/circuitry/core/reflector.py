@@ -1,11 +1,25 @@
+"""Reflector — planning primitive that generates and executes effects at runtime.
+
+Internally delegates to use(inline) for YAML validation, compilation, and
+execution of LLM-generated orchestrations. The reflector is syntax sugar that
+adds: prime directive rendering, iteration control (done flag), and automatic
+wiring between the inner planning prompt and the generated orchestration.
+"""
+
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
+
+import yaml as _yaml  # type: ignore[import-untyped]
 
 from ..adapters import Adapter
 from .primes import REFLECTOR_PRIME_V1
 from .store import Store
+from .use import UseDefinition, UseRuntime, _clean_yaml_fences
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .dynamic import DynamicDefinition
@@ -68,15 +82,13 @@ class ReflectorRuntime:
         meta.setdefault("iterations", [])
         node.setdefault(self.defn.generated_key, {})
 
-        # Execute everything under reflector namespace
-        reflector_store = Store(node, on_write=store.on_write)
+        reflector_store = store.child(self.defn.name)
 
         iterations = max(1, int(self.defn.max_iterations or 1))
         for i in range(iterations):
             rec = self._run_iteration(i=i, store=store, reflector_store=reflector_store)
             meta["iterations"].append(rec)
 
-            # stop conditions
             if rec.get("error"):
                 node["value"] = False
                 raise RuntimeError(rec["error"])
@@ -90,15 +102,7 @@ class ReflectorRuntime:
     def _run_iteration(
         self, *, i: int, store: Store, reflector_store: Store
     ) -> dict[str, Any]:
-        """
-        One reflector loop iteration:
-          1) build prime text
-          2) run inner dynamic (primed)
-          3) read plan text
-          4) parse/validate plan
-          5) compile + execute generated effects under reflector.generated.iter_{i}
-        """
-        from .compiler import compile_orchestration
+        """One reflector iteration: prime → plan → validate → execute via use(inline)."""
         from .dynamic import DynamicRuntime
 
         rec: dict[str, Any] = {
@@ -111,7 +115,7 @@ class ReflectorRuntime:
             "plan_text": "",
         }
 
-        # --- Phase 1: prime text ---
+        # ── Phase 1: Render prime directive ──────────────────────────────
         prime_text = _render_reflector_prime(
             prime_template=self.defn.prime_template,
             max_effects=self.defn.max_effects,
@@ -119,7 +123,7 @@ class ReflectorRuntime:
             context=_best_effort_context(store),
         )
 
-        # --- Phase 2: execute inner dynamic (with prime prepended) ---
+        # ��─ Phase 2: Execute inner dynamic (with prime prepended) ────────
         inner = _prepend_prime_to_plan_prompt(
             inner=self.defn.inner,
             plan_from_step=self.defn.plan_from_step,
@@ -134,12 +138,13 @@ class ReflectorRuntime:
                 runtime_config=self.runtime_config,
                 dry_run=self.dry_run,
                 timeout_seconds=self.timeout_seconds,
+                verbose=self.verbose,
             ).execute(store=reflector_store)
         except Exception as e:
             rec["error"] = f"inner_failed: {e}"
             return rec
 
-        # --- Phase 3: pull plan text from inner.<plan_from_step>.value ---
+        # ── Phase 3: Extract plan text from inner step output ────────────
         plan_text = _get_plan_text(
             node=_store_root(reflector_store), plan_from_step=self.defn.plan_from_step
         )
@@ -150,74 +155,69 @@ class ReflectorRuntime:
             rec["stop"] = True
             return rec
 
-        # --- Phase 4: parse + validate plan ---
+        if self.verbose:
+            rec["raw_plan_text"] = plan_text
+
+        # ── Phase 4: Extract done flag and check stop conditions ─────────
         try:
-            if self.verbose:
-                rec["raw_plan_text"] = plan_text
-                print("\n[Reflector] Raw plan text:")
-                print(plan_text)
-                print("[/Reflector]\n")
-
-            parsed = _parse_plan_yaml(plan_text)
-            rec["parsed"] = parsed
-
-            if self.verbose:
-                print("[Reflector] Parsed plan object:")
-                from pprint import pprint
-
-                pprint(parsed)
-
-            done = bool(parsed.get("done", False))
-            effects = parsed.get("effects") or []
-            if not isinstance(effects, list):
-                raise ValueError("Reflector plan 'effects' must be a list.")
-
+            done, plan_yaml = _extract_done_flag(plan_text)
             rec["done"] = done
 
-            # nothing to do
-            if len(effects) == 0:
+            if not plan_yaml.strip():
                 rec["stop"] = True
                 return rec
 
-            # stop-on-done semantics
+            # Check for empty effects list — nothing to execute
+            try:
+                parsed_check = _yaml.safe_load(plan_yaml)
+                effects = parsed_check.get("effects", []) if isinstance(parsed_check, dict) else []
+                rec["parsed"] = parsed_check
+                if not effects:
+                    rec["stop"] = True
+                    return rec
+            except Exception:
+                pass  # let use(inline) handle parse errors
+
             if done and self.defn.stop_on_done:
                 rec["stop"] = True
                 return rec
 
-            _validate_generated_effects(effects)
         except Exception as e:
             rec["error"] = f"parse_failed: {e}"
             return rec
 
-        # --- Phase 5: compile + execute generated effects ---
+        # ── Phase 5: Validate + compile + execute via use(inline) ────────
         iteration_key = f"iter_{i}"
-        gen_orch = {"effects": effects}
 
         try:
-            gen_def = compile_orchestration(orch=gen_orch, root_name=iteration_key)
-        except Exception as e:
-            rec["error"] = f"compile_failed: {e}"
-            return rec
+            use_defn = UseDefinition(
+                name=iteration_key,
+                inline=plan_yaml,
+                validate=True,
+                on_error="fail",
+            )
 
-        try:
-            gen_root = reflector_store.ensure_dict(self.defn.generated_key)
-            iter_container = _ensure_dict(gen_root, iteration_key)
-            gen_store = Store(iter_container, on_write=store.on_write)
+            gen_parent = reflector_store.child(self.defn.generated_key)
+            gen_store = gen_parent
 
-            DynamicRuntime(
-                gen_def,
+            UseRuntime(
+                use_defn,
                 adapter=self.adapter,
                 model=self.model,
                 runtime_config=self.runtime_config,
                 dry_run=self.dry_run,
                 timeout_seconds=self.timeout_seconds,
-            ).execute(store=gen_store)
+                verbose=self.verbose,
+            ).execute(store=gen_store, ctx=_store_root(store))
 
         except Exception as e:
             rec["error"] = f"generated_exec_failed: {e}"
             return rec
 
         return rec
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 
 def _ensure_dict(parent: dict[str, Any], key: str) -> dict[str, Any]:
@@ -231,7 +231,6 @@ def _ensure_dict(parent: dict[str, Any], key: str) -> dict[str, Any]:
 def _render_reflector_prime(
     *, prime_template: str, max_effects: int, goal: str, context: str
 ) -> str:
-    # Add explicit warning to the user in the prime
     critical_warning = (
         "CRITICAL: The next system will parse your response as YAML. "
         "If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\n"
@@ -251,11 +250,11 @@ def _render_reflector_prime(
         )
         return critical_warning + rendered + "\n\n"
     except Exception:
+        logger.warning("Reflector prime template formatting failed; using raw template", exc_info=True)
         return critical_warning + (prime_template or "").strip() + "\n\n"
 
 
 def _best_effort_goal(store: Store) -> str:
-    # prime.goal.value is the convention
     try:
         root = _store_root(store)
         prime = root.get("prime")
@@ -266,12 +265,11 @@ def _best_effort_goal(store: Store) -> str:
                 if isinstance(v, str) and v.strip():
                     return v.strip()
     except Exception:
-        pass
+        logger.debug("Best-effort goal extraction failed", exc_info=True)
     return ""
 
 
 def _best_effort_context(store: Store) -> str:
-    # keep it small but useful; you can swap this for "selector context" later
     try:
         root = _store_root(store)
         runtime = root.get("runtime")
@@ -282,17 +280,14 @@ def _best_effort_context(store: Store) -> str:
 
                 return json.dumps(eff, indent=2, sort_keys=True)
     except Exception:
-        pass
+        logger.debug("Best-effort context extraction failed", exc_info=True)
     return ""
 
 
 def _prepend_prime_to_plan_prompt(
     *, inner: "DynamicDefinition", plan_from_step: str, prime_text: str
 ) -> "DynamicDefinition":
-    """
-    Shallow-clone DynamicDefinition where plan prompt template is:
-      prime_text + original_template
-    """
+    """Shallow-clone DynamicDefinition, prepending prime to the plan prompt's template."""
     from .prompt import PromptDefinition
 
     new_effects: list[Any] = []
@@ -316,138 +311,53 @@ def _get_plan_text(*, node: dict[str, Any], plan_from_step: str) -> str:
     return val if isinstance(val, str) else ""
 
 
-def _strip_code_fences(text: str) -> str:
+def _extract_done_flag(plan_text: str) -> tuple[bool, str]:
+    """Extract the done flag from plan text and return (done, cleaned_yaml).
+
+    The plan text from the LLM may include a `done: true/false` field alongside
+    `effects: [...]`. We extract the done flag for iteration control, then ensure
+    the YAML has a valid `effects` key for use(inline) to process.
+
+    Returns:
+        (done, cleaned_yaml) where cleaned_yaml is valid orchestration YAML.
     """
-    Remove markdown code fences anywhere in the text.
-    This is intentionally blunt: if the model emits ```yaml ... ``` or stray ```
-    lines inside the payload, we strip them so yaml.safe_load can succeed.
-    """
-    t = (text or "").strip()
-    if not t:
-        return ""
-
-    lines = []
-    for line in t.splitlines():
-        if line.strip().startswith("```"):
-            continue
-        lines.append(line)
-
-    return "\n".join(lines).strip()
-
-
-def _extract_yaml(text: str) -> str:
-    """
-    Extracts YAML content from mixed markdown/prose by selecting from
-    the first likely YAML line onward.
-    """
-    t = (text or "").strip()
-    if not t:
-        return ""
-
-    # 1) If fenced, strip the fence and keep interior
-    t = _strip_code_fences(t)
-
-    # 2) If model included prose, find first likely-yaml line and slice from there
-    lines = t.splitlines()
-    # Support both 'effects' (spec) and 'steps' (legacy)
-    starters = ("done:", "effects:", "steps:", "- type:", "type:", "plan:")
-    for idx, line in enumerate(lines):
-        s = line.lstrip()
-        if any(s.startswith(x) for x in starters):
-            return "\n".join(lines[idx:]).strip()
-
-    # 3) Otherwise return as-is (parser will fail, but error will be clearer)
-    return t
-
-
-def _parse_plan_yaml(text: str) -> dict[str, Any]:
-    """
-    Accepts any of:
-      - [ {type,name,...}, ... ]                       -> effects list
-      - { done: bool, effects: [...] }                 -> canonical
-      - { effects: [...] }                             -> canonical w/ default done
-      - { plan: { effects: [...] } }                   -> recover from "plan:" wrappers
-      - { plan: [...] }                                -> recover from "plan:" list
-      - Legacy 'steps' key is also supported for backwards compatibility
-    Also tolerates multi-document YAML (---) by selecting the first parseable doc.
-    """
-    import yaml  # type: ignore[import-untyped]
-
-    cleaned = _extract_yaml(text)
+    cleaned = _clean_yaml_fences(plan_text)
     if not cleaned.strip():
-        return {"done": True, "effects": []}
+        return True, ""
 
-    docs = list(yaml.safe_load_all(cleaned)) if cleaned else []
-    docs = [d for d in docs if d is not None]
+    try:
+        parsed = _yaml.safe_load(cleaned)
+    except _yaml.YAMLError:
+        # If YAML is unparseable, let use(inline) handle the error
+        return False, cleaned
 
-    # pick the first doc that looks like something we can use
-    for data in docs:
-        if isinstance(data, list):
-            return {"done": False, "effects": data}
+    if not isinstance(parsed, dict):
+        # A bare list → treat as effects, not done
+        if isinstance(parsed, list):
+            return False, _yaml.dump({"effects": parsed}, default_flow_style=False)
+        return False, cleaned
 
-        if isinstance(data, dict):
-            # canonical: prefer 'effects', fallback to 'steps'
-            if "effects" in data:
-                return {
-                    "done": bool(data.get("done", False)),
-                    "effects": data.get("effects", []),
-                }
-            if "steps" in data:
-                return {
-                    "done": bool(data.get("done", False)),
-                    "effects": data.get("steps", []),
-                }
+    done = bool(parsed.get("done", False))
 
-            # recovery: plan wrapper
-            plan = data.get("plan")
-            if isinstance(plan, dict):
-                if isinstance(plan.get("effects"), list):
-                    return {
-                        "done": bool(data.get("done", False)),
-                        "effects": plan["effects"],
-                    }
-                if isinstance(plan.get("steps"), list):
-                    return {
-                        "done": bool(data.get("done", False)),
-                        "effects": plan["steps"],
-                    }
-            if isinstance(plan, list):
-                return {"done": bool(data.get("done", False)), "effects": plan}
+    # Ensure effects key exists for the orchestration schema
+    if "effects" not in parsed:
+        # Check for legacy 'steps' key
+        steps = parsed.get("steps")
+        if isinstance(steps, list):
+            parsed["effects"] = steps
+            del parsed["steps"]
+        # Check for 'plan' wrapper
+        elif isinstance(parsed.get("plan"), dict) and "effects" in parsed["plan"]:
+            parsed["effects"] = parsed["plan"]["effects"]
+            del parsed["plan"]
+        elif isinstance(parsed.get("plan"), list):
+            parsed["effects"] = parsed["plan"]
+            del parsed["plan"]
+        else:
+            return done, cleaned
 
-    return {"done": False, "effects": []}
+    # Remove done from the dict — it's not part of the orchestration schema
+    # (additionalProperties: true allows it, but cleaner to strip)
+    parsed.pop("done", None)
 
-
-def _validate_generated_effects(effects: list[Any]) -> None:
-    allowed = {"prompt", "dynamic", "reflector"}
-
-    for idx, s in enumerate(effects):
-        if not isinstance(s, dict):
-            raise ValueError(f"Generated effect[{idx}] must be an object.")
-
-        t = (s.get("type") or "").strip().lower()
-        n = s.get("name")
-
-        if t not in allowed:
-            raise ValueError(
-                f"""Generated effect[{idx}] has invalid type. Expected one of: {sorted(allowed)} Actual effect: {repr(s)}"""
-            )
-
-        if not isinstance(n, str) or not n.strip():
-            raise ValueError(f"Generated effect[{idx}] missing non-empty 'name'.")
-
-        if t == "prompt":
-            tpl = s.get("template")
-            if not isinstance(tpl, str) or not tpl.strip():
-                raise ValueError(
-                    f"Generated prompt '{n}' missing non-empty 'template'."
-                )
-
-        if t in {"dynamic", "reflector"}:
-            # Support both 'effects' (spec) and 'steps' (legacy)
-            child = s.get("effects") or s.get("steps")
-            if child is None:
-                s["effects"] = []
-            elif not isinstance(child, list):
-                raise ValueError(f"Generated {t} '{n}' effects must be a list.")
-            else:
-                s["effects"] = child
+    return done, _yaml.dump(parsed, default_flow_style=False)
