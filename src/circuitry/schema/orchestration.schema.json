@@ -25,6 +25,37 @@
       "type": "array",
       "description": "Ordered list of top-level effects to execute.",
       "items": { "$ref": "#/$defs/EffectDef" }
+    },
+    "interface": {
+      "type": "object",
+      "description": "Declares typed inputs and outputs for this orchestration. Used by `use` effects for validation and auto-wiring.",
+      "properties": {
+        "inputs": {
+          "type": "object",
+          "description": "Input declarations. Keys are state variable names.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string", "description": "Expected type: string, number, boolean, array, object." },
+              "required": { "type": "boolean", "description": "Whether this input is required. Default false." },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "outputs": {
+          "type": "object",
+          "description": "Output declarations. Keys are output names exposed to the parent.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string", "description": "Output type: string, number, boolean, array, object." },
+              "path": { "type": "string", "description": "Dot-delimited state path to extract (e.g. 'prime.summarize.value')." },
+              "description": { "type": "string" }
+            },
+            "required": ["path"]
+          }
+        }
+      }
     }
   },
   "additionalProperties": true,

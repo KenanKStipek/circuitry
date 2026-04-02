@@ -176,6 +176,44 @@ class UseRuntime:
             "(run `cof list` to see available names)."
         )
 
+    def _check_interface(
+        self, orch: dict[str, Any], rendered_inputs: dict[str, Any]
+    ) -> dict[str, str] | None:
+        """Validate inputs and auto-generate output mapping from interface declaration.
+
+        Returns auto-generated outputs dict if interface has outputs and the use
+        effect has no explicit outputs mapping, otherwise None.
+        """
+        interface = orch.get("interface")
+        if not isinstance(interface, dict):
+            return None
+
+        # Validate required inputs
+        iface_inputs = interface.get("inputs")
+        if isinstance(iface_inputs, dict):
+            for key, spec in iface_inputs.items():
+                if not isinstance(spec, dict):
+                    continue
+                if spec.get("required") and key not in rendered_inputs:
+                    raise ValueError(
+                        f"Use effect '{self.defn.name}': missing required input '{key}' "
+                        f"declared in orchestration interface."
+                    )
+
+        # Auto-generate output mapping if not explicitly provided
+        if self.defn.outputs is not None:
+            return None  # explicit mapping takes precedence
+
+        iface_outputs = interface.get("outputs")
+        if isinstance(iface_outputs, dict) and iface_outputs:
+            auto_outputs: dict[str, str] = {}
+            for key, spec in iface_outputs.items():
+                if isinstance(spec, dict) and "path" in spec:
+                    auto_outputs[key] = spec["path"]
+            return auto_outputs if auto_outputs else None
+
+        return None
+
     def _load_child_orch(self, ctx: dict[str, Any]) -> tuple[dict[str, Any], str]:
         """Load the child orchestration dict and a label for display.
 
@@ -261,6 +299,9 @@ class UseRuntime:
             if self.defn.inputs:
                 child_state = _render_inputs(self.defn.inputs, ctx)
 
+            # Check interface: validate required inputs, auto-generate output mapping
+            auto_outputs = self._check_interface(child_orch, child_state)
+
             child_store = Store(state=child_state)
 
             # Execute child orchestration
@@ -276,10 +317,11 @@ class UseRuntime:
                 ancestors=self._ancestors,
             ).execute(store=child_store)
 
-            # Extract outputs
-            if self.defn.outputs:
+            # Extract outputs (explicit > auto-generated from interface > default True)
+            effective_outputs = self.defn.outputs or auto_outputs
+            if effective_outputs:
                 result: dict[str, Any] = {}
-                for output_key, child_path in self.defn.outputs.items():
+                for output_key, child_path in effective_outputs.items():
                     result[output_key] = _resolve_dot_path(child_store.state, child_path)
                 node["value"] = result
             else:
