@@ -18,6 +18,7 @@ from .doctor import register_doctor
 from .orchestration_loader import serialize_orchestration
 from .registry import load_index, resolve_bundled
 from .runtime_shim import RunRequest, inspect_orchestration, run, validate
+from .setup import register_setup
 from .shared_library import (
     apply_service_profile,
     fetch_shared_orchestration,
@@ -32,6 +33,7 @@ app = typer.Typer(
 console = Console()
 
 register_doctor(app)
+register_setup(app)
 
 _LAST_RUN_PATH = GLOBAL_CONFIG_DIR / "last-run.json"
 
@@ -644,23 +646,18 @@ def list_cmd(
 
 
 def _detect_backends(cfg: CircuitryConfig) -> set[str]:
-    """Best-effort detection of which backends are available."""
-    available: set[str] = set()
+    """Best-effort detection of which backends are actually reachable."""
+    from .detect import detect_all
 
-    # LLM: if any adapter is configured, LLM is available
-    adapters = cfg.runtime.get("adapters", {})
-    if cfg.default_adapter or adapters:
+    ollama_url = cfg.runtime.get("adapters", {}).get("ollama", {}).get("base_url", "http://localhost:11434")
+    comfyui_url = cfg.runtime.get("plugins", {}).get("comfyui", {}).get("base_url", "http://localhost:8188")
+
+    result = detect_all(ollama_url=ollama_url, comfyui_url=comfyui_url)
+    available = result.available_names
+
+    # Map specific LLM backends to the generic 'llm' tag used in index.yml
+    if available & {"ollama", "openai", "anthropic"}:
         available.add("llm")
-
-    # ComfyUI: check runtime.plugins.comfyui
-    plugins = cfg.runtime.get("plugins", {})
-    if "comfyui" in plugins:
-        available.add("comfyui")
-
-    # ffmpeg: check if ffmpeg binary is on PATH
-    import shutil
-    if shutil.which("ffmpeg"):
-        available.add("ffmpeg")
 
     return available
 
