@@ -1,0 +1,33 @@
+effects:
+  # text (default) — free-form string output
+  - type: prompt
+    name: greeting
+    template: "In one sentence, what is Circuitry?"
+
+  # json — structured output with schema validation
+  - type: prompt
+    name: entities
+    prompt_type: json
+    schema:
+      type: object
+      properties:
+        words:
+          type: array
+          items:
+            type: string
+      required: [words]
+    template: |
+      List the nouns in this sentence as JSON: {"words": [...]}
+      Sentence: "The quick brown fox jumps over the lazy dog."
+
+  # number — numeric output
+  - type: prompt
+    name: word_count
+    prompt_type: number
+    template: "How many words are in this sentence? Reply with just the number: {{prime.greeting.value}}"
+
+  # boolean — yes/no output
+  - type: prompt
+    name: is_short
+    prompt_type: boolean
+    template: "Is this fewer than 20 words? Reply yes or no: {{prime.greeting.value}}"

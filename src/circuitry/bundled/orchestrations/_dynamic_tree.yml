@@ -1,0 +1,18 @@
+effects:
+  # flow: tree — all steps share the same state snapshot from the start of the dynamic;
+  # sibling outputs are NOT visible to each other, enabling independent parallel perspectives
+  - type: dynamic
+    name: analysis
+    flow: tree
+    effects:
+      - type: prompt
+        name: summary
+        template: "Summarize in one sentence: 'Photosynthesis converts sunlight into chemical energy stored in glucose.'"
+
+      - type: prompt
+        name: analogy
+        template: "Give a simple everyday analogy for: 'Photosynthesis converts sunlight into chemical energy stored in glucose.'"
+
+      - type: prompt
+        name: question
+        template: "What is one question a curious child might ask about: 'Photosynthesis converts sunlight into chemical energy stored in glucose.'"

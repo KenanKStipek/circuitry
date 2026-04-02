@@ -1,0 +1,43 @@
+# Demonstrates all primitives working together:
+# dynamic(tree) → dynamic(chain) → prompt(json) → loop(each) → if(cel) → prompt
+effects:
+  - type: dynamic
+    name: orchestrator
+    flow: tree
+    effects:
+      - type: dynamic
+        name: pipeline
+        flow: chain
+        effects:
+          - type: prompt
+            name: collect_topics
+            prompt_type: json
+            schema:
+              type: array
+              items:
+                type: string
+            template: 'Return exactly this JSON array: ["reliability","observability","testing"]'
+
+          - type: loop
+            name: summarize
+            each:
+              in: state.prime.orchestrator.pipeline.collect_topics.value
+              as: topic
+            body:
+              - type: prompt
+                name: line
+                template: "Give one sentence on {{topic}}."
+
+          - type: if
+            name: finalize
+            if:
+              mode: cel
+              expr: "size(state.prime.orchestrator.pipeline.summarize.value.effects_by_iteration) >= 1"
+            then:
+              - type: prompt
+                name: success_note
+                template: "Summaries were generated successfully."
+            else:
+              - type: prompt
+                name: empty_note
+                template: "No summaries were generated."

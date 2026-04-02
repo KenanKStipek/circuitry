@@ -1,0 +1,142 @@
+# Circuitry Bundled Orchestration Index
+# ─────────────────────────────────────
+# Each entry maps a short name to its file, description, required backends,
+# expected inputs, and category.  Used by `cof list` and name-based resolution.
+
+orchestrations:
+  # ── Runnable ────────────────────────────────────────────────────────────────
+
+  - name: hello
+    file: hello.yml
+    description: Say hello in a creative way — the simplest orchestration.
+    category: example
+    backends: [llm]
+    inputs:
+      - name: name
+        required: true
+        description: Who to greet.
+    example: "cof run hello -e name=World"
+
+  - name: article-summarizer
+    file: article_summarizer.yml
+    description: Summarize an article into a concise one-sentence summary.
+    category: utility
+    backends: [llm]
+    inputs:
+      - name: article_text
+        required: true
+        description: Full text of the article to summarize.
+      - name: max_words
+        required: false
+        description: Maximum words for the final summary (default model decides).
+    example: "cof run article-summarizer -e article_text='...'"
+
+  - name: comic-strip
+    file: comic_strip.yml
+    description: Generate a 2–4 panel comic strip with AI art and text overlays.
+    category: creative
+    backends: [llm, comfyui, ffmpeg]
+    inputs:
+      - name: prompt
+        required: false
+        description: Premise or theme for the comic strip.
+      - name: panel_count
+        required: false
+        description: "Number of panels (2–4, 0 = random)."
+      - name: genre
+        required: false
+        description: Genre (defaults to dark comedy).
+    example: "cof run comic-strip -e prompt='a cat discovers gravity'"
+
+  - name: orchestration-improver
+    file: orchestration_improver.yml
+    description: Analyze and improve an existing orchestration YAML.
+    category: tooling
+    backends: [llm]
+    inputs:
+      - name: input_yaml
+        required: true
+        description: The orchestration YAML to improve.
+      - name: original_prompt
+        required: true
+        description: The original intent the orchestration was built for.
+      - name: rules
+        required: false
+        description: LLM authoring rules (auto-injected by improve-orchestration script).
+    example: "cof run orchestration-improver --state input.json"
+
+  - name: orchestration-improver-judge
+    file: orchestration_improver_judge.yml
+    description: Convergence judge — decides if two orchestration versions have converged.
+    category: tooling
+    backends: [llm]
+    inputs:
+      - name: yaml_a
+        required: true
+        description: Previous iteration YAML.
+      - name: yaml_b
+        required: true
+        description: Current iteration YAML.
+    example: "cof run orchestration-improver-judge --state input.json"
+
+  - name: meta-orchestrator
+    file: meta_orchestrator.yml
+    description: Generate a new orchestration from a natural language prompt.
+    category: tooling
+    backends: [llm]
+    inputs:
+      - name: user_request
+        required: true
+        description: Natural language description of the orchestration to build.
+    example: "cof gen my-orch 'Build an article summarizer'"
+
+  # ── Templates (patterns for learning / cof gen) ────────────────────────────
+
+  - name: template-prompt
+    file: _prompt.yml
+    description: "Template: basic prompt with text, json, number, and boolean outputs."
+    category: template
+    backends: [llm]
+    inputs: []
+
+  - name: template-loop
+    file: _loop.yml
+    description: "Template: loop with each/as iteration and tree parallelism."
+    category: template
+    backends: [llm]
+    inputs: []
+
+  - name: template-conditional
+    file: _conditional.yml
+    description: "Template: if/then/else branching with CEL expressions."
+    category: template
+    backends: [llm]
+    inputs: []
+
+  - name: template-dynamic
+    file: _dynamic.yml
+    description: "Template: dynamic chain — sequential multi-step pipeline."
+    category: template
+    backends: [llm]
+    inputs: []
+
+  - name: template-dynamic-tree
+    file: _dynamic_tree.yml
+    description: "Template: dynamic tree — parallel fan-out execution."
+    category: template
+    backends: [llm]
+    inputs: []
+
+  - name: template-composition
+    file: _composition.yml
+    description: "Template: all primitives composed — dynamic, loop, conditional, prompt."
+    category: template
+    backends: [llm]
+    inputs: []
+
+  - name: template-reflector
+    file: _reflector.yml
+    description: "Template: reflector — runtime plan generation and execution."
+    category: template
+    backends: [llm]
+    inputs: []

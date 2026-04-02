@@ -1,0 +1,17 @@
+effects:
+  # flow: chain — each step executes sequentially and sees outputs from prior steps
+  - type: dynamic
+    name: pipeline
+    flow: chain
+    effects:
+      - type: prompt
+        name: topic
+        template: "Name one interesting scientific concept in three words or fewer."
+
+      - type: prompt
+        name: explain
+        template: "Explain '{{pipeline.topic.value}}' in one sentence."
+
+      - type: prompt
+        name: question
+        template: "Give one follow-up question a curious person might ask about: {{pipeline.explain.value}}"

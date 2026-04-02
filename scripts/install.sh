@@ -62,5 +62,47 @@ else
     fi
 fi
 
+# --- Create global config directory ---
+CONFIG_DIR="$HOME/.config/circuitry"
+if [ ! -d "$CONFIG_DIR" ]; then
+    mkdir -p "$CONFIG_DIR"
+    ok "Created $CONFIG_DIR"
+fi
+
+# --- Seed default config if none exists ---
+CONFIG_FILE="$CONFIG_DIR/config.json"
+if [ ! -f "$CONFIG_FILE" ]; then
+    cat > "$CONFIG_FILE" << 'CONF'
+{
+  "default_model": "llama3:latest",
+  "default_adapter": "ollama",
+  "runtime": {
+    "adapters": {
+      "ollama": {
+        "base_url": "http://localhost:11434",
+        "timeout_seconds": 6000
+      }
+    }
+  }
+}
+CONF
+    ok "Created default config: $CONFIG_FILE"
+else
+    log "SKIP" "Config already exists: $CONFIG_FILE"
+fi
+
+# --- First-run guidance ---
 echo ""
-log "NEXT" "Run 'cof init' to get started or 'cof doctor' to check your setup."
+echo "  ┌─────────────────────────────────────────────┐"
+echo "  │        Circuitry installed successfully!     │"
+echo "  ├─────────────────────────────────────────────┤"
+echo "  │                                             │"
+echo "  │  Get started:                               │"
+echo "  │    cof list          Browse orchestrations  │"
+echo "  │    cof run hello -e name=World   Try it!    │"
+echo "  │    cof init          Start a new project    │"
+echo "  │    cof doctor        Check your setup       │"
+echo "  │                                             │"
+echo "  │  Config: ~/.config/circuitry/config.json    │"
+echo "  │                                             │"
+echo "  └─────────────────────────────────────────────┘"

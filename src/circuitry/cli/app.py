@@ -16,6 +16,7 @@ from rich.table import Table
 from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, find_config_path, load_config, resolve_config
 from .doctor import register_doctor
 from .orchestration_loader import serialize_orchestration
+from .registry import load_index, resolve_bundled
 from .runtime_shim import RunRequest, inspect_orchestration, run, validate
 from .shared_library import (
     apply_service_profile,
@@ -140,12 +141,36 @@ def _do_validate(orchestration: Path, json_out: bool) -> None:
         raise typer.Exit(code=1)
 
 
+def _resolve_orchestration(name_or_path: str) -> Path | None:
+    """Resolve an orchestration argument to a file path.
+
+    Resolution order:
+      1. Literal file path (exists on disk)
+      2. Bundled orchestration by name (from index.yml)
+    """
+    # 1. Try as a file path
+    candidate = Path(name_or_path)
+    if candidate.exists() and candidate.is_file():
+        return candidate
+
+    # 2. Try bundled name resolution
+    bundled = resolve_bundled(name_or_path)
+    if bundled is not None:
+        return bundled
+
+    return None
+
+
 RUN_EPILOG = """
 [bold]Examples:[/bold]
-  cof run ./my-orch.yml
+  cof run hello -e name=World
+  cof run article-summarizer -e article_text='...'
   cof run ./my-orch.yml -e topic=cats --tail
   cof run ./my-orch.yml --live-state ./state.json
   cof run --last
+
+[bold]Resolution order:[/bold] local file path > bundled orchestration name.
+Run [bold]cof list[/bold] to see available bundled orchestrations.
 """
 
 
@@ -155,9 +180,9 @@ RUN_EPILOG = """
     epilog=RUN_EPILOG,
 )
 def run_cmd(
-    orchestration: Optional[Path] = typer.Argument(
-        None, exists=True, dir_okay=False, readable=True,
-        help="Path to orchestration file.",
+    orchestration: Optional[str] = typer.Argument(
+        None,
+        help="Path to orchestration file, or name of a bundled orchestration.",
     ),
     config: Optional[Path] = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
@@ -202,7 +227,7 @@ def run_cmd(
     # --last: replay stashed args
     if last:
         stashed = _load_last_run()
-        orchestration = Path(stashed["orchestration"])
+        orchestration = stashed["orchestration"]
         config = Path(stashed["config"]) if stashed.get("config") else None
         state = Path(stashed["state"]) if stashed.get("state") else None
         out = Path(stashed["out"]) if stashed.get("out") else None
@@ -217,12 +242,15 @@ def run_cmd(
         tail = stashed.get("tail", False)
 
     if orchestration is None:
-        console.print("[red]Error:[/red] Missing orchestration path. Use --last or provide a path.")
+        console.print("[red]Error:[/red] Missing orchestration. Use --last or provide a path/name.")
+        console.print("[dim]Tip: run [bold]cof list[/bold] to see available orchestrations.[/dim]")
         raise typer.Exit(code=1)
 
-    # Validate orchestration path exists (--last bypasses Typer's exists=True check)
-    if not orchestration.exists():
-        console.print(f"[red]Error:[/red] Orchestration file not found: {orchestration}")
+    # Resolve orchestration: local file path > bundled name
+    orch_path = _resolve_orchestration(orchestration)
+    if orch_path is None:
+        console.print(f"[red]Error:[/red] Orchestration not found: {orchestration}")
+        console.print("[dim]Tip: run [bold]cof list[/bold] to see available orchestrations.[/dim]")
         raise typer.Exit(code=1)
 
     # Auto-pipe detection (before mutual exclusivity check so --tail wins in pipes)
@@ -242,7 +270,8 @@ def run_cmd(
         console.print(
             f"[bold]Config:[/bold] {config if config else '— (resolved)'}"
         )
-        console.print(f"[bold]Orchestration:[/bold] {orchestration}")
+        orch_label = orchestration if str(orch_path) == orchestration else f"{orchestration} ({orch_path})"
+        console.print(f"[bold]Orchestration:[/bold] {orch_label}")
         console.print(f"[bold]State (in):[/bold] {state if state else '—'}")
         console.print(f"[bold]State (out):[/bold] {out if out else '—'}")
         if live_state:
@@ -260,7 +289,7 @@ def run_cmd(
             initial_state = inline
 
     req = RunRequest(
-        orchestration_path=orchestration,
+        orchestration_path=orch_path,
         state_path=state if initial_state is None else None,
         initial_state=initial_state,
         out_path=out,
@@ -301,7 +330,7 @@ def run_cmd(
     # Stash for --last (only on success, skip if replaying via --last)
     if not last:
         _save_last_run({
-            "orchestration": str(orchestration),
+            "orchestration": str(orch_path),
             "config": str(config) if config else None,
             "state": str(state) if state else None,
             "out": str(out) if out else None,
@@ -553,6 +582,87 @@ def run_library_cmd(
     if result.warnings and not (quiet or json_out):
         for w in result.warnings:
             console.print(f"[yellow]Warning:[/yellow] {w}")
+
+
+@app.command("list", help="List available bundled orchestrations.")
+def list_cmd(
+    category: Optional[str] = typer.Option(
+        None, "--category", "-C", help="Filter by category (example, utility, creative, tooling, template)."
+    ),
+    json_out: bool = typer.Option(
+        False, "--json", help="Output machine-readable JSON only."
+    ),
+):
+    entries = load_index()
+    if not entries:
+        console.print("[yellow]No bundled orchestrations found.[/yellow]")
+        raise typer.Exit(code=1)
+
+    if category:
+        entries = [e for e in entries if e.get("category") == category]
+        if not entries:
+            console.print(f"[yellow]No orchestrations in category: {category}[/yellow]")
+            raise typer.Exit(code=1)
+
+    if json_out:
+        console.print_json(json.dumps(entries, ensure_ascii=False))
+        return
+
+    # Check backend availability from current config
+    cfg = resolve_config()
+    available_backends = _detect_backends(cfg)
+
+    _print_header("Circuitry · Orchestrations")
+
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Name", style="bold")
+    table.add_column("Description")
+    table.add_column("Category", style="dim")
+    table.add_column("Backends", justify="center")
+
+    for entry in entries:
+        backends = entry.get("backends", [])
+        backend_parts = []
+        for b in backends:
+            if b in available_backends:
+                backend_parts.append(f"[green]{b}[/green]")
+            else:
+                backend_parts.append(f"[red]{b}[/red]")
+        backends_str = " ".join(backend_parts) if backend_parts else "—"
+
+        table.add_row(
+            entry.get("name", "?"),
+            entry.get("description", ""),
+            entry.get("category", ""),
+            backends_str,
+        )
+
+    console.print(table)
+    console.print()
+    console.print("[dim]Run with:[/dim] cof run <name> [dim](e.g.[/dim] cof run hello -e name=World[dim])[/dim]")
+    console.print(f"[dim]Backends: [green]available[/green] [red]not detected[/red][/dim]")
+
+
+def _detect_backends(cfg: CircuitryConfig) -> set[str]:
+    """Best-effort detection of which backends are available."""
+    available: set[str] = set()
+
+    # LLM: if any adapter is configured, LLM is available
+    adapters = cfg.runtime.get("adapters", {})
+    if cfg.default_adapter or adapters:
+        available.add("llm")
+
+    # ComfyUI: check runtime.plugins.comfyui
+    plugins = cfg.runtime.get("plugins", {})
+    if "comfyui" in plugins:
+        available.add("comfyui")
+
+    # ffmpeg: check if ffmpeg binary is on PATH
+    import shutil
+    if shutil.which("ffmpeg"):
+        available.add("ffmpeg")
+
+    return available
 
 
 @app.command("validate", help="Validate an orchestration file against the schema.")

@@ -1,0 +1,24 @@
+effects:
+  - type: prompt
+    name: step1
+    prompt_type: json
+    schema:
+      type: object
+      properties:
+        summary:
+          type: string
+      required:
+        - summary
+    template: |
+      role: system
+      content: |
+        You are a concise summarizer. Summarize the article below in one sentence, maximum 30 words, plain English. Return a JSON object with a single field "summary" containing that sentence. Do not output anything else.
+
+      role: user
+      content: |
+        {{article_text}}
+  - type: prompt
+    name: summarize
+    template: |
+      Trim the following summary to no more than {{max_words}} words. Return the trimmed summary as plain text, without any additional commentary or headings.  
+      Summary: {{prime.step1.value.summary}}

@@ -1,0 +1,20 @@
+effects:
+  - type: prompt
+    name: get_role
+    template: "What is the user's role? Respond with exactly one word: 'admin' or 'user'."
+
+  # mode: cel — deterministic CEL expression evaluated against state paths
+  # mode: model — LLM evaluates a rendered template and returns yes/no
+  - type: if
+    name: check_role
+    if:
+      mode: cel
+      expr: "state.prime.get_role.value == 'admin'"
+    then:
+      - type: prompt
+        name: admin_greeting
+        template: "Welcome, administrator! You have full system access."
+    else:
+      - type: prompt
+        name: user_greeting
+        template: "Welcome! You have standard access."
