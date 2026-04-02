@@ -1,0 +1,18 @@
+name: _image
+description: Smoke test for image generation via ComfyUI
+
+effects:
+  - name: generate_image
+    type: tool
+    provider: comfyui
+    prompt: "a red apple on a wooden table, photorealistic"
+    model: flux1-dev-fp8.safetensors
+    params:
+      image_output: path
+      image_dir: ./output/images
+      steps: 20
+      cfg: 3.5
+      sampler_name: euler
+      scheduler: beta
+      width: 512
+      height: 512

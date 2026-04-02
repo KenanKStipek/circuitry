@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Sync orchestrations from orchestrations/ to src/circuitry/bundled/orchestrations/.
+
+Copies all .yml files from the project root orchestrations/ directory into the
+bundled package directory. The index.yml is NOT overwritten — it's maintained
+separately since it contains metadata not derivable from the YAML files.
+
+Usage:
+    python scripts/sync-bundled
+    # or
+    ./scripts/sync-bundled
+"""
+
+import shutil
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+SRC_DIR = ROOT / "orchestrations"
+DEST_DIR = ROOT / "src" / "circuitry" / "bundled" / "orchestrations"
+
+
+def main() -> None:
+    if not SRC_DIR.is_dir():
+        print(f"Source directory not found: {SRC_DIR}")
+        raise SystemExit(1)
+
+    DEST_DIR.mkdir(parents=True, exist_ok=True)
+
+    copied = 0
+    skipped = 0
+
+    for src_file in sorted(SRC_DIR.glob("*.yml")):
+        dest_file = DEST_DIR / src_file.name
+
+        # Compare contents — only copy if different
+        if dest_file.exists():
+            if src_file.read_bytes() == dest_file.read_bytes():
+                skipped += 1
+                continue
+
+        shutil.copy2(src_file, dest_file)
+        print(f"  copied: {src_file.name}")
+        copied += 1
+
+    print(f"\nSync complete: {copied} copied, {skipped} unchanged")
+
+    # Check for bundled files that no longer exist in source
+    for dest_file in sorted(DEST_DIR.glob("*.yml")):
+        if dest_file.name == "index.yml":
+            continue
+        src_file = SRC_DIR / dest_file.name
+        if not src_file.exists():
+            print(f"  warning: {dest_file.name} exists in bundled/ but not in orchestrations/")
+
+
+if __name__ == "__main__":
+    main()
