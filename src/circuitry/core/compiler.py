@@ -16,6 +16,7 @@ from .prompt import (
 )
 from .reflector import ReflectorDefinition
 from .tool import ToolDefinition
+from .use import UseDefinition
 
 EffectDef = Union[
     DynamicDefinition,
@@ -24,6 +25,7 @@ EffectDef = Union[
     ConditionalDefinition,
     LoopDefinition,
     ToolDefinition,
+    UseDefinition,
 ]
 
 _NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -137,14 +139,20 @@ def _compile_effects_in_scope(
     return compiled
 
 
+_VALID_FLOWS: dict[str, Literal["chain", "tree"]] = {
+    "chain": "chain", "chain_of_thought": "chain", "cot": "chain",
+    "tree": "tree", "tree_of_thought": "tree", "tot": "tree",
+}
+
+
 def _normalize_flow(flow: str) -> Literal["chain", "tree"]:
     """Normalize flow aliases to canonical form."""
-    flow = (flow or "chain").strip().lower()
-    if flow in ("chain", "chain_of_thought", "cot"):
-        return "chain"
-    if flow in ("tree", "tree_of_thought", "tot"):
-        return "tree"
-    return "chain"
+    key = (flow or "chain").strip().lower()
+    canonical = _VALID_FLOWS.get(key)
+    if canonical is not None:
+        return canonical
+    valid = ", ".join(sorted(_VALID_FLOWS.keys()))
+    raise ValueError(f"Unknown flow value {flow!r}. Valid values are: {valid}.")
 
 
 def compile_orchestration(
@@ -236,6 +244,19 @@ def _compile_effect(
         )
         return _compile_tool(effect, scope_path=scope_path, effect_path=effect_path)
 
+    if effect_type == "use":
+        if name is None:
+            raise ValueError(
+                f"Use effect at '{effect_path}' is missing required field 'name'."
+            )
+        _validate_name(
+            name=name,
+            effect_type="use",
+            scope_path=scope_path,
+            effect_path=effect_path,
+        )
+        return _compile_use(effect, scope_path=scope_path, effect_path=effect_path)
+
     if effect_type == "reflector":
         if name is None:
             raise ValueError(
@@ -315,6 +336,15 @@ def _compile_conditional(
     mode_raw = str(if_def.get("mode") or "model").strip().lower()
     mode: Literal["model", "cel"] = "cel" if mode_raw == "cel" else "model"
 
+    if mode == "model" and not if_def.get("template"):
+        raise ValueError(
+            f"Conditional at '{effect_path}': mode 'model' requires a 'template' field."
+        )
+    if mode == "cel" and not if_def.get("expr"):
+        raise ValueError(
+            f"Conditional at '{effect_path}': mode 'cel' requires an 'expr' field."
+        )
+
     condition = ConditionDef(
         mode=mode,
         template=if_def.get("template") if mode == "model" else None,
@@ -393,6 +423,14 @@ def _compile_loop(
         if isinstance(while_config, dict):
             mode_raw = str(while_config.get("mode") or "model").strip().lower()
             mode: Literal["model", "cel"] = "cel" if mode_raw == "cel" else "model"
+            if mode == "model" and not while_config.get("template"):
+                raise ValueError(
+                    f"Loop while at '{effect_path}': mode 'model' requires a 'template' field."
+                )
+            if mode == "cel" and not while_config.get("expr"):
+                raise ValueError(
+                    f"Loop while at '{effect_path}': mode 'cel' requires an 'expr' field."
+                )
             while_def = LoopWhileDef(
                 mode=mode,
                 template=while_config.get("template") if mode == "model" else None,
@@ -502,6 +540,50 @@ def _compile_tool(
     )
 
 
+def _compile_use(
+    effect: dict[str, Any], *, scope_path: str, effect_path: str
+) -> UseDefinition:
+    """Compile a use (sub-orchestration) effect."""
+    name = effect.get("name")
+    if not name:
+        raise ValueError(f"Use effect at '{effect_path}' is missing 'name'.")
+
+    orchestration = effect.get("orchestration")
+    if not isinstance(orchestration, str) or not orchestration.strip():
+        raise ValueError(
+            f"Use effect '{name}' at '{effect_path}' is missing required field 'orchestration'."
+        )
+
+    inputs = effect.get("inputs") or None
+    if inputs is not None and not isinstance(inputs, dict):
+        inputs = None
+
+    outputs = effect.get("outputs") or None
+    if outputs is not None and not isinstance(outputs, dict):
+        outputs = None
+
+    on_error_raw = str(effect.get("on_error") or "fail").strip().lower()
+    on_error: Literal["fail", "skip", "continue"] = (
+        cast(Literal["fail", "skip", "continue"], on_error_raw)
+        if on_error_raw in ("fail", "skip", "continue")
+        else "fail"
+    )
+
+    description = effect.get("description")
+    if description is not None and not isinstance(description, str):
+        description = None
+
+    _ = scope_path
+    return UseDefinition(
+        name=name,
+        orchestration=orchestration.strip(),
+        inputs=inputs,
+        outputs=outputs,
+        on_error=on_error,
+        description=description,
+    )
+
+
 def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
     """Compile a prompt effect with full spec support."""
     name = effect.get("name")
@@ -551,6 +633,11 @@ def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
     schema = effect.get("schema")
     if schema is not None and not isinstance(schema, dict):
         schema = None
+
+    if prompt_type in ("json", "object", "array") and schema is None:
+        raise ValueError(
+            f"Prompt '{name}': prompt_type '{prompt_type}' requires a 'schema' field."
+        )
 
     # Model configuration
     model = effect.get("model")

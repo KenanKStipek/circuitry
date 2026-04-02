@@ -20,6 +20,23 @@ if TYPE_CHECKING:
     from .loop import LoopDefinition
     from .reflector import ReflectorDefinition
     from .tool import ToolDefinition
+    from .use import UseDefinition
+
+
+class TreeExecutionError(RuntimeError):
+    """Raised when one or more effects fail during parallel (tree) execution."""
+
+    def __init__(self, errors: list[Exception]) -> None:
+        self.errors = errors
+        super().__init__(self._format())
+
+    def _format(self) -> str:
+        if len(self.errors) == 1:
+            return str(self.errors[0])
+        parts = [f"{len(self.errors)} effects failed in parallel:"]
+        for i, err in enumerate(self.errors, 1):
+            parts.append(f"  [{i}] {type(err).__name__}: {err}")
+        return "\n".join(parts)
 
 
 def _now_iso() -> str:
@@ -33,6 +50,7 @@ EffectDef = Union[
     "ConditionalDefinition",
     "LoopDefinition",
     "ToolDefinition",
+    "UseDefinition",
 ]
 
 
@@ -123,7 +141,7 @@ class DynamicRuntime:
             raise ValueError(meta["error"])
 
         ctx = ctx_override if ctx_override is not None else store.state
-        child_store = Store(dyn, on_write=store.on_write)
+        child_store = store.child(self.defn.name)
 
         # Build ancestor context for children (this dynamic is now a parent).
         # Skip depth 0 — that's the invisible root "prime" container.
@@ -155,12 +173,6 @@ class DynamicRuntime:
                 # deterministic snapshot from dynamic start, not sibling writes.
                 tree_ctx = deepcopy(ctx)
 
-                # Pre-allocate store slots sequentially to avoid concurrent dict mutation
-                for effect in self.defn.effects:
-                    name = getattr(effect, "name", None)
-                    if name:
-                        child_store.ensure_dict(name)
-
                 tree_errors: list[Exception] = []
 
                 # Build animated per-effect tracker for verbose display
@@ -190,6 +202,15 @@ class DynamicRuntime:
                 else:
                     live_ctx = nullcontext()
 
+                # Give each thread its own isolated Store so concurrent
+                # effects never mutate shared dicts.  Results are merged
+                # back into child_store sequentially after all futures
+                # complete.
+                isolated_stores: dict[int, Store] = {
+                    idx: Store(state={})
+                    for idx in range(len(self.defn.effects))
+                }
+
                 with live_ctx:
                     with ThreadPoolExecutor(
                         max_workers=len(self.defn.effects)
@@ -198,10 +219,10 @@ class DynamicRuntime:
                             executor.submit(
                                 self._execute_effect,
                                 effect,
-                                store=child_store,
+                                store=isolated_stores[idx],
                                 ctx=tree_ctx,
                                 tracker=tree_tracker,
-                            ): self._effect_path(effect=effect, index=idx)
+                            ): idx
                             for idx, effect in enumerate(self.defn.effects)
                         }
                         for future in as_completed(futures):
@@ -210,11 +231,18 @@ class DynamicRuntime:
                             except Exception as e:
                                 tree_errors.append(e)
 
+                # Merge isolated stores back into child_store sequentially
+                for idx in range(len(self.defn.effects)):
+                    for key, value in isolated_stores[idx].state.items():
+                        child_store.state[key] = value
+
                 if store.on_write:
                     store.on_write(store.state)
 
                 if tree_errors:
-                    raise tree_errors[0]
+                    exc = TreeExecutionError(tree_errors)
+                    exc.__cause__ = tree_errors[0]
+                    raise exc
 
             dyn["value"] = True
             meta["completed_at"] = _now_iso()
@@ -243,6 +271,7 @@ class DynamicRuntime:
         from .reflector import ReflectorDefinition, ReflectorRuntime
 
         from .tool import ToolDefinition, ToolRuntime
+        from .use import UseDefinition, UseRuntime
 
         indent = "  " * self.depth
         type_label = _effect_type_label(effect)
@@ -352,6 +381,19 @@ class DynamicRuntime:
                     ancestors=self._child_ancestors if tracker is None else None,
                 ).execute(store=store, ctx=ctx)
 
+            elif isinstance(effect, UseDefinition):
+                UseRuntime(
+                    effect,
+                    adapter=self.adapter,
+                    model=self.model,
+                    runtime_config=self.runtime_config,
+                    dry_run=self.dry_run,
+                    timeout_seconds=self.timeout_seconds,
+                    verbose=self.verbose,
+                    depth=self.depth + 1,
+                    ancestors=self._child_ancestors,
+                ).execute(store=store, ctx=ctx)
+
             else:
                 raise TypeError(f"Unsupported effect type: {type(effect)}")
 
@@ -408,6 +450,7 @@ def _effect_type_label(effect: Any) -> str:
     from .loop import LoopDefinition
     from .reflector import ReflectorDefinition
     from .tool import ToolDefinition
+    from .use import UseDefinition
 
     if isinstance(effect, PromptDefinition):
         return "prompt"
@@ -421,6 +464,8 @@ def _effect_type_label(effect: Any) -> str:
         return "reflector"
     if isinstance(effect, ToolDefinition):
         return "tool"
+    if isinstance(effect, UseDefinition):
+        return "use"
     return type(effect).__name__.lower()
 
 
@@ -435,6 +480,7 @@ _EFFECT_STYLE: dict[str, tuple[str, str]] = {
     "if": ("◇", "magenta"),
     "reflector": ("✺", "green"),
     "tool": ("⚙", "white"),
+    "use": ("⊕", "green"),
 }
 
 

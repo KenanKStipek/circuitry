@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 try:
     import jsonschema as _jsonschema
@@ -188,7 +191,8 @@ def run(req: RunRequest) -> RunResult:
                 adapters_cfg = (effective.runtime or {}).get("adapters") or {}
                 this_cfg = adapters_cfg.get(resolved_adapter) or {}
                 timeout_seconds = int(this_cfg.get("timeout_seconds") or 120)
-            except Exception:
+            except (ValueError, TypeError) as exc:
+                logger.warning("Failed to parse timeout_seconds, defaulting to 120: %s", exc)
                 timeout_seconds = 120
         else:
             resolved_adapter = "_noop"
@@ -292,7 +296,7 @@ def run(req: RunRequest) -> RunResult:
                     persistence_node["status"] = "failed"
                 persistence_node["error"] = str(e)
         except Exception:
-            pass
+            logger.error("Error during error-handling cleanup", exc_info=True)
         return RunResult(ok=False, state=state, warnings=warnings, error=str(e))
 
 
@@ -377,6 +381,11 @@ def _has_prompt_effects(defn: Any) -> bool:
         return any(_has_prompt_effects(e) for e in defn.body)
     if isinstance(defn, ReflectorDefinition):
         return _has_prompt_effects(defn.inner)
+
+    from ..core.use import UseDefinition
+    if isinstance(defn, UseDefinition):
+        return True  # conservatively assume child orchestration has prompts
+
     return False
 
 

@@ -65,6 +65,7 @@
     "ConditionDef": {
       "type": "object",
       "description": "Condition definition for if/conditional and while loop.",
+      "required": ["mode"],
       "properties": {
         "mode": {
           "type": "string",
@@ -73,13 +74,23 @@
         },
         "template": {
           "type": "string",
-          "description": "Prompt template for model-based evaluation. Required when mode is model."
+          "description": "Prompt template for model-based evaluation. Enforced as required when mode is model."
         },
         "expr": {
           "type": "string",
-          "description": "CEL expression for deterministic evaluation. Must use state.prime.<name>.value prefix. Required when mode is cel."
+          "description": "CEL expression for deterministic evaluation. Must use state.prime.<name>.value prefix. Enforced as required when mode is cel."
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "model" } }, "required": ["mode"] },
+          "then": { "required": ["template"] }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "cel" } }, "required": ["mode"] },
+          "then": { "required": ["expr"] }
+        }
+      ]
     },
 
     "MessageDef": {
@@ -133,10 +144,14 @@
                 "if": { "properties": { "type": { "const": "tool" } } },
                 "then": { "$ref": "#/$defs/ToolEffect" },
                 "else": {
-                  "properties": {
-                    "type": {
-                      "enum": ["prompt", "dynamic", "if", "conditional", "loop", "reflector", "tool"],
-                      "description": "Unknown effect type. Must be one of: prompt, dynamic, if, conditional, loop, reflector, tool."
+                  "if": { "properties": { "type": { "const": "use" } } },
+                  "then": { "$ref": "#/$defs/UseEffect" },
+                  "else": {
+                    "properties": {
+                      "type": {
+                        "enum": ["prompt", "dynamic", "if", "conditional", "loop", "reflector", "tool", "use"],
+                        "description": "Unknown effect type. Must be one of: prompt, dynamic, if, conditional, loop, reflector, tool, use."
+                      }
                     }
                   }
                 }
@@ -151,6 +166,15 @@
       "type": "object",
       "required": ["type", "name"],
       "description": "Atomic model invocation. Produces a typed value at prime.<name>.value.",
+      "if": {
+        "properties": {
+          "prompt_type": { "enum": ["json", "object", "array"] }
+        },
+        "required": ["prompt_type"]
+      },
+      "then": {
+        "required": ["schema"]
+      },
       "properties": {
         "type": { "const": "prompt" },
         "name": { "$ref": "#/$defs/NamePattern" },
@@ -162,7 +186,7 @@
         },
         "schema": {
           "type": "object",
-          "description": "JSON Schema for validating structured output. Required when prompt_type is json."
+          "description": "JSON Schema for validating structured output. Enforced as required when prompt_type is json, object, or array."
         },
         "template": {
           "type": "string",
@@ -391,6 +415,32 @@
           "description": "Plugin-specific parameters. All string values support Mustache rendering against current state. Takes precedence over top-level prompt/model."
         },
         "timeout_ms": { "type": "integer", "minimum": 0 },
+        "on_error": { "$ref": "#/$defs/OnErrorDefault" }
+      }
+    },
+
+    "UseEffect": {
+      "type": "object",
+      "required": ["type", "name", "orchestration"],
+      "description": "Runs another orchestration as an isolated sub-step. Inputs are mapped in, outputs are mapped out. State is fully isolated.",
+      "properties": {
+        "type": { "const": "use" },
+        "name": { "$ref": "#/$defs/NamePattern" },
+        "description": { "type": "string" },
+        "orchestration": {
+          "type": "string",
+          "description": "Orchestration reference: a bundled name (e.g. 'article-summarizer') or a file path."
+        },
+        "inputs": {
+          "type": "object",
+          "description": "Input mapping. Keys become top-level state keys in the child orchestration. String values are Mustache-rendered against parent state.",
+          "additionalProperties": true
+        },
+        "outputs": {
+          "type": "object",
+          "description": "Output mapping. Keys become fields in this effect's .value. Values are dot-paths into the child's final state (e.g. 'prime.summarize.value').",
+          "additionalProperties": { "type": "string" }
+        },
         "on_error": { "$ref": "#/$defs/OnErrorDefault" }
       }
     }
