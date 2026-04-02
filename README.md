@@ -32,27 +32,26 @@ This gives you the `cof` command.
 ## Quick Start
 
 ```bash
-# Initialize a project (creates config + hello.yml)
-cof init
+# Interactive setup — detects backends, creates config
+cof setup
 
-# Dry-run to verify install (no model calls)
-cof run hello.yml --dry-run -e name=World --out out.json --pretty
+# Browse available orchestrations
+cof list
 
-# Live run (requires a configured adapter)
-cof run hello.yml -e name=World
+# Run by name (no path needed)
+cof run hello -e name=World
 
 # Just the output value
-cof run hello.yml -e name=World --tail
-```
+cof run hello -e name=World --tail
 
-Expected dry-run result:
-- Exits with code `0`
-- `out.json` contains `runtime.last_run`, `runtime.effective_settings`, and `prime.*` state keys
+# See details for an orchestration
+cof info article-summarizer
 
-The repo also ships ready-made examples in `orchestrations/`:
+# Copy a bundled orchestration for editing
+cof eject article-summarizer
 
-```bash
-cof run orchestrations/hello.yml -e name=World --dry-run
+# Initialize a new project (creates config + hello.yml)
+cof init
 ```
 
 ## How It Works
@@ -63,7 +62,7 @@ An orchestration is a YAML file declaring **effects** that execute in order. Eac
 effects:
   - type: prompt
     name: draft
-    template: "Write a short intro for {{input.topic}}."
+    template: "Write a short intro for {{topic}}."
 
   - type: prompt
     name: critique
@@ -79,31 +78,32 @@ effects:
 
 The adapter and model come from your config (see [Configuration](#configuration) below) — orchestrations stay portable.
 
-The second prompt reads the first prompt's output. The third reads both. Each step adapts based on what came before — this is the feedback loop that makes orchestrations cybernetic rather than static pipelines.
-
 ## CLI Reference
 
 ```bash
-# Run an orchestration
-cof run orchestrations/hello.yml
-
-# With options
-cof run orchestrations/hello.yml --verbose --out state.json --pretty
+# Run an orchestration (by name or path)
+cof run hello -e name=World
+cof run ./my-orch.yml --verbose --out state.json --pretty
 
 # Pipe-friendly: just the final value
-cof run orchestrations/hello.yml --tail
+cof run hello -e name=World --tail
 
 # Re-run the last orchestration
 cof run --last
 
-# Pass inline state
-cof run orchestrations/hello.yml -e topic="quantum computing" -e tone=casual
-
 # JSON output (auto-detected when piped)
-cof run orchestrations/hello.yml --json | jq '.prime'
+cof run hello --json | jq '.prime'
 
-# Live state for external tools (e.g., Perceptron)
-cof run orchestrations/hello.yml --live-state ./state.live.json
+# Live state for external tools
+cof run hello -e name=World --live-state ./state.live.json
+
+# Browse, inspect, and eject orchestrations
+cof list
+cof list --category example
+cof info article-summarizer
+cof info article-summarizer --json
+cof eject comic-strip
+cof eject comic-strip --out my-comic.yml
 
 # Validate an orchestration
 cof check orchestrations/hello.yml
@@ -112,13 +112,15 @@ cof check orchestrations/hello.yml --json
 # Generate an orchestration from natural language
 cof gen blog_pipeline "Build a pipeline that drafts, critiques, and revises a blog post"
 cof gen summarizer "Summarize a PDF" --format toon
-cof gen summarizer "Summarize a PDF" --out state.json  # live state during run
+
+# System diagnostics and setup
+cof setup              # Interactive backend detection + config wizard
+cof setup --json       # Non-interactive detection output
+cof doctor             # Check all backends and config
+cof doctor --generate  # Also test model connectivity
 
 # Project setup
 cof init
-
-# System check
-cof doctor
 
 # Version
 cof version
@@ -133,10 +135,10 @@ When stdout is not a TTY (e.g., piped to `jq`), `cof run` automatically switches
 Circuitry uses layered config resolution (highest priority wins):
 
 1. CLI flags (`--config`, inline `-e`)
-2. Environment variables (`CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER`, `CIRCUITRY_ADAPTER_URL`)
+2. Environment variables (`CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER`, `CIRCUITRY_ADAPTER_URL`, `CIRCUITRY_COMFYUI_URL`)
 3. Project-local config (`circuitry.config.json` or `config.json` in cwd)
 4. Global config (`~/.config/circuitry/config.json`)
-5. Sane defaults (ollama at localhost:11434)
+5. Sane defaults (ollama at localhost:11434, comfyui at localhost:8188)
 
 ```json
 {
@@ -179,10 +181,27 @@ The atomic unit. One model invocation, one typed result, written to state at a d
 ```yaml
 - type: prompt
   name: greet_user
-  template: "Say hello to {{input.user_name}} in one sentence."
+  template: "Say hello to {{user_name}} in one sentence."
 ```
 
 State path: `prime.greet_user.value`
+
+Available types: `text`, `json`, `boolean`, `number`, `array`, `object`
+
+```yaml
+- type: prompt
+  name: extract_data
+  prompt_type: json
+  schema:
+    type: object
+    properties:
+      items:
+        type: array
+        items:
+          type: string
+    required: [items]
+  template: "Extract items as JSON..."
+```
 
 ### Dynamic
 
@@ -238,14 +257,13 @@ Cybernetic iteration. The loop body executes, writes state, and the continuation
   name: refine
   while:
     mode: model
-    condition: "Is the draft still below quality threshold? {{prime.refine.iter_{{_iter}}.improve.value}}"
+    template: "Does this draft need more improvement? Reply true or false.\n\n{{prime.draft.value}}"
+  max_iterations: 5
   body:
     - type: prompt
-      name: improve
-      template: "Improve this draft: {{prime.refine.iter_{{_prev_iter}}.improve.value}}"
+      name: draft
+      template: "Improve this text:\n{{prime.draft.value}}"
 ```
-
-A `while` loop with `mode: model` is the purest cybernetic primitive — the model observes accumulated state and decides whether to keep going.
 
 Loop modes:
 - **while** — continue while condition holds (model or CEL evaluated)
@@ -268,9 +286,47 @@ Loops support `collect` to aggregate body outputs across iterations:
 
 Collected at: `prime.process_items.collected.value` (array)
 
+### Use
+
+Composition primitive. Runs another orchestration as an isolated sub-step with explicit input/output mapping.
+
+```yaml
+- type: use
+  name: summarize_step
+  orchestration: article-summarizer
+  inputs:
+    article_text: "{{prime.fetch.value}}"
+    max_words: 50
+  outputs:
+    summary: prime.summarize.value
+```
+
+Resolution order: local file path > bundled orchestration name.
+
+State is fully isolated — the child orchestration runs in its own store. Only mapped inputs are passed in, only mapped outputs are extracted.
+
+Features:
+- **`orchestration`** — reference by name (`article-summarizer`) or path (`./my-orch.yml`)
+- **`inline`** — Mustache template that renders to orchestration YAML at runtime (for LLM-generated plans)
+- **`validate`** — schema validation of inline YAML before execution (default `true`)
+- **`on_error`** — `fail` (default), `skip`, or `continue`
+- Works inside loops, conditionals, and dynamics
+
+```yaml
+# LLM-generated orchestration execution
+- type: prompt
+  name: generate_plan
+  template: "Generate a Circuitry orchestration YAML for: {{goal}}"
+
+- type: use
+  name: execute_plan
+  inline: "{{prime.generate_plan.value}}"
+  validate: true
+```
+
 ### Reflector
 
-A planning component that reads state and produces execution plans. Reflectors observe the system's current state and generate dynamics — the highest-level cybernetic feedback.
+A planning component that reads state and produces execution plans. Reflectors observe the system's current state and generate dynamics — the highest-level cybernetic feedback. Internally delegates to `use(inline)` for validation and execution.
 
 ```yaml
 - type: reflector
@@ -297,26 +353,44 @@ Extends orchestrations beyond model invocations. Tool effects invoke external sy
 
 Built-in providers: `ffmpeg`, `comfyui`
 
-### Prompt Types
+## Interfaces
 
-Prompts support typed outputs with optional schema validation:
+Orchestrations can declare typed input/output contracts via `interface`. When referenced by a `use` effect, required inputs are validated and output mappings are auto-generated.
 
 ```yaml
-- type: prompt
-  name: extract_data
-  prompt_type: json
-  schema:
-    type: object
-    properties:
-      items:
-        type: array
-        items:
-          type: string
-    required: [items]
-  template: "Extract items as JSON..."
+interface:
+  inputs:
+    article_text:
+      type: string
+      required: true
+      description: Full article text.
+    max_words:
+      type: number
+      required: false
+  outputs:
+    summary:
+      type: string
+      path: prime.summarize.value
+
+effects:
+  - type: prompt
+    name: summarize
+    template: "Summarize in {{max_words}} words: {{article_text}}"
 ```
 
-Available types: `text`, `json`, `boolean`, `number`, `array`, `object`
+When used:
+
+```yaml
+# Explicit output mapping
+- type: use
+  name: sub
+  orchestration: article-summarizer
+  inputs:
+    article_text: "{{prime.fetch.value}}"
+
+# outputs auto-generated from interface:
+#   summary → prime.summarize.value
+```
 
 ## State Paths
 
@@ -329,11 +403,27 @@ prime.<loop>.iter_<n>.<effect>.value              # inside a loop iteration
 prime.<loop>.collected.value                      # loop collect aggregation
 ```
 
-Inspect paths from any run:
+Available inside loop body templates:
+- `{{_loop_index}}` — zero-based iteration index (both `each` and `while` loops)
+- `{{<each.as>}}` — current collection element (`each` loops only)
+
+## Bundled Orchestrations
+
+Circuitry ships with ready-to-run orchestrations. Browse with `cof list`, inspect with `cof info`, and eject with `cof eject`.
 
 ```bash
-cof run orchestrations/_loop.yml --out out.json --pretty
+cof list                           # see all
+cof list --category example        # filter by category
+cof info hello                     # details + source preview
+cof eject article-summarizer       # copy to local for editing
 ```
+
+Categories:
+- **example** — hello (simplest orchestration)
+- **utility** — article-summarizer
+- **creative** — comic-strip (multi-step image generation)
+- **tooling** — meta-orchestrator, orchestration-improver, orchestration-improver-judge
+- **template** — one per primitive type (prompt, loop, conditional, dynamic, composition, reflector)
 
 ## Programmatic API
 
@@ -356,22 +446,6 @@ Additional embedded API:
 - `inspect_divergence_paths` — deterministic failure-path diagnostics
 
 See `docs/api-reference.md` for signatures and integration guidance.
-
-## Orchestration Library
-
-See `orchestrations/` for pre-built examples:
-
-- `hello.yml` — single prompt hello world
-- `_prompt.yml` — prompt types (text, json, number, boolean)
-- `_dynamic.yml` — sequential chain with interpolation
-- `_dynamic_tree.yml` — parallel execution
-- `_conditional.yml` — branching with CEL conditions
-- `_loop.yml` — collection iteration with collect
-- `_reflector.yml` — reflector-driven planning
-- `_composition.yml` — dynamic + loop + conditional composition
-- `article_summarizer.yml` — real-world summarization pipeline
-- `meta_orchestrator.yml` — generate new orchestrations from natural language
-- `comic_strip.yml` — multi-step image generation with ffmpeg + ComfyUI
 
 ## Architecture
 
@@ -399,6 +473,7 @@ Orchestration YAML
 3. **Explicit Control Flow** — no implicit branching or hidden reasoning; topology is declared in YAML
 4. **Full Auditability** — every effect, branch decision, and iteration is recorded to state
 5. **Model Agnostic** — adapters abstract provider differences; orchestrations are portable
+6. **Composable** — orchestrations are building blocks; `use` chains them with state isolation and typed interfaces
 
 ## License
 
