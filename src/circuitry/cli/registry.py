@@ -24,6 +24,22 @@ def load_index() -> list[dict[str, Any]]:
     return data.get("orchestrations", []) if isinstance(data, dict) else []
 
 
+def find_entry(name: str) -> dict[str, Any] | None:
+    """Look up a single index entry by name, or None if not found."""
+    entries = load_index()
+    normalised = name.replace("-", "_")
+    for entry in entries:
+        entry_name = entry.get("name", "")
+        entry_stem = Path(entry.get("file", "")).stem
+        if (
+            entry_name == name
+            or entry_name.replace("-", "_") == normalised
+            or entry_stem == normalised
+        ):
+            return entry
+    return None
+
+
 def resolve_bundled(name: str) -> Path | None:
     """Resolve an orchestration name to its bundled file path, or None if not found.
 

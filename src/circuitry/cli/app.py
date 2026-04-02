@@ -16,7 +16,7 @@ from rich.table import Table
 from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, find_config_path, load_config, resolve_config
 from .doctor import register_doctor
 from .orchestration_loader import serialize_orchestration
-from .registry import load_index, resolve_bundled
+from .registry import find_entry, load_index, resolve_bundled
 from .runtime_shim import RunRequest, inspect_orchestration, run, validate
 from .setup import register_setup
 from .shared_library import (
@@ -660,6 +660,90 @@ def _detect_backends(cfg: CircuitryConfig) -> set[str]:
         available.add("llm")
 
     return available
+
+
+@app.command("info", help="Show details for a bundled orchestration.")
+def info_cmd(
+    name: str = typer.Argument(..., help="Name of the orchestration."),
+    json_out: bool = typer.Option(False, "--json", help="Output machine-readable JSON only."),
+):
+    entry = find_entry(name)
+    if entry is None:
+        console.print(f"[red]Error:[/red] Orchestration not found: {name}")
+        console.print("[dim]Run [bold]cof list[/bold] to see available orchestrations.[/dim]")
+        raise typer.Exit(code=1)
+
+    if json_out:
+        console.print_json(json.dumps(entry, ensure_ascii=False))
+        return
+
+    _print_header(f"Circuitry · {entry['name']}")
+
+    console.print(f"[bold]Description:[/bold] {entry.get('description', '—')}")
+    console.print(f"[bold]Category:[/bold] {entry.get('category', '—')}")
+    console.print(f"[bold]File:[/bold] {entry.get('file', '—')}")
+    console.print(f"[bold]Backends:[/bold] {', '.join(entry.get('backends', []))}")
+
+    inputs = entry.get("inputs", [])
+    if inputs:
+        console.print()
+        input_table = Table(title="Inputs", show_header=True, header_style="bold cyan")
+        input_table.add_column("Name", style="bold")
+        input_table.add_column("Required", justify="center")
+        input_table.add_column("Description")
+        for inp in inputs:
+            req = "[green]yes[/green]" if inp.get("required") else "[dim]no[/dim]"
+            input_table.add_row(inp.get("name", "?"), req, inp.get("description", ""))
+        console.print(input_table)
+
+    example = entry.get("example")
+    if example:
+        console.print()
+        console.print(f"[bold]Example:[/bold]")
+        console.print(f"  [cyan]{example}[/cyan]")
+
+    # Show the actual orchestration YAML source
+    bundled_path = resolve_bundled(name)
+    if bundled_path and bundled_path.exists():
+        console.print()
+        source = bundled_path.read_text(encoding="utf-8").strip()
+        # Truncate long sources
+        lines = source.splitlines()
+        if len(lines) > 30:
+            preview = "\n".join(lines[:30]) + f"\n# ... ({len(lines) - 30} more lines)"
+        else:
+            preview = source
+        from rich.syntax import Syntax
+        console.print(Syntax(preview, "yaml", theme="monokai", line_numbers=False))
+
+
+@app.command("eject", help="Copy a bundled orchestration to the current directory for editing.")
+def eject_cmd(
+    name: str = typer.Argument(..., help="Name of the orchestration to eject."),
+    out: Optional[Path] = typer.Option(
+        None, "--out", "-o", help="Output path. Defaults to ./<filename>."
+    ),
+):
+    entry = find_entry(name)
+    if entry is None:
+        console.print(f"[red]Error:[/red] Orchestration not found: {name}")
+        console.print("[dim]Run [bold]cof list[/bold] to see available orchestrations.[/dim]")
+        raise typer.Exit(code=1)
+
+    bundled_path = resolve_bundled(name)
+    if bundled_path is None or not bundled_path.exists():
+        console.print(f"[red]Error:[/red] Bundled file not found for: {name}")
+        raise typer.Exit(code=1)
+
+    dest = out or Path(entry.get("file", f"{name}.yml"))
+    if dest.exists():
+        if not typer.confirm(f"{dest} already exists. Overwrite?", default=False):
+            raise typer.Exit(code=0)
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(bundled_path.read_text(encoding="utf-8"), encoding="utf-8")
+    console.print(f"[green]Ejected:[/green] {dest}")
+    console.print(f"[dim]Edit freely — this is your local copy. Run with: cof run {dest}[/dim]")
 
 
 @app.command("validate", help="Validate an orchestration file against the schema.")
