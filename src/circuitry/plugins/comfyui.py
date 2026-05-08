@@ -3,15 +3,90 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import shlex
 import subprocess
 import time
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from .base import ToolResult
+
+
+# ---------------------------------------------------------------------------
+# Validation helpers
+# ---------------------------------------------------------------------------
+
+_ALLOWED_IMAGE_EXTENSIONS = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff", ".tif",
+})
+
+_SHELL_METACHAR_RE = re.compile(r"[;&|`$><]|\$\(|\)\)|&&|\|\|")
+
+
+def _validate_image_path(image_path: str) -> Path:
+    """Validate and resolve an image file path.
+
+    Checks for null bytes, semicolons (curl form-data metacharacter),
+    file existence, is-file, and extension whitelist.
+    """
+    if not isinstance(image_path, str) or not image_path.strip():
+        raise ValueError("image_path must be a non-empty string")
+    if "\x00" in image_path:
+        raise ValueError("image_path must not contain null bytes")
+    if ";" in image_path:
+        raise ValueError("image_path must not contain semicolons")
+
+    resolved = Path(image_path).resolve()
+    if not resolved.exists():
+        raise FileNotFoundError(f"Image file does not exist: {resolved}")
+    if not resolved.is_file():
+        raise ValueError(f"Image path is not a file: {resolved}")
+
+    ext = resolved.suffix.lower()
+    if ext not in _ALLOWED_IMAGE_EXTENSIONS:
+        raise ValueError(
+            f"Image extension {ext!r} not allowed. "
+            f"Permitted: {sorted(_ALLOWED_IMAGE_EXTENSIONS)}"
+        )
+    return resolved
+
+
+def _validate_image_dir(
+    image_dir: str, *, allowed_base: Path | None = None
+) -> Path:
+    """Validate and resolve an image output directory path.
+
+    Ensures the resolved path is within *allowed_base* (defaults to cwd),
+    contains no null bytes, and has no shell metacharacters.
+    """
+    if not isinstance(image_dir, str) or not image_dir.strip():
+        raise ValueError("image_dir must be a non-empty string")
+    if "\x00" in image_dir:
+        raise ValueError("image_dir must not contain null bytes")
+    if _SHELL_METACHAR_RE.search(image_dir):
+        raise ValueError(
+            f"image_dir contains disallowed shell metacharacters: {image_dir!r}"
+        )
+
+    if allowed_base is None:
+        allowed_base = Path.cwd()
+    allowed_base = allowed_base.resolve()
+
+    resolved = Path(image_dir).resolve()
+    # Ensure the resolved dir is equal to or a child of the allowed base.
+    try:
+        resolved.relative_to(allowed_base)
+    except ValueError:
+        raise ValueError(
+            f"image_dir {resolved} is outside the allowed base {allowed_base}"
+        ) from None
+
+    return resolved
 
 
 @dataclass(frozen=True)
@@ -22,6 +97,12 @@ class ComfyUIPlugin:
     default_image_output: str = "path"
     image_dir: str = "./output/images"
     poll_interval: float = 2.0
+
+    def __post_init__(self) -> None:
+        if not self.base_url.startswith(("http://", "https://")):
+            raise ValueError(
+                f"base_url must start with http:// or https://, got: {self.base_url!r}"
+            )
 
     def _curl_json(
         self,
@@ -102,6 +183,7 @@ class ComfyUIPlugin:
 
     def _upload_image(self, *, image_path: str, timeout_seconds: int = 30) -> str:
         """Upload a local image to ComfyUI's input folder. Returns the uploaded filename."""
+        resolved_path = _validate_image_path(image_path)
         base = self.base_url.rstrip("/")
         cmd = [
             "curl",
@@ -111,7 +193,7 @@ class ComfyUIPlugin:
             "--max-time",
             str(int(timeout_seconds)),
             "-X", "POST",
-            "-F", f"image=@{image_path}",
+            "-F", f"image=@{resolved_path}",
             "-F", "type=input",
             "-F", "overwrite=true",
             f"{base}/upload/image",
@@ -329,10 +411,12 @@ class ComfyUIPlugin:
 
         # Download image bytes
         view_url = (
-            f"{base}/view"
-            f"?filename={img_info['filename']}"
-            f"&subfolder={img_info.get('subfolder', '')}"
-            f"&type={img_info.get('type', 'output')}"
+            f"{base}/view?"
+            + urllib.parse.urlencode({
+                "filename": img_info["filename"],
+                "subfolder": img_info.get("subfolder", ""),
+                "type": img_info.get("type", "output"),
+            })
         )
         image_bytes = self._curl_bytes(
             url=view_url, timeout_seconds=min(60, timeout_seconds)
@@ -344,17 +428,18 @@ class ComfyUIPlugin:
             or self.default_image_output
             or "path"
         )
-        image_dir = params.get("image_dir") or self.image_dir or "./output/images"
+        image_dir_raw = params.get("image_dir") or self.image_dir or "./output/images"
+        validated_image_dir = _validate_image_dir(image_dir_raw)
 
         if image_output == "base64":
             value: Any = base64.b64encode(image_bytes).decode()
         elif image_output == "url":
             value = view_url
         else:  # path (default)
-            os.makedirs(image_dir, exist_ok=True)
+            os.makedirs(validated_image_dir, exist_ok=True)
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
             filename = f"comfyui_{timestamp}.png"
-            filepath = os.path.join(image_dir, filename)
+            filepath = os.path.join(str(validated_image_dir), filename)
             with open(filepath, "wb") as f:
                 f.write(image_bytes)
             value = filepath
