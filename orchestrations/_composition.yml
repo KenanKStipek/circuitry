@@ -12,6 +12,10 @@ effects:
           - type: prompt
             name: collect_topics
             prompt_type: json
+            schema:
+              type: array
+              items:
+                type: string
             template: 'Return exactly this JSON array: ["reliability","observability","testing"]'
 
           - type: loop

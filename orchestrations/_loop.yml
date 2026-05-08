@@ -3,6 +3,10 @@ effects:
   - type: prompt
     name: topics
     prompt_type: json
+    schema:
+      type: array
+      items:
+        type: string
     template: 'List exactly 3 programming languages as a JSON array. Return ONLY the array. Example: ["Python", "Rust", "Go"]'
 
   # each.in — dot-delimited state path to the array

@@ -181,3 +181,338 @@ def test_litellm_errors_are_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert "LiteLLM request failed" in str(exc.value)
     assert "provider mismatch" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Adapter Hardening — Non-JSON response tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("adapter_cls", "env_key"),
+    [
+        (OpenAIAdapter, "OPENAI_API_KEY"),
+        (AnthropicAdapter, "ANTHROPIC_API_KEY"),
+    ],
+)
+def test_non_json_html_response_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+    adapter_cls: type,
+    env_key: str,
+) -> None:
+    """curl returns 200 but body is HTML (e.g. Cloudflare challenge page)."""
+    monkeypatch.setenv(env_key, "test-key")
+
+    html_body = "<html><body>Service Unavailable</body></html>"
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=0, stdout=html_body)
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    adapter = adapter_cls()
+    with pytest.raises(RuntimeError, match="non-JSON response"):
+        adapter.generate(model="model", prompt="ping")
+
+
+def test_ollama_non_json_html_response_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ollama endpoint returns HTML instead of JSON."""
+    html_body = "<html><body>Bad Gateway</body></html>"
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=0, stdout=html_body)
+
+    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+
+    adapter = OllamaAdapter()
+    with pytest.raises(RuntimeError, match="non-JSON response"):
+        adapter.generate(model="phi3:mini", prompt="ping")
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Malformed JSON response tests
+# ---------------------------------------------------------------------------
+
+
+def test_openai_empty_choices_returns_empty_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OpenAI returns valid JSON but choices array is empty."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    payload = {"choices": [], "usage": {"prompt_tokens": 5, "completion_tokens": 0}}
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    adapter = OpenAIAdapter()
+    result = adapter.generate(model="gpt-4o-mini", prompt="ping")
+    assert result.text == ""
+
+
+def test_openai_missing_message_key_returns_empty_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OpenAI returns choices but first choice has no 'message' key."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    payload = {"choices": [{}], "usage": {"prompt_tokens": 5, "completion_tokens": 0}}
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    adapter = OpenAIAdapter()
+    result = adapter.generate(model="gpt-4o-mini", prompt="ping")
+    assert result.text == ""
+
+
+def test_openai_missing_usage_returns_none_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OpenAI response has no 'usage' key — tokens should be None, not crash."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    payload = {"choices": [{"message": {"content": "hi"}}]}
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    adapter = OpenAIAdapter()
+    result = adapter.generate(model="gpt-4o-mini", prompt="ping")
+    assert result.text == "hi"
+    assert result.tokens_sent is None
+    assert result.tokens_received is None
+
+
+def test_anthropic_empty_content_returns_empty_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Anthropic returns valid JSON but content array is empty."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    payload = {"content": [], "usage": {"input_tokens": 3, "output_tokens": 0}}
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    adapter = AnthropicAdapter()
+    result = adapter.generate(model="claude-sonnet-4-20250514", prompt="ping")
+    assert result.text == ""
+
+
+def test_anthropic_missing_usage_returns_none_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Anthropic response has no 'usage' key — tokens should be None."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    payload = {"content": [{"type": "text", "text": "hi"}]}
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    adapter = AnthropicAdapter()
+    result = adapter.generate(model="claude-sonnet-4-20250514", prompt="ping")
+    assert result.text == "hi"
+    assert result.tokens_sent is None
+    assert result.tokens_received is None
+
+
+def test_ollama_missing_response_key_returns_empty_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ollama returns valid JSON but no 'response' key."""
+    payload = {"model": "phi3:mini"}
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+
+    adapter = OllamaAdapter()
+    result = adapter.generate(model="phi3:mini", prompt="ping")
+    assert result.text == ""
+    assert result.tokens_sent is None
+    assert result.tokens_received is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: FileNotFoundError (curl not installed) tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("adapter_cls", "env_key"),
+    [
+        (OpenAIAdapter, "OPENAI_API_KEY"),
+        (AnthropicAdapter, "ANTHROPIC_API_KEY"),
+    ],
+)
+def test_curl_not_installed_raises_actionable_error(
+    monkeypatch: pytest.MonkeyPatch,
+    adapter_cls: type,
+    env_key: str,
+) -> None:
+    """FileNotFoundError from subprocess.run -> actionable RuntimeError."""
+    monkeypatch.setenv(env_key, "test-key")
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        raise FileNotFoundError("No such file or directory: 'curl'")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    adapter = adapter_cls()
+    with pytest.raises(RuntimeError, match="curl is not installed"):
+        adapter.generate(model="model", prompt="ping")
+
+
+def test_ollama_curl_not_installed_raises_actionable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ollama adapter: FileNotFoundError -> actionable RuntimeError."""
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        raise FileNotFoundError("No such file or directory: 'curl'")
+
+    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+
+    adapter = OllamaAdapter()
+    with pytest.raises(RuntimeError, match="curl is not installed"):
+        adapter.generate(model="phi3:mini", prompt="ping")
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Missing API key tests
+# ---------------------------------------------------------------------------
+
+
+def test_openai_missing_api_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    adapter = OpenAIAdapter()
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+        adapter.generate(model="gpt-4o-mini", prompt="ping")
+
+
+def test_anthropic_missing_api_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    adapter = AnthropicAdapter()
+    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+        adapter.generate(model="claude-sonnet-4-20250514", prompt="ping")
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: API key masking tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("adapter_cls", "env_key"),
+    [
+        (OpenAIAdapter, "OPENAI_API_KEY"),
+        (AnthropicAdapter, "ANTHROPIC_API_KEY"),
+    ],
+)
+def test_api_key_not_leaked_in_error_message(
+    monkeypatch: pytest.MonkeyPatch,
+    adapter_cls: type,
+    env_key: str,
+) -> None:
+    """When curl fails, the API key must not appear in the exception message."""
+    secret = "sk-super-secret-key-12345"
+    monkeypatch.setenv(env_key, secret)
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=22, stderr="HTTP 401 Unauthorized")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    adapter = adapter_cls()
+    with pytest.raises(RuntimeError) as exc:
+        adapter.generate(model="model", prompt="ping")
+
+    assert secret not in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: LiteLLM import error test
+# ---------------------------------------------------------------------------
+
+
+def test_litellm_import_error_gives_actionable_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When litellm is not installed, the error message tells you how to fix it."""
+    monkeypatch.delitem(sys.modules, "litellm", raising=False)
+
+    # Temporarily make the import fail
+    import builtins
+
+    original_import = builtins.__import__
+
+    def failing_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "litellm":
+            raise ImportError("No module named 'litellm'")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", failing_import)
+
+    adapter = LiteLLMAdapter(default_model="openai/gpt-4o-mini")
+    with pytest.raises(RuntimeError, match="pip install litellm"):
+        adapter.generate(model="", prompt="ping")
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Ollama list_models() tests
+# ---------------------------------------------------------------------------
+
+
+def test_ollama_list_models_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {"models": [{"name": "phi3:mini"}, {"name": "llama3.2:latest"}]}
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+
+    adapter = OllamaAdapter()
+    result = adapter.list_models()
+    assert result == payload
+    assert len(result["models"]) == 2
+
+
+def test_ollama_list_models_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=7, stderr="Failed to connect")
+
+    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+
+    adapter = OllamaAdapter()
+    with pytest.raises(RuntimeError, match="curl failed"):
+        adapter.list_models()

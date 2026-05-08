@@ -83,3 +83,72 @@ effects:
     assert result["ok"] is False
     assert len(result["errors"]) == 1
     assert "Duplicate effect name 'greet'" in result["errors"][0]
+
+
+def test_validate_rejects_json_prompt_without_schema(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "no_schema.yml",
+        "effects:\n  - type: prompt\n    name: x\n    template: hi\n    prompt_type: json\n",
+    )
+    result = validate(path)
+    assert result["ok"] is False
+    assert any("schema" in e.lower() for e in result["errors"])
+
+
+def test_validate_accepts_json_prompt_with_schema(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "with_schema.yml",
+        (
+            "effects:\n"
+            "  - type: prompt\n"
+            "    name: x\n"
+            "    template: hi\n"
+            "    prompt_type: json\n"
+            "    schema:\n"
+            "      type: object\n"
+        ),
+    )
+    result = validate(path)
+    assert result["ok"] is True
+
+
+def test_validate_rejects_model_condition_without_template(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "cond_no_tpl.yml",
+        (
+            "effects:\n"
+            "  - type: if\n"
+            "    if:\n"
+            "      mode: model\n"
+            "    then:\n"
+            "      - type: prompt\n"
+            "        name: a\n"
+            "        template: hi\n"
+        ),
+    )
+    result = validate(path)
+    assert result["ok"] is False
+    assert any("template" in e.lower() for e in result["errors"])
+
+
+def test_validate_rejects_cel_condition_without_expr(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "cond_no_expr.yml",
+        (
+            "effects:\n"
+            "  - type: if\n"
+            "    if:\n"
+            "      mode: cel\n"
+            "    then:\n"
+            "      - type: prompt\n"
+            "        name: a\n"
+            "        template: hi\n"
+        ),
+    )
+    result = validate(path)
+    assert result["ok"] is False
+    assert any("expr" in e.lower() for e in result["errors"])

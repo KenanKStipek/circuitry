@@ -120,6 +120,7 @@ def test_loop_each_emits_iter_and_body_messages() -> None:
                 "name": "items",
                 "template": '["a","b"]',
                 "prompt_type": "json",
+                "schema": {"type": "array", "items": {"type": "string"}},
             },
             {
                 "type": "loop",
