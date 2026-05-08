@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -8,6 +9,8 @@ from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, Union
 from ..adapters import Adapter
 from ..output import console as _console
 from .store import Store
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .dynamic import DynamicDefinition
@@ -114,7 +117,7 @@ class ConditionalRuntime:
             meta["created_at"] = _now_iso()
             meta["mode"] = self.defn.condition.mode
             meta["threshold"] = self.defn.threshold
-            child_store = Store(node, on_write=store.on_write)
+            child_store = store.child(self.defn.name)
         else:
             node = None
             meta = None
@@ -298,6 +301,7 @@ class ConditionalRuntime:
 
             rendered = chevron.render(template, ctx)
         except Exception:
+            logger.warning("Conditional template rendering failed; using raw template", exc_info=True)
             rendered = template
 
         # Invoke model to get yes/no decision
@@ -319,49 +323,6 @@ Answer (yes/no):"""
 
     def _evaluate_cel(self, *, ctx: dict[str, Any]) -> bool:
         """Deterministic evaluation: evaluate CEL expression against state."""
-        expr = self.defn.condition.expr or ""
+        from .cel_eval import evaluate_cel
 
-        if not expr.strip():
-            return False
-
-        # Simple CEL-like evaluation using Python
-        # For a full implementation, use a CEL library like cel-python
-        # This is a simplified version that handles common patterns
-        try:
-            # Build evaluation context with 'state' as root
-            eval_ctx = {"state": ctx}
-
-            # Handle common CEL patterns
-            # Convert state.foo.bar to state["foo"]["bar"]
-            py_expr = self._cel_to_python(expr)
-
-            # Evaluate safely
-            result = eval(py_expr, {"__builtins__": {}}, eval_ctx)
-            return bool(result)
-        except Exception:
-            return False
-
-    def _cel_to_python(self, expr: str) -> str:
-        """Convert simple CEL expressions to Python."""
-        import re
-
-        # Replace dot notation with bracket notation for nested access
-        # state.input.foo -> state["input"]["foo"]
-        def replace_dots(match: re.Match) -> str:
-            parts = match.group(0).split(".")
-            result = parts[0]
-            for part in parts[1:]:
-                result += f'["{part}"]'
-            return result
-
-        # Match identifiers with dots (but not inside strings)
-        pattern = r"\bstate(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+"
-        converted = re.sub(pattern, replace_dots, expr)
-
-        # Handle == and !=
-        converted = converted.replace("==", " == ").replace("!=", " != ")
-
-        # Handle && and ||
-        converted = converted.replace("&&", " and ").replace("||", " or ")
-
-        return converted
+        return evaluate_cel(self.defn.condition.expr or "", ctx)

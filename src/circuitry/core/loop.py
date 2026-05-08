@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Sequence, Union
@@ -11,6 +13,8 @@ from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Sequence, Un
 from ..adapters import Adapter
 from ..output import console as _console
 from .store import Store
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .conditional import ConditionalDefinition
@@ -141,7 +145,7 @@ class LoopRuntime:
             meta["created_at"] = _now_iso()
             meta["max_iterations"] = self.defn.max_iterations
             meta["min_iterations"] = self.defn.min_iterations
-            child_store = Store(node, on_write=store.on_write)
+            child_store = store.child(self.defn.name)
             iterations_effects: list[dict[str, Any]] = []
         else:
             node = None
@@ -179,16 +183,25 @@ class LoopRuntime:
                 if not collection:
                     termination_reason = "collection_exhausted"
                 elif self.defn.flow == "tree":
-                    # Parallel iteration: submit all at once, collect results in order
+                    # Parallel iteration: submit all at once, collect results in order.
+                    # Each thread gets a deepcopy of ctx to prevent nested mutation
+                    # bleed, and its own isolated Store to avoid concurrent dict writes.
                     capped = collection[: self.defn.max_iterations]
                     total = len(capped)
 
                     iter_ctxs: list[tuple[int, dict[str, Any]]] = []
                     for idx, item in enumerate(capped):
-                        iter_ctx = dict(ctx)
+                        iter_ctx = deepcopy(ctx)
                         iter_ctx[self.defn.each_def.as_name] = item
                         iter_ctx["_loop_index"] = idx
                         iter_ctxs.append((idx, iter_ctx))
+
+                    # Per-thread isolated stores: each thread writes into its own
+                    # Store({}) so there is zero contention during parallel execution.
+                    isolated_stores: dict[int, Store] = {
+                        idx: Store(state={})
+                        for idx in range(total)
+                    }
 
                     results: dict[int, dict[str, Any]] = {}
                     errors: dict[int, Exception] = {}
@@ -227,7 +240,7 @@ class LoopRuntime:
                             future_to_idx = {
                                 executor.submit(
                                     self._execute_body,
-                                    store=child_store,
+                                    store=isolated_stores[idx],
                                     ctx=iter_ctx,
                                     iteration=idx,
                                     parallel=True,
@@ -242,6 +255,15 @@ class LoopRuntime:
                                     results[i] = future.result()
                                 except Exception as exc:
                                     errors[i] = exc
+
+                    # Merge isolated stores back into child_store sequentially
+                    for idx in range(total):
+                        for key, value in isolated_stores[idx].state.items():
+                            child_store.state[key] = value
+
+                    # Fire on_write once after merge
+                    if store.on_write:
+                        store.on_write(store.state)
 
                     # Assemble results in original order
                     for idx in range(total):
@@ -307,6 +329,7 @@ class LoopRuntime:
                         termination_reason = "condition_false"
                         break
 
+                    ctx["_loop_index"] = iteration_count
                     try:
                         iter_effects = self._execute_body(
                             store=child_store,
@@ -387,12 +410,24 @@ class LoopRuntime:
             if isinstance(current, dict):
                 current = current.get(part)
             else:
+                logger.warning(
+                    "Loop collection path %r hit non-dict at segment %r; returning empty list",
+                    path, part,
+                )
                 return []
             if current is None:
+                logger.warning(
+                    "Loop collection path %r resolved to None at segment %r; returning empty list",
+                    path, part,
+                )
                 return []
 
         if isinstance(current, list):
             return current
+        logger.warning(
+            "Loop collection path %r resolved to %s instead of list; returning empty list",
+            path, type(current).__name__,
+        )
         return []
 
     def _evaluate_condition(self, *, ctx: dict[str, Any]) -> bool:
@@ -418,6 +453,7 @@ class LoopRuntime:
 
             rendered = chevron.render(template, ctx)
         except Exception:
+            logger.warning("Loop while-template rendering failed; using raw template", exc_info=True)
             rendered = template
 
         # Invoke model to get yes/no decision
@@ -439,46 +475,12 @@ Should the loop continue? Answer (yes/no):"""
 
     def _evaluate_cel(self, *, ctx: dict[str, Any]) -> bool:
         """Deterministic evaluation: evaluate CEL expression against state."""
+        from .cel_eval import evaluate_cel
+
         if not self.defn.while_def:
             return False
 
-        expr = self.defn.while_def.expr or ""
-
-        if not expr.strip():
-            return False
-
-        try:
-            # Build evaluation context with 'state' as root
-            eval_ctx = {"state": ctx}
-
-            # Convert CEL to Python
-            py_expr = self._cel_to_python(expr)
-
-            # Evaluate safely
-            result = eval(py_expr, {"__builtins__": {}}, eval_ctx)
-            return bool(result)
-        except Exception:
-            return False
-
-    def _cel_to_python(self, expr: str) -> str:
-        """Convert simple CEL expressions to Python."""
-        import re
-
-        # Replace dot notation with bracket notation for nested access
-        def replace_dots(match: re.Match) -> str:
-            parts = match.group(0).split(".")
-            result = parts[0]
-            for part in parts[1:]:
-                result += f'["{part}"]'
-            return result
-
-        pattern = r"\bstate(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+"
-        converted = re.sub(pattern, replace_dots, expr)
-
-        converted = converted.replace("==", " == ").replace("!=", " != ")
-        converted = converted.replace("&&", " and ").replace("||", " or ")
-
-        return converted
+        return evaluate_cel(self.defn.while_def.expr or "", ctx)
 
     def _execute_body(
         self,
@@ -500,8 +502,7 @@ Should the loop continue? Answer (yes/no):"""
         # Create iteration-specific store if named
         if self.defn.name:
             iter_key = f"iter_{iteration}"
-            iter_node = store.ensure_dict(iter_key)
-            iter_store = Store(iter_node, on_write=store.on_write)
+            iter_store = store.child(iter_key)
         else:
             iter_store = store
 

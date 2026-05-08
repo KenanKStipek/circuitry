@@ -17,6 +17,7 @@ dependencies = [
     "chevron>=0.14",
     "python-dotenv>=1.0",
     "ollama>=0.1.8",
+    "simpleeval>=0.9.13",
 ]
 
 [project.optional-dependencies]

@@ -13,3 +13,6 @@ chevron>=0.14
 python-dotenv>=1.0
 
 ollama>=0.1.8
+
+# Safe expression evaluation (replaces eval())
+simpleeval>=0.9.13
