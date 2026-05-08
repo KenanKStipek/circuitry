@@ -435,6 +435,7 @@ Templates use Mustache syntax (`{{...}}`). Two kinds of references:
 | Top-level effect output | `{{prime.<name>.value}}` | `{{prime.summarize.value}}` |
 | Nested effect inside dynamic | `{{prime.<dynamic_name>.<child_name>.value}}` | `{{prime.pipeline.outline.value}}` |
 | Loop iteration element | `{{<each.as>}}` or `{{item}}` | `{{topic}}` (when `as: topic`) |
+| Loop iteration index | `{{_loop_index}}` | Zero-based index, available in both `each` and `while` loop bodies |
 
 **Rules:**
 - Never use `{{<name>.value}}` or `{{<name>}}` alone for effect outputs — always include the `prime.` prefix
