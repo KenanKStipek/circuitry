@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -8,6 +9,8 @@ from typing import Any, Callable, Literal
 
 from ..output import console as _console
 from .store import Store
+
+logger = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -82,6 +85,7 @@ def _render_params(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any
 
         return {k: _render_value(v) for k, v in params.items()}
     except Exception:
+        logger.warning("Tool param rendering failed; returning raw params", exc_info=True)
         return params
 
 
@@ -185,6 +189,7 @@ class ToolRuntime:
             self.defn.timeout_ms // 1000 if self.defn.timeout_ms else self.timeout_seconds
         )
         t0 = time.monotonic()
+        mtag = ""
 
         meta["created_at"] = _now_iso()
         meta["completed_at"] = None
@@ -198,6 +203,7 @@ class ToolRuntime:
             node["value"] = None
             meta["completed_at"] = _now_iso()
             meta["dry_run"] = True
+            mtag = _model_tag({"model": self.defn.model})
             if self.verbose:
                 elapsed = time.monotonic() - t0
                 _label = f"{self.defn.provider} · {mtag}" if mtag else self.defn.provider
@@ -218,6 +224,7 @@ class ToolRuntime:
                 import chevron  # type: ignore
                 top_level["prompt"] = chevron.render(self.defn.prompt, ctx)
             except Exception:
+                logger.warning("Tool prompt template rendering failed; using raw prompt", exc_info=True)
                 top_level["prompt"] = self.defn.prompt
         if self.defn.model is not None:
             top_level["model"] = self.defn.model

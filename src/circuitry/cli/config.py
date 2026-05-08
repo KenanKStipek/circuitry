@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_CONFIG_FILENAMES = ("circuitry.config.json", "config.json")
@@ -20,6 +23,11 @@ SANE_DEFAULTS: dict[str, Any] = {
         "adapters": {
             "ollama": {
                 "base_url": "http://localhost:11434",
+            },
+        },
+        "plugins": {
+            "comfyui": {
+                "base_url": "http://localhost:8188",
             },
         },
     },
@@ -146,6 +154,16 @@ def _apply_env_vars(d: dict[str, Any]) -> dict[str, Any]:
         runtime["adapters"] = adapters
         result["runtime"] = runtime
 
+    env_comfyui_url = os.getenv("CIRCUITRY_COMFYUI_URL")
+    if env_comfyui_url:
+        runtime = dict(result.get("runtime") or {})
+        plugins = dict(runtime.get("plugins") or {})
+        comfyui_cfg = dict(plugins.get("comfyui") or {})
+        comfyui_cfg["base_url"] = env_comfyui_url
+        plugins["comfyui"] = comfyui_cfg
+        runtime["plugins"] = plugins
+        result["runtime"] = runtime
+
     return result
 
 
@@ -161,7 +179,7 @@ def resolve_config(
     2. Global config (~/.config/circuitry/config.json)
     3. Project-local config (circuitry.config.json / config.json in cwd)
     4. Explicit --config path (if provided — replaces #2 and #3)
-    5. Environment variables (CIRCUITRY_MODEL, CIRCUITRY_ADAPTER, CIRCUITRY_ADAPTER_URL)
+    5. Environment variables (CIRCUITRY_MODEL, CIRCUITRY_ADAPTER, CIRCUITRY_ADAPTER_URL, CIRCUITRY_COMFYUI_URL)
 
     Each layer deep-merges onto the previous.
     """
@@ -177,8 +195,8 @@ def resolve_config(
             try:
                 global_config = _load_json_file(GLOBAL_CONFIG_PATH)
                 merged = _deep_merge(merged, global_config)
-            except Exception:
-                pass  # Silently skip malformed global config
+            except (json.JSONDecodeError, ValueError, OSError) as exc:
+                logger.warning("Skipping malformed global config %s: %s", GLOBAL_CONFIG_PATH, exc)
 
         # Layer project-local config
         env = os.getenv("CIRCUITRY_CONFIG")
@@ -193,8 +211,8 @@ def resolve_config(
             try:
                 local_config = _load_json_file(local_path)
                 merged = _deep_merge(merged, local_config)
-            except Exception:
-                pass  # Silently skip malformed project config
+            except (json.JSONDecodeError, ValueError, OSError) as exc:
+                logger.warning("Skipping malformed project config %s: %s", local_path, exc)
 
     # Environment variables always overlay on top
     merged = _apply_env_vars(merged)

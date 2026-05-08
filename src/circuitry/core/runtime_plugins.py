@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
+
+logger = logging.getLogger(__name__)
 
 PLUGIN_CONTRACT_VERSION = "1"
 
@@ -46,6 +49,7 @@ def load_plugins(plugin_ids: list[str]) -> list[PluginLoadResult]:
             plugin = _load_single_plugin(plugin_id)
             results.append(PluginLoadResult(plugin_id=plugin_id, plugin=plugin))
         except Exception as e:
+            logger.warning("Failed to load plugin %r: %s", plugin_id, e, exc_info=True)
             results.append(
                 PluginLoadResult(plugin_id=plugin_id, plugin=None, error=str(e))
             )
@@ -85,6 +89,9 @@ def invoke_plugins(
                 }
             )
         except Exception as e:
+            logger.warning(
+                "Plugin %r hook %r failed: %s", plugin_name, hook_name, e, exc_info=True,
+            )
             events.append(
                 {
                     "plugin": plugin_name,

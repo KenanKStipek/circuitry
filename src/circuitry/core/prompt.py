@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -11,6 +12,8 @@ from ..adapters import Adapter, build_adapter
 from ..adapters.base import GenerateResult
 from ..output import console as _console
 from .store import Store
+
+logger = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -81,6 +84,7 @@ def _render(template: str, ctx: dict[str, Any]) -> str:
 
         return chevron.render(template, ctx)
     except Exception:
+        logger.warning("Chevron template rendering failed; returning raw template", exc_info=True)
         return template
 
 
