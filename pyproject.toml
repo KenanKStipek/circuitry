@@ -26,6 +26,20 @@ toon = ["toon-format @ git+https://github.com/toon-format/toon-python.git"]
 [project.scripts]
 cof = "circuitry.cli.app:main"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests that require local runtime dependencies (opt-in)",
+]
+addopts = ["--strict-markers"]
+
+[tool.coverage.run]
+source = ["circuitry"]
+omit = ["src/circuitry/bundled/*"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "if __name__ == .__main__."]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
