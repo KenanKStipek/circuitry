@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from ._identifiers import validate_table_name
+
 
 @dataclass(frozen=True)
 class PostgresStatePersistence:
@@ -26,6 +28,7 @@ class PostgresStatePersistence:
         table = str(config.get("table") or "circuitry_runs").strip()
         if not table:
             raise ValueError("runtime.persistence.table must be a non-empty string")
+        validate_table_name(table)
 
         sslmode = str(config.get("sslmode") or "require").strip().lower()
         allow_insecure = bool(config.get("allow_insecure", False))
@@ -46,18 +49,20 @@ class PostgresStatePersistence:
         }
 
     def load_latest_state(self, *, orchestration_path: str) -> dict[str, Any] | None:
+        from psycopg import sql  # type: ignore[import-not-found]
+
         try:
             with self._connect() as conn:
                 self._ensure_schema(conn)
                 with conn.cursor() as cur:
                     cur.execute(
-                        f"""
+                        sql.SQL("""
                         SELECT state_json
-                        FROM {self.table}
+                        FROM {}
                         WHERE orchestration_path = %s
                         ORDER BY created_at DESC
                         LIMIT 1
-                        """,
+                        """).format(sql.Identifier(self.table)),
                         (orchestration_path,),
                     )
                     row = cur.fetchone()
@@ -90,16 +95,18 @@ class PostgresStatePersistence:
         error: str | None,
         state: dict[str, Any],
     ) -> None:
+        from psycopg import sql  # type: ignore[import-not-found]
+
         try:
             with self._connect() as conn:
                 self._ensure_schema(conn)
                 with conn.cursor() as cur:
                     cur.execute(
-                        f"""
-                        INSERT INTO {self.table}
+                        sql.SQL("""
+                        INSERT INTO {}
                         (run_id, orchestration_path, ok, error, state_json)
                         VALUES (%s, %s, %s, %s, %s::jsonb)
-                        """,
+                        """).format(sql.Identifier(self.table)),
                         (
                             run_id,
                             orchestration_path,
@@ -130,10 +137,12 @@ class PostgresStatePersistence:
         return psycopg.connect(conninfo, autocommit=True)
 
     def _ensure_schema(self, conn: Any) -> None:
+        from psycopg import sql  # type: ignore[import-not-found]
+
         with conn.cursor() as cur:
             cur.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {self.table} (
+                sql.SQL("""
+                CREATE TABLE IF NOT EXISTS {} (
                     run_id TEXT PRIMARY KEY,
                     orchestration_path TEXT NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -141,11 +150,14 @@ class PostgresStatePersistence:
                     error TEXT,
                     state_json JSONB NOT NULL
                 )
-                """
+                """).format(sql.Identifier(self.table))
             )
             cur.execute(
-                f"""
-                CREATE INDEX IF NOT EXISTS {self.table}_path_created_idx
-                ON {self.table} (orchestration_path, created_at DESC)
-                """
+                sql.SQL("""
+                CREATE INDEX IF NOT EXISTS {}
+                ON {} (orchestration_path, created_at DESC)
+                """).format(
+                    sql.Identifier(f"{self.table}_path_created_idx"),
+                    sql.Identifier(self.table),
+                )
             )

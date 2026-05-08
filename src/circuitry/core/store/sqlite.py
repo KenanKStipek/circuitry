@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-_TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+from ._identifiers import quote_sqlite_identifier, validate_table_name
 
 
 @dataclass(frozen=True)
@@ -18,6 +17,14 @@ class SQLiteStatePersistence:
     @property
     def backend_name(self) -> str:
         return "sqlite"
+
+    @property
+    def _quoted_table(self) -> str:
+        return quote_sqlite_identifier(self.table)
+
+    @property
+    def _quoted_index(self) -> str:
+        return quote_sqlite_identifier(f"{self.table}_path_created_idx")
 
     @staticmethod
     def from_config(config: dict[str, Any]) -> "SQLiteStatePersistence":
@@ -30,10 +37,7 @@ class SQLiteStatePersistence:
         table = str(config.get("table") or "circuitry_runs").strip()
         if not table:
             raise ValueError("runtime.persistence.table must be a non-empty string")
-        if not _TABLE_RE.match(table):
-            raise ValueError(
-                "runtime.persistence.table must match [A-Za-z_][A-Za-z0-9_]*"
-            )
+        validate_table_name(table)
 
         return SQLiteStatePersistence(db_path=db_path, table=table)
 
@@ -51,7 +55,7 @@ class SQLiteStatePersistence:
                 cur = conn.execute(
                     f"""
                     SELECT state_json
-                    FROM {self.table}
+                    FROM {self._quoted_table}
                     WHERE orchestration_path = ?
                     ORDER BY created_at DESC, rowid DESC
                     LIMIT 1
@@ -92,7 +96,7 @@ class SQLiteStatePersistence:
                 self._ensure_schema(conn)
                 conn.execute(
                     f"""
-                    INSERT INTO {self.table}
+                    INSERT INTO {self._quoted_table}
                     (run_id, orchestration_path, ok, error, state_json)
                     VALUES (?, ?, ?, ?, ?)
                     """,
@@ -116,7 +120,7 @@ class SQLiteStatePersistence:
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
         conn.execute(
             f"""
-            CREATE TABLE IF NOT EXISTS {self.table} (
+            CREATE TABLE IF NOT EXISTS {self._quoted_table} (
                 run_id TEXT PRIMARY KEY,
                 orchestration_path TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -128,7 +132,7 @@ class SQLiteStatePersistence:
         )
         conn.execute(
             f"""
-            CREATE INDEX IF NOT EXISTS {self.table}_path_created_idx
-            ON {self.table} (orchestration_path, created_at DESC)
+            CREATE INDEX IF NOT EXISTS {self._quoted_index}
+            ON {self._quoted_table} (orchestration_path, created_at DESC)
             """
         )
