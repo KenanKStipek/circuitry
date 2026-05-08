@@ -13,9 +13,9 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_readme_quick_start_includes_dry_run_and_verification() -> None:
+def test_readme_includes_validation_and_verification() -> None:
     readme = _read(README_PATH)
-    assert "cof run hello.yml --dry-run" in readme
+    assert "cof check" in readme
     assert "result.ok" in readme
 
 

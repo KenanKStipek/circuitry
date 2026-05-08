@@ -5,13 +5,13 @@
   "runtime": {
     "adapters": {
       "ollama": {
-        "base_url": "http://192.168.1.173:11434",
+        "base_url": "http://localhost:11434",
         "timeout_seconds": 6000
       }
     },
     "plugins": {
       "comfyui": {
-        "base_url": "http://192.168.1.173:8188",
+        "base_url": "http://localhost:8188",
         "default_image_output": "path",
         "image_dir": "./output/images"
       }

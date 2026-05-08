@@ -39,6 +39,7 @@ htmlcov/
 .DS_Store
 .idea/
 .vscode/
+.zed/
 *.swp
 *.swo
 
@@ -57,6 +58,7 @@ out.json
 .env.*
 *.key
 *.pem
+config.json
 
 # ================================
 # CLI / runtime artifacts
