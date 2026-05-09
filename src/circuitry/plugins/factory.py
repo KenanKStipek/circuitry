@@ -2,6 +2,31 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from . import (
+    awk as _awk_mod,
+    diff_patch as _diff_patch_mod,
+    docker as _docker_mod,
+    exiftool as _exiftool_mod,
+    gh as _gh_mod,
+    git as _git_mod,
+    gpg as _gpg_mod,
+    imagemagick as _imagemagick_mod,
+    kubectl as _kubectl_mod,
+    linter as _linter_mod,
+    mediainfo as _mediainfo_mod,
+    ocr as _ocr_mod,
+    pandoc as _pandoc_mod,
+    pdf_render as _pdf_render_mod,
+    ping as _ping_mod,
+    pytest as _pytest_mod,
+    ripgrep as _ripgrep_mod,
+    sed as _sed_mod,
+    sevenz as _sevenz_mod,
+    traceroute as _traceroute_mod,
+    weather as _weather_mod,
+    web_search as _web_search_mod,
+    yt_dlp as _yt_dlp_mod,
+)
 from .base import ToolPlugin
 from .base64 import Base64Plugin
 from .clock import ClockPlugin
@@ -19,6 +44,7 @@ from .json import JsonPlugin
 from .math import MathPlugin
 from .port_check import PortCheckPlugin
 from .regex import RegexPlugin
+from .shell import ShellPlugin
 from .tar import TarPlugin
 from .uuid import UuidPlugin
 from .zip import ZipPlugin
@@ -112,6 +138,105 @@ def _build_uuid(cfg: dict[str, Any]) -> ToolPlugin:
     del cfg; return UuidPlugin()
 
 
+# Subprocess wrapper plugins. Each module exposes ``make_plugin()`` that
+# returns a configured GenericSubprocessTool (or a dedicated class for
+# the multi-mode / sandboxed cases).
+def _build_git(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _git_mod.make_plugin()
+
+
+def _build_ripgrep(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _ripgrep_mod.make_plugin()
+
+
+def _build_pytest(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _pytest_mod.make_plugin()
+
+
+def _build_awk(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _awk_mod.make_plugin()
+
+
+def _build_sed(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _sed_mod.make_plugin()
+
+
+def _build_pandoc(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _pandoc_mod.make_plugin()
+
+
+def _build_mediainfo(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _mediainfo_mod.make_plugin()
+
+
+def _build_imagemagick(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _imagemagick_mod.make_plugin()
+
+
+def _build_exiftool(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _exiftool_mod.make_plugin()
+
+
+def _build_yt_dlp(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _yt_dlp_mod.make_plugin()
+
+
+def _build_sevenz(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _sevenz_mod.make_plugin()
+
+
+def _build_ping(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _ping_mod.make_plugin()
+
+
+def _build_traceroute(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _traceroute_mod.make_plugin()
+
+
+def _build_docker(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _docker_mod.make_plugin()
+
+
+def _build_kubectl(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _kubectl_mod.make_plugin()
+
+
+def _build_gh(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _gh_mod.make_plugin()
+
+
+def _build_linter(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _linter_mod.make_plugin()
+
+
+def _build_ocr(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _ocr_mod.make_plugin()
+
+
+def _build_shell(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return ShellPlugin()
+
+
+def _build_gpg(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _gpg_mod.GpgPlugin()
+
+
+def _build_diff_patch(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _diff_patch_mod.DiffPatchPlugin()
+
+
+def _build_pdf_render(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _pdf_render_mod.PdfRenderPlugin()
+
+
+def _build_web_search(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _web_search_mod.WebSearchPlugin()
+
+
+def _build_weather(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return _weather_mod.WeatherPlugin()
+
+
 PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "ffmpeg": _build_ffmpeg,
     "comfyui": _build_comfyui,
@@ -133,6 +258,31 @@ PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "base64": _build_base64,
     "hex": _build_hex,
     "uuid": _build_uuid,
+    # Subprocess wrappers (binary on PATH).
+    "git": _build_git,
+    "ripgrep": _build_ripgrep,
+    "pytest": _build_pytest,
+    "awk": _build_awk,
+    "sed": _build_sed,
+    "pandoc": _build_pandoc,
+    "mediainfo": _build_mediainfo,
+    "imagemagick": _build_imagemagick,
+    "exiftool": _build_exiftool,
+    "yt_dlp": _build_yt_dlp,
+    "7z": _build_sevenz,
+    "ping": _build_ping,
+    "traceroute": _build_traceroute,
+    "docker": _build_docker,
+    "kubectl": _build_kubectl,
+    "gh": _build_gh,
+    "linter": _build_linter,
+    "ocr": _build_ocr,
+    "shell": _build_shell,
+    "gpg": _build_gpg,
+    "diff_patch": _build_diff_patch,
+    "pdf_render": _build_pdf_render,
+    "web_search": _build_web_search,
+    "weather": _build_weather,
 }
 
 
