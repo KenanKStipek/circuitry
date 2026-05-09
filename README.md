@@ -1,11 +1,15 @@
 # Circuitry
 
-Cybernetic orchestration framework. **COF** (**C**ybernetic **O**rchestration **F**ramework).
+[![PyPI version](https://img.shields.io/pypi/v/circuitry-cof.svg)](https://pypi.org/project/circuitry-cof/)
+[![CI](https://github.com/kenankstipek/circuitry/actions/workflows/quality.yml/badge.svg)](https://github.com/kenankstipek/circuitry/actions/workflows/quality.yml)
+[![Python](https://img.shields.io/badge/python-3.9%E2%80%933.13-blue.svg)](https://github.com/kenankstipek/circuitry)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-> **Cybernetics** — control theory as it is applied to complex systems. A monitor compares what is happening to a system at various sampling times with some standard of what should be happening, and a controller adjusts the system's behaviour accordingly.
-> — [Britannica](https://www.britannica.com/science/cybernetics)
+**Circuitry** (CLI: `cof`) is the **C**ybernetic **O**rchestration **F**ramework — a YAML-first runtime for LLM pipelines that observe their own output and adapt. Loops re-evaluate continuation against what the model just produced, conditionals branch on accumulated state, and reflectors plan from observed results. It's a closed-loop control system for model invocations, not a chain of static prompts.
 
-Circuitry applies this principle to AI orchestration. Each effect writes to a deterministic state path, and downstream effects observe that state through interpolation to decide what happens next. This creates genuine feedback: loops that re-evaluate continuation based on what the model just produced, conditionals that branch on accumulated output, and reflectors that plan from observed state. The orchestration monitors its own outputs and adjusts — a closed-loop control system for model invocations.
+> **Cybernetics** — control theory as it is applied to complex systems. A monitor compares what is happening to a system at various sampling times with some standard of what should be happening, and a controller adjusts the system's behaviour accordingly. — [Britannica](https://www.britannica.com/science/cybernetics)
+
+<!-- DEMO_GIF: replace with an asciinema or terminal-recorded GIF showing `cof run hello` and one looped orchestration -->
 
 ## Install
 
@@ -18,7 +22,8 @@ curl -fsSL https://raw.githubusercontent.com/kenankstipek/circuitry/main/scripts
 Or install manually:
 
 ```bash
-pipx install git+https://github.com/kenankstipek/circuitry.git
+pipx install circuitry-cof              # PyPI (once published)
+pipx install git+https://github.com/kenankstipek/circuitry.git   # Latest from main
 ```
 
 Or for development:
@@ -27,7 +32,7 @@ Or for development:
 pip install -e .
 ```
 
-This gives you the `cof` command.
+This gives you the `cof` command. The Python import name is still `circuitry` (`from circuitry import run_orchestration`); only the PyPI distribution name is `circuitry-cof` because the unqualified `circuitry` name is taken by an unrelated logic-circuit DSL.
 
 ## Quick Start
 
@@ -53,6 +58,20 @@ cof eject article-summarizer
 # Initialize a new project (creates config + hello.yml)
 cof init
 ```
+
+## Why Circuitry?
+
+Most LLM frameworks make you express orchestration in code. Circuitry lets you declare it in YAML, and treats every effect as a feedback signal — state is the wire between steps, and downstream effects observe it the same way a controller observes a sensor reading. That makes loops, conditionals, and reflection first-class instead of bolted on.
+
+| Framework | Primary metaphor | When it fits |
+| --------- | ---------------- | ------------ |
+| **Circuitry** | Cybernetic feedback. YAML effects read each other's state through deterministic paths; loops and conditionals re-evaluate against fresh model output. | You want declarative pipelines that can self-correct, branch on observed state, or call themselves recursively without writing Python glue. |
+| LangChain | Python-native chains and agents. Compose by importing classes and wiring callbacks. | You're comfortable in Python and want a large library of pre-built integrations. |
+| CrewAI | Agent teams. Roles, tasks, delegation. | You think in terms of multiple cooperating agents rather than a control-flow graph. |
+| DSPy | Prompt programs that compile and self-optimize. | You want gradient-style prompt tuning against a metric, not deterministic flow control. |
+| BAML | Typed prompts as functions. | You want strict typed I/O for a small, well-defined LLM call surface. |
+
+Pick Circuitry when the orchestration topology — what runs after what, conditional on what — is the thing you want to design and read.
 
 ## How It Works
 
@@ -475,6 +494,20 @@ Orchestration YAML
 5. **Model Agnostic** — adapters abstract provider differences; orchestrations are portable
 6. **Composable** — orchestrations are building blocks; `use` chains them with state isolation and typed interfaces
 
+## Privacy & telemetry
+
+Circuitry collects **no telemetry**. The only outbound calls it makes are to the LLM adapter, tool plugin, and persistence backend you configured. See [`SECURITY.md`](SECURITY.md) and [`docs/threat-model.md`](docs/threat-model.md).
+
+## Stability
+
+The public API surface (Python re-exports, `cof` CLI flags, JSON Schema, state paths) and the versioning policy are spelled out in [`docs/stability.md`](docs/stability.md). Circuitry is in `0.x` alpha; `0.x` minor bumps may include breaking changes, called out in [`CHANGELOG.md`](CHANGELOG.md).
+
+## Community
+
+Questions, ideas, and "show and tell" go in [GitHub Discussions](https://github.com/kenankstipek/circuitry/discussions). Bug reports and feature requests go in [Issues](https://github.com/kenankstipek/circuitry/issues). There is no Discord or Slack — keeping the conversation in one indexable place is intentional for v0.1.
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, conventions, and where to start.
+
 ## License
 
-MIT
+MIT — see [`LICENSE`](LICENSE).

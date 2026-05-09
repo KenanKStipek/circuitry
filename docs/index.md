@@ -1,6 +1,12 @@
 # Project Documentation Index
 
-Last Updated: 2026-02-19
+Last Updated: 2026-05-08
+
+## Public Debut Docs
+
+- [Product Requirements (v0.1.0)](./prd.md) — original product brief and MVP scope
+- [Stability & Versioning Policy](./stability.md) — what counts as public API and the deprecation/semver rules
+- [Threat Model](./threat-model.md) — attack surfaces, mitigations, and known limitations
 
 ## Project Overview
 
