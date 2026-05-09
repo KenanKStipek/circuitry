@@ -6,7 +6,10 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
+
+Environment = Literal["dev", "prod", "test"]
+_VALID_ENVIRONMENTS: tuple[str, ...] = ("dev", "prod", "test")
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +22,10 @@ GLOBAL_CONFIG_PATH = GLOBAL_CONFIG_DIR / "config.json"
 SANE_DEFAULTS: dict[str, Any] = {
     "default_model": "llama3.1:8b",
     "default_adapter": "ollama",
+    "enabled_adapters": None,
+    "enabled_plugins": None,
+    "enabled_tools": None,
+    "environment": "dev",
     "runtime": {
         "adapters": {
             "ollama": {
@@ -48,17 +55,51 @@ class CircuitryConfig:
     # Plugins: keep as a list of dotted paths or simple identifiers
     plugins: list[str] = field(default_factory=list)
 
+    # Allowlist gates per extension category. None = default-open (all
+    # compiled-in extensions allowed). [] = locked down. ["x", "y"] = strict.
+    enabled_adapters: Optional[list[str]] = None
+    enabled_plugins: Optional[list[str]] = None  # RuntimePlugin allowlist
+    enabled_tools: Optional[list[str]] = None  # ToolPlugin allowlist
+
+    # Deployment environment; controls store_raw default for SQL persistence.
+    environment: Environment = "dev"
+
     # Any additional runtime config to pass through untouched
     runtime: dict[str, Any] = field(default_factory=dict)
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "CircuitryConfig":
+        env = d.get("environment") or "dev"
+        if env not in _VALID_ENVIRONMENTS:
+            logger.warning(
+                "Unknown environment %r; falling back to 'dev'. Valid: %s",
+                env, _VALID_ENVIRONMENTS,
+            )
+            env = "dev"
         return CircuitryConfig(
             default_model=d.get("default_model"),
             default_adapter=d.get("default_adapter"),
             plugins=list(d.get("plugins") or []),
+            enabled_adapters=_normalize_allowlist(d.get("enabled_adapters")),
+            enabled_plugins=_normalize_allowlist(d.get("enabled_plugins")),
+            enabled_tools=_normalize_allowlist(d.get("enabled_tools")),
+            environment=env,  # type: ignore[arg-type]
             runtime=dict(d.get("runtime") or {}),
         )
+
+
+def _normalize_allowlist(value: Any) -> Optional[list[str]]:
+    """Coerce config-loaded allowlist values into Optional[list[str]].
+
+    None → None (default-open).
+    list → list[str] (filtered to truthy strings).
+    Anything else → None (treated as unset).
+    """
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return None
 
 
 def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -163,6 +204,23 @@ def _apply_env_vars(d: dict[str, Any]) -> dict[str, Any]:
         plugins["comfyui"] = comfyui_cfg
         runtime["plugins"] = plugins
         result["runtime"] = runtime
+
+    # Allowlist env vars override config.json values. Unset env var → leave
+    # whatever the config layer produced. Set env var → overlay (including
+    # empty-string lockdown).
+    for env_key, cfg_key in (
+        ("CIRCUITRY_ENABLED_ADAPTERS", "enabled_adapters"),
+        ("CIRCUITRY_ENABLED_PLUGINS", "enabled_plugins"),
+        ("CIRCUITRY_ENABLED_TOOLS", "enabled_tools"),
+    ):
+        raw = os.getenv(env_key)
+        if raw is None:
+            continue
+        result[cfg_key] = [item.strip() for item in raw.split(",") if item.strip()]
+
+    env_environment = os.getenv("CIRCUITRY_ENVIRONMENT")
+    if env_environment:
+        result["environment"] = env_environment
 
     return result
 

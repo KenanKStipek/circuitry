@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from ..preflight import CheckResult
+
 logger = logging.getLogger(__name__)
 
 PLUGIN_CONTRACT_VERSION = "1"
@@ -34,6 +36,22 @@ class RuntimePlugin(Protocol):
         self, *, state: dict[str, Any], context: PluginContext, error: str
     ) -> None: ...
 
+    # Optional: implement check() to declare runtime dependencies. Plugins
+    # that don't implement it default to ok=True (see core.preflight.call_check).
+    def check(self) -> CheckResult: ...
+
+    # Optional (Story 2): fired after each effect's node["value"] is written.
+    # Plugins missing this method are skipped via hasattr guard in
+    # invoke_plugins so external plugins predating this hook keep working.
+    def on_effect_complete(
+        self,
+        *,
+        state: dict[str, Any],
+        context: PluginContext,
+        effect_path: str,
+        effect_result: dict[str, Any],
+    ) -> None: ...
+
 
 @dataclass(frozen=True)
 class PluginLoadResult:
@@ -42,9 +60,32 @@ class PluginLoadResult:
     error: str | None = None
 
 
-def load_plugins(plugin_ids: list[str]) -> list[PluginLoadResult]:
+def load_plugins(
+    plugin_ids: list[str],
+    *,
+    allowed: list[str] | None = None,
+) -> list[PluginLoadResult]:
+    """Load runtime plugins by dotted-path identifier.
+
+    When ``allowed`` is non-None, plugin IDs not in the list are skipped
+    with a "not in enabled_plugins allowlist" error (the import is not
+    attempted). ``allowed`` of ``[]`` locks down all runtime plugins;
+    ``None`` is default-open.
+    """
     results: list[PluginLoadResult] = []
     for plugin_id in plugin_ids:
+        if allowed is not None and plugin_id not in allowed:
+            results.append(
+                PluginLoadResult(
+                    plugin_id=plugin_id,
+                    plugin=None,
+                    error=(
+                        f"plugin '{plugin_id}' not in enabled_plugins "
+                        f"allowlist (enabled: {allowed})"
+                    ),
+                )
+            )
+            continue
         try:
             plugin = _load_single_plugin(plugin_id)
             results.append(PluginLoadResult(plugin_id=plugin_id, plugin=plugin))
@@ -63,6 +104,8 @@ def invoke_plugins(
     state: dict[str, Any],
     context: PluginContext,
     error: str | None = None,
+    effect_path: str | None = None,
+    effect_result: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
 
@@ -76,6 +119,18 @@ def invoke_plugins(
             elif hook_name == "on_run_failure":
                 plugin.on_run_failure(
                     state=state, context=context, error=error or "unknown error"
+                )
+            elif hook_name == "on_effect_complete":
+                # Optional hook — plugins that predate Story 2 are skipped
+                # silently. effect_path / effect_result must be supplied.
+                handler = getattr(plugin, "on_effect_complete", None)
+                if handler is None or not callable(handler):
+                    continue
+                handler(
+                    state=state,
+                    context=context,
+                    effect_path=effect_path or "",
+                    effect_result=effect_result or {},
                 )
             else:
                 raise ValueError(f"Unknown plugin hook: {hook_name}")

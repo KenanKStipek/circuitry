@@ -371,6 +371,9 @@ class LoopRuntime:
                                 collected.append(effect_node.get("value"))
                     node["collected"] = {"value": collected}
 
+            if is_named and self.defn.name:
+                store.fire_effect_complete(self.defn.name, node or {})
+
         except Exception as e:
             if meta:
                 meta["error"] = str(e)

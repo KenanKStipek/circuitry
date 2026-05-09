@@ -124,12 +124,20 @@ def _load_last_run() -> dict[str, Any]:
     return json.loads(_LAST_RUN_PATH.read_text(encoding="utf-8"))
 
 
-def _do_validate(orchestration: Path, json_out: bool) -> None:
+def _do_validate(
+    orchestration: Path,
+    json_out: bool,
+    *,
+    config: Optional[Path] = None,
+) -> None:
     """Shared validation logic for validate and check commands."""
     if not json_out:
         _print_header("Circuitry · Validate")
+    # Resolve config (incl. allowlist + env-var overlays) so allowlist
+    # enforcement runs alongside schema checks.
+    cfg = resolve_config(explicit_path=config)
     with console.status("[cyan]Validating…[/cyan]") if not json_out else nullcontext():
-        result = validate(orchestration)
+        result = validate(orchestration, config=cfg)
 
     if json_out:
         console.print_json(json.dumps(result, ensure_ascii=False))
@@ -232,6 +240,10 @@ def run_cmd(
         False, "--last",
         help="Re-run the most recent orchestration with the same arguments.",
     ),
+    skip_preflight: bool = typer.Option(
+        False, "--skip-preflight",
+        help="Bypass dependency preflight; run even if check()s reported missing deps.",
+    ),
 ):
     # --last: replay stashed args
     if last:
@@ -249,6 +261,7 @@ def run_cmd(
         live_state = Path(stashed["live_state"]) if stashed.get("live_state") else None
         env_vars = stashed.get("env_vars")
         tail = stashed.get("tail", False)
+        skip_preflight = stashed.get("skip_preflight", False)
 
         # Refuse to replay if the previous run stashed redacted secrets — the
         # sentinel string would silently flow into the new run as a literal.
@@ -321,6 +334,7 @@ def run_cmd(
         verbose=verbose,
         config=cfg,
         live_state_path=live_state,
+        skip_preflight=skip_preflight,
     )
 
     with (
@@ -368,6 +382,7 @@ def run_cmd(
             "live_state": str(live_state) if live_state else None,
             "env_vars": redact_env_pairs(env_vars),
             "tail": tail,
+            "skip_preflight": skip_preflight,
         })
 
     if tail:
@@ -609,7 +624,10 @@ def run_library_cmd(
             console.print(f"[yellow]Warning:[/yellow] {w}")
 
 
-@app.command("list", help="List available bundled orchestrations.")
+@app.command(
+    "list",
+    help="List available bundled orchestrations (or compiled-in extensions with --extensions).",
+)
 def list_cmd(
     category: Optional[str] = typer.Option(
         None, "--category", "-C", help="Filter by category (example, utility, creative, tooling, template)."
@@ -617,7 +635,20 @@ def list_cmd(
     json_out: bool = typer.Option(
         False, "--json", help="Output machine-readable JSON only."
     ),
+    extensions: bool = typer.Option(
+        False,
+        "--extensions",
+        "-x",
+        help="List compiled-in adapters / tool plugins / runtime plugins with allowlist status.",
+    ),
+    config: Optional[Path] = typer.Option(
+        None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
+    ),
 ):
+    if extensions:
+        _list_extensions(json_out=json_out, config_path=config)
+        return
+
     entries = load_index()
     if not entries:
         console.print("[yellow]No bundled orchestrations found.[/yellow]")
@@ -666,6 +697,70 @@ def list_cmd(
     console.print()
     console.print("[dim]Run with:[/dim] cof run <name> [dim](e.g.[/dim] cof run hello -e name=World[dim])[/dim]")
     console.print(f"[dim]Backends: [green]available[/green] [red]not detected[/red][/dim]")
+
+
+def _list_extensions(*, json_out: bool, config_path: Optional[Path]) -> None:
+    """Render compiled-in adapters / tool plugins / runtime plugins with
+    allowlist status."""
+    from ..adapters.factory import ADAPTER_REGISTRY
+    from ..plugins.factory import PLUGIN_REGISTRY
+
+    cfg = resolve_config(explicit_path=config_path)
+
+    adapters_compiled = sorted(ADAPTER_REGISTRY.keys())
+    tools_compiled = sorted(PLUGIN_REGISTRY.keys())
+    # Runtime plugins are loaded by dotted path; cfg.plugins lists what
+    # this project asks for. Phase 6 will introduce a compiled-in catalog;
+    # for now there's no in-tree set, so derive from cfg.plugins.
+    runtime_compiled = sorted(set(cfg.plugins or []))
+
+    def status(name: str, allowed: Optional[list[str]]) -> str:
+        if allowed is None:
+            return "compiled-in (default-open)"
+        return "enabled" if name in allowed else "disabled (not in allowlist)"
+
+    if json_out:
+        payload = {
+            "adapters": [
+                {"name": n, "status": status(n, cfg.enabled_adapters)}
+                for n in adapters_compiled
+            ],
+            "tool_plugins": [
+                {"name": n, "status": status(n, cfg.enabled_tools)}
+                for n in tools_compiled
+            ],
+            "runtime_plugins": [
+                {"name": n, "status": status(n, cfg.enabled_plugins)}
+                for n in runtime_compiled
+            ],
+            "environment": cfg.environment,
+        }
+        console.print_json(json.dumps(payload, ensure_ascii=False))
+        return
+
+    _print_header("Circuitry · Extensions")
+
+    def render_section(title: str, names: list[str], allowed: Optional[list[str]]) -> None:
+        table = Table(title=title, show_header=True, header_style="bold cyan")
+        table.add_column("Name", style="bold")
+        table.add_column("Status")
+        if not names:
+            table.add_row("[dim](none registered)[/dim]", "[dim]—[/dim]")
+        else:
+            for n in names:
+                s = status(n, allowed)
+                style = (
+                    "green" if s == "enabled" or s == "compiled-in (default-open)"
+                    else "red"
+                )
+                table.add_row(n, f"[{style}]{s}[/{style}]")
+        console.print(table)
+        console.print()
+
+    render_section("Adapters", adapters_compiled, cfg.enabled_adapters)
+    render_section("Tool plugins", tools_compiled, cfg.enabled_tools)
+    render_section("Runtime plugins", runtime_compiled, cfg.enabled_plugins)
+    console.print(f"[dim]Environment: {cfg.environment}[/dim]")
 
 
 def _detect_backends(cfg: CircuitryConfig) -> set[str]:
@@ -781,8 +876,11 @@ def validate_cmd(
     json_out: bool = typer.Option(
         False, "--json", help="Output machine-readable JSON only."
     ),
+    config: Optional[Path] = typer.Option(
+        None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
+    ),
 ):
-    _do_validate(orchestration, json_out)
+    _do_validate(orchestration, json_out, config=config)
 
 
 @app.command("check", help="Validate an orchestration file against the schema. (alias of `validate`)")
@@ -794,8 +892,11 @@ def check_cmd(
     json_out: bool = typer.Option(
         False, "--json", help="Output machine-readable JSON only."
     ),
+    config: Optional[Path] = typer.Option(
+        None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
+    ),
 ):
-    _do_validate(orchestration, json_out)
+    _do_validate(orchestration, json_out, config=config)
 
 
 @app.command("inspect", help="Show orchestration metadata.")

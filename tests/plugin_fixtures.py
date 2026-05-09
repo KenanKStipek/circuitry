@@ -6,6 +6,9 @@ from typing import Any
 class RecordingPlugin:
     name = "recording-plugin"
 
+    def __init__(self) -> None:
+        self.effect_completes: list[tuple[str, dict[str, Any]]] = []
+
     def on_run_start(self, *, state: dict[str, Any], context: Any) -> None:
         runtime = state.setdefault("runtime", {})
         runtime["plugin_marker"] = {
@@ -27,6 +30,21 @@ class RecordingPlugin:
         marker["error"] = error
         marker["run_id_on_failure"] = context.run_id
 
+    def on_effect_complete(
+        self,
+        *,
+        state: dict[str, Any],
+        context: Any,
+        effect_path: str,
+        effect_result: dict[str, Any],
+    ) -> None:
+        del context
+        self.effect_completes.append((effect_path, dict(effect_result)))
+        runtime = state.setdefault("runtime", {})
+        marker = runtime.setdefault("plugin_marker", {})
+        record = marker.setdefault("effect_paths", [])
+        record.append(effect_path)
+
 
 class FailingPlugin:
     name = "failing-plugin"
@@ -42,6 +60,17 @@ class FailingPlugin:
     def on_run_failure(self, *, state: dict[str, Any], context: Any, error: str) -> None:
         del state, context, error
         raise RuntimeError("plugin failure exploded")
+
+    def on_effect_complete(
+        self,
+        *,
+        state: dict[str, Any],
+        context: Any,
+        effect_path: str,
+        effect_result: dict[str, Any],
+    ) -> None:
+        del state, context, effect_path, effect_result
+        raise RuntimeError("plugin effect_complete exploded")
 
 
 class InvalidPlugin:

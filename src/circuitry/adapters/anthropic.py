@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import dataclass
 
+from ..preflight import CheckResult
 from .base import GenerateResult
 
 
@@ -112,3 +114,11 @@ class AnthropicAdapter:
             if tokens_received is not None
             else None,
         )
+
+    def check(self) -> CheckResult:
+        missing: list[str] = []
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            missing.append("env:ANTHROPIC_API_KEY")
+        if shutil.which("curl") is None:
+            missing.append("binary:curl")
+        return CheckResult(ok=not missing, missing=missing)

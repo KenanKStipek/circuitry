@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import importlib.util
 from dataclasses import dataclass
 from typing import Any
 
+from ..preflight import CheckResult
 from .base import GenerateResult
 
 
@@ -98,4 +100,17 @@ class LiteLLMAdapter:
             tokens_received=int(tokens_received)
             if tokens_received is not None
             else None,
+        )
+
+    def check(self) -> CheckResult:
+        missing: list[str] = []
+        if importlib.util.find_spec("litellm") is None:
+            missing.append("library:litellm")
+        return CheckResult(
+            ok=not missing,
+            missing=missing,
+            message=(
+                "litellm relays per-provider keys (e.g. OPENAI_API_KEY); "
+                "exact env requirement depends on the model name."
+            ),
         )

@@ -13,13 +13,19 @@ class Store:
     Nested state store with optional persistence callbacks.
 
     Thread-safe: all mutations are protected by a reentrant lock.
-    Child stores created via ``child()`` share the parent's lock and
-    ``on_write`` callback so that concurrent access from parallel
-    (tree) execution paths is serialised correctly.
+    Child stores created via ``child()`` share the parent's lock,
+    ``on_write`` callback, and ``effect_complete`` callback so that
+    concurrent access from parallel (tree) execution paths is serialised
+    correctly and per-effect lifecycle hooks see the canonical absolute
+    state path of every effect result.
     """
 
     state: dict[str, Any]
     on_write: Optional[Callable[[dict[str, Any]], None]] = None
+    effect_complete: Optional[
+        Callable[[str, dict[str, Any]], None]
+    ] = None
+    _path_prefix: str = ""
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     def get(self, path: str, default: Any = None) -> Any:
@@ -61,9 +67,33 @@ class Store:
                 self.on_write(self.state)
 
     def child(self, path: str) -> "Store":
-        """Return a child Store rooted at *path*, sharing the same lock and on_write."""
+        """Return a child Store rooted at *path*, sharing the same lock,
+        on_write callback, effect_complete callback, and accumulating an
+        absolute path prefix for canonical effect paths."""
         node = self.ensure_dict(path)
-        return Store(state=node, on_write=self.on_write, _lock=self._lock)
+        new_prefix = f"{self._path_prefix}.{path}" if self._path_prefix else path
+        return Store(
+            state=node,
+            on_write=self.on_write,
+            effect_complete=self.effect_complete,
+            _path_prefix=new_prefix,
+            _lock=self._lock,
+        )
+
+    def fire_effect_complete(
+        self, name: str, effect_result: dict[str, Any]
+    ) -> None:
+        """Notify ``effect_complete`` (if set) that *name* finished writing.
+
+        Builds the canonical dotted path from the store's prefix + name
+        and invokes the callback. Failures inside the callback are the
+        callback's responsibility (the runtime catches via
+        ``invoke_plugins`` semantics).
+        """
+        if self.effect_complete is None:
+            return
+        full_path = f"{self._path_prefix}.{name}" if self._path_prefix else name
+        self.effect_complete(full_path, effect_result)
 
     def dump_json(self, out_path: Path, *, pretty: bool = False) -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)

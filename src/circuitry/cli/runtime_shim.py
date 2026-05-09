@@ -38,6 +38,9 @@ from ..core.runtime_plugins import (
     load_plugins,
 )
 from ..core.store import Store, build_persistence_backend
+from ..plugins.factory import build_plugin
+from ..preflight import CheckResult, call_check
+from .allowlist import check_allowlist, walk_orchestration_refs
 from .config import CircuitryConfig
 from .effective_settings import EffectiveSettings, resolve_effective_settings
 from .orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
@@ -58,6 +61,7 @@ class RunRequest:
     live_state_path: Optional[Path] = None
     adapter: Optional[Adapter] = None
     state_observer: Optional[Callable[[dict[str, Any]], None]] = None
+    skip_preflight: bool = False
 
 
 @dataclass(frozen=True)
@@ -94,10 +98,18 @@ def run(req: RunRequest) -> RunResult:
         cfg = req.config or CircuitryConfig()
         orch = load_orchestration_file(req.orchestration_path)
 
+        allowlist_errors = check_allowlist(orch=orch, config=cfg)
+        if allowlist_errors:
+            raise ValueError(
+                "Allowlist enforcement failed: " + "; ".join(allowlist_errors)
+            )
+
         effective = resolve_effective_settings(cfg=cfg, orch=orch)
         runtime_config = effective.runtime
         persistence = build_persistence_backend(effective.runtime)
-        plugins, plugin_events = _initialize_plugins(effective.plugins)
+        plugins, plugin_events = _initialize_plugins(
+            effective.plugins, allowed=cfg.enabled_plugins
+        )
 
         loaded_from_persistence = False
         if (
@@ -214,6 +226,29 @@ def run(req: RunRequest) -> RunResult:
             resolved_model = effective.model or ""
             adapter = _NoOpAdapter()
 
+        # Preflight (Story 1). After adapter resolution, before any LLM /
+        # tool effect runs. ``--skip-preflight`` opts out for advanced use;
+        # ``--dry-run`` also skips it since the whole point of dry-run is
+        # to avoid touching the world. Only runs when a config was
+        # supplied (programmatic callers without a config keep default-
+        # open behavior). When the caller injected an adapter via
+        # RunRequest.adapter we trust them — the adapter may not be
+        # buildable from config (host_claude).
+        if (
+            not req.skip_preflight
+            and not req.dry_run
+            and req.config is not None
+            and req.adapter is None
+        ):
+            preflight_results = preflight(req.orchestration_path, req.config)
+            preflight_errors = format_preflight_errors(preflight_results)
+            if preflight_errors:
+                raise RuntimeError(
+                    "Preflight failed: "
+                    + "; ".join(preflight_errors)
+                    + ". Re-run with --skip-preflight to bypass."
+                )
+
         # Inject built-in template variables available in all orchestrations.
         state.setdefault("_run_id", run_id)
         state.setdefault("_timestamp", datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"))
@@ -240,7 +275,33 @@ def run(req: RunRequest) -> RunResult:
         if on_write is not None:
             # Write initial snapshot so watchers see the pending state
             on_write(state)
-        store = Store(state, on_write=on_write)
+
+        # Story 2: per-effect lifecycle hook. Fires after each effect's
+        # node["value"] is finalized. Skipped silently for plugins that
+        # don't implement on_effect_complete.
+        effect_complete_cb: Optional[Callable[[str, dict[str, Any]], None]] = None
+        if plugins:
+            _plugin_ctx = PluginContext(
+                run_id=run_id,
+                orchestration_path=req.orchestration_path,
+                dry_run=req.dry_run,
+                validate_only=req.validate_only,
+                runtime_config=effective.runtime,
+            )
+
+            def effect_complete_cb(  # type: ignore[no-redef]
+                effect_path: str, effect_result: dict[str, Any]
+            ) -> None:
+                invoke_plugins(
+                    plugins=plugins,
+                    hook_name="on_effect_complete",
+                    state=state,
+                    context=_plugin_ctx,
+                    effect_path=effect_path,
+                    effect_result=effect_result,
+                )
+
+        store = Store(state, on_write=on_write, effect_complete=effect_complete_cb)
 
         runtime = DynamicRuntime(
             root_def,
@@ -329,7 +390,11 @@ def run(req: RunRequest) -> RunResult:
         return RunResult(ok=False, state=state, warnings=warnings, error=str(e))
 
 
-def validate(orchestration_path: Path) -> dict[str, Any]:
+def validate(
+    orchestration_path: Path,
+    *,
+    config: CircuitryConfig | None = None,
+) -> dict[str, Any]:
     text = orchestration_path.read_text(encoding="utf-8").strip()
     if not text:
         return {"ok": False, "errors": ["Orchestration file is empty."]}
@@ -344,6 +409,15 @@ def validate(orchestration_path: Path) -> dict[str, Any]:
             if schema_errors:
                 return {"ok": False, "errors": [e.message for e in schema_errors]}
 
+        # Allowlist gate. Skipped when caller supplies no config — keeps
+        # programmatic callers (tests, MCP server, internal scripts)
+        # default-open. The CLI resolves a config from disk + env vars and
+        # passes it explicitly so AC 0.2 (env-var enforcement) holds.
+        if config is not None:
+            allowlist_errors = check_allowlist(orch=orch, config=config)
+            if allowlist_errors:
+                return {"ok": False, "errors": allowlist_errors}
+
         compile_orchestration(orch=orch, root_name="prime")
 
         from ..core.cycle_check import detect_cycles
@@ -354,9 +428,114 @@ def validate(orchestration_path: Path) -> dict[str, Any]:
                 "errors": [f"Cycle: {' → '.join(cycle)}"],
             }
 
+        # Preflight gate (Story 1). Same gating policy as allowlist — only
+        # runs when the caller supplied a config so programmatic callers
+        # without an environment-resolved config don't hit network probes.
+        if config is not None:
+            preflight_results = preflight(orchestration_path, config)
+            preflight_errors = format_preflight_errors(preflight_results)
+            if preflight_errors:
+                return {"ok": False, "errors": preflight_errors}
+
         return {"ok": True, "errors": []}
     except Exception as e:
         return {"ok": False, "errors": [str(e)]}
+
+
+def preflight(
+    orchestration_path: Path,
+    config: CircuitryConfig,
+) -> list[tuple[str, CheckResult]]:
+    """Walk an orchestration's referenced extensions and call ``check()`` on
+    each. Returns an ordered list of ``(label, CheckResult)`` tuples.
+
+    Labels are prefixed by category for actionable error messages:
+      * ``adapter:<name>``
+      * ``tool:<name>``
+      * ``runtime_plugin:<name>``
+
+    Adapters that can only be built at runtime (host_claude needs a
+    request_handler) are reported as ok with a deferred message; preflight
+    cannot exercise them outside the MCP context.
+    """
+    orch = load_orchestration_file(orchestration_path)
+    adapter_refs, tool_refs = walk_orchestration_refs(orch)
+    runtime_cfg = config.runtime or {}
+    results: list[tuple[str, CheckResult]] = []
+
+    for adapter_name in sorted(adapter_refs):
+        try:
+            adapter = build_adapter(adapter_name=adapter_name, runtime=runtime_cfg)
+        except RuntimeError as exc:
+            # Adapters that require runtime injection (e.g. host_claude) raise
+            # RuntimeError at factory time. Treat as deferred — preflight
+            # cannot exercise them, but they are not a failure here.
+            results.append(
+                (
+                    f"adapter:{adapter_name}",
+                    CheckResult(
+                        ok=True,
+                        missing=[],
+                        message=f"deferred (runtime-injected): {exc}",
+                    ),
+                )
+            )
+            continue
+        except ValueError as exc:
+            results.append(
+                (
+                    f"adapter:{adapter_name}",
+                    CheckResult(ok=False, missing=[], message=str(exc)),
+                )
+            )
+            continue
+        results.append((f"adapter:{adapter_name}", call_check(adapter)))
+
+    for tool_name in sorted(tool_refs):
+        try:
+            tool = build_plugin(plugin_name=tool_name, runtime=runtime_cfg)
+        except (RuntimeError, ValueError) as exc:
+            results.append(
+                (
+                    f"tool:{tool_name}",
+                    CheckResult(ok=False, missing=[], message=str(exc)),
+                )
+            )
+            continue
+        results.append((f"tool:{tool_name}", call_check(tool)))
+
+    if config.plugins:
+        # Plugin load failures are non-fatal warnings — surfaced via the
+        # ``runtime.plugins.events`` log, not preflight. Preflight only
+        # exercises ``check()`` on plugins that loaded cleanly.
+        for load_result in load_plugins(
+            list(config.plugins), allowed=config.enabled_plugins
+        ):
+            if load_result.plugin is None:
+                continue
+            name = getattr(load_result.plugin, "name", load_result.plugin_id)
+            results.append(
+                (f"runtime_plugin:{name}", call_check(load_result.plugin))
+            )
+
+    return results
+
+
+def format_preflight_errors(
+    results: list[tuple[str, CheckResult]],
+) -> list[str]:
+    """Render preflight failures as one-line strings for CLI / RunResult."""
+    errors: list[str] = []
+    for label, r in results:
+        if r.ok:
+            continue
+        parts = [f"{label}: not ready"]
+        if r.missing:
+            parts.append(f"missing {r.missing}")
+        if r.message:
+            parts.append(r.message)
+        errors.append(" — ".join(parts))
+    return errors
 
 
 def inspect_orchestration(orchestration_path: Path) -> dict[str, Any]:
@@ -449,11 +628,13 @@ def _require_resolved_settings(
 
 def _initialize_plugins(
     plugin_ids: list[str],
+    *,
+    allowed: list[str] | None = None,
 ) -> tuple[list[RuntimePlugin], list[dict[str, Any]]]:
     loaded_plugins: list[RuntimePlugin] = []
     events: list[dict[str, Any]] = []
 
-    for result in load_plugins(plugin_ids):
+    for result in load_plugins(plugin_ids, allowed=allowed):
         if result.plugin is not None:
             loaded_plugins.append(result.plugin)
             events.append(

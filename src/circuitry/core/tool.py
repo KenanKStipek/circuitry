@@ -287,6 +287,8 @@ class ToolRuntime:
                 else:
                     _console.print(line)
 
+            store.fire_effect_complete(self.defn.name, node)
+
         except Exception as e:
             if self.verbose:
                 elapsed = time.monotonic() - t0
@@ -306,3 +308,4 @@ class ToolRuntime:
             elif self.defn.on_error == "skip":
                 node["value"] = None
             # continue: keep going with None value
+            store.fire_effect_complete(self.defn.name, node)

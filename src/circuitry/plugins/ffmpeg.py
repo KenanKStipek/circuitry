@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import re
 import shlex
+import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Any
 
+from ..preflight import CheckResult
 from .base import ToolResult
 
 _SHELL_METACHARACTERS = ("&&", "||", "|", ";", ">", "<", "`", "$(", "\n")
@@ -167,3 +169,9 @@ class FfmpegPlugin:
             stderr=proc.stderr,
             exit_code=proc.returncode,
         )
+
+    def check(self) -> CheckResult:
+        missing: list[str] = []
+        if shutil.which("ffmpeg") is None:
+            missing.append("binary:ffmpeg")
+        return CheckResult(ok=not missing, missing=missing)

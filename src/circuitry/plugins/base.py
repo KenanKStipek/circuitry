@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from ..preflight import CheckResult
 
 
 @dataclass(frozen=True)
@@ -23,6 +26,8 @@ class ToolPlugin(Protocol):
         params: dict[str, Any],
         timeout_seconds: int = 300,
     ) -> ToolResult: ...
+
+    def check(self) -> CheckResult: ...
 
 
 def validate_tool_result(result: ToolResult, *, plugin_name: str) -> list[str]:

@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, Pattern
 
+from ..preflight import CheckResult
 from .base import GenerateResult
 
 
@@ -97,4 +98,14 @@ class HostClaudeAdapter:
             raw=raw,
             tokens_sent=None,
             tokens_received=None,
+        )
+
+    def check(self) -> CheckResult:
+        # The MCP server injects the request_handler; the adapter has no
+        # external dependencies of its own. A CheckResult.ok=True here just
+        # confirms the dataclass instance is wired.
+        return CheckResult(
+            ok=True,
+            missing=[],
+            message="host_claude is driven by the host LLM session (MCP).",
         )

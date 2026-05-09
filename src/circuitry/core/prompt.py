@@ -259,6 +259,7 @@ class PromptRuntime:
                         f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.display_name}"
                         f" [dim]{_elapsed_str(elapsed)}[/dim]"
                     )
+            store.fire_effect_complete(self.defn.name, node)
             return
 
         # Determine retry policy: per-prompt config > runtime default > 1 (no retry)
@@ -356,6 +357,7 @@ class PromptRuntime:
                         else:
                             _console.print(line)
 
+                    store.fire_effect_complete(self.defn.name, node)
                     return
 
                 except Exception:
@@ -394,6 +396,7 @@ class PromptRuntime:
             elif self.defn.on_error == "skip":
                 node["value"] = None
             # continue: keep going with None value
+            store.fire_effect_complete(self.defn.name, node)
 
     def _build_attempts(self, *, default_model: str) -> list[tuple[str, str]]:
         attempts: list[tuple[str, str]] = []

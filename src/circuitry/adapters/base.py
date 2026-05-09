@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from ..preflight import CheckResult
 
 
 @dataclass(frozen=True)
@@ -19,5 +22,7 @@ class Adapter(Protocol):
     def generate(
         self, *, model: str, prompt: str, timeout_seconds: int = 120
     ) -> GenerateResult: ...
+
+    def check(self) -> CheckResult: ...
 
 

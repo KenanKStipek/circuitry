@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import shlex
+import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Any
 
+from ..preflight import CheckResult
 from .base import GenerateResult
 
 
@@ -98,3 +100,30 @@ class OllamaAdapter:
             if isinstance(tokens_received, int)
             else None,
         )
+
+    def check(self) -> CheckResult:
+        missing: list[str] = []
+        if shutil.which("curl") is None:
+            missing.append("binary:curl")
+        else:
+            # Probe the Ollama daemon. Failure here is non-fatal at validate
+            # time; doctor surfaces it as actionable.
+            try:
+                proc = subprocess.run(
+                    [
+                        "curl",
+                        "--silent",
+                        "--max-time",
+                        "2",
+                        "--head",
+                        self.base_url.rstrip("/") + "/api/tags",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if proc.returncode != 0:
+                    missing.append(f"host:{self.base_url}")
+            except Exception:
+                missing.append(f"host:{self.base_url}")
+        return CheckResult(ok=not missing, missing=missing)

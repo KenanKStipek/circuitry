@@ -246,6 +246,7 @@ class DynamicRuntime:
 
             dyn["value"] = True
             meta["completed_at"] = _now_iso()
+            store.fire_effect_complete(self.defn.name, dyn)
 
         except Exception as e:
             dyn["value"] = False

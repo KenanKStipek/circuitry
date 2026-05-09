@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import time
 import urllib.parse
@@ -14,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..preflight import CheckResult
 from .base import ToolResult
 
 
@@ -451,3 +453,28 @@ class ComfyUIPlugin:
             stderr=None,
             exit_code=None,
         )
+
+    def check(self) -> CheckResult:
+        missing: list[str] = []
+        if shutil.which("curl") is None:
+            missing.append("binary:curl")
+        else:
+            try:
+                proc = subprocess.run(
+                    [
+                        "curl",
+                        "--silent",
+                        "--max-time",
+                        "2",
+                        "--head",
+                        self.base_url.rstrip("/") + "/system_stats",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if proc.returncode != 0:
+                    missing.append(f"host:{self.base_url}")
+            except Exception:
+                missing.append(f"host:{self.base_url}")
+        return CheckResult(ok=not missing, missing=missing)
