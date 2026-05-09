@@ -32,6 +32,7 @@ from .base64 import Base64Plugin
 from .clock import ClockPlugin
 from .comfyui import ComfyUIPlugin
 from .csv import CsvPlugin
+from .dns import DnsPlugin
 from .email_smtp import EmailSmtpPlugin
 from .env_vars import EnvVarsPlugin
 from .ffmpeg import FfmpegPlugin
@@ -39,14 +40,25 @@ from .fs import FsPlugin
 from .gzip import GzipPlugin
 from .hash import HashPlugin
 from .hex import HexPlugin
+from .html_extract import HtmlExtractPlugin
 from .http import HttpPlugin
 from .json import JsonPlugin
 from .math import MathPlugin
+from .pdf_extract import PdfExtractPlugin
 from .port_check import PortCheckPlugin
+from .process_list import ProcessListPlugin
+from .python_eval import PythonEvalPlugin
 from .regex import RegexPlugin
+from .rss import RssPlugin
 from .shell import ShellPlugin
+from .system_info import SystemInfoPlugin
 from .tar import TarPlugin
 from .uuid import UuidPlugin
+from .web_fetch import WebFetchPlugin
+from .webhook import WebhookPlugin
+from .whois import WhoisPlugin
+from .wikipedia import WikipediaPlugin
+from .xml import XmlPlugin
 from .zip import ZipPlugin
 
 PluginBuilder = Callable[[dict[str, Any]], ToolPlugin]
@@ -237,6 +249,57 @@ def _build_weather(cfg: dict[str, Any]) -> ToolPlugin:
     del cfg; return _weather_mod.WeatherPlugin()
 
 
+# PyPI-dep tool plugins. Lazy imports inside execute() — instantiation
+# never fails, so missing deps surface only when actually invoked or
+# when check() is called.
+def _build_dns(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return DnsPlugin()
+
+
+def _build_whois(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return WhoisPlugin()
+
+
+def _build_pdf_extract(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return PdfExtractPlugin()
+
+
+def _build_xml(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return XmlPlugin()
+
+
+def _build_html_extract(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return HtmlExtractPlugin()
+
+
+def _build_system_info(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return SystemInfoPlugin()
+
+
+def _build_process_list(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return ProcessListPlugin()
+
+
+def _build_wikipedia(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return WikipediaPlugin()
+
+
+def _build_rss(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return RssPlugin()
+
+
+def _build_webhook(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return WebhookPlugin()
+
+
+def _build_web_fetch(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return WebFetchPlugin()
+
+
+def _build_python_eval(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return PythonEvalPlugin()
+
+
 PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "ffmpeg": _build_ffmpeg,
     "comfyui": _build_comfyui,
@@ -283,6 +346,19 @@ PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "pdf_render": _build_pdf_render,
     "web_search": _build_web_search,
     "weather": _build_weather,
+    # Pure-Python PyPI-dep catalog.
+    "dns": _build_dns,
+    "whois": _build_whois,
+    "pdf_extract": _build_pdf_extract,
+    "xml": _build_xml,
+    "html_extract": _build_html_extract,
+    "system_info": _build_system_info,
+    "process_list": _build_process_list,
+    "wikipedia": _build_wikipedia,
+    "rss": _build_rss,
+    "webhook": _build_webhook,
+    "web_fetch": _build_web_fetch,
+    "python_eval": _build_python_eval,
 }
 
 

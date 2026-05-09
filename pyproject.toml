@@ -56,6 +56,35 @@ dependencies = [
 [project.optional-dependencies]
 toon = ["toon-format @ git+https://github.com/toon-format/toon-python.git"]
 
+# Per-tool optional deps. Each plugin's check() method reports
+# library:<dep> when the corresponding dep is missing.
+dns = ["dnspython>=2.4"]
+whois = ["python-whois>=0.9"]
+pdf_extract = ["pdfplumber>=0.10"]
+xml = ["lxml>=4.9"]
+html_extract = ["beautifulsoup4>=4.12", "lxml>=4.9"]
+psutil = ["psutil>=5.9"]
+wikipedia = ["wikipedia-api>=0.6"]
+rss = ["feedparser>=6.0"]
+webhook = ["requests>=2.28"]
+web_fetch = ["requests>=2.28", "trafilatura>=1.6"]
+python_eval = ["RestrictedPython>=7.0"]
+
+# Aggregate: pulls in every tool extra from this batch.
+tools = [
+    "dnspython>=2.4",
+    "python-whois>=0.9",
+    "pdfplumber>=0.10",
+    "lxml>=4.9",
+    "beautifulsoup4>=4.12",
+    "psutil>=5.9",
+    "wikipedia-api>=0.6",
+    "feedparser>=6.0",
+    "requests>=2.28",
+    "trafilatura>=1.6",
+    "RestrictedPython>=7.0",
+]
+
 [project.scripts]
 cof = "circuitry.cli.app:main"
 circuitry-mcp = "circuitry.mcp.server:main"
