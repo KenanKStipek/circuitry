@@ -1,0 +1,177 @@
+{
+  "schema_version": "2.0.0",
+  "curation_version": "2026.05.08",
+  "runtime_compatibility": {
+    "min_version": "0.1.0",
+    "notes": "Validated against current main branch runtime in dry-run mode."
+  },
+  "entries": [
+    {
+      "name": "learn/hello",
+      "file": "learn/hello.yml",
+      "category": "learn",
+      "intent": "Say hello in a creative way — the simplest orchestration.",
+      "description": "Say hello in a creative way — the simplest orchestration.",
+      "primitives": ["prompt"],
+      "difficulty": "beginner",
+      "backends": ["llm"],
+      "inputs": {
+        "name": {"type": "string", "required": true, "description": "Who to greet."}
+      },
+      "example": "cof run learn/hello -e name=World"
+    },
+    {
+      "name": "learn/prompt",
+      "file": "learn/prompt.yml",
+      "category": "learn",
+      "intent": "prompt primitive — text, json, number, boolean output types",
+      "description": "Template: basic prompt with text, json, number, and boolean outputs.",
+      "primitives": ["prompt"],
+      "difficulty": "beginner",
+      "backends": ["llm"],
+      "inputs": {}
+    },
+    {
+      "name": "learn/dynamic_chain",
+      "file": "learn/dynamic_chain.yml",
+      "category": "learn",
+      "intent": "dynamic primitive — chain flow (sequential, each step sees prior outputs)",
+      "description": "Template: dynamic chain — sequential multi-step pipeline.",
+      "primitives": ["dynamic", "prompt"],
+      "difficulty": "beginner",
+      "backends": ["llm"],
+      "inputs": {}
+    },
+    {
+      "name": "learn/dynamic_tree",
+      "file": "learn/dynamic_tree.yml",
+      "category": "learn",
+      "intent": "dynamic primitive — tree flow (all steps share the same input snapshot)",
+      "description": "Template: dynamic tree — parallel fan-out execution.",
+      "primitives": ["dynamic", "prompt"],
+      "difficulty": "beginner",
+      "backends": ["llm"],
+      "inputs": {}
+    },
+    {
+      "name": "learn/conditional",
+      "file": "learn/conditional.yml",
+      "category": "learn",
+      "intent": "if primitive — deterministic CEL branching",
+      "description": "Template: if/then/else branching with CEL expressions.",
+      "primitives": ["if", "prompt"],
+      "difficulty": "intermediate",
+      "backends": ["llm"],
+      "inputs": {}
+    },
+    {
+      "name": "learn/loop",
+      "file": "learn/loop.yml",
+      "category": "learn",
+      "intent": "loop primitive — each iteration over a JSON array",
+      "description": "Template: loop with each/as iteration and tree parallelism.",
+      "primitives": ["loop", "prompt"],
+      "difficulty": "intermediate",
+      "backends": ["llm"],
+      "inputs": {}
+    },
+    {
+      "name": "learn/reflector",
+      "file": "learn/reflector.yml",
+      "category": "learn",
+      "intent": "reflector primitive — runtime effect generation",
+      "description": "Template: reflector — runtime plan generation and execution.",
+      "primitives": ["reflector", "prompt"],
+      "difficulty": "advanced",
+      "backends": ["llm"],
+      "inputs": {}
+    },
+    {
+      "name": "patterns/all_primitives",
+      "file": "patterns/all_primitives.yml",
+      "category": "patterns",
+      "intent": "all primitives composed — dynamic, loop, if, prompt",
+      "description": "Template: all primitives composed — dynamic, loop, conditional, prompt.",
+      "primitives": ["dynamic", "loop", "if", "prompt"],
+      "difficulty": "advanced",
+      "backends": ["llm"],
+      "inputs": {}
+    },
+    {
+      "name": "recipes/article_summarizer",
+      "file": "recipes/article_summarizer.yml",
+      "category": "recipes",
+      "intent": "Summarize an article into a concise one-sentence summary.",
+      "description": "Summarize an article into a concise one-sentence summary.",
+      "primitives": ["prompt"],
+      "difficulty": "intermediate",
+      "backends": ["llm"],
+      "inputs": {
+        "article_text": {"type": "string", "required": true, "description": "Full text of the article to summarize."},
+        "max_words": {"type": "number", "required": false, "description": "Maximum words for the final summary (default model decides)."}
+      },
+      "example": "cof run recipes/article_summarizer -e article_text='...'"
+    },
+    {
+      "name": "recipes/comic_strip",
+      "file": "recipes/comic_strip.yml",
+      "category": "recipes",
+      "intent": "Generate a 2–4 panel comic strip with AI art and text overlays.",
+      "description": "Generate a 2–4 panel comic strip with AI art and text overlays.",
+      "primitives": ["prompt", "loop", "tool"],
+      "difficulty": "advanced",
+      "backends": ["llm", "comfyui", "ffmpeg"],
+      "inputs": {
+        "prompt": {"type": "string", "required": false, "description": "Premise or theme for the comic strip."},
+        "panel_count": {"type": "number", "required": false, "description": "Number of panels (2–4, 0 = random)."},
+        "genre": {"type": "string", "required": false, "description": "Genre (defaults to dark comedy)."}
+      },
+      "example": "cof run recipes/comic_strip -e prompt='a cat discovers gravity'"
+    },
+    {
+      "name": "agents/meta_orchestrator",
+      "file": "agents/meta_orchestrator.yml",
+      "category": "agents",
+      "intent": "Generate a new orchestration from a natural language prompt.",
+      "description": "Generate a new orchestration from a natural language prompt.",
+      "primitives": ["dynamic", "prompt", "loop"],
+      "difficulty": "advanced",
+      "backends": ["llm"],
+      "inputs": {
+        "user_request": {"type": "string", "required": true, "description": "Natural language description of the orchestration to build."}
+      },
+      "example": "cof gen my-orch 'Build an article summarizer'"
+    },
+    {
+      "name": "agents/improver",
+      "file": "agents/improver.yml",
+      "category": "agents",
+      "intent": "Analyze and improve an existing orchestration YAML.",
+      "description": "Analyze and improve an existing orchestration YAML.",
+      "primitives": ["dynamic", "prompt"],
+      "difficulty": "advanced",
+      "backends": ["llm"],
+      "inputs": {
+        "input_yaml": {"type": "string", "required": true, "description": "The orchestration YAML to improve."},
+        "original_prompt": {"type": "string", "required": true, "description": "The original intent the orchestration was built for."},
+        "rules": {"type": "string", "required": false, "description": "LLM authoring rules (auto-injected by improve-orchestration script)."}
+      },
+      "example": "cof run agents/improver --state input.json"
+    },
+    {
+      "name": "agents/improver_judge",
+      "file": "agents/improver_judge.yml",
+      "category": "agents",
+      "intent": "Convergence judge — decides if two orchestration versions have converged.",
+      "description": "Convergence judge — decides if two orchestration versions have converged.",
+      "primitives": ["prompt"],
+      "difficulty": "advanced",
+      "backends": ["llm"],
+      "inputs": {
+        "yaml_a": {"type": "string", "required": true, "description": "Previous iteration YAML."},
+        "yaml_b": {"type": "string", "required": true, "description": "Current iteration YAML."}
+      },
+      "example": "cof run agents/improver_judge --state input.json"
+    }
+  ]
+}
