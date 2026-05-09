@@ -4,6 +4,7 @@ from typing import Any, Callable
 
 from .anthropic import AnthropicAdapter
 from .base import Adapter
+from .gemini import GeminiAdapter
 from .host_claude import HostClaudeAdapter
 from .litellm import LiteLLMAdapter
 from .ollama import OllamaAdapter
@@ -39,6 +40,14 @@ def _build_litellm(cfg: dict[str, Any]) -> Adapter:
     )
 
 
+def _build_gemini(cfg: dict[str, Any]) -> Adapter:
+    return GeminiAdapter(
+        base_url=cfg.get("base_url")
+        or "https://generativelanguage.googleapis.com/v1beta/openai",
+        default_model=cfg.get("default_model") or "gemini-2.5-flash",
+    )
+
+
 def _build_host_claude(cfg: dict[str, Any]) -> Adapter:
     raise RuntimeError(
         "host_claude cannot be built from config; it requires a "
@@ -56,6 +65,7 @@ ADAPTER_REGISTRY: dict[str, AdapterBuilder] = {
     "anthropic": _build_anthropic,
     "litellm": _build_litellm,
     "host_claude": _build_host_claude,
+    "gemini": _build_gemini,
 }
 
 

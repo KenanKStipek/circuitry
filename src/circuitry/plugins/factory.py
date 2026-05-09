@@ -5,6 +5,7 @@ from typing import Any, Callable
 from .base import ToolPlugin
 from .comfyui import ComfyUIPlugin
 from .ffmpeg import FfmpegPlugin
+from .http import HttpPlugin
 
 PluginBuilder = Callable[[dict[str, Any]], ToolPlugin]
 
@@ -23,9 +24,15 @@ def _build_comfyui(cfg: dict[str, Any]) -> ToolPlugin:
     )
 
 
+def _build_http(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg  # http has no per-plugin config; all options come per-effect via params
+    return HttpPlugin()
+
+
 PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "ffmpeg": _build_ffmpeg,
     "comfyui": _build_comfyui,
+    "http": _build_http,
 }
 
 
@@ -34,7 +41,7 @@ def _supported_names() -> tuple[str, ...]:
 
 
 # Back-compat alias.
-SUPPORTED_PLUGINS = ("ffmpeg", "comfyui")
+SUPPORTED_PLUGINS = ("ffmpeg", "comfyui", "http")
 
 
 def build_plugin(*, plugin_name: str, runtime: dict[str, Any]) -> ToolPlugin:
