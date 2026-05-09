@@ -70,6 +70,30 @@ webhook = ["requests>=2.28"]
 web_fetch = ["requests>=2.28", "trafilatura>=1.6"]
 python_eval = ["RestrictedPython>=7.0"]
 
+# SaaS / messaging integrations.
+slack = ["slack-sdk>=3.21"]
+discord = ["discord.py>=2.3"]
+github = ["PyGithub>=2.1"]
+jira = ["atlassian-python-api>=3.41"]
+notion = ["notion-client>=2.0"]
+linear = ["requests>=2.28"]
+
+# Cloud SaaS.
+gcalendar = ["google-api-python-client>=2.100", "google-auth>=2.20"]
+gdrive = ["google-api-python-client>=2.100", "google-auth>=2.20"]
+"s3-tool" = ["boto3>=1.28"]
+
+# Browser automation.
+playwright = ["playwright>=1.40"]
+screenshot = ["playwright>=1.40"]
+
+# ML / embeddings / vector search. These pull in heavy transitive deps
+# (PyTorch, transformers, ONNX, tokenizers); installing takes minutes
+# and several GB of disk.
+embed = ["sentence-transformers>=2.2"]
+rerank = ["sentence-transformers>=2.2"]
+vector_search = ["chromadb>=0.4"]
+
 # Aggregate: pulls in every tool extra from this batch.
 tools = [
     "dnspython>=2.4",
@@ -83,6 +107,20 @@ tools = [
     "requests>=2.28",
     "trafilatura>=1.6",
     "RestrictedPython>=7.0",
+]
+
+# Aggregate including SDK-heavy plugins.
+tools-all = [
+    "circuitry-cof[tools]",
+    "slack-sdk>=3.21",
+    "discord.py>=2.3",
+    "PyGithub>=2.1",
+    "atlassian-python-api>=3.41",
+    "notion-client>=2.0",
+    "google-api-python-client>=2.100",
+    "google-auth>=2.20",
+    "boto3>=1.28",
+    "playwright>=1.40",
 ]
 
 [project.scripts]

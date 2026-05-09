@@ -32,28 +32,42 @@ from .base64 import Base64Plugin
 from .clock import ClockPlugin
 from .comfyui import ComfyUIPlugin
 from .csv import CsvPlugin
+from .discord import DiscordPlugin
 from .dns import DnsPlugin
 from .email_smtp import EmailSmtpPlugin
+from .embed import EmbedPlugin
 from .env_vars import EnvVarsPlugin
 from .ffmpeg import FfmpegPlugin
 from .fs import FsPlugin
+from .gcalendar import GCalendarPlugin
+from .gdrive import GDrivePlugin
+from .github import GitHubPlugin
 from .gzip import GzipPlugin
 from .hash import HashPlugin
 from .hex import HexPlugin
 from .html_extract import HtmlExtractPlugin
 from .http import HttpPlugin
+from .jira import JiraPlugin
 from .json import JsonPlugin
+from .linear import LinearPlugin
 from .math import MathPlugin
+from .notion import NotionPlugin
 from .pdf_extract import PdfExtractPlugin
+from .playwright import PlaywrightPlugin
 from .port_check import PortCheckPlugin
 from .process_list import ProcessListPlugin
 from .python_eval import PythonEvalPlugin
 from .regex import RegexPlugin
+from .rerank import RerankPlugin
 from .rss import RssPlugin
+from .s3_tool import S3ToolPlugin
+from .screenshot import ScreenshotPlugin
 from .shell import ShellPlugin
+from .slack import SlackPlugin
 from .system_info import SystemInfoPlugin
 from .tar import TarPlugin
 from .uuid import UuidPlugin
+from .vector_search import VectorSearchPlugin
 from .web_fetch import WebFetchPlugin
 from .webhook import WebhookPlugin
 from .whois import WhoisPlugin
@@ -300,6 +314,65 @@ def _build_python_eval(cfg: dict[str, Any]) -> ToolPlugin:
     del cfg; return PythonEvalPlugin()
 
 
+# SDK / cloud / browser / ML tool plugins. Lazy imports inside execute()
+# — the dataclass instantiation never fails, the dep error surfaces
+# at invocation or via check().
+def _build_linear(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return LinearPlugin()
+
+
+def _build_slack(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return SlackPlugin()
+
+
+def _build_discord(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return DiscordPlugin()
+
+
+def _build_github(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return GitHubPlugin()
+
+
+def _build_jira(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return JiraPlugin()
+
+
+def _build_notion(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return NotionPlugin()
+
+
+def _build_gcalendar(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return GCalendarPlugin()
+
+
+def _build_gdrive(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return GDrivePlugin()
+
+
+def _build_s3_tool(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return S3ToolPlugin()
+
+
+def _build_playwright(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return PlaywrightPlugin()
+
+
+def _build_screenshot(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return ScreenshotPlugin()
+
+
+def _build_embed(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return EmbedPlugin()
+
+
+def _build_rerank(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return RerankPlugin()
+
+
+def _build_vector_search(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return VectorSearchPlugin()
+
+
 PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "ffmpeg": _build_ffmpeg,
     "comfyui": _build_comfyui,
@@ -359,6 +432,21 @@ PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "webhook": _build_webhook,
     "web_fetch": _build_web_fetch,
     "python_eval": _build_python_eval,
+    # SDK / cloud / browser / ML.
+    "linear": _build_linear,
+    "slack": _build_slack,
+    "discord": _build_discord,
+    "github": _build_github,
+    "jira": _build_jira,
+    "notion": _build_notion,
+    "gcalendar": _build_gcalendar,
+    "gdrive": _build_gdrive,
+    "s3": _build_s3_tool,
+    "playwright": _build_playwright,
+    "screenshot": _build_screenshot,
+    "embed": _build_embed,
+    "rerank": _build_rerank,
+    "vector_search": _build_vector_search,
 }
 
 
