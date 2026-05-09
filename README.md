@@ -73,115 +73,60 @@ The `manifest.json` in that directory is the operational registry consumed by `c
 
 ## Mental Model
 
-Circuitry builds up from a single prompt to a full feedback control system in five conceptual steps. Reading them in order is the fastest way to understand why the YAML looks the way it does.
+Circuitry stacks five abstractions. Each one earns its place by solving a problem the previous one couldn't. The framework's name — Cybernetic Orchestration Framework — describes what it becomes once the third and fourth are layered on top of the first two. Concrete YAML for each primitive lives in [Core Primitives](#core-primitives) below; this section is about why the shape is what it is.
 
-### 1. Prompt
+### 1. Prompt — a value in a context
 
-The atomic unit. One model invocation, one typed result, written to state at a deterministic path.
+The simplest unit is a single model invocation. Most frameworks model this as just a function call: input goes in, output comes out. Circuitry models it as a *computation that returns a value alongside a transformed context*. The value is the model's response. The context is everything that happened around it — which adapter served the call, how many tokens were spent, when it started and finished, whether it errored, what the rendered prompt actually looked like.
 
-```yaml
-- type: prompt
-  name: greeting
-  template: "Say hello to the world."
-```
+Both pieces matter. The value is what downstream code needs. The context is what makes the run legible after the fact. A prompt isn't `f(x) → y`; it's `f(state) → (state', y)`.
 
-After this runs, the state contains `prime.greeting.value` — the model's response. That's it: that's the smallest valid orchestration.
+This shape — a computation that produces a value alongside a threaded context — is a monad. Specifically, the state monad. The prompt is the framework's `unit`: the smallest monadic value, a single model call wrapped with its trace.
 
-### 2. State, and composing prompts
+### 2. Composition — the state object as monadic bind
 
-The moment you have two prompts, the second wants to read what the first produced. Circuitry's answer: every effect writes to a path derived from its `name`, and templates interpolate from the global state object using Mustache-style `{{path}}`.
+The moment you have two prompts, you have to talk about what the second knows about the first. Procedural answers (assign to a variable, pass it as an argument) collapse the moment branching, parallelism, or recursion enter the picture. Circuitry's answer is a single state object that every effect writes to and reads from.
 
-```yaml
-effects:
-  - type: prompt
-    name: draft
-    template: "Write a short intro for {{topic}}."
+That sounds like a global variable, but it isn't. Each effect's output is addressable through a deterministic path derived from its name. The path is part of the contract: an effect called `draft` always writes to `prime.draft.value`, and any future effect that wants to read it knows where to look. Determinism here isn't aesthetic — it's what makes the chaining well-defined. If you couldn't reliably refer to *that specific result of that specific computation*, you couldn't compose.
 
-  - type: prompt
-    name: critique
-    template: "Critique this draft: {{prime.draft.value}}"
-```
+Putting two prompts in sequence is monadic bind in the state monad: take a value-in-context and feed it to a continuation. The state object is the carried context. The deterministic paths are how the continuation addresses what came before.
 
-`{{topic}}` came in as user input. `{{prime.draft.value}}` is the first prompt's output. The state object is the wire between effects. **Deterministic paths are the foundation — everything that comes later relies on the next effect being able to address what the previous effect produced.**
+### 3. Dynamic — composition as a first-class operation
 
-### 3. Dynamics — grouping and ordering
+A pair of effects is a chain. Three is also a chain. At some point you stop wanting to think about which effect sees which one's output and start wanting to reason about the *whole composition* as a unit you can name, scope, and reuse.
 
-Once you have multiple effects, you need scopes (so names don't collide across reusable building blocks) and a way to declare "do these in sequence" vs "do them in parallel". A `dynamic` is both:
+A dynamic is exactly that: a higher-order operator that takes a list of effects and produces a single composite effect by composing them. It's the framework's binary operator promoted to a first-class noun.
 
-```yaml
-- type: dynamic
-  name: research
-  flow: chain
-  effects:
-    - type: prompt
-      name: gather
-      template: "List five sources on {{topic}}."
-    - type: prompt
-      name: summarize
-      template: "Summarize them: {{research.gather.value}}"
-```
+There are two natural ways to compose a list:
 
-Effects inside the `research` dynamic write to `prime.research.gather.value`, `prime.research.summarize.value` — their state is namespaced.
+- **Sequential** — each effect sees the prior's output. Monadic in the strict sense; this is the chain-of-thought topology.
+- **Parallel** — all effects launch against the same input snapshot. Applicative rather than monadic (no effect depends on a sibling). This is the tree-of-thought topology.
 
-The `flow:` parameter chooses topology:
+A dynamic is the same structure either way; only the composition strategy changes. The implicit root of every orchestration is a dynamic. So is the body of a loop, each branch of a conditional, and the inner of a reflector. Once you see dynamics as the composition operator, the rest of the language collapses into one idea reused at every scale.
 
-- **`chain`** (also `chain_of_thought` / `cot`) — sequential. Each effect runs after the previous one finishes and sees its state.
-- **`tree`** (also `tree_of_thought` / `tot`) — parallel. All effects launch simultaneously against the same input snapshot. Use this when downstream effects don't depend on each other.
+### 4. Loops and conditionals — closing the loop
 
-If your orchestration only needs sequential prompts that each read the prior, you don't strictly need a dynamic — Circuitry wraps the file's top-level `effects:` in an implicit `prime` dynamic. But for any non-trivial topology, dynamics are how you express it.
+Everything to this point is *open-loop*: the orchestration is a static directed graph. State flows forward, decisions were made at authoring time, and the runtime just executes them. A long chain or a wide tree can't surprise itself.
 
-### 4. Loops and conditionals — this is the cybernetic part
+What turns an open-loop pipeline into a *closed-loop* control system is two ideas: **branching on observed state** and **iterating on observed state**.
 
-So far the orchestration is a directed graph: prompts feed each other, dynamics group them, `chain`/`tree` decides whether they run in series or parallel. That's pipeline composition — not yet cybernetic.
+A conditional is a predicate over state plus two continuations. The predicate reads what has happened and decides which path the system takes next. The deterministic case (a rule-based router) is the boring case; the interesting case is the model-evaluated predicate, where the LLM itself is the sensor reading the system's state and reporting back. The model becomes part of the control loop.
 
-Cybernetics enters when **the orchestration observes its own state and changes its control flow based on what it observes**. Two primitives unlock that:
+A loop is a continuation predicate plus a body. After every iteration the predicate re-reads the now-mutated state and decides whether to keep going. Each iteration's output is the next iteration's input. The loop terminates because the predicate says "done" or because a deliberate iteration cap fires — a floor against runaway feedback.
 
-**Conditionals** branch on observed state:
-
-```yaml
-- type: if
-  name: needs_revision
-  if:
-    mode: model
-    template: "Does this draft need more work? {{prime.draft.value}}"
-  then:
-    - type: prompt
-      name: revise
-      template: "Revise: {{prime.draft.value}}"
-```
-
-`mode: model` lets the LLM read state and decide which branch runs. `mode: cel` does the same with a deterministic CEL expression for cases where you'd rather not pay an LLM for the routing decision.
-
-**Loops** re-evaluate continuation against the freshly-written state:
-
-```yaml
-- type: loop
-  name: refine
-  while:
-    mode: model
-    template: "Is this good enough? {{prime.refine.draft.value}}"
-  max_iterations: 5
-  body:
-    - type: prompt
-      name: draft
-      template: "Improve: {{prime.refine.draft.value}}"
-```
-
-Each iteration writes a new `prime.refine.iter_<N>.draft.value`; the `while` condition is evaluated against the latest one. The loop exits when the model says "good enough" — or when `max_iterations` triggers (a deliberate floor against runaway feedback).
-
-Together, conditionals and loops turn the orchestration from a static plan into a closed-loop control system. The output of one effect drives the choice of the next. **That's the cybernetic claim**: a monitor (the conditional / loop predicate) compares system state to a desired condition, and a controller (the branch / iteration) adjusts behaviour. The orchestration steers itself.
+This is the cybernetic claim made literal. A monitor (the predicate) compares observed state to a desired condition. A controller (the branch or the iteration) adjusts behaviour. The orchestration is no longer a program that runs once; it's a system that observes itself running and steers itself toward an attractor. The framework is named for this.
 
 ### 5. Tools, adapters, and runtime plugins — the rest of the world
 
-Once the control plane is in place, the catalog of *what* you can do at each step opens up:
+Once a closed-loop control system exists, the remaining design space is what the system can actually do at each step.
 
-- **Adapters** — how the LLM call leaves the process. 24 in-tree (anthropic, openai, gemini, groq, ollama, openrouter, mistral, cohere, deepseek, xai, perplexity, vllm, llamacpp, lmstudio, …) plus litellm for the long tail. All sit behind the same `Adapter` Protocol so orchestrations stay portable.
-- **Tool plugins** — non-LLM side effects. 69 in-tree, from stdlib utilities (`json`, `regex`, `csv`, `hash`, `uuid`) to subprocess wrappers (`git`, `ripgrep`, `pandoc`, `ffmpeg`, `gh`) to SDK-driven (`slack`, `github`, `playwright`, `embed`, `vector_search`). A `tool` effect calls one with a `params` dict and writes the result to state, exactly like a prompt effect.
-- **Runtime plugins** — lifecycle hooks for persistence and observability. 30 in-tree (sqlite, postgres, mongodb, redis, s3, kafka, opentelemetry, sentry, datadog, prometheus, …). They observe `on_run_start` / `on_effect_complete` / `on_run_success|failure` to record runs or emit traces, without changing orchestration semantics.
+**Adapters** are how a prompt effect leaves the process. They're substitutable behind one Protocol — a `generate(model, prompt) → result` interface. An orchestration written for Ollama runs on OpenAI or Anthropic with no edits, because the orchestration doesn't know which provider it's talking to. Portability across the LLM market is a property the abstraction gives away for free.
 
-Plus `use` for composing orchestrations from other orchestrations (with state isolation and typed I/O), and `reflector` for letting the model plan the next set of effects at runtime — both built on the same primitives above.
+**Tool plugins** generalise the prompt. A computation whose result isn't a token stream but a side effect, an external observation, or a piece of structured data — reading a file, fetching a URL, computing an embedding, querying SQL, sending a Slack message — each fits the same monadic shape, so they participate in the orchestration's control flow indistinguishably from prompts. The framework doesn't care whether a node is "talking to a model" or "running ffmpeg"; both write a value to a deterministic state path and become composable.
 
-`cof list --extensions` enumerates everything available in your installation; `cof doctor` reports which deps / binaries / env vars each one expects.
+**Runtime plugins** are the system's introspection. They observe the closed loop without participating in its control flow — `on_run_start`, `on_effect_complete`, `on_run_success | failure` are pure observers. Persistence, pub/sub, observability — all subscribe to lifecycle events, do something side-effectful, and change nothing about the orchestration's semantics.
+
+Adapters carry the conversation. Tool plugins do work. Runtime plugins record what happened. Layered on the closed-loop core, these turn the framework from a clever YAML language into a production substrate — but the conceptual core is still just five abstractions, composed.
 
 ## Why Circuitry?
 
