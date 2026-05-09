@@ -1,0 +1,42 @@
+# Utility: extract
+# Pulls named fields out of unstructured text into a typed object.
+#
+# Inputs:  text (string, required), fields (array of strings, required)
+# Outputs: extracted (object — keys match the input `fields`, values are strings or null)
+# Use when: turning prose (an email, a transcript) into structured data downstream effects can consume.
+
+interface:
+  inputs:
+    text:
+      type: string
+      required: true
+      description: The unstructured text to extract from.
+    fields:
+      type: array
+      required: true
+      description: Field names to extract. Each appears as a key in the output object.
+  outputs:
+    extracted:
+      type: object
+      path: prime.extract.value
+      description: Object whose keys exactly match the requested field names. Missing values are null.
+
+effects:
+  - type: prompt
+    name: extract
+    prompt_type: json
+    schema:
+      type: object
+      additionalProperties:
+        type: ["string", "null"]
+    template: |
+      Extract the requested fields from the text. Output a JSON object whose keys EXACTLY match the field names below — no extra keys, no missing keys.
+      For any field not present in the text, set its value to null. Do not invent values.
+
+      Fields to extract:
+      {{#fields}}
+      - {{.}}
+      {{/fields}}
+
+      Text:
+      {{text}}

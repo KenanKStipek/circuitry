@@ -320,6 +320,15 @@ def validate(orchestration_path: Path) -> dict[str, Any]:
                 return {"ok": False, "errors": [e.message for e in schema_errors]}
 
         compile_orchestration(orch=orch, root_name="prime")
+
+        from ..core.cycle_check import detect_cycles
+        cycle = detect_cycles(orch, root_path=orchestration_path)
+        if cycle is not None:
+            return {
+                "ok": False,
+                "errors": [f"Cycle: {' → '.join(cycle)}"],
+            }
+
         return {"ok": True, "errors": []}
     except Exception as e:
         return {"ok": False, "errors": [str(e)]}

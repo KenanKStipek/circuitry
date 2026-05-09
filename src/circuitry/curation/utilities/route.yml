@@ -1,0 +1,37 @@
+# Utility: route
+# Picks a route key for content given a map of {key → description}.
+#
+# Inputs:  content (string, required), routes (object — key→description, required)
+# Outputs: route (string — one of the input route keys, verbatim)
+# Use when: dispatching content to one of N specialized downstream paths (combine with `if` or per-key `use`).
+
+interface:
+  inputs:
+    content:
+      type: string
+      required: true
+      description: The content to route.
+    routes:
+      type: array
+      required: true
+      description: Array of {key, description} objects describing each route option.
+  outputs:
+    route:
+      type: string
+      path: prime.route.value
+      description: Chosen route key. Always equal to one of the input keys.
+
+effects:
+  - type: prompt
+    name: route
+    template: |
+      Read the content and choose the single route key whose description best fits. Output ONLY the route key — no quotes, no preamble, no markdown.
+      The output MUST be one of the keys below verbatim.
+
+      Routes:
+      {{#routes}}
+      - {{key}}: {{description}}
+      {{/routes}}
+
+      Content:
+      {{content}}

@@ -39,7 +39,7 @@ from circuitry.rules import load_all_rules, load_rules_for  # noqa: E402
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 
-META_ORCHESTRATOR = PROJECT_ROOT / "orchestrations" / "meta_orchestrator.yml"
+META_ORCHESTRATOR = PROJECT_ROOT / "src" / "circuitry" / "curation" / "agents" / "meta_orchestrator.yml"
 IDEAS_FILE = PROJECT_ROOT / "orchestration-ideas.txt"
 IDEAS_DIR = PROJECT_ROOT / "tmp" / "ideas"
 

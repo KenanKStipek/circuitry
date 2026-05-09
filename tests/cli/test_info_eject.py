@@ -17,15 +17,15 @@ runner = CliRunner()
 
 
 def test_find_entry_by_name() -> None:
-    entry = find_entry("hello")
+    entry = find_entry("learn/hello")
     assert entry is not None
-    assert entry["name"] == "hello"
+    assert entry["name"] == "learn/hello"
 
 
 def test_find_entry_hyphenated() -> None:
-    entry = find_entry("article-summarizer")
+    entry = find_entry("recipes/article-summarizer")
     assert entry is not None
-    assert entry["file"] == "article_summarizer.yml"
+    assert entry["file"] == "recipes/article_summarizer.yml"
 
 
 def test_find_entry_not_found() -> None:
@@ -36,18 +36,18 @@ def test_find_entry_not_found() -> None:
 
 
 def test_info_shows_details() -> None:
-    result = runner.invoke(app, ["info", "hello"])
+    result = runner.invoke(app, ["info", "learn/hello"])
     assert result.exit_code == 0
     assert "hello" in result.output
     assert "name" in result.output.lower()
-    assert "example" in result.output.lower()
+    assert "learn" in result.output.lower()
 
 
 def test_info_json() -> None:
-    result = runner.invoke(app, ["info", "hello", "--json"])
+    result = runner.invoke(app, ["info", "learn/hello", "--json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert data["name"] == "hello"
+    assert data["name"] == "learn/hello"
     assert "inputs" in data
 
 
@@ -61,7 +61,7 @@ def test_info_not_found() -> None:
 
 def test_eject_creates_file(tmp_path: Path) -> None:
     dest = tmp_path / "hello.yml"
-    result = runner.invoke(app, ["eject", "hello", "--out", str(dest)])
+    result = runner.invoke(app, ["eject", "learn/hello", "--out", str(dest)])
     assert result.exit_code == 0
     assert dest.exists()
     content = dest.read_text()

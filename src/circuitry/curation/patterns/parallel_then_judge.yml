@@ -1,0 +1,53 @@
+# Pattern: parallel → judge
+# Generates N candidate outputs in parallel, then uses the `judge` utility to pick the best.
+#
+# Demonstrates:
+#   - loop(each, flow: tree, collect:) — fan out N variants concurrently
+#   - use: with ref to `utilities/judge` for selection
+#
+# State paths:
+#   styles.value                                       — array of stylistic angles
+#   variants.iter_<N>.candidate.value                  — each candidate variant
+#   variants.collected.value                           — array of all candidates
+#   pick.value                                         — judge output {index, candidate, reason}
+#
+# Run:
+#   cof run patterns/parallel_then_judge -e topic="why we still need REST in 2026"
+
+effects:
+  - type: prompt
+    name: styles
+    prompt_type: json
+    schema:
+      type: array
+      items: { type: string }
+    template: |
+      Output a JSON array of three different stylistic angles for an opinion piece on "{{topic}}".
+      Examples: "skeptical insider", "enthusiastic newcomer", "weary practitioner".
+      Output only the JSON array.
+
+  - type: loop
+    name: variants
+    flow: tree
+    collect: candidate
+    each:
+      in: prime.styles.value
+      as: angle
+    body:
+      - type: prompt
+        name: candidate
+        template: |
+          Write a 3–4 sentence opening from this angle: {{angle}}.
+          Topic: {{topic}}.
+          Plain prose. No headings. No quotes around the output.
+
+  - type: use
+    name: pick
+    ref: utilities/judge
+    inputs:
+      candidates: "{{prime.variants.collected.value}}"
+      objective: "Most engaging opening that earns a reader's continued attention without overpromising."
+    outputs:
+      index: prime.judge.value.index
+      candidate: prime.judge.value.candidate
+      reason: prime.judge.value.reason

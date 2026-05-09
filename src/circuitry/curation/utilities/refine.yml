@@ -1,0 +1,35 @@
+# Utility: refine
+# Revises a piece of content guided by structured feedback (typically from critique.yml).
+#
+# Inputs:  content (string, required), feedback (string|object, required)
+# Outputs: refined (string)
+# Use when: pairing with `critique` in a critique→refine loop.
+
+interface:
+  inputs:
+    content:
+      type: string
+      required: true
+      description: The original content to revise.
+    feedback:
+      type: string
+      required: true
+      description: Reviewer feedback. Either freeform text or a JSON-stringified object from critique.
+  outputs:
+    refined:
+      type: string
+      path: prime.refine.value
+      description: Revised content addressing the feedback while preserving voice.
+
+effects:
+  - type: prompt
+    name: refine
+    template: |
+      Revise the original content to address the feedback. Apply every issue listed; preserve every strength.
+      Match the original's voice, tone, and length. Do not add headings, preamble, or commentary — output only the revised content.
+
+      Feedback:
+      {{feedback}}
+
+      Original content:
+      {{content}}

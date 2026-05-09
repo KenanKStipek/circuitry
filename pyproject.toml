@@ -74,7 +74,7 @@ addopts = ["--strict-markers"]
 
 [tool.coverage.run]
 source = ["circuitry"]
-omit = ["src/circuitry/bundled/*"]
+omit = ["src/circuitry/bundled/*", "src/circuitry/curation/*"]
 
 [tool.coverage.report]
 exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "if __name__ == .__main__."]
@@ -85,7 +85,9 @@ package-dir = {"" = "src"}
 [tool.setuptools.package-data]
 circuitry = [
     "schema/*.json",
-    "bundled/orchestrations/*.yml",
+    "curation/**/*.yml",
+    "curation/**/*.json",
+    "curation/**/*.md",
     "bundled/docs/*.md",
     "bundled/docs/plugins/*.md",
     "bundled/rules/*.yml",

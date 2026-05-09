@@ -15,15 +15,15 @@ circuitry/
 ├── config.json                          # Runtime defaults (adapter/model/provider config)
 ├── scripts/
 │   └── circuitry                        # CLI launcher wrapper (entrypoint shortcut)
-├── orchestrations/                            # Pre-built orchestration library
-│   ├── hello.yml
-│   ├── dynamic_hello.yml
-│   ├── conditional_example.yml
-│   ├── loop_example.yml
-│   ├── typed_prompt_example.yml
-│   └── reflector_v1.yml
 ├── src/
 │   └── circuitry/
+│       ├── curation/                      # Pre-built orchestration library — single source of truth for cof list/run/info/eject
+│       │   ├── manifest.json              # Operational registry + per-entry documentation
+│       │   ├── learn/                     # Single-primitive demonstrations
+│       │   ├── utilities/                 # Composable, single-output orchestrations called via use:
+│       │   ├── patterns/                  # Multi-primitive composition templates
+│       │   ├── recipes/                   # Full real-world workflows
+│       │   └── agents/                    # Orchestrations that build/improve other orchestrations
 │       ├── adapters/                    # Provider abstraction boundary (Ollama/OpenAI/Anthropic/LiteLLM)
 │       │   ├── base.py                  # Adapter protocol + generate result types
 │       │   ├── factory.py               # Adapter construction from runtime config
@@ -58,7 +58,7 @@ circuitry/
 - `src/circuitry/core/`: Highest-leverage implementation area; contains deterministic runtime semantics and effect executors.
 - `src/circuitry/adapters/`: External-provider integration boundary and portability layer.
 - `src/circuitry/cli/`: Operational entrypoint for users and scripts; governs run/validate/inspect experience.
-- `orchestrations/`: Pre-built orchestration library — runnable examples and community-contributed orchestrations.
+- `src/circuitry/curation/`: Pre-built orchestration library, organised by category (`learn/`, `utilities/`, `patterns/`, `recipes/`, `agents/`). Single source of truth for `cof list/run/info/eject`; consumed via `pyproject.toml` package-data globs. The `use:` effect promotes utilities into reusable building blocks composed via `ref: utilities/<name>`.
 - `docs/`: Canonical concept/design intent used to align implementation and future planning docs.
 
 ## Entry Points

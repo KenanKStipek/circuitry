@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
@@ -103,6 +104,8 @@ def _clean_yaml_fences(text: str) -> str:
 @dataclass(frozen=True)
 class UseDefinition:
     name: str
+    ref: str | None = None
+    path: str | None = None
     orchestration: str | None = None
     inline: str | None = None
     inputs: dict[str, Any] | None = None
@@ -144,36 +147,65 @@ class UseRuntime:
     def _resolve_orchestration(self) -> Path:
         """Resolve orchestration reference to a file path.
 
-        Resolution order:
-          1. Literal file path (absolute or relative to cwd)
-          2. Relative to parent orchestration's directory (if available)
-          3. Bundled name via registry
+        Field-driven resolution:
+          - ref: curation library lookup via registry (slash-delimited names supported)
+          - path: filesystem path (absolute, cwd-relative, or parent-orchestration-relative)
+          - orchestration (deprecated): try filesystem first, then registry — same chain
+            as the legacy field semantics.
         """
-        ref = self.defn.orchestration
-
-        # 1. Direct file path
-        candidate = Path(ref)
-        if candidate.exists() and candidate.is_file():
-            return candidate
-
-        # 2. Relative to parent orchestration directory
-        parent_dir = self.runtime_config.get("_orchestration_dir")
-        if parent_dir:
-            relative = Path(parent_dir) / ref
-            if relative.exists() and relative.is_file():
-                return relative
-
-        # 3. Bundled name
         from ..cli.registry import resolve_bundled
 
-        bundled = resolve_bundled(ref)
-        if bundled is not None:
-            return bundled
+        if self.defn.ref:
+            resolved = resolve_bundled(self.defn.ref)
+            if resolved is not None:
+                return resolved
+            raise ValueError(
+                f"Use effect '{self.defn.name}': ref '{self.defn.ref}' did not resolve "
+                "in the curation library. Run `cof list` to see available entries."
+            )
+
+        if self.defn.path:
+            candidate = Path(self.defn.path)
+            if candidate.exists() and candidate.is_file():
+                return candidate
+
+            parent_dir = self.runtime_config.get("_orchestration_dir")
+            if parent_dir:
+                relative = Path(parent_dir) / self.defn.path
+                if relative.exists() and relative.is_file():
+                    return relative
+
+            raise ValueError(
+                f"Use effect '{self.defn.name}': path '{self.defn.path}' not found "
+                "(checked absolute, cwd-relative, and parent-orchestration-relative)."
+            )
+
+        # Deprecated `orchestration` field: legacy fallback chain.
+        legacy = self.defn.orchestration
+        if legacy:
+            candidate = Path(legacy)
+            if candidate.exists() and candidate.is_file():
+                return candidate
+
+            parent_dir = self.runtime_config.get("_orchestration_dir")
+            if parent_dir:
+                relative = Path(parent_dir) / legacy
+                if relative.exists() and relative.is_file():
+                    return relative
+
+            bundled = resolve_bundled(legacy)
+            if bundled is not None:
+                return bundled
+
+            raise ValueError(
+                f"Use effect '{self.defn.name}': orchestration '{legacy}' not found. "
+                "Provide a valid file path or a bundled orchestration name "
+                "(run `cof list` to see available names)."
+            )
 
         raise ValueError(
-            f"Use effect '{self.defn.name}': orchestration '{ref}' not found. "
-            "Provide a valid file path or a bundled orchestration name "
-            "(run `cof list` to see available names)."
+            f"Use effect '{self.defn.name}': no reference field set "
+            "(expected one of ref/path/orchestration)."
         )
 
     def _check_interface(
@@ -214,12 +246,12 @@ class UseRuntime:
 
         return None
 
-    def _load_child_orch(self, ctx: dict[str, Any]) -> tuple[dict[str, Any], str]:
-        """Load the child orchestration dict and a label for display.
+    def _load_child_orch(self, ctx: dict[str, Any]) -> tuple[dict[str, Any], str, str]:
+        """Load the child orchestration dict, a display label, and a cycle-identity string.
 
-        Returns (orch_dict, label).
-        For file-based: loads from resolved path.
-        For inline: renders Mustache template, cleans fences, parses YAML, validates.
+        Returns (orch_dict, label, identity).
+        For file-based: identity is the absolute resolved path.
+        For inline: identity is 'inline:<sha256-of-cleaned-yaml>'.
         """
         import yaml as _yaml  # type: ignore[import-untyped]
 
@@ -242,13 +274,15 @@ class UseRuntime:
             parsed = _yaml.safe_load(cleaned)
             if not isinstance(parsed, dict):
                 raise ValueError("Inline orchestration must be a YAML mapping with an 'effects' key.")
-            return parsed, "inline"
+            content_hash = hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:16]
+            return parsed, "inline", f"inline:{content_hash}"
 
         # File-based resolution
         from ..cli.orchestration_loader import load_orchestration_file
 
         resolved_path = self._resolve_orchestration()
-        return load_orchestration_file(resolved_path), str(resolved_path)
+        identity = str(resolved_path.resolve())
+        return load_orchestration_file(resolved_path), str(resolved_path), identity
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         from .compiler import compile_orchestration
@@ -261,10 +295,11 @@ class UseRuntime:
             meta = {}
             node["meta"] = meta
 
-        label = self.defn.orchestration or "inline"
+        legacy_ref = self.defn.ref or self.defn.path or self.defn.orchestration
+        label = legacy_ref or "inline"
         meta["created_at"] = _now_iso()
         meta["completed_at"] = None
-        meta["orchestration"] = self.defn.orchestration
+        meta["orchestration"] = legacy_ref
         meta["inline"] = self.defn.inline is not None
         meta["resolved_path"] = None
         meta["validation_errors"] = None
@@ -272,6 +307,8 @@ class UseRuntime:
 
         indent = "  " * self.depth
         t0 = time.monotonic()
+        cycle_pushed = False
+        call_stack: list[str] = self.runtime_config.setdefault("_use_call_stack", [])
 
         try:
             if self.dry_run:
@@ -287,10 +324,19 @@ class UseRuntime:
                 return
 
             # Load (file or inline) and compile
-            child_orch, resolved_label = self._load_child_orch(ctx)
+            child_orch, resolved_label, identity = self._load_child_orch(ctx)
             label = resolved_label
             if not meta["inline"]:
                 meta["resolved_path"] = resolved_label
+
+            # Cycle detection — runtime call-stack tracking by resolved identity.
+            if identity in call_stack:
+                cycle_path = " → ".join(call_stack + [identity])
+                raise RecursionError(
+                    f"use '{self.defn.name}': cycle detected — {cycle_path}"
+                )
+            call_stack.append(identity)
+            cycle_pushed = True
 
             child_root = compile_orchestration(orch=child_orch, root_name="prime")
 
@@ -317,7 +363,7 @@ class UseRuntime:
                 ancestors=self._ancestors,
             ).execute(store=child_store)
 
-            # Extract outputs (explicit > auto-generated from interface > default True)
+            # Extract outputs (explicit > auto-generated from interface > full child state)
             effective_outputs = self.defn.outputs or auto_outputs
             if effective_outputs:
                 result: dict[str, Any] = {}
@@ -325,7 +371,14 @@ class UseRuntime:
                     result[output_key] = _resolve_dot_path(child_store.state, child_path)
                 node["value"] = result
             else:
-                node["value"] = True
+                # Full-namespace mode: expose child's prime subtree at
+                # prime.<use_name>.<child_effect>.value (matches dynamic namespacing).
+                child_prime = child_store.state.get("prime") or {}
+                if isinstance(child_prime, dict):
+                    for key, val in child_prime.items():
+                        if key in ("value", "meta"):
+                            continue
+                        node[key] = val
 
             meta["completed_at"] = _now_iso()
 
@@ -359,3 +412,10 @@ class UseRuntime:
             elif self.defn.on_error == "skip":
                 node["value"] = None
             # continue: keep going with None value
+        finally:
+            if cycle_pushed and call_stack:
+                # Pop only if we pushed and the top still matches.
+                try:
+                    call_stack.pop()
+                except IndexError:
+                    pass

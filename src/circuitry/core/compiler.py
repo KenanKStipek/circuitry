@@ -544,26 +544,50 @@ def _compile_use(
     effect: dict[str, Any], *, scope_path: str, effect_path: str
 ) -> UseDefinition:
     """Compile a use (sub-orchestration) effect."""
+    import warnings
+
     name = effect.get("name")
     if not name:
         raise ValueError(f"Use effect at '{effect_path}' is missing 'name'.")
 
+    ref = effect.get("ref")
+    path = effect.get("path")
     orchestration = effect.get("orchestration")
     inline = effect.get("inline")
 
-    # Must have exactly one of orchestration or inline
+    has_ref = isinstance(ref, str) and ref.strip()
+    has_path = isinstance(path, str) and path.strip()
     has_orch = isinstance(orchestration, str) and orchestration.strip()
     has_inline = isinstance(inline, str) and inline.strip()
 
-    if not has_orch and not has_inline:
+    set_fields = [
+        f for f, present in (
+            ("ref", has_ref),
+            ("path", has_path),
+            ("orchestration", has_orch),
+            ("inline", has_inline),
+        ) if present
+    ]
+
+    if not set_fields:
         raise ValueError(
-            f"Use effect '{name}' at '{effect_path}' requires either "
-            "'orchestration' (name/path) or 'inline' (Mustache template yielding YAML)."
+            f"Use effect '{name}' at '{effect_path}' requires exactly one of "
+            "'ref' (curation library lookup), 'path' (filesystem), "
+            "'orchestration' (deprecated), or 'inline' (Mustache template yielding YAML)."
         )
-    if has_orch and has_inline:
+    if len(set_fields) > 1:
         raise ValueError(
-            f"Use effect '{name}' at '{effect_path}' has both 'orchestration' and 'inline'. "
-            "Use one or the other."
+            f"Use effect '{name}' at '{effect_path}' has multiple reference fields set "
+            f"({', '.join(set_fields)}). Specify exactly one of ref/path/orchestration/inline."
+        )
+
+    if has_orch:
+        warnings.warn(
+            f"Use effect '{name}': the 'orchestration' field is deprecated. "
+            "Use 'ref' for curation library lookup (e.g. 'utilities/critique') "
+            "or 'path' for filesystem paths.",
+            DeprecationWarning,
+            stacklevel=2,
         )
 
     inputs = effect.get("inputs") or None
@@ -590,6 +614,8 @@ def _compile_use(
     _ = scope_path
     return UseDefinition(
         name=name,
+        ref=ref.strip() if has_ref else None,
+        path=path.strip() if has_path else None,
         orchestration=orchestration.strip() if has_orch else None,
         inline=inline.strip() if has_inline else None,
         inputs=inputs,

@@ -1,0 +1,63 @@
+# Pattern: classify → route
+# Classifies an inbound query, then dispatches to one of three specialised
+# branches via `if`/`else if`. Each branch is a focused prompt; in real recipes
+# you'd swap the prompts for `use: utilities/<task>` calls.
+#
+# Demonstrates:
+#   - use: with ref to `utilities/classify`
+#   - structured-output gating with prompt_type + schema
+#   - multi-arm branching using `if` chains (CEL on classify output)
+#
+# State paths:
+#   triage.value.label                                 — chosen label (one of the input labels)
+#   triage.value.confidence                            — confidence in the choice
+#   answer.<branch>.value                              — the branch-specific response
+#
+# Run:
+#   cof run patterns/classify_then_route -e query="What's the difference between dynamic and reflector?"
+
+effects:
+  - type: use
+    name: triage
+    ref: utilities/classify
+    inputs:
+      content: "{{query}}"
+      labels:
+        - definition          # asks "what is X?"
+        - comparison          # asks "X vs Y?"
+        - howto               # asks "how do I do X?"
+    outputs:
+      label: prime.classify.value.label
+      confidence: prime.classify.value.confidence
+
+  - type: if
+    name: answer
+    if:
+      mode: cel
+      expr: "state.prime.triage.value.label == 'definition'"
+    then:
+      - type: prompt
+        name: response
+        template: |
+          Define the concept the user asked about. One paragraph. No examples unless asked.
+
+          Question: {{query}}
+    else:
+      - type: if
+        if:
+          mode: cel
+          expr: "state.prime.triage.value.label == 'comparison'"
+        then:
+          - type: prompt
+            name: response
+            template: |
+              Compare the two concepts in the user's question. Present as a 3-bullet contrast: same, different, when to choose.
+
+              Question: {{query}}
+        else:
+          - type: prompt
+            name: response
+            template: |
+              The user is asking how to do something. Give 3–5 numbered steps. Concrete actions only.
+
+              Question: {{query}}

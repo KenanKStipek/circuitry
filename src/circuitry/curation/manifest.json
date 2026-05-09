@@ -87,15 +87,207 @@
       "inputs": {}
     },
     {
+      "name": "utilities/summarize",
+      "file": "utilities/summarize.yml",
+      "category": "utilities",
+      "intent": "Compress text into a single concise sentence.",
+      "description": "Single-pass distillation of a text input down to one sentence.",
+      "when_to_use": "When a downstream effect needs a one-line gist of a longer passage.",
+      "primitives": ["prompt"],
+      "difficulty": "beginner",
+      "backends": ["llm"],
+      "inputs": {
+        "text": {"type": "string", "required": true, "description": "The text to compress."},
+        "max_words": {"type": "number", "required": false, "description": "Soft target word cap (default ~20)."}
+      },
+      "outputs": {
+        "summary": {"type": "string", "path": "prime.summarize.value", "description": "One-sentence summary."}
+      },
+      "tags": ["composable", "single-output"]
+    },
+    {
+      "name": "utilities/critique",
+      "file": "utilities/critique.yml",
+      "category": "utilities",
+      "intent": "Return a structured critique with score, issues, and strengths.",
+      "description": "Reviews content against named criteria; returns JSON with score, issues, strengths.",
+      "when_to_use": "Pair with utilities/refine to drive a critique→refine loop.",
+      "primitives": ["prompt"],
+      "difficulty": "intermediate",
+      "backends": ["llm"],
+      "inputs": {
+        "content": {"type": "string", "required": true},
+        "criteria": {"type": "string", "required": true, "description": "Comma-separated criteria."}
+      },
+      "outputs": {
+        "critique": {"type": "object", "path": "prime.critique.value", "description": "{score, issues, strengths}"}
+      },
+      "tags": ["composable", "structured-output"]
+    },
+    {
+      "name": "utilities/refine",
+      "file": "utilities/refine.yml",
+      "category": "utilities",
+      "intent": "Revise content guided by reviewer feedback.",
+      "description": "Applies feedback (typically from critique.yml) to revise content while preserving voice.",
+      "when_to_use": "Pair with utilities/critique inside a feedback loop.",
+      "primitives": ["prompt"],
+      "difficulty": "beginner",
+      "backends": ["llm"],
+      "inputs": {
+        "content": {"type": "string", "required": true},
+        "feedback": {"type": "string", "required": true}
+      },
+      "outputs": {
+        "refined": {"type": "string", "path": "prime.refine.value"}
+      },
+      "tags": ["composable"]
+    },
+    {
+      "name": "utilities/judge",
+      "file": "utilities/judge.yml",
+      "category": "utilities",
+      "intent": "Pick the best candidate from a list against a stated objective.",
+      "description": "Selects one candidate by zero-based index and returns a one-sentence rationale.",
+      "when_to_use": "Collapse N parallel attempts (e.g. from a tree-loop) into a single chosen output.",
+      "primitives": ["prompt"],
+      "difficulty": "intermediate",
+      "backends": ["llm"],
+      "inputs": {
+        "candidates": {"type": "string", "required": true, "description": "JSON-stringified array or numbered text block."},
+        "objective": {"type": "string", "required": true}
+      },
+      "outputs": {
+        "choice": {"type": "object", "path": "prime.judge.value", "description": "{index, candidate, reason}"}
+      },
+      "tags": ["composable", "structured-output"]
+    },
+    {
+      "name": "utilities/classify",
+      "file": "utilities/classify.yml",
+      "category": "utilities",
+      "intent": "Assign one label from a fixed set to a piece of content.",
+      "description": "Returns the chosen label (verbatim from the input set) plus a 0–1 confidence.",
+      "when_to_use": "Routing the orchestration based on content type — intent classification, triage.",
+      "primitives": ["prompt"],
+      "difficulty": "beginner",
+      "backends": ["llm"],
+      "inputs": {
+        "content": {"type": "string", "required": true},
+        "labels": {"type": "array", "required": true, "description": "Allowed labels."}
+      },
+      "outputs": {
+        "label": {"type": "string", "path": "prime.classify.value.label"},
+        "confidence": {"type": "number", "path": "prime.classify.value.confidence"}
+      },
+      "tags": ["composable", "structured-output"]
+    },
+    {
+      "name": "utilities/decompose",
+      "file": "utilities/decompose.yml",
+      "category": "utilities",
+      "intent": "Break a high-level task into an ordered array of subtasks.",
+      "description": "Returns a JSON array of imperative subtask sentences.",
+      "when_to_use": "Plan the iteration array for a downstream loop(each).",
+      "primitives": ["prompt"],
+      "difficulty": "beginner",
+      "backends": ["llm"],
+      "inputs": {
+        "task": {"type": "string", "required": true},
+        "max_steps": {"type": "number", "required": false, "description": "Soft cap (default 5)."}
+      },
+      "outputs": {
+        "steps": {"type": "array", "path": "prime.decompose.value"}
+      },
+      "tags": ["composable"]
+    },
+    {
+      "name": "utilities/extract",
+      "file": "utilities/extract.yml",
+      "category": "utilities",
+      "intent": "Pull named fields out of unstructured text into a typed object.",
+      "description": "Returns an object whose keys exactly match the requested field names. Missing values are null.",
+      "when_to_use": "Turn prose (email, transcript) into structured data for downstream effects.",
+      "primitives": ["prompt"],
+      "difficulty": "beginner",
+      "backends": ["llm"],
+      "inputs": {
+        "text": {"type": "string", "required": true},
+        "fields": {"type": "array", "required": true}
+      },
+      "outputs": {
+        "extracted": {"type": "object", "path": "prime.extract.value"}
+      },
+      "tags": ["composable"]
+    },
+    {
+      "name": "utilities/route",
+      "file": "utilities/route.yml",
+      "category": "utilities",
+      "intent": "Pick a route key from a {key, description} map for given content.",
+      "description": "Returns the chosen route key (verbatim from the input). Combine with `if` to dispatch.",
+      "when_to_use": "Multi-arm dispatch where each route maps to a specialised follow-up.",
+      "primitives": ["prompt"],
+      "difficulty": "beginner",
+      "backends": ["llm"],
+      "inputs": {
+        "content": {"type": "string", "required": true},
+        "routes": {"type": "array", "required": true, "description": "Array of {key, description}."}
+      },
+      "outputs": {
+        "route": {"type": "string", "path": "prime.route.value"}
+      },
+      "tags": ["composable"]
+    },
+    {
       "name": "patterns/all_primitives",
       "file": "patterns/all_primitives.yml",
       "category": "patterns",
-      "intent": "all primitives composed — dynamic, loop, if, prompt",
-      "description": "Template: all primitives composed — dynamic, loop, conditional, prompt.",
-      "primitives": ["dynamic", "loop", "if", "prompt"],
+      "intent": "all primitives composed — dynamic, loop, if, prompt, use",
+      "description": "Template: all primitives composed — dynamic, loop, conditional, prompt, use.",
+      "primitives": ["dynamic", "loop", "if", "prompt", "use"],
       "difficulty": "advanced",
       "backends": ["llm"],
       "inputs": {}
+    },
+    {
+      "name": "patterns/critique_refine_loop",
+      "file": "patterns/critique_refine_loop.yml",
+      "category": "patterns",
+      "intent": "Iterate critique → refine until the model judges the draft good enough.",
+      "description": "loop(while, mode: model) wrapping use:utilities/critique and use:utilities/refine.",
+      "primitives": ["loop", "use", "prompt"],
+      "difficulty": "advanced",
+      "backends": ["llm"],
+      "inputs": {
+        "topic": {"type": "string", "required": true}
+      }
+    },
+    {
+      "name": "patterns/parallel_then_judge",
+      "file": "patterns/parallel_then_judge.yml",
+      "category": "patterns",
+      "intent": "Generate N candidate variants in parallel, then judge the best.",
+      "description": "loop(each, flow: tree, collect:) → use:utilities/judge.",
+      "primitives": ["loop", "use", "prompt"],
+      "difficulty": "advanced",
+      "backends": ["llm"],
+      "inputs": {
+        "topic": {"type": "string", "required": true}
+      }
+    },
+    {
+      "name": "patterns/classify_then_route",
+      "file": "patterns/classify_then_route.yml",
+      "category": "patterns",
+      "intent": "Classify a query, then dispatch to one of three branches via if.",
+      "description": "use:utilities/classify followed by chained if/else for branch dispatch.",
+      "primitives": ["use", "if", "prompt"],
+      "difficulty": "intermediate",
+      "backends": ["llm"],
+      "inputs": {
+        "query": {"type": "string", "required": true}
+      }
     },
     {
       "name": "recipes/article_summarizer",
@@ -127,6 +319,60 @@
         "genre": {"type": "string", "required": false, "description": "Genre (defaults to dark comedy)."}
       },
       "example": "cof run recipes/comic_strip -e prompt='a cat discovers gravity'"
+    },
+    {
+      "name": "recipes/research_brief",
+      "file": "recipes/research_brief.yml",
+      "category": "recipes",
+      "intent": "Decompose a topic into sub-questions, gather answers in parallel, synthesise a brief, then self-critique.",
+      "description": "Composes utilities/decompose, a parallel loop(tree)+collect, and utilities/critique.",
+      "primitives": ["use", "loop", "prompt"],
+      "difficulty": "advanced",
+      "backends": ["llm"],
+      "inputs": {
+        "topic": {"type": "string", "required": true},
+        "audience": {"type": "string", "required": false}
+      },
+      "outputs": {
+        "brief": {"type": "string", "path": "prime.brief.value"},
+        "review": {"type": "object", "path": "prime.review.value"}
+      },
+      "example": "cof run recipes/research_brief -e topic='..."
+    },
+    {
+      "name": "recipes/code_review",
+      "file": "recipes/code_review.yml",
+      "category": "recipes",
+      "intent": "Review a unified-diff hunk and emit issues with severity, line, category, suggestion.",
+      "description": "Pulls metadata via utilities/extract, then a single structured-output review pass.",
+      "primitives": ["use", "prompt"],
+      "difficulty": "intermediate",
+      "backends": ["llm"],
+      "inputs": {
+        "diff": {"type": "string", "required": true}
+      },
+      "outputs": {
+        "issues": {"type": "array", "path": "prime.review.value"}
+      }
+    },
+    {
+      "name": "recipes/meeting_notes",
+      "file": "recipes/meeting_notes.yml",
+      "category": "recipes",
+      "intent": "Transcript → structured notes: TL;DR, attendees, decisions, action items.",
+      "description": "Composes utilities/summarize and utilities/extract in a parallel dynamic, then a structured pass for decisions and action items.",
+      "primitives": ["use", "dynamic", "prompt"],
+      "difficulty": "intermediate",
+      "backends": ["llm"],
+      "inputs": {
+        "transcript": {"type": "string", "required": true}
+      },
+      "outputs": {
+        "summary": {"type": "string", "path": "prime.summary.value.summary"},
+        "attendees": {"type": "array", "path": "prime.attendees.value"},
+        "decisions": {"type": "array", "path": "prime.notes.value.decisions"},
+        "action_items": {"type": "array", "path": "prime.notes.value.action_items"}
+      }
     },
     {
       "name": "agents/meta_orchestrator",

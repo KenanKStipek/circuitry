@@ -187,3 +187,22 @@ effects:
           {{rules}}
 
           Return ONLY the final YAML. No markdown fences. No explanations. No preamble. Start with `adapter:`.
+
+      # ─── Step 4: Convergence judge ────────────────────────────────────────
+      # Compare the just-produced final_yaml against the input_yaml that was fed
+      # into this iteration. If the judge reports convergence, the driver script
+      # will stop the improvement loop after this pass.
+      #
+      # Uses the agents/improver_judge orchestration via `use:`. The judge call
+      # is wrapped in on_error: continue so a judge failure (e.g. malformed
+      # output) doesn't abort the whole iteration — the driver falls back to
+      # hash-based convergence in that case.
+      - type: use
+        name: judge_convergence
+        ref: agents/improver_judge
+        inputs:
+          yaml_a: "{{input_yaml}}"
+          yaml_b: "{{prime.generate.final_yaml.value}}"
+        outputs:
+          converged: prime.judge.value
+        on_error: continue

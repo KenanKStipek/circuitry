@@ -111,7 +111,7 @@ def test_compile_use_missing_name() -> None:
 
 def test_compile_use_missing_orchestration_and_inline() -> None:
     orch = {"effects": [{"type": "use", "name": "sub"}]}
-    with pytest.raises(ValueError, match="requires either"):
+    with pytest.raises(ValueError, match="requires exactly one"):
         compile_orchestration(orch=orch)
 
 
@@ -173,10 +173,10 @@ def test_use_runtime_resolves_file_path(tmp_path: Path) -> None:
 
 
 def test_use_runtime_resolves_bundled_name() -> None:
-    """UseRuntime can resolve a bundled orchestration name."""
+    """UseRuntime can resolve a curation library name via ref."""
     defn = UseDefinition(
         name="sub",
-        orchestration="hello",
+        ref="learn/hello",
         inputs={"name": "Tester"},
     )
 
@@ -185,8 +185,9 @@ def test_use_runtime_resolves_bundled_name() -> None:
     runtime = UseRuntime(defn, adapter=adapter, model="test-model")
     runtime.execute(store=store, ctx=store.state)
 
-    # Without outputs mapping, value is True on success
-    assert store.state["sub"]["value"] is True
+    # Full-namespace mode: child effect state is reachable directly.
+    assert "greet" in store.state["sub"]
+    assert store.state["sub"]["greet"]["value"] == "Hi Tester!"
 
 
 def test_use_runtime_resolution_failure() -> None:
@@ -202,13 +203,13 @@ def test_use_runtime_resolution_failure() -> None:
 
 
 def test_use_runtime_state_isolation(tmp_path: Path) -> None:
-    """Parent state is not visible in child; child state is not leaked to parent."""
+    """Parent state is not visible in child; child state is not leaked to parent root."""
     child_orch = {"effects": [{"type": "prompt", "name": "echo", "template": "Echo"}]}
     child_path = _write_orch(tmp_path, "child.yml", child_orch)
 
     defn = UseDefinition(
         name="sub",
-        orchestration=str(child_path),
+        path=str(child_path),
         inputs={"child_key": "child_value"},
     )
 
@@ -218,12 +219,12 @@ def test_use_runtime_state_isolation(tmp_path: Path) -> None:
     runtime = UseRuntime(defn, adapter=adapter, model="test-model")
     runtime.execute(store=store, ctx=store.state)
 
-    # Parent state should not have child's internal state keys
+    # Child state is namespaced under the use's name, not at parent root.
     assert "echo" not in store.state
     # Parent should still have its own keys
     assert store.state["parent_secret"] == "should_not_leak"
-    # sub.value should be True (no outputs mapping)
-    assert store.state["sub"]["value"] is True
+    # Full-namespace mode: child effect reachable under prime.<use_name>.<child_effect>
+    assert store.state["sub"]["echo"]["value"] == "echoed"
 
 
 def test_use_runtime_input_mapping(tmp_path: Path) -> None:
@@ -267,18 +268,18 @@ def test_use_runtime_output_mapping(tmp_path: Path) -> None:
 
 
 def test_use_runtime_no_output_mapping(tmp_path: Path) -> None:
-    """Without outputs, .value is True on success."""
+    """Without outputs, child state is exposed under the use name (full-namespace mode)."""
     child_orch = {"effects": [{"type": "prompt", "name": "step", "template": "ok"}]}
     child_path = _write_orch(tmp_path, "child.yml", child_orch)
 
-    defn = UseDefinition(name="sub", orchestration=str(child_path))
+    defn = UseDefinition(name="sub", path=str(child_path))
 
     adapter = _mock_adapter("ok")
     store = Store(state={})
     runtime = UseRuntime(defn, adapter=adapter, model="test-model")
     runtime.execute(store=store, ctx=store.state)
 
-    assert store.state["sub"]["value"] is True
+    assert store.state["sub"]["step"]["value"] == "ok"
 
 
 def test_use_runtime_on_error_skip() -> None:
@@ -338,7 +339,7 @@ def test_use_runtime_non_string_inputs(tmp_path: Path) -> None:
 
     defn = UseDefinition(
         name="sub",
-        orchestration=str(child_path),
+        path=str(child_path),
         inputs={"count": 42, "flag": True, "items": [1, 2, 3]},
     )
 
@@ -347,7 +348,7 @@ def test_use_runtime_non_string_inputs(tmp_path: Path) -> None:
     runtime = UseRuntime(defn, adapter=adapter, model="test-model")
     runtime.execute(store=store, ctx=store.state)
 
-    assert store.state["sub"]["value"] is True
+    assert store.state["sub"]["step"]["value"] == "counted"
 
 
 # ── Integration: use inside dynamic ──────────────────────────────────────────
@@ -369,7 +370,7 @@ def test_use_inside_dynamic_chain(tmp_path: Path) -> None:
                     {
                         "type": "use",
                         "name": "child_step",
-                        "orchestration": str(child_path),
+                        "path": str(child_path),
                     },
                 ],
             }
@@ -385,7 +386,8 @@ def test_use_inside_dynamic_chain(tmp_path: Path) -> None:
     ).execute(store=store)
 
     assert store.state["prime"]["pipeline"]["step1"]["value"] == "response"
-    assert store.state["prime"]["pipeline"]["child_step"]["value"] is True
+    # Full-namespace mode: child orchestration's effect reachable under child_step.
+    assert store.state["prime"]["pipeline"]["child_step"]["greet"]["value"] == "response"
 
 
 # ── Schema validation tests ──────────────────────────────────────────────────
@@ -496,13 +498,13 @@ def test_compile_use_both_orchestration_and_inline_fails() -> None:
             }
         ]
     }
-    with pytest.raises(ValueError, match="both"):
+    with pytest.raises(ValueError, match="multiple reference fields"):
         compile_orchestration(orch=orch)
 
 
 def test_compile_use_neither_orchestration_nor_inline_fails() -> None:
     orch = {"effects": [{"type": "use", "name": "sub"}]}
-    with pytest.raises(ValueError, match="requires either"):
+    with pytest.raises(ValueError, match="requires exactly one"):
         compile_orchestration(orch=orch)
 
 
@@ -540,7 +542,7 @@ def test_use_inline_executes_yaml_string() -> None:
     runtime = UseRuntime(defn, adapter=adapter, model="test-model")
     runtime.execute(store=store, ctx=store.state)
 
-    assert store.state["run_plan"]["value"] is True
+    assert store.state["run_plan"]["greet"]["value"] == "Hello from inline!"
     assert store.state["run_plan"]["meta"]["inline"] is True
     adapter.generate.assert_called_once()
 
@@ -561,7 +563,7 @@ def test_use_inline_with_mustache_rendering() -> None:
     runtime = UseRuntime(defn, adapter=adapter, model="test-model")
     runtime.execute(store=store, ctx=store.state)
 
-    assert store.state["run_plan"]["value"] is True
+    assert store.state["run_plan"]["step"]["value"] == "Rendered!"
 
 
 def test_use_inline_with_output_mapping() -> None:
@@ -602,8 +604,6 @@ def test_use_inline_validation_rejects_bad_yaml() -> None:
 
 def test_use_inline_validation_skip() -> None:
     """validate: false skips schema validation — only YAML parsing required."""
-    # This YAML is structurally valid YAML but doesn't have 'effects' at top level.
-    # With validate=False, the compiler will still fail, but we get past validation.
     defn = UseDefinition(
         name="run_plan",
         inline="effects:\n  - type: prompt\n    name: ok\n    template: works\n",
@@ -615,7 +615,7 @@ def test_use_inline_validation_skip() -> None:
     runtime = UseRuntime(defn, adapter=adapter, model="test-model")
     runtime.execute(store=store, ctx=store.state)
 
-    assert store.state["run_plan"]["value"] is True
+    assert store.state["run_plan"]["ok"]["value"] == "works"
 
 
 def test_use_inline_strips_code_fences() -> None:
@@ -629,7 +629,7 @@ def test_use_inline_strips_code_fences() -> None:
     runtime = UseRuntime(defn, adapter=adapter, model="test-model")
     runtime.execute(store=store, ctx=store.state)
 
-    assert store.state["run_plan"]["value"] is True
+    assert store.state["run_plan"]["step"]["value"] == "fenced!"
 
 
 def test_use_inline_on_error_skip_for_validation_failure() -> None:

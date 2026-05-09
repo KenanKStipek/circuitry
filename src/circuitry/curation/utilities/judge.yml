@@ -1,0 +1,54 @@
+# Utility: judge
+# Picks the best candidate from a list against a stated objective and returns the index + reason.
+#
+# Inputs:  candidates (array of strings, required), objective (string, required)
+# Outputs: choice (object: {index: number, candidate: string, reason: string})
+# Use when: collapsing N parallel attempts (e.g. from a tree-loop) into a single chosen output.
+
+interface:
+  inputs:
+    candidates:
+      type: string
+      required: true
+      description: |
+        Candidates to compare. Either a JSON-stringified array or a pre-formatted
+        block where each line begins "[N] " (zero-based). String form keeps this
+        utility composable across loop+collect outputs without input-shape gymnastics.
+    objective:
+      type: string
+      required: true
+      description: What "best" means for this judgment (e.g. "most concise without losing detail").
+  outputs:
+    choice:
+      type: object
+      path: prime.judge.value
+      description: The selected candidate with its zero-based index and a short justification.
+
+effects:
+  - type: prompt
+    name: judge
+    prompt_type: json
+    schema:
+      type: object
+      required: [index, candidate, reason]
+      properties:
+        index:
+          type: integer
+          minimum: 0
+          description: Zero-based index of the chosen candidate.
+        candidate:
+          type: string
+          description: The full text of the chosen candidate (verbatim).
+        reason:
+          type: string
+          description: One sentence explaining why this candidate beats the others.
+    template: |
+      Pick the single best candidate against the objective. Output JSON with:
+      - "index": zero-based index of the winner
+      - "candidate": its full text verbatim
+      - "reason": one sentence comparing it favorably to the runners-up
+
+      Objective: {{objective}}
+
+      Candidates:
+      {{candidates}}

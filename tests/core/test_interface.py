@@ -82,7 +82,7 @@ def test_interface_passes_when_required_inputs_provided(tmp_path: Path) -> None:
     runtime = UseRuntime(defn, adapter=adapter, model="test-model")
     runtime.execute(store=store, ctx=store.state)
 
-    assert store.state["sub"]["value"] is True
+    assert store.state["sub"]["step"]["value"] is not None
 
 
 def test_interface_optional_inputs_not_required(tmp_path: Path) -> None:
@@ -109,7 +109,7 @@ def test_interface_optional_inputs_not_required(tmp_path: Path) -> None:
     runtime = UseRuntime(defn, adapter=adapter, model="test-model")
     runtime.execute(store=store, ctx=store.state)
 
-    assert store.state["sub"]["value"] is True
+    assert store.state["sub"]["step"]["value"] is not None
 
 
 # ── Interface: auto-generated output mapping ─────────────────────────────────
@@ -182,7 +182,7 @@ def test_interface_no_interface_works_normally(tmp_path: Path) -> None:
     runtime = UseRuntime(defn, adapter=adapter, model="test-model")
     runtime.execute(store=store, ctx=store.state)
 
-    assert store.state["sub"]["value"] is True
+    assert store.state["sub"]["step"]["value"] is not None
 
 
 # ── Schema validation ────────────────────────────────────────────────────────

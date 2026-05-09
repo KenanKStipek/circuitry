@@ -39,7 +39,7 @@ from circuitry.cli.runtime_shim import validate  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-META_ORCHESTRATOR = PROJECT_ROOT / "orchestrations" / "meta_orchestrator.yml"
+META_ORCHESTRATOR = PROJECT_ROOT / "src" / "circuitry" / "curation" / "agents" / "meta_orchestrator.yml"
 
 _CFG = load_config(find_config_path(explicit_path=None, cwd=PROJECT_ROOT))
 

@@ -1,0 +1,32 @@
+# Utility: summarize
+# Compresses a text input into a single concise sentence.
+#
+# Inputs:  text (string, required), max_words (number, optional, default ~20)
+# Outputs: summary (string)
+# Use when: a downstream effect needs a one-line gist of a longer passage.
+
+interface:
+  inputs:
+    text:
+      type: string
+      required: true
+      description: The text to compress into a one-sentence summary.
+    max_words:
+      type: number
+      required: false
+      description: Soft target word count for the summary (default ~20).
+  outputs:
+    summary:
+      type: string
+      path: prime.summarize.value
+      description: One-sentence summary preserving the central claim.
+
+effects:
+  - type: prompt
+    name: summarize
+    template: |
+      Write a single declarative sentence that captures the central claim of the text below.
+      Aim for {{max_words}} words or fewer. Output only the sentence — no preamble, no quotes, no markdown.
+
+      Text:
+      {{text}}

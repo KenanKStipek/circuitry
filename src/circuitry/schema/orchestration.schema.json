@@ -453,18 +453,27 @@
     "UseEffect": {
       "type": "object",
       "required": ["type", "name"],
-      "description": "Runs another orchestration as an isolated sub-step. Provide 'orchestration' (name/path) or 'inline' (Mustache template yielding YAML). State is fully isolated.",
+      "description": "Runs another orchestration as an isolated sub-step. Provide exactly one of 'ref' (curation library lookup), 'path' (filesystem), or 'inline' (Mustache template yielding YAML). The 'orchestration' field is deprecated — use 'ref' or 'path' instead.",
       "properties": {
         "type": { "const": "use" },
         "name": { "$ref": "#/$defs/NamePattern" },
         "description": { "type": "string" },
+        "ref": {
+          "type": "string",
+          "description": "Curation library lookup. Slash-delimited names like 'utilities/critique' resolve to 'curation/utilities/critique.yml'. Mutually exclusive with 'path', 'orchestration', and 'inline'."
+        },
+        "path": {
+          "type": "string",
+          "description": "Filesystem path (absolute, cwd-relative, or parent-orchestration-relative). Mutually exclusive with 'ref', 'orchestration', and 'inline'."
+        },
         "orchestration": {
           "type": "string",
-          "description": "Orchestration reference: a bundled name (e.g. 'article-summarizer') or a file path. Mutually exclusive with 'inline'."
+          "description": "DEPRECATED — use 'ref' for library lookup or 'path' for filesystem references. Still accepted for back-compat; emits a DeprecationWarning at compile time.",
+          "deprecated": true
         },
         "inline": {
           "type": "string",
-          "description": "Mustache template that renders to orchestration YAML at runtime. Typically references a prior prompt output (e.g. '{{prime.plan.value}}'). Mutually exclusive with 'orchestration'."
+          "description": "Mustache template that renders to orchestration YAML at runtime. Typically references a prior prompt output (e.g. '{{prime.plan.value}}'). Mutually exclusive with 'ref', 'path', and 'orchestration'."
         },
         "validate": {
           "type": "boolean",
@@ -478,12 +487,14 @@
         },
         "outputs": {
           "type": "object",
-          "description": "Output mapping. Keys become fields in this effect's .value. Values are dot-paths into the child's final state (e.g. 'prime.summarize.value').",
+          "description": "Output mapping. Keys become fields in this effect's .value. Values are dot-paths into the child's final state (e.g. 'prime.summarize.value'). When omitted, the entire child state is exposed at prime.<use_name>.<child_effect>.value (full-namespace mode).",
           "additionalProperties": { "type": "string" }
         },
         "on_error": { "$ref": "#/$defs/OnErrorDefault" }
       },
       "oneOf": [
+        { "required": ["ref"] },
+        { "required": ["path"] },
         { "required": ["orchestration"] },
         { "required": ["inline"] }
       ]

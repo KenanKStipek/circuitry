@@ -61,8 +61,9 @@ from circuitry.rules import load_all_rules, load_rules_for  # noqa: E402
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 
-IMPROVER = PROJECT_ROOT / "orchestrations" / "orchestration_improver.yml"
-JUDGE = PROJECT_ROOT / "orchestrations" / "orchestration_improver_judge.yml"
+CURATION_ROOT = PROJECT_ROOT / "src" / "circuitry" / "curation"
+IMPROVER = CURATION_ROOT / "agents" / "improver.yml"
+JUDGE = CURATION_ROOT / "agents" / "improver_judge.yml"
 
 # Load project config once so adapters (e.g. ollama base_url) are picked up.
 # find_config_path searches CWD by default; we pass PROJECT_ROOT explicitly so
@@ -198,9 +199,10 @@ def main() -> None:
         _eprint(f"Error: improver orchestration not found: {IMPROVER}")
         sys.exit(1)
 
-    if not JUDGE.exists():
-        _eprint(f"Error: judge orchestration not found: {JUDGE}")
-        sys.exit(1)
+    # JUDGE existence is no longer checked here — the improver invokes the judge
+    # via `use: ref: agents/improver_judge` and the registry resolves it at runtime.
+    # If the judge file is missing, the use call will fail at runtime (with on_error: continue
+    # falling through), and the hash-based convergence check still catches stable iterations.
 
     slug = orch_path.stem
     # Use --out-dir if provided, otherwise default to <project-root>/tmp/improve-<stem>/.
@@ -329,38 +331,28 @@ def main() -> None:
                 _eprint(f"  Converged (hash match) at iteration {iteration + 1}.")
                 break
 
-            # LLM judge check — only after enough history has accumulated.
-            # yaml_a is the input to this iteration (= output of the previous iteration),
-            # yaml_b is the output of this iteration. Comparing these two directly is the
-            # correct semantic: "did this improvement step produce meaningful change?"
+            # LLM judge convergence is now read directly from improver state —
+            # the improver invokes agents/improver_judge via `use:` as its final step.
+            # See agents/improver.yml. The judge runs every iteration; we only consult
+            # its result once we have enough history to trust it.
             if len(recent_hashes) >= args.convergence_window:
-                _eprint("  Running convergence judge...")
-                judge_result = run_orchestration(
-                    orchestration_path=JUDGE,
-                    state={"yaml_a": current_yaml, "yaml_b": output_yaml},
-                    verbose=args.verbose,
-                    dry_run=args.dry_run,
-                    config=_CFG,
-                    raise_on_error=False,
+                judged: object = (
+                    result.state
+                    .get("prime", {})
+                    .get("generate", {})
+                    .get("judge_convergence", {})
+                    .get("value", {})
                 )
-                if judge_result.ok:
-                    converged: object = (
-                        judge_result.state
-                        .get("prime", {})
-                        .get("judge", {})
-                        .get("value")
+                converged: object = judged.get("converged") if isinstance(judged, dict) else None
+                if converged is True:
+                    stop_reason = f"LLM judge convergence at iteration {iteration + 1}"
+                    _eprint(f"  Converged (LLM judge, embedded) at iteration {iteration + 1}.")
+                    break
+                if converged is None:
+                    _eprint(
+                        "  Warning: embedded judge returned no value (state path mismatch or empty output)."
+                        " Treating as not converged and continuing."
                     )
-                    if converged is True:
-                        stop_reason = f"LLM judge convergence at iteration {iteration + 1}"
-                        _eprint(f"  Converged (LLM judge) at iteration {iteration + 1}.")
-                        break
-                    elif converged is None:
-                        _eprint(
-                            "  Warning: judge returned no value (state path mismatch or empty output)."
-                            " Treating as not converged and continuing."
-                        )
-                else:
-                    _eprint(f"  Warning: judge failed ({judge_result.error}), continuing.")
 
             recent_hashes.append(current_hash)
             current_yaml = output_yaml

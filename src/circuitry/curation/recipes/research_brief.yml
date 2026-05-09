@@ -1,0 +1,90 @@
+# Recipe: research_brief
+# Decomposes a research question into sub-questions, gathers candidate answers in
+# parallel, and synthesises a single brief. Adds a final critique pass for
+# self-correction.
+#
+# Composes:
+#   - utilities/decompose — break the topic into sub-questions
+#   - parallel loop(tree, collect:) — answer each sub-question independently
+#   - utilities/critique — assess the synthesis for gaps before returning
+#
+# Inputs:
+#   topic    (string, required)
+#   audience (string, optional, default "informed general reader")
+#
+# Outputs:
+#   prime.brief.value — the final research brief
+
+interface:
+  inputs:
+    topic:
+      type: string
+      required: true
+      description: Research question or topic to brief.
+    audience:
+      type: string
+      required: false
+      description: Intended reader (default "informed general reader").
+  outputs:
+    brief:
+      type: string
+      path: prime.brief.value
+      description: Single-paragraph research brief, audience-tuned.
+    review:
+      type: object
+      path: prime.review.value
+      description: Critique of the brief — score, issues, strengths.
+
+effects:
+  # 1. Plan: break the topic into 3–5 sub-questions using the decompose utility.
+  - type: use
+    name: plan
+    ref: utilities/decompose
+    inputs:
+      task: "{{topic}}"
+      max_steps: 4
+    outputs:
+      steps: prime.decompose.value
+
+  # 2. Gather: answer each sub-question independently, in parallel.
+  - type: loop
+    name: gather
+    flow: tree
+    collect: answer
+    each:
+      in: prime.plan.value.steps
+      as: subq
+    body:
+      - type: prompt
+        name: answer
+        template: |
+          Answer the sub-question below in 2–3 sentences. Be specific and concrete.
+          If the answer requires uncertain claims, prefix them with "Likely:" or "Reportedly:".
+          No preamble. No markdown.
+
+          Sub-question: {{subq}}
+
+  # 3. Synthesise: combine the parallel answers into a single brief.
+  - type: prompt
+    name: brief
+    template: |
+      Synthesise the answers below into a single paragraph (4–6 sentences) addressed to: {{audience}}.
+      Order ideas logically, not in the order the answers were given. Resolve any contradictions explicitly.
+      Do not output headings, lists, or "In summary"-style throat-clearing.
+
+      Topic: {{topic}}
+
+      Sub-question answers:
+      {{prime.gather.collected.value}}
+
+  # 4. Self-critique pass — gives the caller a quality signal alongside the brief.
+  - type: use
+    name: review
+    ref: utilities/critique
+    inputs:
+      content: "{{prime.brief.value}}"
+      criteria: "factual specificity, audience fit, no hedging filler, paragraph-level coherence"
+    outputs:
+      score: prime.critique.value.score
+      issues: prime.critique.value.issues
+      strengths: prime.critique.value.strengths

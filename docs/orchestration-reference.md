@@ -423,6 +423,83 @@ Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously
 
 ---
 
+### `use`
+
+Runs another orchestration as an isolated sub-step. State is fully isolated: declared `inputs` are passed in as initial state; the parent does not see the child's working state directly. Outputs land at `prime.<name>` according to the namespacing mode (see below).
+
+**State output path:** `prime.<name>.value` (declared-outputs mode) or `prime.<name>.<child_effect>.value` (full-namespace mode)
+
+| Field | Type | Required | Default | Constraints |
+|-------|------|----------|---------|-------------|
+| `type` | `"use"` | yes | — | |
+| `name` | string | yes | — | Pattern `^[A-Za-z_][A-Za-z0-9_]*$` |
+| `ref` | string | * | — | Curation library lookup, slash-delimited (e.g. `utilities/critique`) |
+| `path` | string | * | — | Filesystem path (absolute, cwd-relative, or parent-orchestration-relative) |
+| `inline` | string | * | — | Mustache template that renders to orchestration YAML at runtime |
+| `orchestration` | string | * | — | **DEPRECATED** — use `ref` or `path` instead. Still accepted; emits `DeprecationWarning` |
+| `validate` | bool | no | `true` | Schema-validate inline YAML before execution |
+| `inputs` | object | no | `{}` | Map of name → value passed to child as initial state. String values are Mustache-rendered |
+| `outputs` | object | no | — | Map of result-key → child dot-path. When present, switches to declared-outputs mode |
+| `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
+| `description` | string | no | — | |
+
+\* Exactly one of `ref` / `path` / `inline` / `orchestration` must be present.
+
+**Reference fields:**
+
+- **`ref`** — curation library lookup. The slash-delimited name resolves under `src/circuitry/curation/`. For example, `ref: utilities/critique` → `src/circuitry/curation/utilities/critique.yml`. Use this for any curation entry (the canonical mode).
+- **`path`** — filesystem path. Absolute, cwd-relative, or relative to the parent orchestration's directory. Use this for orchestrations that aren't in the curation library (e.g. project-local helpers).
+- **`inline`** — Mustache template that renders to YAML at runtime. The template typically references a prior prompt's structured output (`{{prime.plan.value}}`) and is fully validated against the schema before execution unless `validate: false`.
+- **`orchestration`** — **deprecated**. Functionally a hybrid of `path` and `ref` with a fallback chain. Existing files still work but emit a deprecation warning at compile time. Migrate to `ref` (for library entries) or `path` (for filesystem references).
+
+**Output namespacing modes:**
+
+| Mode | Trigger | Behavior |
+|------|---------|----------|
+| Declared-outputs | `outputs:` is set, OR child orchestration declares an `interface:` with `outputs` | `prime.<use_name>.value` is a flat dict of declared keys mapped to dot-path values from the child state |
+| Full-namespace | No `outputs:` set, no interface outputs | The entire child `prime` subtree is exposed at `prime.<use_name>.<child_effect>.value` (matches `dynamic` namespacing) |
+
+**Cycle detection:**
+
+The runtime tracks a per-execution call stack of resolved orchestration paths. If A invokes B which invokes A, a `RecursionError` is raised before infinite recursion happens. The same check runs statically during `validate()` — cycles are detected at validate time before any execution. Inline-mode subs are excluded from the static check (their content renders at runtime) but the runtime hashes the rendered YAML, so an inline template producing identical YAML in a parent of itself will still be caught.
+
+**Example — library reference, declared outputs:**
+```yaml
+- type: use
+  name: critique_step
+  ref: utilities/critique
+  inputs:
+    content: "{{prime.draft.value}}"
+    criteria: "clarity, accuracy, brevity"
+  outputs:
+    score: prime.score.value
+    notes: prime.notes.value
+```
+
+**Example — filesystem path, full-namespace mode:**
+```yaml
+- type: use
+  name: research
+  path: ./local/research-helper.yml
+  inputs:
+    topic: "{{prime.intake.value}}"
+# child has effects 'gather' and 'synthesize';
+# both are reachable as prime.research.gather.value and prime.research.synthesize.value
+```
+
+**Example — inline, LLM-generated plan:**
+```yaml
+- type: prompt
+  name: plan
+  template: "Output a Circuitry orchestration YAML to ..."
+- type: use
+  name: run_plan
+  inline: "{{prime.plan.value}}"
+  validate: true
+```
+
+---
+
 ## State Path Addressing
 
 ### Mustache Template Interpolation
@@ -599,3 +676,9 @@ The following rules are sufficient for generating structurally correct Circuitry
 23. **Prompt-then-tool pipeline:** Use a prompt effect to generate parameters (e.g. ffmpeg flags, image prompts), then a tool effect to execute with those parameters. The prompt's structured output feeds the tool's params via Mustache interpolation (e.g. `{{prime.plan_flags.value.output_path}}`).
 24. **Staged decomposition:** Break complex generation into: plan (json) → per-item generation (loop+collect) → assembly (prompt) → review (prompt). Each stage is a small, focused LLM call.
 25. **State-based branching:** Use `if(cel)` with `state.prime.<name>.value.<field>` to branch on structured output from prior effects. Use the same effect name in both `then` and `else` branches for consistent downstream state paths.
+
+**Composition via `use`:**
+26. **Prefer `ref:` over `path:` for curation entries** — `ref: utilities/critique` is a stable library lookup; `path:` is for project-local files outside the curation library. Never use the deprecated `orchestration:` field — it emits a deprecation warning and exists only for back-compat.
+27. **Declare `outputs:` when the caller needs specific fields** — produces a flat dict at `prime.<use_name>.value`. Omit `outputs:` (and the child `interface:`) to opt into full-namespace mode where every child effect is reachable at `prime.<use_name>.<child_effect>.value`.
+28. **Declare an `interface:` block on reusable utilities** — typed `inputs` (with `required: true`) get validated automatically; typed `outputs` with `path:` auto-generate the caller's output mapping so callers don't have to repeat dot-paths. The curation library at `src/circuitry/curation/utilities/` is the canonical exemplar.
+29. **Don't form `use:` cycles.** A→B→A is detected at validate time and at runtime. If two utilities legitimately need to call each other, factor out the shared logic into a third utility they both call.

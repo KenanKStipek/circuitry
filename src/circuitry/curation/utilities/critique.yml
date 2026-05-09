@@ -1,0 +1,59 @@
+# Utility: critique
+# Returns a structured critique of a piece of content against named criteria.
+#
+# Inputs:  content (string, required), criteria (string, required)
+# Outputs: critique (object: {score: number, issues: array, strengths: array})
+# Use when: you want a downstream `refine` step to know exactly what to change.
+
+interface:
+  inputs:
+    content:
+      type: string
+      required: true
+      description: The content under review.
+    criteria:
+      type: string
+      required: true
+      description: Comma-separated criteria to judge against (e.g. "clarity, accuracy, brevity").
+  outputs:
+    critique:
+      type: object
+      path: prime.critique.value
+      description: Structured critique with score (0-10), issues, and strengths.
+
+effects:
+  - type: prompt
+    name: critique
+    prompt_type: json
+    schema:
+      type: object
+      required: [score, issues, strengths]
+      properties:
+        score:
+          type: number
+          minimum: 0
+          maximum: 10
+          description: Overall quality on a 0-10 scale.
+        issues:
+          type: array
+          items: { type: string }
+          description: Concrete problems to fix, each a short imperative line.
+        strengths:
+          type: array
+          items: { type: string }
+          description: What is already working — preserve these in any revision.
+    template: |
+      Critique the content below against these criteria: {{criteria}}.
+
+      Output JSON with this exact shape (no extra keys, no markdown):
+      {
+        "score": <0-10 integer>,
+        "issues": ["<imperative fix #1>", "<imperative fix #2>", ...],
+        "strengths": ["<what's working #1>", ...]
+      }
+
+      Issues must be specific and actionable (e.g. "Tighten the third paragraph — it repeats paragraph two").
+      Strengths are what a reviser must preserve.
+
+      Content:
+      {{content}}

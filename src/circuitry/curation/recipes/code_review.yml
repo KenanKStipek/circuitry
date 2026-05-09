@@ -1,0 +1,81 @@
+# Recipe: code_review
+# Reviews a unified-diff hunk and emits a structured list of issues with severity,
+# line, and suggested fix. Composes utilities/extract for parsing context.
+#
+# Inputs:
+#   diff (string, required) — unified-diff text (output of `git diff` or similar)
+#
+# Outputs:
+#   prime.review.value — array of {severity, line, category, message, suggestion}
+
+interface:
+  inputs:
+    diff:
+      type: string
+      required: true
+      description: Unified-diff text. Should contain @@ line markers; new files OK too.
+  outputs:
+    issues:
+      type: array
+      path: prime.review.value
+      description: Reviewed issues, sorted by severity desc.
+
+effects:
+  # Pull file path + lines-changed metadata so downstream prompts can reference them.
+  - type: use
+    name: parse_meta
+    ref: utilities/extract
+    inputs:
+      text: "{{diff}}"
+      fields:
+        - file_path
+        - lines_added
+        - lines_removed
+        - language
+    outputs:
+      meta: prime.extract.value
+
+  # Structured review pass. Single LLM call producing an array of issues.
+  - type: prompt
+    name: review
+    prompt_type: array
+    schema:
+      type: array
+      items:
+        type: object
+        required: [severity, line, category, message]
+        properties:
+          severity:
+            type: string
+            enum: ["blocker", "major", "minor", "nit"]
+          line:
+            type: integer
+            minimum: 1
+            description: Line number in the NEW file (post-diff).
+          category:
+            type: string
+            enum: ["correctness", "security", "performance", "style", "maintainability", "test"]
+          message:
+            type: string
+            description: One sentence describing the issue.
+          suggestion:
+            type: string
+            description: Concrete fix in one sentence; empty string if message itself is sufficient.
+    template: |
+      Review the diff below as a senior engineer. Output a JSON array of issues, sorted by severity descending (blocker → major → minor → nit). For each issue:
+        - severity: blocker | major | minor | nit
+        - line: post-diff line number in the new file
+        - category: correctness | security | performance | style | maintainability | test
+        - message: one declarative sentence
+        - suggestion: one-sentence concrete fix (empty string if the message is already actionable)
+
+      Skip stylistic preferences when the diff already follows project conventions. If the diff looks clean, return an empty array.
+
+      Context (extracted from the diff):
+        file_path:     {{prime.parse_meta.value.meta.file_path}}
+        language:      {{prime.parse_meta.value.meta.language}}
+        lines_added:   {{prime.parse_meta.value.meta.lines_added}}
+        lines_removed: {{prime.parse_meta.value.meta.lines_removed}}
+
+      Diff:
+      {{diff}}

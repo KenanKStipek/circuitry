@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# scripts/smoke-bundled.sh — smoke-test every bundled orchestration.
+# scripts/smoke-curation.sh — smoke-test every curation orchestration.
 #
-# Default mode (offline): runs `cof check` against each bundled YAML to verify
+# Default mode (offline): runs `cof check` against each curation YAML to verify
 # it parses and validates against the JSON Schema. No LLM calls. This is the
 # mode CI runs.
 #
@@ -18,11 +18,10 @@ set -euo pipefail
 # Resolve repo root regardless of where the script is invoked from.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BUNDLED_DIR="$REPO_ROOT/src/circuitry/bundled/orchestrations"
+BUNDLED_DIR="$REPO_ROOT/src/circuitry/curation"
 
 LIVE=0
 ONLY=""
-INDEX_FILE="index.yml"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -46,7 +45,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ ! -d "$BUNDLED_DIR" ]; then
-    echo "Bundled orchestration directory not found: $BUNDLED_DIR" >&2
+    echo "Curation directory not found: $BUNDLED_DIR" >&2
     exit 1
 fi
 
@@ -73,13 +72,8 @@ needs_comfy() {
     esac
 }
 
-for orch in "$BUNDLED_DIR"/*.yml; do
+while IFS= read -r -d '' orch; do
     name="$(basename "$orch" .yml)"
-
-    # Skip the bundled index — it is metadata, not an orchestration.
-    if [ "$(basename "$orch")" = "$INDEX_FILE" ]; then
-        continue
-    fi
 
     if [ -n "$ONLY" ] && [ "$name" != "$ONLY" ]; then
         continue
@@ -109,7 +103,7 @@ for orch in "$BUNDLED_DIR"/*.yml; do
             failures=$((failures + 1))
         fi
     fi
-done
+done < <(find "$BUNDLED_DIR" -type f -name '*.yml' -print0 | sort -z)
 
 echo
 echo "Checked $checked orchestration(s); $failures failure(s)."

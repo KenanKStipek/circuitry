@@ -12,43 +12,47 @@ from circuitry.api import (
 )
 from circuitry.cli.config import CircuitryConfig
 
-EXAMPLES_DIR = Path("orchestrations")
+EXAMPLES_DIR = Path("src/circuitry/curation")
 MANIFEST_PATH = EXAMPLES_DIR / "manifest.json"
-CURATED_EXAMPLES = [
-    "_prompt.yml",
-    "_dynamic.yml",
-    "_dynamic_tree.yml",
-    "_conditional.yml",
-    "_loop.yml",
-    "_reflector.yml",
-    "_composition.yml",
-]
+
+
+def _curated_files() -> list[Path]:
+    """All YAML files anywhere under the curation tree, sorted for stable order."""
+    return sorted(p for p in EXAMPLES_DIR.rglob("*.yml") if p.is_file())
+
+
+CURATED_EXAMPLES = [str(p.relative_to(EXAMPLES_DIR)) for p in _curated_files()]
 
 
 def test_example_manifest_covers_curated_set() -> None:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-    listed = {entry["file"] for entry in manifest["orchestrations"]}
-    assert listed == set(CURATED_EXAMPLES)
+    listed = {entry["file"] for entry in manifest["entries"]}
+    on_disk = set(CURATED_EXAMPLES)
+    assert listed == on_disk, (
+        f"Manifest/disk mismatch.\n"
+        f"  in manifest only: {listed - on_disk}\n"
+        f"  on disk only: {on_disk - listed}"
+    )
 
 
-@pytest.mark.parametrize("name", CURATED_EXAMPLES)
-def test_examples_validate(name: str) -> None:
-    result = validate_orchestration(orchestration_path=EXAMPLES_DIR / name)
-    assert result["ok"] is True
+@pytest.mark.parametrize("rel", CURATED_EXAMPLES)
+def test_examples_validate(rel: str) -> None:
+    result = validate_orchestration(orchestration_path=EXAMPLES_DIR / rel)
+    assert result["ok"] is True, result.get("errors")
     assert result["errors"] == []
 
 
-@pytest.mark.parametrize("name", CURATED_EXAMPLES)
-def test_examples_inspect(name: str) -> None:
-    summary = inspect_orchestration(orchestration_path=EXAMPLES_DIR / name)
+@pytest.mark.parametrize("rel", CURATED_EXAMPLES)
+def test_examples_inspect(rel: str) -> None:
+    summary = inspect_orchestration(orchestration_path=EXAMPLES_DIR / rel)
     assert summary["effects_count"] >= 1
     assert isinstance(summary["effect_names"], list)
 
 
-@pytest.mark.parametrize("name", CURATED_EXAMPLES)
-def test_examples_dry_run_smoke(name: str) -> None:
+@pytest.mark.parametrize("rel", CURATED_EXAMPLES)
+def test_examples_dry_run_smoke(rel: str) -> None:
     result = run_orchestration(
-        orchestration_path=EXAMPLES_DIR / name,
+        orchestration_path=EXAMPLES_DIR / rel,
         state={},
         dry_run=True,
         config=CircuitryConfig(default_adapter="ollama", default_model="phi3:mini"),

@@ -1,24 +1,49 @@
-effects:
-  - type: prompt
-    name: step1
-    prompt_type: json
-    schema:
-      type: object
-      properties:
-        summary:
-          type: string
-      required:
-        - summary
-    template: |
-      role: system
-      content: |
-        You are a concise summarizer. Summarize the article below in one sentence, maximum 30 words, plain English. Return a JSON object with a single field "summary" containing that sentence. Do not output anything else.
+# Recipe: article_summarizer
+# Compresses an article into a single tight sentence, then trims to a target word count.
+#
+# Composes: utilities/summarize (single-pass distillation) + a local trim step.
+#
+# Inputs:
+#   article_text (string, required)
+#   max_words    (number, optional, default 25)
+#
+# Outputs:
+#   prime.trim.value — the final one-sentence summary at or under max_words
 
-      role: user
-      content: |
-        {{article_text}}
+interface:
+  inputs:
+    article_text:
+      type: string
+      required: true
+      description: Full text of the article to summarize.
+    max_words:
+      type: number
+      required: false
+      description: Target word cap for the final summary (default 25).
+  outputs:
+    summary:
+      type: string
+      path: prime.trim.value
+      description: One-sentence summary at or under max_words.
+
+effects:
+  # Step 1 — distill via the summarize utility (drops the central claim into one sentence).
+  - type: use
+    name: distill
+    ref: utilities/summarize
+    inputs:
+      text: "{{article_text}}"
+      max_words: "{{max_words}}"
+    outputs:
+      summary: prime.summarize.value
+
+  # Step 2 — trim to the precise cap. The utility's word target is a soft hint;
+  # this pass enforces a hard limit and removes any boilerplate the model added.
   - type: prompt
-    name: summarize
+    name: trim
     template: |
-      Trim the following summary to no more than {{max_words}} words. Return the trimmed summary as plain text, without any additional commentary or headings.  
-      Summary: {{prime.step1.value.summary}}
+      Trim the sentence below to {{max_words}} words or fewer. Preserve the central claim.
+      Output ONLY the trimmed sentence — no quotes, no preamble, no markdown.
+
+      Sentence:
+      {{prime.distill.value.summary}}

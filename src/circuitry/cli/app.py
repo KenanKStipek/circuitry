@@ -863,16 +863,16 @@ def gen_cmd(
             runtime={**cfg.runtime, "default_prompt_retries": retries},
         )
 
-    # Locate bundled meta_orchestrator
+    # Locate curation meta_orchestrator
     try:
-        pkg = importlib.resources.files("circuitry") / "bundled" / "orchestrations" / "meta_orchestrator.yml"
+        pkg = importlib.resources.files("circuitry") / "curation" / "agents" / "meta_orchestrator.yml"
         meta_orch_path = Path(str(pkg))
     except Exception:
-        console.print("[red]Error:[/red] Could not locate bundled meta_orchestrator.yml")
+        console.print("[red]Error:[/red] Could not locate curation/agents/meta_orchestrator.yml")
         raise typer.Exit(code=1)
 
     if not meta_orch_path.exists():
-        console.print("[red]Error:[/red] Bundled meta_orchestrator.yml not found.")
+        console.print("[red]Error:[/red] curation/agents/meta_orchestrator.yml not found.")
         raise typer.Exit(code=1)
 
     # Load structured rules from bundled rules/ directory

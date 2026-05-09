@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **`use` effect — `ref:` and `path:` fields.** `ref:` is a curation library lookup (slash-delimited, e.g. `utilities/critique`); `path:` is a filesystem path (absolute, cwd-relative, or parent-orchestration-relative).
+- **`use` effect — opt-in full-namespace mode.** When neither `outputs:` nor a child `interface:` declares outputs, the entire child `prime` subtree is exposed at `prime.<use_name>.<child_effect>.value` (matches `dynamic` namespacing). The legacy `value: True` sentinel is removed in this mode.
+- **Cycle detection** for `use` references, both at runtime (call-stack tracking by resolved path) and statically inside `validate()` (DFS over the static `ref:`/`path:` graph). Cycles are reported with the full path: `Cycle: A → B → C → A`.
+- **Curation library** at `src/circuitry/curation/`, organised by category: `learn/`, `utilities/`, `patterns/`, `recipes/`, `agents/`. Replaces the flat `bundled/orchestrations/` and top-level `orchestrations/` mirror.
+- **Consolidated `curation/manifest.json`** — single source of truth for `cof list/run/info/eject` AND per-entry documentation (intent, when_to_use, inputs, outputs, primitives, tags, difficulty). Replaces the separate `index.yml` + `manifest.json`.
+- **`curation-manifest.schema.json`** — Draft-07 JSON Schema for the manifest, enforced by `tests/orchestrations/test_curation_metadata.py`.
+
+### Changed
+
+- **`cof list / run / info / eject` use slash-delimited names.** `cof run hello` is now `cof run learn/hello`; `cof run article-summarizer` is now `cof run recipes/article_summarizer`. Bare last-segment names still resolve when unambiguous.
+- **Test isolation in `use`** — child effects now land at `prime.<use_name>.<child_effect>.value` by default (full-namespace mode). Existing tests/orchestrations that declared `outputs:` or used a child `interface:` are unaffected.
+
+### Deprecated
+
+- **`use` effect — `orchestration:` field.** Compiles with a `DeprecationWarning`; will be removed in a future release. Migrate to `ref:` (for curation library entries) or `path:` (for filesystem paths).
+
+### Removed
+
+- `src/circuitry/bundled/orchestrations/` — content moved to `src/circuitry/curation/<category>/` and renamed (e.g. `_prompt.yml` → `learn/prompt.yml`, `orchestration_improver.yml` → `agents/improver.yml`).
+- Top-level `orchestrations/` mirror — was kept in sync with `bundled/orchestrations/` by `scripts/sync-bundled`. Both removed.
+- `scripts/sync-bundled` — obsolete now that `curation/` is the single source of truth (referenced directly via `pyproject.toml` package-data).
+- `_image.yml` — the legacy `prompt_type: image` example. The compiler has rejected `prompt_type: image` since the tool plugin migration; use `tool` with `provider: comfyui`.
+
 ## [0.1.0] — 2026-05-08
 
 First public release.

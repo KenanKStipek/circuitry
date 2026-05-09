@@ -1,0 +1,71 @@
+# Pattern: critique → refine loop
+# Iterates a draft through critique + refine until the model judges it good enough,
+# or up to a hard cap. Composes the `critique` and `refine` utilities via `use:`.
+#
+# Demonstrates:
+#   - loop(while, mode: model) — the LLM judges whether to continue
+#   - use: with ref + outputs (declared-outputs mode → flat dict at .value)
+#   - chained text passing across iterations via the `last_text` sentinel
+#
+# State paths:
+#   draft.value                                                 — initial draft
+#   review.iter_<N>.critique_step.value                         — per-iteration critique
+#   review.iter_<N>.refine_step.value                           — per-iteration refined text
+#   review.iter_<N>.last_text.value                             — text in flight at end of iter N
+#
+# Run:
+#   cof run patterns/critique_refine_loop -e topic="serverless cold-start tradeoffs"
+
+effects:
+  - type: prompt
+    name: draft
+    template: |
+      Write a single paragraph (4–6 sentences) on: {{topic}}. Plain prose. No bullets. No headings.
+
+  # Seed the loop's "current text" sentinel with the initial draft so the first
+  # iteration has something to critique.
+  - type: prompt
+    name: seed_text
+    template: |
+      Output unchanged: {{prime.draft.value}}
+
+  - type: loop
+    name: review
+    max_iterations: 3
+    min_iterations: 1
+    while:
+      mode: model
+      template: |
+        Does this paragraph still need substantive revision for clarity, accuracy, or brevity?
+        Answer yes if at least one significant flaw remains; otherwise answer no.
+
+        Paragraph:
+        {{prime.seed_text.value}}
+    body:
+      - type: use
+        name: critique_step
+        ref: utilities/critique
+        inputs:
+          content: "{{prime.seed_text.value}}"
+          criteria: "clarity, accuracy, brevity, voice"
+        outputs:
+          score: prime.critique.value.score
+          issues: prime.critique.value.issues
+          strengths: prime.critique.value.strengths
+
+      - type: use
+        name: refine_step
+        ref: utilities/refine
+        inputs:
+          content: "{{prime.seed_text.value}}"
+          feedback: "{{prime.review.iter_0.critique_step.value}}"
+        outputs:
+          refined: prime.refine.value
+
+  # After the loop, expose the latest refinement as the orchestration's final answer.
+  - type: prompt
+    name: final
+    template: |
+      Output the refined paragraph unchanged. No commentary, no markdown.
+
+      {{prime.review.iter_0.refine_step.value.refined}}

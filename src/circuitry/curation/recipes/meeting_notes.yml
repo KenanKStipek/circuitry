@@ -1,0 +1,125 @@
+# Recipe: meeting_notes
+# Turns a meeting transcript into structured notes: summary, decisions, action items.
+# Composes utilities/summarize for the headline TL;DR and utilities/extract for the
+# attendee list, then runs a structured-output pass for decisions and action items.
+#
+# Inputs:
+#   transcript (string, required) — meeting transcript text
+#
+# Outputs:
+#   prime.summary.value     — one-line TL;DR
+#   prime.attendees.value   — list of attendee names
+#   prime.notes.value       — {decisions: [...], action_items: [...]}
+
+interface:
+  inputs:
+    transcript:
+      type: string
+      required: true
+      description: Meeting transcript. Speaker labels welcome but not required.
+  outputs:
+    summary:
+      type: string
+      path: prime.summary.value.summary
+      description: One-sentence TL;DR.
+    attendees:
+      type: array
+      path: prime.attendees.value
+      description: List of names appearing in the transcript.
+    decisions:
+      type: array
+      path: prime.notes.value.decisions
+    action_items:
+      type: array
+      path: prime.notes.value.action_items
+
+effects:
+  # Run the summary and attendee-extraction passes in parallel — they don't depend on each other.
+  - type: dynamic
+    name: parse
+    flow: tree
+    effects:
+      - type: use
+        name: summary_step
+        ref: utilities/summarize
+        inputs:
+          text: "{{transcript}}"
+          max_words: 25
+        outputs:
+          summary: prime.summarize.value
+
+      - type: use
+        name: attendees_step
+        ref: utilities/extract
+        inputs:
+          text: "{{transcript}}"
+          fields: [attendees]
+        outputs:
+          extracted: prime.extract.value
+
+  # Top-level aliases for the interface output paths.
+  - type: prompt
+    name: summary
+    prompt_type: json
+    schema:
+      type: object
+      required: [summary]
+      properties:
+        summary: { type: string }
+    template: |
+      Output a JSON object with the field "summary" set to the one-sentence summary below, unchanged.
+
+      {{prime.parse.summary_step.value.summary}}
+
+  - type: prompt
+    name: attendees
+    prompt_type: array
+    schema:
+      type: array
+      items: { type: string }
+    template: |
+      Output the attendee list below as a JSON array of names (each a single string).
+      If the field is null or empty, output an empty array.
+
+      Attendees raw: {{prime.parse.attendees_step.value.extracted.attendees}}
+
+  # Structured pass for decisions + action items in one shot.
+  - type: prompt
+    name: notes
+    prompt_type: json
+    schema:
+      type: object
+      required: [decisions, action_items]
+      properties:
+        decisions:
+          type: array
+          items:
+            type: object
+            required: [topic, outcome]
+            properties:
+              topic: { type: string }
+              outcome: { type: string }
+        action_items:
+          type: array
+          items:
+            type: object
+            required: [owner, task]
+            properties:
+              owner:
+                type: string
+                description: Name of the assignee (use "unassigned" if unclear).
+              task:
+                type: string
+              due:
+                type: string
+                description: Due date or relative timeframe; empty string if not stated.
+    template: |
+      Read the transcript and extract two arrays:
+        - decisions: each {topic, outcome} where outcome is the resolution reached.
+        - action_items: each {owner, task, due}. Owner must be a person's name from the transcript or "unassigned".
+
+      Skip casual side-chatter. Only include items that are actually decided or assigned.
+      If neither array has any entries, return both as empty arrays.
+
+      Transcript:
+      {{transcript}}

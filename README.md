@@ -40,24 +40,36 @@ This gives you the `cof` command. The Python import name is still `circuitry` (`
 # Interactive setup — detects backends, creates config
 cof setup
 
-# Browse available orchestrations
+# Browse available orchestrations (organised by category: learn, utilities, patterns, recipes, agents)
 cof list
 
-# Run by name (no path needed)
-cof run hello -e name=World
+# Run by slash-delimited name (no path needed)
+cof run learn/hello -e name=World
 
 # Just the output value
-cof run hello -e name=World --tail
+cof run learn/hello -e name=World --tail
 
 # See details for an orchestration
-cof info article-summarizer
+cof info recipes/article_summarizer
 
-# Copy a bundled orchestration for editing
-cof eject article-summarizer
+# Copy a curation entry into the working directory for editing
+cof eject recipes/article_summarizer
 
 # Initialize a new project (creates config + hello.yml)
 cof init
 ```
+
+### Curation library
+
+Pre-built orchestrations live at `src/circuitry/curation/`, organised by category:
+
+- **`learn/`** — single-primitive demonstrations (one concept per file).
+- **`utilities/`** — composable, single-output orchestrations called from other orchestrations via `use:`.
+- **`patterns/`** — multi-primitive composition templates (kitchen-sink, critique→refine, parallel→judge, classify→route).
+- **`recipes/`** — full real-world workflows (article summarizer, comic strip, …).
+- **`agents/`** — orchestrations that build or improve other orchestrations.
+
+The `manifest.json` in that directory is the operational registry consumed by `cof list` / `cof run` / `cof info` / `cof eject`. Run `cof list` to see what's available.
 
 ## Why Circuitry?
 

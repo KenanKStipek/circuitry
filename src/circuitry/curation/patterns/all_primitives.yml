@@ -1,6 +1,19 @@
-# Demonstrates all primitives working together:
-# dynamic(tree) → dynamic(chain) → prompt(json) → loop(each) → if(cel) → prompt
+# Pattern: all primitives composed
+# Exercises every effect type in one orchestration so a reader (human or LLM)
+# can see how prompt, dynamic(chain/tree), loop(each + collect + tree), if(cel),
+# and use compose. Use this as a structural reference, not a finished recipe.
+#
+# State paths produced (dot-delimited, all under prime):
+#   pipeline.collect_topics.value          — array of topic strings
+#   pipeline.fan_out.collected.value       — array of one-line summaries
+#   pipeline.gate.success_note.value | empty_note.value
+#   side_call.summarize.value              — output of the summarize utility
+#
+# Run:
+#   cof run patterns/all_primitives --dry-run
+
 effects:
+  # Top-level dynamic(tree) — the chain pipeline and a side use-call run in parallel.
   - type: dynamic
     name: orchestrator
     flow: tree
@@ -9,35 +22,52 @@ effects:
         name: pipeline
         flow: chain
         effects:
+          # Step 1: produce a typed array via prompt_type: json + schema.
           - type: prompt
             name: collect_topics
             prompt_type: json
             schema:
               type: array
-              items:
-                type: string
-            template: 'Return exactly this JSON array: ["reliability","observability","testing"]'
+              items: { type: string }
+            template: |
+              Output a JSON array of three short topics from systems engineering. No prose, no markdown.
+              Example: ["reliability", "observability", "testing"]
 
+          # Step 2: fan out one short prompt per topic in parallel and collect the results.
           - type: loop
-            name: summarize
+            name: fan_out
+            flow: tree
+            collect: line
             each:
-              in: state.prime.orchestrator.pipeline.collect_topics.value
+              in: prime.orchestrator.pipeline.collect_topics.value
               as: topic
             body:
               - type: prompt
                 name: line
-                template: "Give one sentence on {{topic}}."
+                template: "Write one declarative sentence about: {{topic}}. No preamble. No quotes."
 
+          # Step 3: branch on whether the loop produced anything.
           - type: if
-            name: finalize
+            name: gate
             if:
               mode: cel
-              expr: "size(state.prime.orchestrator.pipeline.summarize.value.effects_by_iteration) >= 1"
+              expr: "size(state.prime.orchestrator.pipeline.fan_out.collected.value) >= 1"
             then:
               - type: prompt
                 name: success_note
-                template: "Summaries were generated successfully."
+                template: |
+                  Acknowledge that {{prime.orchestrator.pipeline.fan_out.collected.value.size}} summaries were generated.
+                  Output a single short confirmation sentence.
             else:
               - type: prompt
                 name: empty_note
-                template: "No summaries were generated."
+                template: "Output exactly: 'No summaries were produced.'"
+
+      # Concurrent side-call: invoke the summarize utility against a literal payload.
+      # Demonstrates `use:` with `ref:` and full-namespace mode.
+      - type: use
+        name: side_call
+        ref: utilities/summarize
+        inputs:
+          text: "Circuitry is a YAML-based LLM orchestration framework that treats state as the wire between effects."
+          max_words: 12

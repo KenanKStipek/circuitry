@@ -1,0 +1,41 @@
+# Utility: decompose
+# Breaks a high-level task into an ordered array of concrete subtasks.
+#
+# Inputs:  task (string, required), max_steps (number, optional, default 5)
+# Outputs: steps (array of strings)
+# Use when: a recipe needs an LLM-planned sequence to feed into a `loop(each)`.
+
+interface:
+  inputs:
+    task:
+      type: string
+      required: true
+      description: The high-level task to decompose.
+    max_steps:
+      type: number
+      required: false
+      description: Soft cap on the number of subtasks (default 5).
+  outputs:
+    steps:
+      type: array
+      path: prime.decompose.value
+      description: Ordered subtasks. Each is a short imperative sentence.
+
+effects:
+  - type: prompt
+    name: decompose
+    prompt_type: json
+    schema:
+      type: array
+      items:
+        type: string
+        description: One subtask, phrased as a short imperative sentence.
+    template: |
+      Decompose the task into an ordered list of concrete subtasks. Each subtask:
+      - is a short imperative sentence ("Fetch the article text", not "We could fetch...")
+      - can be executed independently of subsequent subtasks
+      - depends only on subtasks that come before it
+
+      Output a JSON array of strings only. No preamble. No more than {{max_steps}} subtasks.
+
+      Task: {{task}}

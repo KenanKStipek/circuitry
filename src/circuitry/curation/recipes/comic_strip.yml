@@ -494,3 +494,17 @@ effects:
         fontcolor: white
         box: 0
       output: "./output/comics/{{_timestamp}}/strip.png"
+
+  # ── Step 11: One-line caption ──────────────────────────────────────────
+  # Compose utilities/summarize to produce a one-line caption from the concept.
+  # The caption isn't burned into the image — it's exposed in state so a
+  # downstream caller (or a sharing pipeline) can use it as alt-text or a
+  # social-media blurb without re-querying the model.
+  - name: caption
+    type: use
+    ref: utilities/summarize
+    inputs:
+      text: "Title: {{prime.write_concept.value.title}}. Setting: {{prime.write_concept.value.setting}}. Tone: {{prime.write_concept.value.tone}}."
+      max_words: 15
+    outputs:
+      summary: prime.summarize.value

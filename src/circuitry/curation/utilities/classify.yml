@@ -1,0 +1,54 @@
+# Utility: classify
+# Assigns one label from a fixed set to a piece of content.
+#
+# Inputs:  content (string, required), labels (array of strings, required)
+# Outputs: label (string), confidence (number)
+# Use when: routing the orchestration based on content type (intent classification, triage).
+
+interface:
+  inputs:
+    content:
+      type: string
+      required: true
+      description: The content to classify.
+    labels:
+      type: array
+      required: true
+      description: Allowed labels. The output label MUST be one of these verbatim.
+  outputs:
+    label:
+      type: string
+      path: prime.classify.value.label
+      description: The chosen label (one of the input labels, verbatim).
+    confidence:
+      type: number
+      path: prime.classify.value.confidence
+      description: Confidence in the choice on a 0.0–1.0 scale.
+
+effects:
+  - type: prompt
+    name: classify
+    prompt_type: json
+    schema:
+      type: object
+      required: [label, confidence]
+      properties:
+        label:
+          type: string
+          description: One of the allowed labels, verbatim.
+        confidence:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+    template: |
+      Classify the content into exactly one of the allowed labels.
+      Output JSON: {"label": "<chosen-label>", "confidence": <0.0-1.0>}.
+      The label MUST appear in the allowed list verbatim — do not invent new labels.
+
+      Allowed labels:
+      {{#labels}}
+      - {{.}}
+      {{/labels}}
+
+      Content:
+      {{content}}

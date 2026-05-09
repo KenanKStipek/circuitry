@@ -49,14 +49,15 @@ if [[ "${run_live}" -eq 1 ]]; then
   mkdir -p "$(dirname "${live_out}")"
 fi
 
-for file in orchestrations/*.yml; do
+CURATION_DIR="src/circuitry/curation"
+while IFS= read -r -d '' file; do
   echo
   echo "==> validate: ${file}"
   "${PYTHON_BIN}" -m circuitry.cli.app validate "${file}"
 
   echo "==> dry-run: ${file}"
   "${PYTHON_BIN}" -m circuitry.cli.app run "${file}" --dry-run --out "${dry_out}" >/dev/null
-done
+done < <(find "${CURATION_DIR}" -type f -name '*.yml' -print0 | sort -z)
 
 if [[ "${run_live}" -eq 1 ]]; then
   echo
@@ -66,7 +67,7 @@ if [[ "${run_live}" -eq 1 ]]; then
     echo "Start Ollama (or update adapter config) and retry ./scripts/run-orchestrations --live"
     exit 1
   fi
-  for file in orchestrations/hello.yml orchestrations/dynamic_hello.yml orchestrations/typed_prompt_example.yml; do
+  for file in "${CURATION_DIR}/learn/hello.yml" "${CURATION_DIR}/learn/dynamic_chain.yml" "${CURATION_DIR}/learn/prompt.yml"; do
     echo "==> live-run: ${file}"
     "${PYTHON_BIN}" -m circuitry.cli.app run "${file}" --out "${live_out}" >/dev/null
   done
