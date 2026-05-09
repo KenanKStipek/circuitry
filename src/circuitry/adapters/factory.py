@@ -4,11 +4,12 @@ from typing import Any
 
 from .anthropic import AnthropicAdapter
 from .base import Adapter
+from .host_claude import HostClaudeAdapter
 from .litellm import LiteLLMAdapter
 from .ollama import OllamaAdapter
 from .openai import OpenAIAdapter
 
-SUPPORTED_ADAPTERS = ("ollama", "openai", "anthropic", "litellm")
+SUPPORTED_ADAPTERS = ("ollama", "openai", "anthropic", "litellm", "host_claude")
 
 
 def build_adapter(*, adapter_name: str, runtime: dict[str, Any]) -> Adapter:
@@ -52,6 +53,19 @@ def build_adapter(*, adapter_name: str, runtime: dict[str, Any]) -> Adapter:
             default_model=cfg.get("default_model") or "openai/gpt-4o-mini",
             api_base=cfg.get("api_base") or "",
             timeout=int(cfg.get("timeout") or 120),
+        )
+
+    if adapter_name == "host_claude":
+        # host_claude can't be built from config — it needs a request_handler
+        # callback wired to per-prompt blocking queues, which only the MCP
+        # server (or an embedding caller) can supply.
+        raise RuntimeError(
+            "host_claude cannot be built from config; it requires a "
+            "request_handler injected at runtime via RunRequest.adapter "
+            "(see circuitry-mcp). Run `circuitry-mcp` (or `cof mcp`) and "
+            "drive the orchestration via the MCP tool loop, or supply "
+            "RunRequest(adapter=HostClaudeAdapter(request_handler=...)) "
+            "from a programmatic caller."
         )
 
     supported = ", ".join(SUPPORTED_ADAPTERS)

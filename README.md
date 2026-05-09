@@ -161,6 +161,32 @@ cof version
 
 When stdout is not a TTY (e.g., piped to `jq`), `cof run` automatically switches to `--json` mode with quiet output. `--tail` overrides this when you want just the raw value.
 
+## Run from a Claude conversation
+
+Circuitry ships an MCP server (`circuitry-mcp`) so you can drive an orchestration from a Claude Code (or Claude Desktop) chat. The host Claude session itself becomes the LLM — every `prompt` effect pauses the run, surfaces the rendered prompt as a tool result, and waits for the assistant's response. Tool effects (ffmpeg, ComfyUI, etc.) still execute server-side; only LLM prompts cross the wire.
+
+```bash
+# Verify the server is installed (`pipx install circuitry-cof` provides it).
+circuitry-mcp --help
+
+# Same entrypoint via the main CLI:
+cof mcp --help
+```
+
+Wire it into Claude Code via `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "circuitry": { "command": "circuitry-mcp" }
+  }
+}
+```
+
+Then in chat, the tool loop is: `list_orchestrations()` → `run_orchestration(name, …)` → respond to each entry in `pending_prompts` via `submit_response(run_id, prompt_id, …)` until `status` is `completed`. Parallel `flow: tree` orchestrations and parallel loop iterations work uniformly — `pending_prompts` simply contains N entries instead of one. To exercise an orchestration that pins a non-Claude `model:` (e.g. for testing) without changing the YAML, pass `override_model=True` to `run_orchestration`. See [`.claude/commands/cof.md`](.claude/commands/cof.md) for the `/cof` slash command and full tool-loop reference.
+
+The plain `cof run …` CLI continues to work as-is. The MCP server is a strict addition — no existing behavior changes.
+
 ## Configuration
 
 Circuitry uses layered config resolution (highest priority wins):

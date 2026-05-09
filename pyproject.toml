@@ -50,6 +50,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "ollama>=0.1.8",
     "simpleeval>=0.9.13",
+    "mcp>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -57,6 +58,7 @@ toon = ["toon-format @ git+https://github.com/toon-format/toon-python.git"]
 
 [project.scripts]
 cof = "circuitry.cli.app:main"
+circuitry-mcp = "circuitry.mcp.server:main"
 
 [project.urls]
 Homepage = "https://github.com/kenankstipek/circuitry"

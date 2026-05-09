@@ -24,7 +24,7 @@ Top-level fields of an orchestration YAML file:
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `effects` | array | **yes** | — | Ordered list of top-level effects to execute |
-| `adapter` | string | no | from config.json | Adapter: `ollama`, `openai`, `anthropic`, `litellm` |
+| `adapter` | string | no | from config.json | Adapter: `ollama`, `openai`, `anthropic`, `litellm`, `host_claude` (MCP-only — see below) |
 | `model` | string | no | from config.json | Model identifier (e.g. `llama3`, `gpt-4o`, `claude-haiku-20240307`) |
 | `flow` | string | no | `chain` | Top-level flow for the implicit root dynamic |
 | `version` | number | no | — | Optional compatibility version |
@@ -641,7 +641,7 @@ The following rules are sufficient for generating structurally correct Circuitry
 **File structure:**
 1. Top-level fields: `adapter` (string), `model` (string), `effects` (array). Only `effects` is required. Additional top-level keys are allowed.
 2. `adapter` and `model` are only required when the orchestration contains `prompt` or `reflector` effects. Tool-only orchestrations (`type: tool` effects only) do not need `adapter` or `model`.
-3. Valid `adapter` values: `ollama`, `openai`, `anthropic`, `litellm`.
+3. Valid `adapter` values: `ollama`, `openai`, `anthropic`, `litellm`, `host_claude` (MCP-only; the host Claude session generates each prompt — set via `circuitry-mcp` rather than config.json. By default rejects non-Claude `model:` pins; pass `override_model=True` to `run_orchestration` to ignore the pin and run through Claude regardless).
 4. Valid `flow` values: `chain`, `chain_of_thought`, `cot` (all sequential); `tree`, `tree_of_thought`, `tot` (all parallel).
 
 **Effect types and required fields:**

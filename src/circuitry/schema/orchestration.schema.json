@@ -7,7 +7,7 @@
   "properties": {
     "adapter": {
       "type": "string",
-      "description": "Adapter to use for model invocations. Options: ollama, openai, anthropic, litellm. Optional — can be set in config.json."
+      "description": "Adapter to use for model invocations. Options: ollama, openai, anthropic, litellm, host_claude (MCP-only). Optional — can be set in config.json."
     },
     "model": {
       "type": "string",

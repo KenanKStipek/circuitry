@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,8 @@ class RunRequest:
     verbose: bool = False
     config: CircuitryConfig | None = None
     live_state_path: Optional[Path] = None
+    adapter: Optional[Adapter] = None
+    state_observer: Optional[Callable[[dict[str, Any]], None]] = None
 
 
 @dataclass(frozen=True)
@@ -185,12 +187,21 @@ def run(req: RunRequest) -> RunResult:
         adapter: Adapter
         timeout_seconds = 120
         if _has_prompt_effects(root_def):
-            resolved_adapter, resolved_model = _require_resolved_settings(
-                effective=effective, orchestration_path=req.orchestration_path
-            )
-            adapter = build_adapter(
-                adapter_name=resolved_adapter, runtime=effective.runtime or {}
-            )
+            if req.adapter is not None:
+                # Caller supplied a fully-constructed adapter (e.g. circuitry-mcp
+                # injecting a HostClaudeAdapter wired to per-prompt queues).
+                # Skip factory dispatch but still resolve a model — the adapter
+                # may pin its own, in which case effective.model can be empty.
+                adapter = req.adapter
+                resolved_adapter = req.adapter.name
+                resolved_model = effective.model or ""
+            else:
+                resolved_adapter, resolved_model = _require_resolved_settings(
+                    effective=effective, orchestration_path=req.orchestration_path
+                )
+                adapter = build_adapter(
+                    adapter_name=resolved_adapter, runtime=effective.runtime or {}
+                )
             try:
                 adapters_cfg = (effective.runtime or {}).get("adapters") or {}
                 this_cfg = adapters_cfg.get(resolved_adapter) or {}
@@ -208,11 +219,25 @@ def run(req: RunRequest) -> RunResult:
         state.setdefault("_timestamp", datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"))
 
         # Execute using core runtime against Store
-        on_write = None
+        callbacks: list[Callable[[dict[str, Any]], None]] = []
         if req.live_state_path is not None:
             from .live_state import make_live_state_callback
 
-            on_write = make_live_state_callback(req.live_state_path)
+            callbacks.append(make_live_state_callback(req.live_state_path))
+        if req.state_observer is not None:
+            callbacks.append(req.state_observer)
+
+        on_write: Optional[Callable[[dict[str, Any]], None]]
+        if not callbacks:
+            on_write = None
+        elif len(callbacks) == 1:
+            on_write = callbacks[0]
+        else:
+            def on_write(s: dict[str, Any]) -> None:
+                for cb in callbacks:
+                    cb(s)
+
+        if on_write is not None:
             # Write initial snapshot so watchers see the pending state
             on_write(state)
         store = Store(state, on_write=on_write)

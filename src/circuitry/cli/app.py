@@ -1019,6 +1019,20 @@ def init_cmd():
     console.print("Try: [bold]cof run hello.yml -e name=World[/bold]")
 
 
+@app.command("mcp", help="Run the circuitry MCP server (stdio transport).")
+def mcp_cmd():
+    """
+    Launch the MCP server. Equivalent to running `circuitry-mcp` directly —
+    both entrypoints invoke the same `circuitry.mcp.server.main`.
+
+    Pair with a Claude Code .mcp.json entry to drive orchestrations from a
+    chat session. See `.claude/commands/cof.md` for the full tool-loop docs.
+    """
+    from ..mcp.server import main as _mcp_main
+
+    _mcp_main()
+
+
 @app.command("version", help="Print version.")
 def version_cmd():
     from importlib.metadata import PackageNotFoundError, version as pkg_version
