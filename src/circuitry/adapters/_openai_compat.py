@@ -34,6 +34,11 @@ class OpenAICompatibleConfig:
     ``api_key_env`` may be empty for self-hosted endpoints (vllm, llama.cpp,
     LM Studio) that don't require auth. When empty, ``check()`` reports
     only host-level readiness.
+
+    ``chat_completions_path`` may contain ``{model}`` for providers whose
+    URL embeds the deployment / model name (notably Azure OpenAI:
+    ``/openai/deployments/{model}/chat/completions?api-version=...``).
+    A path without that placeholder formats unchanged.
     """
 
     base_url: str
@@ -65,7 +70,12 @@ def chat_completion(
             f"Export {cfg.api_key_env}=... in the environment."
         )
 
-    url = f"{cfg.base_url.rstrip('/')}{cfg.chat_completions_path}"
+    # ``str.format(model=...)`` substitutes the placeholder when present
+    # (Azure deployments) and is a no-op otherwise. urllib.parse.quote
+    # would be safer in principle but the model names that flow here are
+    # already constrained by the orchestration schema name pattern.
+    path = cfg.chat_completions_path.format(model=model)
+    url = f"{cfg.base_url.rstrip('/')}{path}"
 
     payload: dict[str, object] = {
         "model": model,
