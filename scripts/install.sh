@@ -5,6 +5,7 @@
 set -e
 
 REPO_URL="git+https://github.com/kenankstipek/circuitry.git"
+PIPX_PACKAGE="circuitry-cof"
 MIN_PYTHON="3.9"
 
 log()  { printf '  \033[1;36m%s\033[0m %s\n' "$1" "$2"; }
@@ -41,11 +42,14 @@ fi
 ok "pipx available"
 
 # --- Install or upgrade circuitry ---
-if pipx list 2>/dev/null | grep -q "circuitry"; then
-    log "UPGRADE" "Upgrading circuitry..."
-    pipx upgrade circuitry || pipx install --force "$REPO_URL"
+# The PyPI distribution name is `circuitry-cof` (the unprefixed `circuitry`
+# name on PyPI belongs to a different package). The Python import name remains
+# `circuitry`, and the CLI is `cof`.
+if pipx list 2>/dev/null | grep -qE "(^|[^-])$PIPX_PACKAGE\b"; then
+    log "UPGRADE" "Upgrading $PIPX_PACKAGE..."
+    pipx upgrade "$PIPX_PACKAGE" || pipx install --force "$REPO_URL"
 else
-    log "INSTALL" "Installing circuitry..."
+    log "INSTALL" "Installing $PIPX_PACKAGE..."
     pipx install "$REPO_URL"
 fi
 
