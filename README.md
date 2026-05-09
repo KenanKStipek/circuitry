@@ -2,7 +2,7 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/circuitry-cof.svg)](https://pypi.org/project/circuitry-cof/)
 [![CI](https://github.com/kenankstipek/circuitry/actions/workflows/quality.yml/badge.svg)](https://github.com/kenankstipek/circuitry/actions/workflows/quality.yml)
-[![Python](https://img.shields.io/badge/python-3.9%E2%80%933.13-blue.svg)](https://github.com/kenankstipek/circuitry)
+[![Python](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue.svg)](https://github.com/kenankstipek/circuitry)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 **Circuitry** (CLI: `cof`) is the **C**ybernetic **O**rchestration **F**ramework — a YAML-first runtime for LLM pipelines that observe their own output and adapt. Loops re-evaluate continuation against what the model just produced, conditionals branch on accumulated state, and reflectors plan from observed results. It's a closed-loop control system for model invocations, not a chain of static prompts.
@@ -71,6 +71,118 @@ Pre-built orchestrations live at `src/circuitry/curation/`, organised by categor
 
 The `manifest.json` in that directory is the operational registry consumed by `cof list` / `cof run` / `cof info` / `cof eject`. Run `cof list` to see what's available.
 
+## Mental Model
+
+Circuitry builds up from a single prompt to a full feedback control system in five conceptual steps. Reading them in order is the fastest way to understand why the YAML looks the way it does.
+
+### 1. Prompt
+
+The atomic unit. One model invocation, one typed result, written to state at a deterministic path.
+
+```yaml
+- type: prompt
+  name: greeting
+  template: "Say hello to the world."
+```
+
+After this runs, the state contains `prime.greeting.value` — the model's response. That's it: that's the smallest valid orchestration.
+
+### 2. State, and composing prompts
+
+The moment you have two prompts, the second wants to read what the first produced. Circuitry's answer: every effect writes to a path derived from its `name`, and templates interpolate from the global state object using Mustache-style `{{path}}`.
+
+```yaml
+effects:
+  - type: prompt
+    name: draft
+    template: "Write a short intro for {{topic}}."
+
+  - type: prompt
+    name: critique
+    template: "Critique this draft: {{prime.draft.value}}"
+```
+
+`{{topic}}` came in as user input. `{{prime.draft.value}}` is the first prompt's output. The state object is the wire between effects. **Deterministic paths are the foundation — everything that comes later relies on the next effect being able to address what the previous effect produced.**
+
+### 3. Dynamics — grouping and ordering
+
+Once you have multiple effects, you need scopes (so names don't collide across reusable building blocks) and a way to declare "do these in sequence" vs "do them in parallel". A `dynamic` is both:
+
+```yaml
+- type: dynamic
+  name: research
+  flow: chain
+  effects:
+    - type: prompt
+      name: gather
+      template: "List five sources on {{topic}}."
+    - type: prompt
+      name: summarize
+      template: "Summarize them: {{research.gather.value}}"
+```
+
+Effects inside the `research` dynamic write to `prime.research.gather.value`, `prime.research.summarize.value` — their state is namespaced.
+
+The `flow:` parameter chooses topology:
+
+- **`chain`** (also `chain_of_thought` / `cot`) — sequential. Each effect runs after the previous one finishes and sees its state.
+- **`tree`** (also `tree_of_thought` / `tot`) — parallel. All effects launch simultaneously against the same input snapshot. Use this when downstream effects don't depend on each other.
+
+If your orchestration only needs sequential prompts that each read the prior, you don't strictly need a dynamic — Circuitry wraps the file's top-level `effects:` in an implicit `prime` dynamic. But for any non-trivial topology, dynamics are how you express it.
+
+### 4. Loops and conditionals — this is the cybernetic part
+
+So far the orchestration is a directed graph: prompts feed each other, dynamics group them, `chain`/`tree` decides whether they run in series or parallel. That's pipeline composition — not yet cybernetic.
+
+Cybernetics enters when **the orchestration observes its own state and changes its control flow based on what it observes**. Two primitives unlock that:
+
+**Conditionals** branch on observed state:
+
+```yaml
+- type: if
+  name: needs_revision
+  if:
+    mode: model
+    template: "Does this draft need more work? {{prime.draft.value}}"
+  then:
+    - type: prompt
+      name: revise
+      template: "Revise: {{prime.draft.value}}"
+```
+
+`mode: model` lets the LLM read state and decide which branch runs. `mode: cel` does the same with a deterministic CEL expression for cases where you'd rather not pay an LLM for the routing decision.
+
+**Loops** re-evaluate continuation against the freshly-written state:
+
+```yaml
+- type: loop
+  name: refine
+  while:
+    mode: model
+    template: "Is this good enough? {{prime.refine.draft.value}}"
+  max_iterations: 5
+  body:
+    - type: prompt
+      name: draft
+      template: "Improve: {{prime.refine.draft.value}}"
+```
+
+Each iteration writes a new `prime.refine.iter_<N>.draft.value`; the `while` condition is evaluated against the latest one. The loop exits when the model says "good enough" — or when `max_iterations` triggers (a deliberate floor against runaway feedback).
+
+Together, conditionals and loops turn the orchestration from a static plan into a closed-loop control system. The output of one effect drives the choice of the next. **That's the cybernetic claim**: a monitor (the conditional / loop predicate) compares system state to a desired condition, and a controller (the branch / iteration) adjusts behaviour. The orchestration steers itself.
+
+### 5. Tools, adapters, and runtime plugins — the rest of the world
+
+Once the control plane is in place, the catalog of *what* you can do at each step opens up:
+
+- **Adapters** — how the LLM call leaves the process. 24 in-tree (anthropic, openai, gemini, groq, ollama, openrouter, mistral, cohere, deepseek, xai, perplexity, vllm, llamacpp, lmstudio, …) plus litellm for the long tail. All sit behind the same `Adapter` Protocol so orchestrations stay portable.
+- **Tool plugins** — non-LLM side effects. 69 in-tree, from stdlib utilities (`json`, `regex`, `csv`, `hash`, `uuid`) to subprocess wrappers (`git`, `ripgrep`, `pandoc`, `ffmpeg`, `gh`) to SDK-driven (`slack`, `github`, `playwright`, `embed`, `vector_search`). A `tool` effect calls one with a `params` dict and writes the result to state, exactly like a prompt effect.
+- **Runtime plugins** — lifecycle hooks for persistence and observability. 30 in-tree (sqlite, postgres, mongodb, redis, s3, kafka, opentelemetry, sentry, datadog, prometheus, …). They observe `on_run_start` / `on_effect_complete` / `on_run_success|failure` to record runs or emit traces, without changing orchestration semantics.
+
+Plus `use` for composing orchestrations from other orchestrations (with state isolation and typed I/O), and `reflector` for letting the model plan the next set of effects at runtime — both built on the same primitives above.
+
+`cof list --extensions` enumerates everything available in your installation; `cof doctor` reports which deps / binaries / env vars each one expects.
+
 ## Why Circuitry?
 
 Most LLM frameworks make you express orchestration in code. Circuitry lets you declare it in YAML, and treats every effect as a feedback signal — state is the wire between steps, and downstream effects observe it the same way a controller observes a sensor reading. That makes loops, conditionals, and reflection first-class instead of bolted on.
@@ -84,30 +196,6 @@ Most LLM frameworks make you express orchestration in code. Circuitry lets you d
 | BAML | Typed prompts as functions. | You want strict typed I/O for a small, well-defined LLM call surface. |
 
 Pick Circuitry when the orchestration topology — what runs after what, conditional on what — is the thing you want to design and read.
-
-## How It Works
-
-An orchestration is a YAML file declaring **effects** that execute in order. Each effect writes its output to a **deterministic state path** derived from its name. Subsequent effects read that state through **template interpolation**, creating feedback chains.
-
-```yaml
-effects:
-  - type: prompt
-    name: draft
-    template: "Write a short intro for {{topic}}."
-
-  - type: prompt
-    name: critique
-    template: "Critique this draft and suggest improvements: {{prime.draft.value}}"
-
-  - type: prompt
-    name: revise
-    template: |
-      Original: {{prime.draft.value}}
-      Feedback: {{prime.critique.value}}
-      Write the final version incorporating the feedback.
-```
-
-The adapter and model come from your config (see [Configuration](#configuration) below) — orchestrations stay portable.
 
 ## CLI Reference
 
@@ -129,16 +217,20 @@ cof run hello --json | jq '.prime'
 cof run hello -e name=World --live-state ./state.live.json
 
 # Browse, inspect, and eject orchestrations
-cof list
-cof list --category example
-cof info article-summarizer
-cof info article-summarizer --json
-cof eject comic-strip
-cof eject comic-strip --out my-comic.yml
+cof list                          # bundled orchestrations
+cof list --extensions             # compiled-in adapters / tool plugins / runtime plugins
+cof info recipes/article_summarizer
+cof info recipes/article_summarizer --json
+cof eject recipes/comic_strip
+cof eject recipes/comic_strip --out my-comic.yml
 
 # Validate an orchestration
-cof check orchestrations/hello.yml
-cof check orchestrations/hello.yml --json
+cof check recipes/hello.yml
+cof check recipes/hello.yml --json
+cof check recipes/hello.yml --skip-preflight  # structure only; skip env-readiness
+
+# Skip the dependency preflight at run time too (advanced)
+cof run recipes/comic_strip --skip-preflight
 
 # Generate an orchestration from natural language
 cof gen blog_pipeline "Build a pipeline that drafts, critiques, and revises a blog post"
@@ -147,8 +239,8 @@ cof gen summarizer "Summarize a PDF" --format toon
 # System diagnostics and setup
 cof setup              # Interactive backend detection + config wizard
 cof setup --json       # Non-interactive detection output
-cof doctor             # Check all backends and config
-cof doctor --generate  # Also test model connectivity
+cof doctor             # Per-extension preflight + config check; non-zero exit when anything fails
+cof doctor --generate  # Also test live model connectivity
 
 # Project setup
 cof init
@@ -228,6 +320,34 @@ Selection precedence per run:
 - Adapter: CLI override > orchestration `adapter` > config `default_adapter`
 
 Every run records resolved values in `runtime.effective_settings`.
+
+### Allowlists
+
+By default every compiled-in adapter / tool plugin / runtime plugin is available. Production deployments can restrict that surface by setting allowlists either via env (`CIRCUITRY_ENABLED_ADAPTERS`, `CIRCUITRY_ENABLED_PLUGINS`, `CIRCUITRY_ENABLED_TOOLS` — comma-separated) or via top-level keys in config.json:
+
+```json
+{
+  "default_adapter": "ollama",
+  "enabled_adapters": ["ollama", "openai"],
+  "enabled_tools": ["http", "fs", "json"],
+  "enabled_plugins": ["circuitry.runtime_plugins.sqlite"],
+  "environment": "prod"
+}
+```
+
+`null` (or unset) means default-open. `[]` locks the category down. A non-empty list is strict allowlist. Validation rejects orchestrations that reference disallowed extensions before any LLM call. The `environment` field flips defaults that vary between dev/prod/test (e.g. SQL persistence plugins skip storing raw provider responses in prod).
+
+### Preflight
+
+Each extension declares a `check()` that reports its dependencies (env vars, binaries, library imports, host reachability). At run time, validation invokes `check()` on every referenced extension and aborts with an actionable error before the first LLM call:
+
+```
+$ cof run recipes/comic_strip
+Preflight failed: tool:ffmpeg: not ready — missing ['binary:ffmpeg'].
+Re-run with --skip-preflight to bypass.
+```
+
+`cof doctor` runs the full per-extension preflight without executing an orchestration.
 
 ## Core Primitives
 
@@ -350,7 +470,7 @@ Composition primitive. Runs another orchestration as an isolated sub-step with e
 ```yaml
 - type: use
   name: summarize_step
-  orchestration: article-summarizer
+  ref: utilities/critique     # curation-library lookup
   inputs:
     article_text: "{{prime.fetch.value}}"
     max_words: 50
@@ -358,16 +478,18 @@ Composition primitive. Runs another orchestration as an isolated sub-step with e
     summary: prime.summarize.value
 ```
 
-Resolution order: local file path > bundled orchestration name.
-
 State is fully isolated — the child orchestration runs in its own store. Only mapped inputs are passed in, only mapped outputs are extracted.
 
-Features:
-- **`orchestration`** — reference by name (`article-summarizer`) or path (`./my-orch.yml`)
-- **`inline`** — Mustache template that renders to orchestration YAML at runtime (for LLM-generated plans)
-- **`validate`** — schema validation of inline YAML before execution (default `true`)
-- **`on_error`** — `fail` (default), `skip`, or `continue`
-- Works inside loops, conditionals, and dynamics
+Reference fields:
+- **`ref:`** — curation-library lookup, slash-delimited (`utilities/critique`, `recipes/article_summarizer`).
+- **`path:`** — filesystem path. Absolute, cwd-relative, or parent-orchestration-relative.
+- **`inline:`** — Mustache template that renders to orchestration YAML at runtime (for LLM-generated plans).
+
+Plus:
+- **`validate:`** — schema validation of inline YAML before execution (default `true`).
+- **`on_error:`** — `fail` (default), `skip`, or `continue`.
+- Works inside loops, conditionals, and dynamics.
+- Cycle detection: validation rejects orchestration graphs that recurse on themselves.
 
 ```yaml
 # LLM-generated orchestration execution
@@ -380,6 +502,8 @@ Features:
   inline: "{{prime.generate_plan.value}}"
   validate: true
 ```
+
+When neither `outputs:` nor a child `interface:` declares outputs, the entire child `prime` subtree is exposed at `prime.<use_name>.<child_effect>.value` (full-namespace mode).
 
 ### Reflector
 
@@ -408,7 +532,30 @@ Extends orchestrations beyond model invocations. Tool effects invoke external sy
     output: "./output/video.mp4"
 ```
 
-Built-in providers: `ffmpeg`, `comfyui`
+69 built-in providers, organised by purpose:
+
+| Group | Providers |
+| --- | --- |
+| Time / utility | `clock`, `math`, `regex`, `json`, `uuid`, `hash`, `base64`, `hex` |
+| Filesystem / data | `fs`, `csv`, `tar`, `zip`, `gzip` |
+| Internet | `http`, `web_search`, `web_fetch`, `webhook`, `wikipedia`, `rss`, `weather` |
+| Browser automation | `playwright`, `screenshot` |
+| Communication | `email_smtp`, `slack`, `discord` |
+| Productivity SaaS | `github`, `jira`, `linear`, `notion`, `gcalendar`, `gdrive` |
+| Storage / cloud | `s3` (tool variant) |
+| Audio / image / video | `ffmpeg`, `comfyui`, `imagemagick`, `exiftool`, `ocr`, `yt_dlp` |
+| PDF / docs | `pdf_extract`, `pdf_render`, `pandoc`, `mediainfo` |
+| Embeddings / RAG | `embed`, `rerank`, `vector_search` |
+| Code / dev | `git`, `ripgrep`, `pytest`, `linter`, `gh`, `docker`, `kubectl` |
+| Sandboxed exec | `python_eval`, `shell` (allowlist-gated) |
+| Text processing | `awk`, `sed`, `diff_patch` |
+| Network | `dns`, `whois`, `ping`, `traceroute`, `port_check` |
+| System info | `system_info`, `process_list`, `env_vars` |
+| Crypto / encoding | `gpg` |
+| XML / HTML | `xml`, `html_extract` |
+| Archives / containers | `7z` |
+
+Plugins that depend on optional PyPI packages or external binaries lazy-import. `cof doctor` reports each one's readiness; `pip install circuitry-cof[<plugin>]` (e.g. `[playwright]`, `[github]`, `[embed]`) pulls the deps the plugin needs.
 
 ## Interfaces
 
@@ -466,21 +613,22 @@ Available inside loop body templates:
 
 ## Bundled Orchestrations
 
-Circuitry ships with ready-to-run orchestrations. Browse with `cof list`, inspect with `cof info`, and eject with `cof eject`.
+Circuitry ships with ready-to-run orchestrations under `src/circuitry/curation/`, organised by purpose. Browse with `cof list`, inspect with `cof info`, and eject with `cof eject`.
 
 ```bash
-cof list                           # see all
-cof list --category example        # filter by category
-cof info hello                     # details + source preview
-cof eject article-summarizer       # copy to local for editing
+cof list                                   # everything
+cof list --category recipes                # filter to a category
+cof info learn/hello                       # details + source preview
+cof eject recipes/article_summarizer       # copy to local for editing
 ```
 
-Categories:
-- **example** — hello (simplest orchestration)
-- **utility** — article-summarizer
-- **creative** — comic-strip (multi-step image generation)
-- **tooling** — meta-orchestrator, orchestration-improver, orchestration-improver-judge
-- **template** — one per primitive type (prompt, loop, conditional, dynamic, composition, reflector)
+Categories (slash-delimited; the prefix is the directory):
+
+- **`learn/`** — single-primitive demonstrations, one concept per file (good first read).
+- **`utilities/`** — composable, single-output orchestrations meant to be called from other orchestrations via `use:` (e.g. `utilities/critique`, `utilities/summarize`).
+- **`patterns/`** — multi-primitive composition templates (kitchen-sink, critique → refine, parallel → judge, classify → route).
+- **`recipes/`** — full real-world workflows (`recipes/article_summarizer`, `recipes/comic_strip`).
+- **`agents/`** — orchestrations that build or improve other orchestrations (`agents/improver`, `agents/meta_orchestrator`).
 
 ## Programmatic API
 
@@ -509,19 +657,22 @@ See `docs/api-reference.md` for signatures and integration guidance.
 ```
 Orchestration YAML
        |
-    Compiler ──> Definition Objects
+    Compiler ──> Definition Objects ──> Allowlist + Preflight Gates
        |
-    Runtime ──> Effect Execution ──> State Writes
+    Runtime ──> Effect Execution ──> State Writes ──> on_effect_complete hooks
        |              |
     Store        Adapter Layer ──> Model Provider
-  (feedback)
+  (feedback)        Tool Plugins ──> external systems
+                    Runtime Plugins ──> persistence / observability
 ```
 
-- **Compiler** — parses YAML into typed definition objects with JSON Schema validation
-- **Runtime** — executes definitions, manages state feedback between effects
-- **Store** — hierarchical state with deterministic path resolution
-- **Adapters** — normalize provider transport (Ollama, OpenAI, Anthropic, LiteLLM)
-- **Plugins** — tool effect providers (ffmpeg, ComfyUI) and runtime lifecycle hooks
+- **Compiler** — parses YAML into typed definition objects, validates against a Draft-07 JSON Schema.
+- **Allowlist + Preflight** — gates referenced extensions before any LLM call: allowlists enforce the per-environment surface; preflight invokes each extension's `check()` to verify deps / binaries / env / endpoints.
+- **Runtime** — executes definitions, manages state feedback between effects, fires lifecycle hooks (`on_run_start` / `on_effect_complete` / `on_run_success|failure`).
+- **Store** — hierarchical state with deterministic path resolution.
+- **Adapters** — 24 in-tree, behind one `Adapter` Protocol. Major SaaS LLMs, self-hosted servers (vllm, llama.cpp, LM Studio), aggregator routes (openrouter, litellm), and the MCP `host_claude` adapter that lets a host Claude session drive an orchestration.
+- **Tool plugins** — 69 in-tree, behind one `ToolPlugin` Protocol. Stdlib utilities, subprocess wrappers, SDK-driven integrations, and sandboxed `python_eval` / `shell`.
+- **Runtime plugins** — 30 in-tree, behind one `RuntimePlugin` Protocol. SQL persistence (B-prime schema across 7 dialects), document / KV / object stores, append-log, pub/sub, observability (OpenTelemetry, Sentry, Datadog, Honeycomb, Prometheus, Loki, CloudWatch).
 
 ## Design Principles
 
