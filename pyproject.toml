@@ -104,6 +104,21 @@ duckdb = ["duckdb>=0.9"]
 mssql = ["pyodbc>=5.0"]
 clickhouse = ["clickhouse-connect>=0.7"]
 
+# Document / KV / object / append-log persistence runtime plugins.
+# jsonl-file uses stdlib only (no extra required).
+mongodb = ["pymongo>=4.0"]
+dynamodb = ["boto3>=1.28"]
+firestore = ["google-cloud-firestore>=2.13"]
+couchdb = ["requests>=2.28"]
+elasticsearch = ["elasticsearch>=8.10"]
+opensearch = ["opensearch-py>=2.4"]
+redis = ["redis>=5.0"]
+memcached = ["pymemcache>=4.0"]
+"s3-runtime" = ["boto3>=1.28"]
+gcs = ["google-cloud-storage>=2.10"]
+"azure-blob" = ["azure-storage-blob>=12.18", "azure-identity>=1.15"]
+r2 = ["boto3>=1.28"]
+
 # Aggregate: pulls in every tool extra from this batch.
 tools = [
     "dnspython>=2.4",
