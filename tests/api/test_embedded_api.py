@@ -17,7 +17,7 @@ from circuitry import (
     validate_orchestration,
 )
 from circuitry.cli.app import app
-from circuitry.cli.config import find_config_path, load_config
+from circuitry.cli.config import find_config_path, load_config, resolve_config
 
 runner = CliRunner()
 
@@ -67,7 +67,11 @@ effects:
     )
     assert cli_result.exit_code == 0
     cli_state = json.loads(cli_out.read_text(encoding="utf-8"))
-    cfg = load_config(find_config_path(explicit_path=None))
+    # ``cof run`` builds its CircuitryConfig via the layered
+    # ``resolve_config`` (sane defaults + global + project + env), but
+    # ``load_config`` only reads the file. Use ``resolve_config`` here
+    # so the embedded API call sees the same shape as the CLI did.
+    cfg = resolve_config(explicit_path=None)
 
     api_result = run_orchestration(
         orchestration_path=orch,

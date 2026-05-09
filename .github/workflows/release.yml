@@ -1,0 +1,166 @@
+name: release
+
+# Triggered by pushing a semver tag (``v0.1.0``, ``v1.2.3``).
+# Tag the release commit on the main branch:
+#
+#     git tag v0.1.0
+#     git push origin v0.1.0
+#
+# The workflow runs the full test suite, builds the wheel + sdist,
+# publishes to PyPI via Trusted Publishing (OIDC — no secrets in this
+# repo), and creates a GitHub Release with auto-generated notes.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+rc[0-9]+"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test before release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[tools]"
+          pip install -r requirements-dev.txt
+      - name: Run tests
+        run: pytest -q -m 'not integration'
+
+  verify-version:
+    name: Verify tag matches pyproject version
+    runs-on: ubuntu-latest
+    needs: test
+    outputs:
+      version: ${{ steps.extract.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: extract
+        name: Compare git tag to pyproject.toml version
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          # tomllib lives in stdlib for Python 3.11+; the runner has
+          # 3.x already so this is portable.
+          py_version="$(python3 -c 'import tomllib, sys; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          echo "tag=$tag"
+          echo "pyproject=$py_version"
+          if [[ "$tag" != "$py_version" ]]; then
+            echo "::error::tag $tag does not match pyproject.toml version $py_version"
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build wheel + sdist
+    runs-on: ubuntu-latest
+    needs: verify-version
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install build
+        run: python -m pip install --upgrade pip build
+      - name: Build distributions
+        run: python -m build
+      - name: Inspect artifact
+        run: |
+          ls -la dist/
+          python -m pip install --upgrade twine
+          python -m twine check dist/*
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: pypi
+      url: https://pypi.org/p/circuitry-cof
+    permissions:
+      # Required for PyPI Trusted Publishing (OIDC). One-time setup
+      # at https://pypi.org/manage/account/publishing/ — point a
+      # trusted publisher at this repo + this workflow file.
+      id-token: write
+    steps:
+      - name: Download dist
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # No api token argument — relies on OIDC trusted publishing.
+          # If trusted publishing is not yet configured on PyPI, this
+          # step will fail with a clear "trusted publisher not found"
+          # message.
+          packages-dir: dist/
+          skip-existing: false
+
+  github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [publish-pypi, verify-version]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so previous-tag lookup works
+      - name: Download dist
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          version="${{ needs.verify-version.outputs.version }}"
+          # Pull the section between "## [<version>]" and the next "## [".
+          notes_file="$(mktemp)"
+          if grep -q "^## \[$version\]" CHANGELOG.md; then
+            awk -v ver="$version" '
+              $0 ~ "^## \\[" ver "\\]" { printing=1; next }
+              printing && /^## \[/ { exit }
+              printing { print }
+            ' CHANGELOG.md > "$notes_file"
+          else
+            echo "(No CHANGELOG section for v$version yet — see commit history.)" > "$notes_file"
+          fi
+          {
+            echo "notes_file=$notes_file"
+          } >> "$GITHUB_OUTPUT"
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${{ needs.verify-version.outputs.version }}"
+          # Pre-release tags include 'rc'; mark them so install
+          # tooling treats them appropriately.
+          prerelease_flag=""
+          if [[ "$version" == *"rc"* ]]; then
+            prerelease_flag="--prerelease"
+          fi
+          gh release create "v$version" \
+            --title "v$version" \
+            --notes-file "${{ steps.changelog.outputs.notes_file }}" \
+            $prerelease_flag \
+            dist/*

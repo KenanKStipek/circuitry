@@ -165,7 +165,9 @@ def test_gen_format_json(tmp_path: Path):
 
 def test_gen_format_toon(tmp_path: Path):
     """gen --format toon should produce valid TOON orchestration file."""
-    from toon_format import decode
+    decode = pytest.importorskip(
+        "toon_format", reason="toon-format optional extra not installed"
+    ).decode
 
     orch_name = str(tmp_path / "bot")
     with patch("circuitry.cli.app.run", _make_fake_run()):

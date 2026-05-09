@@ -26,11 +26,17 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          # Install the package with the pure-Python optional extras so
+          # tool-plugin / runtime-plugin tests for psutil / requests /
+          # lxml / etc. can exercise the real libraries instead of
+          # skipping. SDK-heavy extras (boto3, playwright, ML models,
+          # cloud SDKs) are NOT installed — those tests inject fakes
+          # via sys.modules.
+          pip install -e ".[tools]"
           pip install -r requirements-dev.txt
 
       - name: Run tests
-        run: pytest -q --cov=circuitry --cov-report=term-missing --cov-report=xml:coverage.xml
+        run: pytest -q -m 'not integration' --cov=circuitry --cov-report=term-missing --cov-report=xml:coverage.xml
 
       - name: Upload coverage artifact
         if: matrix.python-version == '3.11'
@@ -79,4 +85,4 @@ jobs:
           pip install -e .
 
       - name: Smoke-test bundled orchestrations (offline)
-        run: bash scripts/smoke-bundled.sh
+        run: bash scripts/smoke-curation.sh

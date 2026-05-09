@@ -36,7 +36,10 @@ VALID_JSON = json.dumps(VALID_ORCH, indent=2)
 
 @pytest.fixture()
 def valid_toon() -> str:
-    from toon_format import encode
+    encode = pytest.importorskip(
+        "toon_format",
+        reason="toon-format optional extra not installed",
+    ).encode
 
     return encode(VALID_ORCH)
 
@@ -117,7 +120,9 @@ def test_json_non_dict_root(tmp_path: Path) -> None:
 
 
 def test_toon_non_dict_root(tmp_path: Path) -> None:
-    from toon_format import encode
+    encode = pytest.importorskip(
+        "toon_format", reason="toon-format optional extra not installed"
+    ).encode
 
     toon_content = encode([1, 2, 3])
     path = _write(tmp_path, "orch.toon", toon_content)
@@ -149,7 +154,9 @@ def test_serialize_json() -> None:
 
 
 def test_serialize_toon() -> None:
-    from toon_format import decode
+    decode = pytest.importorskip(
+        "toon_format", reason="toon-format optional extra not installed"
+    ).decode
 
     result = serialize_orchestration(VALID_ORCH, "toon")
     parsed = decode(result)
@@ -169,6 +176,9 @@ def test_serialize_roundtrip_json(tmp_path: Path) -> None:
 
 
 def test_serialize_roundtrip_toon(tmp_path: Path) -> None:
+    pytest.importorskip(
+        "toon_format", reason="toon-format optional extra not installed"
+    )
     serialized = serialize_orchestration(VALID_ORCH, "toon")
     path = _write(tmp_path, "rt.toon", serialized)
     loaded = load_orchestration_file(path)

@@ -175,6 +175,9 @@ def test_fetch_json_orchestration_asset(tmp_path: Path) -> None:
 
 
 def test_fetch_toon_orchestration_asset(tmp_path: Path) -> None:
+    pytest.importorskip(
+        "toon_format", reason="toon-format optional extra not installed"
+    )
     lib_root = tmp_path / "library"
     config_path = tmp_path / "config.json"
     out_path = tmp_path / "out.toon"
