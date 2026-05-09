@@ -3,9 +3,25 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from .base import ToolPlugin
+from .base64 import Base64Plugin
+from .clock import ClockPlugin
 from .comfyui import ComfyUIPlugin
+from .csv import CsvPlugin
+from .email_smtp import EmailSmtpPlugin
+from .env_vars import EnvVarsPlugin
 from .ffmpeg import FfmpegPlugin
+from .fs import FsPlugin
+from .gzip import GzipPlugin
+from .hash import HashPlugin
+from .hex import HexPlugin
 from .http import HttpPlugin
+from .json import JsonPlugin
+from .math import MathPlugin
+from .port_check import PortCheckPlugin
+from .regex import RegexPlugin
+from .tar import TarPlugin
+from .uuid import UuidPlugin
+from .zip import ZipPlugin
 
 PluginBuilder = Callable[[dict[str, Any]], ToolPlugin]
 
@@ -25,14 +41,98 @@ def _build_comfyui(cfg: dict[str, Any]) -> ToolPlugin:
 
 
 def _build_http(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg  # http has no per-plugin config; all options come per-effect via params
+    del cfg
     return HttpPlugin()
+
+
+# Stdlib-only tool plugins — none of these consume per-plugin config
+# from runtime.plugins.<name>; behaviour is fully controlled per-effect
+# via params. Builders ignore cfg.
+def _build_clock(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return ClockPlugin()
+
+
+def _build_math(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return MathPlugin()
+
+
+def _build_regex(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return RegexPlugin()
+
+
+def _build_json(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return JsonPlugin()
+
+
+def _build_fs(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return FsPlugin()
+
+
+def _build_csv(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return CsvPlugin()
+
+
+def _build_email_smtp(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return EmailSmtpPlugin()
+
+
+def _build_tar(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return TarPlugin()
+
+
+def _build_zip(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return ZipPlugin()
+
+
+def _build_gzip(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return GzipPlugin()
+
+
+def _build_port_check(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return PortCheckPlugin()
+
+
+def _build_env_vars(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return EnvVarsPlugin()
+
+
+def _build_hash(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return HashPlugin()
+
+
+def _build_base64(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return Base64Plugin()
+
+
+def _build_hex(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return HexPlugin()
+
+
+def _build_uuid(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg; return UuidPlugin()
 
 
 PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "ffmpeg": _build_ffmpeg,
     "comfyui": _build_comfyui,
     "http": _build_http,
+    # Stdlib-only catalog
+    "clock": _build_clock,
+    "math": _build_math,
+    "regex": _build_regex,
+    "json": _build_json,
+    "fs": _build_fs,
+    "csv": _build_csv,
+    "email_smtp": _build_email_smtp,
+    "tar": _build_tar,
+    "zip": _build_zip,
+    "gzip": _build_gzip,
+    "port_check": _build_port_check,
+    "env_vars": _build_env_vars,
+    "hash": _build_hash,
+    "base64": _build_base64,
+    "hex": _build_hex,
+    "uuid": _build_uuid,
 }
 
 
@@ -41,7 +141,7 @@ def _supported_names() -> tuple[str, ...]:
 
 
 # Back-compat alias.
-SUPPORTED_PLUGINS = ("ffmpeg", "comfyui", "http")
+SUPPORTED_PLUGINS = tuple(_supported_names())
 
 
 def build_plugin(*, plugin_name: str, runtime: dict[str, Any]) -> ToolPlugin:
