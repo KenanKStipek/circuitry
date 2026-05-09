@@ -37,7 +37,10 @@ class AnthropicAdapter:
 
         if not api_key:
             raise RuntimeError(
-                "Anthropic API key not found. Set ANTHROPIC_API_KEY environment variable."
+                "Anthropic API key not found. Set ANTHROPIC_API_KEY in the environment "
+                "(recommended: ~/.config/circuitry/.env), or set "
+                "`runtime.adapters.anthropic.api_key` in your config. "
+                "Run `cof doctor` to verify."
             )
 
         url = f"{self.base_url.rstrip('/')}/v1/messages"

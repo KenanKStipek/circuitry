@@ -35,7 +35,10 @@ class OpenAIAdapter:
 
         if not api_key:
             raise RuntimeError(
-                "OpenAI API key not found. Set OPENAI_API_KEY environment variable."
+                "OpenAI API key not found. Set OPENAI_API_KEY in the environment "
+                "(recommended: ~/.config/circuitry/.env), or set "
+                "`runtime.adapters.openai.api_key` in your config. "
+                "Run `cof doctor` to verify."
             )
 
         url = f"{self.base_url.rstrip('/')}/chat/completions"

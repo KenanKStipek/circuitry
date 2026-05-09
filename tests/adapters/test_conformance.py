@@ -514,5 +514,5 @@ def test_ollama_list_models_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
 
     adapter = OllamaAdapter()
-    with pytest.raises(RuntimeError, match="curl failed"):
+    with pytest.raises(RuntimeError, match=r"curl exit 7.*not reachable.*cof doctor"):
         adapter.list_models()

@@ -49,8 +49,19 @@ class OllamaAdapter:
         if proc.returncode != 0:
             cmd_str = " ".join(shlex.quote(c) for c in cmd)
             err = (proc.stderr or proc.stdout or "").strip()
+            # curl exit 7 = couldn't connect; 28 = timeout. Surface a hint that
+            # names the next step instead of forcing the user to decode curl.
+            hint = ""
+            if proc.returncode in (7, 28):
+                hint = (
+                    f" Ollama at {self.base_url} is not reachable. "
+                    "Start it (`ollama serve`), or set "
+                    "`runtime.adapters.ollama.base_url` in your config. "
+                    "Run `cof doctor` to verify connectivity."
+                )
             raise RuntimeError(
-                f"curl failed (exit {proc.returncode}). cmd={cmd_str}. error={err}"
+                f"Ollama request failed (curl exit {proc.returncode}): {err}.{hint}"
+                f" cmd={cmd_str}"
             )
 
         try:
