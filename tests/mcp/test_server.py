@@ -27,7 +27,17 @@ def fresh_manager(monkeypatch: pytest.MonkeyPatch) -> RunManager:
         worker_poll_interval=0.05,
     )
     monkeypatch.setattr(srv, "_manager", mgr)
-    return mgr
+    yield mgr
+    # Cancel any runs still alive: their daemon worker thread is fine, but a
+    # tree-flow orchestration leaves non-daemon ThreadPoolExecutor workers
+    # blocked on response queues, which would hang interpreter shutdown.
+    for run_id in list(mgr._runs):
+        run = mgr._runs[run_id]
+        if not run.status.is_terminal:
+            try:
+                mgr.cancel_run(run_id)
+            except KeyError:
+                pass
 
 
 def _wait_until(predicate, timeout: float = 2.0, interval: float = 0.01) -> bool:

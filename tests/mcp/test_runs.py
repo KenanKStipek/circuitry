@@ -25,12 +25,23 @@ def mgr() -> RunManager:
     # Tighter quiesce for fast tests; still covers the slow-branch case
     # (test_quiescence_returns_after_all_branches_settle uses a sleep
     # well beyond this threshold).
-    return RunManager(
+    m = RunManager(
         quiesce_seconds=0.02,
         quiesce_max_wait_seconds=2.0,
         cancel_join_timeout=2.0,
         worker_poll_interval=0.05,
     )
+    yield m
+    # Cancel any runs still alive: their daemon worker thread is fine, but a
+    # tree-flow orchestration leaves non-daemon ThreadPoolExecutor workers
+    # blocked on response queues, which would hang interpreter shutdown.
+    for run_id in list(m._runs):
+        run = m._runs[run_id]
+        if not run.status.is_terminal:
+            try:
+                m.cancel_run(run_id)
+            except KeyError:
+                pass
 
 
 def _wait_until(predicate, timeout: float = 2.0, interval: float = 0.01) -> bool:
