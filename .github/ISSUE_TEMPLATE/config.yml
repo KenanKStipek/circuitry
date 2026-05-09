@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/kenankstipek/circuitry/discussions
+    about: Ask a question, share an orchestration, or discuss design ideas in GitHub Discussions.
+  - name: Security report
+    url: https://github.com/kenankstipek/circuitry/blob/main/SECURITY.md
+    about: Please report security issues privately — see SECURITY.md for the disclosure process.

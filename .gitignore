@@ -71,8 +71,22 @@ config.json
 # ================================
 scratch/
 tmp/
+input.json
+my_orchestration.yml
+*.scratch.yml
 
 # ================================
 # Documentation sources (internal)
 # ================================
 readme/
+
+# ================================
+# BMad workspace (internal — not part of public repo)
+# ================================
+_bmad/
+_bmad-output/
+
+# ================================
+# Internal planning (not part of public repo)
+# ================================
+_planning/
