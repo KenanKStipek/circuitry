@@ -94,6 +94,16 @@ embed = ["sentence-transformers>=2.2"]
 rerank = ["sentence-transformers>=2.2"]
 vector_search = ["chromadb>=0.4"]
 
+# SQL B-prime persistence runtime plugins. sqlite uses stdlib so no
+# extra is required. The remaining six dialects each ship as their own
+# extra; install only what your deployment needs.
+postgres = ["psycopg2-binary>=2.9"]
+cockroachdb = ["psycopg2-binary>=2.9"]
+mysql = ["mysql-connector-python>=8.0"]
+duckdb = ["duckdb>=0.9"]
+mssql = ["pyodbc>=5.0"]
+clickhouse = ["clickhouse-connect>=0.7"]
+
 # Aggregate: pulls in every tool extra from this batch.
 tools = [
     "dnspython>=2.4",

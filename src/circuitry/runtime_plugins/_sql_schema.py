@@ -40,12 +40,16 @@ class SqlDialect:
         timestamp_type: column type for ``started_at`` / ``ended_at``.
         placeholder: parameter binding marker (``"?"`` for sqlite/duckdb,
             ``"%s"`` for postgres).
+        pre_ddl: optional statements run before the table DDL — e.g.
+            DuckDB needs ``CREATE SEQUENCE`` before the auto-increment
+            column references it via ``DEFAULT nextval(...)``.
     """
 
     autoincrement: str
     json_type: str
     timestamp_type: str
     placeholder: str
+    pre_ddl: tuple[str, ...] = ()
 
 
 SQLITE = SqlDialect(
@@ -61,6 +65,61 @@ POSTGRES = SqlDialect(
     json_type="JSONB",
     timestamp_type="TIMESTAMPTZ",
     placeholder="%s",
+)
+
+
+# CockroachDB is wire-compatible with PostgreSQL — same dialect.
+COCKROACHDB = POSTGRES
+
+
+MYSQL = SqlDialect(
+    autoincrement="BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY",
+    json_type="JSON",
+    timestamp_type="TIMESTAMP NULL",
+    placeholder="%s",
+)
+
+
+# DuckDB lacks AUTOINCREMENT but supports implicit ROWID; using
+# ``BIGINT PRIMARY KEY DEFAULT nextval('seq')`` requires a separate
+# CREATE SEQUENCE. The simplest portable approach is to lean on
+# DuckDB's ``DEFAULT`` for sequences via the embedded
+# ``next_unique_id()`` builtin; in practice we use a pre-assigned
+# uuid-style id from the application side (here: just an INTEGER PK
+# without auto-increment, populated by the writer if needed). For the
+# current B-prime use case, we let DuckDB auto-assign a ROWID and let
+# the JDBC-style INTEGER PK be NULL-able since each row has a unique
+# (run_id, state_path) tuple.
+DUCKDB = SqlDialect(
+    autoincrement="BIGINT PRIMARY KEY DEFAULT nextval('effect_results_id_seq')",
+    json_type="JSON",
+    timestamp_type="TIMESTAMP",
+    placeholder="?",
+    pre_ddl=("CREATE SEQUENCE IF NOT EXISTS effect_results_id_seq",),
+)
+
+
+MSSQL = SqlDialect(
+    # SQL Server: IDENTITY(1,1) for auto-increment; NVARCHAR(MAX) for
+    # JSON-as-string (SQL Server has JSON functions but no JSON column
+    # type until 2025). DATETIME2 for timestamps.
+    autoincrement="BIGINT IDENTITY(1,1) PRIMARY KEY",
+    json_type="NVARCHAR(MAX)",
+    timestamp_type="DATETIME2",
+    placeholder="?",
+)
+
+
+# ClickHouse uses MergeTree engines and lacks traditional autoincrement.
+# Its plugin file does not use the shared DDL builders — kept here for
+# documentation and consistency with the other dialect references.
+CLICKHOUSE = SqlDialect(
+    autoincrement="UInt64",  # plugin-supplied; not a DB-managed sequence
+    json_type="String",  # JSON-encoded text; ClickHouse has a JSON type
+                          # in newer versions but MergeTree storage is
+                          # simpler with String for portability.
+    timestamp_type="DateTime64(3)",
+    placeholder="%s",  # clickhouse-connect uses %s-style positional binding
 )
 
 
