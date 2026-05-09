@@ -41,6 +41,7 @@ from ..core.store import Store, build_persistence_backend
 from .config import CircuitryConfig
 from .effective_settings import EffectiveSettings, resolve_effective_settings
 from .orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
+from .redaction import redact
 
 
 @dataclass(frozen=True)
@@ -130,11 +131,14 @@ def run(req: RunRequest) -> RunResult:
             "completed_at": None,
         }
 
+        # Redact credential-bearing fields before embedding in state, since
+        # state is serialized to --out, --json, --live-state, and last-run.json.
+        # Live adapter calls keep using the un-redacted `effective.runtime`.
         state["runtime"]["effective_settings"] = {
             "model": effective.model,
             "adapter": effective.adapter,
             "plugins": effective.plugins,
-            "runtime": effective.runtime,
+            "runtime": redact(effective.runtime),
             "sources": effective.sources,
         }
         if req.shared_library_metadata is not None:

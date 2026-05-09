@@ -1,3 +1,12 @@
+"""Resolve the merged adapter/model/plugin/runtime configuration for a run.
+
+Note: the resulting `EffectiveSettings.runtime` dict is the *live* config used
+to build adapters, persistence backends, and tool plugins, so credential
+fields are intentionally NOT redacted here. The runtime snapshot embedded in
+`state["runtime"]["effective_settings"]` is redacted at the embed site (see
+`runtime_shim.run` and `circuitry.cli.redaction`).
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

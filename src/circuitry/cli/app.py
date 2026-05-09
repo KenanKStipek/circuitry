@@ -16,6 +16,7 @@ from rich.table import Table
 from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, find_config_path, load_config, resolve_config
 from .doctor import register_doctor
 from .orchestration_loader import serialize_orchestration
+from .redaction import REDACTED, redact_env_pairs
 from .registry import find_entry, load_index, resolve_bundled
 from .runtime_shim import RunRequest, inspect_orchestration, run, validate
 from .setup import register_setup
@@ -173,6 +174,12 @@ RUN_EPILOG = """
 
 [bold]Resolution order:[/bold] local file path > bundled orchestration name.
 Run [bold]cof list[/bold] to see available bundled orchestrations.
+
+[yellow]Note:[/yellow] do not pass secrets via -e KEY=VALUE; use environment
+variables or a config file instead. Values for keys matching common secret
+patterns (api_key, token, password, secret, etc.) are redacted before being
+written to ~/.config/circuitry/last-run.json, and `--last` will refuse to
+replay redacted runs.
 """
 
 
@@ -242,6 +249,20 @@ def run_cmd(
         live_state = Path(stashed["live_state"]) if stashed.get("live_state") else None
         env_vars = stashed.get("env_vars")
         tail = stashed.get("tail", False)
+
+        # Refuse to replay if the previous run stashed redacted secrets — the
+        # sentinel string would silently flow into the new run as a literal.
+        if env_vars and any(
+            isinstance(pair, str) and pair.endswith(f"={REDACTED}") for pair in env_vars
+        ):
+            console.print(
+                "[red]Error:[/red] previous run included redacted secrets in -e values."
+            )
+            console.print(
+                "[dim]Re-run explicitly with the secret supplied via env var or"
+                " config file (recommended), or via -e for this invocation.[/dim]"
+            )
+            raise typer.Exit(code=1)
 
     if orchestration is None:
         console.print("[red]Error:[/red] Missing orchestration. Use --last or provide a path/name.")
@@ -329,7 +350,9 @@ def run_cmd(
                 console.print(f"[bold]State written:[/bold] {out}")
         raise typer.Exit(code=1)
 
-    # Stash for --last (only on success, skip if replaying via --last)
+    # Stash for --last (only on success, skip if replaying via --last).
+    # Env-var values for credential-shaped keys are redacted before disk write —
+    # see RUN_EPILOG and circuitry.cli.redaction.
     if not last:
         _save_last_run({
             "orchestration": str(orch_path),
@@ -343,7 +366,7 @@ def run_cmd(
             "quiet": quiet,
             "verbose": verbose,
             "live_state": str(live_state) if live_state else None,
-            "env_vars": env_vars,
+            "env_vars": redact_env_pairs(env_vars),
             "tail": tail,
         })
 
@@ -746,7 +769,10 @@ def eject_cmd(
     console.print(f"[dim]Edit freely — this is your local copy. Run with: cof run {dest}[/dim]")
 
 
-@app.command("validate", help="Validate an orchestration file against the schema.")
+@app.command(
+    "validate",
+    help="Validate an orchestration file against the schema. (alias: check)",
+)
 def validate_cmd(
     orchestration: Path = typer.Argument(
         ..., exists=True, dir_okay=False, readable=True,
@@ -759,7 +785,7 @@ def validate_cmd(
     _do_validate(orchestration, json_out)
 
 
-@app.command("check", help="Validate an orchestration file against the schema.")
+@app.command("check", help="Validate an orchestration file against the schema. (alias of `validate`)")
 def check_cmd(
     orchestration: Path = typer.Argument(
         ..., exists=True, dir_okay=False, readable=True,
@@ -995,11 +1021,19 @@ def init_cmd():
 
 @app.command("version", help="Print version.")
 def version_cmd():
-    try:
-        from importlib.metadata import version as pkg_version
-        ver = pkg_version("circuitry")
-    except Exception:
-        ver = "0.1.0"
+    from importlib.metadata import PackageNotFoundError, version as pkg_version
+
+    # Distribution name is `circuitry-cof` on PyPI; the legacy `circuitry`
+    # lookup is kept as a fallback for editable installs that pre-date the
+    # rename.
+    for dist in ("circuitry-cof", "circuitry"):
+        try:
+            ver = pkg_version(dist)
+            break
+        except PackageNotFoundError:
+            continue
+    else:
+        ver = "0.1.0+unknown"
     console.print(f"Circuitry {ver}")
 
 
