@@ -17,7 +17,7 @@ from circuitry import (
     validate_orchestration,
 )
 from circuitry.cli.app import app
-from circuitry.cli.config import find_config_path, load_config, resolve_config
+from circuitry.cli.config import resolve_config
 
 runner = CliRunner()
 

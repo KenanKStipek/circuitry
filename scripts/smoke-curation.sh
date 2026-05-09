@@ -80,11 +80,15 @@ while IFS= read -r -d '' orch; do
     fi
 
     printf 'check %-40s ' "$name"
-    if "$COF" check "$orch" >/dev/null 2>&1; then
+    # --skip-preflight: this is a structure-only smoke test; we don't
+    # require the binaries / hosts / API keys that the orchestrations
+    # would need at run time. preflight readiness is exercised by
+    # `cof doctor`.
+    if "$COF" check "$orch" --skip-preflight >/dev/null 2>&1; then
         printf '[ok]\n'
     else
         printf '[FAIL]\n'
-        "$COF" check "$orch" || true
+        "$COF" check "$orch" --skip-preflight || true
         failures=$((failures + 1))
     fi
     checked=$((checked + 1))

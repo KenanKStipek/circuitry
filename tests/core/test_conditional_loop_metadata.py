@@ -243,9 +243,8 @@ def test_parallel_loop_max_concurrency_respected() -> None:
     """max_concurrency limits the number of simultaneously running workers."""
     import threading
 
-    active_count: list[int] = []
     peak_active = [0]
-    lock = threading.Lock()
+    threading.Lock()
     sem_lock = threading.Lock()
     active = [0]
 

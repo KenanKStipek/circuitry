@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,7 +8,6 @@ import pytest
 
 from circuitry.cli.config import (
     SANE_DEFAULTS,
-    CircuitryConfig,
     _apply_env_vars,
     _deep_merge,
     resolve_config,

@@ -20,7 +20,6 @@ Params:
 from __future__ import annotations
 
 import importlib.util
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -120,9 +119,13 @@ class S3ToolPlugin:
                 with open(Path(str(path)).expanduser(), "rb") as fh:
                     kwargs["Body"] = fh.read()
             else:
-                kwargs["Body"] = (
-                    content.encode("utf-8") if isinstance(content, str) else bytes(content)
-                )
+                # ``content`` was validated above to be exactly one of
+                # ``str``/``bytes``-compatible; the validation prevents
+                # None at this point.
+                if isinstance(content, str):
+                    kwargs["Body"] = content.encode("utf-8")
+                else:
+                    kwargs["Body"] = bytes(content)  # type: ignore[arg-type]
             client.put_object(**kwargs)
             value = {"bucket": bucket, "key": key}
 

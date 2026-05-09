@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, find_config_path, load_config, resolve_config
+from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, resolve_config
 from .doctor import register_doctor
 from .orchestration_loader import serialize_orchestration
 from .redaction import REDACTED, redact_env_pairs
@@ -129,15 +129,18 @@ def _do_validate(
     json_out: bool,
     *,
     config: Optional[Path] = None,
+    skip_preflight: bool = False,
 ) -> None:
     """Shared validation logic for validate and check commands."""
     if not json_out:
         _print_header("Circuitry · Validate")
     # Resolve config (incl. allowlist + env-var overlays) so allowlist
-    # enforcement runs alongside schema checks.
+    # enforcement runs alongside schema checks. ``skip_preflight``
+    # disables the dependency-readiness checks in offline CI / smoke
+    # contexts where binaries / hosts are not available.
     cfg = resolve_config(explicit_path=config)
     with console.status("[cyan]Validating…[/cyan]") if not json_out else nullcontext():
-        result = validate(orchestration, config=cfg)
+        result = validate(orchestration, config=cfg, skip_preflight=skip_preflight)
 
     if json_out:
         console.print_json(json.dumps(result, ensure_ascii=False))
@@ -696,7 +699,7 @@ def list_cmd(
     console.print(table)
     console.print()
     console.print("[dim]Run with:[/dim] cof run <name> [dim](e.g.[/dim] cof run hello -e name=World[dim])[/dim]")
-    console.print(f"[dim]Backends: [green]available[/green] [red]not detected[/red][/dim]")
+    console.print("[dim]Backends: [green]available[/green] [red]not detected[/red][/dim]")
 
 
 def _list_extensions(*, json_out: bool, config_path: Optional[Path]) -> None:
@@ -817,7 +820,7 @@ def info_cmd(
     example = entry.get("example")
     if example:
         console.print()
-        console.print(f"[bold]Example:[/bold]")
+        console.print("[bold]Example:[/bold]")
         console.print(f"  [cyan]{example}[/cyan]")
 
     # Show the actual orchestration YAML source
@@ -879,8 +882,12 @@ def validate_cmd(
     config: Optional[Path] = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
+    skip_preflight: bool = typer.Option(
+        False, "--skip-preflight",
+        help="Skip dependency-readiness checks; only verify structure / schema.",
+    ),
 ):
-    _do_validate(orchestration, json_out, config=config)
+    _do_validate(orchestration, json_out, config=config, skip_preflight=skip_preflight)
 
 
 @app.command("check", help="Validate an orchestration file against the schema. (alias of `validate`)")
@@ -895,8 +902,12 @@ def check_cmd(
     config: Optional[Path] = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
+    skip_preflight: bool = typer.Option(
+        False, "--skip-preflight",
+        help="Skip dependency-readiness checks; only verify structure / schema.",
+    ),
 ):
-    _do_validate(orchestration, json_out, config=config)
+    _do_validate(orchestration, json_out, config=config, skip_preflight=skip_preflight)
 
 
 @app.command("inspect", help="Show orchestration metadata.")

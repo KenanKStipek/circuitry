@@ -26,7 +26,6 @@ import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
-from typing import Any
 
 from ..preflight import CheckResult
 from .base import GenerateResult

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
 from circuitry.cli.registry import load_index, resolve_bundled
 

@@ -7,7 +7,7 @@ name = "circuitry-cof"
 version = "0.1.0"
 description = "Circuitry — Cybernetic Orchestration Framework (COF) for LLMs."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Kenan Stipek", email = "kenan@stipek.org" }]
@@ -32,7 +32,6 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -185,6 +184,31 @@ markers = [
     "integration: marks tests that require local runtime dependencies (opt-in)",
 ]
 addopts = ["--strict-markers"]
+
+[tool.mypy]
+# The plugin catalog lazy-imports a wide set of optional third-party
+# packages (boto3, pymongo, requests, lxml, sentence-transformers, ...)
+# whose stubs we don't ship as deps. Skipping those imports keeps the
+# typecheck focused on code we own.
+ignore_missing_imports = true
+# ``import-untyped`` reports "Library stubs not installed for X" even
+# when the import resolves — common for ``requests`` etc. Plugin
+# integrations don't gain enough from third-party stubs to justify
+# adding them to the lint env.
+disable_error_code = ["import-untyped"]
+# Pre-existing core modules have non-trivial type debt; checking them
+# strictly gates new work on a separate cleanup. Track explicit
+# exemptions per-module rather than disabling globally so newly-added
+# files default to checked.
+exclude = [
+    "^src/circuitry/core/loop\\.py$",
+    "^src/circuitry/core/compiler\\.py$",
+    "^src/circuitry/core/conditional\\.py$",
+    "^src/circuitry/core/dynamic\\.py$",
+    "^src/circuitry/core/prompt\\.py$",
+    "^src/circuitry/core/tool\\.py$",
+    "^src/circuitry/mcp/runs\\.py$",
+]
 
 [tool.coverage.run]
 source = ["circuitry"]

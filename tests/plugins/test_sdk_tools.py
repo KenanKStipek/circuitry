@@ -9,11 +9,8 @@ sentence-transformers / etc.
 from __future__ import annotations
 
 import importlib.util
-import json as _json
-import os
 import sys
 import types
-from dataclasses import dataclass
 from typing import Any
 
 import pytest

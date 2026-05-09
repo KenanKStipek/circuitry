@@ -101,276 +101,342 @@ def _build_http(cfg: dict[str, Any]) -> ToolPlugin:
 # from runtime.plugins.<name>; behaviour is fully controlled per-effect
 # via params. Builders ignore cfg.
 def _build_clock(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return ClockPlugin()
+    del cfg
+    return ClockPlugin()
 
 
 def _build_math(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return MathPlugin()
+    del cfg
+    return MathPlugin()
 
 
 def _build_regex(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return RegexPlugin()
+    del cfg
+    return RegexPlugin()
 
 
 def _build_json(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return JsonPlugin()
+    del cfg
+    return JsonPlugin()
 
 
 def _build_fs(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return FsPlugin()
+    del cfg
+    return FsPlugin()
 
 
 def _build_csv(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return CsvPlugin()
+    del cfg
+    return CsvPlugin()
 
 
 def _build_email_smtp(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return EmailSmtpPlugin()
+    del cfg
+    return EmailSmtpPlugin()
 
 
 def _build_tar(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return TarPlugin()
+    del cfg
+    return TarPlugin()
 
 
 def _build_zip(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return ZipPlugin()
+    del cfg
+    return ZipPlugin()
 
 
 def _build_gzip(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return GzipPlugin()
+    del cfg
+    return GzipPlugin()
 
 
 def _build_port_check(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return PortCheckPlugin()
+    del cfg
+    return PortCheckPlugin()
 
 
 def _build_env_vars(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return EnvVarsPlugin()
+    del cfg
+    return EnvVarsPlugin()
 
 
 def _build_hash(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return HashPlugin()
+    del cfg
+    return HashPlugin()
 
 
 def _build_base64(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return Base64Plugin()
+    del cfg
+    return Base64Plugin()
 
 
 def _build_hex(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return HexPlugin()
+    del cfg
+    return HexPlugin()
 
 
 def _build_uuid(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return UuidPlugin()
+    del cfg
+    return UuidPlugin()
 
 
 # Subprocess wrapper plugins. Each module exposes ``make_plugin()`` that
 # returns a configured GenericSubprocessTool (or a dedicated class for
 # the multi-mode / sandboxed cases).
 def _build_git(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _git_mod.make_plugin()
+    del cfg
+    return _git_mod.make_plugin()
 
 
 def _build_ripgrep(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _ripgrep_mod.make_plugin()
+    del cfg
+    return _ripgrep_mod.make_plugin()
 
 
 def _build_pytest(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _pytest_mod.make_plugin()
+    del cfg
+    return _pytest_mod.make_plugin()
 
 
 def _build_awk(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _awk_mod.make_plugin()
+    del cfg
+    return _awk_mod.make_plugin()
 
 
 def _build_sed(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _sed_mod.make_plugin()
+    del cfg
+    return _sed_mod.make_plugin()
 
 
 def _build_pandoc(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _pandoc_mod.make_plugin()
+    del cfg
+    return _pandoc_mod.make_plugin()
 
 
 def _build_mediainfo(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _mediainfo_mod.make_plugin()
+    del cfg
+    return _mediainfo_mod.make_plugin()
 
 
 def _build_imagemagick(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _imagemagick_mod.make_plugin()
+    del cfg
+    return _imagemagick_mod.make_plugin()
 
 
 def _build_exiftool(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _exiftool_mod.make_plugin()
+    del cfg
+    return _exiftool_mod.make_plugin()
 
 
 def _build_yt_dlp(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _yt_dlp_mod.make_plugin()
+    del cfg
+    return _yt_dlp_mod.make_plugin()
 
 
 def _build_sevenz(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _sevenz_mod.make_plugin()
+    del cfg
+    return _sevenz_mod.make_plugin()
 
 
 def _build_ping(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _ping_mod.make_plugin()
+    del cfg
+    return _ping_mod.make_plugin()
 
 
 def _build_traceroute(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _traceroute_mod.make_plugin()
+    del cfg
+    return _traceroute_mod.make_plugin()
 
 
 def _build_docker(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _docker_mod.make_plugin()
+    del cfg
+    return _docker_mod.make_plugin()
 
 
 def _build_kubectl(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _kubectl_mod.make_plugin()
+    del cfg
+    return _kubectl_mod.make_plugin()
 
 
 def _build_gh(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _gh_mod.make_plugin()
+    del cfg
+    return _gh_mod.make_plugin()
 
 
 def _build_linter(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _linter_mod.make_plugin()
+    del cfg
+    return _linter_mod.make_plugin()
 
 
 def _build_ocr(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _ocr_mod.make_plugin()
+    del cfg
+    return _ocr_mod.make_plugin()
 
 
 def _build_shell(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return ShellPlugin()
+    del cfg
+    return ShellPlugin()
 
 
 def _build_gpg(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _gpg_mod.GpgPlugin()
+    del cfg
+    return _gpg_mod.GpgPlugin()
 
 
 def _build_diff_patch(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _diff_patch_mod.DiffPatchPlugin()
+    del cfg
+    return _diff_patch_mod.DiffPatchPlugin()
 
 
 def _build_pdf_render(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _pdf_render_mod.PdfRenderPlugin()
+    del cfg
+    return _pdf_render_mod.PdfRenderPlugin()
 
 
 def _build_web_search(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _web_search_mod.WebSearchPlugin()
+    del cfg
+    return _web_search_mod.WebSearchPlugin()
 
 
 def _build_weather(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return _weather_mod.WeatherPlugin()
+    del cfg
+    return _weather_mod.WeatherPlugin()
 
 
 # PyPI-dep tool plugins. Lazy imports inside execute() — instantiation
 # never fails, so missing deps surface only when actually invoked or
 # when check() is called.
 def _build_dns(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return DnsPlugin()
+    del cfg
+    return DnsPlugin()
 
 
 def _build_whois(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return WhoisPlugin()
+    del cfg
+    return WhoisPlugin()
 
 
 def _build_pdf_extract(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return PdfExtractPlugin()
+    del cfg
+    return PdfExtractPlugin()
 
 
 def _build_xml(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return XmlPlugin()
+    del cfg
+    return XmlPlugin()
 
 
 def _build_html_extract(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return HtmlExtractPlugin()
+    del cfg
+    return HtmlExtractPlugin()
 
 
 def _build_system_info(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return SystemInfoPlugin()
+    del cfg
+    return SystemInfoPlugin()
 
 
 def _build_process_list(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return ProcessListPlugin()
+    del cfg
+    return ProcessListPlugin()
 
 
 def _build_wikipedia(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return WikipediaPlugin()
+    del cfg
+    return WikipediaPlugin()
 
 
 def _build_rss(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return RssPlugin()
+    del cfg
+    return RssPlugin()
 
 
 def _build_webhook(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return WebhookPlugin()
+    del cfg
+    return WebhookPlugin()
 
 
 def _build_web_fetch(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return WebFetchPlugin()
+    del cfg
+    return WebFetchPlugin()
 
 
 def _build_python_eval(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return PythonEvalPlugin()
+    del cfg
+    return PythonEvalPlugin()
 
 
 # SDK / cloud / browser / ML tool plugins. Lazy imports inside execute()
 # — the dataclass instantiation never fails, the dep error surfaces
 # at invocation or via check().
 def _build_linear(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return LinearPlugin()
+    del cfg
+    return LinearPlugin()
 
 
 def _build_slack(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return SlackPlugin()
+    del cfg
+    return SlackPlugin()
 
 
 def _build_discord(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return DiscordPlugin()
+    del cfg
+    return DiscordPlugin()
 
 
 def _build_github(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return GitHubPlugin()
+    del cfg
+    return GitHubPlugin()
 
 
 def _build_jira(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return JiraPlugin()
+    del cfg
+    return JiraPlugin()
 
 
 def _build_notion(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return NotionPlugin()
+    del cfg
+    return NotionPlugin()
 
 
 def _build_gcalendar(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return GCalendarPlugin()
+    del cfg
+    return GCalendarPlugin()
 
 
 def _build_gdrive(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return GDrivePlugin()
+    del cfg
+    return GDrivePlugin()
 
 
 def _build_s3_tool(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return S3ToolPlugin()
+    del cfg
+    return S3ToolPlugin()
 
 
 def _build_playwright(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return PlaywrightPlugin()
+    del cfg
+    return PlaywrightPlugin()
 
 
 def _build_screenshot(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return ScreenshotPlugin()
+    del cfg
+    return ScreenshotPlugin()
 
 
 def _build_embed(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return EmbedPlugin()
+    del cfg
+    return EmbedPlugin()
 
 
 def _build_rerank(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return RerankPlugin()
+    del cfg
+    return RerankPlugin()
 
 
 def _build_vector_search(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg; return VectorSearchPlugin()
+    del cfg
+    return VectorSearchPlugin()
 
 
 PLUGIN_REGISTRY: dict[str, PluginBuilder] = {

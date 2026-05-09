@@ -14,7 +14,6 @@ from .deepseek import DeepSeekAdapter
 from .fireworks import FireworksAdapter
 from .gemini import GeminiAdapter
 from .groq import GroqAdapter
-from .host_claude import HostClaudeAdapter
 from .huggingface_inference import HuggingFaceInferenceAdapter
 from .litellm import LiteLLMAdapter
 from .llamacpp import LlamaCppAdapter

@@ -285,10 +285,14 @@ class DynamicRuntime:
         _cb_running: Callable[[str, int], None] | None = None
         if tracker is not None:
             _n = name
-            cb_start = lambda _k=_n: tracker.on_start(_k)
-            cb_done = lambda line, _k=_n: tracker.on_done(_k, line)
-            cb_error = lambda line, _k=_n: tracker.on_error(_k, line)
-            _cb_running = lambda t, e, _k=_n: tracker.on_running(_k, t, e)
+            def cb_start(_k=_n):
+                return tracker.on_start(_k)
+            def cb_done(line, _k=_n):
+                return tracker.on_done(_k, line)
+            def cb_error(line, _k=_n):
+                return tracker.on_error(_k, line)
+            def _cb_running(t, e, _k=_n):
+                return tracker.on_running(_k, t, e)
 
         if self.verbose and not is_prompt and not is_tool:
             if cb_start is not None:

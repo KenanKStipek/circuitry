@@ -15,9 +15,7 @@ ClickHouse uses a different driver model and gets its own coverage.
 from __future__ import annotations
 
 import importlib.util
-import json as _json
 import sys
-import threading
 import types
 from dataclasses import dataclass
 from pathlib import Path

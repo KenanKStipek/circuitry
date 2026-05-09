@@ -85,19 +85,19 @@ class CsvPlugin:
                 fieldnames = list(
                     {k: None for r in rows if isinstance(r, dict) for k in r}.keys()
                 )
-            writer = _csv.DictWriter(
+            dict_writer = _csv.DictWriter(
                 buf, fieldnames=list(fieldnames), delimiter=delimiter
             )
-            writer.writeheader()
+            dict_writer.writeheader()
             for row in rows:
-                writer.writerow(row)
+                dict_writer.writerow(row)
         else:
-            writer = _csv.writer(buf, delimiter=delimiter)
+            list_writer = _csv.writer(buf, delimiter=delimiter)
             header = params.get("header")
             if header:
-                writer.writerow(header)
+                list_writer.writerow(header)
             for row in rows:
-                writer.writerow(row)
+                list_writer.writerow(row)
         text = buf.getvalue()
         return ToolResult(
             value=text,

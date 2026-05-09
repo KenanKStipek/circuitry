@@ -67,6 +67,8 @@ class LinearPlugin:
             raise RuntimeError("linear: LINEAR_API_KEY not set.")
 
         mode = str(params.get("mode") or "query").lower()
+        query: str
+        variables: Any
         if mode == "list_issues":
             filter_obj: dict[str, Any] = {}
             if isinstance(params.get("team"), str):
@@ -79,9 +81,10 @@ class LinearPlugin:
             }
             query = _LIST_ISSUES_QUERY
         elif mode == "query":
-            query = params.get("query")
-            if not isinstance(query, str) or not query.strip():
+            raw_query = params.get("query")
+            if not isinstance(raw_query, str) or not raw_query.strip():
                 raise ValueError("linear query mode requires params['query'].")
+            query = raw_query
             variables = params.get("variables")
         else:
             raise ValueError(f"linear: unknown mode {mode!r}")

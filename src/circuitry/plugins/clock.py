@@ -11,7 +11,7 @@ Params:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 from typing import Any
 
 from ..preflight import CheckResult
@@ -31,6 +31,7 @@ class ClockPlugin:
         del timeout_seconds
         epoch_mode = bool(params.get("epoch"))
         tz_name = params.get("timezone")
+        tz: tzinfo
         if tz_name:
             try:
                 from zoneinfo import ZoneInfo

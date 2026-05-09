@@ -9,24 +9,6 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 from uuid import uuid4
 
-logger = logging.getLogger(__name__)
-
-try:
-    import jsonschema as _jsonschema
-except ImportError:
-    _jsonschema = None  # type: ignore[assignment]
-
-_SCHEMA_PATH = Path(__file__).parent.parent / "schema" / "orchestration.schema.json"
-
-
-def _load_schema() -> dict[str, Any] | None:
-    if _jsonschema is None:
-        return None
-    try:
-        return json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None
-
 from ..adapters import Adapter, build_adapter
 from ..core.compiler import compile_orchestration
 from ..core.dynamic import DynamicRuntime
@@ -45,6 +27,24 @@ from .config import CircuitryConfig
 from .effective_settings import EffectiveSettings, resolve_effective_settings
 from .orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
 from .redaction import redact
+
+logger = logging.getLogger(__name__)
+
+try:
+    import jsonschema as _jsonschema
+except ImportError:
+    _jsonschema = None  # type: ignore[assignment]
+
+_SCHEMA_PATH = Path(__file__).parent.parent / "schema" / "orchestration.schema.json"
+
+
+def _load_schema() -> dict[str, Any] | None:
+    if _jsonschema is None:
+        return None
+    try:
+        return json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
 
 
 @dataclass(frozen=True)
@@ -394,6 +394,7 @@ def validate(
     orchestration_path: Path,
     *,
     config: CircuitryConfig | None = None,
+    skip_preflight: bool = False,
 ) -> dict[str, Any]:
     text = orchestration_path.read_text(encoding="utf-8").strip()
     if not text:
@@ -431,7 +432,9 @@ def validate(
         # Preflight gate (Story 1). Same gating policy as allowlist — only
         # runs when the caller supplied a config so programmatic callers
         # without an environment-resolved config don't hit network probes.
-        if config is not None:
+        # ``skip_preflight`` lets offline / structure-only contexts (CI
+        # smoke tests, ``cof check --skip-preflight``) bypass it.
+        if config is not None and not skip_preflight:
             preflight_results = preflight(orchestration_path, config)
             preflight_errors = format_preflight_errors(preflight_results)
             if preflight_errors:
@@ -575,6 +578,15 @@ class _NoOpAdapter:
         raise RuntimeError(
             "Attempted to call generate() on a tool-only orchestration. "
             "No prompt effects should be present."
+        )
+
+    def check(self) -> CheckResult:
+        # Tool-only orchestrations don't exercise an LLM, so the noop
+        # adapter's preflight is trivially ready.
+        return CheckResult(
+            ok=True,
+            missing=[],
+            message="no-op adapter; no LLM transport.",
         )
 
 

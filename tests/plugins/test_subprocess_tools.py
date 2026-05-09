@@ -374,8 +374,10 @@ def test_diff_patch_diff_strings() -> None:
 
 
 def test_diff_patch_diff_files(tmp_path: Path) -> None:
-    a = tmp_path / "a.txt"; a.write_text("alpha\n")
-    b = tmp_path / "b.txt"; b.write_text("alpha\nbeta\n")
+    a = tmp_path / "a.txt"
+    a.write_text("alpha\n")
+    b = tmp_path / "b.txt"
+    b.write_text("alpha\nbeta\n")
     r = DiffPatchPlugin().execute(
         params={
             "mode": "diff",

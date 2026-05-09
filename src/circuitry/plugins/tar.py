@@ -68,7 +68,10 @@ class TarPlugin:
                 raise ValueError(f"tar: unsupported compression {compression!r}")
             mode_str = f"w:{compression}" if compression else "w"
             archive.parent.mkdir(parents=True, exist_ok=True)
-            with tarfile.open(archive, mode_str) as tf:
+            # ``mode_str`` is a runtime-built string; tarfile.open is
+            # heavily overloaded on string Literal modes so mypy can't
+            # match without a hint.
+            with tarfile.open(archive, mode_str) as tf:  # type: ignore[call-overload]
                 for i, src in enumerate(sources):
                     arcname = (
                         arcnames[i] if arcnames else Path(src).name

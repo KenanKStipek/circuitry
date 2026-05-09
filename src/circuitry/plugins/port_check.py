@@ -35,7 +35,7 @@ class PortCheckPlugin:
         if not isinstance(host, str) or not host:
             raise ValueError("port_check requires params['host'].")
         try:
-            port_int = int(port)
+            port_int = int(port)  # type: ignore[arg-type]
         except (TypeError, ValueError) as exc:
             raise ValueError("port_check requires params['port'] as int.") from exc
         if not (1 <= port_int <= 65535):

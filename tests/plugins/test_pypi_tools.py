@@ -14,8 +14,6 @@ import importlib.util
 import json as _json
 import sys
 import types
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import pytest

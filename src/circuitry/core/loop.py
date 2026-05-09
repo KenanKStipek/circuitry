@@ -8,7 +8,7 @@ from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, Union
 
 from ..adapters import Adapter
 from ..output import console as _console
@@ -534,24 +534,19 @@ Should the loop continue? Answer (yes/no):"""
             try:
                 if is_prompt:
                     if tracker is not None:
-                        _cb_start: Callable[[], None] | None = (
-                            lambda _i=iteration: tracker.on_start(_i)
-                        )
-                        _cb_done: Callable[[str], None] | None = (
-                            lambda line, _i=iteration: tracker.on_done(_i, line)
-                        )
-                        _cb_error: Callable[[str], None] | None = (
-                            lambda line, _i=iteration: tracker.on_error(_i, line)
-                        )
-                        _cb_running: Callable[[str, int], None] | None = (
-                            lambda t, e, _i=iteration: tracker.on_running(_i, t, e)
-                        )
+                        def _cb_start(_i=iteration):
+                            return (tracker.on_start(_i))
+                        def _cb_done(line, _i=iteration):
+                            return (tracker.on_done(_i, line))
+                        def _cb_error(line, _i=iteration):
+                            return (tracker.on_error(_i, line))
+                        def _cb_running(t, e, _i=iteration):
+                            return (tracker.on_running(_i, t, e))
                     elif parallel:
-                        _cb_start = (
-                            lambda _n=name, _ico=icon, _col=color, _ind=body_indent: _console.print(
-                                f"{_ind}[info]→[/info] [{_col}]{_ico}[/{_col}] {_n}"
-                            )
-                        )
+                        def _cb_start(_n=name, _ico=icon, _col=color, _ind=body_indent):
+                            return (_console.print(
+                                                        f"{_ind}[info]→[/info] [{_col}]{_ico}[/{_col}] {_n}"
+                                                    ))
                         _cb_done = _console.print
                         _cb_error = _console.print
                         _cb_running = None

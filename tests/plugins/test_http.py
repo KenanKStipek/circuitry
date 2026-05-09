@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 import json as _json
 from typing import Any
-from unittest.mock import MagicMock
 from urllib.error import HTTPError, URLError
 
 import pytest

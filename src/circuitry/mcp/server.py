@@ -29,7 +29,7 @@ from typing import Any, Optional
 from ..cli.app import _resolve_orchestration
 from ..cli.registry import load_index
 from ..cli.runtime_shim import validate as validate_orch_path
-from .runs import Run, RunManager, RunStatus
+from .runs import Run, RunManager
 
 logger = logging.getLogger(__name__)
 

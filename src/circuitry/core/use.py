@@ -5,10 +5,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from ..adapters import Adapter
 from ..output import console as _console
@@ -267,7 +267,7 @@ class UseRuntime:
                 ok, errors = _validate_inline_yaml(cleaned)
                 if not ok:
                     raise ValueError(
-                        f"Inline orchestration validation failed:\n"
+                        "Inline orchestration validation failed:\n"
                         + "\n".join(f"  - {e}" for e in errors)
                     )
 

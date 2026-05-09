@@ -10,13 +10,11 @@ from __future__ import annotations
 import gzip as _gzip
 import io
 import json as _json
-import os
 import socket
 import tarfile
 import zipfile
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
 
 import pytest
 
