@@ -51,6 +51,7 @@ from .jira import JiraPlugin
 from .json import JsonPlugin
 from .linear import LinearPlugin
 from .math import MathPlugin
+from .mcp_client import McpPlugin
 from .notion import NotionPlugin
 from .pdf_extract import PdfExtractPlugin
 from .playwright import PlaywrightPlugin
@@ -439,6 +440,13 @@ def _build_vector_search(cfg: dict[str, Any]) -> ToolPlugin:
     return VectorSearchPlugin()
 
 
+# MCP client — bridges orchestrations to external Model Context Protocol
+# servers declared under runtime.plugins.mcp.servers. The only builder
+# besides comfyui that consumes per-plugin config.
+def _build_mcp(cfg: dict[str, Any]) -> ToolPlugin:
+    return McpPlugin(servers=dict(cfg.get("servers") or {}))
+
+
 PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "ffmpeg": _build_ffmpeg,
     "comfyui": _build_comfyui,
@@ -513,6 +521,8 @@ PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "embed": _build_embed,
     "rerank": _build_rerank,
     "vector_search": _build_vector_search,
+    # MCP client.
+    "mcp": _build_mcp,
 }
 
 
