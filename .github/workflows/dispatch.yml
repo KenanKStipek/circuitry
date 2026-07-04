@@ -1,0 +1,32 @@
+name: Dispatch queued agent work
+on:
+  schedule:
+    - cron: '17 */3 * * *' # every 3 hours; :17 avoids top-of-hour runner congestion
+  workflow_dispatch: {} # manual "Run workflow" button for testing
+
+permissions:
+  issues: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find and dispatch eligible issues
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="${{ github.repository }}"
+          issues=$(gh search issues \
+            --repo "$repo" \
+            "is:open label:agent-ready -label:working -label:ready-for-review -label:needs-human -label:blocked -label:hold -label:in-loop" \
+            --json number --jq '.[].number' --limit 2)
+          if [ -z "$issues" ]; then
+            echo "Queue empty — nothing to dispatch."
+            exit 0
+          fi
+          for n in $issues; do
+            echo "Dispatching #$n"
+            gh issue comment "$n" --repo "$repo" --body \
+              "@claude Automated dispatch: this issue is queued with no active or pending state. Work it per CLAUDE.md and the issue body. If a previous attempt left a partial branch (claude/issue-${n}-*), resume from it rather than starting over. Open a PR; do not merge."
+          done
