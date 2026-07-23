@@ -1,0 +1,11 @@
+name: Finalize
+
+on:
+  check_suite:
+    types: [completed]
+
+jobs:
+  finalize:
+    if: startsWith(github.event.check_suite.head_branch, 'claude/')
+    uses: KenanKStipek/agent-loop/.github/workflows/finalize.yml@v1
+    secrets: inherit
