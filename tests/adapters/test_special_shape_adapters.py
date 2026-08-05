@@ -1,6 +1,9 @@
 """Tests for adapters whose URL or auth shape doesn't fit the generic
-parametrized catalog: azure-openai, cloudflare-workers-ai, cyberdiner,
-databricks, replicate, watsonx.
+parametrized catalog: azure-openai, cloudflare-workers-ai, databricks,
+replicate, watsonx.
+
+cyberdiner has its own dedicated suite in test_cyberdiner.py — its
+submit/poll job-broker shape doesn't fit this file's curl-based fakes.
 """
 
 from __future__ import annotations
@@ -15,7 +18,6 @@ from circuitry.adapters import build_adapter
 from circuitry.adapters.azure_openai import AzureOpenAIAdapter
 from circuitry.adapters.cloudflare_workers_ai import CloudflareWorkersAIAdapter
 from circuitry.adapters.conformance import validate_generate_result
-from circuitry.adapters.cyberdiner import CyberdinerAdapter
 from circuitry.adapters.databricks import DatabricksAdapter
 from circuitry.adapters.replicate import ReplicateAdapter
 from circuitry.adapters.watsonx import WatsonXAdapter
@@ -180,36 +182,6 @@ def test_cloudflare_runtime_account_id_overrides_env(
     adapter.generate(model="@cf/m", prompt="ping")
     assert "from-config" in captured["cmd"][-1]
     assert "from-env" not in captured["cmd"][-1]
-
-
-# ---------------------------------------------------------------------------
-# cyberdiner
-# ---------------------------------------------------------------------------
-
-
-def test_cyberdiner_check_requires_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CYBERDINER_BASE_URL", raising=False)
-    monkeypatch.delenv("CYBERDINER_TOKEN", raising=False)
-    r = CyberdinerAdapter().check()
-    assert r.ok is False
-    assert "env:CYBERDINER_BASE_URL" in r.missing
-    assert "env:CYBERDINER_TOKEN" in r.missing
-
-
-def test_cyberdiner_generates_when_configured(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("CYBERDINER_BASE_URL", "https://broker.example/v1")
-    monkeypatch.setenv("CYBERDINER_TOKEN", "k")
-
-    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
-        del args, kwargs
-        return FakeProc(returncode=0, stdout=_ok_chat_payload("ok"))
-
-    monkeypatch.setattr("subprocess.run", fake_run)
-    adapter = build_adapter(adapter_name="cyberdiner", runtime={})
-    result = adapter.generate(model="m", prompt="p")
-    assert result.text == "ok"
 
 
 # ---------------------------------------------------------------------------
