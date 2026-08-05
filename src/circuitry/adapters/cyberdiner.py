@@ -1,13 +1,18 @@
 """Adapter for CyberDiner — a job-queue LLM broker.
 
-Unlike the OpenAI-compatible adapters, CyberDiner's expo service is
-async: a prompt is submitted as a job and the result is retrieved by
-polling. Wire shape mirrors cookd's ask client (``apps/cook/cookd/src/
-commands/ask.rs`` in KenanKStipek/CyberDiner): ``POST {expo_url}/beta/
-jobs`` with ``{prompt, tier}`` and a bearer token returns a ``job_id``;
-``GET {expo_url}/beta/jobs/{job_id}`` is polled until the job leaves the
-in-flight states (``pending``/``assigned``/``running``) and reaches a
-terminal one (``complete``/``failed``/``cancelled``).
+CyberDiner's expo API is a job queue: a prompt is submitted as a job and
+the result is fetched by polling — expo has no single blocking
+completion endpoint. This adapter hides that behind circuitry's
+synchronous ``generate()``: submit, poll, block until the job completes,
+then return the text. That is exactly what cookd's own ``ask`` command
+does (``apps/cook/cookd/src/commands/ask.rs`` in
+KenanKStipek/CyberDiner), using the same two endpoints: ``POST
+{expo_url}/beta/jobs`` with ``{prompt, tier}`` and a bearer token
+returns a ``job_id``; ``GET {expo_url}/beta/jobs/{job_id}`` is polled
+(default every 500ms) until the job leaves the in-flight states
+(``pending``/``assigned``/``running``) and reaches a terminal one
+(``complete``/``failed``/``cancelled``). No asyncio, no threads — a
+prompt effect simply blocks like it does on every other adapter.
 
 Authentication: a CyberDiner API key (``ck_...``, minted via expo's
 ``api_keys`` routes or the web app), supplied as
