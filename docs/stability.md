@@ -90,6 +90,14 @@ is the canonical contract for orchestration YAML. Backwards-compatible
 schema changes (new optional fields, relaxed constraints) are not breaking;
 new required fields, removed types, or tightened constraints are.
 
+### 3a. Profile JSON Schema
+
+The schema at
+[`src/circuitry/schema/profile.schema.json`](../src/circuitry/schema/profile.schema.json)
+is the canonical contract for named profile files (`profiles/<name>.yml`,
+see [Named Profiles](./profiles.md)). Same backwards-compatibility rules as
+the orchestration schema above.
+
 ### 4. State path conventions
 
 The deterministic state-path layout is part of the contract because
