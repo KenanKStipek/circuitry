@@ -8,9 +8,9 @@ import pytest
 
 pytest.importorskip("textual")
 
-from textual.widgets import ListView  # noqa: E402
+from textual.widgets import ListView
 
-from circuitry.tui.app import PLANNED_VIEWS, CircuitryApp  # noqa: E402
+from circuitry.tui.app import PLANNED_VIEWS, CircuitryApp
 
 
 def test_home_renders_every_planned_view() -> None:

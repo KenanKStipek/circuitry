@@ -7,8 +7,10 @@ requires the ``tui`` extra — go through :mod:`circuitry.tui` instead.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.containers import Vertical
 from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
@@ -68,7 +70,7 @@ class CircuitryApp(App[None]):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("q", "quit", "Quit"),
     ]
 
