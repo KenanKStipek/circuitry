@@ -91,8 +91,8 @@ class PythonEvalPlugin:
                 compile_restricted,
                 safe_globals,
             )
-            from RestrictedPython.Eval import (
-                default_guarded_getitem,  # type: ignore[import-not-found]
+            from RestrictedPython.Eval import (  # type: ignore[import-not-found]
+                default_guarded_getitem,
             )
             from RestrictedPython.Guards import (  # type: ignore[import-not-found]
                 guarded_iter_unpack_sequence,

@@ -129,12 +129,13 @@ def _completed_effect_values(state: dict[str, Any]) -> list[str]:
     prime = state.get("prime")
     if not isinstance(prime, dict):
         return []
-    values = []
-    for node in prime.values():
-        if isinstance(node, dict) and isinstance(node.get("value"), str):
-            if node["value"].strip():
-                values.append(node["value"])
-    return values
+    return [
+        node["value"]
+        for node in prime.values()
+        if isinstance(node, dict)
+        and isinstance(node.get("value"), str)
+        and node["value"].strip()
+    ]
 
 
 def test_generate_returns_text_from_live_network(live: LiveSettings) -> None:

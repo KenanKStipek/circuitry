@@ -61,7 +61,7 @@ class ViewScreen(CircuitryScreen):
         spec: ViewSpec,
         *,
         name: str | None = None,
-        id: str | None = None,  # noqa: A002 - Textual's parameter name
+        id: str | None = None,  # shadows the builtin: Textual's parameter name
         classes: str | None = None,
     ) -> None:
         super().__init__(name=name, id=id or f"screen-{spec.slug}", classes=classes)
