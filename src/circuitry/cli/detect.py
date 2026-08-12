@@ -112,6 +112,7 @@ def detect_ffmpeg() -> BackendStatus:
                 capture_output=True,
                 text=True,
                 timeout=5,
+                check=False,
             )
             first_line = result.stdout.split("\n")[0] if result.stdout else "found"
             return BackendStatus(name="ffmpeg", available=True, detail=first_line)

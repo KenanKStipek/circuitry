@@ -18,7 +18,7 @@ import sys
 import types
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -665,7 +665,7 @@ def test_prometheus_increments_run_counter(
     histograms: list[tuple[str, float]] = []
 
     class FakeRegistry:
-        _names_to_collectors: dict = {}
+        _names_to_collectors: ClassVar[dict] = {}
 
     class FakeCounter:
         def __init__(self, name: str, doc: str, labelnames: list | None = None, registry: Any = None) -> None:
@@ -686,7 +686,7 @@ def test_prometheus_increments_run_counter(
         def observe(self, value: float) -> None:
             histograms.append((self.name, value))
 
-    fake.CollectorRegistry = lambda: FakeRegistry()
+    fake.CollectorRegistry = FakeRegistry
     fake.Counter = FakeCounter
     fake.Histogram = FakeHistogram
     fake.REGISTRY = FakeRegistry()

@@ -132,7 +132,8 @@ def test_toon_non_dict_root(tmp_path: Path) -> None:
 
 def test_malformed_json(tmp_path: Path) -> None:
     path = _write(tmp_path, "orch.json", "{not valid json")
-    with pytest.raises(Exception):
+    # json.loads raises JSONDecodeError, a ValueError subclass.
+    with pytest.raises(ValueError):
         load_orchestration_file(path)
 
 

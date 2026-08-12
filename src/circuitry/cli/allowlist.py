@@ -111,20 +111,20 @@ def check_allowlist(
 
     if config.enabled_adapters is not None:
         allowed = config.enabled_adapters
-        for name in sorted(adapter_refs):
-            if name not in allowed:
-                errors.append(
-                    f"adapter '{name}' not in enabled_adapters allowlist "
-                    f"(enabled: {allowed})"
-                )
+        errors.extend(
+            f"adapter '{name}' not in enabled_adapters allowlist "
+            f"(enabled: {allowed})"
+            for name in sorted(adapter_refs)
+            if name not in allowed
+        )
 
     if config.enabled_tools is not None:
         allowed = config.enabled_tools
-        for name in sorted(tool_refs):
-            if name not in allowed:
-                errors.append(
-                    f"tool '{name}' not in enabled_tools allowlist "
-                    f"(enabled: {allowed})"
-                )
+        errors.extend(
+            f"tool '{name}' not in enabled_tools allowlist "
+            f"(enabled: {allowed})"
+            for name in sorted(tool_refs)
+            if name not in allowed
+        )
 
     return errors

@@ -18,6 +18,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- **mcp SDK 2.0 is now required** (`mcp>=2.0,<3`). 2.0 renamed `FastMCP` to
+  `MCPServer` and moved it from `mcp.server.fastmcp` to `mcp.server.mcpserver`;
+  `circuitry-mcp` targets the new name. The `mcp` tool provider's
+  streamable-HTTP transport follows the same rename
+  (`streamablehttp_client` → `streamable_http_client`) and now passes headers
+  through an SDK-built httpx client, since 2.0 dropped the `headers=` kwarg.
+  stdio and SSE transports are unaffected. **mcp 1.x will no longer import.**
+- **Explicit ruff rule selection** in `[tool.ruff.lint]`. Ruff's default rule
+  set is not stable across releases — 0.16 promoted several hundred rules into
+  it and turned a green tree red with no code change. Rule adoption is now a
+  deliberate config commit, and the six deliberately-disabled rules are
+  justified in-file. The `ruff<0.16` / `mcp<2` emergency pins are gone from
+  `requirements-dev.txt`; the mcp bound now lives in `pyproject.toml`.
 - **`cof list / run / info / eject` use slash-delimited names.** `cof run hello` is now `cof run learn/hello`; `cof run article-summarizer` is now `cof run recipes/article_summarizer`. Bare last-segment names still resolve when unambiguous.
 - **Test isolation in `use`** — child effects now land at `prime.<use_name>.<child_effect>.value` by default (full-namespace mode). Existing tests/orchestrations that declared `outputs:` or used a child `interface:` are unaffected.
 

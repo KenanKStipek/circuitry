@@ -95,10 +95,11 @@ class AnthropicAdapter:
         text = ""
         content = raw.get("content", [])
         if content and isinstance(content, list):
-            text_parts = []
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text_parts.append(block.get("text", ""))
+            text_parts = [
+                block.get("text", "")
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            ]
             text = "".join(text_parts)
 
         # Extract token usage

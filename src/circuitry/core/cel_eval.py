@@ -40,7 +40,7 @@ def evaluate_cel(expr: str, ctx: dict[str, Any]) -> bool:
         result = evaluator.eval(py_expr)
         return bool(result)
     except Exception as exc:
-        logger.error("CEL evaluation failed for expr %r: %s", expr, exc, exc_info=True)
+        logger.exception("CEL evaluation failed for expr %r: %s", expr, exc)
         return False
 
 
@@ -62,6 +62,5 @@ def _cel_to_python(expr: str) -> str:
     converted = converted.replace("==", " == ").replace("!=", " != ")
 
     # CEL boolean operators -> Python
-    converted = converted.replace("&&", " and ").replace("||", " or ")
+    return converted.replace("&&", " and ").replace("||", " or ")
 
-    return converted

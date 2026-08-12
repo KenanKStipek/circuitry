@@ -55,7 +55,7 @@ def test_interface_validates_required_inputs(tmp_path: Path) -> None:
     store = Store(state={})
     runtime = UseRuntime(defn, adapter=adapter, model="test-model")
 
-    with pytest.raises(RuntimeError, match="missing required input.*article_text"):
+    with pytest.raises(RuntimeError, match=r"missing required input.*article_text"):
         runtime.execute(store=store, ctx=store.state)
 
 

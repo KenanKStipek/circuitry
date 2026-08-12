@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Literal, Union, cast
+from typing import Any, Literal, cast
 
 from .conditional import ConditionalDefinition, ConditionDef
 from .dynamic import DynamicDefinition
@@ -18,15 +18,15 @@ from .reflector import ReflectorDefinition
 from .tool import ToolDefinition
 from .use import UseDefinition
 
-EffectDef = Union[
-    DynamicDefinition,
-    PromptDefinition,
-    ReflectorDefinition,
-    ConditionalDefinition,
-    LoopDefinition,
-    ToolDefinition,
-    UseDefinition,
-]
+EffectDef = (
+    DynamicDefinition
+    | PromptDefinition
+    | ReflectorDefinition
+    | ConditionalDefinition
+    | LoopDefinition
+    | ToolDefinition
+    | UseDefinition
+)
 
 _NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 

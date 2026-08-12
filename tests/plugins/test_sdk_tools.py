@@ -491,7 +491,7 @@ def test_playwright_text_mode_via_fake_sdk(
         def __exit__(self, *args: Any) -> None:
             return None
 
-    fake_sync_api.sync_playwright = lambda: FakeSyncContext()
+    fake_sync_api.sync_playwright = FakeSyncContext
     fake_mod.sync_api = fake_sync_api
     monkeypatch.setitem(sys.modules, "playwright", fake_mod)
     monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)

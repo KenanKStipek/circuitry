@@ -468,7 +468,7 @@ def fetch_cmd(
             console.print_json(json.dumps({"ok": False, "error": str(e)}))
         else:
             console.print(f"[red]Fetch failed:[/red] {e}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
     payload = {"ok": True, "asset": asset.metadata, "out_path": str(out)}
     if json_out:
@@ -559,7 +559,7 @@ def run_library_cmd(
             console.print_json(json.dumps({"ok": False, "error": str(e)}))
         else:
             console.print(f"[red]Shared library retrieval failed:[/red] {e}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
     if not (quiet or json_out):
         _print_header("Circuitry · Run Library")
@@ -874,9 +874,10 @@ def eject_cmd(
         raise typer.Exit(code=1)
 
     dest = out or Path(entry.get("file", f"{name}.yml"))
-    if dest.exists():
-        if not typer.confirm(f"{dest} already exists. Overwrite?", default=False):
-            raise typer.Exit(code=0)
+    if dest.exists() and not typer.confirm(
+        f"{dest} already exists. Overwrite?", default=False
+    ):
+        raise typer.Exit(code=0)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(bundled_path.read_text(encoding="utf-8"), encoding="utf-8")
@@ -996,9 +997,9 @@ def gen_cmd(
     try:
         pkg = importlib.resources.files("circuitry") / "curation" / "agents" / "meta_orchestrator.yml"
         meta_orch_path = Path(str(pkg))
-    except Exception:
+    except Exception as e:
         console.print("[red]Error:[/red] Could not locate curation/agents/meta_orchestrator.yml")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
     if not meta_orch_path.exists():
         console.print("[red]Error:[/red] curation/agents/meta_orchestrator.yml not found.")
@@ -1023,9 +1024,10 @@ def gen_cmd(
         plugins_pkg = importlib.resources.files("circuitry") / "bundled" / "docs" / "plugins"
         plugins_dir = Path(str(plugins_pkg))
         if plugins_dir.is_dir():
-            parts = []
-            for md_file in sorted(plugins_dir.glob("*.md")):
-                parts.append(md_file.read_text(encoding="utf-8").strip())
+            parts = [
+                md_file.read_text(encoding="utf-8").strip()
+                for md_file in sorted(plugins_dir.glob("*.md"))
+            ]
             if parts:
                 initial_state["plugins"] = "\n\n---\n\n".join(parts)
     except Exception:
@@ -1091,7 +1093,7 @@ def gen_cmd(
     # Strip preamble text before the first effects: or adapter: line
     _clean_lines = yaml_text.splitlines()
     for _i, _line in enumerate(_clean_lines):
-        if _line.startswith("effects:") or _line.startswith("adapter:"):
+        if _line.startswith(("effects:", "adapter:")):
             yaml_text = "\n".join(_clean_lines[_i:]).strip()
             break
 

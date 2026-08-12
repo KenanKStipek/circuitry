@@ -129,10 +129,10 @@ class PythonEvalPlugin:
             ) from exc
 
         if mode == "eval":
-            result = eval(compiled, env_globals, env_locals)
+            result = eval(compiled, env_globals, env_locals)  # noqa: S307
             value: Any = result
         else:
-            exec(compiled, env_globals, env_locals)
+            exec(compiled, env_globals, env_locals)  # noqa: S102
             value = env_locals.get("result")
 
         return ToolResult(

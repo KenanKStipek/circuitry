@@ -207,7 +207,7 @@ def test_mongodb_lifecycle_writes_snapshot_per_phase(
     plugin.on_run_success(state={"name": "K", "out": "done"}, context=ctx)
 
     client = holder["c"]
-    coll = list(client._collections.values())[0]
+    coll = next(iter(client._collections.values()))
     assert len(coll.upserts) == 2  # start + success
     start_doc = coll.upserts[0][1]
     assert start_doc["status"] == "running"
@@ -228,7 +228,7 @@ def test_mongodb_failure_records_error(
     plugin.on_run_start(state={}, context=ctx)
     plugin.on_run_failure(state={}, context=ctx, error="boom")
 
-    coll = list(holder["c"]._collections.values())[0]
+    coll = next(iter(holder["c"]._collections.values()))
     fail_doc = coll.upserts[-1][1]
     assert fail_doc["status"] == "failed"
     assert fail_doc["error"] == "boom"
@@ -245,7 +245,7 @@ def test_mongodb_skips_per_effect_update_by_default(
         state={"x": 1}, context=ctx,
         effect_path="prime.greet", effect_result={"value": "hi"},
     )
-    coll = list(holder["c"]._collections.values())[0]
+    coll = next(iter(holder["c"]._collections.values()))
     # Only the start event wrote so far — effect skipped.
     assert len(coll.upserts) == 1
 
@@ -271,7 +271,7 @@ def test_mongodb_update_per_effect_when_configured(
         state={"x": 1}, context=ctx,
         effect_path="prime.greet", effect_result={"value": "hi"},
     )
-    coll = list(holder["c"]._collections.values())[0]
+    coll = next(iter(holder["c"]._collections.values()))
     assert len(coll.upserts) == 2  # start + per-effect update
 
 
@@ -887,7 +887,7 @@ def test_snapshot_includes_canonical_fields(
     ctx = _make_context(tmp_path, "mongodb")
     plugin.on_run_start(state={"k": "v"}, context=ctx)
 
-    coll = list(holder["c"]._collections.values())[0]
+    coll = next(iter(holder["c"]._collections.values()))
     doc = coll.upserts[0][1]
     for required in (
         "run_id", "orchestration_path", "status", "started_at",

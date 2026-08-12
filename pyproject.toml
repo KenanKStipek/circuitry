@@ -218,6 +218,12 @@ select = [
     "FURB",           # refurb
     "RUF",            # ruff-specific
     "PLE", "PLW",     # pylint errors + warnings (PLC/PLR are mostly style)
+    # flake8-bandit, narrowed to the three checks that guard genuinely
+    # dangerous primitives. The rest of `S` is dominated by S110/S112
+    # (try/except: pass) noise on best-effort cleanup paths.
+    "S102",           # exec()
+    "S202",           # tarfile.extractall
+    "S307",           # eval()
 ]
 ignore = [
     # Line length. The codebase wraps by hand at a soft ~88 and reflowing

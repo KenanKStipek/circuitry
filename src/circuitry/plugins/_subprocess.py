@@ -87,7 +87,7 @@ def run_binary(
     re-raised as a clearer ``RuntimeError`` so the missing binary case
     is unambiguous.
     """
-    cmd = [binary] + _validate_args(args)
+    cmd = [binary, *_validate_args(args)]
     try:
         proc = subprocess.run(
             cmd,

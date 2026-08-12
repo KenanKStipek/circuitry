@@ -410,8 +410,10 @@ class PromptRuntime:
                 0, self._parse_provider_token(self.defn.provider, default_model)
             )
 
-        for provider_token in self.defn.provider_fallbacks or ():
-            attempts.append(self._parse_provider_token(provider_token, default_model))
+        attempts.extend(
+            self._parse_provider_token(provider_token, default_model)
+            for provider_token in self.defn.provider_fallbacks or ()
+        )
 
         deduped: list[tuple[str, str]] = []
         seen: set[tuple[str, str]] = set()
@@ -578,5 +580,5 @@ class PromptRuntime:
             # jsonschema not installed, skip validation
             pass
         except jsonschema.ValidationError as e:
-            raise ValueError(f"Schema validation failed: {e.message}")
+            raise ValueError(f"Schema validation failed: {e.message}") from e
 

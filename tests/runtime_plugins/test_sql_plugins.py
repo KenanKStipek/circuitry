@@ -251,7 +251,7 @@ def test_postgres_lifecycle_round_trip(
         s for s in conn.statements if "INSERT INTO effect_results" in s[0]
     ]
     assert len(effect_inserts) == 1
-    sql, params = effect_inserts[0]
+    _sql, params = effect_inserts[0]
     # state_path, effect_name positional check.
     assert "prime.greet" in params
     assert "greet" in params

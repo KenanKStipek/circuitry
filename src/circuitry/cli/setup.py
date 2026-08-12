@@ -189,15 +189,17 @@ def _write_env_file(result: DetectionResult) -> Path | None:
     anthropic = result.get("anthropic")
 
     # Only prompt for keys that aren't already set
-    if not (openai and openai.available):
-        if typer.confirm("Set up OpenAI API key?", default=False):
-            key = typer.prompt("OPENAI_API_KEY")
-            lines.append(f"OPENAI_API_KEY={key}")
+    if not (openai and openai.available) and typer.confirm(
+        "Set up OpenAI API key?", default=False
+    ):
+        key = typer.prompt("OPENAI_API_KEY")
+        lines.append(f"OPENAI_API_KEY={key}")
 
-    if not (anthropic and anthropic.available):
-        if typer.confirm("Set up Anthropic API key?", default=False):
-            key = typer.prompt("ANTHROPIC_API_KEY")
-            lines.append(f"ANTHROPIC_API_KEY={key}")
+    if not (anthropic and anthropic.available) and typer.confirm(
+        "Set up Anthropic API key?", default=False
+    ):
+        key = typer.prompt("ANTHROPIC_API_KEY")
+        lines.append(f"ANTHROPIC_API_KEY={key}")
 
     if not lines:
         return None
@@ -206,7 +208,7 @@ def _write_env_file(result: DetectionResult) -> Path | None:
     # Append to existing .env if present
     if env_path.exists():
         existing = env_path.read_text(encoding="utf-8")
-        lines = [existing.rstrip()] + lines
+        lines = [existing.rstrip(), *lines]
 
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return env_path

@@ -68,7 +68,7 @@ class DatabricksAdapter:
         if not cfg.base_url:
             return CheckResult(
                 ok=False,
-                missing=list(result.missing) + ["env:DATABRICKS_HOST"],
+                missing=[*list(result.missing), "env:DATABRICKS_HOST"],
                 message="set DATABRICKS_HOST to your workspace.",
             )
         return result

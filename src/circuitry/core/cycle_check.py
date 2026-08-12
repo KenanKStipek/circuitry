@@ -118,7 +118,7 @@ def detect_cycles(
                 idx = parent_chain.index(identity)
             except ValueError:
                 idx = 0
-            return parent_chain[idx:] + [identity]
+            return [*parent_chain[idx:], identity]
         if state == 2:
             return None
 

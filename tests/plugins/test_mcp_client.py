@@ -107,7 +107,7 @@ def test_transport_unknown_raises() -> None:
 
 
 def test_transport_empty_config_raises() -> None:
-    with pytest.raises(ValueError, match="'command'.*or 'url'"):
+    with pytest.raises(ValueError, match=r"'command'.*or 'url'"):
         resolve_transport({})
 
 
@@ -302,7 +302,7 @@ def test_missing_server_raises() -> None:
 
 
 def test_unknown_server_lists_configured() -> None:
-    with pytest.raises(ValueError, match="Unknown MCP server.*local.*remote"):
+    with pytest.raises(ValueError, match=r"Unknown MCP server.*local.*remote"):
         McpPlugin(servers=_SERVERS).execute(params={"server": "nope", "tool": "t"})
 
 

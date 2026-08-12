@@ -331,7 +331,7 @@ class UseRuntime:
 
             # Cycle detection — runtime call-stack tracking by resolved identity.
             if identity in call_stack:
-                cycle_path = " → ".join(call_stack + [identity])
+                cycle_path = " → ".join([*call_stack, identity])
                 raise RecursionError(
                     f"use '{self.defn.name}': cycle detected — {cycle_path}"
                 )

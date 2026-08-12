@@ -12,7 +12,7 @@ from circuitry.plugins.ffmpeg import FfmpegPlugin
 
 
 def test_unknown_plugin_raises_value_error() -> None:
-    with pytest.raises(ValueError, match="Unknown plugin.*'nope'"):
+    with pytest.raises(ValueError, match=r"Unknown plugin.*'nope'"):
         build_plugin(plugin_name="nope", runtime={})
 
 

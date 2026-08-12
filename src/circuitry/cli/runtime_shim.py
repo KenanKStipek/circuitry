@@ -387,7 +387,7 @@ def run(req: RunRequest) -> RunResult:
                     persistence_node["status"] = "failed"
                 persistence_node["error"] = str(e)
         except Exception:
-            logger.error("Error during error-handling cleanup", exc_info=True)
+            logger.exception("Error during error-handling cleanup")
         return RunResult(ok=False, state=state, warnings=warnings, error=str(e))
 
 
@@ -613,10 +613,9 @@ def _has_prompt_effects(defn: Any) -> bool:
         return _has_prompt_effects(defn.inner)
 
     from ..core.use import UseDefinition
-    if isinstance(defn, UseDefinition):
-        return True  # conservatively assume child orchestration has prompts
 
-    return False
+    # Conservatively assume a child orchestration has prompts.
+    return isinstance(defn, UseDefinition)
 
 
 def _require_resolved_settings(

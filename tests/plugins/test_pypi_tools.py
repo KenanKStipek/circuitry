@@ -14,7 +14,7 @@ import importlib.util
 import json as _json
 import sys
 import types
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -226,7 +226,8 @@ def test_whois_execute_normalises_dates(monkeypatch: pytest.MonkeyPatch) -> None
     def fake_lookup(domain: str) -> FakeEntry:
         return FakeEntry(
             registrar="Example Registrar",
-            creation_date=_dt(2020, 1, 1, 12, 0, 0),
+            # python-whois returns naive datetimes; the fake models that.
+            creation_date=_dt(2020, 1, 1, 12, 0, 0),  # noqa: DTZ001
             name_servers=["NS1.X.TEST", "NS2.X.TEST"],
         )
 
@@ -509,7 +510,7 @@ def test_web_fetch_html_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeResponse:
         status_code = 200
         text = "<html><body>raw</body></html>"
-        headers = {"Content-Type": "text/html"}
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "text/html"}
 
     fake_mod.get = lambda *a, **k: FakeResponse()
     monkeypatch.setitem(sys.modules, "requests", fake_mod)
@@ -531,7 +532,7 @@ def test_web_fetch_text_via_trafilatura(monkeypatch: pytest.MonkeyPatch) -> None
     class FakeResponse:
         status_code = 200
         text = "<html><body><nav>x</nav><article>main body</article></body></html>"
-        headers = {"Content-Type": "text/html"}
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "text/html"}
 
     fake_mod.get = lambda *a, **k: FakeResponse()
     monkeypatch.setitem(sys.modules, "requests", fake_mod)
@@ -554,7 +555,7 @@ def test_web_fetch_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeResponse:
         status_code = 200
         text = _json.dumps({"a": 1})
-        headers = {"Content-Type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "application/json"}
 
     fake_mod.get = lambda *a, **k: FakeResponse()
     monkeypatch.setitem(sys.modules, "requests", fake_mod)

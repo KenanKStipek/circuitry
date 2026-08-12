@@ -49,19 +49,17 @@ class RssPlugin:
         # underlying exception in `bozo_exception`. Treat as soft warning.
         bozo = bool(getattr(feed, "bozo", False))
 
-        entries: list[dict[str, Any]] = []
-        for entry in feed.entries:
-            entries.append(
-                {
-                    "title": getattr(entry, "title", ""),
-                    "link": getattr(entry, "link", ""),
-                    "summary": getattr(entry, "summary", ""),
-                    "published": getattr(entry, "published", ""),
-                    "author": getattr(entry, "author", ""),
-                    "guid": getattr(entry, "id", "")
-                    or getattr(entry, "guid", ""),
-                }
-            )
+        entries: list[dict[str, Any]] = [
+            {
+                "title": getattr(entry, "title", ""),
+                "link": getattr(entry, "link", ""),
+                "summary": getattr(entry, "summary", ""),
+                "published": getattr(entry, "published", ""),
+                "author": getattr(entry, "author", ""),
+                "guid": getattr(entry, "id", "") or getattr(entry, "guid", ""),
+            }
+            for entry in feed.entries
+        ]
         if isinstance(limit, int) and limit > 0:
             entries = entries[:limit]
 

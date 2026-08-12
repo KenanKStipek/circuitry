@@ -115,12 +115,11 @@ class PrometheusPlugin:
             return factory(name, doc, **kwargs)
         except ValueError:
             # Already registered — pull it back out.
-            existing = (
+            return (
                 self._registry._names_to_collectors.get(name)
                 if hasattr(self._registry, "_names_to_collectors")
                 else None
             )
-            return existing
 
     def on_effect_complete(
         self,

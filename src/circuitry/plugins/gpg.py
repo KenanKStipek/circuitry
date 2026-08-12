@@ -152,7 +152,7 @@ def _run_verify(
     """
     sig = params["signature"]
     payload = params.get("input")
-    cmd = base_cmd + ["--verify"]
+    cmd = [*base_cmd, "--verify"]
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         if from_path:
