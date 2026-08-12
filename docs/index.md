@@ -35,6 +35,7 @@ Last Updated: 2026-05-08
 - [Shared Library Retrieval](./shared-library.md)
 - [Shared Library Contributions](./shared-library-contributions.md)
 - [Shared Library Growth](./shared-library-growth.md)
+- [Terminal UI](./tui.md) — app chrome: keymap, help overlay, resize breakpoints, TUI-mode logging
 - [Editor Highlighting](./editor-highlighting.md)
 - [Perceptron Boundary](./perceptron-boundary.md)
 - [Troubleshooting State Paths](./troubleshooting-state-paths.md)
