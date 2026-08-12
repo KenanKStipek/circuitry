@@ -1,24 +1,24 @@
  ⭘                           Circuitry — Library                                
                                                                                 
-  Library                                                                       
-  Browse bundled and shared orchestrations                                      
+  Library — Browse bundled and shared orchestrations                            
+  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎  
+  ▊  / to search — name, intent, tags                                        ▎  
+  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎  
+  ╭──────────────╮╭─────────────────────╮╭───────────────────────────────────╮  
+  │▼ All (28)    ││learn/hello          ││ learn/hello                       │  
+  │├── learn (8) ││learn/prompt         ││                                   │  
+  │├── utilities ││learn/dynamic_chain  ││ Say hello in a creative way —     │  
+  │├── patterns (││learn/dynamic_tree   ││ the simplest orchestration.       │  
+  │├── recipes (5││learn/conditional    ││                                   │  
+  │└── agents (3)││learn/loop           ││ Category    learn                 │  
+  │              ││learn/reflector    ▇▇││ File        learn/hello.yml    ▁▁ │  
+  │              ││learn/cyberdiner_h…  ││ Difficulty  beginner              │  
+  │              ││utilities/summarize  ││ Primitives  prompt                │  
+  │              ││utilities/critique   ││ Backends    llm                   │  
+  │              ││utilities/refine     ││ Tags        —                     │  
+  │              ││utilities/judge      ││                                   │  
+  │           ▋  ││utilities/classify   ││ Inputs                            │  
+  ╰──────────────╯╰─────────────────────╯╰───────────────────────────────────╯  
+  28/28 in all                                                                  
                                                                                 
-  Not built yet — this view lands in a later story.                             
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
- tab Next view  ? Help  q Back / Quit                               ▏^p palette 
+ tab Next view  / Search  e Eject  ? Help  q Back / Quit            ▏^p palette 

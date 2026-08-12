@@ -22,13 +22,27 @@ def _slug(app: CircuitryApp) -> str | None:
 
 @pytest.mark.parametrize("spec", VIEWS, ids=[spec.slug for spec in VIEWS])
 def test_number_key_opens_its_view(run_app: Any, spec: Any) -> None:
-    async def scenario(pilot: Pilot[Any]) -> tuple[str | None, str]:
+    async def scenario(pilot: Pilot[Any]) -> tuple[str | None, bool]:
         await pilot.press(spec.key)
         await pilot.pause()
         app: CircuitryApp = pilot.app  # type: ignore[assignment]
-        return _slug(app), type(app.screen).__name__
+        return _slug(app), isinstance(app.screen, ViewScreen)
 
-    assert run_app(scenario) == (spec.slug, PlaceholderScreen.__name__)
+    assert run_app(scenario) == (spec.slug, True)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [spec for spec in VIEWS if spec.factory is None],
+    ids=[spec.slug for spec in VIEWS if spec.factory is None],
+)
+def test_views_without_a_factory_still_get_the_placeholder(run_app: Any, spec: Any) -> None:
+    async def scenario(pilot: Pilot[Any]) -> str:
+        await pilot.press(spec.key)
+        await pilot.pause()
+        return type(pilot.app.screen).__name__
+
+    assert run_app(scenario) == PlaceholderScreen.__name__
 
 
 def test_view_screens_stack_one_deep(run_app: Any) -> None:

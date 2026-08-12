@@ -1,0 +1,24 @@
+ ⭘                           Circuitry — Library                                
+                                                                                
+  Library — Browse bundled and shared orchestrations                            
+  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎  
+  ▊  hello                                                                   ▎  
+  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎  
+  ╭──────────────╮╭─────────────────────╮╭───────────────────────────────────╮  
+  │▼ All (28)    ││learn/hello          ││ learn/hello                       │  
+  │├── learn (8) ││learn/cyberdiner_hel…││                                   │  
+  │├── utilities ││agents/meta_orchestr…││ Say hello in a creative way —     │  
+  │├── patterns (││learn/dynamic_chain  ││ the simplest orchestration.       │  
+  │├── recipes (5││utilities/judge      ││                                   │  
+  │└── agents (3)││                     ││ Category    learn                 │  
+  │              ││                     ││ File        learn/hello.yml    ▁▁ │  
+  │              ││                     ││ Difficulty  beginner              │  
+  │              ││                     ││ Primitives  prompt                │  
+  │              ││                     ││ Backends    llm                   │  
+  │              ││                     ││ Tags        —                     │  
+  │              ││                     ││                                   │  
+  │           ▋  ││                     ││ Inputs                            │  
+  ╰──────────────╯╰─────────────────────╯╰───────────────────────────────────╯  
+  5/28 in all · "hello"                                                         
+                                                                                
+ tab Next view  / Search                                            ▏^p palette 
