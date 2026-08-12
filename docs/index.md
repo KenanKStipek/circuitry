@@ -16,7 +16,7 @@ Last Updated: 2026-05-08
 
 ## Quick Reference
 
-- **Tech Stack:** Python, Typer, Rich, PyYAML, Chevron, Ollama/OpenAI/Anthropic/LiteLLM adapters
+- **Tech Stack:** Python, Typer, Rich, PyYAML, Chevron, Ollama/OpenAI/Anthropic/LiteLLM/CyberDiner adapters
 - **Entry Point:** `scripts/circuitry` and `python -m circuitry.cli.app`
 - **Architecture Pattern:** deterministic orchestration runtime with explicit effect control flow
 

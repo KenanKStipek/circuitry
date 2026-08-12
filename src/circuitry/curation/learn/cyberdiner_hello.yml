@@ -1,0 +1,31 @@
+# CyberDiner hello — one prompt routed through the CyberDiner job queue.
+#
+# CyberDiner is a job-queue broker: the adapter submits the prompt as a job
+# and polls until it reaches a terminal status, then returns the text. From
+# the orchestration's point of view it's an ordinary prompt effect — the
+# queue is entirely inside the adapter.
+#
+# `model:` selects a capability tier, not a provider model name. Valid
+# tiers: tier-1, tier-2, tier-3, tier-4.
+#
+# Config (config.json — NOT this YAML; the token is a secret):
+#   {"runtime": {"adapters": {"cyberdiner": {
+#     "expo_url": "https://expo.example.com",
+#     "token": "ck_..."
+#   }}}}
+#
+# Caveat: expo's `/beta` API is pre-stability and may change.
+#
+# Usage:
+#   cof run learn/cyberdiner_hello -e question="What is cybernetics?"
+#   cof run learn/cyberdiner_hello -e question="What is cybernetics?" --tail
+#
+# State path: prime.ask.value
+
+adapter: cyberdiner
+model: tier-1
+
+effects:
+  - type: prompt
+    name: ask
+    template: "Answer in two sentences, plainly: {{question}}"

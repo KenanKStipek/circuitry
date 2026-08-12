@@ -13,7 +13,7 @@ Circuitry is a single-package Python orchestration runtime for deterministic exe
 | CLI | Typer + Rich | Command UX, validation, inspect, and doctor flows |
 | Orchestration Input | YAML (`PyYAML`) | DSL definitions for prompts/dynamics/conditionals/loops/reflectors |
 | Template Rendering | Chevron (Mustache) | Prompt interpolation from execution state |
-| Model Providers | Ollama/OpenAI/Anthropic/LiteLLM adapters | Configurable adapter boundary |
+| Model Providers | Ollama/OpenAI/Anthropic/LiteLLM/CyberDiner adapters (29 in-tree) | Configurable adapter boundary |
 | Quality Tooling | pytest, ruff, mypy | Dev verification and code quality |
 
 ## Architecture Pattern
@@ -64,11 +64,12 @@ Circuitry is a single-package Python orchestration runtime for deterministic exe
 ## Adapter Boundary
 
 - Adapter protocol normalizes `generate(model, prompt, timeout_seconds)` semantics.
-- Concrete adapters:
+- Concrete adapters (see `ADAPTER_REGISTRY` in `factory.py` for the full compiled-in set):
   - `ollama.py`
   - `openai.py`
   - `anthropic.py`
   - `litellm.py`
+  - `cyberdiner.py` — job-queue broker; submits a job to CyberDiner expo and polls until terminal, so the queue stays behind the synchronous `generate()`. `model` is a capability tier (`tier-1`…`tier-4`).
 - Adapter factory (`factory.py`) resolves implementation from runtime config.
 
 ## State and Auditability

@@ -266,6 +266,44 @@ Selection precedence per run:
 
 Every run records resolved values in `runtime.effective_settings`.
 
+### CyberDiner adapter
+
+[CyberDiner](https://github.com/KenanKStipek/CyberDiner) is a job-queue LLM broker rather than a single completion endpoint. The `cyberdiner` adapter hides that behind the ordinary synchronous `generate()`: it submits the prompt as a job to expo, polls until the job reaches a terminal status, and returns the text. Orchestrations look no different from any other adapter's — the queue lives entirely inside the adapter.
+
+`model:` selects a **capability tier**, not a provider model name. Valid tiers: `tier-1`, `tier-2`, `tier-3`, `tier-4` (an unset `model:` falls back to `default_tier`).
+
+```json
+{
+  "default_adapter": "cyberdiner",
+  "default_model": "tier-1",
+  "runtime": {
+    "adapters": {
+      "cyberdiner": {
+        "expo_url": "https://expo.example.com",
+        "token": "ck_...",
+        "default_tier": "tier-1",
+        "poll_interval_ms": 500,
+        "timeout_seconds": 30
+      }
+    }
+  }
+}
+```
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `expo_url` | — (required) | Root URL of your CyberDiner expo deployment |
+| `token` | — (required) | CyberDiner API key (`ck_…`), sent as a bearer token |
+| `default_tier` | `tier-1` | Tier used when the orchestration doesn't pin a `model:` |
+| `poll_interval_ms` | `500` | Delay between job-status polls |
+| `timeout_seconds` | `30` | Per-HTTP-request socket timeout (the whole submit+poll sequence is bounded separately by the effect's timeout) |
+
+**The token is a secret: it belongs in config.json or the environment, never in an orchestration YAML.** Orchestration files are meant to be committed, ejected, and shared; adapter credentials are resolved from the config layers at run time and are redacted from serialized run state. `cof doctor` reports whether `expo_url`/`token` are set and whether the host answers.
+
+> **Caveat:** expo's `/beta` API surface (`POST /beta/jobs`, `GET /beta/jobs/{job_id}`) is pre-stability and may change without notice. Pin your expo deployment accordingly.
+
+Runnable example: [`learn/cyberdiner_hello`](src/circuitry/curation/learn/cyberdiner_hello.yml) — `cof info learn/cyberdiner_hello`.
+
 ### Allowlists
 
 By default every compiled-in adapter / tool plugin / runtime plugin is available. Production deployments can restrict that surface by setting allowlists either via env (`CIRCUITRY_ENABLED_ADAPTERS`, `CIRCUITRY_ENABLED_PLUGINS`, `CIRCUITRY_ENABLED_TOOLS` — comma-separated) or via top-level keys in config.json:
@@ -615,7 +653,7 @@ Orchestration YAML
 - **Allowlist + Preflight** — gates referenced extensions before any LLM call: allowlists enforce the per-environment surface; preflight invokes each extension's `check()` to verify deps / binaries / env / endpoints.
 - **Runtime** — executes definitions, manages state feedback between effects, fires lifecycle hooks (`on_run_start` / `on_effect_complete` / `on_run_success|failure`).
 - **Store** — hierarchical state with deterministic path resolution.
-- **Adapters** — 24 in-tree, behind one `Adapter` Protocol. Major SaaS LLMs, self-hosted servers (vllm, llama.cpp, LM Studio), aggregator routes (openrouter, litellm), and the MCP `host_claude` adapter that lets a host Claude session drive an orchestration.
+- **Adapters** — 29 in-tree, behind one `Adapter` Protocol. Major SaaS LLMs, self-hosted servers (vllm, llama.cpp, LM Studio), aggregator routes (openrouter, litellm), job-queue brokers (`cyberdiner` — submit + poll, tiers instead of model names), and the MCP `host_claude` adapter that lets a host Claude session drive an orchestration.
 - **Tool plugins** — 69 in-tree, behind one `ToolPlugin` Protocol. Stdlib utilities, subprocess wrappers, SDK-driven integrations, and sandboxed `python_eval` / `shell`.
 - **Runtime plugins** — 30 in-tree, behind one `RuntimePlugin` Protocol. SQL persistence (B-prime schema across 7 dialects), document / KV / object stores, append-log, pub/sub, observability (OpenTelemetry, Sentry, Datadog, Honeycomb, Prometheus, Loki, CloudWatch).
 
