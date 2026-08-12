@@ -48,6 +48,8 @@ From [`src/circuitry/adapters/__init__.py`](../src/circuitry/adapters/__init__.p
 - `OpenAIAdapter`
 - `AnthropicAdapter`
 - `LiteLLMAdapter`
+- `CyberdinerAdapter`
+- …one `<Provider>Adapter` class per entry in `ADAPTER_REGISTRY` (`cof list --extensions`)
 - `validate_generate_result`
 
 #### `circuitry.plugins`
