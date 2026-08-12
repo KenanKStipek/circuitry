@@ -1,0 +1,24 @@
+ ⭘      ╭──────────────────────────────────────────────────────────────╮        
+        │                                                              │        
+  Circui│  Keys — Home                                                 │        
+  Cybern│  Global                                                      │        
+        │           tab  Next view                                     │        
+  ╭─────│     shift+tab  Previous view                                 │─────╮  
+  │1  Li│            ^c  Quit                                          │     │  
+  │2  Ru│            ^q  Quit                                          │     │  
+  │3  In│             1  Library                                       │     │  
+  │4  Ru│             2  Run                                           │     │  
+  │5  Do│             3  Inspect                                       │     │  
+  │6  Se│             4  Runs                                          │     │  
+  ╰─────│             5  Doctor                                        │─────╯  
+        │             6  Settings                                  ▁▁  │        
+        │             ?  Help                                          │        
+        │             q  Back / Quit                                   │        
+        │           esc  Back / Quit                                   │        
+        │            ^p  palette                                       │        
+        │                                                              │        
+        │  This screen                                                 │        
+        │       super+c  Copy selected text                            │        
+        │  Esc or ? to close                                           │        
+        │                                                              │        
+ tab Nex╰──────────────────────────────────────────────────────────────╯palette 

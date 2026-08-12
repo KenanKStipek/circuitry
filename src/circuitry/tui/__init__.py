@@ -61,7 +61,14 @@ def should_launch_tui() -> bool:
 
 
 def run_tui() -> None:
-    """Launch the Textual app. Requires the ``tui`` extra to be installed."""
-    from .app import CircuitryApp
+    """Launch the Textual app. Requires the ``tui`` extra to be installed.
 
-    CircuitryApp().run()
+    Console logging is detached for the lifetime of the app so a stray
+    ``logger.info`` cannot paint over the frame; file handlers keep receiving
+    every record, and the original handlers are restored on exit.
+    """
+    from .app import CircuitryApp
+    from .log import tui_logging
+
+    with tui_logging():
+        CircuitryApp().run()

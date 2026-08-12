@@ -1,0 +1,24 @@
+ ⭘                             Circuitry — Home                                 
+                                                                                
+  Circuitry                                                                     
+  Cybernetic orchestration framework. Pick a view, or press ? for keys.         
+                                                                                
+  ╭──────────────────────────────────────────────────────────────────────────╮  
+  │1  Library — Browse bundled and shared orchestrations                     │  
+  │2  Run — Execute an orchestration and watch effects stream                │  
+  │3  Inspect — Orchestration metadata, schema validation, and warnings      │  
+  │4  Runs — History of past runs and their final state                      │  
+  │5  Doctor — Backend, config, and connectivity diagnostics                 │  
+  │6  Settings — Effective configuration and where each value came from      │  
+  ╰──────────────────────────────────────────────────────────────────────────╯  
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ tab Next view  ? Help  q Back / Quit                               ▏^p palette 
