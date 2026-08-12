@@ -39,8 +39,8 @@ class DetectionResult:
 
 def _curl_json_get(url: str, timeout: int = 5) -> dict[str, Any]:
     """Quick GET via urllib (no extra deps). Raises on failure."""
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     req = urllib.request.Request(url, method="GET")
     with urllib.request.urlopen(req, timeout=timeout) as resp:

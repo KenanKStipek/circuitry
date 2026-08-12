@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 from circuitry.cli.registry import load_index, resolve_bundled
 
 

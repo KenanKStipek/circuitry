@@ -68,9 +68,10 @@ import asyncio
 import importlib.util
 import json as _json
 import shutil
+from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Coroutine
+from typing import Any
 
 from ..preflight import CheckResult
 from .base import ToolResult
@@ -127,7 +128,7 @@ def _dump_block(block: Any) -> dict[str, Any]:
             result = dump(mode="json")
             if isinstance(result, dict):
                 return result
-        except Exception:  # noqa: BLE001 — raw dump is best-effort metadata
+        except Exception:
             pass
     return {"type": getattr(block, "type", None), "text": getattr(block, "text", None)}
 

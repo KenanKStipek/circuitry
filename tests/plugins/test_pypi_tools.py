@@ -32,7 +32,6 @@ from circuitry.plugins.whois import WhoisPlugin
 from circuitry.plugins.wikipedia import WikipediaPlugin
 from circuitry.plugins.xml import XmlPlugin
 
-
 PYPI_PLUGINS = [
     "dns", "whois", "pdf_extract", "xml", "html_extract",
     "system_info", "process_list", "wikipedia", "rss",
@@ -257,7 +256,7 @@ def test_pdf_extract_text_mode(monkeypatch: pytest.MonkeyPatch) -> None:
         def __init__(self) -> None:
             self.pages = [FakePage("page one"), FakePage("page two")]
 
-        def __enter__(self) -> "FakePdf":
+        def __enter__(self) -> FakePdf:
             return self
 
         def __exit__(self, *args: Any) -> None:

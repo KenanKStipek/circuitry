@@ -19,7 +19,6 @@ from circuitry.core.use import (
     _validate_inline_yaml,
 )
 
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -393,8 +392,9 @@ def test_use_inside_dynamic_chain(tmp_path: Path) -> None:
 
 
 def test_schema_validates_use_effect() -> None:
-    from circuitry.cli.runtime_shim import validate
     import tempfile
+
+    from circuitry.cli.runtime_shim import validate
 
     orch = {
         "effects": [
@@ -417,8 +417,9 @@ def test_schema_validates_use_effect() -> None:
 
 
 def test_schema_rejects_use_without_orchestration() -> None:
-    from circuitry.cli.runtime_shim import validate
     import tempfile
+
+    from circuitry.cli.runtime_shim import validate
 
     orch = {"effects": [{"type": "use", "name": "sub"}]}
 
@@ -652,8 +653,9 @@ def test_use_inline_on_error_skip_for_validation_failure() -> None:
 
 
 def test_schema_validates_use_inline_effect() -> None:
-    from circuitry.cli.runtime_shim import validate
     import tempfile
+
+    from circuitry.cli.runtime_shim import validate
 
     orch = {
         "effects": [
@@ -674,8 +676,9 @@ def test_schema_validates_use_inline_effect() -> None:
 
 
 def test_schema_validates_use_with_validate_false() -> None:
-    from circuitry.cli.runtime_shim import validate
     import tempfile
+
+    from circuitry.cli.runtime_shim import validate
 
     orch = {
         "effects": [

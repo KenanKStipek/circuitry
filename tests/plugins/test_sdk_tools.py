@@ -17,7 +17,8 @@ import pytest
 
 from circuitry.plugins import build_plugin
 from circuitry.plugins.discord import DiscordPlugin
-from circuitry.plugins.embed import EmbedPlugin, _MODEL_CACHE as _EMBED_CACHE
+from circuitry.plugins.embed import _MODEL_CACHE as _EMBED_CACHE
+from circuitry.plugins.embed import EmbedPlugin
 from circuitry.plugins.gcalendar import GCalendarPlugin
 from circuitry.plugins.gdrive import GDrivePlugin
 from circuitry.plugins.github import GitHubPlugin
@@ -25,12 +26,12 @@ from circuitry.plugins.jira import JiraPlugin
 from circuitry.plugins.linear import LinearPlugin
 from circuitry.plugins.notion import NotionPlugin
 from circuitry.plugins.playwright import PlaywrightPlugin
-from circuitry.plugins.rerank import RerankPlugin, _MODEL_CACHE as _RERANK_CACHE
+from circuitry.plugins.rerank import _MODEL_CACHE as _RERANK_CACHE
+from circuitry.plugins.rerank import RerankPlugin
 from circuitry.plugins.s3_tool import S3ToolPlugin
 from circuitry.plugins.screenshot import ScreenshotPlugin
 from circuitry.plugins.slack import SlackPlugin
 from circuitry.plugins.vector_search import VectorSearchPlugin
-
 
 SDK_PLUGINS = [
     "linear", "slack", "discord", "github", "jira", "notion",
@@ -255,7 +256,7 @@ def test_discord_send_via_fake_webhook(monkeypatch: pytest.MonkeyPatch) -> None:
 
     class FakeWebhook:
         @classmethod
-        def from_url(cls, url: str) -> "FakeWebhook":
+        def from_url(cls, url: str) -> FakeWebhook:
             captured["url"] = url
             return cls()
 
@@ -380,7 +381,7 @@ def test_gcalendar_list_events_via_fake_google(
 
     class FakeCreds:
         @classmethod
-        def from_service_account_file(cls, path: str, scopes: Any) -> "FakeCreds":
+        def from_service_account_file(cls, path: str, scopes: Any) -> FakeCreds:
             return cls()
 
     fake_service_account.Credentials = FakeCreds
@@ -484,7 +485,7 @@ def test_playwright_text_mode_via_fake_sdk(
             self.firefox = FakeBrowserType()
             self.webkit = FakeBrowserType()
 
-        def __enter__(self) -> "FakeSyncContext":
+        def __enter__(self) -> FakeSyncContext:
             return self
 
         def __exit__(self, *args: Any) -> None:

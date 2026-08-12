@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 
 @dataclass
@@ -21,10 +22,8 @@ class Store:
     """
 
     state: dict[str, Any]
-    on_write: Optional[Callable[[dict[str, Any]], None]] = None
-    effect_complete: Optional[
-        Callable[[str, dict[str, Any]], None]
-    ] = None
+    on_write: Callable[[dict[str, Any]], None] | None = None
+    effect_complete: Callable[[str, dict[str, Any]], None] | None = None
     _path_prefix: str = ""
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
@@ -66,7 +65,7 @@ class Store:
             if self.on_write:
                 self.on_write(self.state)
 
-    def child(self, path: str) -> "Store":
+    def child(self, path: str) -> Store:
         """Return a child Store rooted at *path*, sharing the same lock,
         on_write callback, effect_complete callback, and accumulating an
         absolute path prefix for canonical effect paths."""

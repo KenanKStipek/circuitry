@@ -48,7 +48,7 @@ class PortCheckPlugin:
             sock.connect((host, port_int))
             open_state = True
             error: str | None = None
-        except (OSError, socket.timeout) as exc:
+        except (TimeoutError, OSError) as exc:
             open_state = False
             error = type(exc).__name__ + ": " + str(exc)
         finally:

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from circuitry.core.store._identifiers import quote_sqlite_identifier, validate_table_name
+from circuitry.core.store._identifiers import (
+    quote_sqlite_identifier,
+    validate_table_name,
+)
 
 
 class TestValidateTableName:

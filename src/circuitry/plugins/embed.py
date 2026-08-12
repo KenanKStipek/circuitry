@@ -29,7 +29,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 _DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 # Tiny in-process cache: model name → SentenceTransformer instance.
@@ -40,7 +39,9 @@ _MODEL_CACHE: dict[str, Any] = {}
 def _resolve_model(model_name: str, device: str | None) -> Any:
     cache_key = f"{model_name}@{device or 'auto'}"
     if cache_key not in _MODEL_CACHE:
-        from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
+        from sentence_transformers import (
+            SentenceTransformer,  # type: ignore[import-not-found]
+        )
 
         _MODEL_CACHE[cache_key] = SentenceTransformer(
             model_name, device=device

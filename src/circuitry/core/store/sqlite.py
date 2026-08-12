@@ -27,7 +27,7 @@ class SQLiteStatePersistence:
         return quote_sqlite_identifier(f"{self.table}_path_created_idx")
 
     @staticmethod
-    def from_config(config: dict[str, Any]) -> "SQLiteStatePersistence":
+    def from_config(config: dict[str, Any]) -> SQLiteStatePersistence:
         db_path = str(config.get("db_path") or "").strip()
         if not db_path:
             raise ValueError(

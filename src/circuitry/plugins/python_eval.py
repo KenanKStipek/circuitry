@@ -31,7 +31,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 # Tiny safe-builtins set — math + string handling only.
 _SAFE_BUILTINS = {
     "abs": abs, "all": all, "any": any, "bool": bool, "dict": dict,
@@ -92,7 +91,9 @@ class PythonEvalPlugin:
                 compile_restricted,
                 safe_globals,
             )
-            from RestrictedPython.Eval import default_guarded_getitem  # type: ignore[import-not-found]
+            from RestrictedPython.Eval import (
+                default_guarded_getitem,  # type: ignore[import-not-found]
+            )
             from RestrictedPython.Guards import (  # type: ignore[import-not-found]
                 guarded_iter_unpack_sequence,
                 guarded_unpack_sequence,
@@ -128,10 +129,10 @@ class PythonEvalPlugin:
             ) from exc
 
         if mode == "eval":
-            result = eval(compiled, env_globals, env_locals)  # noqa: S307
+            result = eval(compiled, env_globals, env_locals)
             value: Any = result
         else:
-            exec(compiled, env_globals, env_locals)  # noqa: S102
+            exec(compiled, env_globals, env_locals)
             value = env_locals.get("result")
 
         return ToolResult(

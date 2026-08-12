@@ -25,17 +25,34 @@ import pytest
 from circuitry.core.runtime_plugins import PluginContext, load_plugins
 from circuitry.runtime_plugins import (
     cloudwatch as cloudwatch_mod,
+)
+from circuitry.runtime_plugins import (
     datadog as datadog_mod,
+)
+from circuitry.runtime_plugins import (
     honeycomb as honeycomb_mod,
+)
+from circuitry.runtime_plugins import (
     kafka as kafka_mod,
+)
+from circuitry.runtime_plugins import (
     loki as loki_mod,
+)
+from circuitry.runtime_plugins import (
     nats as nats_mod,
+)
+from circuitry.runtime_plugins import (
     opentelemetry as otel_mod,
+)
+from circuitry.runtime_plugins import (
     prometheus as prometheus_mod,
+)
+from circuitry.runtime_plugins import (
     rabbitmq as rabbitmq_mod,
+)
+from circuitry.runtime_plugins import (
     sentry as sentry_mod,
 )
-
 
 PUBSUB_PLUGINS = [
     ("kafka", "confluent_kafka", "confluent-kafka"),
@@ -371,7 +388,7 @@ class _FakeSpan:
     def end(self) -> None:
         self.ended = True
 
-    def __enter__(self) -> "_FakeSpan":
+    def __enter__(self) -> _FakeSpan:
         return self
 
     def __exit__(self, *args: Any) -> None:
@@ -655,7 +672,7 @@ def test_prometheus_increments_run_counter(
             self.name = name
             self.labelnames = labelnames or []
 
-        def labels(self, **kwargs: Any) -> "FakeCounter":
+        def labels(self, **kwargs: Any) -> FakeCounter:
             self._labels = kwargs
             return self
 

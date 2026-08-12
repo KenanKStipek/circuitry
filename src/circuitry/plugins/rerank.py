@@ -29,7 +29,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 _DEFAULT_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 _MODEL_CACHE: dict[str, Any] = {}

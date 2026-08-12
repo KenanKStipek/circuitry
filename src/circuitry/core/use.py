@@ -242,7 +242,7 @@ class UseRuntime:
             for key, spec in iface_outputs.items():
                 if isinstance(spec, dict) and "path" in spec:
                     auto_outputs[key] = spec["path"]
-            return auto_outputs if auto_outputs else None
+            return auto_outputs or None
 
         return None
 
@@ -409,7 +409,7 @@ class UseRuntime:
                 raise RuntimeError(
                     f"use '{self.defn.name}' -> {label}: {e}"
                 ) from e
-            elif self.defn.on_error == "skip":
+            if self.defn.on_error == "skip":
                 node["value"] = None
             # continue: keep going with None value
         finally:

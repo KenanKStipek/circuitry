@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-
 import pytest
 
 pytest.importorskip("typer")
 
 from circuitry.cli.app import _find_last_effect_value, _parse_env_vars
-
 
 # ---------------------------------------------------------------------------
 # _parse_env_vars

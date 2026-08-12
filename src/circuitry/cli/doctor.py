@@ -1,21 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from .config import find_config_path, load_config, resolve_config
-from .detect import detect_all
-from .effective_settings import resolve_effective_settings
-from .orchestration_loader import load_orchestration_file
 from ..adapters import build_adapter
 from ..adapters.factory import ADAPTER_REGISTRY
 from ..core.runtime_plugins import load_plugins
 from ..plugins.factory import PLUGIN_REGISTRY, build_plugin
 from ..preflight import call_check
+from .config import find_config_path, load_config, resolve_config
+from .detect import detect_all
+from .effective_settings import resolve_effective_settings
+from .orchestration_loader import load_orchestration_file
 
 console = Console()
 
@@ -23,13 +22,13 @@ console = Console()
 def register_doctor(app: typer.Typer) -> None:
     @app.command("doctor", help="System diagnostics — check backends, config, and connectivity.")
     def doctor_cmd(
-        config: Optional[Path] = typer.Option(
+        config: Path | None = typer.Option(
             None,
             "--config",
             "-c",
             help="Path to config JSON (or use CIRCUITRY_CONFIG).",
         ),
-        orchestration: Optional[Path] = typer.Option(
+        orchestration: Path | None = typer.Option(
             None,
             "--orch",
             help="Optional orchestration file to include in effective settings.",

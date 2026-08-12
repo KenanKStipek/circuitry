@@ -8,7 +8,6 @@ from circuitry.adapters.litellm import LiteLLMAdapter
 from circuitry.adapters.ollama import OllamaAdapter
 from circuitry.adapters.openai import OpenAIAdapter
 
-
 # ---------------------------------------------------------------------------
 # Unknown adapter name
 # ---------------------------------------------------------------------------

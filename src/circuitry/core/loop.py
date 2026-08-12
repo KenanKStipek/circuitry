@@ -3,12 +3,13 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Literal, Union
 
 from ..adapters import Adapter
 from ..output import console as _console
@@ -43,8 +44,8 @@ class LoopWhileDef:
     """Defines continuation condition for while loops."""
 
     mode: Literal["model", "cel"] = "model"
-    template: Optional[str] = None  # for mode: model
-    expr: Optional[str] = None  # for mode: cel
+    template: str | None = None  # for mode: model
+    expr: str | None = None  # for mode: cel
 
 
 @dataclass(frozen=True)
@@ -68,12 +69,12 @@ class LoopDefinition:
     - name: optional (named loop vs transparent control)
     """
 
-    name: Optional[str]
+    name: str | None
     body: Sequence[EffectDef]
 
     # Continuation strategy (exactly one of these should be set)
-    while_def: Optional[LoopWhileDef] = None
-    each_def: Optional[LoopEachDef] = None
+    while_def: LoopWhileDef | None = None
+    each_def: LoopEachDef | None = None
 
     # Iteration bounds
     max_iterations: int = 100
@@ -84,7 +85,7 @@ class LoopDefinition:
 
     # Collection output: if set, aggregate this body effect's .value across all
     # iterations into an array written to prime.<loop_name>.collected.value
-    collect: Optional[str] = None
+    collect: str | None = None
 
     # Execution topology for each-loops: "chain" = sequential (default),
     # "tree" = parallel iterations via ThreadPoolExecutor.
@@ -92,7 +93,7 @@ class LoopDefinition:
     flow: Literal["chain", "tree"] = "chain"
 
     # Maximum parallel workers when flow="tree". None = unbounded.
-    max_concurrency: Optional[int] = None
+    max_concurrency: int | None = None
 
 
 class LoopRuntime:
@@ -157,7 +158,8 @@ class LoopRuntime:
         termination_reason = "max_iterations"
 
         # Build ancestor context for children (this loop is now a parent)
-        from .dynamic import AncestorContext, _EFFECT_STYLE as _ES
+        from .dynamic import _EFFECT_STYLE as _ES
+        from .dynamic import AncestorContext
 
         _loop_t0 = time.monotonic()
         _loop_icon, _loop_color = _ES.get(f"loop:{self.defn.flow}", ("↻", "yellow"))
@@ -275,7 +277,7 @@ class LoopRuntime:
                         if self.defn.on_error == "fail":
                             termination_reason = "error"
                             raise next(iter(errors.values()))
-                        elif self.defn.on_error == "break":
+                        if self.defn.on_error == "break":
                             termination_reason = "error"
                         # continue: already skipped failed iterations above
                     else:
@@ -306,7 +308,7 @@ class LoopRuntime:
                             if self.defn.on_error == "fail":
                                 termination_reason = "error"
                                 raise
-                            elif self.defn.on_error == "break":
+                            if self.defn.on_error == "break":
                                 termination_reason = "error"
                                 break
                             # continue: skip this iteration
@@ -343,7 +345,7 @@ class LoopRuntime:
                         if self.defn.on_error == "fail":
                             termination_reason = "error"
                             raise
-                        elif self.defn.on_error == "break":
+                        if self.defn.on_error == "break":
                             termination_reason = "error"
                             break
                         # continue: skip this iteration
@@ -440,8 +442,7 @@ class LoopRuntime:
 
         if self.defn.while_def.mode == "cel":
             return self._evaluate_cel(ctx=ctx)
-        else:
-            return self._evaluate_model(ctx=ctx)
+        return self._evaluate_model(ctx=ctx)
 
     def _evaluate_model(self, *, ctx: dict[str, Any]) -> bool:
         """Cybernetic evaluation: invoke model with rendered template."""

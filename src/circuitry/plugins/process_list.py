@@ -22,7 +22,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 _VALID_SORT = ("pid", "cpu", "memory", "name")
 
 

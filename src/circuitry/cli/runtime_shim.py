@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 from uuid import uuid4
 
 from ..adapters import Adapter, build_adapter
@@ -50,17 +51,17 @@ def _load_schema() -> dict[str, Any] | None:
 @dataclass(frozen=True)
 class RunRequest:
     orchestration_path: Path
-    state_path: Optional[Path]
-    out_path: Optional[Path]
+    state_path: Path | None
+    out_path: Path | None
     dry_run: bool
     validate_only: bool
     initial_state: dict[str, Any] | None = None
     shared_library_metadata: dict[str, Any] | None = None
     verbose: bool = False
     config: CircuitryConfig | None = None
-    live_state_path: Optional[Path] = None
-    adapter: Optional[Adapter] = None
-    state_observer: Optional[Callable[[dict[str, Any]], None]] = None
+    live_state_path: Path | None = None
+    adapter: Adapter | None = None
+    state_observer: Callable[[dict[str, Any]], None] | None = None
     skip_preflight: bool = False
 
 
@@ -69,7 +70,7 @@ class RunResult:
     ok: bool
     state: dict[str, Any]
     warnings: list[str]
-    error: Optional[str] = None
+    error: str | None = None
 
 
 def _now_iso() -> str:
@@ -77,7 +78,7 @@ def _now_iso() -> str:
 
 
 def _load_state(
-    path: Optional[Path], initial_state: dict[str, Any] | None = None
+    path: Path | None, initial_state: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     if initial_state is not None:
         # Isolate runtime mutations from caller-owned dictionaries.
@@ -262,7 +263,7 @@ def run(req: RunRequest) -> RunResult:
         if req.state_observer is not None:
             callbacks.append(req.state_observer)
 
-        on_write: Optional[Callable[[dict[str, Any]], None]]
+        on_write: Callable[[dict[str, Any]], None] | None
         if not callbacks:
             on_write = None
         elif len(callbacks) == 1:
@@ -279,7 +280,7 @@ def run(req: RunRequest) -> RunResult:
         # Story 2: per-effect lifecycle hook. Fires after each effect's
         # node["value"] is finalized. Skipped silently for plugins that
         # don't implement on_effect_complete.
-        effect_complete_cb: Optional[Callable[[str, dict[str, Any]], None]] = None
+        effect_complete_cb: Callable[[str, dict[str, Any]], None] | None = None
         if plugins:
             _plugin_ctx = PluginContext(
                 run_id=run_id,

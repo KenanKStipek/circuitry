@@ -20,7 +20,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 _FLAG_MAP = {
     "IGNORECASE": re.IGNORECASE,
     "MULTILINE": re.MULTILINE,

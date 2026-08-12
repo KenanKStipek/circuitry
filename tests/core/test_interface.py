@@ -190,8 +190,9 @@ def test_interface_no_interface_works_normally(tmp_path: Path) -> None:
 
 def test_schema_validates_interface_declaration() -> None:
     """Orchestration with interface field passes schema validation."""
-    from circuitry.cli.runtime_shim import validate
     import tempfile
+
+    from circuitry.cli.runtime_shim import validate
 
     orch = {
         "interface": {

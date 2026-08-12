@@ -24,7 +24,7 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from ..cli.app import _resolve_orchestration
 from ..cli.registry import load_index
@@ -81,7 +81,7 @@ def _run_response(run: Run, *, include_state: bool = False) -> dict[str, Any]:
     return payload
 
 
-def _error_response(message: str, *, run_id: Optional[str] = None) -> dict[str, Any]:
+def _error_response(message: str, *, run_id: str | None = None) -> dict[str, Any]:
     """Structured error response for tool calls. Never raises into the SDK."""
     return {
         "ok": False,
@@ -119,7 +119,7 @@ def _validate_orchestration_impl(path: str) -> dict[str, Any]:
 def _run_orchestration_impl(
     *,
     orchestration: str,
-    initial_state: Optional[dict[str, Any]] = None,
+    initial_state: dict[str, Any] | None = None,
     override_model: bool = False,
     override_to: str = "",
 ) -> dict[str, Any]:
@@ -207,7 +207,7 @@ def _build_server() -> Any:
     @server.tool()
     def run_orchestration(
         orchestration: str,
-        initial_state: Optional[dict[str, Any]] = None,
+        initial_state: dict[str, Any] | None = None,
         override_model: bool = False,
         override_to: str = "",
     ) -> dict[str, Any]:

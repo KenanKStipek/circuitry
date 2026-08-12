@@ -67,7 +67,9 @@ class AzureBlobPlugin(SnapshotPersistenceBase):
         return True, []
 
     def _init_run(self, context: Any) -> None:
-        from azure.storage.blob import BlobServiceClient  # type: ignore[import-not-found]
+        from azure.storage.blob import (
+            BlobServiceClient,  # type: ignore[import-not-found]
+        )
 
         cfg = _resolve_config(context.runtime_config or {})
         if not cfg["container"]:

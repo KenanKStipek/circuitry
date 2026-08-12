@@ -24,23 +24,46 @@ import pytest
 from circuitry.core.runtime_plugins import PluginContext, load_plugins
 from circuitry.runtime_plugins import (
     azure_blob as azure_blob_mod,
+)
+from circuitry.runtime_plugins import (
     couchdb as couchdb_mod,
+)
+from circuitry.runtime_plugins import (
     dynamodb as dynamodb_mod,
+)
+from circuitry.runtime_plugins import (
     elasticsearch as es_mod,
+)
+from circuitry.runtime_plugins import (
     firestore as firestore_mod,
+)
+from circuitry.runtime_plugins import (
     gcs as gcs_mod,
+)
+from circuitry.runtime_plugins import (
     jsonl_file as jsonl_mod,
+)
+from circuitry.runtime_plugins import (
     memcached as memcached_mod,
+)
+from circuitry.runtime_plugins import (
     mongodb as mongodb_mod,
+)
+from circuitry.runtime_plugins import (
     opensearch as opensearch_mod,
+)
+from circuitry.runtime_plugins import (
     r2 as r2_mod,
+)
+from circuitry.runtime_plugins import (
     redis as redis_mod,
+)
+from circuitry.runtime_plugins import (
     s3 as s3_mod,
 )
 from circuitry.runtime_plugins._snapshot_persistence import (
     SnapshotPersistenceBase,
 )
-
 
 STORAGE_PLUGINS = [
     ("mongodb", "pymongo", "pymongo"),
@@ -127,7 +150,7 @@ class _FakeMongoClient:
         self._collections: dict[tuple[str, str], _FakeCollection] = {}
         self.closed = False
 
-    def __getitem__(self, db_name: str) -> "_FakeMongoDB":
+    def __getitem__(self, db_name: str) -> _FakeMongoDB:
         return _FakeMongoDB(self, db_name)
 
     def close(self) -> None:
@@ -708,7 +731,7 @@ def test_azure_blob_uses_connection_string(
 
     class FakeBlobServiceClient:
         @classmethod
-        def from_connection_string(cls, cstr: str) -> "FakeBlobServiceClient":
+        def from_connection_string(cls, cstr: str) -> FakeBlobServiceClient:
             captured["connection_string"] = cstr
             return cls()
 

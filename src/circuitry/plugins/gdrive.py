@@ -32,7 +32,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 _SCOPES = ("https://www.googleapis.com/auth/drive",)
 
 

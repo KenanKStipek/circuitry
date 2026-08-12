@@ -6,7 +6,6 @@ from circuitry.plugins.comfyui import ComfyUIPlugin
 from circuitry.plugins.factory import build_plugin
 from circuitry.plugins.ffmpeg import FfmpegPlugin
 
-
 # ---------------------------------------------------------------------------
 # Unknown plugin name
 # ---------------------------------------------------------------------------

@@ -164,7 +164,9 @@ class PrometheusPlugin:
         self._counters["runs"].labels(status=status).inc()
         if self._pushgateway:
             try:
-                from prometheus_client import push_to_gateway  # type: ignore[import-not-found]
+                from prometheus_client import (
+                    push_to_gateway,  # type: ignore[import-not-found]
+                )
                 push_to_gateway(
                     self._pushgateway, job=self._job, registry=self._registry
                 )

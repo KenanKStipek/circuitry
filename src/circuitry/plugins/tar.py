@@ -102,7 +102,7 @@ class TarPlugin:
                     extracted.append(member.name)
                 # filter="data" is the safer extraction mode introduced
                 # in Python 3.12 and required (default in Python 3.14).
-                tf.extractall(dest, filter="data")  # noqa: S202
+                tf.extractall(dest, filter="data")
             return ToolResult(
                 value=str(dest), raw={"extracted": extracted},
                 stdout=None, stderr=None, exit_code=None,

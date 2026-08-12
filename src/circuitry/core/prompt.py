@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Literal, Optional, Sequence
+from typing import Any, Literal
 
 from ..adapters import Adapter, build_adapter
 from ..adapters.base import GenerateResult
@@ -130,35 +131,35 @@ class PromptDefinition:
     name: str
 
     # Primary input form (exactly one must be provided)
-    template: Optional[str] = None
-    messages: Optional[Sequence[MessageDef]] = None
+    template: str | None = None
+    messages: Sequence[MessageDef] | None = None
 
     # Typing and decoding
     prompt_type: PromptType = "text"
-    schema: Optional[dict[str, Any]] = None
+    schema: dict[str, Any] | None = None
 
     # Model configuration
-    model: Optional[str] = None
-    provider: Optional[str] = None
-    provider_fallbacks: Optional[Sequence[str]] = None
+    model: str | None = None
+    provider: str | None = None
+    provider_fallbacks: Sequence[str] | None = None
 
     # Execution parameters
-    params: Optional[dict[str, Any]] = None
-    timeout_ms: Optional[int] = None
+    params: dict[str, Any] | None = None
+    timeout_ms: int | None = None
     deterministic: bool = False
 
     # Prompt-local structured values
-    inputs: Optional[dict[str, Any]] = None
+    inputs: dict[str, Any] | None = None
 
     # Non-text inputs
-    assets: Optional[Sequence[AssetRefDef]] = None
+    assets: Sequence[AssetRefDef] | None = None
 
     # Reliability
-    retries: Optional[RetryPolicyDef] = None
+    retries: RetryPolicyDef | None = None
     on_error: Literal["fail", "skip", "continue"] = "fail"
 
     # Description (for documentation/LLM guidance)
-    description: Optional[str] = None
+    description: str | None = None
 
 
 class PromptRuntime:
@@ -393,7 +394,7 @@ class PromptRuntime:
             meta["completed_at"] = _now_iso()
             if self.defn.on_error == "fail":
                 raise
-            elif self.defn.on_error == "skip":
+            if self.defn.on_error == "skip":
                 node["value"] = None
             # continue: keep going with None value
             store.fire_effect_complete(self.defn.name, node)

@@ -6,7 +6,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 Environment = Literal["dev", "prod", "test"]
 _VALID_ENVIRONMENTS: tuple[str, ...] = ("dev", "prod", "test")
@@ -49,17 +49,17 @@ class CircuitryConfig:
     """
 
     # Common defaults users will want
-    default_model: Optional[str] = None
-    default_adapter: Optional[str] = None
+    default_model: str | None = None
+    default_adapter: str | None = None
 
     # Plugins: keep as a list of dotted paths or simple identifiers
     plugins: list[str] = field(default_factory=list)
 
     # Allowlist gates per extension category. None = default-open (all
     # compiled-in extensions allowed). [] = locked down. ["x", "y"] = strict.
-    enabled_adapters: Optional[list[str]] = None
-    enabled_plugins: Optional[list[str]] = None  # RuntimePlugin allowlist
-    enabled_tools: Optional[list[str]] = None  # ToolPlugin allowlist
+    enabled_adapters: list[str] | None = None
+    enabled_plugins: list[str] | None = None  # RuntimePlugin allowlist
+    enabled_tools: list[str] | None = None  # ToolPlugin allowlist
 
     # Deployment environment; controls store_raw default for SQL persistence.
     environment: Environment = "dev"
@@ -68,7 +68,7 @@ class CircuitryConfig:
     runtime: dict[str, Any] = field(default_factory=dict)
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "CircuitryConfig":
+    def from_dict(d: dict[str, Any]) -> CircuitryConfig:
         env = d.get("environment") or "dev"
         if env not in _VALID_ENVIRONMENTS:
             logger.warning(
@@ -88,7 +88,7 @@ class CircuitryConfig:
         )
 
 
-def _normalize_allowlist(value: Any) -> Optional[list[str]]:
+def _normalize_allowlist(value: Any) -> list[str] | None:
     """Coerce config-loaded allowlist values into Optional[list[str]].
 
     None → None (default-open).
@@ -117,7 +117,7 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]
     return merged
 
 
-def _first_existing(paths: list[Path]) -> Optional[Path]:
+def _first_existing(paths: list[Path]) -> Path | None:
     for p in paths:
         if p.exists() and p.is_file():
             return p
@@ -133,9 +133,9 @@ def _load_json_file(path: Path) -> dict[str, Any]:
 
 def find_config_path(
     *,
-    explicit_path: Optional[Path],
-    cwd: Optional[Path] = None,
-) -> Optional[Path]:
+    explicit_path: Path | None,
+    cwd: Path | None = None,
+) -> Path | None:
     """
     Resolution order:
       1) explicit_path (if provided)
@@ -162,7 +162,7 @@ def find_config_path(
     return None
 
 
-def load_config(path: Optional[Path]) -> CircuitryConfig:
+def load_config(path: Path | None) -> CircuitryConfig:
     if not path:
         return CircuitryConfig()
 
@@ -227,8 +227,8 @@ def _apply_env_vars(d: dict[str, Any]) -> dict[str, Any]:
 
 def resolve_config(
     *,
-    explicit_path: Optional[Path] = None,
-    cwd: Optional[Path] = None,
+    explicit_path: Path | None = None,
+    cwd: Path | None = None,
 ) -> CircuitryConfig:
     """
     Build a fully-resolved CircuitryConfig by layering:
@@ -259,7 +259,7 @@ def resolve_config(
         # Layer project-local config
         env = os.getenv("CIRCUITRY_CONFIG")
         if env:
-            local_path: Optional[Path] = Path(env)
+            local_path: Path | None = Path(env)
         else:
             base = cwd or Path.cwd()
             candidates = [base / name for name in DEFAULT_CONFIG_FILENAMES]

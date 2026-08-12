@@ -11,7 +11,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .config import GLOBAL_CONFIG_DIR, GLOBAL_CONFIG_PATH
-from .detect import detect_all, DetectionResult
+from .detect import DetectionResult, detect_all
 from .registry import load_index
 
 console = Console()

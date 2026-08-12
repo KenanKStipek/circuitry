@@ -26,10 +26,20 @@ import pytest
 from circuitry.core.runtime_plugins import PluginContext, load_plugins
 from circuitry.runtime_plugins import (
     clickhouse as clickhouse_mod,
+)
+from circuitry.runtime_plugins import (
     cockroachdb as cockroachdb_mod,
+)
+from circuitry.runtime_plugins import (
     duckdb as duckdb_mod,
+)
+from circuitry.runtime_plugins import (
     mssql as mssql_mod,
+)
+from circuitry.runtime_plugins import (
     mysql as mysql_mod,
+)
+from circuitry.runtime_plugins import (
     postgres as postgres_mod,
 )
 from circuitry.runtime_plugins._sql_schema import (
@@ -43,7 +53,6 @@ from circuitry.runtime_plugins._sql_schema import (
     effect_results_ddl,
     runs_ddl,
 )
-
 
 # ---------------------------------------------------------------------------
 # Dialect smoke tests
@@ -152,7 +161,7 @@ def test_check_reports_missing_dep(
 
 @dataclass
 class _FakeCursor:
-    parent: "_FakeConn"
+    parent: _FakeConn
 
     def execute(self, sql: str, params: tuple | None = None) -> None:
         self.parent.statements.append((sql, tuple(params) if params else ()))

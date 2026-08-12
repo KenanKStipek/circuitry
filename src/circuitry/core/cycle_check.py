@@ -9,7 +9,7 @@ see them.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
@@ -59,8 +59,8 @@ def _collect_use_refs(orch: dict[str, Any]) -> list[tuple[str, str]]:
 
 
 def _resolve_reference(
-    kind: str, value: str, *, parent_dir: Optional[Path]
-) -> Optional[Path]:
+    kind: str, value: str, *, parent_dir: Path | None
+) -> Path | None:
     """Resolve a `ref:` / `path:` value to an absolute file path, or None if unresolvable."""
     from ..cli.registry import resolve_bundled
 
@@ -88,8 +88,8 @@ def _resolve_reference(
 def detect_cycles(
     root_orch: dict[str, Any],
     *,
-    root_path: Optional[Path] = None,
-) -> Optional[list[str]]:
+    root_path: Path | None = None,
+) -> list[str] | None:
     """Walk the static `use:` graph from root_orch.
 
     Returns None if no cycle is found. Returns a list of orchestration paths
@@ -110,7 +110,7 @@ def detect_cycles(
     color: dict[str, int] = {}
     parent_chain: list[str] = []
 
-    def visit(orch: dict[str, Any], identity: str, parent_dir: Optional[Path]) -> Optional[list[str]]:
+    def visit(orch: dict[str, Any], identity: str, parent_dir: Path | None) -> list[str] | None:
         state = color.get(identity, 0)
         if state == 1:
             # Cycle: find where identity appears in chain and slice

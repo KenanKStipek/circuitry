@@ -23,7 +23,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 _SUPPORTED_ALGORITHMS = {
     "md5", "sha1", "sha224", "sha256", "sha384", "sha512",
     "sha3_256", "sha3_512", "blake2b", "blake2s",

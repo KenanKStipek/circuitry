@@ -38,7 +38,7 @@ def _store_root(store: Store) -> dict[str, Any]:
 @dataclass(frozen=True)
 class ReflectorDefinition:
     name: str
-    inner: "DynamicDefinition"
+    inner: DynamicDefinition
 
     plan_from_step: str = "propose_steps"
 
@@ -285,8 +285,8 @@ def _best_effort_context(store: Store) -> str:
 
 
 def _prepend_prime_to_plan_prompt(
-    *, inner: "DynamicDefinition", plan_from_step: str, prime_text: str
-) -> "DynamicDefinition":
+    *, inner: DynamicDefinition, plan_from_step: str, prime_text: str
+) -> DynamicDefinition:
     """Shallow-clone DynamicDefinition, prepending prime to the plan prompt's template."""
     from .prompt import PromptDefinition
 

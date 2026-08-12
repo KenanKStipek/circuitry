@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, ClassVar, Pattern
+from re import Pattern
+from typing import Any, ClassVar
 
 from ..preflight import CheckResult
 from .base import GenerateResult

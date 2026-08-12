@@ -22,7 +22,6 @@ from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.redaction import REDACTED
 from circuitry.cli.runtime_shim import RunRequest, run
 
-
 # ---------------------------------------------------------------------------
 # urlopen / clock fakes
 # ---------------------------------------------------------------------------
@@ -37,7 +36,7 @@ class _FakeResponse:
     def read(self) -> bytes:
         return self._body
 
-    def __enter__(self) -> "_FakeResponse":
+    def __enter__(self) -> _FakeResponse:
         return self
 
     def __exit__(self, *args: Any) -> None:

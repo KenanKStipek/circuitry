@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from ..output import console as _console
 from .store import Store
@@ -305,7 +306,7 @@ class ToolRuntime:
             meta["completed_at"] = _now_iso()
             if self.defn.on_error == "fail":
                 raise
-            elif self.defn.on_error == "skip":
+            if self.defn.on_error == "skip":
                 node["value"] = None
             # continue: keep going with None value
             store.fire_effect_complete(self.defn.name, node)

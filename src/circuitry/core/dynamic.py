@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Literal, Sequence, Union
+from typing import TYPE_CHECKING, Any, Literal, Union
 
 from ..adapters import Adapter
 from ..output import console as _console
@@ -263,14 +264,13 @@ class DynamicRuntime:
         cb_start: Callable[[], None] | None = None,
         cb_done: Callable[[str], None] | None = None,
         cb_error: Callable[[str], None] | None = None,
-        tracker: "_TreeStatus | None" = None,
+        tracker: _TreeStatus | None = None,
     ) -> None:
         """Execute a single effect within the dynamic."""
         # Local imports to avoid circular imports at module load time
         from .conditional import ConditionalDefinition, ConditionalRuntime
         from .loop import LoopDefinition, LoopRuntime
         from .reflector import ReflectorDefinition, ReflectorRuntime
-
         from .tool import ToolDefinition, ToolRuntime
         from .use import UseDefinition, UseRuntime
 
