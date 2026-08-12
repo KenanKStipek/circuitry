@@ -68,6 +68,7 @@ from .slack import SlackPlugin
 from .system_info import SystemInfoPlugin
 from .tar import TarPlugin
 from .uuid import UuidPlugin
+from .validate_yaml import ValidateYamlPlugin
 from .vector_search import VectorSearchPlugin
 from .web_fetch import WebFetchPlugin
 from .webhook import WebhookPlugin
@@ -179,6 +180,11 @@ def _build_hex(cfg: dict[str, Any]) -> ToolPlugin:
 def _build_uuid(cfg: dict[str, Any]) -> ToolPlugin:
     del cfg
     return UuidPlugin()
+
+
+def _build_validate_yaml(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg
+    return ValidateYamlPlugin()
 
 
 # Subprocess wrapper plugins. Each module exposes ``make_plugin()`` that
@@ -468,6 +474,7 @@ PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "base64": _build_base64,
     "hex": _build_hex,
     "uuid": _build_uuid,
+    "validate_yaml": _build_validate_yaml,
     # Subprocess wrappers (binary on PATH).
     "git": _build_git,
     "ripgrep": _build_ripgrep,
