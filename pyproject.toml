@@ -55,6 +55,10 @@ dependencies = [
 [project.optional-dependencies]
 toon = ["toon-format @ git+https://github.com/toon-format/toon-python.git"]
 
+# Terminal UI. `cof tui` (and a bare `cof` on a TTY) needs this; every
+# other subcommand works without it.
+tui = ["textual>=1.0"]
+
 # Per-tool optional deps. Each plugin's check() method reports
 # library:<dep> when the corresponding dep is missing.
 dns = ["dnspython>=2.4"]
