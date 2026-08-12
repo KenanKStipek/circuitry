@@ -51,8 +51,10 @@ jobs:
           additional_permissions: |
             actions: read
           # Cap sessions at 150 turns to prevent runaway execution.
-          # Permissions are managed via .claude/settings.json.
-          claude_args: '--max-turns 150 --model claude-sonnet-5'
+          # NOTE: .claude/settings.json allow-rules do NOT reach CI agents -
+          # the allowlist must be passed here via --allowedTools (agent-loop
+          # HANDOFF gotcha; runs before this fix ended branch-only: #5).
+          claude_args: '--max-turns 150 --model claude-opus-5 --allowedTools "Bash(gh:*),Bash(git:*),Bash(pip:*),Bash(pip3:*),Bash(python:*),Bash(python3:*),Bash(pytest:*),Bash(ruff:*),Bash(mypy:*),Bash(bash:*),Bash(ls:*),Bash(cat:*),Bash(mkdir:*),Bash(cp:*),Bash(mv:*)"'
 
       - name: Clear working
         if: always() && github.event.issue.number && !github.event.issue.pull_request
