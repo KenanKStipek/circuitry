@@ -30,6 +30,7 @@ Last Updated: 2026-05-08
 - [Testing Policy](./testing-policy.md)
 - [Test Matrix](./test-matrix.md)
 - [Adapter Conformance](./adapter-conformance.md)
+- [CyberDiner Demo Runbook](./cyberdiner-demo-runbook.md)
 - [Postgres Persistence](./postgres-persistence.md)
 - [Plugin Extensions](./plugins.md)
 - [Shared Library Retrieval](./shared-library.md)
