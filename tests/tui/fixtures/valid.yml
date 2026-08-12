@@ -1,0 +1,8 @@
+# A minimal orchestration that passes every gate — the Validate view's
+# "no issues found" state.
+adapter: ollama
+model: llama3.1:8b
+effects:
+  - type: prompt
+    name: greet
+    template: "Say hello in five words."
