@@ -102,10 +102,23 @@ class ViewSpec:
         return self.factory(self)
 
 
+def _build_run_screen(spec: ViewSpec) -> CircuitryScreen:
+    """Imported lazily: run_view imports this module for its base class."""
+    from .run_view import RunScreen
+
+    return RunScreen(spec)
+
+
 #: Every view the shell knows about, in navigation (and number key) order.
 VIEWS: tuple[ViewSpec, ...] = (
     ViewSpec("library", "Library", "Browse bundled and shared orchestrations", "1"),
-    ViewSpec("run", "Run", "Execute an orchestration and watch effects stream", "2"),
+    ViewSpec(
+        "run",
+        "Run",
+        "Execute an orchestration and watch effects stream",
+        "2",
+        factory=_build_run_screen,
+    ),
     ViewSpec(
         "inspect",
         "Inspect",

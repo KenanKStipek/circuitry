@@ -22,13 +22,16 @@ def _slug(app: CircuitryApp) -> str | None:
 
 @pytest.mark.parametrize("spec", VIEWS, ids=[spec.slug for spec in VIEWS])
 def test_number_key_opens_its_view(run_app: Any, spec: Any) -> None:
+    """The key opens whatever the registry builds — placeholder or real view."""
+
     async def scenario(pilot: Pilot[Any]) -> tuple[str | None, str]:
         await pilot.press(spec.key)
         await pilot.pause()
         app: CircuitryApp = pilot.app  # type: ignore[assignment]
         return _slug(app), type(app.screen).__name__
 
-    assert run_app(scenario) == (spec.slug, PlaceholderScreen.__name__)
+    expected = PlaceholderScreen if spec.factory is None else type(spec.build())
+    assert run_app(scenario) == (spec.slug, expected.__name__)
 
 
 def test_view_screens_stack_one_deep(run_app: Any) -> None:

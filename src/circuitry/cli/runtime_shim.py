@@ -62,6 +62,12 @@ class RunRequest:
     adapter: Optional[Adapter] = None
     state_observer: Optional[Callable[[dict[str, Any]], None]] = None
     skip_preflight: bool = False
+    # Caller-level overrides, ranked above the orchestration's own
+    # ``adapter``/``model`` (the ``cli`` tier of resolve_effective_settings).
+    # ``adapter_override`` is ignored when ``adapter`` supplies an instance —
+    # that already pins the transport.
+    adapter_override: Optional[str] = None
+    model_override: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -104,7 +110,12 @@ def run(req: RunRequest) -> RunResult:
                 "Allowlist enforcement failed: " + "; ".join(allowlist_errors)
             )
 
-        effective = resolve_effective_settings(cfg=cfg, orch=orch)
+        effective = resolve_effective_settings(
+            cfg=cfg,
+            orch=orch,
+            cli_model=req.model_override,
+            cli_adapter=req.adapter_override,
+        )
         runtime_config = effective.runtime
         persistence = build_persistence_backend(effective.runtime)
         plugins, plugin_events = _initialize_plugins(
