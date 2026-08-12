@@ -92,8 +92,8 @@ def tui_logging(*loggers: logging.Logger) -> Iterator[list[logging.Handler]]:
     try:
         yield [handler for _, handlers in detached for handler in handlers]
     finally:
-        for logger, placeholder in placeholders:
-            logger.removeHandler(placeholder)
+        for logger, parked in placeholders:
+            logger.removeHandler(parked)
         for logger, handlers in detached:
             for handler in handlers:
                 logger.addHandler(handler)

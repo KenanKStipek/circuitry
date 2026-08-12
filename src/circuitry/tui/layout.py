@@ -10,11 +10,13 @@ shrinks.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from textual.dom import DOMNode
     from textual.events import Resize
     from textual.geometry import Size
+    from textual.widget import Widget
 
 #: Below this width the layout drops padding, borders and secondary copy.
 COMPACT_WIDTH = 48
@@ -79,13 +81,6 @@ class ResponsiveLayout:
     CSS instead of every screen hand-rolling its own breakpoint logic.
     """
 
-    if TYPE_CHECKING:  # pragma: no cover - provided by the DOMNode we mix into
-        size: Size
-
-        def add_class(self, *class_names: str) -> object: ...
-
-        def remove_class(self, *class_names: str) -> object: ...
-
     def apply_size_classes(self, size: Size) -> None:
         """Stamp the classes matching ``size`` onto this node.
 
@@ -94,16 +89,17 @@ class ResponsiveLayout:
         """
         if size.width <= 0 and size.height <= 0:
             return
+        node = cast("DOMNode", self)
         wanted = size_classes(size.width, size.height)
         stale = [name for name in SIZE_CLASSES if name not in wanted]
         if stale:
-            self.remove_class(*stale)
+            node.remove_class(*stale)
         if wanted:
-            self.add_class(*sorted(wanted))
+            node.add_class(*sorted(wanted))
 
     def on_mount(self) -> None:
         """Textual message handler: stamp classes before the first paint."""
-        self.apply_size_classes(self.size)
+        self.apply_size_classes(cast("Widget", self).size)
 
     def on_resize(self, event: Resize) -> None:
         """Textual message handler: re-stamp classes for the new size."""

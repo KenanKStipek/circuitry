@@ -77,6 +77,23 @@ def frame_lines(app: App[Any]) -> list[str]:
 
 
 @pytest.fixture
+def capture_frame() -> Callable[[App[Any]], str]:
+    """Return :func:`screen_text`, for rendering mid-scenario.
+
+    Usage::
+
+        def test_frame(run_app, capture_frame):
+            async def scenario(pilot):
+                await pilot.resize_terminal(10, 4)
+                await pilot.pause()
+                return capture_frame(pilot.app)
+
+            assert run_app(scenario).count("\\n") == 3
+    """
+    return screen_text
+
+
+@pytest.fixture
 def run_app() -> Callable[..., Any]:
     """Return a runner that drives ``scenario(pilot)`` inside a live app."""
 

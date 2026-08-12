@@ -74,8 +74,8 @@ def binding_rows(app: App[Any]) -> list[HelpRow]:
 class HelpTable(Static):
     """Key/description rows, re-flowed to whatever width is available."""
 
-    def __init__(self, rows: list[HelpRow], **kwargs: str) -> None:
-        super().__init__("", **kwargs)
+    def __init__(self, rows: list[HelpRow], *, id: str | None = None) -> None:  # noqa: A002
+        super().__init__("", id=id)
         self.rows = rows
 
     def on_mount(self) -> None:
