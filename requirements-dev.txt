@@ -1,6 +1,15 @@
 -r requirements.txt
 
 pytest>=8.0
+# The `tui` extra, so tests/tui can drive the real Textual app instead of
+# skipping. Keep in sync with the `tui` extra in pyproject.toml.
+textual>=1.0
 pytest-cov>=5.0
-ruff>=0.6
+ruff>=0.6,<0.16
 mypy>=1.10
+# CI known-good pins (2026-08-12): ruff 0.16 expanded default rules (406 new
+# findings repo-wide) and mcp 2.0 removed mcp.server.fastmcp. These bounds
+# keep CI on the verified-green versions (ruff 0.15.x, mcp 1.29.x) until the
+# modernization follow-up adopts the new majors. mcp here deliberately
+# overrides the looser pyproject constraint during CI's second pip resolve.
+mcp>=1.0,<2

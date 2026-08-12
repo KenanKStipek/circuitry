@@ -33,6 +33,23 @@ app = typer.Typer(
 )
 console = Console()
 
+
+@app.callback(invoke_without_command=True)
+def _root(ctx: typer.Context) -> None:
+    # No docstring/help here on purpose: the group's help text comes from
+    # ``Typer(help=...)`` above and must stay byte-identical.
+    if ctx.invoked_subcommand is not None:
+        return
+    from ..tui import run_tui, should_launch_tui
+
+    if should_launch_tui():
+        run_tui()
+        raise typer.Exit()
+    # Not an interactive terminal (or no `tui` extra): reproduce exactly what
+    # Click does for a group invoked without a subcommand.
+    ctx.fail("Missing command.")
+
+
 register_doctor(app)
 register_setup(app)
 
@@ -1153,6 +1170,22 @@ def mcp_cmd():
     from ..mcp.server import main as _mcp_main
 
     _mcp_main()
+
+
+@app.command("tui", help="Launch the terminal UI (requires the 'tui' extra).")
+def tui_cmd():
+    """
+    Open the Textual UI unconditionally, even when stdout is not a terminal.
+
+    A bare `cof` opens the same UI automatically when stdin and stdout are
+    both terminals and the extra is installed; this command forces it.
+    """
+    from ..tui import MISSING_EXTRA_MESSAGE, run_tui, textual_available
+
+    if not textual_available():
+        console.print(MISSING_EXTRA_MESSAGE, markup=False, highlight=False)
+        raise typer.Exit(1)
+    run_tui()
 
 
 @app.command("version", help="Print version.")

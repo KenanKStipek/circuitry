@@ -8,7 +8,7 @@ The library is organised by category — what role the file plays in your orches
 
 | Category | Use when… | Files |
 |----------|-----------|-------|
-| **`learn/`** | Teaching the agent ONE primitive in isolation. Each file demonstrates one concept (prompt, dynamic, loop, conditional, reflector). | `prompt`, `dynamic_chain`, `dynamic_tree`, `conditional`, `loop`, `reflector`, `hello` |
+| **`learn/`** | Teaching the agent ONE primitive (or one adapter) in isolation. Each file demonstrates a single concept. | `prompt`, `dynamic_chain`, `dynamic_tree`, `conditional`, `loop`, `reflector`, `hello`, `cyberdiner_hello` |
 | **`utilities/`** | The agent needs a small composable building block to call from a recipe via `use:`. Each utility has a single declared output and is individually runnable. | `summarize`, `critique`, `refine`, `judge`, `classify`, `decompose`, `extract`, `route` |
 | **`patterns/`** | Showing the agent how primitives compose. These are runnable templates that exercise multi-step shapes. | `all_primitives`, `critique_refine_loop`, `parallel_then_judge`, `classify_then_route` |
 | **`recipes/`** | Real end-to-end workflows. These are what you'd ship to a user — full prompts, structured outputs, composed utilities. | `article_summarizer`, `comic_strip`, `research_brief`, `code_review`, `meeting_notes` |

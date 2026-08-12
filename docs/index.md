@@ -16,7 +16,7 @@ Last Updated: 2026-05-08
 
 ## Quick Reference
 
-- **Tech Stack:** Python, Typer, Rich, PyYAML, Chevron, Ollama/OpenAI/Anthropic/LiteLLM adapters
+- **Tech Stack:** Python, Typer, Rich, PyYAML, Chevron, Ollama/OpenAI/Anthropic/LiteLLM/CyberDiner adapters
 - **Entry Point:** `scripts/circuitry` and `python -m circuitry.cli.app`
 - **Architecture Pattern:** deterministic orchestration runtime with explicit effect control flow
 
@@ -30,12 +30,14 @@ Last Updated: 2026-05-08
 - [Testing Policy](./testing-policy.md)
 - [Test Matrix](./test-matrix.md)
 - [Adapter Conformance](./adapter-conformance.md)
+- [CyberDiner Demo Runbook](./cyberdiner-demo-runbook.md)
 - [Postgres Persistence](./postgres-persistence.md)
 - [Plugin Extensions](./plugins.md)
 - [Named Profiles](./profiles.md)
 - [Shared Library Retrieval](./shared-library.md)
 - [Shared Library Contributions](./shared-library-contributions.md)
 - [Shared Library Growth](./shared-library-growth.md)
+- [Terminal UI](./tui.md) — app chrome: keymap, help overlay, resize breakpoints, TUI-mode logging
 - [Editor Highlighting](./editor-highlighting.md)
 - [Perceptron Boundary](./perceptron-boundary.md)
 - [Troubleshooting State Paths](./troubleshooting-state-paths.md)

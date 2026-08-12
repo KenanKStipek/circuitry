@@ -1,0 +1,24 @@
+ ⭘                           Circuitry — Library                                
+                                                                                
+  Library                                                                       
+  Browse bundled and shared orchestrations                                      
+                                                                                
+  Not built yet — this view lands in a later story.                             
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ tab Next view  ? Help  q Back / Quit                               ▏^p palette 

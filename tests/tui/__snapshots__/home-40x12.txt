@@ -1,0 +1,12 @@
+ ⭘         Circuitry — Home             
+ Circuitry                              
+ 1  Library — Browse bundled and shared 
+ 2  Run — Execute an orchestration and  
+ 3  Inspect — Orchestration metadata, s 
+ 4  Runs — History of past runs and the 
+ 5  Doctor — Backend, config, and conne 
+ 6  Settings — Effective configuration  
+                                        
+                                        
+                                        
+ tab Next view  ? Help  q Ba▏^p palette 
