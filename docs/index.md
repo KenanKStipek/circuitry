@@ -32,6 +32,7 @@ Last Updated: 2026-05-08
 - [Adapter Conformance](./adapter-conformance.md)
 - [Postgres Persistence](./postgres-persistence.md)
 - [Plugin Extensions](./plugins.md)
+- [The Wizard](./wizard.md) — building orchestrations by talking; the turn contract and how to drive it headlessly
 - [Shared Library Retrieval](./shared-library.md)
 - [Shared Library Contributions](./shared-library-contributions.md)
 - [Shared Library Growth](./shared-library-growth.md)

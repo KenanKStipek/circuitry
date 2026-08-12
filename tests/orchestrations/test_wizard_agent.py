@@ -409,6 +409,90 @@ def test_done_gate_is_false_when_the_model_is_not_finished() -> None:
     assert out["done"] is False
 
 
+# ── The whole conversation ───────────────────────────────────────────────────
+
+
+def test_scripted_conversation_converges_on_a_valid_orchestration() -> None:
+    """The host loop, end to end: ask → draft (repaired invisibly) → finish.
+
+    This is the demo in docs/wizard.md, executed. State accumulates between
+    turns exactly as a host accumulates it — the orchestration itself is
+    stateless across turns.
+    """
+    broken = LOOP_CONDITIONAL_PIPELINE.replace("name: sections", "name: 2_sections")
+    built = (
+        "Built a three-section pipeline: plan the topics, draft each in a loop, "
+        "score the result, then branch on the score."
+    )
+
+    turns = [
+        (
+            ScriptedAdapter(
+                replies={
+                    INTERPRET_MARKER: [_interpretation(ready=False)],
+                    DECIDE_MARKER: ["yes"],
+                    QUESTION_MARKER: [
+                        _json_turn(
+                            say="How many sections, and what happens on a low score?",
+                            yaml_text=None,
+                            done=False,
+                        )
+                    ],
+                }
+            ),
+            "Three sections. If the score is 7 or below, list what to fix.",
+        ),
+        (
+            _drafting_adapter(
+                drafts=[_json_turn(say=built, yaml_text=broken, done=False)],
+                repairs=[
+                    _json_turn(say=built, yaml_text=LOOP_CONDITIONAL_PIPELINE, done=False)
+                ],
+            ),
+            "That's it. Ship it.",
+        ),
+        (
+            _drafting_adapter(
+                drafts=[
+                    _json_turn(
+                        say="Unchanged — the pipeline already covers the goal.",
+                        yaml_text=LOOP_CONDITIONAL_PIPELINE,
+                        done=True,
+                    )
+                ]
+            ),
+            None,
+        ),
+    ]
+
+    conversation: list[dict[str, str]] = []
+    draft = ""
+    goal = "Draft three sections about a brief, score them, and branch on the score."
+    finished = False
+
+    for adapter, reply in turns:
+        result = _run_turn(
+            adapter, goal=goal, conversation=list(conversation), draft=draft
+        )
+        assert result.ok, result.error
+        out = _turn_output(result)
+
+        if out["yaml"]:
+            draft = out["yaml"]
+            assert out["valid"] is True
+        conversation.append({"role": "wizard", "content": out["say"]})
+        if out["done"]:
+            finished = True
+            break
+        if reply:
+            conversation.append({"role": "user", "content": reply})
+
+    assert finished, "the conversation never reached done"
+    # The invalid intermediate never became the draft the host carried forward.
+    assert "2_sections" not in draft
+    _assert_compiles(draft)
+
+
 # ── File-level contracts ─────────────────────────────────────────────────────
 
 

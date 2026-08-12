@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""wizard-chat — build an orchestration by talking to it.
+
+Drives `curation/agents/wizard.yml`. The orchestration handles ONE turn; this
+script is the outer conversation loop, which is all a host has to supply:
+
+    state = {goal, conversation, draft}  →  run_orchestration  →  {say, yaml, done}
+
+The same seam the TUI chat view uses. Nothing below is wizard-specific plumbing
+— it is the loop, verbatim.
+
+Usage:
+    scripts/wizard-chat --goal "Summarize an article, then translate it"
+    scripts/wizard-chat --goal "..." --out my_orch.yml
+    scripts/wizard-chat --goal "..." --reply answers.txt   # scripted, no stdin
+    scripts/wizard-chat --goal "..." --max-turns 4 --verbose
+
+Options:
+    --goal, -g       What you want the orchestration to do (required)
+    --out, -o        Write the final YAML here (default: stdout)
+    --reply, -r      File of scripted replies, one per line, used instead of
+                     stdin. The transcript stays reproducible — this is how the
+                     demo in docs/wizard.md is produced
+    --max-turns      Stop after this many turns (default: 10)
+    --verbose        Show orchestration execution logs
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+from circuitry import run_orchestration
+from circuitry.cli.config import find_config_path, load_config
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+WIZARD = (
+    PROJECT_ROOT / "src" / "circuitry" / "curation" / "agents" / "wizard.yml"
+)
+
+
+def _dig(state: dict, path: str):
+    """Read a dot-path out of the final state. Missing → None."""
+    cursor = state
+    for segment in path.split("."):
+        if not isinstance(cursor, dict) or segment not in cursor:
+            return None
+        cursor = cursor[segment]
+    return cursor
+
+
+def run_turn(*, goal, conversation, draft, config, verbose=False):
+    """One wizard turn. Returns the turn contract: (say, yaml, done, errors)."""
+    result = run_orchestration(
+        orchestration_path=WIZARD,
+        state={"goal": goal, "conversation": conversation, "draft": draft},
+        config=config,
+        verbose=verbose,
+    )
+    state = result.state
+    return (
+        _dig(state, "prime.turn.decide.respond.value.say"),
+        _dig(state, "prime.turn.decide.check.value.yaml"),
+        bool(_dig(state, "prime.turn.decide.done.value")),
+        _dig(state, "prime.turn.decide.check.value.errors") or [],
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Build a Circuitry orchestration by talking to the wizard."
+    )
+    parser.add_argument("--goal", "-g", required=True)
+    parser.add_argument("--out", "-o", type=Path)
+    parser.add_argument("--reply", "-r", type=Path)
+    parser.add_argument("--max-turns", type=int, default=10)
+    parser.add_argument("--verbose", action="store_true")
+    args = parser.parse_args()
+
+    config = load_config(find_config_path(explicit_path=None, cwd=PROJECT_ROOT))
+
+    scripted = None
+    if args.reply is not None:
+        scripted = iter(args.reply.read_text(encoding="utf-8").splitlines())
+
+    conversation: list[dict[str, str]] = []
+    draft = ""
+
+    for turn in range(args.max_turns):
+        say, yaml_text, done, errors = run_turn(
+            goal=args.goal,
+            conversation=conversation,
+            draft=draft,
+            config=config,
+            verbose=args.verbose,
+        )
+
+        print(f"\n\033[1mwizard\033[0m  {say}")
+        if yaml_text:
+            draft = yaml_text
+            print(f"\033[2m        (draft: {len(draft.splitlines())} lines)\033[0m")
+        if errors:
+            print(f"\033[33m        unresolved: {errors[0]}\033[0m")
+
+        conversation.append({"role": "wizard", "content": say or ""})
+
+        if done:
+            print("\n\033[32mwizard is done.\033[0m")
+            break
+
+        if scripted is not None:
+            reply = next(scripted, None)
+            if reply is None:
+                print("\n(transcript exhausted)")
+                break
+            print(f"\033[1myou\033[0m     {reply}")
+        else:
+            try:
+                reply = input("\033[1myou\033[0m     ")
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+
+        conversation.append({"role": "user", "content": reply})
+    else:
+        print(f"\n(stopped after {args.max_turns} turns)")
+
+    if not draft:
+        print("\nNo orchestration was produced.", file=sys.stderr)
+        return 1
+
+    if args.out:
+        args.out.write_text(draft, encoding="utf-8")
+        print(f"\nWrote {args.out} — check it with: cof check {args.out}")
+    else:
+        print()
+        print(draft)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
