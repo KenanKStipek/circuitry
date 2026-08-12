@@ -49,7 +49,9 @@ dependencies = [
     "python-dotenv>=1.0",
     "ollama>=0.1.8",
     "simpleeval>=0.9.13",
-    "mcp>=1.0",
+    # 2.0 renamed FastMCP -> MCPServer and moved it to mcp.server.mcpserver;
+    # src/circuitry/mcp/server.py targets that API, so 1.x will not import.
+    "mcp>=2.0,<3",
 ]
 
 [project.optional-dependencies]
@@ -188,6 +190,63 @@ markers = [
     "integration: marks tests that require local runtime dependencies (opt-in)",
 ]
 addopts = ["--strict-markers"]
+
+[tool.ruff.lint]
+# Ruff's *default* rule set is not stable across releases: 0.16 promoted
+# several hundred rules into it and turned a green tree into 413 findings
+# without a single line of our code changing. Selecting explicitly makes
+# rule adoption a deliberate, reviewable commit instead of something a
+# `pip install -U ruff` can do to CI.
+select = [
+    "E4", "E7", "E9", # pycodestyle errors (E501 line length: see ignore)
+    "F",              # pyflakes
+    "W",              # pycodestyle warnings
+    "I",              # isort — import ordering
+    "UP",             # pyupgrade — modern syntax for our floor (3.10)
+    "B",              # flake8-bugbear
+    "C4",             # flake8-comprehensions
+    "SIM",            # flake8-simplify
+    "RET",            # flake8-return
+    "PIE",            # flake8-pie
+    "ISC",            # flake8-implicit-str-concat
+    "LOG", "G",       # logging correctness / format style
+    "DTZ",            # flake8-datetimez — naive datetimes are a real bug class
+    "ASYNC",          # flake8-async
+    "YTT",            # flake8-2020 — sys.version comparisons
+    "FLY",            # flynt — static str.join
+    "PERF",           # perflint
+    "FURB",           # refurb
+    "RUF",            # ruff-specific
+    "PLE", "PLW",     # pylint errors + warnings (PLC/PLR are mostly style)
+]
+ignore = [
+    # Line length. The codebase wraps by hand at a soft ~88 and reflowing
+    # 295 lines would bury real review signal; no formatter is enforced
+    # here, so this stays a convention rather than a gate.
+    "E501",
+    # Typer's whole CLI idiom is `arg: T = typer.Option(...)` in the
+    # signature. flake8-bugbear's immutable-call allowlist covers our own
+    # helpers (see [tool.ruff.lint.flake8-bugbear]) but Typer's dynamic
+    # re-export shapes still trip it across cli/app.py.
+    "B008",
+    # `try/except: pass` -> `contextlib.suppress` reads worse in the tight
+    # best-effort cleanup paths (thread joins, temp-file unlink) where it
+    # fires, and adds an import + a context manager per site.
+    "SIM105",
+    # Nested `with` -> single parenthesized `with`. Mostly fires in tests
+    # where the nesting documents which patch belongs to which assertion.
+    "SIM117",
+    # try/except inside a loop. Per-item error isolation is the point in
+    # the plugin dispatch and per-branch run loops; hoisting it out would
+    # change semantics, not just shape.
+    "PERF203",
+    # Module-level singletons (`_manager`, plugin registries) are set
+    # through `global` by design and are covered by tests.
+    "PLW0603",
+]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
 
 [tool.mypy]
 # The plugin catalog lazy-imports a wide set of optional third-party

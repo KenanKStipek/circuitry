@@ -173,14 +173,17 @@ def _cancel_run_impl(*, run_id: str) -> dict[str, Any]:
 # ----------------------------------------------------------------- server wire
 def _build_server() -> Any:
     """
-    Construct and return the FastMCP server with tools registered.
+    Construct and return the MCP server with tools registered.
 
     Lazy-imported so `from circuitry.mcp.server import ...` works in test
     environments without an MCP host attached.
-    """
-    from mcp.server.fastmcp import FastMCP
 
-    server = FastMCP(
+    ``MCPServer`` is the mcp 2.0 name for what 1.x called ``FastMCP``
+    (``mcp.server.fastmcp``); the decorator/run surface we use is unchanged.
+    """
+    from mcp.server import MCPServer
+
+    server = MCPServer(
         name="circuitry-mcp",
         instructions=(
             "Drive circuitry orchestrations from a Claude conversation. "
