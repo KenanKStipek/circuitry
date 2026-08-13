@@ -252,9 +252,15 @@ RUN_EPILOG = """
   cof run article-summarizer -e article_text='...'
   cof run ./my-orch.yml -e topic=cats --tail
   cof run ./my-orch.yml --live-state ./state.json
+  cof run learn/hello -e name=World --model gpt-oss:20b
+  cof run learn/hello -e name=World --adapter ollama --model llama3.1:8b
   cof run --last
 
 [bold]Resolution order:[/bold] local file path > bundled orchestration name.
+
+[bold]Settings precedence:[/bold] CLI flags (--adapter/--model) > --profile >
+orchestration > environment (CIRCUITRY_ADAPTER/CIRCUITRY_MODEL) > config file
+> defaults. Env vars overlay the config layer, so a flag or profile beats them.
 Run [bold]cof list[/bold] to see available bundled orchestrations.
 
 [yellow]Note:[/yellow] do not pass secrets via -e KEY=VALUE; use environment
@@ -325,6 +331,14 @@ def run_cmd(
             "wins over project-level). Precedence: CLI > profile > orchestration > config."
         ),
     ),
+    adapter: Optional[str] = typer.Option(
+        None, "--adapter",
+        help="Adapter to use for this run. Beats CIRCUITRY_ADAPTER, --profile, and the orchestration.",
+    ),
+    model: Optional[str] = typer.Option(
+        None, "--model",
+        help="Model to use for this run. Beats CIRCUITRY_MODEL, --profile, and the orchestration.",
+    ),
 ):
     # --last: replay stashed args
     if last:
@@ -344,6 +358,8 @@ def run_cmd(
         tail = stashed.get("tail", False)
         skip_preflight = stashed.get("skip_preflight", False)
         profile = stashed.get("profile")
+        adapter = stashed.get("adapter")
+        model = stashed.get("model")
 
         # Refuse to replay if the previous run stashed redacted secrets — the
         # sentinel string would silently flow into the new run as a literal.
@@ -400,6 +416,10 @@ def run_cmd(
         console.print(f"[bold]State (out):[/bold] {out if out else '—'}")
         if live_state:
             console.print(f"[bold]Live state:[/bold] {live_state}")
+        if adapter:
+            console.print(f"[bold]Adapter (override):[/bold] {adapter}")
+        if model:
+            console.print(f"[bold]Model (override):[/bold] {model}")
         console.print(f"[bold]Dry run:[/bold] {dry_run}")
 
     # Build initial state from --state file + -e overrides
@@ -424,6 +444,8 @@ def run_cmd(
         live_state_path=live_state,
         skip_preflight=skip_preflight,
         profile_name=profile,
+        adapter_override=adapter,
+        model_override=model,
     )
 
     with (
@@ -473,6 +495,8 @@ def run_cmd(
             "tail": tail,
             "skip_preflight": skip_preflight,
             "profile": profile,
+            "adapter": adapter,
+            "model": model,
         })
 
     if tail:
@@ -600,6 +624,14 @@ def run_library_cmd(
         False, "--tail",
         help="Print only the final effect's value as plain text. Ideal for piping.",
     ),
+    adapter: Optional[str] = typer.Option(
+        None, "--adapter",
+        help="Adapter to use for this run. Beats CIRCUITRY_ADAPTER and the orchestration.",
+    ),
+    model: Optional[str] = typer.Option(
+        None, "--model",
+        help="Model to use for this run. Beats CIRCUITRY_MODEL and the orchestration.",
+    ),
 ):
     # Auto-pipe detection
     if not sys.stdout.isatty():
@@ -643,6 +675,10 @@ def run_library_cmd(
         console.print(f"[bold]State (out):[/bold] {out if out else '—'}")
         if live_state:
             console.print(f"[bold]Live state:[/bold] {live_state}")
+        if adapter:
+            console.print(f"[bold]Adapter (override):[/bold] {adapter}")
+        if model:
+            console.print(f"[bold]Model (override):[/bold] {model}")
         console.print(f"[bold]Dry run:[/bold] {dry_run}")
 
     # Build initial state from --state file + -e overrides
@@ -666,6 +702,8 @@ def run_library_cmd(
         verbose=verbose,
         config=effective_cfg,
         live_state_path=live_state,
+        adapter_override=adapter,
+        model_override=model,
     )
 
     with (
