@@ -1,0 +1,30 @@
+ ⭘                                       Circuitry — Runs                                           
+                                                                                                    
+  Runs — Inspect run state as a tree, open a saved state file, replay the last run                  
+                                                                                                    
+  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎  
+  ▊  path to a state JSON (--out / --live-state) — Enter opens it                                ▎  
+  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎  
+  Not valid JSON — Expecting value (line 1, column 20).                                             
+  ▼ half-written.json                   │ Not valid JSON — Expecting value (line 1, column 20).     
+                                        │                                                           
+                                        │ A --live-state file is rewritten after every effect; if   
+                                        │ the run is still going, open it again in a moment.        
+                                        │                                                           
+                                        │                                                           
+                                        │                                                           
+                                        │                                                           
+                                        │                                                           
+                                        │                                                           
+                                        │                                                           
+                                        │                                                           
+                                        │                                                           
+                                        │                                                           
+                                        │                                                           
+                                        │                                                           
+                                        │                                                           
+                                        │                                                           
+  file — half-written.json did not open                                                             
+  Last run — demo.yml · openai · gpt-4o-mini  (Ctrl-R replays it)                                   
+                                                                                                    
+ tab Next view  y Copy path  o Open state file  ^r Replay last run  ? Help  q Back / Qui▏^p palette 

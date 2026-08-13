@@ -51,6 +51,7 @@ from .execution import (
     render_text,
     totals_for,
 )
+from .inspector import StateStore
 from .launch import (
     CUSTOM_MODEL,
     NO_OVERRIDE,
@@ -284,6 +285,9 @@ class RunScreen(ViewScreen):
         self._final_elapsed: float | None = None
         self._in_flight = False
         self._repaint: Any = None
+        #: The app's state store, captured on mount so a run can keep
+        #: publishing into it after this screen is replaced.
+        self._store: StateStore | None = None
 
     # -- composition ---------------------------------------------------------
 
@@ -344,6 +348,8 @@ class RunScreen(ViewScreen):
 
     def _on_mount(self, event: Mount) -> None:
         super()._on_mount(event)
+        store = getattr(self.app, "run_states", None)
+        self._store = store if isinstance(store, StateStore) else None
         self._adopt_pending()
 
     def _adopt_pending(self) -> None:
@@ -608,6 +614,12 @@ class RunScreen(ViewScreen):
     # widgets from here would not be.
 
     def _observe_state(self, state: dict[str, Any]) -> None:
+        # Published to the app's store *here* rather than from the message
+        # handler: the store is what the Runs view inspects, and a run
+        # outlives the screen that launched it — once the user navigates
+        # away this screen stops receiving messages, but the run goes on.
+        if self._store is not None:
+            self._store.publish(state)
         self.post_message(self.RunStateUpdate(state))
 
     def _observe_effect(self, path: str, node: dict[str, Any]) -> None:
@@ -615,6 +627,8 @@ class RunScreen(ViewScreen):
 
     def _observe_finish(self, result: RunResult) -> None:
         cancelled = self._session is not None and self._session.cancelled
+        if self._store is not None:
+            self._store.finish(result.state if result.ok else None)
         self.post_message(self.RunFinished(result, cancelled=cancelled))
 
     def on_run_screen_run_state_update(self, message: RunStateUpdate) -> None:
@@ -663,6 +677,8 @@ class RunScreen(ViewScreen):
         self._started_at = self._clock()
         self._final_elapsed = None
         self._in_flight = True
+        if self._store is not None:
+            self._store.begin(label=self._form.choice.label if self._form else "")
         self._paint()
         self.reveal_execution()
         if self._repaint is None:

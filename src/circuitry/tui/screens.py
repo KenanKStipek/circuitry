@@ -136,6 +136,13 @@ def _build_run_screen(spec: ViewSpec) -> CircuitryScreen:
     return RunScreen(spec)
 
 
+def _runs(spec: ViewSpec) -> CircuitryScreen:
+    """Imported lazily: runs_view imports this module for its base class."""
+    from .runs_view import RunsScreen
+
+    return RunsScreen(spec)
+
+
 def _doctor(spec: ViewSpec) -> CircuitryScreen:
     from .doctor import DoctorScreen
 
@@ -188,7 +195,13 @@ VIEWS: tuple[ViewSpec, ...] = (
         "Orchestration metadata, schema validation, and warnings",
         "3",
     ),
-    ViewSpec("runs", "Runs", "History of past runs and their final state", "4"),
+    ViewSpec(
+        "runs",
+        "Runs",
+        "Inspect run state as a tree, open a saved state file, replay the last run",
+        "4",
+        factory=_runs,
+    ),
     ViewSpec(
         "doctor",
         "Doctor",

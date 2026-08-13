@@ -17,6 +17,7 @@ from typer.core import TyperGroup
 
 from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, ConfigError, resolve_config
 from .doctor import register_doctor
+from .last_run import LAST_RUN_PATH
 from .library_sources import (
     Entry,
     LibraryFetchError,
@@ -89,7 +90,9 @@ def _root(ctx: typer.Context) -> None:
 register_doctor(app)
 register_setup(app)
 
-_LAST_RUN_PATH = GLOBAL_CONFIG_DIR / "last-run.json"
+#: Aliased from :mod:`circuitry.cli.last_run`, which the TUI's replay reads
+#: too — one location, so the two can never disagree about where the stash is.
+_LAST_RUN_PATH = LAST_RUN_PATH
 
 
 def _print_header(title: str) -> None:

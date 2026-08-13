@@ -14,13 +14,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.screen import Screen
 
 from .help import HelpOverlay, binding_rows
+from .inspector import StateStore
 from .screens import VIEWS, CircuitryScreen, HomeScreen, ViewScreen, ViewSpec
 
 __all__ = ["PLANNED_VIEWS", "VIEWS", "CircuitryApp"]
@@ -42,6 +43,15 @@ class CircuitryApp(App[None]):
     #: Set alongside :attr:`pending_run` when the hand-off carries a named
     #: profile (the Profile view's "run with this profile").
     pending_profile: str | None = None
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        #: State published by whatever run is in flight, read by the Runs
+        #: view. Owned by the app rather than a screen because a run
+        #: outlives the screen it was launched from — views replace one
+        #: another, and switching away must not stop the inspector
+        #: following the run.
+        self.run_states = StateStore()
 
     CSS = """
     CircuitryScreen #body {

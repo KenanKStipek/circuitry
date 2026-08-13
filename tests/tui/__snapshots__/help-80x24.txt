@@ -7,7 +7,7 @@
   │1  Li│            ^c  Quit                                          │     │  
   │2  Ru│            ^q  Quit                                          │     │  
   │3  In│             1  Library                                       │     │  
-  │4  Ru│             2  Run                                           │     │  
+  │4  Ru│             2  Run                                           │y the│  
   │5  Do│             3  Inspect                                       │     │  
   │6  Se│             4  Runs                                          │     │  
   │7  Va│             5  Doctor                                    ▁▁  │and p│  
