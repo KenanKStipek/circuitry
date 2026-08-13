@@ -56,9 +56,9 @@ inputs:
   topic: "widgets"
 effects:
   summarize:
-    model: tier-1
+    model: cheap
   sub.deep_analysis:
-    model: tier-4
+    model: good-fast
 """.strip()
         + "\n",
     )
@@ -77,16 +77,16 @@ effects:
     result = run(req)
 
     assert result.ok is True, result.error
-    assert result.state["prime"]["summarize"]["value"] == "tier-1:summarize widgets"
-    assert result.state["prime"]["summarize"]["meta"]["model"] == "tier-1"
+    assert result.state["prime"]["summarize"]["value"] == "cheap:summarize widgets"
+    assert result.state["prime"]["summarize"]["meta"]["model"] == "cheap"
     assert (
-        result.state["prime"]["sub"]["deep_analysis"]["meta"]["model"] == "tier-4"
+        result.state["prime"]["sub"]["deep_analysis"]["meta"]["model"] == "good-fast"
     )
 
     profile_record = result.state["runtime"]["effective_settings"]["profile"]
     assert profile_record["name"] == "fast"
     assert profile_record["content"]["inputs"] == {"topic": "widgets"}
-    assert profile_record["content"]["effects"]["summarize"]["model"] == "tier-1"
+    assert profile_record["content"]["effects"]["summarize"]["model"] == "cheap"
 
 
 def test_run_with_profile_cli_e_wins_over_profile_inputs(tmp_path: Path) -> None:
@@ -120,7 +120,7 @@ def test_run_with_unknown_profile_effect_path_fails_with_actionable_error(
     orch_path = _write_orch(tmp_path)
     _write(
         orch_path.parent / "profiles" / "fast.yml",
-        "effects:\n  does_not_exist:\n    model: tier-1\n",
+        "effects:\n  does_not_exist:\n    model: cheap\n",
     )
 
     req = RunRequest(

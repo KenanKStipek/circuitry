@@ -88,7 +88,7 @@ def _adapter(**overrides: Any) -> CyberdinerAdapter:
     fields: dict[str, Any] = {
         "expo_url": "https://expo.example.test",
         "token": "ck_test_token_123",
-        "default_tier": "tier-1",
+        "default_tier": "cheap",
         "poll_interval_ms": 500,
         "timeout_seconds": 30,
     }
@@ -101,20 +101,53 @@ def _adapter(**overrides: Any) -> CyberdinerAdapter:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("tier", ["tier-1", "tier-2", "tier-3", "tier-4"])
-def test_tier_mapping_valid_model_selects_that_tier(tier: str) -> None:
-    assert _resolve_tier(tier, "tier-1") == tier
+# CyberDiner's seeded tier names (expo `scripts/seed-tiers.sh`).
+_REAL_TIERS = [
+    "cheap",
+    "fast-cheap",
+    "fast",
+    "good-cheap",
+    "good",
+    "good-fast",
+    "alpha",
+]
+
+
+@pytest.mark.parametrize("tier", _REAL_TIERS)
+def test_tier_mapping_real_network_tier_passes_through(tier: str) -> None:
+    assert _resolve_tier(tier, "cheap") == tier
 
 
 def test_tier_mapping_empty_model_uses_default_tier() -> None:
-    assert _resolve_tier("", "tier-3") == "tier-3"
-    assert _resolve_tier("   ", "tier-3") == "tier-3"
+    assert _resolve_tier("", "good") == "good"
+    assert _resolve_tier("   ", "good") == "good"
 
 
-def test_tier_mapping_invalid_model_raises_value_error_naming_valid_tiers() -> None:
-    with pytest.raises(ValueError, match="tier-1, tier-2, tier-3, tier-4") as exc:
-        _resolve_tier("gpt-4o-mini", "tier-1")
+def test_tier_mapping_trims_surrounding_whitespace() -> None:
+    assert _resolve_tier("  good-fast \n", "cheap") == "good-fast"
+
+
+def test_tier_mapping_unknown_tier_passes_through_by_default() -> None:
+    """The network owns the tier list — the client must not second-guess it."""
+    assert _resolve_tier("tier-that-shipped-yesterday", "cheap") == (
+        "tier-that-shipped-yesterday"
+    )
+
+
+def test_tier_mapping_no_tier_at_all_is_actionable() -> None:
+    with pytest.raises(ValueError, match="default_tier") as exc:
+        _resolve_tier("", "")
+    assert "model:" in str(exc.value)
+
+
+def test_tier_mapping_valid_tiers_opt_in_rejects_unknown_tier() -> None:
+    with pytest.raises(ValueError, match="valid_tiers: cheap, good-fast") as exc:
+        _resolve_tier("gpt-4o-mini", "cheap", ("cheap", "good-fast"))
     assert "gpt-4o-mini" in str(exc.value)
+
+
+def test_tier_mapping_valid_tiers_opt_in_allows_listed_tier() -> None:
+    assert _resolve_tier("good-fast", "cheap", ("cheap", "good-fast")) == "good-fast"
 
 
 # ---------------------------------------------------------------------------
@@ -136,10 +169,10 @@ def test_generate_happy_path_submit_poll_complete(
     monkeypatch.setattr("urllib.request.urlopen", scripted)
 
     adapter = _adapter()
-    result = adapter.generate(model="tier-2", prompt="hi", timeout_seconds=10)
+    result = adapter.generate(model="good-fast", prompt="hi", timeout_seconds=10)
 
     assert result.text == "hello world"
-    assert result.raw == {"job_id": "job-1", "status": "complete", "tier": "tier-2"}
+    assert result.raw == {"job_id": "job-1", "status": "complete", "tier": "good-fast"}
     assert result.tokens_sent is None
     assert result.tokens_received is None
     assert validate_generate_result(result, adapter_name="cyberdiner") == []
@@ -148,7 +181,7 @@ def test_generate_happy_path_submit_poll_complete(
     submit_call = scripted.calls[0]
     assert submit_call["method"] == "POST"
     assert submit_call["url"] == "https://expo.example.test/beta/jobs"
-    assert _json.loads(submit_call["body"]) == {"prompt": "hi", "tier": "tier-2"}
+    assert _json.loads(submit_call["body"]) == {"prompt": "hi", "tier": "good-fast"}
 
     # Poll calls hit the job_id endpoint.
     for call in scripted.calls[1:]:
@@ -165,21 +198,64 @@ def test_generate_uses_default_tier_when_model_empty(
     )
     monkeypatch.setattr("urllib.request.urlopen", scripted)
 
-    adapter = _adapter(default_tier="tier-4")
+    adapter = _adapter(default_tier="good")
     result = adapter.generate(model="", prompt="hi", timeout_seconds=10)
 
-    assert result.raw["tier"] == "tier-4"
-    assert _json.loads(scripted.calls[0]["body"])["tier"] == "tier-4"
+    assert result.raw["tier"] == "good"
+    assert _json.loads(scripted.calls[0]["body"])["tier"] == "good"
 
 
-def test_generate_invalid_tier_raises_before_any_request(
+def test_generate_uses_default_tier_when_model_is_whitespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_clock(monkeypatch)
+    scripted = _ScriptedUrlopen(
+        [{"job_id": "job-2b", "status": "complete", "result": "ok"}]
+    )
+    monkeypatch.setattr("urllib.request.urlopen", scripted)
+
+    adapter = _adapter(default_tier="good-cheap")
+    result = adapter.generate(model="   ", prompt="hi", timeout_seconds=10)
+
+    assert result.raw["tier"] == "good-cheap"
+    assert _json.loads(scripted.calls[0]["body"])["tier"] == "good-cheap"
+
+
+def test_generate_unknown_tier_is_submitted_and_expo_400_surfaces_actionably(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tier validation belongs to expo; its 400 is the actionable error."""
+    _install_clock(monkeypatch)
+    seen: list[str] = []
+
+    def fake_urlopen(req: Any, timeout: float = 0) -> Any:
+        seen.append(_json.loads(req.data.decode("utf-8"))["tier"])
+        raise HTTPError(
+            url=req.full_url,
+            code=400,
+            msg="Bad Request",
+            hdrs=None,  # type: ignore[arg-type]
+            fp=io.BytesIO(b'{"error":"unknown tier \'gpt-4o-mini\'"}'),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    adapter = _adapter()
+    with pytest.raises(RuntimeError, match="HTTP 400") as exc:
+        adapter.generate(model="gpt-4o-mini", prompt="hi", timeout_seconds=10)
+
+    assert seen == ["gpt-4o-mini"]
+    assert "unknown tier" in str(exc.value)
+
+
+def test_generate_valid_tiers_opt_in_raises_before_any_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     scripted = _ScriptedUrlopen([{"job_id": "job-x", "status": "complete"}])
     monkeypatch.setattr("urllib.request.urlopen", scripted)
 
-    adapter = _adapter()
-    with pytest.raises(ValueError, match="tier-1, tier-2, tier-3, tier-4"):
+    adapter = _adapter(valid_tiers=("cheap", "good-fast"))
+    with pytest.raises(ValueError, match="valid_tiers: cheap, good-fast"):
         adapter.generate(model="not-a-tier", prompt="hi", timeout_seconds=10)
     assert scripted.calls == []
 
@@ -203,7 +279,7 @@ def test_generate_failed_status_raises_with_error_message(
 
     adapter = _adapter()
     with pytest.raises(RuntimeError, match="model exploded"):
-        adapter.generate(model="tier-1", prompt="hi", timeout_seconds=10)
+        adapter.generate(model="cheap", prompt="hi", timeout_seconds=10)
 
 
 def test_generate_cancelled_status_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -218,7 +294,7 @@ def test_generate_cancelled_status_raises(monkeypatch: pytest.MonkeyPatch) -> No
 
     adapter = _adapter()
     with pytest.raises(RuntimeError, match="cancelled"):
-        adapter.generate(model="tier-1", prompt="hi", timeout_seconds=10)
+        adapter.generate(model="cheap", prompt="hi", timeout_seconds=10)
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +318,7 @@ def test_poll_timeout_raises_naming_timeout_and_job_id(
 
     adapter = _adapter(poll_interval_ms=500)
     with pytest.raises(RuntimeError, match=r"timed out after 1s.*job-5") as exc:
-        adapter.generate(model="tier-1", prompt="hi", timeout_seconds=1)
+        adapter.generate(model="cheap", prompt="hi", timeout_seconds=1)
     assert clock.now >= 1.0
     assert "job-5" in str(exc.value)
 
@@ -266,7 +342,7 @@ def test_poll_cadence_honors_poll_interval(monkeypatch: pytest.MonkeyPatch) -> N
 
     adapter = _adapter(poll_interval_ms=500)
     with pytest.raises(RuntimeError, match="timed out"):
-        adapter.generate(model="tier-1", prompt="hi", timeout_seconds=2)
+        adapter.generate(model="cheap", prompt="hi", timeout_seconds=2)
 
     # Poll calls (excluding the initial submit) should be ~0.5s apart.
     poll_times = calls[1:]
@@ -287,7 +363,7 @@ def test_bearer_header_sent_with_token(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("urllib.request.urlopen", scripted)
 
     adapter = _adapter(token="ck_super_secret")
-    adapter.generate(model="tier-1", prompt="hi", timeout_seconds=10)
+    adapter.generate(model="cheap", prompt="hi", timeout_seconds=10)
 
     headers = {k.lower(): v for k, v in scripted.calls[0]["headers"].items()}
     assert headers.get("authorization") == "Bearer ck_super_secret"
@@ -296,13 +372,13 @@ def test_bearer_header_sent_with_token(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_missing_token_raises_at_generate(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _adapter(token="")
     with pytest.raises(RuntimeError, match="token not configured"):
-        adapter.generate(model="tier-1", prompt="hi", timeout_seconds=10)
+        adapter.generate(model="cheap", prompt="hi", timeout_seconds=10)
 
 
 def test_missing_expo_url_raises_at_generate(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _adapter(expo_url="")
     with pytest.raises(RuntimeError, match="expo_url not configured"):
-        adapter.generate(model="tier-1", prompt="hi", timeout_seconds=10)
+        adapter.generate(model="cheap", prompt="hi", timeout_seconds=10)
 
 
 def test_http_error_wrapped_in_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -319,7 +395,7 @@ def test_http_error_wrapped_in_runtime_error(monkeypatch: pytest.MonkeyPatch) ->
 
     adapter = _adapter()
     with pytest.raises(RuntimeError, match="HTTP 500") as exc:
-        adapter.generate(model="tier-1", prompt="hi", timeout_seconds=10)
+        adapter.generate(model="cheap", prompt="hi", timeout_seconds=10)
     assert exc.value.__cause__ is not None
 
 
@@ -333,7 +409,7 @@ def test_connection_error_wrapped_in_runtime_error(
 
     adapter = _adapter()
     with pytest.raises(RuntimeError, match="Name or service not known") as exc:
-        adapter.generate(model="tier-1", prompt="hi", timeout_seconds=10)
+        adapter.generate(model="cheap", prompt="hi", timeout_seconds=10)
     assert exc.value.__cause__ is not None
 
 
@@ -414,7 +490,8 @@ def test_factory_cyberdiner_config_passthrough() -> None:
             "cyberdiner": {
                 "expo_url": "https://expo.internal",
                 "token": "ck_abc123",
-                "default_tier": "tier-2",
+                "default_tier": "fast",
+                "valid_tiers": ["cheap", " good-fast ", ""],
                 "poll_interval_ms": 250,
                 "timeout_seconds": 45,
             }
@@ -424,7 +501,8 @@ def test_factory_cyberdiner_config_passthrough() -> None:
     assert isinstance(adapter, CyberdinerAdapter)
     assert adapter.expo_url == "https://expo.internal"
     assert adapter.token == "ck_abc123"
-    assert adapter.default_tier == "tier-2"
+    assert adapter.default_tier == "fast"
+    assert adapter.valid_tiers == ("cheap", "good-fast")
     assert adapter.poll_interval_ms == 250
     assert adapter.timeout_seconds == 45
 
@@ -434,7 +512,8 @@ def test_factory_cyberdiner_defaults_when_config_absent() -> None:
     assert isinstance(adapter, CyberdinerAdapter)
     assert adapter.expo_url == ""
     assert adapter.token == ""
-    assert adapter.default_tier == "tier-1"
+    assert adapter.default_tier == "cheap"
+    assert adapter.valid_tiers == ()
     assert adapter.poll_interval_ms == 500
     assert adapter.timeout_seconds == 30
 

@@ -29,10 +29,10 @@ inputs:
   topic: "circuit design"   # merged into the initial state (CLI -e wins)
 effects:                    # keyed by dotted effect path, as in state
   summarize:
-    model: tier-1
+    model: cheap
     provider: cyberdiner
   deep_analysis:
-    model: tier-4
+    model: good-fast
   my_reflector:
     enabled: false           # do not execute this effect for this run
 persistence:                 # where this run's state snapshot lands

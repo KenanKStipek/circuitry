@@ -5,8 +5,9 @@
 # the orchestration's point of view it's an ordinary prompt effect — the
 # queue is entirely inside the adapter.
 #
-# `model:` selects a capability tier, not a provider model name. Valid
-# tiers: tier-1, tier-2, tier-3, tier-4.
+# `model:` selects a capability tier, not a provider model name. The network
+# owns the tier vocabulary; CyberDiner's seeded tiers today are cheap,
+# fast-cheap, fast, good-cheap, good, good-fast, alpha.
 #
 # Config (config.json — NOT this YAML; the token is a secret):
 #   {"runtime": {"adapters": {"cyberdiner": {
@@ -23,7 +24,7 @@
 # State path: prime.ask.value
 
 adapter: cyberdiner
-model: tier-1
+model: cheap
 
 effects:
   - type: prompt
