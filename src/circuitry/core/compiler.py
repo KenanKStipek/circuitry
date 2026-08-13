@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from typing import Any, Literal, Union, cast
 
 from .conditional import ConditionalDefinition, ConditionDef
@@ -173,6 +174,97 @@ def compile_orchestration(
         effects=compiled_effects,
         flow=flow,
     )
+
+
+def apply_effect_overrides(
+    root: DynamicDefinition, overrides: dict[str, dict[str, Any]]
+) -> tuple[DynamicDefinition, set[str]]:
+    """Apply a profile's per-effect model/provider overlay onto a compiled tree.
+
+    Rebuilds the immutable ``*Definition`` chain bottom-up via
+    ``dataclasses.replace`` so frozen semantics are preserved — this never
+    mutates ``root`` or any of its descendants. Dotted override keys use the
+    same addressing as runtime state paths (relative to the ``prime`` root),
+    matching ``profiles.collect_orchestration_effect_paths``.
+
+    Returns the rebuilt root plus the set of override keys that matched an
+    effect somewhere in the tree.
+    """
+    if not overrides:
+        return root, set()
+
+    matched: set[str] = set()
+    new_children = [
+        _overlay_effect(child, path="", overrides=overrides, matched=matched)
+        for child in root.effects
+    ]
+    return replace(root, effects=new_children), matched
+
+
+def _overlay_effect(
+    node: EffectDef,
+    *,
+    path: str,
+    overrides: dict[str, dict[str, Any]],
+    matched: set[str],
+) -> EffectDef:
+    name = getattr(node, "name", None)
+    own_path = _scope_child(path, name) if name else path
+
+    override = overrides.get(own_path) if own_path else None
+    if override:
+        matched.add(own_path)
+        model_provider: dict[str, Any] = {}
+        if "model" in override and hasattr(node, "model"):
+            model_provider["model"] = override["model"]
+        if "provider" in override and hasattr(node, "provider"):
+            model_provider["provider"] = override["provider"]
+        if model_provider:
+            node = replace(node, **model_provider)
+
+    if isinstance(node, DynamicDefinition):
+        node = replace(
+            node,
+            effects=[
+                _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
+                for c in node.effects
+            ],
+        )
+    elif isinstance(node, ReflectorDefinition):
+        node = replace(
+            node,
+            inner=replace(
+                node.inner,
+                effects=[
+                    _overlay_effect(
+                        c, path=own_path, overrides=overrides, matched=matched
+                    )
+                    for c in node.inner.effects
+                ],
+            ),
+        )
+    elif isinstance(node, ConditionalDefinition):
+        node = replace(
+            node,
+            then_effects=tuple(
+                _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
+                for c in node.then_effects
+            ),
+            else_effects=tuple(
+                _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
+                for c in node.else_effects
+            ),
+        )
+    elif isinstance(node, LoopDefinition):
+        node = replace(
+            node,
+            body=tuple(
+                _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
+                for c in node.body
+            ),
+        )
+
+    return node
 
 
 def _compile_effect(
