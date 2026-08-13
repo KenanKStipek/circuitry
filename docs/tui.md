@@ -8,14 +8,15 @@ pip install "circuitry-cof[tui]"
 ```
 
 This page documents the shell — navigation, keys, layout breakpoints, logging
-and the test harness — and each view as it lands (Library below; Run, Inspect,
-Runs, Doctor and Settings are still placeholders).
+and the test harness — and the views that have landed (Library, Doctor,
+Settings and Validate below). Views still to come (Run, Inspect, Runs) render a
+placeholder until they do.
 
 ## Keymap
 
 | Key | Action |
 | --- | --- |
-| `1`–`6` | Jump straight to a view, in registry order |
+| `1`–`7` | Jump straight to a view, in registry order |
 | `Tab` / `Shift+Tab` | Cycle forward/backward through home and every view |
 | `Enter` | Open the highlighted view from the home list |
 | `?` | Toggle the help overlay |
@@ -108,6 +109,65 @@ current directory). An existing file is never clobbered silently: a modal asks
 first (`y` overwrites, `n`/`Esc` keeps the file), and the status line reports
 what happened.
 
+## Doctor (`5`) and Settings (`6`)
+
+Doctor answers "can this machine run anything" in two panels.
+
+The top panel is the preflight walk — the same `check()` call `cof doctor`
+makes on every enabled (or, with no allowlist, every compiled-in) adapter, tool
+plugin and configured runtime plugin. Enumerating what will be checked is
+instant, so every row is on screen immediately in a `checking…` state; results
+replace them as they arrive, up to `CHECK_CONCURRENCY` probes at a time. A slow
+network check therefore costs you one row, never the keyboard. `Ctrl-R` re-runs
+the whole walk.
+
+Rows classify the same way the CLI does:
+
+| State | Meaning |
+| --- | --- |
+| `ok` | `check()` returned ready |
+| `deferred` | can only be built with a runtime-injected handler (`host_claude`) |
+| `missing deps` | `check()` reported missing items |
+| `error` | unknown extension, failed load, or a `check()` that raised |
+
+Missing items are translated out of the `CheckResult` grammar into next steps:
+
+| Item | Rendered as |
+| --- | --- |
+| `env:OPENAI_API_KEY` | Set the OPENAI_API_KEY environment variable, then re-run the check. |
+| `binary:ffmpeg` | Install ffmpeg and make sure it is on your PATH. |
+| `library:pymongo` | Install the Python package: pip install pymongo |
+| `host:http://localhost:11434` | Start the service at http://localhost:11434, or point the config at a host that is up. |
+
+The bottom panel — and the Settings view on its own — is
+`resolve_effective_settings` flattened to one row per value, each tagged with
+the layer it came from (`cli`, `orchestration`, `config`, `default`). `runtime`
+is flattened to dotted keys so a nested credential gets its own row, and every
+value goes through `circuitry.cli.redaction.redact` first, so a token renders as
+`***REDACTED***` and never reaches the compositor.
+
+## Validate (`7`)
+
+Type a path, press Enter. `cof check` returns at the first gate that trips,
+because all it owes the shell is an exit code; this view runs each gate
+independently and groups everything it finds by class:
+
+| Class | Gate |
+| --- | --- |
+| Load | file unreadable, empty, or unparseable — nothing else can run |
+| Schema | `orchestration.schema.json`, with the JSON pointer to the offending field |
+| Allowlist | `enabled_adapters` / `enabled_tools` / `enabled_plugins` |
+| Compile | `compile_orchestration` |
+| Cycle | `detect_cycles` over the static `use:` graph |
+| Preflight | `check()` on every extension the file references, with next steps |
+
+Gates that could not run (no config resolved, `jsonschema` absent) are named
+under "Not checked:" rather than being silently counted as passing. `Ctrl-R`
+re-validates the current path after you have edited the file.
+
+Validation reads files and may probe the network, so it runs in a worker; the
+view sits in a `Validating…` state until the report lands.
+
 ## Adding a view
 
 Views are declared once, in `circuitry/tui/screens.py`:
@@ -130,6 +190,20 @@ overlay together. To replace a placeholder, subclass `ViewScreen` (implementing
 `compose_body`) and set the spec's `factory`; nothing else in the shell changes.
 A view whose panes scroll on their own sets `BODY_CONTAINER = Vertical` so the
 body itself does not also scroll.
+
+The factory is a small function that imports the screen locally, which is what
+keeps `screens.py` the single registry without it depending on the screens
+registered in it.
+
+Two rules the built views follow, both learned the hard way:
+
+- Anything a view renders that came from a message — a `check()` message, a
+  validator error — is rendered with `markup=False`. A schema error quoting
+  `[A-Za-z_]` is not a style tag, and Textual will happily eat it.
+- Slow work belongs in a `run_worker(..., thread=True)` that hands results back
+  through `app.call_from_thread`, with the screen painting a per-item pending
+  state up front. Set a closing flag in `on_unmount` so a result cannot be
+  posted into a screen that has gone away.
 
 ## Testing
 
@@ -161,3 +235,17 @@ CIRCUITRY_SNAPSHOT_UPDATE=1 pytest tests/tui
 
 A missing snapshot fails rather than silently recording, so CI cannot pass on
 an empty baseline.
+
+Two conventions keep the view suites honest:
+
+- Screens that read the machine (Doctor, Settings) take a
+  `DiagnosticsSource`, and screens that read a file (Validate) take a
+  validator callable. Tests pass a fixture instead, so an assertion is about
+  the view and not about whether the CI box has ffmpeg installed.
+- Snapshots are rendered from canned data for the same reason — pinning the
+  layout, not the adapter registry, which would otherwise re-record every
+  snapshot each time an adapter is added.
+
+The pure data layer behind those views (`circuitry.tui.diagnostics`) imports no
+Textual, so its tests live in `tests/test_tui_diagnostics.py` and run in the CI
+lanes that install without the `tui` extra and skip `tests/tui` entirely.
