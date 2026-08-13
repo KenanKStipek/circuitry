@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Protocol
 
 from ..adapters import build_adapter
 from ..adapters.factory import ADAPTER_REGISTRY
@@ -48,6 +48,7 @@ __all__ = [
     "ISSUE_KINDS",
     "CheckTarget",
     "Diagnostics",
+    "DiagnosticsSource",
     "ExtensionCheck",
     "SettingRow",
     "ValidationIssue",
@@ -69,6 +70,18 @@ CATEGORY_LABELS: dict[str, str] = {
     "tool": "Tool plugins",
     "runtime_plugin": "Runtime plugins",
 }
+
+CATEGORY_NOUNS: dict[str, tuple[str, str]] = {
+    "adapter": ("adapter", "adapters"),
+    "tool": ("tool plugin", "tool plugins"),
+    "runtime_plugin": ("runtime plugin", "runtime plugins"),
+}
+
+
+def counted(count: int, category: str) -> str:
+    """``1 adapter`` / ``3 adapters`` — counts read badly when pluralised wrong."""
+    singular, plural = CATEGORY_NOUNS[category]
+    return f"{count} {singular if count == 1 else plural}"
 
 #: Outcome of one extension check. ``checking`` is the pre-result placeholder
 #: the view paints while the worker is still running.
@@ -451,13 +464,30 @@ def validate_report(
     return ValidationReport(path, tuple(issues), tuple(skipped))
 
 
+class DiagnosticsSource(Protocol):
+    """What the Doctor and Settings views need from an environment.
+
+    A Protocol rather than a concrete class so a test can hand a screen a
+    fixture machine — a handful of canned results — instead of whatever the
+    machine running the suite happens to have installed.
+    """
+
+    def targets(self) -> tuple[CheckTarget, ...]:
+        """Everything that will be checked, known without checking anything."""
+        ...
+
+    def check(self, target: CheckTarget) -> ExtensionCheck:
+        """Check one target. May be slow; callers run it off the UI thread."""
+        ...
+
+    def rows(self) -> tuple[SettingRow, ...]:
+        """The effective settings, redacted, with source attribution."""
+        ...
+
+
 @dataclass(frozen=True)
 class Diagnostics:
-    """The environment the Doctor and Settings views describe.
-
-    Views take one of these so a test can hand them a fixture config instead of
-    whatever happens to be on the machine running the suite.
-    """
+    """The live environment: the real config, the real ``check()`` calls."""
 
     config: CircuitryConfig
     settings: EffectiveSettings
