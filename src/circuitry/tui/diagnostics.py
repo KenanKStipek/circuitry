@@ -435,7 +435,11 @@ def validate_report(
         issues.append(ValidationIssue("compile", str(exc)))
 
     try:
-        cycle = detect_cycles(orch, root_path=path)
+        cycle = detect_cycles(
+            orch,
+            root_path=path,
+            runtime=(config.runtime if config is not None else None),
+        )
     except Exception as exc:  # noqa: BLE001 - unreadable sub-orchestration, etc.
         issues.append(ValidationIssue("cycle", str(exc)))
     else:

@@ -146,25 +146,29 @@ class UseRuntime:
         self.verbose = verbose
         self.depth = depth
         self._ancestors = ancestors or []
+        # Pin recorded when `ref:` resolved through a library source, mirrored
+        # onto the effect's meta for per-effect introspection.
+        self._pin: dict[str, Any] | None = None
 
     def _resolve_orchestration(self) -> Path:
         """Resolve orchestration reference to a file path.
 
         Field-driven resolution:
-          - ref: curation library lookup via registry (slash-delimited names supported)
+          - ref: library lookup across every configured source — bare names by
+            source precedence, `source:name` exactly. Remote resolutions record
+            their commit pin so the run is reproducible from cache.
           - path: filesystem path (absolute, cwd-relative, or parent-orchestration-relative)
-          - orchestration (deprecated): try filesystem first, then registry — same chain
-            as the legacy field semantics.
+          - orchestration (deprecated): try filesystem first, then the library — same
+            chain as the legacy field semantics.
         """
-        from ..cli.registry import resolve_bundled
-
         if self.defn.ref:
-            resolved = resolve_bundled(self.defn.ref)
+            resolved = self._resolve_library_ref(self.defn.ref)
             if resolved is not None:
                 return resolved
             raise ValueError(
                 f"Use effect '{self.defn.name}': ref '{self.defn.ref}' did not resolve "
-                "in the curation library. Run `cof list` to see available entries."
+                f"in any configured library source ({self._source_names()}). "
+                "Run `cof list` to see available entries."
             )
 
         if self.defn.path:
@@ -196,7 +200,7 @@ class UseRuntime:
                 if relative.exists() and relative.is_file():
                     return relative
 
-            bundled = resolve_bundled(legacy)
+            bundled = self._resolve_library_ref(legacy)
             if bundled is not None:
                 return bundled
 
@@ -210,6 +214,41 @@ class UseRuntime:
             f"Use effect '{self.defn.name}': no reference field set "
             "(expected one of ref/path/orchestration)."
         )
+
+    def _resolve_library_ref(self, ref: str) -> Path | None:
+        """Resolve through the library registry, recording the pin on success.
+
+        A never-fetched source raises with the `cof library refresh` command
+        needed — validate/preflight normally catches that first, so reaching it
+        here means the cache went away between check and run.
+        """
+        from .library_ref import LibraryRefError, record_pin, resolve_ref
+
+        try:
+            resolved = resolve_ref(ref, runtime=self.runtime_config)
+        except LibraryRefError as exc:
+            raise ValueError(f"Use effect '{self.defn.name}': {exc}") from exc
+
+        if resolved is None:
+            return None
+
+        record_pin(self.runtime_config, resolved)
+        self._pin = resolved.as_pin()
+        if resolved.ambiguous_sources:
+            logger.warning(
+                "use '%s': ref %r matched multiple sources; using %s:%s (also in: %s)",
+                self.defn.name,
+                ref,
+                resolved.source,
+                ref,
+                ", ".join(resolved.ambiguous_sources),
+            )
+        return resolved.path
+
+    def _source_names(self) -> str:
+        from .library_ref import build_registry
+
+        return ", ".join(build_registry(self.runtime_config).source_names) or "none"
 
     def _check_interface(
         self, orch: dict[str, Any], rendered_inputs: dict[str, Any]
@@ -331,6 +370,8 @@ class UseRuntime:
             label = resolved_label
             if not meta["inline"]:
                 meta["resolved_path"] = resolved_label
+            if self._pin is not None:
+                meta["library_ref"] = self._pin
 
             # Cycle detection — runtime call-stack tracking by resolved identity.
             if identity in call_stack:

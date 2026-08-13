@@ -371,6 +371,16 @@ class LibraryRegistry:
         return cls([_build_source(spec, index) for index, spec in enumerate(raw_sources)])
 
     @classmethod
+    def from_runtime(cls, runtime: Optional[dict[str, Any]] = None) -> "LibraryRegistry":
+        """Build from a bare `runtime` mapping rather than a `CircuitryConfig`.
+
+        The core runtime only ever carries the resolved `runtime` dict (see
+        `effective_settings`), so this is the entry point `use ref:` resolution
+        and static cycle detection use.
+        """
+        return cls.from_config(CircuitryConfig(runtime=dict(runtime or {})))
+
+    @classmethod
     def default(cls) -> "LibraryRegistry":
         return cls([CurationSource()])
 

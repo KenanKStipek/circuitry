@@ -453,14 +453,14 @@
     "UseEffect": {
       "type": "object",
       "required": ["type", "name"],
-      "description": "Runs another orchestration as an isolated sub-step. Provide exactly one of 'ref' (curation library lookup), 'path' (filesystem), or 'inline' (Mustache template yielding YAML). The 'orchestration' field is deprecated — use 'ref' or 'path' instead.",
+      "description": "Runs another orchestration as an isolated sub-step. Provide exactly one of 'ref' (library lookup across configured sources), 'path' (filesystem), or 'inline' (Mustache template yielding YAML). The 'orchestration' field is deprecated — use 'ref' or 'path' instead.",
       "properties": {
         "type": { "const": "use" },
         "name": { "$ref": "#/$defs/NamePattern" },
         "description": { "type": "string" },
         "ref": {
           "type": "string",
-          "description": "Curation library lookup. Slash-delimited names like 'utilities/critique' resolve to 'curation/utilities/critique.yml'. Mutually exclusive with 'path', 'orchestration', and 'inline'."
+          "description": "Library lookup across every source configured in runtime.library.sources. A bare, slash-delimited name like 'utilities/critique' searches sources in precedence order (curation-only by default, resolving to 'curation/utilities/critique.yml'). A source-qualified name — '<source>:<name>', e.g. 'hub:utilities/critique' — resolves in exactly that source and never falls through. Remote (github) sources are served from a SHA-pinned cache and record the commit into runtime.library_refs; refresh them with `cof library refresh <source>`. Mutually exclusive with 'path', 'orchestration', and 'inline'."
         },
         "path": {
           "type": "string",

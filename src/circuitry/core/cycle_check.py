@@ -4,14 +4,22 @@ Walks `ref:` and `path:` references at validate time, building an adjacency
 map and detecting cycles via DFS with three-color marking. Inline-mode subs
 are excluded — their content renders at runtime, so the static graph cannot
 see them.
+
+`ref:` edges resolve through the library registry, so the graph crosses
+sources: a folder orchestration referencing a github entry is followed into
+that source's SHA-pinned cache path, and a cycle that closes through a remote
+source is caught before anything runs.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import yaml  # type: ignore[import-untyped]
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from ..cli.library_sources import LibraryRegistry
 
 
 class CycleDetected(ValueError):
@@ -35,7 +43,7 @@ def _walk_effects(effects: Any) -> list[dict[str, Any]]:
     return out
 
 
-def _collect_use_refs(orch: dict[str, Any]) -> list[tuple[str, str]]:
+def collect_use_refs(orch: dict[str, Any]) -> list[tuple[str, str]]:
     """Return a list of (kind, value) for every `use` effect referencing a file/library entry.
 
     Skips inline-mode uses. Kind is 'ref' or 'path'; for the deprecated
@@ -58,17 +66,37 @@ def _collect_use_refs(orch: dict[str, Any]) -> list[tuple[str, str]]:
     return out
 
 
-def _resolve_reference(
-    kind: str, value: str, *, parent_dir: Optional[Path]
+def resolve_reference(
+    kind: str,
+    value: str,
+    *,
+    parent_dir: Optional[Path],
+    registry: Optional["LibraryRegistry"] = None,
+    runtime: Optional[dict[str, Any]] = None,
 ) -> Optional[Path]:
-    """Resolve a `ref:` / `path:` value to an absolute file path, or None if unresolvable."""
-    from ..cli.registry import resolve_bundled
+    """Resolve a `ref:` / `path:` value to an absolute file path, or None if unresolvable.
+
+    `ref:` goes through the library registry (cross-source, cache paths
+    included); `path:` keeps its filesystem-first chain with a library lookup
+    as the final fallback. An unfetched remote source resolves to None here —
+    a missing cache is preflight's error to raise, not a cycle.
+    """
+    from .library_ref import LibraryRefError, build_registry, resolve_ref
+
+    if registry is None:
+        registry = build_registry(runtime)
+
+    def library_lookup(ref: str) -> Optional[Path]:
+        try:
+            resolved = resolve_ref(ref, registry=registry)
+        except LibraryRefError:
+            return None
+        return resolved.path.resolve() if resolved is not None else None
 
     if kind == "ref":
-        resolved = resolve_bundled(value)
-        return resolved.resolve() if resolved is not None else None
+        return library_lookup(value)
 
-    # path / legacy orchestration: try filesystem then registry as fallback
+    # path / legacy orchestration: try filesystem then the library as fallback
     candidate = Path(value)
     if candidate.exists() and candidate.is_file():
         return candidate.resolve()
@@ -78,17 +106,23 @@ def _resolve_reference(
         if relative.exists() and relative.is_file():
             return relative.resolve()
 
-    bundled = resolve_bundled(value)
-    if bundled is not None:
-        return bundled.resolve()
+    return library_lookup(value)
 
-    return None
+
+def load_orch(path: Path) -> dict[str, Any]:
+    """Parse an orchestration file, treating unreadable content as empty."""
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def detect_cycles(
     root_orch: dict[str, Any],
     *,
     root_path: Optional[Path] = None,
+    runtime: Optional[dict[str, Any]] = None,
 ) -> Optional[list[str]]:
     """Walk the static `use:` graph from root_orch.
 
@@ -97,13 +131,18 @@ def detect_cycles(
 
     `root_path` is the path of the root orchestration if it was loaded from disk;
     used both as a node identity for the root and to scope parent-relative paths.
+    `runtime` is the resolved runtime config; its `library.sources` decide which
+    sources `ref:` edges may traverse (curation-only when omitted).
     """
+    from .library_ref import build_registry
+
+    registry = build_registry(runtime)
     cache: dict[str, dict[str, Any]] = {}
 
     def load(path: Path) -> dict[str, Any]:
         key = str(path)
         if key not in cache:
-            cache[key] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            cache[key] = load_orch(path)
         return cache[key]
 
     # Three-color DFS: 0=unvisited, 1=on-stack, 2=done.
@@ -125,8 +164,10 @@ def detect_cycles(
         color[identity] = 1
         parent_chain.append(identity)
         try:
-            for kind, value in _collect_use_refs(orch):
-                resolved = _resolve_reference(kind, value, parent_dir=parent_dir)
+            for kind, value in collect_use_refs(orch):
+                resolved = resolve_reference(
+                    kind, value, parent_dir=parent_dir, registry=registry
+                )
                 if resolved is None:
                     # Unresolvable reference — not a cycle issue. Skip.
                     continue
