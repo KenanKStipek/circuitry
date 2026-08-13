@@ -24,7 +24,6 @@ from textual.widgets import Button, Input, Select, Static
 from circuitry.adapters.base import GenerateResult
 from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.runtime_shim import RunRequest, RunResult
-from circuitry.tui.app import CircuitryApp
 from circuitry.tui.launch import NO_OVERRIDE, OrchestrationChoice
 from circuitry.tui.run_view import CANCELLED, DONE, FAILED, RunScreen
 from circuitry.tui.screens import VIEWS

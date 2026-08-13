@@ -77,6 +77,50 @@ A log record written to stdout while Textual owns the screen shreds the frame.
   `logging.lastResort` cannot write warnings to stderr;
 - restores the original handlers on exit, including when the app crashes.
 
+## Run view
+
+`2` opens the launcher. Three steps, top to bottom:
+
+1. **Pick** — the dropdown lists orchestration files found next to you (the
+   working directory and `./orchestrations/`, one level deep, filtered to files
+   that actually declare `effects`) followed by the bundled curation library.
+2. **Fill** — selecting an orchestration reads its `interface.inputs` and
+   generates one box per declared input. Required inputs are marked with `*`,
+   the declared `type` is shown, `description` becomes the placeholder, and a
+   declared `default` is prefilled. Values are parsed to their declared type
+   before launch — `number` and `boolean` accept the obvious spellings,
+   `array` and `object` take JSON. Failures are reported under the offending
+   field and nothing is launched. A blank optional field falls back to its
+   default, or is left out of `initial_state` entirely.
+3. **Launch** — `Ctrl-R` or the button. The adapter and model dropdowns
+   override resolution for this run only (they map to
+   `RunRequest.adapter_override` / `model_override`, which rank above the
+   orchestration's own `adapter`/`model`); left on `—` they change nothing.
+   Adapter options come from the adapters you have configured, minus
+   `host_claude`, which can only be injected at runtime.
+
+`Tab` belongs to view navigation, so `Enter` is what walks the form: it moves
+to the next field and, from the last one, lands on Launch.
+
+The run itself executes `runtime_shim.run` on a worker thread, so the UI never
+blocks. Its `state_observer` is pure — it deep-copies each snapshot before
+handing it to the UI and never writes back, so a run driven from the TUI ends
+in exactly the state a plain `cof run` produces (there is a fixture that
+asserts precisely that). Snapshots and the final result come back as Textual
+messages posted from the worker thread.
+
+`Ctrl-X` (or the Cancel button) requests cancellation: the observer raises on
+the next state write, the runtime unwinds through its ordinary error path, and
+the result is a normal failed `RunResult`. Nothing is left half-torn-down.
+
+The status line carries the whole signal for now — `Running…`, `Done`,
+`Failed: …`, `Cancelled`. The execution view that renders effects as they
+stream lands in the next story; `RunScreen.last_result` is where it picks up.
+
+Logic that is not a widget lives in `circuitry/tui/launch.py` (discovery, the
+typed form, override options, `RunSession`) and is tested without booting an
+app.
+
 ## Adding a view
 
 Views are declared once, in `circuitry/tui/screens.py`:
