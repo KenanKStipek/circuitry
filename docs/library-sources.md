@@ -238,6 +238,10 @@ cof list --json             # machine-readable
 more than one source is configured, which is what keeps single-source output
 byte-identical.
 
+The TUI's library view (`cof tui`, then `1`) browses the same registry: source
+badges, an `s` source filter, `r` to refresh without blocking the UI, and the
+provenance of whatever is highlighted. See [tui.md](tui.md#library-view-1).
+
 ## Relationship to `runtime.library` shared-library retrieval
 
 `runtime.library.sources` is independent of the `runtime.library.backend` /

@@ -103,11 +103,17 @@ and a detail pane rendering that entry's manifest metadata.
 | `Tab`-free focus | `/` jumps to search, `Enter` in search returns to the list |
 | `/` | Search name, intent and tags across the **whole** library |
 | `Esc` | Clear an active search; on a clean view, back to home |
+| `Enter` | Run the highlighted orchestration (hands it to the Run view) |
 | `e` | Eject the highlighted orchestration into the current directory |
+| `s` | Cycle the source filter: all → each configured source → all |
+| `r` | Refresh the fetchable sources in scope |
 
-Everything on screen comes from `curation/manifest.json` through
-`circuitry.cli.registry.load_index()` — the same reader behind `cof list` and
-`cof info`, so the TUI cannot show something the CLI disagrees with.
+Everything on screen comes from
+`circuitry.cli.library_sources.LibraryRegistry` — the same reader behind
+`cof list`, `cof info`, `cof run` and `cof library refresh`, so the TUI cannot
+show something the CLI disagrees with, and a new source type appears here for
+free. See [library-sources.md](library-sources.md) for how sources are
+configured.
 
 **Search** is ranked, not just filtered: an exact name (or last segment) wins,
 then a prefix, then a substring in the name, then a hit in the intent or tags,
@@ -116,12 +122,29 @@ hide matches in the others, starting a search resets the tree to *All*. A query
 that matches nothing gets a written-out empty state — what was searched, what
 else to try, and that `Esc` clears it — rather than an empty box.
 
-**Eject** goes through `circuitry.cli.registry.eject_text()` /
-`write_ejected()`, the same pair `cof eject` uses, so both write identical
-bytes to the same default destination (`<category>/<name>.yml`, relative to the
-current directory). An existing file is never clobbered silently: a modal asks
-first (`y` overwrites, `n`/`Esc` keeps the file), and the status line reports
-what happened.
+**Sources.** With only the bundled curation library configured — the default —
+the view looks exactly as it always has. Configure more than one source and
+each row grows a `[source]` badge, the detail pane grows a **Provenance**
+block (type, and for a `github` source its repo, ref, pinned SHA and
+fetched-at), and the status line names the source scope. A bare name that more
+than one source claims is listed source-qualified (`hub:summarize`), which is
+the same spelling `cof run` accepts to disambiguate it.
+
+**Refresh** (`r`) is the only thing in the view that touches the network, and
+it runs on a worker thread: the list stays scrollable and searchable while a
+fetch is in flight, and the status line says what is being fetched. With a
+source filter active it fetches just that source. A failed fetch is a designed
+state, not a blank screen — the previously cached entries stay exactly where
+they were, under a banner carrying the failure and saying they may be stale. A
+`github` source that has never been fetched shows a "press `r` to fetch" panel
+plus the same notice `cof list` prints.
+
+**Run** (`Enter`) and **eject** (`e`) are uniform across sources: both act on
+the file the registry resolved the entry to, which is the file `cof run` and
+`cof eject` would use for the same name. An existing file is never clobbered
+silently: a modal asks first (`y` overwrites, `n`/`Esc` keeps the file), and
+the status line reports what happened. The default eject destination is
+`<category>/<name>.yml`, relative to the current directory.
 
 ## Run view (`2`)
 
