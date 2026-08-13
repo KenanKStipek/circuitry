@@ -316,7 +316,7 @@ Every run records resolved values in `runtime.effective_settings`.
 
 **The token is a secret: it belongs in config.json or the environment, never in an orchestration YAML.** Orchestration files are meant to be committed, ejected, and shared; adapter credentials are resolved from the config layers at run time and are redacted from serialized run state. `cof doctor` reports whether `expo_url`/`token` are set and whether the host answers.
 
-> **Caveat:** expo's `/beta` API surface (`POST /beta/jobs`, `GET /beta/jobs/{job_id}`) is pre-stability and may change without notice. Pin your expo deployment accordingly.
+> **Caveat:** expo's `/beta` API surface (`POST /beta/jobs`, `GET /beta/jobs/{jobId}`) is pre-stability and may change without notice. Pin your expo deployment accordingly.
 
 Runnable example: [`learn/cyberdiner_hello`](src/circuitry/curation/learn/cyberdiner_hello.yml) — `cof info learn/cyberdiner_hello`.
 

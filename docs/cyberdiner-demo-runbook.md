@@ -9,8 +9,15 @@ integration tests are marked `integration` and CI runs
 `pytest -m 'not integration'`, so the offline guarantee is untouched.
 
 > **Pre-stability API.** The adapter talks to expo's `/beta` job routes
-> (`POST /beta/jobs`, `GET /beta/jobs/{job_id}`). Those routes are
+> (`POST /beta/jobs`, `GET /beta/jobs/{jobId}`). Those routes are
 > pre-stability and may change shape without a CyberDiner major bump.
+>
+> Wire format, as of expo's `apps/expo/src/models/job.rs`: requests and
+> responses are **camelCase**, and every job response is wrapped in an
+> `ApiEnvelope` — `{"data": {"jobId", "status", "tierName", "result",
+> "tokensProcessed", "durationMs", "errorMessage", …}}`. The adapter sends
+> `{"prompt": …, "tierName": …}` and nothing else; expo's optional
+> `priority` (`normal`/`fast`) is not yet exposed as adapter config.
 
 ---
 
@@ -227,7 +234,8 @@ Optional knobs: `CYBERDINER_TIER` (default `cheap`) and
 | `doctor` shows `['host:…']` for cyberdiner | expo unreachable — check the URL (root URL, no `/beta` suffix), VPN, TLS |
 | `cyberdiner: HTTP 401 …` | bad or revoked API key; mint a fresh `ck_…` |
 | `cyberdiner: timed out … (last status='pending')` | no cook is serving that tier, or the fleet is cold — start a cook, try another tier, or raise `timeout_seconds` |
-| `cyberdiner: job <id> failed: …` | the cook reported failure; the message is expo's `error_message` verbatim |
+| `cyberdiner: job <id> failed: …` | the cook reported failure; the message is expo's `errorMessage` verbatim |
+| `cyberdiner: HTTP 422 … missing field` \| `… is not a CyberDiner job envelope` | the endpoint isn't an expo `/beta` job route (proxy, wrong host, or an expo predating the camelCase + `data`-envelope format) |
 | `cyberdiner: HTTP 400 … unknown tier 'gpt-4o'` | tiers are the model names, not provider models — use one your expo knows (`cheap`, `fast`, `good`, `good-fast`, `alpha` …) |
 | `cyberdiner: unknown tier 'chepa'. Configured … valid_tiers:` | you opted into `valid_tiers` — fix the typo or widen/remove the list |
 | `Preflight failed: …` | fix the reported item, or bypass with `cof run --skip-preflight` |

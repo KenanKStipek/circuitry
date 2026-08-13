@@ -154,8 +154,9 @@ def test_generate_returns_text_from_live_network(live: LiveSettings) -> None:
     assert validate_generate_result(result, adapter_name="cyberdiner") == []
     assert result.text.strip(), "Live cyberdiner job returned an empty completion."
     assert result.raw is not None
-    assert result.raw.get("status") == "complete"
-    assert result.raw.get("tier") == live.tier
+    # expo writes `completed`; cookd's client polls for `complete` — both real.
+    assert result.raw.get("status") in ("complete", "completed")
+    assert result.raw.get("tierName") == live.tier
 
 
 def test_run_orchestration_completes_against_live_network(
