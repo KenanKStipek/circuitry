@@ -33,7 +33,7 @@ effects:                    # keyed by dotted effect path, as in state
   deep_analysis:
     model: tier-4
   my_reflector:
-    enabled: false           # parsed/validated here; effect-disable behavior TBD
+    enabled: false           # do not execute this effect for this run
 persistence:                 # parsed/validated here; backend selection behavior TBD
   backend: jsonl-file
   path: runs.jsonl
@@ -76,10 +76,43 @@ frozen/immutable — a new tree is returned, nothing is mutated in place).
 Overrides targeting an effect type that has no `model`/`provider` field
 (e.g. `use`) are a no-op for that field.
 
-`effects.<path>.enabled` is parsed and schema-validated, but effect-disable
-behavior is not implemented by this feature — see the sibling task that
-consumes it. Likewise, `persistence` is parsed and validated but backend
-selection is implemented by a sibling task.
+`persistence` is parsed and validated but backend selection is implemented by
+a sibling task.
+
+## Disabling Effects
+
+`effects.<path>.enabled: false` switches an effect off for the run. It is not
+executed, and its node is written as a skip marker mirroring `on_error: skip`:
+
+```json
+{ "value": null, "meta": { "disabled": true, "created_at": "...", "completed_at": "..." } }
+```
+
+`on_effect_complete` still fires for that node, so observability sees the skip.
+Disabling a container (`dynamic`/`loop`/`conditional`/`reflector`) disables its
+whole subtree.
+
+The flagship use is turning agentic planning off for a single run:
+
+```yaml
+# profiles/no-planning.yml
+effects:
+  my_reflector:
+    enabled: false
+```
+
+```bash
+cof run recipe                          # reflector plans and executes
+cof run recipe --profile no-planning    # reflector is skipped; the rest is unchanged
+```
+
+A conditional's `if` and a loop's `while` are conditions, not effects — they
+cannot be disabled, and targeting `<name>.if` / `<name>.while` /
+`<name>.condition` fails validation with an error naming the container to
+disable instead. See
+[Disabling Effects](orchestration-reference.md#disabling-effects) in the
+orchestration reference for the full rule table and downstream (template/CEL)
+behavior.
 
 ## Usage
 
