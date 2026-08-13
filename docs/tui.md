@@ -153,13 +153,65 @@ messages posted from the worker thread.
 the next state write, the runtime unwinds through its ordinary error path, and
 the result is a normal failed `RunResult`. Nothing is left half-torn-down.
 
-The status line carries the whole signal for now — `Running…`, `Done`,
-`Failed: …`, `Cancelled`. The execution view that renders effects as they
-stream lands in the next story; `RunScreen.last_result` is where it picks up.
+The status line carries the run's headline — `Running…`, `Done`, `Failed: …`,
+`Cancelled` — and `RunScreen.last_result` holds the finished `RunResult`.
 
 Logic that is not a widget lives in `circuitry/tui/launch.py` (discovery, the
 typed form, override options, `RunSession`) and is tested without booting an
 app.
+
+### Watching it run
+
+The right-hand pane is the execution view (the panes stack below the compact
+breakpoint). It is drawn from two things: the *plan* — the orchestration's own
+structure, read as soon as you pick a file, so the shape is visible before you
+commit — and the run's *events*.
+
+```
+├─ ✓ items (1.5s, ↑7 ↓13)
+└─ ◐ over_items each
+   ├─ ✓ iter 0
+   │  └─ ✓ handle (1.5s, ↑7 ↓13)
+   └─ ◐ iter 1
+      └─ ◐ handle
+↑14 ↓26 tok  ·  4.2s  ·  2/4 effects
+```
+
+Glyphs: `·` pending, `◐` running, `✓` done, `✗` failed, `⊘` skipped (compiled
+out). Each row carries its elapsed time and token counts once its effect
+lands; a failure is printed underneath the row it belongs to, together with the
+`on_error` policy that decided what happened next (`↳ adapter timed out
+[on_error: continue]`). Loops grow `iter n` children as they iterate — until
+the first one lands the body is shown as a preview — and a named conditional
+shows both branches until it decides, then only the branch it took.
+
+The footer aggregates the run: tokens sent and received summed over every
+effect's `meta` in state (including effects the tree cannot show, such as a
+sub-orchestration's internals), wall-clock elapsed, and effects finished out of
+those known so far — a number that grows as a loop discovers its iterations.
+
+Two event sources feed it:
+
+- **`state_observer`** — full state snapshots. The runtime publishes one as
+  each effect lands, which is what fills in statuses, timings and tokens.
+- **`effect_observer`** — `RunRequest`'s per-effect hook, the same one runtime
+  plugins see as `on_effect_complete`, carrying `(effect_path, effect_node)`.
+  Tree flow merges its children's state back only once the last sibling
+  finishes, so these notifications are what let a parallel sibling be marked
+  off as soon as *it* is done.
+
+Because state is published when an effect *finishes*, the effect currently in
+flight would otherwise look pending. The view infers it from the structure
+instead: under a running chain the next unfinished effect is under way; under
+a running `flow: tree` node, all of them are.
+
+Repaints are coalesced onto a 10 Hz tick rather than done per event, so a
+chatty run cannot starve the input queue — cancelling still lands immediately
+mid-run.
+
+The model behind all of this — plan parsing, the snapshot overlay, the
+aggregates and the rendered rows — lives in `circuitry/tui/execution.py` and
+has no Textual import, so it is tested by feeding it states directly.
 
 ## Doctor (`5`) and Settings (`6`)
 
