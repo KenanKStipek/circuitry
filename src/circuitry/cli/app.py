@@ -23,7 +23,7 @@ from .library_sources import (
 )
 from .orchestration_loader import serialize_orchestration
 from .redaction import REDACTED, redact_env_pairs
-from .registry import resolve_bundled
+from .registry import eject_destination, resolve_bundled, write_ejected
 from .runtime_shim import RunRequest, inspect_orchestration, run, validate
 from .setup import register_setup
 from .shared_library import (
@@ -966,13 +966,12 @@ def eject_cmd(
         console.print(f"[red]Error:[/red] Bundled file not found for: {name}")
         raise typer.Exit(code=1)
 
-    dest = out or Path(entry.get("file", f"{name}.yml"))
+    dest = out or eject_destination(entry)
     if dest.exists():
         if not typer.confirm(f"{dest} already exists. Overwrite?", default=False):
             raise typer.Exit(code=0)
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(bundled_path.read_text(encoding="utf-8"), encoding="utf-8")
+    write_ejected(bundled_path.read_text(encoding="utf-8"), dest)
     console.print(f"[green]Ejected:[/green] {dest}")
     console.print(f"[dim]Edit freely — this is your local copy. Run with: cof run {dest}[/dim]")
 

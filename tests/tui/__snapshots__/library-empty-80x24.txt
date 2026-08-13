@@ -1,0 +1,24 @@
+ ⭘                           Circuitry — Library                                
+                                                                                
+  Library — Browse bundled and shared orchestrations                            
+  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎  
+  ▊  zzzz                                                                    ▎  
+  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎  
+  ╭──────────────╮╭─────────────────────╮╭───────────────────────────────────╮  
+  │▼ All (29)    ││ No orchestration    ││ Nothing selected                  │  
+  │├── learn (8) ││ matches "zzzz".     ││                                   │  
+  │├── utilities ││                     ││ Pick an orchestration on the      │  
+  │├── patterns (││ Try fewer letters,  ││ left, or press / to search.       │  
+  │├── recipes (5││ or search an intent ││                                   │  
+  │└── agents (4)││ word or a tag.      ││                                   │  
+  │              ││ Esc clears the      ││                                   │  
+  │              ││ search and shows    ││                                   │  
+  │              ││ the whole library.  ││                                   │  
+  │              ││                     ││                                   │  
+  │              ││                     ││                                   │  
+  │              ││                     ││                                   │  
+  │           ▋  ││                     ││                                   │  
+  ╰──────────────╯╰─────────────────────╯╰───────────────────────────────────╯  
+  0/29 in all · "zzzz"                                                          
+                                                                                
+ tab Next view  / Search                                            ▏^p palette 
