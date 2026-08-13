@@ -33,6 +33,7 @@ Last Updated: 2026-05-08
 - [CyberDiner Demo Runbook](./cyberdiner-demo-runbook.md)
 - [Postgres Persistence](./postgres-persistence.md)
 - [Plugin Extensions](./plugins.md)
+- [Named Profiles](./profiles.md)
 - [Shared Library Retrieval](./shared-library.md)
 - [Shared Library Contributions](./shared-library-contributions.md)
 - [Shared Library Growth](./shared-library-growth.md)

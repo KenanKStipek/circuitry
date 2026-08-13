@@ -161,6 +161,9 @@ cof run hello --json | jq '.prime'
 # Live state for external tools
 cof run hello -e name=World --live-state ./state.live.json
 
+# Apply a named profile (run-level defaults + per-effect model/provider overrides)
+cof run recipe --profile fast
+
 # Browse, inspect, and eject orchestrations
 cof list                          # bundled orchestrations
 cof list --extensions             # compiled-in adapters / tool plugins / runtime plugins
