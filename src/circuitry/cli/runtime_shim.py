@@ -10,7 +10,7 @@ from typing import Any, Callable, Optional
 from uuid import uuid4
 
 from ..adapters import Adapter, build_adapter
-from ..core.compiler import compile_orchestration
+from ..core.compiler import apply_effect_overrides, compile_orchestration
 from ..core.dynamic import DynamicRuntime
 from ..core.runtime_plugins import (
     PLUGIN_CONTRACT_VERSION,
@@ -26,6 +26,7 @@ from .allowlist import check_allowlist, walk_orchestration_refs
 from .config import CircuitryConfig
 from .effective_settings import EffectiveSettings, resolve_effective_settings
 from .orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
+from .profiles import ProfileSettings, load_profile
 from .redaction import redact
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,7 @@ class RunRequest:
     adapter: Optional[Adapter] = None
     state_observer: Optional[Callable[[dict[str, Any]], None]] = None
     skip_preflight: bool = False
+    profile_name: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -113,7 +115,22 @@ def run(req: RunRequest) -> RunResult:
                 "Allowlist enforcement failed: " + "; ".join(allowlist_errors)
             )
 
-        effective = resolve_effective_settings(cfg=cfg, orch=orch)
+        profile: ProfileSettings | None = None
+        if req.profile_name:
+            profile = load_profile(
+                name=req.profile_name,
+                orchestration_path=req.orchestration_path,
+                orch=orch,
+            )
+            if profile.inputs:
+                # Profile inputs are a lower-priority base layer under
+                # whatever the caller already resolved from --state/-e (CLI
+                # values win — see cli.app.run_cmd).
+                merged = dict(profile.inputs)
+                merged.update(state)
+                state = merged
+
+        effective = resolve_effective_settings(cfg=cfg, orch=orch, profile=profile)
         runtime_config = effective.runtime
         persistence = build_persistence_backend(effective.runtime)
         plugins, plugin_events = _initialize_plugins(
@@ -164,6 +181,11 @@ def run(req: RunRequest) -> RunResult:
             "runtime": redact(effective.runtime),
             "sources": effective.sources,
         }
+        if profile is not None:
+            state["runtime"]["effective_settings"]["profile"] = {
+                "name": profile.name,
+                "content": redact(profile.raw),
+            }
         if req.shared_library_metadata is not None:
             state["runtime"]["shared_library"] = req.shared_library_metadata
         state["runtime"]["plugins"] = {
@@ -204,6 +226,16 @@ def run(req: RunRequest) -> RunResult:
         # Compile YAML -> core definitions before adapter/model initialization so
         # structural orchestration errors are surfaced deterministically.
         root_def = compile_orchestration(orch=orch, root_name="prime")
+        if profile is not None and profile.effects:
+            model_provider_overrides = {
+                path: {k: v for k, v in override.items() if k in ("model", "provider")}
+                for path, override in profile.effects.items()
+            }
+            model_provider_overrides = {
+                path: override for path, override in model_provider_overrides.items() if override
+            }
+            if model_provider_overrides:
+                root_def, _ = apply_effect_overrides(root_def, model_provider_overrides)
 
         adapter: Adapter
         timeout_seconds = 120
