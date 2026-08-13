@@ -12,7 +12,15 @@ curation library is one source; a folder of your own `*.yml` files is another.
     "library": {
       "sources": [
         {"type": "curation"},
-        {"type": "folder", "name": "local", "path": "./orchestrations"}
+        {"type": "folder", "name": "local", "path": "./orchestrations"},
+        {
+          "type": "github",
+          "name": "hub",
+          "repo": "owner/name",
+          "ref": "main",
+          "path": "library/",
+          "token_env": "GITHUB_TOKEN"
+        }
       ]
     }
   }
@@ -29,11 +37,17 @@ was before sources existed: curation-only, with no source column and no
 
 ### Source types
 
-| Field  | Applies to | Required | Description |
-| ------ | ---------- | -------- | ----------- |
-| `type` | all        | yes      | `curation` or `folder`. |
-| `name` | all        | no       | Display name and qualifier prefix. Defaults to `curation` for curation sources and the directory's basename for folder sources. |
-| `path` | `folder`   | yes      | Directory to scan. `~` is expanded; relative paths resolve against the process working directory. |
+| Field       | Applies to          | Required | Description |
+| ----------- | ------------------- | -------- | ----------- |
+| `type`      | all                 | yes      | `curation`, `folder`, or `github`. |
+| `name`      | all                 | no       | Display name and qualifier prefix. Defaults to `curation` for curation sources, the directory's basename for folder sources, and the repository name for GitHub sources. |
+| `path`      | `folder`            | yes      | Directory to scan. `~` is expanded; relative paths resolve against the process working directory. |
+| `repo`      | `github`            | yes      | `owner/name`. |
+| `ref`       | `github`            | no       | Branch, tag, or commit SHA. Defaults to `main`. |
+| `path`      | `github`            | no       | Subtree to fetch. Defaults to the repository root. |
+| `token_env` | `github`            | no       | **Name** of the environment variable holding a GitHub token. The token value itself is never read from — nor written to — config or state. |
+| `cache_dir` | `github`            | no       | Override the cache root (default `~/.cache/circuitry/library`). |
+| `api_base`  | `github`            | no       | Override the API base URL (GitHub Enterprise). Defaults to `https://api.github.com`. |
 
 A malformed `sources` list (unknown `type`, missing `path`, empty list, a
 non-object entry) is a hard error reported by the command, not silently ignored.
@@ -78,6 +92,88 @@ get metadata derived from the YAML itself:
 - **category** — the entry's directory relative to the folder root (empty for
   top-level files).
 - **backends** — empty, unless the manifest supplies them.
+
+#### `github`
+
+A subtree of a GitHub repository, served from a **SHA-pinned local cache**.
+This is the consumption half of the publish-by-PR workflow described in
+[shared library contributions](./shared-library-contributions.md): people add
+orchestrations to a library repository by pull request, and consumers point a
+`github` source at it.
+
+```json
+{
+  "type": "github",
+  "repo": "owner/name",
+  "ref": "main",
+  "path": "library/",
+  "name": "hub",
+  "token_env": "GITHUB_TOKEN"
+}
+```
+
+**Only `cof library refresh` touches the network.** `cof list`, `cof info`,
+`cof run`, and `cof eject` read the cache and nothing else — there is no
+implicit fetch, so a run can never stall on a network call or silently pick up
+a different version of an orchestration than the one you listed.
+
+Refresh resolves `ref` → commit SHA and downloads the subtree's `*.yml` /
+`*.yaml` files (plus an optional `manifest.json`) through the REST contents API
+into:
+
+```
+~/.cache/circuitry/library/<source>/<sha>/…
+~/.cache/circuitry/library/<source>/index.json   # {"sha": …, "fetched_at": …}
+```
+
+`XDG_CACHE_HOME` is honoured, and `CIRCUITRY_CACHE_DIR` (or the source's
+`cache_dir`) overrides the root outright. The cached subtree is read exactly
+like a [folder source](#folder) — same manifest handling, same metadata
+derivation, same name matching — so `library/nested/deep.yml` is the entry
+`nested/deep`.
+
+Refresh re-downloads **only when the SHA moved**; when it matches the cached
+one the command reports `unchanged` and makes no content requests. A successful
+fetch is staged beside the live tree and swapped in when the index is rewritten,
+and superseded SHA directories are pruned.
+
+Until the first refresh the source is simply empty, and commands print:
+
+```
+Warning: Library source 'hub' (owner/name@main) has not been fetched yet — run `cof library refresh hub`.
+```
+
+##### Authentication
+
+Public repositories work with no token at all. For private repositories — or to
+raise the API rate limit — set `token_env` to the **name** of an environment
+variable and export the token there:
+
+```sh
+export GITHUB_TOKEN=ghp_…
+cof library refresh hub
+```
+
+When that variable is set (and non-empty), requests carry
+`Authorization: Bearer $GITHUB_TOKEN`. The config file, the cache index, and
+every serialised state file record only the variable *name*, never the secret.
+
+Failures are reported with the fix attached: a 401 names the variable that was
+rejected, a 404 reminds you that a private repository looks identical to a
+missing one when unauthenticated, and an exhausted rate limit reports the reset
+time plus how to authenticate.
+
+## Refreshing
+
+```sh
+cof library refresh          # every configured source
+cof library refresh hub      # one source
+cof library refresh --json   # machine-readable results
+```
+
+Each source reports `updated` (with the new SHA), `unchanged`, or `skipped`
+(local sources have nothing to fetch). The command exits non-zero if any source
+failed, after attempting all of them.
 
 ## Referring to entries
 

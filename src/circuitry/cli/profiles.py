@@ -15,9 +15,8 @@ Container effects disable their whole subtree; a container's *condition*
 (a conditional's ``if``, a loop's ``while``) cannot be targeted at all and is
 rejected here with an actionable error.
 
-The ``persistence`` key is parsed and schema validated here, but its runtime
-behavior is implemented by a sibling task — this module only guarantees the
-data is well-formed and discoverable.
+``persistence`` is consumed by ``cli.effective_settings``, which layers it over
+the orchestration/config ``runtime.persistence`` block.
 """
 
 from __future__ import annotations

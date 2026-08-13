@@ -121,6 +121,23 @@ def resolve_effective_settings(
         "orchestration" if orch_runtime else ("config" if cfg.runtime else "default")
     )
 
+    # persistence: a profile's `persistence:` block replaces (never merges
+    # with) whatever the orchestration/config supplied — backends take
+    # disjoint config keys, so a partial overlay would produce a chimera.
+    # `enabled` defaults to true for a profile-supplied block: naming a
+    # backend in a profile is the opt-in. There is no CLI persistence flag
+    # today; if one is added it layers on top of this.
+    if profile is not None and profile.persistence is not None:
+        profile_persistence = dict(profile.persistence)
+        profile_persistence.setdefault("enabled", True)
+        runtime = dict(runtime)
+        runtime["persistence"] = profile_persistence
+        sources["persistence"] = "profile"
+    elif isinstance(orch_runtime.get("persistence"), dict):
+        sources["persistence"] = "orchestration"
+    elif isinstance((cfg.runtime or {}).get("persistence"), dict):
+        sources["persistence"] = "config"
+
     return EffectiveSettings(
         model=model,
         adapter=adapter,

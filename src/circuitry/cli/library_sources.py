@@ -2,9 +2,10 @@
 
 A *library source* is anything that can enumerate orchestration entries and
 resolve a name to a file on disk. The bundled curation library is one source;
-a folder of local `*.yml` files is another. Sources are declared in config
-under `runtime.library.sources` and are ordered — earlier entries win when a
-bare name matches in more than one source.
+a folder of local `*.yml` files is another; a GitHub repository subtree (served
+from a SHA-pinned local cache) is a third. Sources are declared in config under
+`runtime.library.sources` and are ordered — earlier entries win when a bare
+name matches in more than one source.
 
 ```json
 {
@@ -12,12 +13,16 @@ bare name matches in more than one source.
     "library": {
       "sources": [
         {"type": "curation"},
-        {"type": "folder", "name": "local", "path": "./orchestrations"}
+        {"type": "folder", "name": "local", "path": "./orchestrations"},
+        {"type": "github", "name": "hub", "repo": "owner/name", "path": "library/"}
       ]
     }
   }
 }
 ```
+
+Only `refresh()` may touch the network; `list_entries()`/`resolve()` are always
+local reads, which keeps every other command usable offline.
 
 When `sources` is absent the registry defaults to `[{"type": "curation"}]`,
 which makes zero-config behaviour byte-identical to the pre-registry CLI.
@@ -47,6 +52,25 @@ DEFAULT_SOURCES: list[dict[str, Any]] = [{"type": "curation"}]
 
 class LibrarySourceError(ValueError):
     """Raised when `runtime.library.sources` is malformed."""
+
+
+class LibraryFetchError(RuntimeError):
+    """Raised when a remote source cannot be refreshed (network, auth, 404…)."""
+
+
+@dataclass(frozen=True)
+class RefreshResult:
+    """Outcome of refreshing one source, for `cof library refresh` output."""
+
+    source: str
+    status: str  # "updated" | "unchanged" | "skipped"
+    sha: Optional[str] = None
+    detail: str = ""
+
+    def summary(self) -> str:
+        pinned = f" ({self.sha[:7]})" if self.sha else ""
+        suffix = f" — {self.detail}" if self.detail else ""
+        return f"{self.source}: {self.status}{pinned}{suffix}"
 
 
 @dataclass(frozen=True)
@@ -413,11 +437,48 @@ class LibraryRegistry:
         resolution = self.resolve(ref)
         return resolution.entry if resolution is not None else None
 
-    def refresh(self) -> None:
-        for source in self.sources:
-            refresh = getattr(source, "refresh", None)
-            if callable(refresh):
-                refresh()
+    def notices(self, *, source: Optional[str] = None) -> list[str]:
+        """User-facing hints from sources that cannot serve entries yet."""
+        out: list[str] = []
+        for candidate in self.sources:
+            if source is not None and candidate.name != source:
+                continue
+            notice = getattr(candidate, "notice", None)
+            if not callable(notice):
+                continue
+            message = notice()
+            if message:
+                out.append(str(message))
+        return out
+
+    def refresh(self, *, source: Optional[str] = None) -> list[RefreshResult]:
+        """Refresh every source (or one), returning a result per source.
+
+        Local sources have nothing to fetch and report `skipped`; only remote
+        sources do network work, and they do it *only* here.
+        """
+        results: list[RefreshResult] = []
+        for candidate in self.sources:
+            if source is not None and candidate.name != source:
+                continue
+            refresh = getattr(candidate, "refresh", None)
+            if not callable(refresh):
+                results.append(
+                    RefreshResult(source=candidate.name, status="skipped", detail="not refreshable")
+                )
+                continue
+            outcome = refresh()
+            if isinstance(outcome, RefreshResult):
+                results.append(outcome)
+            else:
+                results.append(
+                    RefreshResult(
+                        source=candidate.name,
+                        status="skipped",
+                        detail="local source — nothing to fetch",
+                    )
+                )
+        return results
 
     # -- internals ----------------------------------------------------------
 
@@ -483,8 +544,41 @@ def _build_source(spec: dict[str, Any], index: int) -> LibrarySource:
         name = str(spec.get("name") or "").strip() or (path.name or "folder")
         return FolderSource(name=name, path=path)
 
+    if source_type == "github":
+        return _build_github_source(spec, index)
+
     raise LibrarySourceError(
-        f"Unknown library source type: {source_type!r}. Supported types: curation, folder."
+        f"Unknown library source type: {source_type!r}. "
+        "Supported types: curation, folder, github."
+    )
+
+
+def _build_github_source(spec: dict[str, Any], index: int) -> LibrarySource:
+    # Imported here so `library_sources` stays import-cycle-free: the GitHub
+    # source depends on FolderSource for reading its cache.
+    from .github_source import DEFAULT_REF, GitHubSource
+
+    repo = str(spec.get("repo") or "").strip().strip("/")
+    if not repo:
+        raise LibrarySourceError(
+            f"runtime.library.sources[{index}] (github) requires a 'repo' as 'owner/name'."
+        )
+    if repo.count("/") != 1 or not all(part for part in repo.split("/")):
+        raise LibrarySourceError(
+            f"runtime.library.sources[{index}] (github) 'repo' must be 'owner/name'; "
+            f"got {repo!r}."
+        )
+
+    name = str(spec.get("name") or "").strip() or repo.split("/")[1]
+    cache_dir = spec.get("cache_dir")
+    return GitHubSource(
+        name=name,
+        repo=repo,
+        ref=str(spec.get("ref") or DEFAULT_REF).strip(),
+        path=str(spec.get("path") or "").strip(),
+        token_env=str(spec.get("token_env") or "").strip() or None,
+        cache_root=Path(str(cache_dir)).expanduser() if cache_dir else None,
+        api_base=str(spec.get("api_base") or "").strip() or "https://api.github.com",
     )
 
 

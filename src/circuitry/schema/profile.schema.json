@@ -42,12 +42,21 @@
     },
     "persistence": {
       "type": "object",
-      "description": "Persistence backend override. Parsed/validated here; backend selection behavior is implemented by a sibling task.",
+      "description": "Persistence backend selection for this run. Replaces (never merges with) the orchestration/config `runtime.persistence` block. Backend-specific keys (db_path, dsn, uri, database, collection, table, ...) are passed through.",
       "required": ["backend"],
       "properties": {
-        "backend": { "type": "string" },
-        "enabled": { "type": "boolean" },
-        "path": { "type": "string" }
+        "backend": {
+          "type": "string",
+          "description": "Backend name: jsonl-file, sqlite, mongodb, or postgres."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Defaults to true for a profile-supplied block; set false to disable persistence for runs using this profile."
+        },
+        "path": {
+          "type": "string",
+          "description": "File path for jsonl-file (also accepted as an alias for sqlite's db_path)."
+        }
       },
       "additionalProperties": true
     }

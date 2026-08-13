@@ -28,7 +28,9 @@ class SQLiteStatePersistence:
 
     @staticmethod
     def from_config(config: dict[str, Any]) -> "SQLiteStatePersistence":
-        db_path = str(config.get("db_path") or "").strip()
+        # ``path`` is accepted as an alias for ``db_path`` so a profile's
+        # ``persistence:`` block can use one spelling across backends.
+        db_path = str(config.get("db_path") or config.get("path") or "").strip()
         if not db_path:
             raise ValueError(
                 "Persistence backend 'sqlite' requires runtime.persistence.db_path"
