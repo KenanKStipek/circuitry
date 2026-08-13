@@ -48,6 +48,15 @@ def _load_schema() -> dict[str, Any] | None:
         return None
 
 
+def load_schema() -> dict[str, Any] | None:
+    """The orchestration JSON schema, or ``None`` when it cannot be used.
+
+    Public entry point for callers that validate against the same schema
+    ``validate`` does (the TUI's Validate view) without reaching for a private.
+    """
+    return _load_schema()
+
+
 @dataclass(frozen=True)
 class RunRequest:
     orchestration_path: Path
