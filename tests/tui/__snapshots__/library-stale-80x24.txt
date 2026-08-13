@@ -4,21 +4,21 @@
   ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎  
   ▊  / to search — name, intent, tags                                        ▎  
   ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎  
+   Refresh failed — showing the last cached entries.                            
+   Library source 'hub': could not reach api.github.com (timed out)             
   ╭──────────────╮╭─────────────────────╮╭───────────────────────────────────╮  
-  │▼ All (29)    ││learn/hello          ││ learn/hello                       │  
-  │├── learn (8) ││learn/prompt         ││                                   │  
-  │├── utilities ││learn/dynamic_chain  ││ Say hello in a creative way —     │  
-  │├── patterns (││learn/dynamic_tree   ││ the simplest orchestration.       │  
-  │├── recipes (5││learn/conditional    ││                                   │  
-  │└── agents (4)││learn/loop         ▁▁││ Category    learn                 │  
-  │              ││learn/reflector      ││ File        learn/hello.yml    ▁▁ │  
-  │              ││learn/cyberdiner_h…  ││ Difficulty  beginner              │  
-  │              ││utilities/summarize  ││ Primitives  prompt                │  
-  │              ││utilities/critique   ││ Backends    llm                   │  
-  │              ││utilities/refine     ││ Tags        —                     │  
-  │              ││utilities/judge      ││                                   │  
-  │           ▋  ││utilities/classify   ││ Inputs                            │  
+  │▼ All (2)     ││[hub] hub:dupe       ││ dupe                              │  
+  │└── uncategori││[hub] hub_review     ││                                   │  
+  │              ││                     ││ The hub copy of an ambiguous      │  
+  │              ││                     ││ name.                             │  
+  │              ││                     ││                                ▆▆ │  
+  │              ││                     ││ Category    —                     │  
+  │              ││                     ││ File        dupe.yml              │  
+  │              ││                     ││ Difficulty  —                     │  
+  │              ││                     ││ Primitives  —                     │  
+  │              ││                     ││ Backends    —                     │  
+  │         ▍    ││                     ││ Tags        —                     │  
   ╰──────────────╯╰─────────────────────╯╰───────────────────────────────────╯  
-  29/29 in all                                                                  
+  2/2 in all · source hub — 1 failed                                            
                                                                                 
  ⏎ Run  tab Next view  / Search  e Eject  s Source  r Refresh  ? Hel▏^p palette 

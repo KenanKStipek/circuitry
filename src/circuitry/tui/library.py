@@ -21,7 +21,7 @@ Source column.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -380,7 +380,7 @@ def detail_lines(
         lines += ["", "Example", f"  {example}"]
     if provenance is not None:
         lines += provenance_lines(entry.source, provenance)
-    lines += ["", f"Press e to eject to ./{eject_destination(raw)}"]
+    lines += ["", f"Press enter to run · e to eject to ./{eject_destination(raw)}"]
     return lines
 
 
@@ -550,11 +550,6 @@ class ConfirmOverwrite(ResponsiveLayout, ModalScreen[bool]):
         self.dismiss(False)
 
 
-#: What a refresh does: given a source name, return its outcomes (or raise
-#: :class:`LibraryFetchError`). Injectable so tests never touch the network.
-Refresher = Callable[[str], "list[RefreshResult]"]
-
-
 class LibraryScreen(ViewScreen):
     """Browse, search, refresh and eject every configured library source."""
 
@@ -563,7 +558,10 @@ class LibraryScreen(ViewScreen):
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("slash", "search", "Search"),
-        Binding("enter", "run_entry", "Run"),
+        # Priority: the results list binds Enter to "select" and would
+        # otherwise swallow it, leaving Run advertised in the footer only
+        # while there is nothing to run.
+        Binding("enter", "run_entry", "Run", priority=True),
         Binding("e", "eject", "Eject"),
         Binding("s", "cycle_source", "Source"),
         Binding("r", "refresh_sources", "Refresh"),
@@ -656,19 +654,12 @@ class LibraryScreen(ViewScreen):
     }
     """
 
-    def __init__(
-        self,
-        spec: Any,
-        *,
-        registry: LibraryRegistry | None = None,
-        refresher: Refresher | None = None,
-    ) -> None:
+    def __init__(self, spec: Any, *, registry: LibraryRegistry | None = None) -> None:
         super().__init__(spec)
         warning = ""
         if registry is None:
             registry, warning = library_registry()
         self.registry = registry
-        self._refresher: Refresher = refresher or self._registry_refresh
         self.entries: list[LibraryEntry] = load_entries(self.registry)
         self.matches: list[LibraryEntry] = list(self.entries)
         self.category: str | None = None
@@ -677,9 +668,6 @@ class LibraryScreen(ViewScreen):
         self.notice = warning
         self.stale = ""
         self.refreshing = False
-
-    def _registry_refresh(self, source: str) -> list[RefreshResult]:
-        return self.registry.refresh(source=source)
 
     # -- composition ---------------------------------------------------------
 
@@ -710,19 +698,6 @@ class LibraryScreen(ViewScreen):
         self._build_tree()
         self._refresh_list()
         self._entry_list.focus()
-
-    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
-        """Hide the source keys for a library that has only one answer.
-
-        ``None`` hides the binding outright (footer and help overlay), so a
-        zero-config user is never offered a filter with one option or a
-        refresh with nothing to fetch.
-        """
-        if action == "cycle_source" and not self.registry.is_multi_source:
-            return None
-        if action == "refresh_sources" and not self.registry.refreshable_names:
-            return None
-        return True
 
     # -- widget handles ------------------------------------------------------
 
@@ -780,7 +755,7 @@ class LibraryScreen(ViewScreen):
     def _refresh_list(self) -> None:
         """Re-run the filter and repaint the list, detail pane and status."""
         self.matches = search(self.entries, self.term, self.category, self.source)
-        ambiguous = ambiguous_names(self.entries) if self.show_source else frozenset()
+        ambiguous: set[str] = ambiguous_names(self.entries) if self.show_source else set()
         options = self._entry_list
         options.clear_options()
         if self.matches:
@@ -879,8 +854,13 @@ class LibraryScreen(ViewScreen):
         self._search_box.focus()
 
     def action_cycle_source(self) -> None:
-        """``s`` — step the source filter: all → first → … → all."""
+        """``s`` — step the source filter: all → first → … → all.
+
+        Always live rather than greyed out: with one source it answers with
+        what that source is, which is more use than a dead key.
+        """
         if not self.registry.is_multi_source:
+            self._set_status(f"One source configured: {', '.join(self.registry.source_names)}.")
             return
         order: list[str | None] = [None, *self.registry.source_names]
         index = order.index(self.source) if self.source in order else 0
@@ -906,8 +886,13 @@ class LibraryScreen(ViewScreen):
         """``enter`` — hand the highlighted entry to the Run view.
 
         Uniform across sources: what travels is the resolved file path, which
-        is what ``cof run`` would resolve the same name to.
+        is what ``cof run`` would resolve the same name to. In the search box
+        Enter keeps its older meaning — take me to the results — because
+        committing a search and launching a run are different intentions.
         """
+        if self._search_box.has_focus:
+            self._entry_list.focus()
+            return
         entry = self.selected_entry
         if entry is None:
             self._set_status("Nothing to run.")
@@ -954,7 +939,7 @@ class LibraryScreen(ViewScreen):
         failures: list[str] = []
         for name in targets:
             try:
-                outcomes.extend(self._refresher(name))
+                outcomes.extend(self.registry.refresh(source=name))
             except LibraryFetchError as exc:
                 failures.append(str(exc))
             except Exception as exc:  # noqa: BLE001 - a dead worker must still report

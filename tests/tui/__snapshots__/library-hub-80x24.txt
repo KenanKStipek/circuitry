@@ -2,23 +2,23 @@
                                                                                 
   Library — Browse bundled and shared orchestrations                            
   ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎  
-  ▊  hello                                                                   ▎  
+  ▊  / to search — name, intent, tags                                        ▎  
   ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎  
   ╭──────────────╮╭─────────────────────╮╭───────────────────────────────────╮  
-  │▼ All (29)    ││learn/hello          ││ learn/hello                       │  
-  │├── learn (8) ││learn/cyberdiner_hel…││                                   │  
-  │├── utilities ││agents/meta_orchestr…││ Say hello in a creative way —     │  
-  │├── patterns (││agents/wizard        ││ the simplest orchestration.       │  
-  │├── recipes (5││learn/dynamic_chain  ││                                   │  
-  │└── agents (4)││utilities/judge      ││ Category    learn                 │  
-  │              ││                     ││ File        learn/hello.yml    ▁▁ │  
-  │              ││                     ││ Difficulty  beginner              │  
-  │              ││                     ││ Primitives  prompt                │  
-  │              ││                     ││ Backends    llm                   │  
+  │▼ All (2)     ││[hub] hub:dupe       ││ dupe                              │  
+  │└── uncategori││[hub] hub_review     ││                                   │  
+  │              ││                     ││ The hub copy of an ambiguous      │  
+  │              ││                     ││ name.                             │  
+  │              ││                     ││                                   │  
+  │              ││                     ││ Category    —                  ▁▁ │  
+  │              ││                     ││ File        dupe.yml              │  
+  │              ││                     ││ Difficulty  —                     │  
+  │              ││                     ││ Primitives  —                     │  
+  │              ││                     ││ Backends    —                     │  
   │              ││                     ││ Tags        —                     │  
   │              ││                     ││                                   │  
-  │           ▋  ││                     ││ Inputs                            │  
+  │         ▍    ││                     ││ Inputs                            │  
   ╰──────────────╯╰─────────────────────╯╰───────────────────────────────────╯  
-  6/29 in all · "hello"                                                         
+  2/2 in all · source hub — Source: hub                                         
                                                                                 
- ⏎ Run  tab Next view  / Search                                     ▏^p palette 
+ ⏎ Run  tab Next view  / Search  e Eject  s Source  r Refresh  ? Hel▏^p palette 

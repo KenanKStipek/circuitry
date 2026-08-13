@@ -129,8 +129,13 @@ class CurationSource:
         self.name = name
 
     def provenance(self) -> dict[str, str]:
-        """Where these entries came from, for `cof info` and the TUI detail pane."""
-        return {"type": "curation", "path": str(_curation_dir())}
+        """Where these entries came from, for the TUI detail pane.
+
+        Deliberately no path: the curation library ships inside the package,
+        so its location is an install detail, not something a reader can act
+        on the way a folder path or a pinned SHA is.
+        """
+        return {"type": "curation"}
 
     def list_entries(self) -> list[Entry]:
         root = _curation_dir()
