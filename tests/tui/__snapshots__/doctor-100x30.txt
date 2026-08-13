@@ -1,0 +1,30 @@
+ ⭘                                      Circuitry — Doctor                                          
+                                                                                                    
+  Doctor                                                                                            
+  Backend, config, and connectivity diagnostics                                                     
+                                                                                                    
+  Environment checks                                                                                
+  1 ok · 1 deferred · 2 missing deps  —  3 adapters, 1 tool plugin                                  
+  ollama                ok                                                                          
+      reachable at http://localhost:11434                                                           
+  openai                missing deps                                                                
+      Set the OPENAI_API_KEY environment variable, then re-run the check.                           
+  host_claude           deferred                                                                    
+      runtime-injected                                                                              
+  ffmpeg                missing deps                                                                
+      Install ffmpeg and make sure it is on your PATH.                                              
+                                                                                                    
+  Effective settings                                                                                
+  model                            llama3.1:8b  (from config)                                       
+  adapter                          ollama  (from config)                                            
+  plugins                          —  (from default)                                                
+  runtime.adapters.openai.api_key  ***REDACTED***  (from config)                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+ tab Next view  ^r Re-run checks  ? Help  q Back / Quit                                 ▏^p palette 

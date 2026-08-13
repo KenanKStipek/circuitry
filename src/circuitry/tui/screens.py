@@ -102,6 +102,28 @@ class ViewSpec:
         return self.factory(self)
 
 
+# Factories are imported inside the function so this module stays the single
+# registry without depending on the screens that register themselves in it.
+
+
+def _doctor(spec: ViewSpec) -> CircuitryScreen:
+    from .doctor import DoctorScreen
+
+    return DoctorScreen(spec)
+
+
+def _settings(spec: ViewSpec) -> CircuitryScreen:
+    from .doctor import SettingsScreen
+
+    return SettingsScreen(spec)
+
+
+def _validate(spec: ViewSpec) -> CircuitryScreen:
+    from .validate import ValidateScreen
+
+    return ValidateScreen(spec)
+
+
 #: Every view the shell knows about, in navigation (and number key) order.
 VIEWS: tuple[ViewSpec, ...] = (
     ViewSpec("library", "Library", "Browse bundled and shared orchestrations", "1"),
@@ -113,12 +135,26 @@ VIEWS: tuple[ViewSpec, ...] = (
         "3",
     ),
     ViewSpec("runs", "Runs", "History of past runs and their final state", "4"),
-    ViewSpec("doctor", "Doctor", "Backend, config, and connectivity diagnostics", "5"),
+    ViewSpec(
+        "doctor",
+        "Doctor",
+        "Backend, config, and connectivity diagnostics",
+        "5",
+        factory=_doctor,
+    ),
     ViewSpec(
         "settings",
         "Settings",
         "Effective configuration and where each value came from",
         "6",
+        factory=_settings,
+    ),
+    ViewSpec(
+        "validate",
+        "Validate",
+        "Check an orchestration file for schema, compile, cycle and preflight errors",
+        "7",
+        factory=_validate,
     ),
 )
 
