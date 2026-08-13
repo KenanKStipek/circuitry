@@ -69,7 +69,7 @@ Circuitry is a single-package Python orchestration runtime for deterministic exe
   - `openai.py`
   - `anthropic.py`
   - `litellm.py`
-  - `cyberdiner.py` — job-queue broker; submits a job to CyberDiner expo and polls until terminal, so the queue stays behind the synchronous `generate()`. `model` is a capability tier (`tier-1`…`tier-4`).
+  - `cyberdiner.py` — job-queue broker; submits a job to CyberDiner expo and polls until terminal, so the queue stays behind the synchronous `generate()`. `model` is a capability tier (`cheap`, `fast`, `good`, `good-fast`, `alpha` …), validated by the network rather than the client.
 - Adapter factory (`factory.py`) resolves implementation from runtime config.
 
 ## State and Auditability

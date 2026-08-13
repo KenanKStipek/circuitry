@@ -1,0 +1,30 @@
+ ⭘                                       Circuitry — Run                                            
+                                                                                                    
+  Run                                                                                               
+  Execute an orchestration and watch effects stream                                                 
+                                                                                                    
+                                                                                                    
+  Orchestration                                           ├─ ✓ items (1.5s, ↑7 ↓13)                 
+  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎ └─ ✓ over_items each (1.5s)               
+  ▊   demo.yml                                       ▼  ▎    ├─ ✓ iter 0                            
+  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎    │  └─ ✓ handle (1.5s, ↑7 ↓13)          
+  No declared inputs — launch runs it as-is.                 └─ ✗ iter 1                            
+                                                                └─ ✗ handle (1.5s, ↑7 ↓0)           
+                                                                      ↳ scripted failure            
+                                                          [on_error: continue]                      
+                                                                                                    
+                                                          ↑21 ↓26 tok  ·  9.5s  ·  4/4 effects      
+  Adapter                                                                                           
+  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎                                           
+  ▊  — default                                       ▼  ▎                                           
+  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎                                           
+                                                                                                    
+  Model                                                                                             
+  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎                                           
+  ▊  — default                                       ▼  ▎                                           
+  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎                                           
+                                                                                                ▅▅  
+  ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔                                                                  
+       Launch        Cancel run                                                                     
+                                                                                                    
+ tab Next view  ^r Launch  ^x Cancel run  ? Help  q Back / Quit                         ▏^p palette 

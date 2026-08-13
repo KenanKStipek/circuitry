@@ -36,15 +36,32 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import GenerateResult
 
-_VALID_TIERS = ("tier-1", "tier-2", "tier-3", "tier-4")
 _TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled"})
 
 
-def _resolve_tier(model: str, default_tier: str) -> str:
-    tier = (model or "").strip() or default_tier
-    if tier not in _VALID_TIERS:
-        valid = ", ".join(_VALID_TIERS)
-        raise ValueError(f"cyberdiner: unknown tier {tier!r}. Valid tiers: {valid}.")
+def _resolve_tier(
+    model: str, default_tier: str, valid_tiers: tuple[str, ...] = ()
+) -> str:
+    """Map an orchestration ``model:`` onto a CyberDiner tier name.
+
+    The tier vocabulary belongs to the network, not to this client: expo's
+    ``tier_service::validate_tier`` is the authority, and its 400 already
+    surfaces through the adapter's actionable HTTP error path. So any
+    non-empty tier passes through untouched. Set ``valid_tiers`` in adapter
+    config to opt into client-side validation against a known list.
+    """
+    tier = (model or "").strip() or (default_tier or "").strip()
+    if not tier:
+        raise ValueError(
+            "cyberdiner: no tier resolved. Pin `model:` in the orchestration "
+            "or set runtime.adapters.cyberdiner.default_tier."
+        )
+    if valid_tiers and tier not in valid_tiers:
+        valid = ", ".join(valid_tiers)
+        raise ValueError(
+            f"cyberdiner: unknown tier {tier!r}. Configured "
+            f"runtime.adapters.cyberdiner.valid_tiers: {valid}."
+        )
     return tier
 
 
@@ -53,7 +70,10 @@ class CyberdinerAdapter:
     name: str = "cyberdiner"
     expo_url: str = ""
     token: str = ""
-    default_tier: str = "tier-1"
+    default_tier: str = "cheap"
+    # Empty = pass-through: the network validates tier names. Populate it
+    # (from config) only to fail fast against a known-good list.
+    valid_tiers: tuple[str, ...] = ()
     poll_interval_ms: int = 500
     # Per-HTTP-request socket timeout; distinct from generate()'s
     # timeout_seconds, which bounds the whole submit+poll sequence.
@@ -114,7 +134,7 @@ class CyberdinerAdapter:
                 "(ck_...), minted via expo's api_keys routes or the web app."
             )
 
-        tier = _resolve_tier(model, self.default_tier)
+        tier = _resolve_tier(model, self.default_tier, tuple(self.valid_tiers))
         base = self.expo_url.rstrip("/")
         req_timeout = max(0.001, min(float(self.timeout_seconds), float(timeout_seconds)))
         deadline = time.monotonic() + timeout_seconds

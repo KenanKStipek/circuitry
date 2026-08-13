@@ -29,10 +29,10 @@ inputs:
   topic: "circuit design"   # merged into the initial state (CLI -e wins)
 effects:                    # keyed by dotted effect path, as in state
   summarize:
-    model: tier-1
+    model: cheap
     provider: cyberdiner
   deep_analysis:
-    model: tier-4
+    model: good-fast
   my_reflector:
     enabled: false           # do not execute this effect for this run
 persistence:                 # where this run's state snapshot lands
@@ -60,6 +60,11 @@ and contribute no path segment.
 ```
 CLI > profile > orchestration > project config > global config > default
 ```
+
+`CLI` here is `cof run --adapter <name>` / `--model <name>` (also available on
+`cof run-library`). Environment variables (`CIRCUITRY_ADAPTER`,
+`CIRCUITRY_MODEL`) overlay the *config* layer, so a profile beats them and a
+flag beats both.
 
 (Project config already layers over global config before this — see
 `resolve_config` in `circuitry.cli.config`.) A run with no `--profile` is

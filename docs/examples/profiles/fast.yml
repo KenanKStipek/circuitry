@@ -7,10 +7,10 @@ inputs:
   topic: "circuit design"
 effects:
   summarize:
-    model: tier-1
+    model: cheap
     provider: cyberdiner
   deep_analysis:
-    model: tier-4
+    model: good-fast
   my_reflector:
     enabled: false
 persistence:

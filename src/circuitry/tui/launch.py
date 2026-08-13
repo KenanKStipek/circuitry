@@ -399,6 +399,7 @@ def model_options(cfg: CircuitryConfig, orch: dict[str, Any] | None = None) -> l
 
 Runner = Callable[[RunRequest], RunResult]
 StateCallback = Callable[[dict[str, Any]], None]
+EffectCallback = Callable[[str, dict[str, Any]], None]
 FinishCallback = Callable[[RunResult], None]
 
 
@@ -421,14 +422,20 @@ class RunSession:
         request: RunRequest,
         *,
         on_state: StateCallback | None = None,
+        on_effect: EffectCallback | None = None,
         on_finish: FinishCallback | None = None,
         runner: Runner | None = None,
     ) -> None:
         self._on_state = on_state
+        self._on_effect = on_effect
         self._on_finish = on_finish
         self._runner: Runner = runner if runner is not None else shim_run
         self._cancelled = threading.Event()
-        self._request = replace(request, state_observer=self._observe)
+        self._request = replace(
+            request,
+            state_observer=self._observe,
+            effect_observer=self._observe_effect,
+        )
         self._thread = threading.Thread(
             target=self._execute, name="circuitry-tui-run", daemon=True
         )
@@ -472,6 +479,16 @@ class RunSession:
             # live runtime state, or an observed run would drift from an
             # unobserved one.
             self._on_state(deepcopy(state))
+
+    def _observe_effect(self, path: str, node: dict[str, Any]) -> None:
+        """One effect landed. Deep-copied for the same reason as state.
+
+        Not a cancellation point: the effect has already happened, and
+        raising here would unwind the run from inside a lifecycle hook
+        rather than at the next state write.
+        """
+        if self._on_effect is not None:
+            self._on_effect(path, deepcopy(node))
 
     def _execute(self) -> None:
         try:
