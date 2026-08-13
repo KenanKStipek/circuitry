@@ -203,6 +203,25 @@ def collect_orchestration_condition_paths(orch: dict[str, Any]) -> set[str]:
     return conditions
 
 
+def condition_target_message(targeted: list[str], *, profile_name: str) -> str:
+    """The refusal text for overrides aimed at a container's condition.
+
+    Lives here rather than inline in :func:`_validate_effect_paths` so an
+    editor that blocks the same move up front (the TUI's profile view) can
+    say it in exactly the validator's words instead of paraphrasing it.
+    """
+    ordered = sorted(targeted)
+    return (
+        f"Profile {profile_name!r} targets condition path(s): "
+        f"{', '.join(ordered)}. A conditional's 'if' and a "
+        "loop's 'while' are conditions, not effects — they cannot be "
+        "disabled or overridden, because a container with no condition "
+        "has no defined branch. Disable the whole container instead "
+        f"(e.g. {ordered[0].rsplit('.', 1)[0]}: {{enabled: false}}), "
+        "which disables its entire subtree."
+    )
+
+
 def _validate_effect_paths(
     effects_map: Any, *, orch: dict[str, Any], profile_name: str
 ) -> None:
@@ -213,13 +232,7 @@ def _validate_effect_paths(
     targeted_conditions = sorted(k for k in effects_map if k in condition_paths)
     if targeted_conditions:
         raise ProfileValidationError(
-            f"Profile {profile_name!r} targets condition path(s): "
-            f"{', '.join(targeted_conditions)}. A conditional's 'if' and a "
-            "loop's 'while' are conditions, not effects — they cannot be "
-            "disabled or overridden, because a container with no condition "
-            "has no defined branch. Disable the whole container instead "
-            f"(e.g. {targeted_conditions[0].rsplit('.', 1)[0]}: {{enabled: false}}), "
-            "which disables its entire subtree."
+            condition_target_message(targeted_conditions, profile_name=profile_name)
         )
 
     valid_paths = collect_orchestration_effect_paths(orch)
@@ -233,6 +246,24 @@ def _validate_effect_paths(
     )
 
 
+def parse_profile_document(path: Path, *, name: str) -> dict[str, Any]:
+    """Read and schema-check a profile file without resolving effect paths.
+
+    The path check needs a target orchestration; an editor loading a profile
+    to *show* it does not have one yet — and, more to the point, wants to
+    render stale overrides as orphan rows rather than refuse to open the
+    file. Schema errors still raise, because a malformed file has nothing
+    coherent to render.
+    """
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise ProfileValidationError(
+            f"Profile {name!r} at {path} must be a mapping/object at the root."
+        )
+    _validate_profile_schema(raw, profile_name=name, path=path)
+    return raw
+
+
 def load_profile(
     *,
     name: str,
@@ -242,13 +273,7 @@ def load_profile(
 ) -> ProfileSettings:
     """Discover, parse, and validate a named profile file."""
     path = discover_profile_path(name=name, orchestration_path=orchestration_path, cwd=cwd)
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    if not isinstance(raw, dict):
-        raise ProfileValidationError(
-            f"Profile {name!r} at {path} must be a mapping/object at the root."
-        )
-
-    _validate_profile_schema(raw, profile_name=name, path=path)
+    raw = parse_profile_document(path, name=name)
 
     effects_raw = raw.get("effects") or {}
     _validate_effect_paths(effects_raw, orch=orch, profile_name=name)
