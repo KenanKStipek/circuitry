@@ -13,13 +13,14 @@ Importing this module requires the ``tui`` extra — go through
 from __future__ import annotations
 
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.screen import Screen
 
 from .help import HelpOverlay, binding_rows
+from .inspector import StateStore
 from .screens import VIEWS, HomeScreen, ViewScreen, ViewSpec
 
 __all__ = ["PLANNED_VIEWS", "VIEWS", "CircuitryApp"]
@@ -37,6 +38,15 @@ class CircuitryApp(App[None]):
     #: Set by :meth:`launch_run` — the orchestration the Run view should pick
     #: up when it opens. ``None`` when the user navigated there themselves.
     pending_run: Path | None = None
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        #: State published by whatever run is in flight, read by the Runs
+        #: view. Owned by the app rather than a screen because a run
+        #: outlives the screen it was launched from — views replace one
+        #: another, and switching away must not stop the inspector
+        #: following the run.
+        self.run_states = StateStore()
 
     CSS = """
     CircuitryScreen #body {
