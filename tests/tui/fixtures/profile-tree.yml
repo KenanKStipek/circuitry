@@ -1,0 +1,30 @@
+# One of everything a profile can address, so the Profile view's snapshot
+# covers a plain effect, a reflector, a nested child and a condition row.
+name: profile-tree
+adapter: echo
+model: echo-1
+interface:
+  inputs:
+    topic:
+      type: string
+      required: true
+      description: What to write about.
+effects:
+  - type: prompt
+    name: summarize
+    template: "{{topic}}"
+  - type: reflector
+    name: planner
+    effects:
+      - type: prompt
+        name: draft
+        template: "{{topic}}"
+  - type: conditional
+    name: gate
+    if:
+      mode: cel
+      expr: "true"
+    then:
+      - type: prompt
+        name: deep
+        template: "go deeper on {{topic}}"

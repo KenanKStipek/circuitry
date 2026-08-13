@@ -204,6 +204,10 @@ class ProfileScreen(ViewScreen):
         self._rows: list[EffectNode] = []
         self._input_fields: list[InputField] = []
         self._backend_fields: list[BackendField] = []
+        #: The profile-picker value this screen last wrote, so the ``Changed``
+        #: that write echoes back is not mistaken for the user switching
+        #: profiles (which would discard the draft they are holding).
+        self._picked = NEW_PROFILE
         self.draft = ProfileDraft()
         self._status_text = EMPTY_STATE
         #: Set while widgets are being repopulated, so the change handlers
@@ -346,18 +350,16 @@ class ProfileScreen(ViewScreen):
             else []
         )
         options = [(NEW_PROFILE, NEW_PROFILE), *((name, name) for name in names)]
-        self._loading = True
-        try:
-            picker.set_options(options)
-            picker.value = self.draft.name if self.draft.name in names else NEW_PROFILE
-        finally:
-            self._loading = False
+        self._picked = self.draft.name if self.draft.name in names else NEW_PROFILE
+        picker.set_options(options)
+        picker.value = self._picked
 
     # -- profile switching ---------------------------------------------------
 
     async def _select_profile(self, value: Any) -> None:
-        if self._loading or self._choice is None:
+        if self._choice is None or value == self._picked:
             return
+        self._picked = str(value)
         if value == NEW_PROFILE:
             await self._adopt(ProfileDraft())
             self._set_status("New profile — nothing overridden yet.")

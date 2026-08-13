@@ -8,23 +8,24 @@ pip install "circuitry-cof[tui]"
 ```
 
 This page documents the shell — navigation, keys, layout breakpoints, logging
-and the test harness — and the views that have landed (Library, Doctor,
-Settings and Validate below). Views still to come (Run, Inspect, Runs) render a
-placeholder until they do.
+and the test harness — and the views that have landed. Views still to come
+(Inspect, Runs) render a placeholder until they do.
 
 | Key | View |
 | --- | --- |
 | `1` | [Library](#library-view-1) |
-| `2`–`4` | Run, Inspect, Runs — placeholders |
+| `2` | [Run](#run-view-2) |
+| `3`–`4` | Inspect, Runs — placeholders |
 | `5` / `6` | [Doctor / Settings](#doctor-5-and-settings-6) |
 | `7` | [Validate](#validate-7) |
 | `8` | [Chat](#chat-8--build-an-orchestration-by-talking-to-it) |
+| `9` | [Profiles](#profiles-9--edit-a-named-profile) |
 
 ## Keymap
 
 | Key | Action |
 | --- | --- |
-| `1`–`8` | Jump straight to a view, in registry order |
+| `1`–`9` | Jump straight to a view, in registry order |
 | `Tab` / `Shift+Tab` | Cycle forward/backward through home and every view |
 | `Enter` | Open the highlighted view from the home list |
 | `?` | Toggle the help overlay |
@@ -34,6 +35,11 @@ placeholder until they do.
 `q` and `Esc` are deliberately "back then quit": quitting is never more than
 one level away, and never a surprise from inside a view. `Ctrl-C` is bound with
 Textual `priority` so it wins over the screen-level copy binding.
+
+A screen holding unsaved work can put itself in front of that: `show_view` and
+`show_home` route through `CircuitryScreen.confirm_leave(proceed)`, whose
+default is to call `proceed` immediately. Overriding it covers the number keys,
+`Tab` and `q`/`Esc` in one place — see [Profiles](#profiles-9--edit-a-named-profile).
 
 Views replace one another rather than stacking, so the screen stack is never
 deeper than home + view (+ the help overlay).
@@ -261,15 +267,81 @@ manifest schema validates, so a saved orchestration is immediately reachable as
 `~/.circuitry/library` when none is configured. Re-saving a name replaces its
 entry rather than appending a duplicate.
 
-"Run it now" sets `app.pending_run` and opens the Run view; the Run view reads
-it on mount. Until that view lands, the hand-off is the seam and the Run screen
-is still a placeholder.
+"Run it now" sets `app.pending_run` and opens the Run view, which consumes the
+slot on mount: it selects the saved file (adding it to the picker if the scan
+never saw it) and clears `pending_run`, so returning to Run later opens clean.
+The Profile view uses the same seam, additionally setting `app.pending_profile`.
 
 The view never constructs an adapter. It calls a `TurnRunner` — by default
 `api.run_orchestration` over whatever the config resolves — which is what makes
 it adapter-agnostic, and what lets `tests/tui/test_chat_view.py` drive the real
 wizard (its `validate_yaml` tool, its revision loop, its `done` gate) over a
 scripted adapter, all the way to a saved file that `cof check` accepts.
+
+## Profiles (`9`) — edit a named profile
+
+`9` opens the profile editor: everything [`docs/profiles.md`](profiles.md)
+describes, without opening the YAML.
+
+Picking an orchestration compiles it through the validate-only path
+(`compile_orchestration`) and renders the tree that comes back. A file that
+does not compile says so and renders no tree — there is nothing to pick models
+for. Each row is one effect, indented under its container:
+
+| Row | What it offers |
+| --- | --- |
+| An effect | provider picker, model picker, free-text box, enabled toggle |
+| A reflector | the same, flagged — the override reaches the subtree it plans |
+| A container | the same, noting that disabling it disables everything inside |
+| A condition (`if` / `while`) | rendered, pickers disabled, toggle refuses |
+| An anonymous container | a structural row — it contributes no path segment |
+
+The pickers list the adapters you have configured and every model named in
+config or in the selected orchestration; `custom…` reveals a text box for
+anything they do not enumerate. A model a profile already names is folded into
+its picker, so reopening a profile never silently resets a field. Row paths are
+the same dotted addresses the profile loader validates against
+(`collect_orchestration_effect_paths`) — there is a test asserting the two
+agree.
+
+Around the tree: `adapter`/`model` run defaults, an `inputs` panel generated
+from `interface.inputs` (only what you actually type is written — an untouched
+optional input does not bake its default into the file), and a persistence
+panel whose backend dropdown reveals exactly that backend's keys. Switching
+backends drops the previous one's keys, because backends take disjoint keys and
+a partial overlay would produce a chimera.
+
+| Key | Action |
+| --- | --- |
+| `Ctrl-S` | Save to `<orchestration_dir>/profiles/<name>.yml` |
+| `Ctrl-D` | Duplicate under a fresh name (`fast` → `fast-copy`) |
+| `Ctrl-O` | Drop every orphan override |
+| `Ctrl-R` | Save if needed, then open Run pre-loaded with this profile |
+
+Two refusals are the *engine's*, not the view's:
+
+- **Conditions.** Toggling a conditional's `if` or a loop's `while` springs the
+  switch back and prints
+  `circuitry.cli.profiles.condition_target_message` verbatim — the same
+  sentence `cof run --profile` would fail with. Both call the one function; a
+  test asserts the two strings are equal.
+- **Orphans.** A profile naming effects the orchestration no longer defines is
+  *opened* rather than rejected (`parse_profile_document` skips path
+  validation), and the stale keys are listed as orphan rows. `Ctrl-O` drops
+  them. Saving is blocked while any remain, so the editor can never write a
+  file the loader would refuse.
+
+The dirty indicator under the buttons tracks the draft against what is on disk.
+Navigating away with unsaved edits — number key, `Tab`, `q` or `Esc` — goes
+through `confirm_leave` and asks first.
+
+Everything that is not a widget lives in `circuitry/tui/profile_edit.py`: the
+effect tree, `ProfileDraft` (the working copy, and the only thing that writes a
+file), the backend table, and profile discovery. What it writes is a plain
+profile document — `tests/tui/test_profile_edit.py` round-trips it through the
+engine's own `load_profile`, and `tests/tui/test_profile_view.py` builds "fast"
+and "thorough" in the pilot and then runs one through `runtime_shim.run` to
+check the toggle the editor wrote is the toggle the runtime honoured.
 
 ## Adding a view
 

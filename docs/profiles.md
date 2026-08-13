@@ -186,6 +186,11 @@ than overwriting resumed values.
 cof run recipe --profile fast
 ```
 
+Or edit one without touching the YAML: `cof tui`, then `9` for the profile
+editor — the effect tree with a picker and a toggle per row, panels for the
+run defaults, inputs and persistence, and save/duplicate/switch across named
+profiles. See [Profiles (`9`)](tui.md#profiles-9--edit-a-named-profile).
+
 ## Runtime Metadata
 
 When a profile is applied, run state includes:

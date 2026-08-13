@@ -8,5 +8,5 @@
  6  Settings — Effective configuration  
  7  Validate — Check an orchestration f 
  8  Chat — Describe a pipeline and let  
-                                        
+ 9  Profiles — Edit named profiles: per 
  tab Next view  ? Help  q Ba▏^p palette 

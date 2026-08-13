@@ -1,0 +1,12 @@
+ ⭘       Circuitry — Profiles           
+ Profiles                               
+ Edit named profiles: per-effect        
+ models, toggles, inputs and         ▄▄ 
+ persistence                            
+ Orchestration                          
+ ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎   
+ ▊   profile-tree.yml            ▼  ▎   
+ ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎   
+ Profile                                
+ ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎   
+ tab Next view  ^s Save prof▏^p palette 

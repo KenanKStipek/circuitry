@@ -12,6 +12,7 @@ Importing this module requires the ``tui`` extra — go through
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import ClassVar
 
@@ -20,7 +21,7 @@ from textual.binding import Binding, BindingType
 from textual.screen import Screen
 
 from .help import HelpOverlay, binding_rows
-from .screens import VIEWS, HomeScreen, ViewScreen, ViewSpec
+from .screens import VIEWS, CircuitryScreen, HomeScreen, ViewScreen, ViewSpec
 
 __all__ = ["PLANNED_VIEWS", "VIEWS", "CircuitryApp"]
 
@@ -149,6 +150,20 @@ class CircuitryApp(App[None]):
         self.pop_screen()
         return True
 
+    def leaving(self, proceed: Callable[[], None]) -> None:
+        """Let the current screen gate a navigation away from itself.
+
+        Every route off a screen — number keys, ``Tab``, ``q``/``Esc`` — funnels
+        through here, so a screen holding unsaved work only has to override
+        :meth:`CircuitryScreen.confirm_leave` once. Anything that is not one of
+        ours (a modal, say) has no say and the navigation just happens.
+        """
+        screen = self.base_screen()
+        if isinstance(screen, CircuitryScreen):
+            screen.confirm_leave(proceed)
+        else:
+            proceed()
+
     # -- navigation ----------------------------------------------------------
 
     def show_view(self, spec: ViewSpec) -> None:
@@ -162,7 +177,10 @@ class CircuitryApp(App[None]):
             return
         # The screen being left gets the last word — see
         # ``CircuitryScreen.confirm_leave``. Default is to proceed at once.
-        self.base_screen().confirm_leave(lambda: self.switch_screen(spec.build()))
+        def _switch() -> None:
+            self.switch_screen(spec.build())
+
+        self.leaving(_switch)
 
     def launch_run(self, path: Path, *, profile: str | None = None) -> None:
         """Hand a saved orchestration — and optionally a profile — to Run.
@@ -184,7 +202,7 @@ class CircuitryApp(App[None]):
         """Return to the home screen, dropping any view on top of it."""
         self.close_help()
         if len(self.screen_stack) > 1:
-            self.base_screen().confirm_leave(self._pop_to_home)
+            self.leaving(self._pop_to_home)
 
     def _pop_to_home(self) -> None:
         while len(self.screen_stack) > 1:
