@@ -69,6 +69,8 @@ from .launch import (
 from .screens import ViewScreen, ViewSpec
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from textual.events import Mount
+
     from circuitry.adapters import Adapter
 
 __all__ = ["RunScreen"]
@@ -230,6 +232,9 @@ class RunScreen(ViewScreen):
         self._session: RunSession | None = None
         self._updates = 0
         self._status_text = IDLE
+        #: Named profile applied to the next launch, when the view was opened
+        #: through a hand-off that carried one.
+        self.profile_name: str | None = None
         #: Last finished result, for tests and for the execution view to pick up.
         self.last_result: RunResult | None = None
 
@@ -298,6 +303,35 @@ class RunScreen(ViewScreen):
             Static(format_totals(Totals()), id="run-footer"),
         ]
 
+    def _on_mount(self, event: Mount) -> None:
+        super()._on_mount(event)
+        self._adopt_pending()
+
+    def _adopt_pending(self) -> None:
+        """Pre-load whatever handed us here (Chat's "run it", Profile's "run
+        with this profile"), then clear the hand-off so a later visit to the
+        view opens clean."""
+        path = getattr(self.app, "pending_run", None)
+        if not isinstance(path, Path):
+            return
+        self.profile_name = getattr(self.app, "pending_profile", None)
+        self.app.pending_run = None  # type: ignore[attr-defined]
+        self.app.pending_profile = None  # type: ignore[attr-defined]
+
+        choice = next(
+            (c for c in self._choices if c.path.resolve() == path.resolve()), None
+        )
+        if choice is None:
+            # Handed a file the picker never scanned (a fresh save, or one
+            # outside the scan roots). It is still launchable, so offer it.
+            choice = OrchestrationChoice(
+                key=str(path), label=path.name, path=path, source="local"
+            )
+            self._choices = [choice, *self._choices]
+            select: Select[str] = self.query_one("#run-orchestration", Select)
+            select.set_options([(c.option, c.key) for c in self._choices])
+        self.query_one("#run-orchestration", Select).value = choice.key
+
     # -- selection -----------------------------------------------------------
 
     async def on_select_changed(self, event: Select.Changed) -> None:
@@ -325,7 +359,7 @@ class RunScreen(ViewScreen):
         # Draw the plan straight away: the shape of the run is worth seeing
         # before committing to it.
         self._reset_execution(plan_from_orchestration(form.orchestration))
-        self._set_status(_ready_message(form))
+        self._set_status(_ready_message(form, self.profile_name))
 
     def _choice_for(self, value: Any) -> OrchestrationChoice | None:
         for choice in self._choices:
@@ -418,6 +452,7 @@ class RunScreen(ViewScreen):
             adapter_override=_override_value(self.query_one("#run-adapter", Select)),
             model_override=_override_value(self.query_one("#run-model", Select)),
             skip_preflight=False,
+            profile_name=self.profile_name,
         )
 
         self._updates = 0
@@ -641,14 +676,15 @@ def _override_value(select: Select[str]) -> str | None:
     return value
 
 
-def _ready_message(form: OrchestrationForm) -> str:
+def _ready_message(form: OrchestrationForm, profile: str | None = None) -> str:
+    suffix = f" Profile: {profile}." if profile else ""
     required = sum(1 for spec in form.fields if spec.required)
     if not form.fields:
-        return f"{form.choice.label} — no inputs declared."
+        return f"{form.choice.label} — no inputs declared.{suffix}"
     return (
         f"{form.choice.label} — {len(form.fields)} input"
         f"{'s' if len(form.fields) != 1 else ''}"
-        f" ({required} required)."
+        f" ({required} required).{suffix}"
     )
 
 

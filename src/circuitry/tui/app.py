@@ -12,6 +12,7 @@ Importing this module requires the ``tui`` extra — go through
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import ClassVar
 
@@ -20,7 +21,7 @@ from textual.binding import Binding, BindingType
 from textual.screen import Screen
 
 from .help import HelpOverlay, binding_rows
-from .screens import VIEWS, HomeScreen, ViewScreen, ViewSpec
+from .screens import VIEWS, CircuitryScreen, HomeScreen, ViewScreen, ViewSpec
 
 __all__ = ["PLANNED_VIEWS", "VIEWS", "CircuitryApp"]
 
@@ -37,6 +38,10 @@ class CircuitryApp(App[None]):
     #: Set by :meth:`launch_run` — the orchestration the Run view should pick
     #: up when it opens. ``None`` when the user navigated there themselves.
     pending_run: Path | None = None
+
+    #: Set alongside :attr:`pending_run` when the hand-off carries a named
+    #: profile (the Profile view's "run with this profile").
+    pending_profile: str | None = None
 
     CSS = """
     CircuitryScreen #body {
@@ -145,6 +150,20 @@ class CircuitryApp(App[None]):
         self.pop_screen()
         return True
 
+    def leaving(self, proceed: Callable[[], None]) -> None:
+        """Let the current screen gate a navigation away from itself.
+
+        Every route off a screen — number keys, ``Tab``, ``q``/``Esc`` — funnels
+        through here, so a screen holding unsaved work only has to override
+        :meth:`CircuitryScreen.confirm_leave` once. Anything that is not one of
+        ours (a modal, say) has no say and the navigation just happens.
+        """
+        screen = self.base_screen()
+        if isinstance(screen, CircuitryScreen):
+            screen.confirm_leave(proceed)
+        else:
+            proceed()
+
     # -- navigation ----------------------------------------------------------
 
     def show_view(self, spec: ViewSpec) -> None:
@@ -153,18 +172,27 @@ class CircuitryApp(App[None]):
         current = self.current_view()
         if current is None:
             self.push_screen(spec.build())
-        elif current.slug != spec.slug:
+            return
+        if current.slug == spec.slug:
+            return
+        # The screen being left gets the last word — see
+        # ``CircuitryScreen.confirm_leave``. Default is to proceed at once.
+        def _switch() -> None:
             self.switch_screen(spec.build())
 
-    def launch_run(self, path: Path) -> None:
-        """Hand a saved orchestration to the Run view.
+        self.leaving(_switch)
 
-        The Chat view's "run it now" and the Run view are separate stories, so
-        the hand-off is a value on the app rather than a call into a screen
-        that may still be a placeholder: whoever builds Run reads
-        ``app.pending_run`` on mount and needs nothing from here.
+    def launch_run(self, path: Path, *, profile: str | None = None) -> None:
+        """Hand a saved orchestration — and optionally a profile — to Run.
+
+        The Chat view's "run it now", the Profile view's "run with this
+        profile" and the Run view are separate stories, so the hand-off is a
+        value on the app rather than a call into a screen that may still be a
+        placeholder: Run reads ``app.pending_run`` / ``app.pending_profile``
+        on mount and needs nothing from here.
         """
         self.pending_run = path
+        self.pending_profile = profile
         for spec in VIEWS:
             if spec.slug == "run":
                 self.show_view(spec)
@@ -173,6 +201,10 @@ class CircuitryApp(App[None]):
     def show_home(self) -> None:
         """Return to the home screen, dropping any view on top of it."""
         self.close_help()
+        if len(self.screen_stack) > 1:
+            self.leaving(self._pop_to_home)
+
+    def _pop_to_home(self) -> None:
         while len(self.screen_stack) > 1:
             self.pop_screen()
 
