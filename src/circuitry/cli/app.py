@@ -15,9 +15,16 @@ from rich.table import Table
 
 from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, resolve_config
 from .doctor import register_doctor
+from .library_sources import (
+    Entry,
+    LibraryFetchError,
+    LibraryRegistry,
+    LibrarySourceError,
+    build_registry,
+)
 from .orchestration_loader import serialize_orchestration
 from .redaction import REDACTED, redact_env_pairs
-from .registry import find_entry, load_index, resolve_bundled
+from .registry import eject_destination, resolve_bundled, write_ejected
 from .runtime_shim import RunRequest, inspect_orchestration, run, validate
 from .setup import register_setup
 from .shared_library import (
@@ -172,24 +179,71 @@ def _do_validate(
         raise typer.Exit(code=1)
 
 
-def _resolve_orchestration(name_or_path: str) -> Path | None:
+def _library_registry(config_path: Optional[Path] = None) -> LibraryRegistry:
+    """Build the configured library registry, reporting config errors as CLI errors."""
+    try:
+        return build_registry(config_path=config_path)
+    except LibrarySourceError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
+def _warn(message: str) -> None:
+    console.print(f"[yellow]Warning:[/yellow] {message}")
+
+
+def _print_source_notices(registry: LibraryRegistry) -> None:
+    """Surface "not fetched yet" hints so a miss points at the right fix."""
+    for message in registry.notices():
+        _warn(message)
+
+
+def _lookup_entry(registry: LibraryRegistry, name: str) -> Entry | None:
+    """Find an entry by bare or source-qualified name, warning on ambiguity."""
+    resolution = registry.resolve(name)
+    if resolution is None:
+        return None
+    if resolution.is_ambiguous:
+        _warn(resolution.ambiguity_warning(name))
+    return resolution.entry
+
+
+def _resolve_orchestration(
+    name_or_path: str,
+    *,
+    registry: LibraryRegistry | None = None,
+    on_warning: Any = None,
+) -> Path | None:
     """Resolve an orchestration argument to a file path.
 
     Resolution order:
       1. Literal file path (exists on disk)
-      2. Bundled orchestration by name (from index.yml)
+      2. Library source lookup by name, in `runtime.library.sources` order.
+         Source-qualified names (`"<source>:<name>"`) skip precedence.
+
+    Ambiguity (a bare name matching more than one source) is reported through
+    *on_warning* rather than printed, so non-CLI callers — the MCP server talks
+    JSON-RPC over stdout — stay silent by default.
     """
     # 1. Try as a file path
     candidate = Path(name_or_path)
     if candidate.exists() and candidate.is_file():
         return candidate
 
-    # 2. Try bundled name resolution
-    bundled = resolve_bundled(name_or_path)
-    if bundled is not None:
-        return bundled
+    # 2. Try library source resolution
+    try:
+        reg = registry if registry is not None else build_registry()
+    except LibrarySourceError:
+        # A malformed sources config must not make bundled names unreachable;
+        # commands surface the error separately via _library_registry().
+        return resolve_bundled(name_or_path)
 
-    return None
+    resolution = reg.resolve(name_or_path)
+    if resolution is None:
+        return None
+    if resolution.is_ambiguous and callable(on_warning):
+        on_warning(resolution.ambiguity_warning(name_or_path))
+    return resolution.path
 
 
 RUN_EPILOG = """
@@ -264,6 +318,13 @@ def run_cmd(
         False, "--skip-preflight",
         help="Bypass dependency preflight; run even if check()s reported missing deps.",
     ),
+    profile: Optional[str] = typer.Option(
+        None, "--profile",
+        help=(
+            "Named profile to apply (profiles/<name>.yml, orchestration-scoped "
+            "wins over project-level). Precedence: CLI > profile > orchestration > config."
+        ),
+    ),
 ):
     # --last: replay stashed args
     if last:
@@ -282,6 +343,7 @@ def run_cmd(
         env_vars = stashed.get("env_vars")
         tail = stashed.get("tail", False)
         skip_preflight = stashed.get("skip_preflight", False)
+        profile = stashed.get("profile")
 
         # Refuse to replay if the previous run stashed redacted secrets — the
         # sentinel string would silently flow into the new run as a literal.
@@ -302,10 +364,16 @@ def run_cmd(
         console.print("[dim]Tip: run [bold]cof list[/bold] to see available orchestrations.[/dim]")
         raise typer.Exit(code=1)
 
-    # Resolve orchestration: local file path > bundled name
-    orch_path = _resolve_orchestration(orchestration)
+    # Resolve orchestration: local file path > library source name
+    run_registry = _library_registry(config)
+    orch_path = _resolve_orchestration(
+        orchestration,
+        registry=run_registry,
+        on_warning=_warn,
+    )
     if orch_path is None:
         console.print(f"[red]Error:[/red] Orchestration not found: {orchestration}")
+        _print_source_notices(run_registry)
         console.print("[dim]Tip: run [bold]cof list[/bold] to see available orchestrations.[/dim]")
         raise typer.Exit(code=1)
 
@@ -355,6 +423,7 @@ def run_cmd(
         config=cfg,
         live_state_path=live_state,
         skip_preflight=skip_preflight,
+        profile_name=profile,
     )
 
     with (
@@ -403,6 +472,7 @@ def run_cmd(
             "env_vars": redact_env_pairs(env_vars),
             "tail": tail,
             "skip_preflight": skip_preflight,
+            "profile": profile,
         })
 
     if tail:
@@ -661,6 +731,9 @@ def list_cmd(
         "-x",
         help="List compiled-in adapters / tool plugins / runtime plugins with allowlist status.",
     ),
+    source: str | None = typer.Option(
+        None, "--source", "-S", help="Only list entries from this library source."
+    ),
     config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
@@ -669,16 +742,31 @@ def list_cmd(
         _list_extensions(json_out=json_out, config_path=config)
         return
 
-    entries = load_index()
-    if not entries:
+    registry = _library_registry(config)
+    if source is not None and registry.get_source(source) is None:
+        known = ", ".join(registry.source_names)
+        console.print(f"[red]Error:[/red] Unknown library source: {source}")
+        console.print(f"[dim]Configured sources: {known}[/dim]")
+        raise typer.Exit(code=1)
+
+    show_source = registry.is_multi_source
+    library_entries = registry.list_entries(source=source)
+    if not json_out:
+        # A remote source with an empty cache is *not* an error — it just has
+        # nothing to show until `cof library refresh` runs.
+        for message in registry.notices(source=source):
+            _warn(message)
+    if not library_entries:
         console.print("[yellow]No bundled orchestrations found.[/yellow]")
         raise typer.Exit(code=1)
 
     if category:
-        entries = [e for e in entries if e.get("category") == category]
-        if not entries:
+        library_entries = [e for e in library_entries if e.category == category]
+        if not library_entries:
             console.print(f"[yellow]No orchestrations in category: {category}[/yellow]")
             raise typer.Exit(code=1)
+
+    entries = [e.as_dict(include_source=show_source) for e in library_entries]
 
     if json_out:
         console.print_json(json.dumps(entries, ensure_ascii=False))
@@ -694,10 +782,12 @@ def list_cmd(
     table.add_column("Name", style="bold")
     table.add_column("Description")
     table.add_column("Category", style="dim")
+    if show_source:
+        table.add_column("Source", style="dim")
     table.add_column("Backends", justify="center")
 
-    for entry in entries:
-        backends = entry.get("backends", [])
+    for entry in library_entries:
+        backends = entry.metadata.get("backends", [])
         backend_parts = []
         for b in backends:
             if b in available_backends:
@@ -706,12 +796,15 @@ def list_cmd(
                 backend_parts.append(f"[red]{b}[/red]")
         backends_str = " ".join(backend_parts) if backend_parts else "—"
 
-        table.add_row(
-            entry.get("name", "?"),
-            entry.get("description", ""),
-            entry.get("category", ""),
-            backends_str,
-        )
+        row = [
+            entry.metadata.get("name", "?"),
+            entry.metadata.get("description", ""),
+            entry.category,
+        ]
+        if show_source:
+            row.append(entry.source)
+        row.append(backends_str)
+        table.add_row(*row)
 
     console.print(table)
     console.print()
@@ -804,12 +897,20 @@ def _detect_backends(cfg: CircuitryConfig) -> set[str]:
 def info_cmd(
     name: str = typer.Argument(..., help="Name of the orchestration."),
     json_out: bool = typer.Option(False, "--json", help="Output machine-readable JSON only."),
+    config: Optional[Path] = typer.Option(
+        None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
+    ),
 ):
-    entry = find_entry(name)
-    if entry is None:
+    registry = _library_registry(config)
+    found = _lookup_entry(registry, name)
+    if found is None:
         console.print(f"[red]Error:[/red] Orchestration not found: {name}")
+        _print_source_notices(registry)
         console.print("[dim]Run [bold]cof list[/bold] to see available orchestrations.[/dim]")
         raise typer.Exit(code=1)
+
+    show_source = registry.is_multi_source
+    entry = found.as_dict(include_source=show_source)
 
     if json_out:
         console.print_json(json.dumps(entry, ensure_ascii=False))
@@ -820,6 +921,8 @@ def info_cmd(
     console.print(f"[bold]Description:[/bold] {entry.get('description', '—')}")
     console.print(f"[bold]Category:[/bold] {entry.get('category', '—')}")
     console.print(f"[bold]File:[/bold] {entry.get('file', '—')}")
+    if show_source:
+        console.print(f"[bold]Source:[/bold] {found.source}")
     console.print(f"[bold]Backends:[/bold] {', '.join(entry.get('backends', []))}")
 
     inputs = entry.get("inputs", [])
@@ -841,7 +944,7 @@ def info_cmd(
         console.print(f"  [cyan]{example}[/cyan]")
 
     # Show the actual orchestration YAML source
-    bundled_path = resolve_bundled(name)
+    bundled_path = found.path
     if bundled_path and bundled_path.exists():
         console.print()
         source = bundled_path.read_text(encoding="utf-8").strip()
@@ -861,28 +964,94 @@ def eject_cmd(
     out: Path | None = typer.Option(
         None, "--out", "-o", help="Output path. Defaults to ./<filename>."
     ),
+    config: Optional[Path] = typer.Option(
+        None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
+    ),
 ):
-    entry = find_entry(name)
-    if entry is None:
+    registry = _library_registry(config)
+    found = _lookup_entry(registry, name)
+    if found is None:
         console.print(f"[red]Error:[/red] Orchestration not found: {name}")
         console.print("[dim]Run [bold]cof list[/bold] to see available orchestrations.[/dim]")
         raise typer.Exit(code=1)
 
-    bundled_path = resolve_bundled(name)
+    entry = found.metadata
+    bundled_path = found.path
     if bundled_path is None or not bundled_path.exists():
         console.print(f"[red]Error:[/red] Bundled file not found for: {name}")
         raise typer.Exit(code=1)
 
-    dest = out or Path(entry.get("file", f"{name}.yml"))
+    dest = out or eject_destination(entry)
     if dest.exists() and not typer.confirm(
         f"{dest} already exists. Overwrite?", default=False
     ):
         raise typer.Exit(code=0)
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(bundled_path.read_text(encoding="utf-8"), encoding="utf-8")
+    write_ejected(bundled_path.read_text(encoding="utf-8"), dest)
     console.print(f"[green]Ejected:[/green] {dest}")
     console.print(f"[dim]Edit freely — this is your local copy. Run with: cof run {dest}[/dim]")
+
+
+library_app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="Manage library sources (`runtime.library.sources`).",
+)
+app.add_typer(library_app, name="library")
+
+
+@library_app.command(
+    "refresh",
+    help="Fetch remote library sources into the local cache. This is the only "
+    "command that touches the network for a library source.",
+)
+def library_refresh_cmd(
+    source: Optional[str] = typer.Argument(
+        None, help="Source to refresh. Omit to refresh every configured source."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Output machine-readable JSON only."),
+    config: Optional[Path] = typer.Option(
+        None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
+    ),
+):
+    registry = _library_registry(config)
+    if source is not None and registry.get_source(source) is None:
+        known = ", ".join(registry.source_names)
+        console.print(f"[red]Error:[/red] Unknown library source: {source}")
+        console.print(f"[dim]Configured sources: {known}[/dim]")
+        raise typer.Exit(code=1)
+
+    if not json_out:
+        _print_header("Circuitry · Library refresh")
+
+    results: list[dict[str, Any]] = []
+    failed = False
+    for candidate in registry.sources:
+        if source is not None and candidate.name != source:
+            continue
+        try:
+            outcome = registry.refresh(source=candidate.name)[0]
+        except LibraryFetchError as exc:
+            failed = True
+            results.append({"source": candidate.name, "status": "error", "error": str(exc)})
+            if not json_out:
+                console.print(f"[red]Error:[/red] {exc}")
+            continue
+        results.append(
+            {
+                "source": outcome.source,
+                "status": outcome.status,
+                "sha": outcome.sha,
+                "detail": outcome.detail,
+            }
+        )
+        if not json_out:
+            colour = {"updated": "green", "unchanged": "cyan"}.get(outcome.status, "dim")
+            console.print(f"[{colour}]{outcome.summary()}[/{colour}]")
+
+    if json_out:
+        console.print_json(json.dumps(results, ensure_ascii=False))
+    raise typer.Exit(code=1 if failed else 0)
 
 
 @app.command(

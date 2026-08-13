@@ -350,6 +350,10 @@ A planning-time effect. Instead of executing a fixed set of effects, the reflect
       template: "Execute: {{prime.goal.propose_steps.value}}"
 ```
 
+A reflector is the effect most worth switching off for a single run: a profile
+with `effects.goal.enabled: false` turns agentic planning off while leaving the
+rest of the orchestration intact — see [Disabling Effects](#disabling-effects).
+
 ---
 
 ### `tool`
@@ -497,6 +501,64 @@ The runtime tracks a per-execution call stack of resolved orchestration paths. I
   inline: "{{prime.plan.value}}"
   validate: true
 ```
+
+---
+
+## Disabling Effects
+
+Any named effect can be switched off for a single run from a
+[profile](profiles.md), without editing the orchestration:
+
+```yaml
+# profiles/no-planning.yml
+effects:
+  goal:
+    enabled: false
+```
+
+```bash
+cof run recipe --profile no-planning
+```
+
+A disabled effect **is not executed**. In its place the runtime writes a skip
+node — deliberately the same shape `on_error: skip` leaves behind, so
+downstream handling is uniform:
+
+```json
+{
+  "value": null,
+  "meta": { "disabled": true, "created_at": "...", "completed_at": "..." }
+}
+```
+
+The per-effect `on_effect_complete` hook still fires for the node, so
+observability sees the skip rather than a gap.
+
+**Rules:**
+
+| Situation | Behavior |
+|-----------|----------|
+| Disabled container (`dynamic` / `loop` / `conditional` / `reflector`) | The whole subtree is disabled — the container's node is written as disabled and nothing inside it runs (no child nodes appear at all) |
+| Disabled `loop` body effect | Skipped in every iteration; `prime.<loop>.iter_<n>.<name>` is a skip node |
+| Disabled `loop` `collect` target | Each iteration's slot is a skip node, and `prime.<loop>.collected.value` omits it — `collected` reports only values that were actually produced |
+| Disabled effect inside an `if`/`else` branch | Skipped when that branch is selected; the branch's other effects run normally |
+| A container's *condition* (`if:` on a conditional, `while:` on a loop) | Not disableable — it is a condition, not an effect, and a container with no condition has no defined branch. Targeting `<name>.if`, `<name>.while`, or `<name>.condition` fails profile validation with an actionable error. Disable the whole container instead |
+| Unknown effect path | Fails profile validation, listing the orchestration's valid paths |
+| Anonymous (transparent) `conditional`/`loop` | Contributes no path segment, so it has no address to disable — disable its individual named children instead |
+
+**Downstream coherence.** A disabled node's `value` is `null`, so:
+
+- Mustache templates referencing it render empty:
+  `"report on <{{prime.goal.value}}>"` → `"report on <>"`
+- CEL conditions that test for a value evaluate `False` — both by comparison
+  (`state.prime.goal.value == "yes"`) and via the existing error→`False`
+  behavior (`size(state.prime.goal.value) > 0`).
+- Negative tests are the exception worth knowing: `state.prime.goal.value != ""`
+  is `True` against `null`, exactly as it would be for any unset value. Prefer
+  positive tests in conditions that may read a disableable effect.
+
+A run with no `--profile` is unaffected: `enabled` is never set from
+orchestration YAML, so every effect compiles as enabled.
 
 ---
 

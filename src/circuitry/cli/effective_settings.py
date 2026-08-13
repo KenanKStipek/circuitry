@@ -10,9 +10,12 @@ fields are intentionally NOT redacted here. The runtime snapshot embedded in
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .config import CircuitryConfig
+
+if TYPE_CHECKING:
+    from .profiles import ProfileSettings
 
 
 @dataclass(frozen=True)
@@ -41,16 +44,20 @@ def resolve_effective_settings(
     cli_model: str | None = None,
     cli_adapter: str | None = None,
     cli_plugins: list[str] | None = None,
+    profile: ProfileSettings | None = None,
 ) -> EffectiveSettings:
     sources: dict[str, str] = {}
     model: str | None
     adapter: str | None
     plugins: list[str]
 
-    # model precedence: cli > orch > config > default
+    # model precedence: cli > profile > orch > config > default
     if cli_model is not None:
         model = cli_model
         sources["model"] = "cli"
+    elif profile is not None and profile.model is not None:
+        model = profile.model
+        sources["model"] = "profile"
     elif orch.get("model") is not None:
         raw_model = orch.get("model")
         model = str(raw_model) if raw_model is not None else None
@@ -62,10 +69,13 @@ def resolve_effective_settings(
         model = None
         sources["model"] = "default"
 
-    # adapter precedence: cli > orch > config > default
+    # adapter precedence: cli > profile > orch > config > default
     if cli_adapter is not None:
         adapter = cli_adapter
         sources["adapter"] = "cli"
+    elif profile is not None and profile.adapter is not None:
+        adapter = profile.adapter
+        sources["adapter"] = "profile"
     elif orch.get("adapter") is not None:
         raw_adapter = orch.get("adapter")
         adapter = str(raw_adapter) if raw_adapter is not None else None
@@ -110,6 +120,23 @@ def resolve_effective_settings(
     sources["runtime"] = (
         "orchestration" if orch_runtime else ("config" if cfg.runtime else "default")
     )
+
+    # persistence: a profile's `persistence:` block replaces (never merges
+    # with) whatever the orchestration/config supplied — backends take
+    # disjoint config keys, so a partial overlay would produce a chimera.
+    # `enabled` defaults to true for a profile-supplied block: naming a
+    # backend in a profile is the opt-in. There is no CLI persistence flag
+    # today; if one is added it layers on top of this.
+    if profile is not None and profile.persistence is not None:
+        profile_persistence = dict(profile.persistence)
+        profile_persistence.setdefault("enabled", True)
+        runtime = dict(runtime)
+        runtime["persistence"] = profile_persistence
+        sources["persistence"] = "profile"
+    elif isinstance(orch_runtime.get("persistence"), dict):
+        sources["persistence"] = "orchestration"
+    elif isinstance((cfg.runtime or {}).get("persistence"), dict):
+        sources["persistence"] = "config"
 
     return EffectiveSettings(
         model=model,

@@ -16,6 +16,7 @@ from .port_check import PortCheckPlugin
 from .regex import RegexPlugin
 from .tar import TarPlugin
 from .uuid import UuidPlugin
+from .validate_yaml import ValidateYamlPlugin
 from .zip import ZipPlugin
 
 __all__ = [
@@ -37,6 +38,7 @@ __all__ = [
     "ToolPlugin",
     "ToolResult",
     "UuidPlugin",
+    "ValidateYamlPlugin",
     "ZipPlugin",
     "build_plugin",
     "validate_tool_result",

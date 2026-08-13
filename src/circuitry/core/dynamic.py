@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal, Union
 
 from ..adapters import Adapter
 from ..output import console as _console
+from .disabled import is_enabled, write_disabled_node
 from .prompt import PromptDefinition, PromptRuntime
 from .store import Store
 
@@ -85,6 +86,9 @@ class DynamicDefinition:
     name: str
     effects: Sequence[EffectDef]
     flow: Literal["chain", "tree"] = "chain"
+
+    # False = skip execution (whole subtree) and write a disabled node.
+    enabled: bool = True
 
 
 class DynamicRuntime:
@@ -294,6 +298,18 @@ class DynamicRuntime:
             def _cb_running(t, e, _k=_n):
                 return tracker.on_running(_k, t, e)
 
+        if not is_enabled(effect):
+            _skip_disabled_effect(
+                effect,
+                store=store,
+                indent=indent,
+                icon=icon,
+                color=color,
+                verbose=self.verbose,
+                cb_done=cb_done,
+            )
+            return
+
         if self.verbose and not is_prompt and not is_tool:
             if cb_start is not None:
                 cb_start()
@@ -441,6 +457,38 @@ class DynamicRuntime:
         if isinstance(name, str) and name:
             return f"{self.defn.name}.{name}"
         return f"{self.defn.name}.{type(effect).__name__}[{index}]"
+
+
+def _skip_disabled_effect(
+    effect: Any,
+    *,
+    store: Store,
+    indent: str,
+    icon: str,
+    color: str,
+    verbose: bool,
+    cb_done: Callable[[str], None] | None = None,
+) -> None:
+    """Write the disabled node for *effect* and report the skip.
+
+    Shared by every container runtime (dynamic/conditional/loop) so the skip
+    node shape and the verbose line stay identical wherever an effect is
+    dispatched. An anonymous effect (transparent conditional/loop) has no
+    state node to write, so it is simply not executed.
+    """
+    name = getattr(effect, "name", None)
+    if isinstance(name, str) and name:
+        write_disabled_node(store=store, name=name)
+    if verbose:
+        label = name or "?"
+        line = (
+            f"{indent}[dim]⊘[/dim] [{color}]{icon}[/{color}]"
+            f" {label} [dim]disabled[/dim]"
+        )
+        if cb_done is not None:
+            cb_done(line)
+        else:
+            _console.print(line)
 
 
 def _effect_type_label(effect: Any) -> str:

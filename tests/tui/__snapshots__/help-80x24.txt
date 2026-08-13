@@ -10,15 +10,15 @@
   │4  Ru│             2  Run                                           │     │  
   │5  Do│             3  Inspect                                       │     │  
   │6  Se│             4  Runs                                          │     │  
-  ╰─────│             5  Doctor                                        │─────╯  
-        │             6  Settings                                  ▁▁  │        
+  │7  Va│             5  Doctor                                        │and p│  
+  │8  Ch│             6  Settings                                  ▇▇  │ion  │  
+  ╰─────│             7  Validate                                      │─────╯  
+        │             8  Chat                                          │        
         │             ?  Help                                          │        
         │             q  Back / Quit                                   │        
         │           esc  Back / Quit                                   │        
         │            ^p  palette                                       │        
         │                                                              │        
-        │  This screen                                                 │        
-        │       super+c  Copy selected text                            │        
         │  Esc or ? to close                                           │        
         │                                                              │        
  tab Nex╰──────────────────────────────────────────────────────────────╯palette 

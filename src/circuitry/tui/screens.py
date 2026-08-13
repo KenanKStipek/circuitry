@@ -10,11 +10,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.screen import Screen
+from textual.widget import Widget
 from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
 from .layout import ResponsiveLayout
@@ -40,12 +41,16 @@ class CircuitryScreen(ResponsiveLayout, Screen[None]):
     Subclasses implement :meth:`compose_body`; the chrome around it is
     supplied here so every view shares one layout and one set of breakpoints.
     The body is a scroll container, which is what keeps a full-size screen
-    renderable inside a four-row terminal.
+    renderable inside a four-row terminal. A view that lays out its own
+    panes (and scrolls inside them) overrides :attr:`BODY_CONTAINER`.
     """
+
+    #: Container the body widgets are wrapped in.
+    BODY_CONTAINER: ClassVar[type[Widget]] = VerticalScroll
 
     def compose(self) -> ComposeResult:
         yield Header(id="chrome-header")
-        yield VerticalScroll(*self.compose_body(), id="body")
+        yield self.BODY_CONTAINER(*self.compose_body(), id="body")
         yield Footer(id="chrome-footer")
 
     def compose_body(self) -> ComposeResult:
@@ -102,10 +107,64 @@ class ViewSpec:
         return self.factory(self)
 
 
+# Factories are imported inside the function so this module stays the single
+# registry without depending on the screens that register themselves in it.
+
+
+def _library_screen(spec: ViewSpec) -> CircuitryScreen:
+    """Build the library view, imported late to keep the registry import-cheap."""
+    from .library import LibraryScreen
+
+    return LibraryScreen(spec)
+
+
+def _build_run_screen(spec: ViewSpec) -> CircuitryScreen:
+    """Imported lazily: run_view imports this module for its base class."""
+    from .run_view import RunScreen
+
+    return RunScreen(spec)
+
+
+def _doctor(spec: ViewSpec) -> CircuitryScreen:
+    from .doctor import DoctorScreen
+
+    return DoctorScreen(spec)
+
+
+def _settings(spec: ViewSpec) -> CircuitryScreen:
+    from .doctor import SettingsScreen
+
+    return SettingsScreen(spec)
+
+
+def _validate(spec: ViewSpec) -> CircuitryScreen:
+    from .validate import ValidateScreen
+
+    return ValidateScreen(spec)
+
+
+def _chat(spec: ViewSpec) -> CircuitryScreen:
+    from .chat import ChatScreen
+
+    return ChatScreen(spec)
+
+
 #: Every view the shell knows about, in navigation (and number key) order.
 VIEWS: tuple[ViewSpec, ...] = (
-    ViewSpec("library", "Library", "Browse bundled and shared orchestrations", "1"),
-    ViewSpec("run", "Run", "Execute an orchestration and watch effects stream", "2"),
+    ViewSpec(
+        "library",
+        "Library",
+        "Browse bundled and shared orchestrations",
+        "1",
+        factory=_library_screen,
+    ),
+    ViewSpec(
+        "run",
+        "Run",
+        "Execute an orchestration and watch effects stream",
+        "2",
+        factory=_build_run_screen,
+    ),
     ViewSpec(
         "inspect",
         "Inspect",
@@ -113,12 +172,33 @@ VIEWS: tuple[ViewSpec, ...] = (
         "3",
     ),
     ViewSpec("runs", "Runs", "History of past runs and their final state", "4"),
-    ViewSpec("doctor", "Doctor", "Backend, config, and connectivity diagnostics", "5"),
+    ViewSpec(
+        "doctor",
+        "Doctor",
+        "Backend, config, and connectivity diagnostics",
+        "5",
+        factory=_doctor,
+    ),
     ViewSpec(
         "settings",
         "Settings",
         "Effective configuration and where each value came from",
         "6",
+        factory=_settings,
+    ),
+    ViewSpec(
+        "validate",
+        "Validate",
+        "Check an orchestration file for schema, compile, cycle and preflight errors",
+        "7",
+        factory=_validate,
+    ),
+    ViewSpec(
+        "chat",
+        "Chat",
+        "Describe a pipeline and let the wizard write the orchestration",
+        "8",
+        factory=_chat,
     ),
 )
 

@@ -1,0 +1,15 @@
+# Deliberately broken: one file that trips every validation gate at once, so
+# the Validate view can be tested rendering schema, compile, cycle and
+# preflight problems side by side.
+#
+#   adapter          -> preflight: no such adapter
+#   name: "bad name" -> schema (NamePattern) and compile (whitespace in name)
+#   path: broken.yml -> cycle: the file uses itself
+adapter: definitely_not_an_adapter
+effects:
+  - type: prompt
+    name: "bad name"
+    template: "Summarize {{ prime.input }}"
+  - type: use
+    name: loop_back
+    path: ./broken.yml

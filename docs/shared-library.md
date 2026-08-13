@@ -10,6 +10,19 @@ Publishing is intentionally out of scope for this repository.
 - This repository consumes/retrieves shared assets for execution.
 - Any local filesystem library here is a development/testing mirror, not the source-of-truth publishing workflow.
 
+**The consumption path for that publish-by-PR workflow is the `github` library
+source** — see [library sources → `github`](./library-sources.md#github). Point
+it at the library repository, run `cof library refresh`, and the merged
+orchestrations become listable and runnable by name from a SHA-pinned local
+cache (no network on the run path). `cof fetch` / `cof run-library`, documented
+below, are a separate per-asset retrieval mechanism.
+
+> **Not to be confused with [library sources](./library-sources.md).**
+> `runtime.library.sources` configures where `cof list/info/run/eject` look up
+> orchestrations by name (including the `github` source above); the `backend` /
+> `local_root` settings below configure shared-asset retrieval (`cof fetch`,
+> `cof run-library`). They share the `runtime.library` namespace but no keys.
+
 ## Configuration
 
 Configure a library backend under `runtime.library`.

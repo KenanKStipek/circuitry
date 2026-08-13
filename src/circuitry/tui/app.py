@@ -12,6 +12,7 @@ Importing this module requires the ``tui`` extra — go through
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import ClassVar
 
 from textual.app import App
@@ -32,6 +33,10 @@ class CircuitryApp(App[None]):
 
     TITLE = "Circuitry"
     SUB_TITLE = "cof"
+
+    #: Set by :meth:`launch_run` — the orchestration the Run view should pick
+    #: up when it opens. ``None`` when the user navigated there themselves.
+    pending_run: Path | None = None
 
     CSS = """
     CircuitryScreen #body {
@@ -150,6 +155,20 @@ class CircuitryApp(App[None]):
             self.push_screen(spec.build())
         elif current.slug != spec.slug:
             self.switch_screen(spec.build())
+
+    def launch_run(self, path: Path) -> None:
+        """Hand a saved orchestration to the Run view.
+
+        The Chat view's "run it now" and the Run view are separate stories, so
+        the hand-off is a value on the app rather than a call into a screen
+        that may still be a placeholder: whoever builds Run reads
+        ``app.pending_run`` on mount and needs nothing from here.
+        """
+        self.pending_run = path
+        for spec in VIEWS:
+            if spec.slug == "run":
+                self.show_view(spec)
+                return
 
     def show_home(self) -> None:
         """Return to the home screen, dropping any view on top of it."""

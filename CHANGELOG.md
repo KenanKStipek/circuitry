@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **`agents/wizard` — the orchestration that writes orchestrations.** A conversational agent that handles ONE turn of an interview (`interpret → ask-or-draft → validate → revise → gate`) and hands back a structured turn contract: `say` (what to show the human), `yaml` (the validated draft, `null` on a question turn), and `done`. The host drives the outer loop by re-running it with the accumulated `goal`/`conversation`/`draft` state — see [`docs/wizard.md`](docs/wizard.md) for the headless `api.run_orchestration` example and `scripts/wizard-chat` for a runnable driver. `done` is a deterministic gate (CEL + tool), not a model claim: it is true only when the model says it is finished *and* the draft passed validation, so the wizard cannot finish on invalid YAML.
+- **`WIZARD_PRIME_V1`** in `core/primes.py` — a DSL cheat-sheet prime (seven primitives, naming rules, interface blocks, state paths, prompt types) with the same no-fences/no-markdown emission discipline as `REFLECTOR_PRIME_V1`.
+- **`validate_yaml` tool provider — schema + compiler validation with no LLM.** Validates an orchestration document against `orchestration.schema.json` and then compiles it to catch what the schema cannot (duplicate sibling names, reserved `iter_N` names, unknown effect types). Returns `{ok, errors, yaml}`; an empty document is `ok: false` rather than an exception, errors are capped (`max_errors`, default 20) so they fit in a revision prompt, and `strip_fences` (default `true`) tolerates fenced model output. The echoed `yaml` is the cleaned text that was actually validated.
+- **Library sources — `runtime.library.sources`.** `cof list / info / run / eject` now resolve names through an ordered registry of library sources instead of the curation manifest alone. Two source types ship: `curation` (the bundled library, behaviour unchanged) and `folder` (a directory of `*.yml`/`*.yaml`, scanned recursively, with metadata from an optional `manifest.json` or derived from the file — description from the leading comment block or first prompt template, inputs from `interface:`). Order is precedence: a bare name resolves to the first matching source and warns when it matched more than one; a source-qualified `"<source>:<name>"` reference (e.g. `cof run local:my_pipeline`) always resolves exactly. `cof list` gains `--source <name>`. **Zero-config is unchanged** — with no `sources` key the registry is curation-only, and `cof list` output (including `--json`) is byte-identical to before: the Source column and `source` key appear only when more than one source is configured. See [`docs/library-sources.md`](docs/library-sources.md).
+- **`--config/-c` on `cof info` and `cof eject`**, matching `cof list` and `cof run`, so library sources can be pointed at an explicit config file.
+- **TUI Doctor, Settings and Validate views** (`cof tui`). Doctor runs the same `check()` walk `cof doctor` runs, one row per adapter / tool plugin / runtime plugin, each row painted `checking…` until its result lands so a probe waiting on a socket never blocks the keyboard; missing dependencies are rendered as next steps ("Install ffmpeg and make sure it is on your PATH") rather than raw `env:`/`binary:`/`library:`/`host:` items. Its second panel — and the Settings view on its own — shows `resolve_effective_settings` flattened to one row per value with the layer each came from (cli / orchestration / config / default), passed through the credential redaction first. Validate takes an orchestration path and lists **every** problem at once, grouped by class (schema, allowlist, compile, cycle, preflight), where `cof check` stops at the first gate that trips. New public helper `circuitry.cli.runtime_shim.load_schema()`.
+- **Named profile files — `cof run --profile <name>`.** `profiles/<name>.yml` supplies run-level `adapter`/`model` defaults, `inputs` merged into the initial state (CLI `-e` wins), and a per-effect `effects.<path>.model`/`.provider` overlay applied at compile time (frozen `*Definition` semantics preserved via `dataclasses.replace`). Discovery: `<orchestration_dir>/profiles/<name>.yml` (orchestration-scoped) wins over `<cwd>/profiles/<name>.yml` (project-level). Precedence: `CLI > profile > orchestration > project config > global config > default`. Validated against `src/circuitry/schema/profile.schema.json`; unknown effect paths fail with the list of valid paths. Recorded (redacted) at `runtime.effective_settings.profile`. `effects.<path>.enabled` and `persistence` are parsed/validated here but their runtime behavior is implemented by sibling tasks. See [`docs/profiles.md`](docs/profiles.md).
 - **Live-network integration tests for the `cyberdiner` adapter** (`tests/integration/test_cyberdiner_live.py`) — one direct `generate()` call against a real expo, one full `run_orchestration` asserting `ok=True` and a redacted token in `runtime.effective_settings`. Marked `integration` and env-gated on `CYBERDINER_EXPO_URL` + `CYBERDINER_TOKEN`, so they skip cleanly (with a reason) everywhere else; CI's `-m 'not integration'` is unaffected.
 - **[CyberDiner demo runbook](docs/cyberdiner-demo-runbook.md)** — copy-pasteable end-to-end demo: env setup, config generated from env (token never in YAML), `cof doctor` preflight, `cof run`, where the completion lands in state, and troubleshooting.
 - **`cyberdiner` adapter — the CyberDiner job-queue broker.** Submits each prompt as a job to expo (`POST /beta/jobs`) and polls (`GET /beta/jobs/{job_id}`) until it reaches a terminal status, so the queue stays behind circuitry's synchronous `generate()`. `model:` selects a capability tier (`tier-1`…`tier-4`) rather than a provider model name. Configured via `runtime.adapters.cyberdiner` (`expo_url`, `token`, `default_tier`, `poll_interval_ms`, `timeout_seconds`) — the token belongs in config/env, never in an orchestration YAML. `check()` reports missing credentials and an unreachable host at preflight. Note: expo's `/beta` API is pre-stability and may change.
@@ -20,26 +27,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Consolidated `curation/manifest.json`** — single source of truth for `cof list/run/info/eject` AND per-entry documentation (intent, when_to_use, inputs, outputs, primitives, tags, difficulty). Replaces the separate `index.yml` + `manifest.json`.
 - **`curation-manifest.schema.json`** — Draft-07 JSON Schema for the manifest, enforced by `tests/orchestrations/test_curation_metadata.py`.
 
+### Fixed
+
+- **`tool` and `use` effects inside conditional branches, and `use` inside loop bodies, were silently skipped.** `ConditionalRuntime`'s dispatch chain handled `prompt`/`dynamic`/`if`/`loop`/`reflector` and then fell through: a `tool` effect in a branch wrote nothing to the store, was recorded as executed, and the run reported success. `LoopRuntime` had the same gap for `use`. Both now dispatch the full effect set and raise on an unhandled type, matching `DynamicRuntime`.
+
 ### Changed
 
-- **mcp SDK 2.0 is now required** (`mcp>=2.0,<3`). 2.0 renamed `FastMCP` to
-  `MCPServer` and moved it from `mcp.server.fastmcp` to `mcp.server.mcpserver`;
-  `circuitry-mcp` targets the new name. The `mcp` tool provider's
-  streamable-HTTP transport follows the same rename
-  (`streamablehttp_client` → `streamable_http_client`) and now passes headers
-  through an SDK-built httpx client, since 2.0 dropped the `headers=` kwarg.
-  stdio and SSE transports are unaffected. **mcp 1.x will no longer import.**
-- **Explicit ruff rule selection** in `[tool.ruff.lint]`. Ruff's default rule
-  set is not stable across releases — 0.16 promoted several hundred rules into
-  it and turned a green tree red with no code change. Rule adoption is now a
-  deliberate config commit, and the six deliberately-disabled rules are
-  justified in-file. The `ruff<0.16` / `mcp<2` emergency pins are gone from
-  `requirements-dev.txt`; the mcp bound now lives in `pyproject.toml`.
-  Adopting the rule set is a wide but behaviour-preserving sweep across ~110
-  files — PEP 604 unions in place of `Optional[...]` (UP007/UP045), sorted
-  `__all__` (RUF022), sorted imports (I001), and `next(iter(x))` over
-  `list(x)[0]` (RUF015). Autofixes and hand-fixes are split into separate
-  commits so the mechanical part can be skimmed.
 - **`cof list / run / info / eject` use slash-delimited names.** `cof run hello` is now `cof run learn/hello`; `cof run article-summarizer` is now `cof run recipes/article_summarizer`. Bare last-segment names still resolve when unambiguous.
 - **Test isolation in `use`** — child effects now land at `prime.<use_name>.<child_effect>.value` by default (full-namespace mode). Existing tests/orchestrations that declared `outputs:` or used a child `interface:` are unaffected.
 

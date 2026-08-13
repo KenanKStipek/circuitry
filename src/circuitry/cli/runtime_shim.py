@@ -11,7 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..adapters import Adapter, build_adapter
-from ..core.compiler import compile_orchestration
+from ..core.compiler import apply_effect_overrides, compile_orchestration
 from ..core.dynamic import DynamicRuntime
 from ..core.runtime_plugins import (
     PLUGIN_CONTRACT_VERSION,
@@ -27,6 +27,7 @@ from .allowlist import check_allowlist, walk_orchestration_refs
 from .config import CircuitryConfig
 from .effective_settings import EffectiveSettings, resolve_effective_settings
 from .orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
+from .profiles import ProfileSettings, load_profile
 from .redaction import redact
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,15 @@ def _load_schema() -> dict[str, Any] | None:
         return None
 
 
+def load_schema() -> dict[str, Any] | None:
+    """The orchestration JSON schema, or ``None`` when it cannot be used.
+
+    Public entry point for callers that validate against the same schema
+    ``validate`` does (the TUI's Validate view) without reaching for a private.
+    """
+    return _load_schema()
+
+
 @dataclass(frozen=True)
 class RunRequest:
     orchestration_path: Path
@@ -63,6 +73,13 @@ class RunRequest:
     adapter: Adapter | None = None
     state_observer: Callable[[dict[str, Any]], None] | None = None
     skip_preflight: bool = False
+    # Caller-level overrides, ranked above the orchestration's own
+    # ``adapter``/``model`` (the ``cli`` tier of resolve_effective_settings).
+    # ``adapter_override`` is ignored when ``adapter`` supplies an instance —
+    # that already pins the transport.
+    adapter_override: Optional[str] = None
+    model_override: Optional[str] = None
+    profile_name: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -105,7 +122,28 @@ def run(req: RunRequest) -> RunResult:
                 "Allowlist enforcement failed: " + "; ".join(allowlist_errors)
             )
 
-        effective = resolve_effective_settings(cfg=cfg, orch=orch)
+        profile: ProfileSettings | None = None
+        if req.profile_name:
+            profile = load_profile(
+                name=req.profile_name,
+                orchestration_path=req.orchestration_path,
+                orch=orch,
+            )
+            if profile.inputs:
+                # Profile inputs are a lower-priority base layer under
+                # whatever the caller already resolved from --state/-e (CLI
+                # values win — see cli.app.run_cmd).
+                merged = dict(profile.inputs)
+                merged.update(state)
+                state = merged
+
+        effective = resolve_effective_settings(
+            cfg=cfg,
+            orch=orch,
+            cli_model=req.model_override,
+            cli_adapter=req.adapter_override,
+            profile=profile,
+        )
         runtime_config = effective.runtime
         persistence = build_persistence_backend(effective.runtime)
         plugins, plugin_events = _initialize_plugins(
@@ -123,7 +161,14 @@ def run(req: RunRequest) -> RunResult:
                     orchestration_path=str(req.orchestration_path)
                 )
                 if isinstance(persisted, dict):
-                    state = deepcopy(persisted)
+                    hydrated = deepcopy(persisted)
+                    if profile is not None and profile.inputs:
+                        # Profile inputs stay the lowest layer: they fill
+                        # keys the persisted snapshot doesn't carry rather
+                        # than overwriting resumed values.
+                        for key, value in profile.inputs.items():
+                            hydrated.setdefault(key, value)
+                    state = hydrated
                     loaded_from_persistence = True
             except Exception as e:
                 state.setdefault("runtime", {})
@@ -156,6 +201,11 @@ def run(req: RunRequest) -> RunResult:
             "runtime": redact(effective.runtime),
             "sources": effective.sources,
         }
+        if profile is not None:
+            state["runtime"]["effective_settings"]["profile"] = {
+                "name": profile.name,
+                "content": redact(profile.raw),
+            }
         if req.shared_library_metadata is not None:
             state["runtime"]["shared_library"] = req.shared_library_metadata
         state["runtime"]["plugins"] = {
@@ -196,6 +246,20 @@ def run(req: RunRequest) -> RunResult:
         # Compile YAML -> core definitions before adapter/model initialization so
         # structural orchestration errors are surfaced deterministically.
         root_def = compile_orchestration(orch=orch, root_name="prime")
+        if profile is not None and profile.effects:
+            effect_overrides = {
+                path: {
+                    k: v
+                    for k, v in override.items()
+                    if k in ("model", "provider", "enabled")
+                }
+                for path, override in profile.effects.items()
+            }
+            effect_overrides = {
+                path: override for path, override in effect_overrides.items() if override
+            }
+            if effect_overrides:
+                root_def, _ = apply_effect_overrides(root_def, effect_overrides)
 
         adapter: Adapter
         timeout_seconds = 120
@@ -594,10 +658,16 @@ class _NoOpAdapter:
 def _has_prompt_effects(defn: Any) -> bool:
     """Recursively check if any effect in the tree requires an LLM adapter."""
     from ..core.conditional import ConditionalDefinition
+    from ..core.disabled import is_enabled
     from ..core.dynamic import DynamicDefinition
     from ..core.loop import LoopDefinition
     from ..core.prompt import PromptDefinition
     from ..core.reflector import ReflectorDefinition
+
+    # A disabled effect never runs, so it never needs an adapter — a profile
+    # that switches every prompt off makes the run adapter-free.
+    if not is_enabled(defn):
+        return False
 
     if isinstance(defn, PromptDefinition):
         return True

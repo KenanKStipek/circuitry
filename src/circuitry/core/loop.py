@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal, Union
 
 from ..adapters import Adapter
 from ..output import console as _console
+from .disabled import is_disabled_node, is_enabled
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,10 @@ class LoopDefinition:
 
     # Maximum parallel workers when flow="tree". None = unbounded.
     max_concurrency: int | None = None
+
+    # False = skip execution (whole body, every iteration) and write a
+    # disabled node.
+    enabled: bool = True
 
 
 class LoopRuntime:
@@ -364,14 +369,9 @@ class LoopRuntime:
 
                 # collect: aggregate the named body effect's .value across all iterations
                 if self.defn.collect:
-                    collected: list[Any] = []
-                    for i in range(iteration_count):
-                        iter_node = node.get(f"iter_{i}")
-                        if isinstance(iter_node, dict):
-                            effect_node = iter_node.get(self.defn.collect)
-                            if isinstance(effect_node, dict):
-                                collected.append(effect_node.get("value"))
-                    node["collected"] = {"value": collected}
+                    node["collected"] = {
+                        "value": self._collect_values(node, iteration_count)
+                    }
 
             if is_named and self.defn.name:
                 store.fire_effect_complete(self.defn.name, node or {})
@@ -390,15 +390,36 @@ class LoopRuntime:
                     "effects_by_iteration": iterations_effects,
                 }
                 if self.defn.collect:
-                    collected_err: list[Any] = []
-                    for i in range(iteration_count):
-                        iter_node = node.get(f"iter_{i}")
-                        if isinstance(iter_node, dict):
-                            effect_node = iter_node.get(self.defn.collect)
-                            if isinstance(effect_node, dict):
-                                collected_err.append(effect_node.get("value"))
-                    node["collected"] = {"value": collected_err}
+                    node["collected"] = {
+                        "value": self._collect_values(node, iteration_count)
+                    }
             raise
+
+    def _collect_values(
+        self, node: dict[str, Any], iteration_count: int
+    ) -> list[Any]:
+        """Aggregate the ``collect`` target's value across every iteration.
+
+        A disabled collect target contributes no slot at all: its node exists
+        (value ``None``, ``meta.disabled``), but a caller reading ``collected``
+        wants the values that were actually produced, so the skip is elided
+        rather than surfacing as a run of ``None`` entries.
+        """
+        key = self.defn.collect
+        if not key:
+            return []
+        collected: list[Any] = []
+        for i in range(iteration_count):
+            iter_node = node.get(f"iter_{i}")
+            if not isinstance(iter_node, dict):
+                continue
+            effect_node = iter_node.get(key)
+            if not isinstance(effect_node, dict):
+                continue
+            if is_disabled_node(effect_node):
+                continue
+            collected.append(effect_node.get("value"))
+        return collected
 
     def _resolve_collection(self, ctx: dict[str, Any]) -> list[Any]:
         """Resolve the collection path to an actual list."""
@@ -502,6 +523,7 @@ Should the loop continue? Answer (yes/no):"""
         from .prompt import PromptDefinition, PromptRuntime
         from .reflector import ReflectorDefinition, ReflectorRuntime
         from .tool import ToolDefinition, ToolRuntime
+        from .use import UseDefinition, UseRuntime
 
         # Create iteration-specific store if named
         if self.defn.name:
@@ -510,7 +532,7 @@ Should the loop continue? Answer (yes/no):"""
         else:
             iter_store = store
 
-        from .dynamic import _EFFECT_STYLE, _elapsed_str
+        from .dynamic import _EFFECT_STYLE, _elapsed_str, _skip_disabled_effect
 
         body_indent = "  " * (self.depth + 1)
         executed: list[dict[str, Any]] = []
@@ -524,6 +546,23 @@ Should the loop continue? Answer (yes/no):"""
             name = getattr(effect, "name", None) or "?"
             is_prompt = isinstance(effect, PromptDefinition)
             is_tool = isinstance(effect, ToolDefinition)
+
+            if not is_enabled(effect):
+                _skip_disabled_effect(
+                    effect,
+                    store=iter_store,
+                    indent=body_indent,
+                    icon=icon,
+                    color=color,
+                    verbose=self.verbose,
+                )
+                effect_record["disabled"] = True
+                executed.append(effect_record)
+                # Expose the skip node to later body effects on the same terms
+                # as a produced one (see the sibling merge below).
+                if self.defn.name:
+                    ctx = {**ctx, **iter_store.state}
+                continue
 
             if self.verbose and not is_prompt and not is_tool:
                 _console.print(
@@ -635,6 +674,22 @@ Should the loop continue? Answer (yes/no):"""
                         display_name=f"{name} {iter_label}" if iter_label else None,
                         ancestors=self._child_ancestors if tracker is None else None,
                     ).execute(store=iter_store, ctx=ctx)
+
+                elif isinstance(effect, UseDefinition):
+                    UseRuntime(
+                        effect,
+                        adapter=self.adapter,
+                        model=self.model,
+                        runtime_config=self.runtime_config,
+                        dry_run=self.dry_run,
+                        timeout_seconds=self.timeout_seconds,
+                        verbose=self.verbose,
+                        depth=self.depth + 1,
+                        ancestors=self._child_ancestors,
+                    ).execute(store=iter_store, ctx=ctx)
+
+                else:
+                    raise TypeError(f"Unsupported effect type: {type(effect)}")
 
                 if self.verbose and not is_prompt and not is_tool:
                     elapsed = time.monotonic() - t0

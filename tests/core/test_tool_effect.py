@@ -256,3 +256,124 @@ def test_has_prompt_effects_returns_true_for_prompt() -> None:
         }
     )
     assert _has_prompt_effects(root) is True
+
+
+# ---------------------------------------------------------------------------
+# Tool effects nested inside control-flow containers
+#
+# Conditional branches and loop bodies dispatch on effect type. A type the
+# dispatch chain forgets used to fall straight through — the effect was
+# recorded as executed, wrote nothing, and the run reported success. These
+# pin the composition down.
+# ---------------------------------------------------------------------------
+
+
+def _tool_returning(value: Any) -> Any:
+    plugin = MagicMock()
+    plugin.execute.return_value = ToolResult(value=value, raw={}, exit_code=0)
+    return plugin
+
+
+def test_tool_effect_runs_inside_a_conditional_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from circuitry.core.dynamic import DynamicRuntime
+
+    monkeypatch.setattr(
+        "circuitry.plugins.factory.build_plugin",
+        lambda **kw: _tool_returning("then-branch"),
+    )
+
+    root = compile_orchestration(
+        orch={
+            "effects": [
+                {
+                    "type": "if",
+                    "if": {"mode": "cel", "expr": "true"},
+                    "then": [
+                        {"type": "tool", "name": "picked", "provider": "json"}
+                    ],
+                    "else": [
+                        {"type": "tool", "name": "picked", "provider": "json"}
+                    ],
+                }
+            ]
+        }
+    )
+    store = Store({})
+    DynamicRuntime(root, adapter=MagicMock(), model="test").execute(store=store)
+
+    assert store.state["prime"]["picked"]["value"] == "then-branch"
+
+
+def test_tool_effect_runs_inside_a_loop_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from circuitry.core.dynamic import DynamicRuntime
+
+    monkeypatch.setattr(
+        "circuitry.plugins.factory.build_plugin",
+        lambda **kw: _tool_returning("ran"),
+    )
+
+    root = compile_orchestration(
+        orch={
+            "effects": [
+                {
+                    "type": "loop",
+                    "name": "twice",
+                    "each": {"in": "items", "as": "item"},
+                    "body": [
+                        {"type": "tool", "name": "step", "provider": "json"}
+                    ],
+                }
+            ]
+        }
+    )
+    store = Store({"items": ["a", "b"]})
+    DynamicRuntime(root, adapter=MagicMock(), model="test").execute(store=store)
+
+    loop_node = store.state["prime"]["twice"]
+    assert loop_node["iter_0"]["step"]["value"] == "ran"
+    assert loop_node["iter_1"]["step"]["value"] == "ran"
+
+
+def test_unnamed_loop_body_overwrites_at_a_stable_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The idiom the wizard's revision loop depends on: an unnamed loop merges
+    its body into the parent scope, so a CEL while-condition can observe the
+    body's own latest output instead of an unreachable iter_<N> node."""
+    from circuitry.core.dynamic import DynamicRuntime
+
+    values = iter(["first", "second", "stop"])
+    plugin = MagicMock()
+    plugin.execute.side_effect = lambda **kw: ToolResult(
+        value=next(values), raw={}, exit_code=0
+    )
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: plugin)
+
+    root = compile_orchestration(
+        orch={
+            "effects": [
+                {"type": "tool", "name": "probe", "provider": "json"},
+                {
+                    "type": "loop",
+                    "max_iterations": 5,
+                    "while": {
+                        "mode": "cel",
+                        "expr": 'state.prime.probe.value != "stop"',
+                    },
+                    "body": [
+                        {"type": "tool", "name": "probe", "provider": "json"}
+                    ],
+                },
+            ]
+        }
+    )
+    store = Store({})
+    DynamicRuntime(root, adapter=MagicMock(), model="test").execute(store=store)
+
+    # first (pre-loop) → second → stop, then the condition goes false.
+    assert store.state["prime"]["probe"]["value"] == "stop"
+    assert plugin.execute.call_count == 3

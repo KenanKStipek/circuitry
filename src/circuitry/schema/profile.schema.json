@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CircuitryProfile",
+  "description": "JSON Schema for Circuitry named profile files (profiles/<name>.yml), consumed by `cof run --profile <name>`.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "adapter": {
+      "type": "string",
+      "description": "Run-level default adapter override. Precedence: CLI > profile > orchestration > config."
+    },
+    "model": {
+      "type": "string",
+      "description": "Run-level default model override. Precedence: CLI > profile > orchestration > config."
+    },
+    "inputs": {
+      "type": "object",
+      "description": "Merged into the initial state as a base layer. CLI -e values win over profile inputs."
+    },
+    "effects": {
+      "type": "object",
+      "description": "Per-effect overrides, keyed by dotted effect path as it appears in state (e.g. 'summarize' or 'my_dynamic.child').",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "minProperties": 1,
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "Overrides this effect's model at compile time."
+          },
+          "provider": {
+            "type": "string",
+            "description": "Overrides this effect's provider at compile time."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "false = do not execute this effect for the run; its node is written as {value: null, meta: {disabled: true, ...}}. Disabling a container (dynamic/loop/conditional/reflector) disables its whole subtree."
+          }
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "description": "Persistence backend selection for this run. Replaces (never merges with) the orchestration/config `runtime.persistence` block. Backend-specific keys (db_path, dsn, uri, database, collection, table, ...) are passed through.",
+      "required": ["backend"],
+      "properties": {
+        "backend": {
+          "type": "string",
+          "description": "Backend name: jsonl-file, sqlite, mongodb, or postgres."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Defaults to true for a profile-supplied block; set false to disable persistence for runs using this profile."
+        },
+        "path": {
+          "type": "string",
+          "description": "File path for jsonl-file (also accepted as an alias for sqlite's db_path)."
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}
