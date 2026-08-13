@@ -13,8 +13,9 @@ the view sits in a ``Validating…`` state until the report lands.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, ClassVar, Optional
+from typing import TYPE_CHECKING, ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -62,7 +63,7 @@ class IssueList(Vertical):
     IssueList .issue-skipped { color: $text-muted; margin-top: 1; }
     """
 
-    def show(self, report: Optional[ValidationReport]) -> None:
+    def show(self, report: ValidationReport | None) -> None:
         """Replace the contents with ``report`` (``None`` clears the panel)."""
         self.remove_children()
         if report is None:
@@ -103,13 +104,13 @@ class ValidateScreen(ViewScreen):
         self,
         spec: ViewSpec,
         *,
-        validator: Optional[Callable[[Path], ValidationReport]] = None,
-        path: Optional[Path] = None,
+        validator: Callable[[Path], ValidationReport] | None = None,
+        path: Path | None = None,
     ) -> None:
         super().__init__(spec)
         self._validate = validator or default_validator
         self._path = path
-        self.report: Optional[ValidationReport] = None
+        self.report: ValidationReport | None = None
         self._closing = False
 
     def compose_body(self) -> ComposeResult:
@@ -164,7 +165,7 @@ class ValidateScreen(ViewScreen):
             return
         try:
             report = self._validate(path)
-        except Exception as exc:  # noqa: BLE001 - never let a worker die silently
+        except Exception as exc:
             report = ValidationReport(
                 path, (ValidationIssue("load", f"{type(exc).__name__}: {exc}"),)
             )
@@ -188,5 +189,5 @@ class ValidateScreen(ViewScreen):
     def _set_status(self, text: str) -> None:
         self.query_one("#validate-status", Static).update(text)
 
-    def _show(self, report: Optional[ValidationReport]) -> None:
+    def _show(self, report: ValidationReport | None) -> None:
         self.query_one("#validate-issues", IssueList).show(report)

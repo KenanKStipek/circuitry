@@ -22,8 +22,8 @@ import argparse
 import re
 import subprocess
 import sys
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Iterable, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

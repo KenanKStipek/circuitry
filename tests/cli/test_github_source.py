@@ -16,7 +16,7 @@ import io
 import json
 import urllib.parse
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from urllib.error import HTTPError, URLError
 
 import pytest
@@ -96,7 +96,7 @@ class _FakeResponse:
     def read(self) -> bytes:
         return self._body
 
-    def __enter__(self) -> "_FakeResponse":
+    def __enter__(self) -> _FakeResponse:
         return self
 
     def __exit__(self, *args: Any) -> None:
@@ -110,19 +110,19 @@ class FakeGitHub:
         self,
         *,
         sha: str = SHA_ONE,
-        tree: Optional[dict[str, str]] = None,
+        tree: dict[str, str] | None = None,
         repo: str = REPO,
     ) -> None:
         self.sha = sha
         self.tree = dict(TREE if tree is None else tree)
         self.repo = repo
         self.requests: list[dict[str, Any]] = []
-        self.error: Optional[HTTPError] = None
+        self.error: HTTPError | None = None
         self.offline = False
 
     # -- installation ---------------------------------------------------------
 
-    def install(self, monkeypatch: pytest.MonkeyPatch) -> "FakeGitHub":
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
         def fake_urlopen(req: Any, timeout: int = 0) -> _FakeResponse:
             self.requests.append(
                 {
@@ -197,7 +197,7 @@ class FakeGitHub:
 
     @staticmethod
     def _http_error(
-        url: str, status: int, headers: Optional[dict[str, str]] = None
+        url: str, status: int, headers: dict[str, str] | None = None
     ) -> HTTPError:
         return HTTPError(
             url,

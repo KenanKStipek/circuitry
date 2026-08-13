@@ -36,7 +36,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import yaml  # type: ignore[import-untyped]
 
@@ -64,7 +64,7 @@ class RefreshResult:
 
     source: str
     status: str  # "updated" | "unchanged" | "skipped"
-    sha: Optional[str] = None
+    sha: str | None = None
     detail: str = ""
 
     def summary(self) -> str:
@@ -81,7 +81,7 @@ class Entry:
     category: str
     metadata: dict[str, Any] = field(default_factory=dict)
     source: str = ""
-    path: Optional[Path] = None
+    path: Path | None = None
 
     @property
     def qualified_name(self) -> str:
@@ -111,7 +111,7 @@ class LibrarySource(Protocol):
         """Return every entry this source exposes, in display order."""
         ...
 
-    def resolve(self, ref: str) -> Optional[Path]:
+    def resolve(self, ref: str) -> Path | None:
         """Resolve a (source-local, unqualified) name to a file path."""
         ...
 
@@ -141,7 +141,7 @@ class CurationSource:
             )
         return entries
 
-    def resolve(self, ref: str) -> Optional[Path]:
+    def resolve(self, ref: str) -> Path | None:
         # Delegate to the original resolver so curation behaviour — manifest
         # lookup, then the slash-delimited filesystem walk — is unchanged.
         from .registry import resolve_bundled
@@ -168,7 +168,7 @@ class FolderSource:
     def __init__(self, name: str, path: Path) -> None:
         self.name = name
         self.path = path
-        self._cache: Optional[list[Entry]] = None
+        self._cache: list[Entry] | None = None
 
     def refresh(self) -> None:
         """Drop the cached scan so the next `list_entries()` re-reads disk."""
@@ -179,7 +179,7 @@ class FolderSource:
             self._cache = self._scan()
         return list(self._cache)
 
-    def resolve(self, ref: str) -> Optional[Path]:
+    def resolve(self, ref: str) -> Path | None:
         for entry in self.list_entries():
             stem = entry.path.stem if entry.path is not None else ""
             if _name_matches(ref, entry.name, stem):
@@ -340,7 +340,7 @@ class Resolution:
     ambiguous_sources: list[str] = field(default_factory=list)
 
     @property
-    def path(self) -> Optional[Path]:
+    def path(self) -> Path | None:
         return self.entry.path
 
     @property
@@ -365,13 +365,13 @@ class LibraryRegistry:
     # -- construction -------------------------------------------------------
 
     @classmethod
-    def from_config(cls, cfg: Optional[CircuitryConfig] = None) -> "LibraryRegistry":
+    def from_config(cls, cfg: CircuitryConfig | None = None) -> LibraryRegistry:
         """Build from `runtime.library.sources`, defaulting to curation-only."""
         raw_sources = _configured_sources(cfg)
         return cls([_build_source(spec, index) for index, spec in enumerate(raw_sources)])
 
     @classmethod
-    def default(cls) -> "LibraryRegistry":
+    def default(cls) -> LibraryRegistry:
         return cls([CurationSource()])
 
     # -- queries ------------------------------------------------------------
@@ -389,13 +389,13 @@ class LibraryRegistry:
         """
         return len(self.sources) > 1
 
-    def get_source(self, name: str) -> Optional[LibrarySource]:
+    def get_source(self, name: str) -> LibrarySource | None:
         for source in self.sources:
             if source.name == name:
                 return source
         return None
 
-    def list_entries(self, *, source: Optional[str] = None) -> list[Entry]:
+    def list_entries(self, *, source: str | None = None) -> list[Entry]:
         """Aggregate entries across sources, in source precedence order."""
         entries: list[Entry] = []
         for candidate in self.sources:
@@ -404,7 +404,7 @@ class LibraryRegistry:
             entries.extend(candidate.list_entries())
         return entries
 
-    def split_ref(self, ref: str) -> tuple[Optional[str], str]:
+    def split_ref(self, ref: str) -> tuple[str | None, str]:
         """Split `"<source>:<name>"` when the prefix names a configured source.
 
         Anything else (including Windows paths and URLs) comes back unqualified,
@@ -417,7 +417,7 @@ class LibraryRegistry:
             return (prefix, rest)
         return (None, ref)
 
-    def resolve(self, ref: str) -> Optional[Resolution]:
+    def resolve(self, ref: str) -> Resolution | None:
         """Resolve a bare or source-qualified reference to a `Resolution`."""
         source_name, bare = self.split_ref(ref)
 
@@ -433,11 +433,11 @@ class LibraryRegistry:
             return None
         return Resolution(entry=matches[0], ambiguous_sources=[e.source for e in matches[1:]])
 
-    def find_entry(self, ref: str) -> Optional[Entry]:
+    def find_entry(self, ref: str) -> Entry | None:
         resolution = self.resolve(ref)
         return resolution.entry if resolution is not None else None
 
-    def notices(self, *, source: Optional[str] = None) -> list[str]:
+    def notices(self, *, source: str | None = None) -> list[str]:
         """User-facing hints from sources that cannot serve entries yet."""
         out: list[str] = []
         for candidate in self.sources:
@@ -451,7 +451,7 @@ class LibraryRegistry:
                 out.append(str(message))
         return out
 
-    def refresh(self, *, source: Optional[str] = None) -> list[RefreshResult]:
+    def refresh(self, *, source: str | None = None) -> list[RefreshResult]:
         """Refresh every source (or one), returning a result per source.
 
         Local sources have nothing to fetch and report `skipped`; only remote
@@ -482,7 +482,7 @@ class LibraryRegistry:
 
     # -- internals ----------------------------------------------------------
 
-    def _resolve_in(self, source: LibrarySource, bare: str) -> Optional[Entry]:
+    def _resolve_in(self, source: LibrarySource, bare: str) -> Entry | None:
         """Resolve within one source, preferring a listed entry for metadata."""
         path = source.resolve(bare)
         if path is None:
@@ -501,7 +501,7 @@ class LibraryRegistry:
         )
 
 
-def _configured_sources(cfg: Optional[CircuitryConfig]) -> list[dict[str, Any]]:
+def _configured_sources(cfg: CircuitryConfig | None) -> list[dict[str, Any]]:
     if cfg is None:
         return list(DEFAULT_SOURCES)
     library = (cfg.runtime or {}).get("library")
@@ -583,7 +583,7 @@ def _build_github_source(spec: dict[str, Any], index: int) -> LibrarySource:
 
 
 def build_registry(
-    *, config_path: Optional[Path] = None, cfg: Optional[CircuitryConfig] = None
+    *, config_path: Path | None = None, cfg: CircuitryConfig | None = None
 ) -> LibraryRegistry:
     """Convenience constructor used by the CLI commands."""
     if cfg is None:

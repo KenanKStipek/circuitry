@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
-from typing import Any, Literal, Union, cast
+from typing import Any, Literal, cast
 
 from .conditional import ConditionalDefinition, ConditionDef
 from .dynamic import DynamicDefinition

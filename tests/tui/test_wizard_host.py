@@ -14,6 +14,7 @@ from pathlib import Path
 import jsonschema
 import pytest
 import yaml
+from scripted_wizard import INVALID_DRAFT, VALID_DRAFT
 
 from circuitry.tui.wizard_host import (
     CATEGORIES,
@@ -35,8 +36,6 @@ from circuitry.tui.wizard_host import (
     wizard_path,
 )
 
-from scripted_wizard import INVALID_DRAFT, VALID_DRAFT
-
 MANIFEST_SCHEMA = Path("src/circuitry/schema/curation-manifest.schema.json")
 
 SEED = Seed(name="Summarize And Translate", category="recipes", goal="Summarize, then translate.")
@@ -49,7 +48,7 @@ def test_turn_paths_are_the_paths_the_wizard_declares() -> None:
     """The one part of the wizard a host copies verbatim. Check, don't trust."""
     interface = yaml.safe_load(wizard_path().read_text(encoding="utf-8"))["interface"]
     declared = {name: spec["path"] for name, spec in interface["outputs"].items()}
-    assert TURN_PATHS == declared
+    assert declared == TURN_PATHS
 
 
 def test_dig_walks_and_misses_cleanly() -> None:

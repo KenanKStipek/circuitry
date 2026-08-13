@@ -476,7 +476,7 @@ class RunSession:
     def _execute(self) -> None:
         try:
             result = self._runner(self._request)
-        except BaseException as exc:  # noqa: BLE001 - a dead worker must still report
+        except BaseException as exc:
             result = RunResult(ok=False, state={}, warnings=[], error=str(exc))
         self._result = result
         if self._on_finish is not None:

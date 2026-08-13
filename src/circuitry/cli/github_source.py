@@ -43,7 +43,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from .library_sources import (
     FOLDER_SUFFIXES,
@@ -93,8 +93,8 @@ class GitHubSource:
         repo: str,
         ref: str = DEFAULT_REF,
         path: str = "",
-        token_env: Optional[str] = None,
-        cache_root: Optional[Path] = None,
+        token_env: str | None = None,
+        cache_root: Path | None = None,
         api_base: str = GITHUB_API_BASE,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
@@ -106,8 +106,8 @@ class GitHubSource:
         self.api_base = api_base.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self._cache_root = cache_root
-        self._folder: Optional[FolderSource] = None
-        self._folder_dir: Optional[Path] = None
+        self._folder: FolderSource | None = None
+        self._folder_dir: Path | None = None
 
     # -- cache layout -------------------------------------------------------
 
@@ -124,7 +124,7 @@ class GitHubSource:
     def index_path(self) -> Path:
         return self.cache_dir / INDEX_NAME
 
-    def read_index(self) -> Optional[dict[str, Any]]:
+    def read_index(self) -> dict[str, Any] | None:
         """The cache index (`sha`, `fetched_at`, …), or None when unfetched."""
         try:
             data = json.loads(self.index_path.read_text(encoding="utf-8"))
@@ -133,7 +133,7 @@ class GitHubSource:
         return data if isinstance(data, dict) else None
 
     @property
-    def cached_sha(self) -> Optional[str]:
+    def cached_sha(self) -> str | None:
         index = self.read_index()
         if index is None:
             return None
@@ -141,7 +141,7 @@ class GitHubSource:
         return str(sha) if sha else None
 
     @property
-    def entries_dir(self) -> Optional[Path]:
+    def entries_dir(self) -> Path | None:
         """Directory holding the cached subtree, or None when unfetched."""
         sha = self.cached_sha
         if not sha:
@@ -158,13 +158,13 @@ class GitHubSource:
             return []
         return folder.list_entries()
 
-    def resolve(self, ref: str) -> Optional[Path]:
+    def resolve(self, ref: str) -> Path | None:
         folder = self._folder_source()
         if folder is None:
             return None
         return folder.resolve(ref)
 
-    def notice(self) -> Optional[str]:
+    def notice(self) -> str | None:
         """A user-facing hint when the cache cannot serve this source yet."""
         if self.entries_dir is not None:
             return None
@@ -199,7 +199,7 @@ class GitHubSource:
 
     # -- internals ----------------------------------------------------------
 
-    def _folder_source(self) -> Optional[FolderSource]:
+    def _folder_source(self) -> FolderSource | None:
         """A `FolderSource` over the cached subtree — cached-tree reuse.
 
         The cache is laid out exactly like a folder source (YAML files plus an
@@ -227,7 +227,7 @@ class GitHubSource:
             headers["Authorization"] = f"Bearer {token}"
         return headers
 
-    def _token(self) -> Optional[str]:
+    def _token(self) -> str | None:
         if not self.token_env:
             return None
         value = os.environ.get(self.token_env, "").strip()
@@ -434,7 +434,7 @@ def _relative_to(root: str, item_path: str) -> str:
     return _safe_relative_name(rel, original=item_path)
 
 
-def _safe_relative_name(rel: str, *, original: Optional[str] = None) -> str:
+def _safe_relative_name(rel: str, *, original: str | None = None) -> str:
     """Normalise a cache-relative path, refusing anything that could escape."""
     parts = [p for p in rel.lstrip("/").split("/") if p not in ("", ".")]
     if not parts or any(p == ".." for p in parts):
@@ -458,7 +458,7 @@ def _quote_path(value: str) -> str:
     return urllib.parse.quote(value, safe="/")
 
 
-def _format_reset(raw: Optional[str]) -> str:
+def _format_reset(raw: str | None) -> str:
     if not raw:
         return ""
     try:

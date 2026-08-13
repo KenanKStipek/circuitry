@@ -34,8 +34,8 @@ from .launch import (
     InputField,
     OrchestrationChoice,
     OrchestrationForm,
-    RunSession,
     Runner,
+    RunSession,
     adapter_options,
     build_initial_state,
     default_text,
@@ -126,7 +126,7 @@ class RunScreen(ViewScreen):
         runner: Runner | None = None,
         root: Path | None = None,
         name: str | None = None,
-        id: str | None = None,  # noqa: A002 - Textual's parameter name
+        id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(spec, name=name, id=id, classes=classes)
@@ -197,7 +197,7 @@ class RunScreen(ViewScreen):
             return
         try:
             form = load_form(choice)
-        except Exception as exc:  # noqa: BLE001 - any load failure is user-facing
+        except Exception as exc:
             self._form = None
             await self._render_fields(())
             self._set_status(f"{FAILED} to load {choice.label}: {exc}", "-failed")
@@ -403,12 +403,12 @@ def _safe_config() -> CircuitryConfig:
     """Resolved config, falling back to defaults rather than failing to open."""
     try:
         return resolve_config()
-    except Exception:  # noqa: BLE001 - a bad config file must not kill the view
+    except Exception:
         return CircuitryConfig()
 
 
 def _safe_choices(root: Path | None) -> list[OrchestrationChoice]:
     try:
         return discover_orchestrations(root)
-    except Exception:  # noqa: BLE001 - discovery touches the filesystem
+    except Exception:
         return []

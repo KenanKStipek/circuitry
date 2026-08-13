@@ -22,7 +22,6 @@ from circuitry.core.store import (
 )
 from circuitry.core.store.mongodb import sanitize_uri
 
-
 # ----------------------------------------------------------------------
 # Fake pymongo
 # ----------------------------------------------------------------------
@@ -62,7 +61,7 @@ class _FakeDatabase:
 
 
 class _FakeMongoClient:
-    instances: list["_FakeMongoClient"] = []
+    instances: list[_FakeMongoClient] = []
 
     def __init__(self, uri: str, *args: Any, **kwargs: Any) -> None:
         del args, kwargs
