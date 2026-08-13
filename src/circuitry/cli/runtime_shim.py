@@ -218,15 +218,19 @@ def run(req: RunRequest) -> RunResult:
         # structural orchestration errors are surfaced deterministically.
         root_def = compile_orchestration(orch=orch, root_name="prime")
         if profile is not None and profile.effects:
-            model_provider_overrides = {
-                path: {k: v for k, v in override.items() if k in ("model", "provider")}
+            effect_overrides = {
+                path: {
+                    k: v
+                    for k, v in override.items()
+                    if k in ("model", "provider", "enabled")
+                }
                 for path, override in profile.effects.items()
             }
-            model_provider_overrides = {
-                path: override for path, override in model_provider_overrides.items() if override
+            effect_overrides = {
+                path: override for path, override in effect_overrides.items() if override
             }
-            if model_provider_overrides:
-                root_def, _ = apply_effect_overrides(root_def, model_provider_overrides)
+            if effect_overrides:
+                root_def, _ = apply_effect_overrides(root_def, effect_overrides)
 
         adapter: Adapter
         timeout_seconds = 120
@@ -625,10 +629,16 @@ class _NoOpAdapter:
 def _has_prompt_effects(defn: Any) -> bool:
     """Recursively check if any effect in the tree requires an LLM adapter."""
     from ..core.conditional import ConditionalDefinition
+    from ..core.disabled import is_enabled
     from ..core.dynamic import DynamicDefinition
     from ..core.loop import LoopDefinition
     from ..core.prompt import PromptDefinition
     from ..core.reflector import ReflectorDefinition
+
+    # A disabled effect never runs, so it never needs an adapter — a profile
+    # that switches every prompt off makes the run adapter-free.
+    if not is_enabled(defn):
+        return False
 
     if isinstance(defn, PromptDefinition):
         return True

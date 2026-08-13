@@ -9,9 +9,15 @@ Discovery order (first match wins):
   1. ``<orchestration_dir>/profiles/<name>.yml`` (orchestration-scoped)
   2. ``<cwd>/profiles/<name>.yml`` (project-level)
 
-The ``enabled`` (per-effect) and ``persistence`` keys are parsed and schema
-validated here, but their runtime behavior is implemented by sibling tasks —
-this module only guarantees the data is well-formed and discoverable.
+Per-effect ``enabled: false`` disables an effect for the run: it is not
+executed and its node is written as a skip marker (see ``core.disabled``).
+Container effects disable their whole subtree; a container's *condition*
+(a conditional's ``if``, a loop's ``while``) cannot be targeted at all and is
+rejected here with an actionable error.
+
+The ``persistence`` key is parsed and schema validated here, but its runtime
+behavior is implemented by a sibling task — this module only guarantees the
+data is well-formed and discoverable.
 """
 
 from __future__ import annotations
@@ -115,7 +121,9 @@ def _validate_profile_schema(
     )
 
 
-def _collect_effect_paths(effects: Any, *, scope: str, paths: set[str]) -> None:
+def _collect_effect_paths(
+    effects: Any, *, scope: str, paths: set[str], conditions: set[str] | None = None
+) -> None:
     if not isinstance(effects, list):
         return
     for effect in effects:
@@ -136,14 +144,34 @@ def _collect_effect_paths(effects: Any, *, scope: str, paths: set[str]) -> None:
                 effect.get("effects") or effect.get("steps") or [],
                 scope=child_scope,
                 paths=paths,
+                conditions=conditions,
             )
         elif effect_type in ("conditional", "if"):
             branch_scope = own_path if has_name else scope
-            _collect_effect_paths(effect.get("then") or [], scope=branch_scope, paths=paths)
-            _collect_effect_paths(effect.get("else") or [], scope=branch_scope, paths=paths)
+            if conditions is not None and has_name:
+                conditions.update({f"{own_path}.if", f"{own_path}.condition"})
+            _collect_effect_paths(
+                effect.get("then") or [],
+                scope=branch_scope,
+                paths=paths,
+                conditions=conditions,
+            )
+            _collect_effect_paths(
+                effect.get("else") or [],
+                scope=branch_scope,
+                paths=paths,
+                conditions=conditions,
+            )
         elif effect_type == "loop":
             body_scope = own_path if has_name else scope
-            _collect_effect_paths(effect.get("body") or [], scope=body_scope, paths=paths)
+            if conditions is not None and has_name:
+                conditions.update({f"{own_path}.while", f"{own_path}.condition"})
+            _collect_effect_paths(
+                effect.get("body") or [],
+                scope=body_scope,
+                paths=paths,
+                conditions=conditions,
+            )
 
 
 def collect_orchestration_effect_paths(orch: dict[str, Any]) -> set[str]:
@@ -159,11 +187,42 @@ def collect_orchestration_effect_paths(orch: dict[str, Any]) -> set[str]:
     return paths
 
 
+def collect_orchestration_condition_paths(orch: dict[str, Any]) -> set[str]:
+    """Collect the pseudo-paths that address a container's *condition*.
+
+    A conditional's ``if:`` and a loop's ``while:`` are ``ConditionDef``
+    values, not effects: they select the branch / drive continuation and have
+    no state node of their own. They are therefore not overridable — and in
+    particular not disableable, since a conditional with no condition has no
+    defined branch. These paths exist only so profile validation can say that
+    out loud instead of reporting a bare "unknown effect path".
+    """
+    paths: set[str] = set()
+    conditions: set[str] = set()
+    effects = orch.get("effects") or orch.get("steps") or []
+    _collect_effect_paths(effects, scope="", paths=paths, conditions=conditions)
+    return conditions
+
+
 def _validate_effect_paths(
     effects_map: Any, *, orch: dict[str, Any], profile_name: str
 ) -> None:
     if not isinstance(effects_map, dict) or not effects_map:
         return
+
+    condition_paths = collect_orchestration_condition_paths(orch)
+    targeted_conditions = sorted(k for k in effects_map if k in condition_paths)
+    if targeted_conditions:
+        raise ProfileValidationError(
+            f"Profile {profile_name!r} targets condition path(s): "
+            f"{', '.join(targeted_conditions)}. A conditional's 'if' and a "
+            "loop's 'while' are conditions, not effects — they cannot be "
+            "disabled or overridden, because a container with no condition "
+            "has no defined branch. Disable the whole container instead "
+            f"(e.g. {targeted_conditions[0].rsplit('.', 1)[0]}: {{enabled: false}}), "
+            "which disables its entire subtree."
+        )
+
     valid_paths = collect_orchestration_effect_paths(orch)
     unknown = sorted(k for k in effects_map.keys() if k not in valid_paths)
     if not unknown:

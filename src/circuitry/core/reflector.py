@@ -54,6 +54,10 @@ class ReflectorDefinition:
     prime_template: str = REFLECTOR_PRIME_V1
     max_effects: int = 8
 
+    # False = skip planning and generated execution entirely, writing a
+    # disabled node ("turn agentic planning off for this run").
+    enabled: bool = True
+
 
 class ReflectorRuntime:
     def __init__(

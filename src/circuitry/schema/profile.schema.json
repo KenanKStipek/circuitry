@@ -35,7 +35,7 @@
           },
           "enabled": {
             "type": "boolean",
-            "description": "Parsed/validated here; effect-disable behavior is implemented by a sibling task."
+            "description": "false = do not execute this effect for the run; its node is written as {value: null, meta: {disabled: true, ...}}. Disabling a container (dynamic/loop/conditional/reflector) disables its whole subtree."
           }
         }
       }
