@@ -438,6 +438,37 @@
         "yaml_b": {"type": "string", "required": true, "description": "Current iteration YAML."}
       },
       "example": "cof run agents/improver_judge --state input.json"
+    },
+    {
+      "name": "agents/wizard",
+      "file": "agents/wizard.yml",
+      "category": "agents",
+      "intent": "Conversational wizard — one turn of an interview that drafts and self-validates an orchestration.",
+      "description": "Handles ONE turn of a conversation that builds an orchestration: interprets the transcript, either asks a clarifying question or drafts the target YAML, validates the draft with the validate_yaml tool, and revises it in a bounded loop until it passes. The host drives the outer conversation loop.",
+      "when_to_use": "When a human wants to build an orchestration by talking rather than by writing YAML. Drive it from a chat view or a Python loop over api.run_orchestration.",
+      "primitives": ["dynamic", "prompt", "conditional", "loop", "tool"],
+      "difficulty": "advanced",
+      "backends": ["llm", "tool"],
+      "inputs": {
+        "goal": {"type": "string", "required": true, "description": "What the human wants the target orchestration to do."},
+        "conversation": {"type": "array", "required": false, "description": "Prior turns, oldest first; each item is a {role, content} object. Empty on the first turn."},
+        "draft": {"type": "string", "required": false, "description": "The current orchestration YAML, or empty if none exists yet."}
+      },
+      "outputs": {
+        "say": {"type": "string", "path": "prime.turn.decide.respond.value.say", "description": "The wizard's message to the human for this turn."},
+        "yaml": {"type": "string", "path": "prime.turn.decide.check.value.yaml", "description": "The validated orchestration YAML; null on a question turn."},
+        "done": {"type": "boolean", "path": "prime.turn.decide.done.value", "description": "True only when the wizard is finished AND the draft is valid."},
+        "valid": {"type": "boolean", "path": "prime.turn.decide.check.value.ok", "description": "Whether this turn's draft validated; null on a question turn."},
+        "errors": {"type": "array", "path": "prime.turn.decide.check.value.errors", "description": "Validator errors for this turn's draft, if any."}
+      },
+      "state_paths": [
+        "prime.turn.interpret.value",
+        "prime.turn.decide.respond.value",
+        "prime.turn.decide.check.value",
+        "prime.turn.decide.done.value"
+      ],
+      "tags": ["wizard", "meta", "conversational", "self-validating", "yaml"],
+      "example": "cof run agents/wizard --state turn.json"
     }
   ]
 }
