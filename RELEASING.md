@@ -63,9 +63,22 @@ minor bumps may include breaking changes:
 * `PATCH` — bug fixes and additions that strictly preserve the public
   API surface.
 
-### 3. Move `Unreleased` to the new version in `CHANGELOG.md`
+### 3. Compile the changelog fragments, then cut the version section
 
-Rename the heading and add today's date:
+Contributors add release notes as fragments under
+[`changelog.d/`](changelog.d/README.md) — one new file per PR, so parallel PRs
+never conflict on `CHANGELOG.md`. Compile them first:
+
+```bash
+python scripts/build-changelog.py --dry-run   # preview the combined section
+python scripts/build-changelog.py             # merge into Unreleased, delete the fragments
+```
+
+The compiler is deterministic (section order, then filename) and only touches
+the `## [Unreleased]` section; released sections are left alone.
+
+Then move `Unreleased` to the new version — rename the heading and add
+today's date:
 
 ```markdown
 ## [Unreleased]
@@ -87,7 +100,7 @@ release workflow extracts to populate the GitHub Release notes.
 ### 4. Commit, tag, push
 
 ```bash
-git add pyproject.toml CHANGELOG.md
+git add pyproject.toml CHANGELOG.md changelog.d   # includes the consumed fragments
 git commit -m "release v0.2.0"
 git tag v0.2.0
 git push origin main
@@ -154,4 +167,7 @@ ls -la dist/   # circuitry_cof-<version>.tar.gz + .whl
 | `.github/workflows/quality.yml` | Test / lint / typecheck on every push and PR |
 | `pyproject.toml` | Version source of truth |
 | `CHANGELOG.md` | Per-release notes; the workflow extracts from here |
+| `changelog.d/` | Per-PR changelog fragments, compiled into `CHANGELOG.md` at release |
+| `scripts/build-changelog.py` | The fragment compiler |
+| `scripts/check-changelog.py` | CI gate: fragment required, no direct Unreleased edits |
 | `RELEASING.md` | This document |
