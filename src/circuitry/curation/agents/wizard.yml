@@ -1,0 +1,536 @@
+# Orchestration Wizard — one turn of a conversation that writes an orchestration
+# ─────────────────────────────────────────────────────────────────────────────
+# The orchestration that creates orchestrations. Given the conversation so far,
+# it produces EITHER a clarifying question OR a revised draft of the target
+# orchestration — and it never hands back YAML it has not validated.
+#
+# The HOST drives the outer loop. This file handles exactly ONE turn:
+#
+#     interpret → ask-or-draft (model conditional) → validate → revise → gate
+#
+# The host re-runs it per turn with the accumulated conversation, e.g.:
+#
+#     from circuitry.api import run_orchestration
+#     res = run_orchestration(
+#         orchestration_path="src/circuitry/curation/agents/wizard.yml",
+#         state={"goal": goal, "conversation": turns, "draft": draft},
+#     )
+#
+# See docs/wizard.md for the full headless driving example.
+#
+# ─── INPUT STATE ─────────────────────────────────────────────────────────────
+#
+#   Key           Type    Description
+#   goal          string  The seed: what the human wants the orchestration to do.
+#   conversation  array   Prior turns, oldest first. Each item is
+#                         {role: user|wizard, content: string}. Empty on turn 1.
+#   draft         string  The current orchestration YAML, or "" if none yet.
+#
+# ─── OUTPUT STATE PATHS (the turn contract) ──────────────────────────────────
+#
+#   prime.turn.decide.respond.value.say   → what to show the human (string)
+#   prime.turn.decide.check.value.yaml    → the validated draft, or null on a
+#                                           question turn (string|null)
+#   prime.turn.decide.done.value          → boolean; true ONLY when the model
+#                                           says it is finished AND the draft
+#                                           passed validation
+#   prime.turn.decide.check.value.ok      → validity of this turn's draft
+#   prime.turn.decide.check.value.errors  → validator errors, if any
+#
+# The `done` gate is deterministic (CEL + a tool), not model-authored — that is
+# what makes "never finishes with invalid YAML" a property of the file rather
+# than a hope about the model.
+#
+# ─── MODEL RECOMMENDATION ────────────────────────────────────────────────────
+#
+#   A capable model. Small models produce structurally invalid YAML, which the
+#   revision loop can absorb once or twice but not indefinitely.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+interface:
+  inputs:
+    goal:
+      type: string
+      required: true
+      description: What the human wants the target orchestration to do.
+    conversation:
+      type: array
+      required: false
+      description: >-
+        Prior turns, oldest first. Each item is {role, content} where role is
+        "user" or "wizard". Empty or omitted on the first turn.
+    draft:
+      type: string
+      required: false
+      description: The current orchestration YAML, or empty if none exists yet.
+  outputs:
+    say:
+      type: string
+      path: prime.turn.decide.respond.value.say
+      description: The wizard's message to the human for this turn.
+    yaml:
+      type: string
+      path: prime.turn.decide.check.value.yaml
+      description: The validated orchestration YAML; null on a question turn.
+    done:
+      type: boolean
+      path: prime.turn.decide.done.value
+      description: True only when the wizard is finished AND the draft is valid.
+    valid:
+      type: boolean
+      path: prime.turn.decide.check.value.ok
+      description: Whether this turn's draft validated; null on a question turn.
+    errors:
+      type: array
+      path: prime.turn.decide.check.value.errors
+      description: Validator errors for this turn's draft, if any.
+
+effects:
+  - type: dynamic
+    name: turn
+    flow: chain
+    effects:
+      # ─── Step 1: Interpret the conversation ────────────────────────────────
+      # Reads the accumulated state and decides what is actually known. Kept
+      # separate from the answer so the branch decision below has something
+      # concrete to weigh instead of re-reading the raw transcript.
+      - type: prompt
+        name: interpret
+        prompt_type: object
+        schema:
+          type: object
+          properties:
+            intent:
+              type: string
+              description: One sentence — what the target orchestration must do.
+            unknowns:
+              type: array
+              items:
+                type: string
+              description: Facts still missing that would change the design.
+            ready_to_draft:
+              type: boolean
+              description: Whether enough is known to write or revise YAML now.
+            reason:
+              type: string
+          required: [intent, unknowns, ready_to_draft, reason]
+          additionalProperties: false
+        template: |
+          You are interpreting a design conversation about a Circuitry
+          orchestration that is being built one turn at a time.
+
+          Seed goal: "{{goal}}"
+
+          Conversation so far (oldest first; empty on the first turn):
+          {{#conversation}}
+          [{{role}}] {{{content}}}
+          {{/conversation}}
+
+          Current draft (empty if none exists yet):
+          <<< BEGIN DRAFT >>>
+          {{{draft}}}
+          <<< END DRAFT >>>
+
+          Decide what is known and what is missing:
+          - intent: one sentence describing what the orchestration must do.
+          - unknowns: the facts still missing that would MATERIALLY change the
+            design (inputs, output shape, steps, tools, branching). Only list
+            things you cannot make a sensible default for. Empty list is fine.
+          - ready_to_draft: true when you could write or improve the YAML right
+            now. A vague goal with obvious defaults is still ready. Reserve
+            false for the case where drafting would be guessing.
+          - reason: one sentence justifying ready_to_draft.
+
+          Return ONLY the JSON object. No explanation. No markdown.
+
+      # ─── Step 2: Ask or draft ──────────────────────────────────────────────
+      # The one genuinely judgemental decision in the turn: is another question
+      # worth more than another draft? Named, so the branch taken is recorded in
+      # prime.turn.decide.meta — and so both branches land on the same paths.
+      - type: if
+        name: decide
+        if:
+          mode: model
+          template: |
+            A wizard is helping a human build a Circuitry orchestration.
+
+            Goal: "{{goal}}"
+            Interpreted intent: {{prime.turn.interpret.value.intent}}
+            Ready to draft: {{prime.turn.interpret.value.ready_to_draft}}
+            Reason: {{prime.turn.interpret.value.reason}}
+            Open unknowns: {{prime.turn.interpret.value.unknowns}}
+            Turns so far: {{#conversation}}1 {{/conversation}}
+
+            Should the wizard ask ONE clarifying question instead of producing a
+            draft this turn?
+
+            Answer yes only if a missing fact would change the SHAPE of the
+            orchestration and cannot be defaulted. Answer no if a draft — even
+            a rough one — would move the conversation forward faster than a
+            question. A draft the human can react to beats an interrogation.
+
+        # ── Branch A: ask one question ──────────────────────────────────────
+        # No YAML is produced, so nothing is validated. The schema pins yaml to
+        # null and done to false: a question turn can never end the session.
+        then:
+          - type: prompt
+            name: respond
+            prompt_type: object
+            schema:
+              type: object
+              properties:
+                say:
+                  type: string
+                yaml:
+                  type: "null"
+                done:
+                  const: false
+              required: [say, yaml, done]
+              additionalProperties: false
+            template: |
+              You are the Circuitry orchestration wizard, mid-conversation with
+              a human. You have decided to ask ONE clarifying question.
+
+              Goal: "{{goal}}"
+              Intent: {{prime.turn.interpret.value.intent}}
+              Open unknowns: {{prime.turn.interpret.value.unknowns}}
+
+              Conversation so far:
+              {{#conversation}}
+              [{{role}}] {{{content}}}
+              {{/conversation}}
+
+              Ask the single highest-leverage question — the one whose answer
+              unblocks the most design decisions. Be brief and concrete, offer a
+              sensible default the human can just accept, and do not ask for
+              anything already answered above.
+
+              Return ONLY a JSON object:
+                {"say": "<your question>", "yaml": null, "done": false}
+              No markdown. No explanation.
+
+          # Deterministic false. A tool, not a model call — the `done` path must
+          # exist on every branch and must never be the model's opinion.
+          - type: tool
+            name: done
+            provider: json
+            params:
+              mode: parse
+              input: "false"
+
+        # ── Branch B: draft, validate, revise ───────────────────────────────
+        else:
+          - type: prompt
+            name: respond
+            prompt_type: object
+            inputs:
+              wizard_prime: &wizard_prime |
+                You are the Circuitry orchestration wizard. You interview a human about what
+                they want, and you write the orchestration YAML that does it.
+
+                === OUTPUT DISCIPLINE ===
+                The `yaml` field you emit is parsed by a YAML parser and validated against the
+                Circuitry JSON Schema. It must be the orchestration file and nothing else.
+                - NO markdown fences (```), NO prose outside YAML comments, NO '---' separator.
+                - ONE YAML document, a mapping at the top level.
+                - Comments (# ...) are welcome and encouraged — they are part of the file.
+                - Never invent keys. Every key you write appears somewhere below.
+
+                === TOP-LEVEL KEYS ===
+                effects:   REQUIRED. A list of effects, executed in order.
+                flow:      chain (default, sequential — each effect sees prior outputs)
+                           | tree (parallel — all effects see the same input snapshot).
+                           Aliases: chain_of_thought, cot | tree_of_thought, tot.
+                interface: OPTIONAL. Declares typed inputs/outputs (see INTERFACE below).
+                adapter:   OPTIONAL. Omit — it comes from the user's config.json.
+                model:     OPTIONAL. Omit — it comes from the user's config.json.
+
+                === NAMING RULES ===
+                - Pattern: ^[A-Za-z_][A-Za-z0-9_]*$ — snake_case. No dots, spaces, or dashes.
+                - Never `iter_<N>` (iter_0, iter_1, ...) — reserved for loop iteration segments.
+                - Names must be unique among siblings in the same list.
+                - A name is a path segment, never a path: use `summarize`, NOT `prime.summarize`.
+
+                === THE SEVEN PRIMITIVES ===
+
+                1) prompt — one model call. Writes prime.<name>.value.
+                   Required: type, name, and exactly one of template | messages.
+                   prompt_type: text (default) | json | object | array | number | boolean | tool.
+                   schema: REQUIRED whenever prompt_type is json, object, or array.
+                   Optional: description, model, provider, provider_fallbacks, params,
+                             timeout_ms, deterministic, inputs, assets, retries, on_error.
+                     - type: prompt
+                       name: summarize
+                       prompt_type: object
+                       schema:
+                         type: object
+                         properties:
+                           title: {type: string}
+                         required: [title]
+                         additionalProperties: false
+                       template: |
+                         Summarize {{article}} as JSON. Return ONLY the JSON object.
+
+                2) dynamic — a named container. Writes prime.<name>.<child>.value.
+                   Required: type, name, effects (non-empty list).
+                   Optional: flow, max_concurrency, stop_on_error, on_error, description.
+                     - type: dynamic
+                       name: pipeline
+                       flow: chain
+                       effects: [ ... ]
+
+                3) if (alias: conditional) — evaluates a condition, runs exactly ONE branch.
+                   Required: type, if, then. Optional: name, else, threshold, on_error.
+                   The `if` block is a condition: mode: model needs `template`;
+                   mode: cel needs `expr`.
+                   Give `then` and `else` the SAME inner effect names so the downstream state
+                   path is the same whichever branch runs. An UNNAMED conditional merges its
+                   branch effects into the parent scope (prime.<inner>.value); a NAMED one
+                   nests them (prime.<cond_name>.<inner>.value) and records the decision.
+                     - type: if
+                       if:
+                         mode: cel
+                         expr: "state.prime.score.value > 7"
+                       then:
+                         - type: prompt
+                           name: verdict
+                           template: "Explain why this passed."
+                       else:
+                         - type: prompt
+                           name: verdict
+                           template: "Explain why this failed."
+
+                4) loop — repeats a body. Required: type, body (non-empty), plus `each` OR
+                   `while`. Optional: name, collect, flow, max_concurrency, max_iterations
+                   (default 100), min_iterations, on_error (fail | break | continue).
+                   - each.in is a state path resolving to an ARRAY; each.as names the element
+                     (default `item`), available in the body as {{item}}.
+                   - while is a condition block (mode: cel | model), checked before each pass.
+                   - collect: <body effect name> aggregates that effect's .value across
+                     iterations into prime.<loop_name>.collected.value. Requires a named loop.
+                   - A NAMED loop writes each pass under prime.<loop_name>.iter_<N>.<child>.value.
+                     An UNNAMED loop writes body effects straight into the parent scope, so each
+                     pass OVERWRITES the previous one at a stable path — that is the idiom for a
+                     while-loop whose CEL condition must observe the body's own latest output.
+                     - type: loop
+                       name: per_topic
+                       collect: draft
+                       each:
+                         in: prime.plan.value
+                         as: topic
+                       body:
+                         - type: prompt
+                           name: draft
+                           template: "Write a paragraph about {{topic}}."
+
+                5) tool — a deterministic, non-LLM side effect via a plugin.
+                   Required: type, name, provider. Optional: prompt, model, params, timeout_ms,
+                   on_error. String values inside params are Mustache-rendered against state.
+                     - type: tool
+                       name: check
+                       provider: validate_yaml
+                       params:
+                         yaml: "{{prime.draft.value}}"
+
+                6) use — runs another orchestration as an isolated sub-step.
+                   Required: type, name, and exactly ONE of ref | path | inline.
+                   ref points into the curation library ('utilities/critique'); path points at a
+                   file; inline is a Mustache template that renders to YAML at runtime.
+                   Optional: inputs (become the child's top-level state), outputs (map names to
+                   dot-paths in the child's final state), validate, on_error.
+                     - type: use
+                       name: critique
+                       ref: utilities/critique
+                       inputs:
+                         text: "{{prime.draft.value}}"
+                       outputs:
+                         notes: prime.critique.value
+
+                7) reflector — plans its own effects, then runs them, for max_iterations cycles.
+                   Required: type, name, effects (non-empty). Optional: plan_from_step,
+                   max_iterations, generated_key, stop_on_done, max_effects, prime_template.
+                   Use it only when the steps genuinely cannot be known up front.
+
+                === STATE PATHS ===
+                Top-level effect output ............ prime.<name>.value
+                Inside a named dynamic ............. prime.<dynamic>.<name>.value
+                Named loop, one iteration .......... prime.<loop>.iter_<N>.<name>.value
+                Named loop, collected .............. prime.<loop>.collected.value
+                Named conditional branch effect .... prime.<cond>.<name>.value
+                Unnamed loop / conditional ......... prime.<name>.value (merged into parent)
+                A field of a JSON/object output .... prime.<name>.value.<field>
+                User-supplied state key ............ {{key}} — no prime. prefix
+
+                In templates:  {{prime.step.value}}          (double braces; triple to skip
+                                                              HTML escaping: {{{prime.step.value}}})
+                In CEL exprs:  state.prime.step.value        (state. prefix, no braces)
+                CEL supports: == != < <= > >= && || ! and size(x). Nothing else.
+
+                An effect may only read paths written by an effect that runs BEFORE it in
+                chain order. In tree flow, siblings CANNOT read each other at all.
+
+                === INTERFACE ===
+                Declare what the orchestration takes and returns so `use` can wire it up:
+                  interface:
+                    inputs:
+                      article: {type: string, required: true, description: Text to summarize.}
+                    outputs:
+                      summary: {type: string, path: prime.summarize.value, description: Result.}
+                Input types: string, number, boolean, array, object. Every output needs a path.
+
+                === HOUSE STYLE ===
+                - Open the file with a # comment block: what it does, its inputs, its primary
+                  output path. Comment each effect with why it exists.
+                - One job per prompt. Split anything that classifies AND writes AND reviews.
+                - Prefer deterministic primitives: a CEL condition over a model condition, a
+                  tool over a prompt, whenever the task allows it.
+                - End templates that feed other effects with "Return ONLY ..." so the output
+                  stays clean.
+                - Do not set adapter: or model: — the user's config supplies them.
+            schema:
+              type: object
+              properties:
+                say:
+                  type: string
+                yaml:
+                  type: string
+                done:
+                  type: boolean
+              required: [say, yaml, done]
+              additionalProperties: false
+            template: |
+              {{{wizard_prime}}}
+
+              === THIS TURN ===
+              You are mid-conversation with a human. Produce the orchestration.
+
+              Goal: "{{goal}}"
+              Intent: {{prime.turn.interpret.value.intent}}
+              Open unknowns (assume a sensible default for each, and say which
+              defaults you assumed): {{prime.turn.interpret.value.unknowns}}
+
+              Conversation so far:
+              {{#conversation}}
+              [{{role}}] {{{content}}}
+              {{/conversation}}
+
+              Current draft to revise (empty means write it from scratch):
+              <<< BEGIN DRAFT >>>
+              {{{draft}}}
+              <<< END DRAFT >>>
+
+              Return ONLY a JSON object with exactly these keys:
+                say  — 2–5 sentences for the human: what you built or changed,
+                       which defaults you assumed, and what to check next.
+                       Never paste the YAML into `say`.
+                yaml — the complete orchestration file as ONE string. No fences.
+                done — true only if this orchestration fully satisfies the goal
+                       and you have nothing left to ask.
+
+              No markdown. No text outside the JSON object.
+
+          # ── Validate the draft ─────────────────────────────────────────────
+          # Deterministic: YAML parse + JSON Schema + compiler. Triple-stache is
+          # required — a double-stache would HTML-escape the quotes in the YAML
+          # and every draft would fail to parse.
+          - type: tool
+            name: check
+            provider: validate_yaml
+            params:
+              yaml: "{{{prime.turn.decide.respond.value.yaml}}}"
+
+          # ── Revise until it validates (bounded) ────────────────────────────
+          # The loop is UNNAMED on purpose: its body writes `respond` and `check`
+          # straight into this branch's scope, overwriting the previous pass at a
+          # stable path. That is what lets the CEL condition below observe the
+          # body's own latest validation result — a named loop would bury each
+          # pass under iter_<N> where the condition cannot reach it.
+          #
+          # Invalid drafts therefore never leave this turn unless three revisions
+          # in a row fail, and even then the `done` gate below refuses to finish.
+          - type: loop
+            max_iterations: 3
+            while:
+              mode: cel
+              expr: "state.prime.turn.decide.check.value.ok == false"
+            body:
+              - type: prompt
+                name: respond
+                prompt_type: object
+                inputs:
+                  wizard_prime: *wizard_prime
+                schema:
+                  type: object
+                  properties:
+                    say:
+                      type: string
+                    yaml:
+                      type: string
+                    done:
+                      type: boolean
+                  required: [say, yaml, done]
+                  additionalProperties: false
+                template: |
+                  {{{wizard_prime}}}
+
+                  === REPAIR TASK ===
+                  The orchestration below was rejected by the validator. Fix it.
+
+                  Goal: "{{goal}}"
+                  Intent: {{prime.turn.interpret.value.intent}}
+
+                  Rejected YAML:
+                  <<< BEGIN YAML >>>
+                  {{{prime.turn.decide.check.value.yaml}}}
+                  <<< END YAML >>>
+
+                  Validator errors (each is `<json path>: <problem>`):
+                  {{{prime.turn.decide.check.value.errors}}}
+
+                  Fix every error. Change as little as possible — preserve the
+                  structure, the comments, and the intent of the draft. Do not
+                  delete effects to make errors go away.
+
+                  Return ONLY a JSON object with exactly these keys:
+                    say  — 2–5 sentences for the human about what the
+                           orchestration does. This is a normal turn from their
+                           point of view: they never saw the rejected draft, so
+                           do not mention the validator or the repair.
+                    yaml — the complete corrected orchestration. No fences.
+                    done — true only if this orchestration fully satisfies the
+                           goal and you have nothing left to ask.
+
+                  No markdown. No text outside the JSON object.
+
+              # Re-validate the repair. Same name as the pre-loop check, so the
+              # while condition above sees this result on the next pass.
+              - type: tool
+                name: check
+                provider: validate_yaml
+                params:
+                  yaml: "{{{prime.turn.decide.respond.value.yaml}}}"
+
+          # ── The done gate ──────────────────────────────────────────────────
+          # `done` is never the model's word alone. It is true only when the
+          # model claims completion AND the final draft validated. Unnamed, so
+          # both branches write prime.turn.decide.done.value — the same path the
+          # question branch uses.
+          - type: if
+            if:
+              mode: cel
+              expr: "state.prime.turn.decide.check.value.ok == true && state.prime.turn.decide.respond.value.done == true"
+            then:
+              - type: tool
+                name: done
+                provider: json
+                params:
+                  mode: parse
+                  input: "true"
+            else:
+              - type: tool
+                name: done
+                provider: json
+                params:
+                  mode: parse
+                  input: "false"

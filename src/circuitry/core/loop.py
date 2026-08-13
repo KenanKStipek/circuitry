@@ -501,6 +501,7 @@ Should the loop continue? Answer (yes/no):"""
         from .prompt import PromptDefinition, PromptRuntime
         from .reflector import ReflectorDefinition, ReflectorRuntime
         from .tool import ToolDefinition, ToolRuntime
+        from .use import UseDefinition, UseRuntime
 
         # Create iteration-specific store if named
         if self.defn.name:
@@ -634,6 +635,22 @@ Should the loop continue? Answer (yes/no):"""
                         display_name=f"{name} {iter_label}" if iter_label else None,
                         ancestors=self._child_ancestors if tracker is None else None,
                     ).execute(store=iter_store, ctx=ctx)
+
+                elif isinstance(effect, UseDefinition):
+                    UseRuntime(
+                        effect,
+                        adapter=self.adapter,
+                        model=self.model,
+                        runtime_config=self.runtime_config,
+                        dry_run=self.dry_run,
+                        timeout_seconds=self.timeout_seconds,
+                        verbose=self.verbose,
+                        depth=self.depth + 1,
+                        ancestors=self._child_ancestors,
+                    ).execute(store=iter_store, ctx=ctx)
+
+                else:
+                    raise TypeError(f"Unsupported effect type: {type(effect)}")
 
                 if self.verbose and not is_prompt and not is_tool:
                     elapsed = time.monotonic() - t0
