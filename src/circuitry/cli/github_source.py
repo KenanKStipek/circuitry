@@ -263,9 +263,9 @@ class GitHubSource:
             # The contents API returns an object (not an array) when `path`
             # names a single file; treat that as a one-file subtree.
             item = listing
-            if _is_wanted(str(item.get("name") or "")):
-                rel = _relative_to(self.path, str(item.get("path") or ""))
-                files[rel] = self._file_bytes(item, sha=sha)
+            name = str(item.get("name") or "")
+            if _is_wanted(name):
+                files[_safe_relative_name(name)] = self._file_bytes(item, sha=sha)
             return
 
         for item in listing:
@@ -431,10 +431,16 @@ def _is_wanted(filename: str) -> bool:
 def _relative_to(root: str, item_path: str) -> str:
     """Path relative to the source's `path`, validated against traversal."""
     rel = item_path[len(root) :] if root and item_path.startswith(root) else item_path
-    rel = rel.lstrip("/")
-    parts = [p for p in rel.split("/") if p not in ("", ".")]
+    return _safe_relative_name(rel, original=item_path)
+
+
+def _safe_relative_name(rel: str, *, original: Optional[str] = None) -> str:
+    """Normalise a cache-relative path, refusing anything that could escape."""
+    parts = [p for p in rel.lstrip("/").split("/") if p not in ("", ".")]
     if not parts or any(p == ".." for p in parts):
-        raise LibraryFetchError(f"Refusing to cache unsafe repository path: {item_path!r}")
+        raise LibraryFetchError(
+            f"Refusing to cache unsafe repository path: {(original or rel)!r}"
+        )
     return "/".join(parts)
 
 
