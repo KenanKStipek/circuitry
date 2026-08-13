@@ -163,11 +163,13 @@ def build_state_nodes(
     if not isinstance(state, Mapping):
         return ()
     budget = _Budget(limit)
-    ordered = sorted(state.items(), key=lambda item: (str(item[0]) != "prime",))
-    return tuple(
-        _node(str(key), _join("", str(key)), value, None, "", budget)
-        for key, value in ordered
-    )
+    ordered = sorted(state.items(), key=lambda item: str(item[0]) != "prime")
+    rows: list[StateNode] = []
+    for key, value in ordered:
+        if not budget.take():
+            break
+        rows.append(_node(str(key), _join("", str(key)), value, None, "", budget))
+    return tuple(rows)
 
 
 def _node(

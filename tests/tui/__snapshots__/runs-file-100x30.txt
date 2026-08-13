@@ -1,0 +1,30 @@
+ ⭘                                       Circuitry — Runs                                           
+                                                                                                    
+  Runs — Inspect run state as a tree, open a saved state file, replay the last run                  
+                                                                                                    
+  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎  
+  ▊  path to a state JSON (--out / --live-state) — Enter opens it                                ▎  
+  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎  
+  ▼ yesterday.json                      │ prime                                                     
+  ├── ▼ prime  {6 keys}                 │ mapping · 6 keys                                          
+  │   ├── ▶ meta  {3 keys}              │                                                           
+  │   ├── ▶ draft  {2 keys}             │ meta — prime                                          ▅▅  
+  │   ├── ▶ items  {2 keys}             │   status      ✓ done                                      
+  │   ├── ▶ over_items  {3 keys}        │   adapter     —                                           
+  │   ├── ▶ helper  {2 keys}            │   model       —                                           
+  │   └── ▶ gate  {2 keys}              │   tokens      —                                           
+  ├── topic  "cybernetics"              │   created     2024-05-01T10:00:00+00:00                   
+  └── ▶ runtime  {2 keys}               │   completed   2024-05-01T10:00:09+00:00  (9.0s)           
+                                        │                                                           
+                                        │ value                                                     
+                                        │ {                                                         
+                                        │   "meta": {                                               
+                                        │     "created_at": "2024-05-01T10:00:00+00:00",            
+                                        │     "completed_at": "2024-05-01T10:00:09+00:00",          
+                                        │     "flow": "chain"                                       
+                                        │   },                                                      
+                                        │   "draft": {                                              
+  file — yesterday.json                                                                             
+  Last run — demo.yml · openai · gpt-4o-mini  (Ctrl-R replays it)                                   
+                                                                                                    
+ tab Next view  y Copy path  o Open state file  ^r Replay last run  ? Help  q Back / Qui▏^p palette 

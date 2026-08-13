@@ -8,14 +8,16 @@ pip install "circuitry-cof[tui]"
 ```
 
 This page documents the shell — navigation, keys, layout breakpoints, logging
-and the test harness — and the views that have landed (Library, Doctor,
-Settings and Validate below). Views still to come (Run, Inspect, Runs) render a
-placeholder until they do.
+and the test harness — and the views that have landed (Library, Run, Runs,
+Doctor, Settings, Validate and Chat below). Views still to come (Inspect)
+render a placeholder until they do.
 
 | Key | View |
 | --- | --- |
 | `1` | [Library](#library-view-1) |
-| `2`–`4` | Run, Inspect, Runs — placeholders |
+| `2` | [Run](#run-view-2) |
+| `3` | Inspect — placeholder |
+| `4` | [Runs](#runs-view-4--the-state-inspector) |
 | `5` / `6` | [Doctor / Settings](#doctor-5-and-settings-6) |
 | `7` | [Validate](#validate-7) |
 | `8` | [Chat](#chat-8--build-an-orchestration-by-talking-to-it) |
@@ -212,6 +214,86 @@ mid-run.
 The model behind all of this — plan parsing, the snapshot overlay, the
 aggregates and the rendered rows — lives in `circuitry/tui/execution.py` and
 has no Textual import, so it is tested by feeding it states directly.
+
+## Runs view (`4`) — the state inspector
+
+Where the Run view answers *what is happening*, `4` answers *what is in
+state*. Circuitry state is a nested dict and every template addresses it by
+dot-path, so the view is a filesystem browser over that dict: the tree on the
+left, the selected node in full on the right.
+
+```
+▼ demo.yml                          │ prime.draft.value
+├── ▼ prime  {6 keys}               │ string · 342 chars · 1 line
+│   ├── ▼ draft  {2 keys}           │
+│   │   ├── value  "Cybernetics is  │ meta — prime.draft
+│   │   └── ▶ meta  {6 keys}        │   status      ✓ done
+│   ├── ▶ over_items  {3 keys}      │   adapter     openai
+│   └── ▶ gate  {2 keys}            │   model       gpt-4o-mini
+├── topic  "cybernetics"            │   tokens      ↑120 ↓340
+└── ▶ runtime  {2 keys}             │   created     2024-05-01T10:00:00+00:00
+                                    │   completed   2024-05-01T10:00:04+00:00  (4.0s)
+```
+
+| Key | Action |
+| --- | --- |
+| `↑` / `↓`, `Enter` | Move through the tree; expand or collapse a node |
+| `y` | Copy the highlighted node's dot-path |
+| `o` | Jump to the path box (open a saved state file) |
+| `Esc` | Leave file mode; on the run source, back to home |
+| `Ctrl-R` | Replay the last `cof run` |
+| `Ctrl-X` | Cancel a replay in flight |
+
+**Rows** show the key and a one-line preview by type — `{6 keys}`, `[2 items]`,
+`"text…" (342 chars)`, `true`, `null`. **The detail pane** is where a truncated
+value is expanded: the path, the type and size, the `meta` of the effect the
+value belongs to (a value inherits its effect's meta, so `prime.draft.value`
+still reports the adapter, model, tokens, timestamps and error that produced
+it), and then the value itself — verbatim for strings, pretty-printed JSON for
+structures.
+
+**`y` copies the dot-path** exactly as a template would write it —
+`prime.over_items.iter_0.handle.value` — which is the point of the view: find
+the value, copy its address, paste it into `{{…}}`. A key that is not a plain
+name gets the bracket form (`prime["a.b"]`) rather than a path that would not
+resolve.
+
+Three sources feed the same tree:
+
+- **live** — the run in flight. Runs publish each snapshot into a `StateStore`
+  the *app* owns, not the screen, so a run launched from the Run view keeps
+  filling this in after you navigate away from it. The view polls the store on
+  a 5 Hz tick; publishing is a reference swap under a lock, so watching never
+  makes the run wait.
+- **post-run** — the same store once the run has landed.
+- **file** — a JSON document written earlier by `cof run --out` or
+  `--live-state`. Type its path in the box (`o` jumps there) and `Esc` hands
+  the view back to the run. File mode ignores live snapshots on purpose:
+  opening yesterday's state must not be overwritten by today's run.
+
+A file that is missing, is a directory, is too large, is not JSON or does not
+hold an object gets a written-out error state — what is wrong, and what to try
+next (a half-written `--live-state` file is an ordinary thing to catch
+mid-write, so that hint says to open it again in a moment). Nothing raises.
+
+**Redaction** is not re-applied here. `runtime.effective_settings` is redacted
+by `circuitry.cli.redaction` on the way *into* state; the inspector shows what
+is stored, because an inspector that hid more than the file contains would
+misreport the file.
+
+**`Ctrl-R` replays the last run** — the arguments `cof run` stashes in
+`~/.config/circuitry/last-run.json`, the same ones `cof run --last` reads
+(`circuitry.cli.last_run` owns that file for both). The replay goes through
+the same `RunSession` the Run view launches, with the stashed orchestration,
+`-e` inputs, adapter/model overrides, profile and `--dry-run`; it publishes
+into the store, so the tree fills in as it goes. Two things it will not do:
+replay a run whose `-e` values were redacted before being stashed (the literal
+marker would be sent as a real value — the same refusal `cof run --last`
+makes), and rewrite the stashed `--out` / `--live-state` files, because a
+keypress in a browser should not overwrite an artefact on disk.
+
+The model — the tree, the previews, the meta panel, file loading and the store
+— lives in `circuitry/tui/inspector.py` and imports no Textual.
 
 ## Doctor (`5`) and Settings (`6`)
 

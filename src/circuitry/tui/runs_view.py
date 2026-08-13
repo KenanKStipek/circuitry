@@ -36,8 +36,10 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.message import Message
+from textual.widget import Widget
 from textual.widgets import Input, Static, Tree
 
 from ..cli.config import CircuitryConfig, resolve_config
@@ -50,6 +52,7 @@ from .inspector import (
     build_state_nodes,
     detail_lines,
     find_node,
+    flatten,
     load_state_file,
     render_text,
 )
@@ -87,6 +90,11 @@ DEFAULT_EXPANDED = frozenset({"prime"})
 class RunsScreen(ViewScreen):
     """State inspector over a live run, a finished run, or a saved file."""
 
+    #: The panes scroll inside themselves (the tree and the detail pane both
+    #: do), so the body must not scroll under them — the status line and the
+    #: last-run line have to stay on screen while the tree is walked.
+    BODY_CONTAINER: ClassVar[type[Widget]] = Vertical
+
     CSS = """
     RunsScreen #runs-panes {
         height: 1fr;
@@ -108,7 +116,7 @@ class RunsScreen(ViewScreen):
     }
 
     RunsScreen #runs-status {
-        height: auto;
+        height: 1;
         color: $text-muted;
     }
 
@@ -117,7 +125,7 @@ class RunsScreen(ViewScreen):
     }
 
     RunsScreen #runs-last {
-        height: auto;
+        height: 1;
         color: $text-muted;
     }
 
@@ -228,6 +236,10 @@ class RunsScreen(ViewScreen):
         self._refresh_last_run()
         self._adopt_store(force=True)
         self._poll_timer = self.set_interval(POLL_SECONDS, self._poll)
+        # The tree takes the keyboard, not the path box: ``y`` and ``o``
+        # have to work the moment the view opens, and a focused Input
+        # would swallow them as text.
+        self._tree.focus()
 
     # -- sources -------------------------------------------------------------
 
@@ -277,16 +289,36 @@ class RunsScreen(ViewScreen):
         else:
             self._show_error(loaded)
             self._set_nodes(())
-            self._set_status(f"{FILE} — {loaded.error}", failed=True)
+            # Terse on the status line, explained in the detail pane — the
+            # banner over the tree is the third of the same story, so it
+            # carries only the headline.
+            self._set_status(f"{FILE} — {path} did not open", failed=True)
         return loaded
 
     def close_file(self) -> None:
         """Leave file mode and go back to whatever the run source holds."""
         self._file = None
-        self.query_one("#runs-file", Input).value = ""
+        self._clear_path_box()
         self._adopt_store(force=True)
 
+    def _clear_path_box(self) -> None:
+        box = self._widget("#runs-file", Input)
+        if box is not None:
+            box.value = ""
+
     # -- the tree ------------------------------------------------------------
+
+    def _widget(self, selector: str, kind: type[Any]) -> Any:
+        """The widget, or ``None`` when this screen has no body yet.
+
+        Every repaint goes through here: the model is updated whether or
+        not there is anything to draw on, so a screen that is not on the
+        stack (or is still mounting) is never a special case.
+        """
+        try:
+            return self.query_one(selector, kind)
+        except NoMatches:
+            return None
 
     def _set_nodes(self, nodes: tuple[StateNode, ...]) -> None:
         self._state_nodes = nodes
@@ -296,12 +328,13 @@ class RunsScreen(ViewScreen):
             self._selected = nodes[0].path
         elif not nodes:
             self._selected = ""
-        if self.is_mounted:
-            self._build_tree()
-            self._refresh_detail()
+        self._build_tree()
+        self._refresh_detail()
 
     def _build_tree(self) -> None:
-        tree = self._tree
+        tree = self._widget("#runs-tree", Tree)
+        if tree is None:
+            return
         tree.clear()
         tree.root.label = self._root_label()
         tree.root.data = ""
@@ -334,6 +367,24 @@ class RunsScreen(ViewScreen):
     def _tree(self) -> Tree[str]:
         return self.query_one("#runs-tree", Tree)
 
+    def select_path(self, path: str) -> bool:
+        """Reveal ``path``, expanding whatever hides it, and select it.
+
+        Returns ``False`` when the current state has no such path — which
+        is the honest answer for a path from an older snapshot.
+        """
+        if find_node(self._state_nodes, path) is None:
+            return False
+        self._expanded |= {
+            node.path
+            for node in flatten(self._state_nodes)
+            if node.children and _is_ancestor(node.path, path)
+        }
+        self._selected = path
+        self._build_tree()
+        self._refresh_detail()
+        return True
+
     @property
     def selected_node(self) -> StateNode | None:
         """The highlighted state node, or ``None`` when the tree is empty."""
@@ -357,9 +408,9 @@ class RunsScreen(ViewScreen):
     # -- the detail pane -----------------------------------------------------
 
     def _refresh_detail(self) -> None:
-        if not self.is_mounted:
-            return
-        self.query_one("#runs-detail", Static).update("\n".join(self.detail_text_lines()))
+        detail = self._widget("#runs-detail", Static)
+        if detail is not None:
+            detail.update("\n".join(self.detail_text_lines()))
 
     def detail_text_lines(self) -> list[str]:
         """What the detail pane says right now (used by tests)."""
@@ -371,15 +422,15 @@ class RunsScreen(ViewScreen):
         return detail_lines(self.selected_node)
 
     def _show_error(self, loaded: LoadedState | None) -> None:
-        if not self.is_mounted:
+        box = self._widget("#runs-error", Static)
+        if box is None:
             return
-        box = self.query_one("#runs-error", Static)
         if loaded is None or loaded.ok:
             box.display = False
             box.update("")
             return
         box.display = True
-        box.update(loaded.error if not loaded.hint else f"{loaded.error}\n{loaded.hint}")
+        box.update(loaded.error)
 
     # -- the last run --------------------------------------------------------
 
@@ -392,9 +443,9 @@ class RunsScreen(ViewScreen):
         return self._last_run
 
     def _refresh_last_run(self) -> None:
-        if not self.is_mounted:
-            return
-        self.query_one("#runs-last", Static).update(self.last_run_text)
+        box = self._widget("#runs-last", Static)
+        if box is not None:
+            box.update(self.last_run_text)
 
     @property
     def last_run_text(self) -> str:
@@ -428,8 +479,8 @@ class RunsScreen(ViewScreen):
 
     def action_close_file_or_back(self) -> None:
         """Esc leaves file mode, then falls back to the app's Back."""
-        box = self.query_one("#runs-file", Input)
-        if self._mode == FILE or box.value:
+        box = self._widget("#runs-file", Input)
+        if self._mode == FILE or (box is not None and box.value):
             self.close_file()
             self._tree.focus()
             return
@@ -491,7 +542,7 @@ class RunsScreen(ViewScreen):
         self.store.begin(label=orch.name)
         self._mode = LIVE
         self._file = None
-        self.query_one("#runs-file", Input).value = ""
+        self._clear_path_box()
         self._revision = -1
         session = RunSession(
             request,
@@ -542,9 +593,9 @@ class RunsScreen(ViewScreen):
     def _set_status(self, text: str, *, failed: bool) -> None:
         self._status = text
         self._status_failed = failed
-        if not self.is_mounted:
+        status = self._widget("#runs-status", Static)
+        if status is None:
             return
-        status = self.query_one("#runs-status", Static)
         status.set_class(failed, "-failed")
         status.update(text)
 
@@ -567,6 +618,11 @@ class RunsScreen(ViewScreen):
     def tree_text(self) -> str:
         """The tree as plain text, outliving the widget."""
         return render_text(self._state_nodes)
+
+
+def _is_ancestor(parent: str, child: str) -> bool:
+    """True when ``parent`` is a prefix path of ``child`` at a key boundary."""
+    return child.startswith(parent) and child[len(parent) : len(parent) + 1] in (".", "[")
 
 
 def _row_label(node: StateNode) -> Text:

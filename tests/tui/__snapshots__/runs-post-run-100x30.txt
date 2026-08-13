@@ -1,0 +1,30 @@
+ ⭘                                       Circuitry — Runs                                           
+                                                                                                    
+  Runs — Inspect run state as a tree, open a saved state file, replay the last run                  
+                                                                                                    
+  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎  
+  ▊  path to a state JSON (--out / --live-state) — Enter opens it                                ▎  
+  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎  
+  ▼ demo.yml                            │ prime.draft.value                                         
+  ├── ▼ prime  {6 keys}                 │ string · 342 chars · 1 line                               
+  │   ├── ▶ meta  {3 keys}              │                                                           
+  │   ├── ▼ draft  {2 keys}             │ meta — prime.draft                                        
+  │   │   ├── value  "Cybernetics is the│   status      ✓ done                                      
+  │   │   └── ▶ meta  {6 keys}          │   adapter     openai                                      
+  │   ├── ▶ items  {2 keys}             │   model       gpt-4o-mini                                 
+  │   ├── ▶ over_items  {3 keys}        │   tokens      ↑120 ↓340                                   
+  │   ├── ▶ helper  {2 keys}            │   created     2024-05-01T10:00:00+00:00                   
+  │   └── ▶ gate  {2 keys}              │   completed   2024-05-01T10:00:04+00:00  (4.0s)           
+  ├── topic  "cybernetics"              │                                                           
+  └── ▶ runtime  {2 keys}               │ value                                                     
+                                        │ Cybernetics is the science of control and communication.  
+                                        │ Cybernetics is the science of control and communication.  
+                                        │ Cybernetics is the science of control and communication.  
+                                        │ Cybernetics is the science of control and communication.  
+                                        │ Cybernetics is the science of control and communication.  
+                                        │ Cybernetics is the science of control and communication.  
+                  ▏                     │                                                           
+  post-run — demo.yml                                                                               
+  Last run — demo.yml · openai · gpt-4o-mini  (Ctrl-R replays it)                                   
+                                                                                                    
+ tab Next view  y Copy path  o Open state file  ^r Replay last run  ? Help  q Back / Qui▏^p palette 
