@@ -20,7 +20,10 @@ CASES: list[tuple[str, tuple[int, int], list[str]]] = [
     ("help-80x24", (80, 24), ["question_mark"]),
     ("help-40x12", (40, 12), ["question_mark"]),
     ("view-library-80x24", (80, 24), ["1"]),
+    ("view-library-40x12", (40, 12), ["1"]),
     ("view-library-10x4", (10, 4), ["1"]),
+    ("library-search-80x24", (80, 24), ["1", "slash", "h", "e", "l", "l", "o"]),
+    ("library-empty-80x24", (80, 24), ["1", "slash", "z", "z", "z", "z"]),
     # The chat view opens on its seed form, which is static until it is
     # submitted — no worker runs, so the frame is deterministic.
     ("view-chat-80x24", (80, 24), ["8"]),

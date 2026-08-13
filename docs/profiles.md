@@ -1,8 +1,9 @@
 # Named Profiles
 
 A profile is a YAML file that supplies run-level defaults, initial-state
-inputs, and per-effect model/provider overrides for a single `cof run
---profile <name>` invocation — without editing the orchestration itself.
+inputs, per-effect model/provider overrides, and the persistence target for a
+single `cof run --profile <name>` invocation — without editing the
+orchestration itself.
 
 ## File Layout
 
@@ -34,7 +35,7 @@ effects:                    # keyed by dotted effect path, as in state
     model: tier-4
   my_reflector:
     enabled: false           # parsed/validated here; effect-disable behavior TBD
-persistence:                 # parsed/validated here; backend selection behavior TBD
+persistence:                 # where this run's state snapshot lands
   backend: jsonl-file
   path: runs.jsonl
 ```
@@ -78,8 +79,72 @@ Overrides targeting an effect type that has no `model`/`provider` field
 
 `effects.<path>.enabled` is parsed and schema-validated, but effect-disable
 behavior is not implemented by this feature — see the sibling task that
-consumes it. Likewise, `persistence` is parsed and validated but backend
-selection is implemented by a sibling task.
+consumes it.
+
+## Persistence
+
+A profile's `persistence:` block selects and configures the persistence
+backend for the run. It feeds the same `build_persistence_backend` path the
+project config uses, so the run snapshot lands in the chosen store and a
+later run rehydrates from it (`runtime.persistence.loaded_from_persistence`).
+
+```yaml
+# profiles/thorough.yml
+persistence:
+  backend: sqlite
+  path: .circuitry/thorough-runs.db   # or db_path:
+```
+
+Backends and their keys:
+
+| `backend`    | Required            | Optional                                       | Dependency |
+| ------------ | ------------------- | ---------------------------------------------- | ---------- |
+| `jsonl-file` | `path`              | —                                              | stdlib     |
+| `sqlite`     | `path` / `db_path`  | `table` (default `circuitry_runs`)             | stdlib     |
+| `mongodb`    | `uri`               | `database` (`circuitry`), `collection` (`circuitry_runs`) | `pip install circuitry-cof[mongodb]` |
+| `postgres`   | `dsn`               | `table`, `sslmode`, `allow_insecure`           | `pip install psycopg[binary]` |
+
+`jsonl-file` appends one record per run to a local file and reads the last
+record for the orchestration back on load — no server required, and the log
+stays greppable. It is independent of the write-only `jsonl-file` *runtime
+plugin* (an event stream); both can be enabled at once.
+
+Precedence:
+
+```
+profile persistence > orchestration runtime.persistence > project config > global config
+```
+
+The profile block **replaces** rather than merges with a lower-priority
+block — backends take disjoint keys, so a partial overlay would produce a
+chimera. `runtime.effective_settings.sources.persistence` records which layer
+won (`profile` / `orchestration` / `config`). There is no CLI persistence
+flag today; if one is added, it wins over the profile.
+
+`enabled` defaults to **true** for a profile-supplied block — naming a
+backend in a profile is the opt-in. Set `enabled: false` to run without
+persistence even when the project config configures a backend. A profile
+with no `persistence:` block changes nothing: the config/orchestration
+backend (or no persistence at all) applies exactly as it does today.
+
+`--out` is orthogonal and combinable — it still writes the final state to the
+given file regardless of which backend persisted the snapshot.
+
+Credential-bearing values (a Mongo URI's `user:pass@`, `password`-style keys)
+are redacted everywhere state is serialized: `runtime.persistence`,
+`runtime.effective_settings.runtime`, and
+`runtime.effective_settings.profile.content`. The un-redacted value only
+reaches the driver. Prefer pointing at env-var-supplied credentials over
+writing them into a profile file — see [`docs/threat-model.md`](threat-model.md).
+
+A backend that can't be reached fails the run with the same actionable error
+the runtime-config path produces (`Failed to load persisted state: MongoDB
+state load failed for orchestration ...`), and records
+`runtime.persistence.status = "load_failed"` / `"save_failed"`.
+
+When persistence hydrates state from a previous run, profile `inputs` remain
+the lowest layer: they fill keys the persisted snapshot doesn't carry rather
+than overwriting resumed values.
 
 ## Usage
 
@@ -93,9 +158,12 @@ When a profile is applied, run state includes:
 
 ```
 runtime.effective_settings.profile.name
-runtime.effective_settings.profile.content   # the full parsed profile, redacted
-runtime.effective_settings.sources.model     # "profile" when the profile supplied it
-runtime.effective_settings.sources.adapter   # "profile" when the profile supplied it
+runtime.effective_settings.profile.content       # the full parsed profile, redacted
+runtime.effective_settings.sources.model         # "profile" when the profile supplied it
+runtime.effective_settings.sources.adapter       # "profile" when the profile supplied it
+runtime.effective_settings.sources.persistence   # "profile" | "orchestration" | "config"
+runtime.persistence.backend                      # selected backend + its describe() fields
+runtime.persistence.loaded_from_persistence      # true when state was rehydrated
 ```
 
 Credential-shaped values inside the profile are redacted the same way

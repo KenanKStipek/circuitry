@@ -11,6 +11,20 @@ def test_sqlite_persistence_requires_db_path() -> None:
     assert "runtime.persistence.db_path" in str(exc.value)
 
 
+def test_sqlite_persistence_accepts_path_alias() -> None:
+    backend = SQLiteStatePersistence.from_config(
+        {"backend": "sqlite", "path": "/tmp/a.db"}
+    )
+    assert backend.db_path == "/tmp/a.db"
+
+
+def test_sqlite_persistence_prefers_db_path_over_path_alias() -> None:
+    backend = SQLiteStatePersistence.from_config(
+        {"backend": "sqlite", "db_path": "/tmp/canonical.db", "path": "/tmp/alias.db"}
+    )
+    assert backend.db_path == "/tmp/canonical.db"
+
+
 def test_sqlite_persistence_rejects_invalid_table_name() -> None:
     with pytest.raises(ValueError):
         SQLiteStatePersistence.from_config(

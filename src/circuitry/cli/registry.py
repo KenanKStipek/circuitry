@@ -113,6 +113,40 @@ def find_entry(name: str) -> dict[str, Any] | None:
     return None
 
 
+def eject_source(entry: dict[str, Any]) -> Path | None:
+    """Path of the curation file ``entry`` is ejected from, if it exists."""
+    file = str(entry.get("file") or "")
+    if file:
+        candidate = _curation_dir() / file
+        if candidate.exists():
+            return candidate
+    return resolve_bundled(str(entry.get("name", "")))
+
+
+def eject_destination(entry: dict[str, Any]) -> Path:
+    """Default destination for ``entry``, relative to the current directory."""
+    file = str(entry.get("file") or "")
+    return Path(file) if file else Path(f"{entry.get('name', 'orchestration')}.yml")
+
+
+def eject_text(entry: dict[str, Any]) -> str | None:
+    """The exact text an eject writes for ``entry``; ``None`` if unresolvable.
+
+    One reader for `cof eject` and the TUI's ``e`` key, so the two can never
+    write different bytes for the same entry.
+    """
+    source = eject_source(entry)
+    if source is None or not source.exists():
+        return None
+    return source.read_text(encoding="utf-8")
+
+
+def write_ejected(text: str, dest: Path) -> None:
+    """Write ejected ``text`` to ``dest``, creating parent directories."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(text, encoding="utf-8")
+
+
 def resolve_bundled(name: str) -> Path | None:
     """Resolve a curation entry name to its file path.
 
