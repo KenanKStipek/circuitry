@@ -34,6 +34,7 @@ Last Updated: 2026-05-08
 - [Postgres Persistence](./postgres-persistence.md)
 - [Plugin Extensions](./plugins.md)
 - [Library Sources](./library-sources.md) — `runtime.library.sources`: curation + folder sources behind `cof list/info/run/eject`
+- [Named Profiles](./profiles.md)
 - [Shared Library Retrieval](./shared-library.md)
 - [Shared Library Contributions](./shared-library-contributions.md)
 - [Shared Library Growth](./shared-library-growth.md)

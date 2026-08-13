@@ -311,6 +311,13 @@ def run_cmd(
         False, "--skip-preflight",
         help="Bypass dependency preflight; run even if check()s reported missing deps.",
     ),
+    profile: Optional[str] = typer.Option(
+        None, "--profile",
+        help=(
+            "Named profile to apply (profiles/<name>.yml, orchestration-scoped "
+            "wins over project-level). Precedence: CLI > profile > orchestration > config."
+        ),
+    ),
 ):
     # --last: replay stashed args
     if last:
@@ -329,6 +336,7 @@ def run_cmd(
         env_vars = stashed.get("env_vars")
         tail = stashed.get("tail", False)
         skip_preflight = stashed.get("skip_preflight", False)
+        profile = stashed.get("profile")
 
         # Refuse to replay if the previous run stashed redacted secrets — the
         # sentinel string would silently flow into the new run as a literal.
@@ -406,6 +414,7 @@ def run_cmd(
         config=cfg,
         live_state_path=live_state,
         skip_preflight=skip_preflight,
+        profile_name=profile,
     )
 
     with (
@@ -454,6 +463,7 @@ def run_cmd(
             "env_vars": redact_env_pairs(env_vars),
             "tail": tail,
             "skip_preflight": skip_preflight,
+            "profile": profile,
         })
 
     if tail:
