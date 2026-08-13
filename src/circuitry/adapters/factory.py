@@ -49,7 +49,7 @@ def _build_openai(cfg: dict[str, Any]) -> Adapter:
 def _build_anthropic(cfg: dict[str, Any]) -> Adapter:
     return AnthropicAdapter(
         base_url=cfg.get("base_url") or "https://api.anthropic.com",
-        default_model=cfg.get("default_model") or "claude-sonnet-4-20250514",
+        default_model=cfg.get("default_model") or AnthropicAdapter.default_model,
         max_tokens=int(cfg.get("max_tokens") or 4096),
     )
 

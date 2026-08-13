@@ -52,12 +52,14 @@ from .execution import (
     totals_for,
 )
 from .launch import (
+    CUSTOM_MODEL,
     NO_OVERRIDE,
     InputField,
     OrchestrationChoice,
     OrchestrationForm,
     RunSession,
     Runner,
+    adapter_models,
     adapter_options,
     build_initial_state,
     default_text,
@@ -83,6 +85,14 @@ CANCELLED = "Cancelled"
 
 #: Placeholder for the tree pane before an orchestration is picked.
 NO_TREE = "No orchestration picked — the effect tree appears here."
+
+#: What the note under the model dropdown says while an adapter is being
+#: asked what it offers, and what it says when nothing came back.
+LOADING_MODELS = "Asking {adapter} for its models…"
+NO_ADAPTER_MODELS = "{adapter} did not report any models — pick or type one."
+
+#: Placeholder in the free-text model box.
+CUSTOM_MODEL_HINT = "Type any model name (same as --model)"
 
 #: How often the execution view repaints while a run is in flight. Events
 #: arrive far faster than a person reads, so they are coalesced onto this
@@ -111,6 +121,15 @@ class RunScreen(ViewScreen):
 
     RunScreen .field-error {
         color: $error;
+    }
+
+    RunScreen .hidden {
+        display: none;
+    }
+
+    RunScreen #run-model-note {
+        color: $text-muted;
+        height: auto;
     }
 
     RunScreen #run-status {
@@ -202,6 +221,14 @@ class RunScreen(ViewScreen):
             self.result = result
             self.cancelled = cancelled
 
+    class AdapterModelsLoaded(Message):
+        """An adapter answered ``list_models()`` on a worker thread."""
+
+        def __init__(self, adapter: str, models: list[str]) -> None:
+            super().__init__()
+            self.adapter = adapter
+            self.models = models
+
     def __init__(
         self,
         spec: ViewSpec,
@@ -227,6 +254,12 @@ class RunScreen(ViewScreen):
         self._runner = runner
         self._form: OrchestrationForm | None = None
         self._fields: list[tuple[InputField, Input]] = []
+        # Models the selected adapter reported, and the adapter that
+        # reported them — a slow answer arriving after the user moved on
+        # must not repopulate the dropdown for a different adapter.
+        self._adapter_models: list[str] = []
+        self._models_for: str | None = None
+        self._custom_model = False
         self._session: RunSession | None = None
         self._updates = 0
         self._status_text = IDLE
@@ -279,11 +312,17 @@ class RunScreen(ViewScreen):
             ),
             Label("Model", classes="form-label"),
             Select(
-                _override_options(model_options(self._config)),
+                _model_options(model_options(self._config)),
                 value=NO_OVERRIDE,
                 allow_blank=False,
                 id="run-model",
             ),
+            Input(
+                placeholder=CUSTOM_MODEL_HINT,
+                id="run-model-custom",
+                classes="hidden",
+            ),
+            Static("", id="run-model-note", classes="view-note"),
             Horizontal(
                 Button("Launch", variant="primary", id="run-launch"),
                 Button("Cancel run", id="run-cancel", disabled=True),
@@ -301,6 +340,14 @@ class RunScreen(ViewScreen):
     # -- selection -----------------------------------------------------------
 
     async def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "run-adapter":
+            event.stop()
+            self._load_adapter_models(event.value)
+            return
+        if event.select.id == "run-model":
+            event.stop()
+            self._set_custom_model(event.value == CUSTOM_MODEL)
+            return
         if event.select.id != "run-orchestration":
             return
         event.stop()
@@ -321,7 +368,7 @@ class RunScreen(ViewScreen):
             return
         self._form = form
         await self._render_fields(form.fields)
-        self._refresh_model_options(form)
+        self._refresh_model_options()
         # Draw the plan straight away: the shape of the run is worth seeing
         # before committing to it.
         self._reset_execution(plan_from_orchestration(form.orchestration))
@@ -356,14 +403,75 @@ class RunScreen(ViewScreen):
             )
             self._fields.append((spec, box))
 
-    def _refresh_model_options(self, form: OrchestrationForm) -> None:
-        """Fold the orchestration's own model into the dropdown."""
+    def _refresh_model_options(self) -> None:
+        """Repaint the dropdown from config, orchestration, and adapter."""
+        orch = self._form.orchestration if self._form is not None else None
         select: Select[str] = self.query_one("#run-model", Select)
         current = select.value
-        options = _override_options(model_options(self._config, form.orchestration))
+        options = _model_options(
+            model_options(self._config, orch, extra=self._adapter_models)
+        )
         select.set_options(options)
         values = {value for _, value in options}
+        # ``set_options`` resets the selection; put the user's choice back
+        # when it survived the repaint.
         select.value = current if current in values else NO_OVERRIDE
+
+    # -- adapter model enumeration ------------------------------------------
+
+    def _load_adapter_models(self, adapter_name: Any) -> None:
+        """Ask the picked adapter what it offers, off the UI thread."""
+        name = adapter_name if isinstance(adapter_name, str) else ""
+        name = "" if name in (NO_OVERRIDE, Select.BLANK) else name.strip()
+        self._models_for = name or None
+        self._adapter_models = []
+        if not name:
+            self._model_note("")
+            self._refresh_model_options()
+            return
+        self._model_note(LOADING_MODELS.format(adapter=name))
+        self.run_worker(
+            lambda: self._fetch_models(name),
+            thread=True,
+            exclusive=True,
+            group="adapter-models",
+        )
+
+    def _fetch_models(self, name: str) -> None:
+        """Worker body: ``list_models()`` never raises, so neither does this."""
+        self.post_message(self.AdapterModelsLoaded(name, adapter_models(self._config, name)))
+
+    def on_run_screen_adapter_models_loaded(self, message: AdapterModelsLoaded) -> None:
+        message.stop()
+        if message.adapter != self._models_for:
+            # The user moved on while the answer was in flight.
+            return
+        self._adapter_models = message.models
+        self._refresh_model_options()
+        if message.models:
+            count = len(message.models)
+            self._model_note(
+                f"{count} model{'s' if count != 1 else ''} from {message.adapter}."
+            )
+        else:
+            self._model_note(NO_ADAPTER_MODELS.format(adapter=message.adapter))
+
+    def _model_note(self, text: str) -> None:
+        self.query_one("#run-model-note", Static).update(text)
+
+    def _set_custom_model(self, on: bool) -> None:
+        """Swap the dropdown for a free-text box, or put it back."""
+        if on == self._custom_model:
+            return
+        self._custom_model = on
+        select = self.query_one("#run-model", Select)
+        box = self.query_one("#run-model-custom", Input)
+        select.set_class(on, "hidden")
+        box.set_class(not on, "hidden")
+        if on:
+            box.focus()
+        else:
+            box.value = ""
 
     # -- launching -----------------------------------------------------------
 
@@ -378,6 +486,14 @@ class RunScreen(ViewScreen):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Enter walks the form — Tab belongs to view navigation."""
         event.stop()
+        if event.input.id == "run-model-custom":
+            # Enter on an empty box is the way back to the dropdown.
+            if not event.input.value.strip():
+                self.query_one("#run-model", Select).value = NO_OVERRIDE
+                self._set_custom_model(False)
+                return
+            self.query_one("#run-launch", Button).focus()
+            return
         boxes = [box for _, box in self._fields]
         if event.input in boxes:
             index = boxes.index(event.input)
@@ -416,7 +532,7 @@ class RunScreen(ViewScreen):
             config=self._config,
             adapter=self._adapter,
             adapter_override=_override_value(self.query_one("#run-adapter", Select)),
-            model_override=_override_value(self.query_one("#run-model", Select)),
+            model_override=self._model_override(),
             skip_preflight=False,
         )
 
@@ -434,6 +550,12 @@ class RunScreen(ViewScreen):
         self._set_running(True)
         self._set_status(RUNNING)
         session.start()
+
+    def _model_override(self) -> str | None:
+        """Whatever the model control currently says, or ``None``."""
+        if self._custom_model:
+            return self.query_one("#run-model-custom", Input).value.strip() or None
+        return _override_value(self.query_one("#run-model", Select))
 
     def action_cancel_run(self) -> None:
         """Ask the in-flight run to stop; a no-op when nothing is running."""
@@ -631,6 +753,15 @@ def _tree_text(lines: list[RenderLine]) -> Text:
 def _override_options(values: list[str]) -> list[tuple[str, str]]:
     """Dropdown options with the "leave it alone" sentinel first."""
     return [(f"{NO_OVERRIDE} default", NO_OVERRIDE), *((value, value) for value in values)]
+
+
+def _model_options(values: list[str]) -> list[tuple[str, str]]:
+    """Model options: sentinel, what we know about, then the escape hatch.
+
+    ``custom…`` is always last and always present — no enumeration can be
+    complete, and the flag equivalent (``--model``) takes any string.
+    """
+    return [*_override_options(values), (CUSTOM_MODEL, CUSTOM_MODEL)]
 
 
 def _override_value(select: Select[str]) -> str | None:

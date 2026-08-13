@@ -4,6 +4,7 @@ import json
 import shlex
 import shutil
 import subprocess
+import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
@@ -73,9 +74,33 @@ class OllamaAdapter:
                 f"curl returned non-JSON response: {proc.stdout[:200]}"
             ) from e
 
-    def list_models(self, *, timeout_seconds: int = 10) -> dict[str, Any]:
+    def list_models(self, *, timeout_seconds: float = 2.0) -> list[str]:
+        """Locally installed tag names, e.g. ``["gpt-oss:20b", "phi3:mini"]``.
+
+        Optional adapter hook (see
+        :mod:`circuitry.adapters.models`): it exists to fill a picker, so
+        an unreachable daemon is an empty list, not an error. stdlib
+        urllib and a short timeout — nothing here is worth blocking a UI
+        or requiring ``curl`` for.
+        """
         url = self.base_url.rstrip("/") + "/api/tags"
-        return self._curl_json(url=url, method="GET", timeout_seconds=timeout_seconds)
+        try:
+            with urllib.request.urlopen(url, timeout=timeout_seconds) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        except Exception:
+            return []
+
+        entries = payload.get("models") if isinstance(payload, dict) else None
+        if not isinstance(entries, list):
+            return []
+        names = [
+            entry["name"].strip()
+            for entry in entries
+            if isinstance(entry, dict)
+            and isinstance(entry.get("name"), str)
+            and entry["name"].strip()
+        ]
+        return sorted(names)
 
     def generate(
         self, *, model: str, prompt: str, timeout_seconds: int = 120
