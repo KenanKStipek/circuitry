@@ -143,7 +143,9 @@ def run(req: RunRequest) -> RunResult:
             cli_adapter=req.adapter_override,
             profile=profile,
         )
-        runtime_config = effective.runtime
+        # One shared dict for the whole run: `use` effects append their library
+        # pins to it as they resolve, at any nesting depth.
+        runtime_config = effective.runtime if effective.runtime is not None else {}
         persistence = build_persistence_backend(effective.runtime)
         plugins, plugin_events = _initialize_plugins(
             effective.plugins, allowed=cfg.enabled_plugins
@@ -371,13 +373,14 @@ def run(req: RunRequest) -> RunResult:
             root_def,
             adapter=adapter,
             model=resolved_model,
-            runtime_config=effective.runtime or {},
+            runtime_config=runtime_config,
             dry_run=req.dry_run,
             timeout_seconds=timeout_seconds,
             verbose=req.verbose,
         )
         runtime.execute(store=store)
 
+        _record_library_pins(state, runtime_config)
         state["runtime"]["last_run"]["completed_at"] = _now_iso()
 
         success_events = invoke_plugins(
@@ -414,6 +417,9 @@ def run(req: RunRequest) -> RunResult:
 
     except Exception as e:
         try:
+            # Pins resolved before the failure still describe what this run
+            # reached for — keep them for the post-mortem.
+            _record_library_pins(state, runtime_config)
             if run_id is None:
                 run_id = str(uuid4())
             plugins_meta = state.setdefault("runtime", {}).setdefault("plugins", {})
@@ -454,6 +460,23 @@ def run(req: RunRequest) -> RunResult:
         return RunResult(ok=False, state=state, warnings=warnings, error=str(e))
 
 
+def _record_library_pins(
+    state: dict[str, Any], runtime_config: dict[str, Any] | None
+) -> None:
+    """Copy the run's `use ref:` pins into `runtime.library_refs`.
+
+    Each pin carries source, ref, resolved path, and — for SHA-pinned remote
+    sources — the commit and cache directory it was served from, which is what
+    a later offline re-run reproduces.
+    """
+    from ..core.library_ref import STATE_KEY, collect_pins
+
+    pins = collect_pins(runtime_config)
+    if not pins:
+        return
+    state.setdefault("runtime", {})[STATE_KEY] = pins
+
+
 def validate(
     orchestration_path: Path,
     *,
@@ -486,7 +509,11 @@ def validate(
         compile_orchestration(orch=orch, root_name="prime")
 
         from ..core.cycle_check import detect_cycles
-        cycle = detect_cycles(orch, root_path=orchestration_path)
+        cycle = detect_cycles(
+            orch,
+            root_path=orchestration_path,
+            runtime=(config.runtime if config is not None else None),
+        )
         if cycle is not None:
             return {
                 "ok": False,
@@ -520,6 +547,7 @@ def preflight(
       * ``adapter:<name>``
       * ``tool:<name>``
       * ``runtime_plugin:<name>``
+      * ``library_ref:<ref>``
 
     Adapters that can only be built at runtime (host_claude needs a
     request_handler) are reported as ok with a deferred message; preflight
@@ -529,6 +557,18 @@ def preflight(
     adapter_refs, tool_refs = walk_orchestration_refs(orch)
     runtime_cfg = config.runtime or {}
     results: list[tuple[str, CheckResult]] = []
+
+    # `use ref:` entries served by a source that was never refreshed fail here,
+    # before any effect runs, carrying the `cof library refresh` command that
+    # fixes them. Resolvable-but-missing refs are left to the run's own error.
+    from ..core.library_ref import check_use_refs
+
+    for ref, message in check_use_refs(
+        orch, root_path=orchestration_path, runtime=runtime_cfg
+    ):
+        results.append(
+            (f"library_ref:{ref}", CheckResult(ok=False, missing=[], message=message))
+        )
 
     for adapter_name in sorted(adapter_refs):
         try:

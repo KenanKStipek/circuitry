@@ -437,7 +437,7 @@ Runs another orchestration as an isolated sub-step. State is fully isolated: dec
 |-------|------|----------|---------|-------------|
 | `type` | `"use"` | yes | — | |
 | `name` | string | yes | — | Pattern `^[A-Za-z_][A-Za-z0-9_]*$` |
-| `ref` | string | * | — | Curation library lookup, slash-delimited (e.g. `utilities/critique`) |
+| `ref` | string | * | — | Library lookup across configured sources. Bare (`utilities/critique`) or source-qualified (`hub:utilities/critique`) |
 | `path` | string | * | — | Filesystem path (absolute, cwd-relative, or parent-orchestration-relative) |
 | `inline` | string | * | — | Mustache template that renders to orchestration YAML at runtime |
 | `orchestration` | string | * | — | **DEPRECATED** — use `ref` or `path` instead. Still accepted; emits `DeprecationWarning` |
@@ -451,7 +451,9 @@ Runs another orchestration as an isolated sub-step. State is fully isolated: dec
 
 **Reference fields:**
 
-- **`ref`** — curation library lookup. The slash-delimited name resolves under `src/circuitry/curation/`. For example, `ref: utilities/critique` → `src/circuitry/curation/utilities/critique.yml`. Use this for any curation entry (the canonical mode).
+- **`ref`** — library lookup across every source configured in [`runtime.library.sources`](./library-sources.md). With the default configuration (curation only) a slash-delimited name resolves under `src/circuitry/curation/`: `ref: utilities/critique` → `src/circuitry/curation/utilities/critique.yml`. With more sources configured, refs come in two forms:
+  - **Bare** — `ref: utilities/critique` searches sources in precedence order and takes the first match. If more than one source matches, the run logs a warning naming the others.
+  - **Source-qualified** — `ref: hub:utilities/critique` resolves in exactly the source named `hub` and never falls through to another source. A colon only qualifies when the prefix names a configured source, so a value like `C:/tmp/orch.yml` is never mistaken for one.
 - **`path`** — filesystem path. Absolute, cwd-relative, or relative to the parent orchestration's directory. Use this for orchestrations that aren't in the curation library (e.g. project-local helpers).
 - **`inline`** — Mustache template that renders to YAML at runtime. The template typically references a prior prompt's structured output (`{{prime.plan.value}}`) and is fully validated against the schema before execution unless `validate: false`.
 - **`orchestration`** — **deprecated**. Functionally a hybrid of `path` and `ref` with a fallback chain. Existing files still work but emit a deprecation warning at compile time. Migrate to `ref` (for library entries) or `path` (for filesystem references).
@@ -463,9 +465,38 @@ Runs another orchestration as an isolated sub-step. State is fully isolated: dec
 | Declared-outputs | `outputs:` is set, OR child orchestration declares an `interface:` with `outputs` | `prime.<use_name>.value` is a flat dict of declared keys mapped to dot-path values from the child state |
 | Full-namespace | No `outputs:` set, no interface outputs | The entire child `prime` subtree is exposed at `prime.<use_name>.<child_effect>.value` (matches `dynamic` namespacing) |
 
+**Recorded pins (`runtime.library_refs`):**
+
+Every `ref:` that resolves through a library source is recorded in the run state under `runtime.library_refs`, and mirrored onto the effect's own `meta.library_ref`:
+
+```json
+{
+  "ref": "hub:utilities/critique",
+  "source": "hub",
+  "path": "/home/me/.cache/circuitry/library/hub/6f1c…/utilities/critique.yml",
+  "sha": "6f1c9a2…",
+  "cache_path": "/home/me/.cache/circuitry/library/hub/6f1c9a2…",
+  "resolved_at": "2026-01-30T12:00:00+00:00"
+}
+```
+
+For a `github` source, `sha` is the pinned commit the cache was fetched at and `cache_path` is the directory it was served from — which is what makes a later run reproduce the identical tree with **no network access at all** (only `cof library refresh` ever fetches). Local sources (`curation`, `folder`) have no commit to pin, so `sha` and `cache_path` are `null` and the resolved `path` is the record. Pins are recorded at every nesting depth, so a ref three orchestrations deep still shows up in the root run state.
+
+**Unfetched sources fail early:**
+
+A `ref:` pointing at a source whose cache has never been populated fails at **validate / preflight** time — never mid-run — with the command that fixes it:
+
+```
+library_ref:hub:utilities/critique: not ready — use ref 'hub:utilities/critique' cannot be
+resolved: Library source 'hub' (owner/name@main) has not been fetched yet — run
+`cof library refresh hub`. Run `cof library refresh hub` before this orchestration runs.
+```
+
+The check follows the static `use` graph, so a ref reached transitively through other orchestrations is caught just as early. Genuinely unknown refs (a typo, an entry that no source carries) are not a preflight failure — they surface as the `use` effect's own error at run time.
+
 **Cycle detection:**
 
-The runtime tracks a per-execution call stack of resolved orchestration paths. If A invokes B which invokes A, a `RecursionError` is raised before infinite recursion happens. The same check runs statically during `validate()` — cycles are detected at validate time before any execution. Inline-mode subs are excluded from the static check (their content renders at runtime) but the runtime hashes the rendered YAML, so an inline template producing identical YAML in a parent of itself will still be caught.
+The runtime tracks a per-execution call stack of resolved orchestration paths. If A invokes B which invokes A, a `RecursionError` is raised before infinite recursion happens. The same check runs statically during `validate()` — cycles are detected at validate time before any execution. The static walk follows `ref:` edges **across sources**, resolving remote entries to their cache paths, so a cycle that closes through a `github` source (A in a folder → B in the hub cache → A) is caught statically too. Inline-mode subs are excluded from the static check (their content renders at runtime) but the runtime hashes the rendered YAML, so an inline template producing identical YAML in a parent of itself will still be caught.
 
 **Example — library reference, declared outputs:**
 ```yaml
@@ -478,6 +509,16 @@ The runtime tracks a per-execution call stack of resolved orchestration paths. I
   outputs:
     score: prime.score.value
     notes: prime.notes.value
+```
+
+**Example — source-qualified library reference:**
+```yaml
+- type: use
+  name: hub_critique
+  ref: hub:utilities/critique   # exactly the source named 'hub'; never another
+  inputs:
+    content: "{{prime.draft.value}}"
+    criteria: "clarity, accuracy"
 ```
 
 **Example — filesystem path, full-namespace mode:**
