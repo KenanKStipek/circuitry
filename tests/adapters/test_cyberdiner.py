@@ -18,8 +18,10 @@ import pytest
 from circuitry.adapters.conformance import validate_generate_result
 from circuitry.adapters.cyberdiner import CyberdinerAdapter, _resolve_tier
 from circuitry.adapters.factory import build_adapter
+from circuitry.api import run_orchestration
 from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.redaction import REDACTED
+from circuitry.cli.registry import resolve_bundled
 from circuitry.cli.runtime_shim import RunRequest, run
 
 
@@ -565,3 +567,46 @@ def test_token_is_redacted_in_effective_settings(tmp_path: Path) -> None:
     cyberdiner_cfg = embedded["adapters"]["cyberdiner"]
     assert cyberdiner_cfg["token"] == REDACTED
     assert cyberdiner_cfg["expo_url"] == "https://expo.example.test"
+
+
+# ---------------------------------------------------------------------------
+# Bundled example — the demo, against a fake expo
+# ---------------------------------------------------------------------------
+
+
+def test_bundled_example_puts_a_real_tier_on_the_wire(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`cof run learn/cyberdiner_hello` submits `tier: cheap`, not `tier-1`."""
+    _install_clock(monkeypatch)
+    submitted: list[dict[str, Any]] = []
+
+    def fake_urlopen(req: Any, timeout: float = 0) -> _FakeResponse:
+        if req.data:
+            submitted.append(_json.loads(req.data.decode("utf-8")))
+        body = {"job_id": "job-demo", "status": "complete", "result": "Cybernetics is."}
+        return _FakeResponse(status=200, body=_json.dumps(body).encode("utf-8"))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    orch_path = resolve_bundled("learn/cyberdiner_hello")
+    assert orch_path is not None and orch_path.exists()
+
+    result = run_orchestration(
+        orchestration_path=orch_path,
+        state={"question": "What is cybernetics?"},
+        config=CircuitryConfig(
+            runtime={
+                "adapters": {
+                    "cyberdiner": {
+                        "expo_url": "https://expo.example.test",
+                        "token": "ck_test_token_123",
+                    }
+                }
+            },
+        ),
+    )
+
+    assert result.ok is True
+    assert submitted and submitted[0]["tier"] == "cheap"
+    assert result.state["prime"]["ask"]["meta"]["model"] == "cheap"
