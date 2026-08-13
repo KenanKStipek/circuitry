@@ -6,7 +6,7 @@
  4  Runs — History of past runs and the 
  5  Doctor — Backend, config, and conne 
  6  Settings — Effective configuration  
-                                        
+ 7  Validate — Check an orchestration f 
                                         
                                         
  tab Next view  ? Help  q Ba▏^p palette 

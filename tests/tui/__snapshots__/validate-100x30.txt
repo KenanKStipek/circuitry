@@ -1,0 +1,30 @@
+ ⭘                                     Circuitry — Validate                                         
+                                                                                                    
+  Validate                                                                                          
+  Check an orchestration file for schema, compile, cycle and preflight errors                       
+                                                                                                    
+  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎  
+  ▊  tests/tui/fixtures/broken.yml                                                               ▎  
+  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎  
+                                                                                                    
+  4 problems  tests/tui/fixtures/broken.yml                                                         
+                                                                                                    
+  Schema (1)                                                                                        
+    /effects/0/name: 'bad name' does not match '^[A-Za-z_]*$'                                       
+                                                                                                    
+  Compile (1)                                                                                       
+    Invalid name 'bad name' for prompt at 'prime.effects[0]'.                                       
+                                                                                                    
+  Cycle (1)                                                                                         
+    broken.yml → broken.yml                                                                         
+                                                                                                    
+  Preflight (1)                                                                                     
+    adapter:ollama: missing host:http://localhost:11434                                             
+        → Start the service at http://localhost:11434, or point the config at a host that is up.    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+ tab Next view  ^r Re-validate  ? Help  q Back / Quit                                   ▏^p palette 

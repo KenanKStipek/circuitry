@@ -10,8 +10,8 @@
   │4  Runs — History of past runs and their final state                      │  
   │5  Doctor — Backend, config, and connectivity diagnostics                 │  
   │6  Settings — Effective configuration and where each value came from      │  
+  │7  Validate — Check an orchestration file for schema, compile, cycle and p│  
   ╰──────────────────────────────────────────────────────────────────────────╯  
-                                                                                
                                                                                 
                                                                                 
                                                                                 
