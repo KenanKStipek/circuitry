@@ -351,6 +351,34 @@ def test_replaying_the_last_run_fills_the_tree_as_it_goes(
     assert "replay finished" in status
 
 
+def test_replay_merges_a_stashed_state_file_under_its_inline_values(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """``-e`` beats ``--state``, the way ``cof run`` ranks them."""
+    orch = tmp_path / "demo.yml"
+    orch.write_text("effects: []\n", encoding="utf-8")
+    state_file = tmp_path / "in.json"
+    state_file.write_text(json.dumps({"topic": "dogs", "tone": "dry"}), encoding="utf-8")
+    seen: dict[str, Any] = {}
+
+    def runner(request: RunRequest) -> RunResult:
+        seen["request"] = request
+        return RunResult(ok=True, state={}, warnings=[])
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        screen = await _open(
+            pilot, _screen(last_run=_stash(orch, state=str(state_file)), runner=runner)
+        )
+        screen.action_replay()
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if "request" in seen:
+                break
+
+    run_app(scenario)
+    assert seen["request"].initial_state == {"topic": "cats", "tone": "dry"}
+
+
 def test_replay_carries_the_stashed_adapter_and_model(run_app: Any, tmp_path: Path) -> None:
     orch = tmp_path / "demo.yml"
     orch.write_text("effects: []\n", encoding="utf-8")

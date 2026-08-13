@@ -30,6 +30,7 @@ the store so the tree fills in as it goes.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
@@ -525,13 +526,14 @@ class RunsScreen(ViewScreen):
             self._set_status(f"Stashed orchestration is gone: {orch}", failed=True)
             return
 
+        initial_state, state_path = _replay_inputs(stashed)
         request = RunRequest(
             orchestration_path=orch,
-            state_path=stashed.state_path,
+            state_path=state_path,
             out_path=None,
             dry_run=stashed.dry_run,
             validate_only=False,
-            initial_state=stashed.initial_state() or None,
+            initial_state=initial_state,
             config=self._config if self._config is not None else _safe_config(stashed),
             adapter=self._adapter,
             adapter_override=stashed.adapter or None,
@@ -618,6 +620,29 @@ class RunsScreen(ViewScreen):
     def tree_text(self) -> str:
         """The tree as plain text, outliving the widget."""
         return render_text(self._state_nodes)
+
+
+def _replay_inputs(stashed: LastRun) -> tuple[dict[str, Any] | None, Path | None]:
+    """``(initial_state, state_path)`` for a replay, ranked as ``cof run`` ranks them.
+
+    ``-e`` values win over a ``--state`` file, and the runtime reads only
+    one of the two — so when the stash has both, the file is merged here
+    exactly as the CLI merges it. An unreadable state file degrades to the
+    inline values rather than failing the replay.
+    """
+    inline = stashed.initial_state()
+    if not inline:
+        return None, stashed.state_path
+    merged: dict[str, Any] = {}
+    if stashed.state_path is not None:
+        try:
+            loaded = json.loads(stashed.state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            loaded = None
+        if isinstance(loaded, dict):
+            merged.update(loaded)
+    merged.update(inline)
+    return merged, None
 
 
 def _is_ancestor(parent: str, child: str) -> bool:
