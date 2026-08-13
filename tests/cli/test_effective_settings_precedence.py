@@ -9,16 +9,16 @@ from circuitry.cli.runtime_shim import RunRequest, run
 
 
 def _profile(**overrides: object) -> ProfileSettings:
-    defaults: dict[str, object] = dict(
-        name="fast",
-        path=Path("profiles/fast.yml"),
-        adapter=None,
-        model=None,
-        inputs={},
-        effects={},
-        persistence=None,
-        raw={},
-    )
+    defaults: dict[str, object] = {
+        "name": "fast",
+        "path": Path("profiles/fast.yml"),
+        "adapter": None,
+        "model": None,
+        "inputs": {},
+        "effects": {},
+        "persistence": None,
+        "raw": {},
+    }
     defaults.update(overrides)
     return ProfileSettings(**defaults)  # type: ignore[arg-type]
 

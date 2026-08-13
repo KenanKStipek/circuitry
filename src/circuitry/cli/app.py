@@ -179,7 +179,7 @@ def _do_validate(
         raise typer.Exit(code=1)
 
 
-def _library_registry(config_path: Optional[Path] = None) -> LibraryRegistry:
+def _library_registry(config_path: Path | None = None) -> LibraryRegistry:
     """Build the configured library registry, reporting config errors as CLI errors."""
     try:
         return build_registry(config_path=config_path)
@@ -318,7 +318,7 @@ def run_cmd(
         False, "--skip-preflight",
         help="Bypass dependency preflight; run even if check()s reported missing deps.",
     ),
-    profile: Optional[str] = typer.Option(
+    profile: str | None = typer.Option(
         None, "--profile",
         help=(
             "Named profile to apply (profiles/<name>.yml, orchestration-scoped "
@@ -897,7 +897,7 @@ def _detect_backends(cfg: CircuitryConfig) -> set[str]:
 def info_cmd(
     name: str = typer.Argument(..., help="Name of the orchestration."),
     json_out: bool = typer.Option(False, "--json", help="Output machine-readable JSON only."),
-    config: Optional[Path] = typer.Option(
+    config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
 ):
@@ -964,7 +964,7 @@ def eject_cmd(
     out: Path | None = typer.Option(
         None, "--out", "-o", help="Output path. Defaults to ./<filename>."
     ),
-    config: Optional[Path] = typer.Option(
+    config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
 ):
@@ -1006,11 +1006,11 @@ app.add_typer(library_app, name="library")
     "command that touches the network for a library source.",
 )
 def library_refresh_cmd(
-    source: Optional[str] = typer.Argument(
+    source: str | None = typer.Argument(
         None, help="Source to refresh. Omit to refresh every configured source."
     ),
     json_out: bool = typer.Option(False, "--json", help="Output machine-readable JSON only."),
-    config: Optional[Path] = typer.Option(
+    config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
 ):

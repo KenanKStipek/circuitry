@@ -61,8 +61,8 @@ class JsonlFileStatePersistence:
             ) from e
 
         # Scan backwards: the last matching record is the latest snapshot.
-        for line in reversed(lines):
-            line = line.strip()
+        for raw_line in reversed(lines):
+            line = raw_line.strip()
             if not line:
                 continue
             try:

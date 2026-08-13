@@ -77,9 +77,9 @@ class RunRequest:
     # ``adapter``/``model`` (the ``cli`` tier of resolve_effective_settings).
     # ``adapter_override`` is ignored when ``adapter`` supplies an instance —
     # that already pins the transport.
-    adapter_override: Optional[str] = None
-    model_override: Optional[str] = None
-    profile_name: Optional[str] = None
+    adapter_override: str | None = None
+    model_override: str | None = None
+    profile_name: str | None = None
 
 
 @dataclass(frozen=True)

@@ -14,7 +14,7 @@ import json
 import re
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 import yaml
@@ -108,7 +108,7 @@ def test_run_turn_passes_the_host_state_through(
     seen: dict[str, Any] = {}
 
     class _Result:
-        state = {
+        state: ClassVar[dict[str, Any]] = {
             "prime": {
                 "turn": {
                     "decide": {

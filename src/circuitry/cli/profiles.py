@@ -223,7 +223,7 @@ def _validate_effect_paths(
         )
 
     valid_paths = collect_orchestration_effect_paths(orch)
-    unknown = sorted(k for k in effects_map.keys() if k not in valid_paths)
+    unknown = sorted(k for k in effects_map if k not in valid_paths)
     if not unknown:
         return
     valid_list = ", ".join(sorted(valid_paths)) or "(orchestration defines no named effects)"

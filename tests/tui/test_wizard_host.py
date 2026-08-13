@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import ClassVar
 
 import jsonschema
 import pytest
@@ -96,7 +97,7 @@ def test_run_turn_passes_the_host_state_and_adapter_through(
     seen: dict = {}
 
     class _Result:
-        state: dict = {}
+        state: ClassVar[dict] = {}
 
     def fake_run(**kwargs: object) -> object:
         seen.update(kwargs)
@@ -118,7 +119,7 @@ def test_default_runner_leaves_the_adapter_to_the_config(
     seen: dict = {}
 
     class _Result:
-        state: dict = {}
+        state: ClassVar[dict] = {}
 
     monkeypatch.setattr("circuitry.cli.config.resolve_config", lambda *a, **k: "resolved")
     monkeypatch.setattr(
