@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 from dataclasses import dataclass
+from typing import ClassVar
 
 from ..preflight import CheckResult
 from .base import GenerateResult
@@ -19,14 +20,28 @@ class AnthropicAdapter:
 
     Config options (in config.json under runtime.adapters.anthropic):
       - base_url: API base URL (defaults to https://api.anthropic.com)
-      - default_model: Default model if not specified (defaults to claude-sonnet-4-20250514)
+      - default_model: Default model if not specified (defaults to claude-sonnet-5)
       - max_tokens: Maximum tokens to generate (defaults to 4096)
     """
 
+    #: Current model aliases, most capable first. Static on purpose: the
+    #: picker should not need an API key or a round trip just to offer
+    #: suggestions, and aliases (no dated suffix) always resolve to the
+    #: latest snapshot. Any string still passes through to the API.
+    KNOWN_MODELS: ClassVar[tuple[str, ...]] = (
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-haiku-4-5",
+    )
+
     name: str = "anthropic"
     base_url: str = "https://api.anthropic.com"
-    default_model: str = "claude-sonnet-4-20250514"
+    default_model: str = "claude-sonnet-5"
     max_tokens: int = 4096
+
+    def list_models(self) -> list[str]:
+        """Current Claude model strings — no network call, no API key."""
+        return list(self.KNOWN_MODELS)
 
     def generate(
         self, *, model: str, prompt: str, timeout_seconds: int = 120

@@ -24,7 +24,7 @@ from textual.widgets import Button, Input, Select, Static
 from circuitry.adapters.base import GenerateResult
 from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.runtime_shim import RunRequest, RunResult
-from circuitry.tui.launch import NO_OVERRIDE, OrchestrationChoice
+from circuitry.tui.launch import CUSTOM_MODEL, NO_OVERRIDE, OrchestrationChoice
 from circuitry.tui.run_view import CANCELLED, DONE, FAILED, RunScreen
 from circuitry.tui.screens import VIEWS
 
@@ -140,10 +140,12 @@ def test_selecting_an_orchestration_generates_its_typed_form(
 
     async def scenario(pilot: Pilot[Any]) -> tuple[list[str], list[str], list[str]]:
         screen = await _open(pilot, _screen(path))
-        boxes = screen.query(Input).results(Input)
+        # Scoped to the generated form: the setup pane also holds the
+        # model dropdown's free-text box.
+        boxes = list(screen.query("#run-form Input").results(Input))
         return (
             [spec.label for spec, _ in screen._fields],
-            [box.value for box in screen.query(Input).results(Input)],
+            [box.value for box in boxes],
             [box.placeholder for box in boxes],
         )
 
@@ -351,8 +353,15 @@ def test_dropdowns_offer_configured_adapters_and_models(
 
     adapters, models = run_app(scenario)
     assert adapters == [NO_OVERRIDE, "ollama", "openai"]
-    # The orchestration's own model joins the configured ones.
-    assert models == [NO_OVERRIDE, "echo-1", "gpt-4o-mini", "llama3.1:8b"]
+    # The orchestration's own model joins the configured ones, and the
+    # free-text escape hatch is always last.
+    assert models == [
+        NO_OVERRIDE,
+        "echo-1",
+        "gpt-4o-mini",
+        "llama3.1:8b",
+        CUSTOM_MODEL,
+    ]
 
 
 def test_chosen_overrides_ride_along_on_the_request(run_app: Any, tmp_path: Path) -> None:
@@ -401,6 +410,142 @@ def test_leaving_the_dropdowns_alone_overrides_nothing(
     run_app(scenario)
     assert captured[0].adapter_override is None
     assert captured[0].model_override is None
+
+
+# -- adapter-reported models -------------------------------------------------
+
+
+def _model_values(screen: RunScreen) -> list[Any]:
+    return [value for _, value in screen.query_one("#run-model", Select)._options]
+
+
+def test_picking_an_adapter_fills_the_model_dropdown(
+    run_app: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The demo: select ollama, see the tags this machine actually has."""
+    monkeypatch.setattr(
+        "circuitry.tui.launch.list_adapter_models",
+        lambda *, adapter_name, runtime: ["gpt-oss:20b", "phi3:mini"],
+    )
+    path = _write(tmp_path, TWO_INPUTS)
+
+    async def scenario(pilot: Pilot[Any]) -> tuple[list[Any], str]:
+        screen = await _open(pilot, _screen(path))
+        screen.query_one("#run-adapter", Select).value = "ollama"
+        await _settle(pilot, lambda: "gpt-oss:20b" in _model_values(screen))
+        note = str(screen.query_one("#run-model-note", Static).render())
+        return _model_values(screen), note
+
+    values, note = run_app(scenario)
+    # Adapter-reported tags merge with the config/orchestration-derived ones.
+    assert values == [NO_OVERRIDE, "echo-1", "gpt-oss:20b", "phi3:mini", CUSTOM_MODEL]
+    assert "2 models from ollama" in note
+
+
+def test_an_adapter_that_reports_nothing_leaves_the_list_alone(
+    run_app: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing hook or an unreachable daemon degrades, never errors."""
+
+    def nothing(*, adapter_name: str, runtime: dict[str, Any]) -> list[str]:
+        return []
+
+    monkeypatch.setattr("circuitry.tui.launch.list_adapter_models", nothing)
+    path = _write(tmp_path, TWO_INPUTS)
+
+    async def scenario(pilot: Pilot[Any]) -> tuple[list[Any], str, bool]:
+        screen = await _open(pilot, _screen(path))
+        screen.query_one("#run-adapter", Select).value = "openai"
+        await _settle(
+            pilot,
+            lambda: "did not report"
+            in str(screen.query_one("#run-model-note", Static).render()),
+        )
+        return (
+            _model_values(screen),
+            str(screen.query_one("#run-model-note", Static).render()),
+            bool(pilot.app.is_running),
+        )
+
+    values, note, running = run_app(scenario)
+    assert values == [NO_OVERRIDE, "echo-1", CUSTOM_MODEL]
+    assert "openai did not report any models" in note
+    assert running
+
+
+def test_a_slow_answer_for_a_stale_adapter_is_dropped(
+    run_app: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The user moved on; a late reply must not repopulate the dropdown."""
+    monkeypatch.setattr(
+        "circuitry.tui.launch.list_adapter_models",
+        lambda *, adapter_name, runtime: [],
+    )
+    path = _write(tmp_path, TWO_INPUTS)
+
+    async def scenario(pilot: Pilot[Any]) -> list[Any]:
+        screen = await _open(pilot, _screen(path))
+        screen.query_one("#run-adapter", Select).value = "openai"
+        await pilot.pause()
+        screen.post_message(screen.AdapterModelsLoaded("ollama", ["ghost:7b"]))
+        await pilot.pause()
+        await pilot.pause()
+        return _model_values(screen)
+
+    assert "ghost:7b" not in run_app(scenario)
+
+
+def test_custom_swaps_the_dropdown_for_a_box_and_threads_the_value(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """The escape hatch: any string, exactly like ``--model``."""
+    path = _write(tmp_path, TWO_INPUTS)
+    captured: list[RunRequest] = []
+
+    def runner(request: RunRequest) -> RunResult:
+        captured.append(request)
+        return RunResult(ok=True, state={}, warnings=[])
+
+    async def scenario(pilot: Pilot[Any]) -> tuple[bool, bool]:
+        screen = await _open(pilot, _screen(path, runner=runner))
+        _fill(screen, text="hello")
+        screen.query_one("#run-model", Select).value = CUSTOM_MODEL
+        await pilot.pause()
+        box = screen.query_one("#run-model-custom", Input)
+        hidden = screen.query_one("#run-model", Select).has_class("hidden")
+        box.value = "gpt-oss:20b"
+        screen.action_launch()
+        await _settle(pilot, lambda: screen.last_result is not None)
+        return hidden, box.has_class("hidden")
+
+    select_hidden, box_hidden = run_app(scenario)
+    assert select_hidden and not box_hidden
+    assert captured[0].model_override == "gpt-oss:20b"
+
+
+def test_an_empty_custom_box_gives_the_dropdown_back(
+    run_app: Any, tmp_path: Path
+) -> None:
+    path = _write(tmp_path, TWO_INPUTS)
+
+    async def scenario(pilot: Pilot[Any]) -> tuple[bool, Any, Any]:
+        screen = await _open(pilot, _screen(path))
+        screen.query_one("#run-model", Select).value = CUSTOM_MODEL
+        await pilot.pause()
+        box = screen.query_one("#run-model-custom", Input)
+        box.post_message(Input.Submitted(box, ""))
+        await pilot.pause()
+        await pilot.pause()
+        return (
+            screen.query_one("#run-model", Select).has_class("hidden"),
+            screen.query_one("#run-model", Select).value,
+            screen._model_override(),
+        )
+
+    select_hidden, value, override = run_app(scenario)
+    assert not select_hidden
+    assert value == NO_OVERRIDE
+    assert override is None
 
 
 # -- failure reporting -------------------------------------------------------

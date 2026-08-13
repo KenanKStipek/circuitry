@@ -18,6 +18,7 @@ from .litellm import LiteLLMAdapter
 from .llamacpp import LlamaCppAdapter
 from .lmstudio import LMStudioAdapter
 from .mistral import MistralAdapter
+from .models import ModelLister, call_list_models, list_adapter_models
 from .nvidia_nim import NvidiaNimAdapter
 from .ollama import OllamaAdapter
 from .openai import OpenAIAdapter
@@ -66,5 +67,8 @@ __all__ = [
     "AzureOpenAIAdapter",
     "ReplicateAdapter",
     "WatsonXAdapter",
+    "ModelLister",
+    "call_list_models",
+    "list_adapter_models",
     "validate_generate_result",
 ]

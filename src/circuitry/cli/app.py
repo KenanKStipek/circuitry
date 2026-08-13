@@ -784,7 +784,10 @@ def run_library_cmd(
 
 @app.command(
     "list",
-    help="List available bundled orchestrations (or compiled-in extensions with --extensions).",
+    help=(
+        "List available bundled orchestrations (compiled-in extensions with "
+        "--extensions, an adapter's models with --models <adapter>)."
+    ),
 )
 def list_cmd(
     category: Optional[str] = typer.Option(
@@ -799,6 +802,12 @@ def list_cmd(
         "-x",
         help="List compiled-in adapters / tool plugins / runtime plugins with allowlist status.",
     ),
+    models: Optional[str] = typer.Option(
+        None,
+        "--models",
+        "-M",
+        help="List the models an adapter offers (e.g. --models ollama). Same data the TUI's model picker uses.",
+    ),
     source: Optional[str] = typer.Option(
         None, "--source", "-S", help="Only list entries from this library source."
     ),
@@ -806,6 +815,10 @@ def list_cmd(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
 ):
+    if models is not None:
+        _list_models(adapter_name=models, json_out=json_out, config_path=config)
+        return
+
     if extensions:
         _list_extensions(json_out=json_out, config_path=config)
         return
@@ -878,6 +891,59 @@ def list_cmd(
     console.print()
     console.print("[dim]Run with:[/dim] cof run <name> [dim](e.g.[/dim] cof run hello -e name=World[dim])[/dim]")
     console.print("[dim]Backends: [green]available[/green] [red]not detected[/red][/dim]")
+
+
+def _list_models(
+    *, adapter_name: str, json_out: bool, config_path: Optional[Path]
+) -> None:
+    """Render the models one adapter offers — CLI parity with the TUI picker.
+
+    Adapters answer optionally (see ``circuitry.adapters.models``): an
+    adapter that cannot enumerate, or a backend that is not running,
+    reports nothing rather than failing. Only an unknown adapter name is
+    an error — that one is a typo, not a missing daemon.
+    """
+    from ..adapters.factory import ADAPTER_REGISTRY
+    from ..adapters.models import list_adapter_models
+
+    name = (adapter_name or "").strip().lower()
+    if name not in ADAPTER_REGISTRY:
+        known = ", ".join(sorted(ADAPTER_REGISTRY))
+        if json_out:
+            console.print_json(
+                json.dumps({"adapter": name, "error": "unknown adapter", "models": []})
+            )
+        else:
+            console.print(f"[red]Error:[/red] Unknown adapter: {adapter_name}")
+            console.print(f"[dim]Known adapters: {known}[/dim]")
+        raise typer.Exit(code=1)
+
+    cfg = resolve_config(explicit_path=config_path)
+    names = list_adapter_models(adapter_name=name, runtime=cfg.runtime or {})
+
+    if json_out:
+        console.print_json(
+            json.dumps({"adapter": name, "models": names}, ensure_ascii=False)
+        )
+        return
+
+    if not names:
+        console.print(f"[yellow]No models reported by {name}.[/yellow]")
+        console.print(
+            "[dim]The adapter may not enumerate models, or its backend may not "
+            "be reachable — run `cof doctor`. Any model string still works with "
+            "`cof run --model <name>`.[/dim]"
+        )
+        return
+
+    _print_header(f"Circuitry · Models · {name}")
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Model", style="bold")
+    for model_name in names:
+        table.add_row(model_name)
+    console.print(table)
+    console.print()
+    console.print(f"[dim]Run with:[/dim] cof run <name> --adapter {name} --model <model>")
 
 
 def _list_extensions(*, json_out: bool, config_path: Optional[Path]) -> None:

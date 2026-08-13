@@ -38,6 +38,19 @@ from .base import GenerateResult
 
 _TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled"})
 
+#: Tier names expo seeds a deployment with. Suggestions only — expo's
+#: ``tier_service`` is the authority, a deployment can define others, and
+#: ``valid_tiers`` in config supersedes this list when set.
+SEED_TIERS: tuple[str, ...] = (
+    "cheap",
+    "fast-cheap",
+    "fast",
+    "good-cheap",
+    "good",
+    "good-fast",
+    "alpha",
+)
+
 
 def _resolve_tier(
     model: str, default_tier: str, valid_tiers: tuple[str, ...] = ()
@@ -183,6 +196,16 @@ class CyberdinerAdapter:
             tokens_sent=None,
             tokens_received=None,
         )
+
+    def list_models(self) -> list[str]:
+        """Tier names to offer as ``model:`` values.
+
+        The configured ``valid_tiers`` when set — that is this
+        deployment's own vocabulary — else the seed names. No network
+        call: expo has no tier-listing endpoint, and a picker should not
+        need a token to show suggestions.
+        """
+        return list(self.valid_tiers) if self.valid_tiers else list(SEED_TIERS)
 
     def check(self) -> CheckResult:
         missing: list[str] = []

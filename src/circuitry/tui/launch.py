@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from ..adapters.factory import ADAPTER_REGISTRY
+from ..adapters.models import list_adapter_models
 from ..cli.config import CircuitryConfig
 from ..cli.orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
 from ..cli.registry import load_index, resolve_bundled
@@ -30,6 +31,7 @@ from ..cli.runtime_shim import run as shim_run
 
 __all__ = [
     "CANCEL_MESSAGE",
+    "CUSTOM_MODEL",
     "INPUT_TYPES",
     "NO_OVERRIDE",
     "InputError",
@@ -38,6 +40,7 @@ __all__ = [
     "OrchestrationForm",
     "RunCancelled",
     "RunSession",
+    "adapter_models",
     "adapter_options",
     "build_initial_state",
     "coerce_input",
@@ -51,6 +54,11 @@ __all__ = [
 
 #: Sentinel option for the adapter/model dropdowns: leave resolution alone.
 NO_OVERRIDE = "—"
+
+#: Sentinel option on the model dropdown that swaps it for a free-text
+#: box. A curated list can always be wrong about the one model you want;
+#: this keeps the TUI at parity with ``cof run --model <anything>``.
+CUSTOM_MODEL = "custom…"
 
 #: Error text a cancelled run surfaces through ``RunResult.error``.
 CANCEL_MESSAGE = "Run cancelled by request."
@@ -376,8 +384,18 @@ def adapter_options(cfg: CircuitryConfig) -> list[str]:
     return sorted(configured - _UNSELECTABLE_ADAPTERS)
 
 
-def model_options(cfg: CircuitryConfig, orch: dict[str, Any] | None = None) -> list[str]:
-    """Models named anywhere in config or in the selected orchestration."""
+def model_options(
+    cfg: CircuitryConfig,
+    orch: dict[str, Any] | None = None,
+    extra: Iterable[str] = (),
+) -> list[str]:
+    """Models named anywhere in config or in the selected orchestration.
+
+    ``extra`` folds in whatever an adapter reported from
+    :func:`~circuitry.adapters.models.call_list_models` — the installed
+    Ollama tags, a tier list — so the dropdown offers what the machine
+    actually has, not only what the config happens to mention.
+    """
     models: set[str] = set()
     if cfg.default_model:
         models.add(cfg.default_model.strip())
@@ -392,7 +410,21 @@ def model_options(cfg: CircuitryConfig, orch: dict[str, Any] | None = None) -> l
         model = orch.get("model")
         if isinstance(model, str) and model.strip():
             models.add(model.strip())
+    models.update(name.strip() for name in extra if name and name.strip())
     return sorted(models)
+
+
+def adapter_models(cfg: CircuitryConfig, adapter_name: str | None) -> list[str]:
+    """Models the named adapter offers, or ``[]`` — never raises.
+
+    Called from a worker thread: ``ollama`` reaches out to its local
+    daemon, and even a two-second connect is two seconds the UI thread
+    must not spend.
+    """
+    name = (adapter_name or "").strip().lower()
+    if not name or name in _UNSELECTABLE_ADAPTERS:
+        return []
+    return list_adapter_models(adapter_name=name, runtime=cfg.runtime or {})
 
 
 # -- the run session ---------------------------------------------------------

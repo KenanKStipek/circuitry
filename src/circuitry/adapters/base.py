@@ -16,6 +16,19 @@ class GenerateResult:
 
 
 class Adapter(Protocol):
+    """What every adapter must provide.
+
+    Two hooks are *optional* and therefore live outside this Protocol, so
+    adapters written before they existed keep type-checking and running:
+
+      * ``check() -> CheckResult`` — see :func:`circuitry.preflight.call_check`
+      * ``list_models() -> list[str]`` — see
+        :func:`circuitry.adapters.models.call_list_models` and the
+        :class:`~circuitry.adapters.models.ModelLister` structural type
+
+    Call both through their shims, never directly.
+    """
+
     @property
     def name(self) -> str: ...
 
