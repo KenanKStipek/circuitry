@@ -314,7 +314,7 @@ def test_list_entries_filtered_by_source(tmp_path: Path) -> None:
 
 
 def test_unknown_source_type_is_rejected() -> None:
-    cfg = CircuitryConfig(runtime={"library": {"sources": [{"type": "github"}]}})
+    cfg = CircuitryConfig(runtime={"library": {"sources": [{"type": "gopher"}]}})
     with pytest.raises(LibrarySourceError, match="Unknown library source type"):
         LibraryRegistry.from_config(cfg)
 
