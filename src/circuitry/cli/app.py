@@ -17,6 +17,7 @@ from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, resolve_config
 from .doctor import register_doctor
 from .library_sources import (
     Entry,
+    LibraryFetchError,
     LibraryRegistry,
     LibrarySourceError,
     build_registry,
@@ -191,6 +192,12 @@ def _warn(message: str) -> None:
     console.print(f"[yellow]Warning:[/yellow] {message}")
 
 
+def _print_source_notices(registry: LibraryRegistry) -> None:
+    """Surface "not fetched yet" hints so a miss points at the right fix."""
+    for message in registry.notices():
+        _warn(message)
+
+
 def _lookup_entry(registry: LibraryRegistry, name: str) -> Entry | None:
     """Find an entry by bare or source-qualified name, warning on ambiguity."""
     resolution = registry.resolve(name)
@@ -358,13 +365,15 @@ def run_cmd(
         raise typer.Exit(code=1)
 
     # Resolve orchestration: local file path > library source name
+    run_registry = _library_registry(config)
     orch_path = _resolve_orchestration(
         orchestration,
-        registry=_library_registry(config),
+        registry=run_registry,
         on_warning=_warn,
     )
     if orch_path is None:
         console.print(f"[red]Error:[/red] Orchestration not found: {orchestration}")
+        _print_source_notices(run_registry)
         console.print("[dim]Tip: run [bold]cof list[/bold] to see available orchestrations.[/dim]")
         raise typer.Exit(code=1)
 
@@ -742,6 +751,11 @@ def list_cmd(
 
     show_source = registry.is_multi_source
     library_entries = registry.list_entries(source=source)
+    if not json_out:
+        # A remote source with an empty cache is *not* an error — it just has
+        # nothing to show until `cof library refresh` runs.
+        for message in registry.notices(source=source):
+            _warn(message)
     if not library_entries:
         console.print("[yellow]No bundled orchestrations found.[/yellow]")
         raise typer.Exit(code=1)
@@ -891,6 +905,7 @@ def info_cmd(
     found = _lookup_entry(registry, name)
     if found is None:
         console.print(f"[red]Error:[/red] Orchestration not found: {name}")
+        _print_source_notices(registry)
         console.print("[dim]Run [bold]cof list[/bold] to see available orchestrations.[/dim]")
         raise typer.Exit(code=1)
 
@@ -974,6 +989,68 @@ def eject_cmd(
     write_ejected(bundled_path.read_text(encoding="utf-8"), dest)
     console.print(f"[green]Ejected:[/green] {dest}")
     console.print(f"[dim]Edit freely — this is your local copy. Run with: cof run {dest}[/dim]")
+
+
+library_app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="Manage library sources (`runtime.library.sources`).",
+)
+app.add_typer(library_app, name="library")
+
+
+@library_app.command(
+    "refresh",
+    help="Fetch remote library sources into the local cache. This is the only "
+    "command that touches the network for a library source.",
+)
+def library_refresh_cmd(
+    source: Optional[str] = typer.Argument(
+        None, help="Source to refresh. Omit to refresh every configured source."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Output machine-readable JSON only."),
+    config: Optional[Path] = typer.Option(
+        None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
+    ),
+):
+    registry = _library_registry(config)
+    if source is not None and registry.get_source(source) is None:
+        known = ", ".join(registry.source_names)
+        console.print(f"[red]Error:[/red] Unknown library source: {source}")
+        console.print(f"[dim]Configured sources: {known}[/dim]")
+        raise typer.Exit(code=1)
+
+    if not json_out:
+        _print_header("Circuitry · Library refresh")
+
+    results: list[dict[str, Any]] = []
+    failed = False
+    for candidate in registry.sources:
+        if source is not None and candidate.name != source:
+            continue
+        try:
+            outcome = registry.refresh(source=candidate.name)[0]
+        except LibraryFetchError as exc:
+            failed = True
+            results.append({"source": candidate.name, "status": "error", "error": str(exc)})
+            if not json_out:
+                console.print(f"[red]Error:[/red] {exc}")
+            continue
+        results.append(
+            {
+                "source": outcome.source,
+                "status": outcome.status,
+                "sha": outcome.sha,
+                "detail": outcome.detail,
+            }
+        )
+        if not json_out:
+            colour = {"updated": "green", "unchanged": "cyan"}.get(outcome.status, "dim")
+            console.print(f"[{colour}]{outcome.summary()}[/{colour}]")
+
+    if json_out:
+        console.print_json(json.dumps(results, ensure_ascii=False))
+    raise typer.Exit(code=1 if failed else 0)
 
 
 @app.command(
