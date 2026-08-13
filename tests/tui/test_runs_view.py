@@ -44,6 +44,7 @@ def _screen(
     *,
     store: StateStore | None = None,
     last_run: LastRun | None = NO_LAST_RUN,
+    last_run_path: Path | None = None,
     runner: Any = None,
     config: CircuitryConfig | None = None,
 ) -> RunsScreen:
@@ -51,6 +52,7 @@ def _screen(
         RUNS_SPEC,
         store=store if store is not None else StateStore(),
         last_run=last_run,
+        last_run_path=last_run_path,
         runner=runner,
         config=config,
     )
@@ -187,6 +189,37 @@ def test_the_cursor_stays_put_across_a_live_repaint(run_app: Any) -> None:
 
     before, after = run_app(scenario)
     assert before == after == "prime.draft.value"
+
+
+def test_an_expanded_node_stays_expanded_across_a_live_repaint(run_app: Any) -> None:
+    """Reading down into a value mid-run must not be undone by the next snapshot."""
+    store = StateStore()
+    store.begin(label="demo.yml")
+    store.publish({"prime": {"draft": {"value": "first"}}})
+
+    def expanded(screen: RunsScreen) -> set[str]:
+        tree = screen.query_one("#runs-tree", Tree)
+        found: set[str] = set()
+        stack = list(tree.root.children)
+        while stack:
+            node = stack.pop()
+            if node.is_expanded and node.data:
+                found.add(str(node.data))
+            stack.extend(node.children)
+        return found
+
+    async def scenario(pilot: Pilot[Any]) -> tuple[set[str], set[str]]:
+        screen = await _open(pilot, _screen(store=store))
+        _highlight(screen, "prime.draft.value")
+        await pilot.pause()
+        before = expanded(screen)
+        store.publish({"prime": {"draft": {"value": "first"}, "polish": {"value": "next"}}})
+        await _settle(pilot)
+        return before, expanded(screen)
+
+    before, after = run_app(scenario)
+    assert "prime.draft" in before
+    assert "prime.draft" in after
 
 
 def test_a_run_launched_from_the_run_view_is_inspectable_here(
@@ -433,9 +466,13 @@ def test_replay_refuses_a_run_that_stashed_redacted_secrets(
     assert not called
 
 
-def test_replay_says_so_when_there_is_nothing_stashed(run_app: Any) -> None:
+def test_replay_says_so_when_there_is_nothing_stashed(run_app: Any, tmp_path: Path) -> None:
+    # Read a stash path that does not exist rather than injecting the answer:
+    # this is the "no last-run.json on this machine" case end to end.
     async def scenario(pilot: Pilot[Any]) -> str:
-        screen = await _open(pilot, _screen(last_run=None))
+        screen = await _open(
+            pilot, _screen(last_run=None, last_run_path=tmp_path / "last-run.json")
+        )
         screen.action_replay()
         await pilot.pause()
         return screen.status_text
