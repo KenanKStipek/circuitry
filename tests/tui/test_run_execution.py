@@ -424,6 +424,33 @@ def test_the_view_is_live_and_input_still_lands_mid_run(
     assert "polish" in final
 
 
+def test_navigating_away_mid_run_does_not_break_anything(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """The run outlives the screen; the repaint must not chase the widgets."""
+    gate = GateAdapter()
+
+    async def scenario(pilot: Pilot[Any]) -> tuple[Any, str]:
+        screen = await _open(pilot, _screen(_write(tmp_path, CHAIN), adapter=gate))
+        screen.query_one("#run-launch", Button).press()
+        await _settle(pilot, gate.entered.is_set)
+        await pilot.app.pop_screen()
+        await pilot.pause()
+        gate.release.set()
+        session = screen._session
+        assert session is not None
+        await _settle(pilot, lambda: session.result is not None)
+        # Whatever the timer does now, it must not take the app with it.
+        await pilot.pause()
+        await pilot.press("q")
+        await pilot.pause()
+        return session.result, screen.tree_text
+
+    result, tree = run_app(scenario)
+    assert result is not None and result.ok
+    assert "draft" in tree
+
+
 def test_picking_another_orchestration_redraws_the_tree(
     run_app: Any, tmp_path: Path
 ) -> None:

@@ -38,21 +38,7 @@ from textual.widgets import Button, Input, Label, Select, Static
 
 from ..cli.config import CircuitryConfig, resolve_config
 from ..cli.runtime_shim import RunRequest, RunResult
-from .execution import (
-    DONE as EFFECT_DONE,
-)
-from .execution import (
-    FAILED as EFFECT_FAILED,
-)
-from .execution import (
-    PENDING as EFFECT_PENDING,
-)
-from .execution import (
-    RUNNING as EFFECT_RUNNING,
-)
-from .execution import (
-    SKIPPED as EFFECT_SKIPPED,
-)
+from . import execution
 from .execution import (
     ExecNode,
     PlanNode,
@@ -103,13 +89,14 @@ NO_TREE = "No orchestration picked — the effect tree appears here."
 #: tick; anything the user types is handled in the gaps.
 REFRESH_SECONDS = 0.1
 
-#: Row colour per effect status.
+#: Row colour per effect status. Keyed off :mod:`circuitry.tui.execution`'s
+#: names rather than this module's same-spelled run states.
 _STATUS_STYLES: dict[str, str] = {
-    EFFECT_PENDING: "dim",
-    EFFECT_RUNNING: "bold yellow",
-    EFFECT_DONE: "green",
-    EFFECT_FAILED: "bold red",
-    EFFECT_SKIPPED: "dim italic",
+    execution.PENDING: "dim",
+    execution.RUNNING: "bold yellow",
+    execution.DONE: "green",
+    execution.FAILED: "bold red",
+    execution.SKIPPED: "dim italic",
 }
 
 
@@ -543,7 +530,13 @@ class RunScreen(ViewScreen):
             # the first snapshot lands only once the first effect does.
             running=True if self._in_flight else None,
         )
-        self._totals = totals_for(self._exec_nodes, self._run_state, elapsed=self._elapsed())
+        self._totals = totals_for(
+            self._exec_nodes, self._run_state, elapsed=self._elapsed()
+        )
+        if not self.is_mounted:
+            # A run outlives the screen when the user navigates away; the
+            # model still tracks it, there is just nothing to draw on.
+            return
         lines = render_lines(self._exec_nodes)
         tree = self.query_one("#run-tree", Static)
         tree.update(_tree_text(lines) if lines else Text(NO_TREE, style="dim"))
