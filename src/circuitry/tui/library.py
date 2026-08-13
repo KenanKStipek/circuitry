@@ -670,6 +670,8 @@ class LibraryScreen(ViewScreen):
         self.notice = warning
         self.stale = ""
         self.refreshing = False
+        self._notices: list[tuple[str, str]] = []
+        self._reload_notices()
 
     # -- composition ---------------------------------------------------------
 
@@ -792,9 +794,25 @@ class LibraryScreen(ViewScreen):
         )
         detail.update("\n".join(detail_lines(entry, provenance)))
 
+    def _reload_notices(self) -> None:
+        """Re-read the sources' notices, keyed by source.
+
+        Cached rather than asked for on every repaint: a notice is answered
+        from a source's cache index (a file read), and the banner is repainted
+        on every keystroke. Only a refresh can change the answer.
+        """
+        self._notices = [
+            (name, message)
+            for name in self.registry.source_names
+            for message in self.registry.notices(source=name)
+        ]
+
     def _refresh_banner(self) -> None:
         banner = self.query_one("#library-banner", Static)
-        text = banner_text(self.registry.notices(source=self.source), self.stale)
+        notices = [
+            message for name, message in self._notices if self.source in (None, name)
+        ]
+        text = banner_text(notices, self.stale)
         banner.display = bool(text)
         banner.update(text)
 
@@ -959,6 +977,7 @@ class LibraryScreen(ViewScreen):
         """
         self.refreshing = False
         self.entries = load_entries(self.registry)
+        self._reload_notices()
         self.stale = stale_banner(list(failures))
         # A fetch can add or remove categories, so the tree is rebuilt and its
         # cursor lands back on the root; the filter follows it rather than
