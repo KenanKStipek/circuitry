@@ -25,6 +25,7 @@ from circuitry.tui.launch import (
     InputField,
     OrchestrationChoice,
     RunSession,
+    adapter_models,
     adapter_options,
     build_initial_state,
     coerce_input,
@@ -284,6 +285,43 @@ def test_model_options_gather_config_and_orchestration_models() -> None:
         "gpt-4o-mini",
         "llama3.1:8b",
     ]
+
+
+def test_model_options_fold_in_what_an_adapter_reported() -> None:
+    """Adapter-reported models join the config-derived ones, sorted, deduped."""
+    cfg = CircuitryConfig(default_model="llama3.1:8b")
+    assert model_options(cfg, None, extra=["phi3:mini", " llama3.1:8b ", ""]) == [
+        "llama3.1:8b",
+        "phi3:mini",
+    ]
+
+
+def test_adapter_models_asks_the_named_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[dict[str, Any]] = []
+
+    def fake(*, adapter_name: str, runtime: dict[str, Any]) -> list[str]:
+        seen.append({"adapter": adapter_name, "runtime": runtime})
+        return ["phi3:mini"]
+
+    monkeypatch.setattr("circuitry.tui.launch.list_adapter_models", fake)
+    cfg = CircuitryConfig(runtime={"adapters": {"ollama": {"base_url": "http://x"}}})
+
+    assert adapter_models(cfg, "Ollama") == ["phi3:mini"]
+    assert seen[0]["adapter"] == "ollama"
+    assert seen[0]["runtime"] == cfg.runtime
+
+
+def test_adapter_models_skips_the_sentinel_and_unbuildable_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def explode(*, adapter_name: str, runtime: dict[str, Any]) -> list[str]:
+        raise AssertionError("should not be asked")
+
+    monkeypatch.setattr("circuitry.tui.launch.list_adapter_models", explode)
+    cfg = CircuitryConfig()
+    assert adapter_models(cfg, None) == []
+    assert adapter_models(cfg, "") == []
+    assert adapter_models(cfg, "host_claude") == []
 
 
 def test_overrides_outrank_the_orchestrations_own_settings(orchestration: Path) -> None:

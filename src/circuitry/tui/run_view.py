@@ -322,7 +322,7 @@ class RunScreen(ViewScreen):
                 id="run-model-custom",
                 classes="hidden",
             ),
-            Static("", id="run-model-note", classes="view-note"),
+            Static("", id="run-model-note", classes="view-note hidden"),
             Horizontal(
                 Button("Launch", variant="primary", id="run-launch"),
                 Button("Cancel run", id="run-cancel", disabled=True),
@@ -457,7 +457,10 @@ class RunScreen(ViewScreen):
             self._model_note(NO_ADAPTER_MODELS.format(adapter=message.adapter))
 
     def _model_note(self, text: str) -> None:
-        self.query_one("#run-model-note", Static).update(text)
+        """Say what the dropdown is doing — and take no room when silent."""
+        note = self.query_one("#run-model-note", Static)
+        note.update(text)
+        note.set_class(not text, "hidden")
 
     def _set_custom_model(self, on: bool) -> None:
         """Swap the dropdown for a free-text box, or put it back."""

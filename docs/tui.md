@@ -139,6 +139,21 @@ what happened.
    Adapter options come from the adapters you have configured, minus
    `host_claude`, which can only be injected at runtime.
 
+   Model options are whatever config and the selected orchestration name,
+   plus whatever the picked adapter reports from its optional
+   `list_models()` hook (see
+   [Adapter Conformance](./adapter-conformance.md)) — installed Ollama
+   tags, CyberDiner tiers, current Claude models. That question is asked
+   on a worker thread with a note under the dropdown while it is in
+   flight, so a sleeping daemon never freezes the UI; an adapter that
+   cannot answer just leaves the list as it was. The same data is
+   available from the CLI as `cof list --models <adapter>`.
+
+   No enumeration is complete, so the list always ends with `custom…`,
+   which swaps the dropdown for a free-text box that accepts any model
+   string — parity with `cof run --model`. Enter on an empty box gives
+   the dropdown back.
+
 `Tab` belongs to view navigation, so `Enter` is what walks the form: it moves
 to the next field and, from the last one, lands on Launch.
 
