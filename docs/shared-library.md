@@ -10,6 +10,12 @@ Publishing is intentionally out of scope for this repository.
 - This repository consumes/retrieves shared assets for execution.
 - Any local filesystem library here is a development/testing mirror, not the source-of-truth publishing workflow.
 
+> **Not to be confused with [library sources](./library-sources.md).**
+> `runtime.library.sources` configures where `cof list/info/run/eject` look up
+> orchestrations by name; the `backend` / `local_root` settings below configure
+> shared-asset retrieval (`cof fetch`, `cof run-library`). They share the
+> `runtime.library` namespace but no keys.
+
 ## Configuration
 
 Configure a library backend under `runtime.library`.
