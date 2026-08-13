@@ -160,7 +160,14 @@ def run(req: RunRequest) -> RunResult:
                     orchestration_path=str(req.orchestration_path)
                 )
                 if isinstance(persisted, dict):
-                    state = deepcopy(persisted)
+                    hydrated = deepcopy(persisted)
+                    if profile is not None and profile.inputs:
+                        # Profile inputs stay the lowest layer: they fill
+                        # keys the persisted snapshot doesn't carry rather
+                        # than overwriting resumed values.
+                        for key, value in profile.inputs.items():
+                            hydrated.setdefault(key, value)
+                    state = hydrated
                     loaded_from_persistence = True
             except Exception as e:
                 state.setdefault("runtime", {})
