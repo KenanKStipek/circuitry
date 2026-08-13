@@ -107,6 +107,8 @@ class ConditionalRuntime:
         from .loop import LoopDefinition, LoopRuntime
         from .prompt import PromptDefinition, PromptRuntime
         from .reflector import ReflectorDefinition, ReflectorRuntime
+        from .tool import ToolDefinition, ToolRuntime
+        from .use import UseDefinition, UseRuntime
 
         # Named decision: create a node for this conditional
         # Transparent control: effects merge directly into parent
@@ -257,6 +259,33 @@ class ConditionalRuntime:
                             timeout_seconds=self.timeout_seconds,
                             verbose=self.verbose,
                         ).execute(store=child_store)
+
+                    elif isinstance(effect, ToolDefinition):
+                        ToolRuntime(
+                            effect,
+                            runtime_config=self.runtime_config,
+                            dry_run=self.dry_run,
+                            timeout_seconds=self.timeout_seconds,
+                            verbose=self.verbose,
+                            depth=self.depth + 1,
+                            ancestors=self._ancestors,
+                        ).execute(store=child_store, ctx=ctx)
+
+                    elif isinstance(effect, UseDefinition):
+                        UseRuntime(
+                            effect,
+                            adapter=self.adapter,
+                            model=self.model,
+                            runtime_config=self.runtime_config,
+                            dry_run=self.dry_run,
+                            timeout_seconds=self.timeout_seconds,
+                            verbose=self.verbose,
+                            depth=self.depth + 1,
+                            ancestors=self._ancestors,
+                        ).execute(store=child_store, ctx=ctx)
+
+                    else:
+                        raise TypeError(f"Unsupported effect type: {type(effect)}")
 
                     if self.verbose and not is_prompt:
                         elapsed = time.monotonic() - t0
