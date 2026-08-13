@@ -164,6 +164,10 @@ cof run hello -e name=World --live-state ./state.live.json
 # Apply a named profile (run-level defaults + per-effect model/provider overrides)
 cof run recipe --profile fast
 
+# Override the adapter/model for a single run (highest-priority layer)
+cof run learn/hello -e name=World --model gpt-oss:20b
+cof run learn/hello -e name=World --adapter ollama --model llama3.1:8b
+
 # Browse, inspect, and eject orchestrations
 cof list                          # bundled orchestrations
 cof list --extensions             # compiled-in adapters / tool plugins / runtime plugins
@@ -231,11 +235,18 @@ The plain `cof run …` CLI continues to work as-is. The MCP server is a strict 
 
 Circuitry uses layered config resolution (highest priority wins):
 
-1. CLI flags (`--config`, inline `-e`)
-2. Environment variables (`CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER`, `CIRCUITRY_ADAPTER_URL`, `CIRCUITRY_COMFYUI_URL`)
-3. Project-local config (`circuitry.config.json` or `config.json` in cwd)
-4. Global config (`~/.config/circuitry/config.json`)
-5. Sane defaults (ollama at localhost:11434, comfyui at localhost:8188)
+1. CLI flags (`--adapter`, `--model`, `--config`, inline `-e`)
+2. `--profile` (see [docs/profiles.md](docs/profiles.md))
+3. The orchestration's own `adapter:` / `model:` / `runtime:`
+4. Environment variables (`CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER`, `CIRCUITRY_ADAPTER_URL`, `CIRCUITRY_COMFYUI_URL`)
+5. Project-local config (`circuitry.config.json` or `config.json` in cwd)
+6. Global config (`~/.config/circuitry/config.json`)
+7. Sane defaults (ollama at localhost:11434, comfyui at localhost:8188)
+
+Environment variables overlay the config-file layer, so both `--adapter`/`--model`
+and a profile outrank them. Where each value came from is recorded per run in
+`runtime.effective_settings.sources` (`cli`, `profile`, `orchestration`, `config`,
+`default`).
 
 ```json
 {
