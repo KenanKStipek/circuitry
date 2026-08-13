@@ -71,6 +71,9 @@ class RunRequest:
     live_state_path: Optional[Path] = None
     adapter: Optional[Adapter] = None
     state_observer: Optional[Callable[[dict[str, Any]], None]] = None
+    # Per-effect completion notifications: ``(effect_path, effect_node)``,
+    # the same payload runtime plugins receive from ``on_effect_complete``.
+    effect_observer: Optional[Callable[[str, dict[str, Any]], None]] = None
     skip_preflight: bool = False
     # Caller-level overrides, ranked above the orchestration's own
     # ``adapter``/``model`` (the ``cli`` tier of resolve_effective_settings).
@@ -344,8 +347,10 @@ def run(req: RunRequest) -> RunResult:
 
         # Story 2: per-effect lifecycle hook. Fires after each effect's
         # node["value"] is finalized. Skipped silently for plugins that
-        # don't implement on_effect_complete.
-        effect_complete_cb: Optional[Callable[[str, dict[str, Any]], None]] = None
+        # don't implement on_effect_complete. ``req.effect_observer`` rides
+        # the same hook, which is how a live UI learns an effect landed
+        # without diffing whole state snapshots.
+        effect_observers: list[Callable[[str, dict[str, Any]], None]] = []
         if plugins:
             _plugin_ctx = PluginContext(
                 run_id=run_id,
@@ -355,7 +360,7 @@ def run(req: RunRequest) -> RunResult:
                 runtime_config=effective.runtime,
             )
 
-            def effect_complete_cb(  # type: ignore[no-redef]
+            def _notify_plugins(
                 effect_path: str, effect_result: dict[str, Any]
             ) -> None:
                 invoke_plugins(
@@ -366,6 +371,22 @@ def run(req: RunRequest) -> RunResult:
                     effect_path=effect_path,
                     effect_result=effect_result,
                 )
+
+            effect_observers.append(_notify_plugins)
+        if req.effect_observer is not None:
+            effect_observers.append(req.effect_observer)
+
+        effect_complete_cb: Optional[Callable[[str, dict[str, Any]], None]]
+        if not effect_observers:
+            effect_complete_cb = None
+        elif len(effect_observers) == 1:
+            effect_complete_cb = effect_observers[0]
+        else:
+            def effect_complete_cb(  # type: ignore[no-redef]
+                effect_path: str, effect_result: dict[str, Any]
+            ) -> None:
+                for observer in effect_observers:
+                    observer(effect_path, effect_result)
 
         store = Store(state, on_write=on_write, effect_complete=effect_complete_cb)
 
