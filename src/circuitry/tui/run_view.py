@@ -62,6 +62,7 @@ from .execution import (
     format_totals,
     plan_from_orchestration,
     render_lines,
+    render_text,
     totals_for,
 )
 from .launch import (
@@ -143,6 +144,21 @@ class RunScreen(ViewScreen):
         margin-top: 1;
     }
 
+    RunScreen #run-panes {
+        height: auto;
+    }
+
+    RunScreen #run-setup {
+        width: 3fr;
+        height: auto;
+        padding-right: 1;
+    }
+
+    RunScreen #run-execution {
+        width: 2fr;
+        height: auto;
+    }
+
     RunScreen #run-tree {
         height: auto;
         margin-top: 1;
@@ -157,6 +173,17 @@ class RunScreen(ViewScreen):
 
     RunScreen.-compact .form-label {
         margin-top: 0;
+    }
+
+    /* Side by side needs width; below the breakpoint the panes stack. */
+    RunScreen.-compact #run-panes {
+        layout: vertical;
+    }
+
+    RunScreen.-compact #run-setup,
+    RunScreen.-compact #run-execution {
+        width: 1fr;
+        padding-right: 0;
     }
     """
 
@@ -226,10 +253,11 @@ class RunScreen(ViewScreen):
         self._plan: tuple[PlanNode, ...] = ()
         self._run_state: dict[str, Any] = {}
         self._completed: set[str] = set()
-        self._nodes: tuple[ExecNode, ...] = ()
+        self._exec_nodes: tuple[ExecNode, ...] = ()
         self._totals = Totals()
         self._started_at: float | None = None
         self._final_elapsed: float | None = None
+        self._in_flight = False
         self._repaint: Any = None
 
     # -- composition ---------------------------------------------------------
@@ -237,39 +265,51 @@ class RunScreen(ViewScreen):
     def compose_body(self) -> ComposeResult:
         yield Static(self.spec.name, classes="view-title")
         yield Static(self.spec.blurb, classes="view-blurb")
-
-        yield Label("Orchestration", classes="form-label")
-        yield Select(
-            [(choice.option, choice.key) for choice in self._choices],
-            prompt="Pick an orchestration",
-            id="run-orchestration",
-        )
-
-        yield Vertical(id="run-form")
-
-        yield Label("Adapter", classes="form-label")
-        yield Select(
-            _override_options(adapter_options(self._config)),
-            value=NO_OVERRIDE,
-            allow_blank=False,
-            id="run-adapter",
-        )
-        yield Label("Model", classes="form-label")
-        yield Select(
-            _override_options(model_options(self._config)),
-            value=NO_OVERRIDE,
-            allow_blank=False,
-            id="run-model",
-        )
-
+        # Setup on the left, the run itself on the right — so launching
+        # does not scroll the controls away, and watching does not hide
+        # them. Below the breakpoint the two panes stack.
         yield Horizontal(
-            Button("Launch", variant="primary", id="run-launch"),
-            Button("Cancel run", id="run-cancel", disabled=True),
-            id="run-actions",
+            Vertical(*self._setup_pane(), id="run-setup"),
+            Vertical(*self._execution_pane(), id="run-execution"),
+            id="run-panes",
         )
-        yield Static(IDLE, id="run-status")
-        yield Static(NO_TREE, id="run-tree")
-        yield Static(format_totals(Totals()), id="run-footer")
+
+    def _setup_pane(self) -> list[Any]:
+        return [
+            Label("Orchestration", classes="form-label"),
+            Select(
+                [(choice.option, choice.key) for choice in self._choices],
+                prompt="Pick an orchestration",
+                id="run-orchestration",
+            ),
+            Vertical(id="run-form"),
+            Label("Adapter", classes="form-label"),
+            Select(
+                _override_options(adapter_options(self._config)),
+                value=NO_OVERRIDE,
+                allow_blank=False,
+                id="run-adapter",
+            ),
+            Label("Model", classes="form-label"),
+            Select(
+                _override_options(model_options(self._config)),
+                value=NO_OVERRIDE,
+                allow_blank=False,
+                id="run-model",
+            ),
+            Horizontal(
+                Button("Launch", variant="primary", id="run-launch"),
+                Button("Cancel run", id="run-cancel", disabled=True),
+                id="run-actions",
+            ),
+            Static(IDLE, id="run-status"),
+        ]
+
+    def _execution_pane(self) -> list[Any]:
+        return [
+            Static(NO_TREE, id="run-tree"),
+            Static(format_totals(Totals()), id="run-footer"),
+        ]
 
     # -- selection -----------------------------------------------------------
 
@@ -466,6 +506,7 @@ class RunScreen(ViewScreen):
         self._completed = set()
         self._started_at = None
         self._final_elapsed = None
+        self._in_flight = False
         self._paint()
 
     def _begin_execution(self) -> None:
@@ -474,12 +515,15 @@ class RunScreen(ViewScreen):
         self._completed = set()
         self._started_at = self._clock()
         self._final_elapsed = None
+        self._in_flight = True
         self._paint()
+        self.reveal_execution()
         if self._repaint is None:
             self._repaint = self.set_interval(REFRESH_SECONDS, self._paint)
 
     def _end_execution(self, result: RunResult) -> None:
         """Freeze the wall clock and draw the run's final state."""
+        self._in_flight = False
         if self._repaint is not None:
             self._repaint.stop()
             self._repaint = None
@@ -491,9 +535,16 @@ class RunScreen(ViewScreen):
 
     def _paint(self) -> None:
         """Rebuild the tree and footer from whatever is known right now."""
-        self._nodes = build_tree(self._plan, self._run_state, completed=self._completed)
-        self._totals = totals_for(self._nodes, self._run_state, elapsed=self._elapsed())
-        lines = render_lines(self._nodes)
+        self._exec_nodes = build_tree(
+            self._plan,
+            self._run_state,
+            completed=self._completed,
+            # The session is the authority on whether work is in flight:
+            # the first snapshot lands only once the first effect does.
+            running=True if self._in_flight else None,
+        )
+        self._totals = totals_for(self._exec_nodes, self._run_state, elapsed=self._elapsed())
+        lines = render_lines(self._exec_nodes)
         tree = self.query_one("#run-tree", Static)
         tree.update(_tree_text(lines) if lines else Text(NO_TREE, style="dim"))
         self.query_one("#run-footer", Static).update(format_totals(self._totals))
@@ -508,20 +559,44 @@ class RunScreen(ViewScreen):
     @property
     def execution_nodes(self) -> tuple[ExecNode, ...]:
         """The tree as last drawn (used by tests)."""
-        return self._nodes
+        return self._exec_nodes
 
     @property
     def totals(self) -> Totals:
         """The footer's aggregate numbers as last drawn (used by tests)."""
         return self._totals
 
-    def show_state(self, state: dict[str, Any]) -> None:
+    @property
+    def tree_text(self) -> str:
+        """The tree pane's rows as plain text, outliving the widget."""
+        return render_text(self._exec_nodes) if self._exec_nodes else NO_TREE
+
+    @property
+    def footer_text(self) -> str:
+        """The footer bar as plain text, outliving the widget."""
+        return format_totals(self._totals)
+
+    def reveal_execution(self) -> None:
+        """Scroll the tree into view — a launch is a request to watch it.
+
+        Done once per launch rather than on every repaint, so a user who
+        scrolls back up to the form is left alone.
+        """
+        try:
+            self.query_one("#run-tree", Static).scroll_visible(top=True, animate=False)
+        except Exception:  # noqa: BLE001 - a scroll is never worth an error
+            return
+
+    def show_state(self, state: dict[str, Any], *, elapsed: float | None = None) -> None:
         """Apply a state snapshot directly, without a run behind it.
 
         The scripted entry point: snapshot tests and embedders drive the
-        execution view with a state they wrote themselves.
+        execution view with a state they wrote themselves, pinning the
+        wall clock rather than reading it.
         """
         self._run_state = state
+        if elapsed is not None:
+            self._final_elapsed = elapsed
         self._paint()
 
     # -- small helpers -------------------------------------------------------

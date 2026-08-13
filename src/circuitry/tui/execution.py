@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
@@ -194,11 +194,17 @@ class ExecNode:
     on_error: str = ""
     #: Short annotation: the branch taken, the loop mode, the flow model.
     detail: str = ""
+    #: ``tree`` when this node runs its children in parallel.
+    flow: str = ""
     children: tuple[ExecNode, ...] = field(default_factory=tuple)
 
     @property
     def finished(self) -> bool:
         return self.status in (DONE, FAILED, SKIPPED)
+
+    @property
+    def parallel(self) -> bool:
+        return self.flow == "tree"
 
 
 def effect_scope(state: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -212,6 +218,7 @@ def build_tree(
     state: Mapping[str, Any] | None = None,
     *,
     completed: Iterable[str] = (),
+    running: bool | None = None,
 ) -> tuple[ExecNode, ...]:
     """Overlay a state snapshot on ``plan`` and return the rows to draw.
 
@@ -219,9 +226,61 @@ def build_tree(
     flow merges its children's state back only once every sibling lands,
     so those notifications are the only way to show a parallel sibling
     finishing ahead of its neighbours.
+
+    ``running`` overrides what the snapshot implies about the run being
+    in flight — a caller holding the run session knows before the first
+    snapshot arrives.
     """
-    scope = effect_scope(state or {})
-    return _nodes(plan, scope, set(completed), ROOT_KEY)
+    snapshot = state or {}
+    scope = effect_scope(snapshot)
+    nodes = _nodes(plan, scope, set(completed), ROOT_KEY)
+    root = _root_meta(scope)
+    if _in_flight(root) if running is None else running:
+        # The runtime writes an effect's node before it starts but only
+        # publishes a snapshot when one lands, so the effect currently in
+        # flight looks pending. Walk down from the running root marking
+        # what must be under way: the next unfinished child of a chain,
+        # every unfinished child of a parallel one.
+        nodes = _advance(nodes, parallel=_flow_of(root) == "tree")
+    return nodes
+
+
+def _root_meta(scope: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    meta = scope.get("meta") if isinstance(scope, Mapping) else None
+    return meta if isinstance(meta, Mapping) else None
+
+
+def _in_flight(meta: Mapping[str, Any] | None) -> bool:
+    if meta is None:
+        return False
+    return bool(meta.get("created_at")) and not (
+        meta.get("completed_at") or meta.get("error")
+    )
+
+
+def _flow_of(meta: Mapping[str, Any] | None) -> str:
+    flow = meta.get("flow") if meta else None
+    return str(flow) if isinstance(flow, str) else ""
+
+
+def _advance(nodes: Sequence[ExecNode], *, parallel: bool) -> tuple[ExecNode, ...]:
+    """Mark the children of a running node that must be running too."""
+    unfinished = [index for index, node in enumerate(nodes) if not node.finished]
+    if not unfinished:
+        return tuple(nodes)
+    current = set(unfinished) if parallel else {unfinished[0]}
+    return tuple(
+        _running_now(node) if index in current else node
+        for index, node in enumerate(nodes)
+    )
+
+
+def _running_now(node: ExecNode) -> ExecNode:
+    return replace(
+        node,
+        status=RUNNING if node.status == PENDING else node.status,
+        children=_advance(node.children, parallel=node.parallel),
+    )
 
 
 def _nodes(
@@ -256,11 +315,8 @@ def _node(
 
     children = _children(plan, node, child_scope, completed, node_path)
     status = _status(meta, children, done=node_path in completed)
-    if status == RUNNING and plan.flow == "tree":
-        # Tree flow starts every sibling at once and merges their state
-        # back only when the last one lands, so a still-blank sibling of a
-        # running parallel parent is running, not waiting.
-        children = tuple(_started(child) for child in children)
+    if status == RUNNING:
+        children = _advance(children, parallel=plan.flow == "tree")
     error = str(meta.get("error")) if meta and meta.get("error") else None
 
     return ExecNode(
@@ -273,6 +329,7 @@ def _node(
         error=error,
         on_error=plan.on_error if error else "",
         detail=_detail(plan, meta),
+        flow=plan.flow,
         children=children,
     )
 
@@ -381,19 +438,6 @@ def _status(
     return _rollup(children) if children else PENDING
 
 
-def _started(node: ExecNode) -> ExecNode:
-    """A pending row inside a running parallel parent, shown as running."""
-    if node.status != PENDING:
-        return node
-    return ExecNode(
-        label=node.label,
-        kind=node.kind,
-        status=RUNNING,
-        detail=node.detail,
-        children=node.children,
-    )
-
-
 def _rollup(children: Sequence[ExecNode]) -> str:
     """A group's status is the summary of what is underneath it."""
     if not children:
@@ -414,9 +458,10 @@ def _rollup(children: Sequence[ExecNode]) -> str:
 def _detail(plan: PlanNode, meta: Mapping[str, Any] | None) -> str:
     bits: list[str] = []
     if plan.kind == "loop":
-        mode = str(meta.get("mode")) if meta and meta.get("mode") else plan.mode
-        if mode:
-            bits.append(mode)
+        # The plan is the honest source here: a while-loop's ``meta.mode``
+        # records how its *condition* is evaluated, not how it iterates.
+        if plan.mode:
+            bits.append(plan.mode)
         if plan.flow == "tree":
             bits.append("parallel")
     elif plan.kind == "conditional":
