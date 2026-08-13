@@ -7,6 +7,7 @@ import pytest
 from circuitry.cli.profiles import (
     ProfileNotFoundError,
     ProfileValidationError,
+    collect_orchestration_condition_paths,
     collect_orchestration_effect_paths,
     discover_profile_path,
     load_profile,
@@ -200,3 +201,79 @@ def test_load_profile_rejects_non_mapping_effect_override(tmp_path: Path) -> Non
     orch = {"effects": [{"type": "prompt", "name": "summarize", "template": "s"}]}
     with pytest.raises(ProfileValidationError):
         load_profile(name="fast", orchestration_path=orch_path, orch=orch)
+
+
+# ── condition paths are not disableable (issue #29) ──────────────────────────
+
+
+def _conditional_orch() -> dict:
+    return {
+        "effects": [
+            {
+                "type": "conditional",
+                "name": "named_cond",
+                "if": {"mode": "cel", "expr": "true"},
+                "then": [{"type": "prompt", "name": "branch_child", "template": "b"}],
+            },
+            {
+                "type": "loop",
+                "name": "named_loop",
+                "while": {"mode": "cel", "expr": "true"},
+                "body": [{"type": "prompt", "name": "body_child", "template": "l"}],
+            },
+            {
+                "type": "conditional",
+                "if": {"mode": "cel", "expr": "true"},
+                "then": [{"type": "prompt", "name": "transparent", "template": "t"}],
+            },
+        ]
+    }
+
+
+def test_collect_orchestration_condition_paths_covers_conditionals_and_loops() -> None:
+    # Anonymous containers contribute no path segment, so they have no
+    # addressable condition either.
+    assert collect_orchestration_condition_paths(_conditional_orch()) == {
+        "named_cond.if",
+        "named_cond.condition",
+        "named_loop.while",
+        "named_loop.condition",
+    }
+
+
+@pytest.mark.parametrize(
+    "condition_path",
+    ["named_cond.if", "named_cond.condition", "named_loop.while"],
+)
+def test_load_profile_rejects_disabling_a_condition_with_actionable_error(
+    tmp_path: Path, condition_path: str
+) -> None:
+    orch_path = _orch(tmp_path)
+    _write(
+        orch_path.parent / "profiles" / "fast.yml",
+        f"effects:\n  {condition_path}:\n    enabled: false\n",
+    )
+    with pytest.raises(ProfileValidationError) as exc_info:
+        load_profile(
+            name="fast", orchestration_path=orch_path, orch=_conditional_orch()
+        )
+
+    message = str(exc_info.value)
+    assert condition_path in message
+    # Actionable: says why, and names the container to disable instead.
+    assert "cannot be disabled" in message
+    assert condition_path.rsplit(".", 1)[0] in message
+
+
+def test_load_profile_still_allows_disabling_the_container_itself(
+    tmp_path: Path,
+) -> None:
+    orch_path = _orch(tmp_path)
+    _write(
+        orch_path.parent / "profiles" / "fast.yml",
+        "effects:\n  named_cond:\n    enabled: false\n",
+    )
+    profile = load_profile(
+        name="fast", orchestration_path=orch_path, orch=_conditional_orch()
+    )
+    assert profile.effects["named_cond"] == {"enabled": False}
