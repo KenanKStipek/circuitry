@@ -87,6 +87,26 @@
       "inputs": {}
     },
     {
+      "name": "learn/cyberdiner_hello",
+      "file": "learn/cyberdiner_hello.yml",
+      "category": "learn",
+      "intent": "cyberdiner adapter — send one prompt through the CyberDiner job queue at tier-1.",
+      "description": "Minimal prompt orchestration pinned to the cyberdiner adapter. `model:` names a capability tier (tier-1…tier-4) rather than a provider model; the submit/poll job queue is handled inside the adapter.",
+      "when_to_use": "When you want to see how an orchestration targets the CyberDiner broker, or as the starting point for one. Requires `runtime.adapters.cyberdiner.expo_url` and `token` in config — never in the YAML.",
+      "primitives": ["prompt"],
+      "difficulty": "beginner",
+      "backends": ["llm"],
+      "inputs": {
+        "question": {"type": "string", "required": true, "description": "The question to ask."}
+      },
+      "outputs": {
+        "answer": {"type": "string", "path": "prime.ask.value", "description": "Two-sentence answer returned by the tier-1 worker."}
+      },
+      "state_paths": ["prime.ask.value"],
+      "tags": ["adapter", "cyberdiner"],
+      "example": "cof run learn/cyberdiner_hello -e question=\"What is cybernetics?\""
+    },
+    {
       "name": "utilities/summarize",
       "file": "utilities/summarize.yml",
       "category": "utilities",

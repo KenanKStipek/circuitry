@@ -191,8 +191,11 @@ def _build_tgi(cfg: dict[str, Any]) -> Adapter:
 
 def _build_cyberdiner(cfg: dict[str, Any]) -> Adapter:
     return CyberdinerAdapter(
-        base_url=cfg.get("base_url") or "",
-        default_model=cfg.get("default_model") or "",
+        expo_url=cfg.get("expo_url") or "",
+        token=cfg.get("token") or "",
+        default_tier=cfg.get("default_tier") or "tier-1",
+        poll_interval_ms=int(cfg.get("poll_interval_ms") or 500),
+        timeout_seconds=int(cfg.get("timeout_seconds") or 30),
     )
 
 
