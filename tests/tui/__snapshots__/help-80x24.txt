@@ -10,15 +10,15 @@
   │4  Ru│             2  Run                                           │y the│  
   │5  Do│             3  Inspect                                       │     │  
   │6  Se│             4  Runs                                          │     │  
-  │7  Va│             5  Doctor                                        │and p│  
-  │8  Ch│             6  Settings                                  ▇▇  │ion  │  
-  ╰─────│             7  Validate                                      │─────╯  
-        │             8  Chat                                          │        
+  │7  Va│             5  Doctor                                    ▁▁  │and p│  
+  │8  Ch│             6  Settings                                      │ion  │  
+  │9  Pr│             7  Validate                                      │ and │  
+  ╰─────│             8  Chat                                          │─────╯  
+        │             9  Profiles                                      │        
         │             ?  Help                                          │        
         │             q  Back / Quit                                   │        
         │           esc  Back / Quit                                   │        
         │            ^p  palette                                       │        
-        │                                                              │        
         │  Esc or ? to close                                           │        
         │                                                              │        
  tab Nex╰──────────────────────────────────────────────────────────────╯palette 

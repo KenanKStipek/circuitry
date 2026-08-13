@@ -2,23 +2,23 @@
                                                                                 
   Library — Browse bundled and shared orchestrations                            
   ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎  
-  ▊  zzzz                                                                    ▎  
+  ▊  / to search — name, intent, tags                                        ▎  
   ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎  
+   Library source 'hub' (owner/hub@main) has not been fetched yet — run `cof    
+   library refresh hub`.                                                        
   ╭──────────────╮╭─────────────────────╮╭───────────────────────────────────╮  
-  │▼ All (29)    ││ No orchestration    ││ Nothing selected                  │  
-  │├── learn (8) ││ matches "zzzz".     ││                                   │  
-  │├── utilities ││                     ││ Pick an orchestration on the      │  
-  │├── patterns (││ Try fewer letters,  ││ left, or press / to search.       │  
-  │├── recipes (5││ or search an intent ││                                   │  
-  │└── agents (4)││ word or a tag.      ││                                   │  
-  │              ││ Esc clears the      ││                                   │  
-  │              ││ search and shows    ││                                   │  
-  │              ││ the whole library.  ││                                   │  
+  │▼ All (0)     ││ Nothing cached for  ││ Nothing selected                  │  
+  │              ││ source 'hub' yet.   ││                                   │  
+  │              ││                     ││ Pick an orchestration on the      │  
+  │              ││ Press r to fetch it ││ left, or press / to search.       │  
+  │              ││ — the only thing    ││                                   │  
+  │              ││ here that touches   ││                                   │  
+  │              ││ the network.        ││                                   │  
+  │              ││ s cycles sources ·  ││                                   │  
+  │              ││ Esc goes back.      ││                                   │  
   │              ││                     ││                                   │  
   │              ││                     ││                                   │  
-  │              ││                     ││                                   │  
-  │           ▋  ││                     ││                                   │  
   ╰──────────────╯╰─────────────────────╯╰───────────────────────────────────╯  
-  0/29 in all · "zzzz"                                                          
+  0/0 in all · source hub — Source: hub                                         
                                                                                 
- ⏎ Run  tab Next view  / Search                                     ▏^p palette 
+ tab Next view  / Search  ⏎ Run  e Eject  s Source  r Refresh  ? Hel▏^p palette 

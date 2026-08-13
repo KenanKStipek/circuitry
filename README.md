@@ -171,6 +171,7 @@ cof run learn/hello -e name=World --adapter ollama --model llama3.1:8b
 # Browse, inspect, and eject orchestrations
 cof list                          # bundled orchestrations
 cof list --extensions             # compiled-in adapters / tool plugins / runtime plugins
+cof list --models ollama          # models an adapter offers (--json for scripts)
 cof info recipes/article_summarizer
 cof info recipes/article_summarizer --json
 cof eject recipes/comic_strip

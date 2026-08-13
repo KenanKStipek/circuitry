@@ -10,10 +10,12 @@ from typing import Any, Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from typer.core import TyperGroup
 
-from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, resolve_config
+from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, ConfigError, resolve_config
 from .doctor import register_doctor
 from .last_run import LAST_RUN_PATH
 from .library_sources import (
@@ -34,12 +36,39 @@ from .shared_library import (
     resolve_service_profile,
 )
 
+console = Console()
+err_console = Console(stderr=True)
+
+
+class CircuitryGroup(TyperGroup):
+    """Root command group that renders config problems as one actionable line.
+
+    Every subcommand taking ``--config/-c`` reaches the same loader, so the
+    catch lives here once instead of in per-command ``try``/``except`` blocks —
+    commands registered from other modules (``doctor``, ``setup``) and any
+    future ones are covered automatically.
+    """
+
+    # ``ctx`` is typed Any because Typer vendors its own click.Context under a
+    # private module path; naming either concrete class trips mypy's override check.
+    def invoke(self, ctx: Any) -> Any:
+        try:
+            return super().invoke(ctx)
+        except ConfigError as exc:
+            # soft_wrap keeps the message on a single line regardless of
+            # terminal width, so it stays greppable when piped.
+            err_console.print(
+                f"[red]Error:[/red] {escape(str(exc))}", highlight=False, soft_wrap=True
+            )
+            raise typer.Exit(code=1) from exc
+
+
 app = typer.Typer(
+    cls=CircuitryGroup,
     add_completion=False,
     help="Circuitry — Cybernetic orchestration framework. (cof)",
     rich_markup_mode="rich",
 )
-console = Console()
 
 
 @app.callback(invoke_without_command=True)
@@ -159,13 +188,14 @@ def _do_validate(
     skip_preflight: bool = False,
 ) -> None:
     """Shared validation logic for validate and check commands."""
-    if not json_out:
-        _print_header("Circuitry · Validate")
     # Resolve config (incl. allowlist + env-var overlays) so allowlist
     # enforcement runs alongside schema checks. ``skip_preflight``
     # disables the dependency-readiness checks in offline CI / smoke
-    # contexts where binaries / hosts are not available.
+    # contexts where binaries / hosts are not available. Resolved before
+    # the header so a bad --config prints the error alone.
     cfg = resolve_config(explicit_path=config)
+    if not json_out:
+        _print_header("Circuitry · Validate")
     with console.status("[cyan]Validating…[/cyan]") if not json_out else nullcontext():
         result = validate(orchestration, config=cfg, skip_preflight=skip_preflight)
 
@@ -757,7 +787,10 @@ def run_library_cmd(
 
 @app.command(
     "list",
-    help="List available bundled orchestrations (or compiled-in extensions with --extensions).",
+    help=(
+        "List available bundled orchestrations (compiled-in extensions with "
+        "--extensions, an adapter's models with --models <adapter>)."
+    ),
 )
 def list_cmd(
     category: Optional[str] = typer.Option(
@@ -772,6 +805,12 @@ def list_cmd(
         "-x",
         help="List compiled-in adapters / tool plugins / runtime plugins with allowlist status.",
     ),
+    models: Optional[str] = typer.Option(
+        None,
+        "--models",
+        "-M",
+        help="List the models an adapter offers (e.g. --models ollama). Same data the TUI's model picker uses.",
+    ),
     source: Optional[str] = typer.Option(
         None, "--source", "-S", help="Only list entries from this library source."
     ),
@@ -779,6 +818,10 @@ def list_cmd(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
 ):
+    if models is not None:
+        _list_models(adapter_name=models, json_out=json_out, config_path=config)
+        return
+
     if extensions:
         _list_extensions(json_out=json_out, config_path=config)
         return
@@ -851,6 +894,59 @@ def list_cmd(
     console.print()
     console.print("[dim]Run with:[/dim] cof run <name> [dim](e.g.[/dim] cof run hello -e name=World[dim])[/dim]")
     console.print("[dim]Backends: [green]available[/green] [red]not detected[/red][/dim]")
+
+
+def _list_models(
+    *, adapter_name: str, json_out: bool, config_path: Optional[Path]
+) -> None:
+    """Render the models one adapter offers — CLI parity with the TUI picker.
+
+    Adapters answer optionally (see ``circuitry.adapters.models``): an
+    adapter that cannot enumerate, or a backend that is not running,
+    reports nothing rather than failing. Only an unknown adapter name is
+    an error — that one is a typo, not a missing daemon.
+    """
+    from ..adapters.factory import ADAPTER_REGISTRY
+    from ..adapters.models import list_adapter_models
+
+    name = (adapter_name or "").strip().lower()
+    if name not in ADAPTER_REGISTRY:
+        known = ", ".join(sorted(ADAPTER_REGISTRY))
+        if json_out:
+            console.print_json(
+                json.dumps({"adapter": name, "error": "unknown adapter", "models": []})
+            )
+        else:
+            console.print(f"[red]Error:[/red] Unknown adapter: {adapter_name}")
+            console.print(f"[dim]Known adapters: {known}[/dim]")
+        raise typer.Exit(code=1)
+
+    cfg = resolve_config(explicit_path=config_path)
+    names = list_adapter_models(adapter_name=name, runtime=cfg.runtime or {})
+
+    if json_out:
+        console.print_json(
+            json.dumps({"adapter": name, "models": names}, ensure_ascii=False)
+        )
+        return
+
+    if not names:
+        console.print(f"[yellow]No models reported by {name}.[/yellow]")
+        console.print(
+            "[dim]The adapter may not enumerate models, or its backend may not "
+            "be reachable — run `cof doctor`. Any model string still works with "
+            "`cof run --model <name>`.[/dim]"
+        )
+        return
+
+    _print_header(f"Circuitry · Models · {name}")
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Model", style="bold")
+    for model_name in names:
+        table.add_row(model_name)
+    console.print(table)
+    console.print()
+    console.print(f"[dim]Run with:[/dim] cof run <name> --adapter {name} --model <model>")
 
 
 def _list_extensions(*, json_out: bool, config_path: Optional[Path]) -> None:

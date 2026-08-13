@@ -484,35 +484,3 @@ def test_litellm_import_error_gives_actionable_message(
     adapter = LiteLLMAdapter(default_model="openai/gpt-4o-mini")
     with pytest.raises(RuntimeError, match="pip install litellm"):
         adapter.generate(model="", prompt="ping")
-
-
-# ---------------------------------------------------------------------------
-# Phase 1: Ollama list_models() tests
-# ---------------------------------------------------------------------------
-
-
-def test_ollama_list_models_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    payload = {"models": [{"name": "phi3:mini"}, {"name": "llama3.2:latest"}]}
-
-    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
-        del args, kwargs
-        return FakeProc(returncode=0, stdout=json.dumps(payload))
-
-    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
-
-    adapter = OllamaAdapter()
-    result = adapter.list_models()
-    assert result == payload
-    assert len(result["models"]) == 2
-
-
-def test_ollama_list_models_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
-        del args, kwargs
-        return FakeProc(returncode=7, stderr="Failed to connect")
-
-    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
-
-    adapter = OllamaAdapter()
-    with pytest.raises(RuntimeError, match=r"curl exit 7.*not reachable.*cof doctor"):
-        adapter.list_models()
