@@ -2,8 +2,18 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from .jsonl_file import JsonlFileStatePersistence
+from .mongodb import MongodbStatePersistence
 from .postgres import PostgresStatePersistence
 from .sqlite import SQLiteStatePersistence
+
+# Accepted spellings for each backend. The canonical name is the key.
+_BACKEND_ALIASES = {
+    "jsonl-file": {"jsonl-file", "jsonl_file", "jsonl", "file"},
+    "mongodb": {"mongodb", "mongo"},
+    "postgres": {"postgres", "postgresql"},
+    "sqlite": {"sqlite", "sqlite3"},
+}
 
 
 class PersistenceBackend(Protocol):
@@ -34,16 +44,29 @@ def build_persistence_backend(runtime: dict[str, Any]) -> PersistenceBackend | N
     if not bool(persistence_cfg.get("enabled", False)):
         return None
 
-    backend = str(persistence_cfg.get("backend") or "postgres").strip().lower()
+    requested = str(persistence_cfg.get("backend") or "postgres").strip().lower()
+    backend = next(
+        (
+            canonical
+            for canonical, aliases in _BACKEND_ALIASES.items()
+            if requested in aliases
+        ),
+        None,
+    )
+
     if backend == "postgres":
         return PostgresStatePersistence.from_config(persistence_cfg)
 
     if backend == "sqlite":
         return SQLiteStatePersistence.from_config(persistence_cfg)
 
-    if backend not in {"postgres", "sqlite"}:
-        raise ValueError(
-            f"Unsupported persistence backend: {backend!r}. "
-            "Supported backends: postgres, sqlite."
-        )
-    return None
+    if backend == "jsonl-file":
+        return JsonlFileStatePersistence.from_config(persistence_cfg)
+
+    if backend == "mongodb":
+        return MongodbStatePersistence.from_config(persistence_cfg)
+
+    raise ValueError(
+        f"Unsupported persistence backend: {requested!r}. "
+        "Supported backends: jsonl-file, mongodb, postgres, sqlite."
+    )

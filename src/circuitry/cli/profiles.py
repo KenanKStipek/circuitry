@@ -9,9 +9,11 @@ Discovery order (first match wins):
   1. ``<orchestration_dir>/profiles/<name>.yml`` (orchestration-scoped)
   2. ``<cwd>/profiles/<name>.yml`` (project-level)
 
-The ``enabled`` (per-effect) and ``persistence`` keys are parsed and schema
-validated here, but their runtime behavior is implemented by sibling tasks —
-this module only guarantees the data is well-formed and discoverable.
+The per-effect ``enabled`` key is parsed and schema validated here, but its
+runtime behavior is implemented by a sibling task — this module only
+guarantees the data is well-formed and discoverable. ``persistence`` is
+consumed by ``cli.effective_settings``, which layers it over the
+orchestration/config ``runtime.persistence`` block.
 """
 
 from __future__ import annotations
