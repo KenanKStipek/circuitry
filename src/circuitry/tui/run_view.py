@@ -289,11 +289,6 @@ class RunScreen(ViewScreen):
         #: publishing into it after this screen is replaced.
         self._store: StateStore | None = None
 
-    def _on_mount(self, event: Mount) -> None:
-        super()._on_mount(event)
-        store = getattr(self.app, "run_states", None)
-        self._store = store if isinstance(store, StateStore) else None
-
     # -- composition ---------------------------------------------------------
 
     def compose_body(self) -> ComposeResult:
@@ -353,6 +348,8 @@ class RunScreen(ViewScreen):
 
     def _on_mount(self, event: Mount) -> None:
         super()._on_mount(event)
+        store = getattr(self.app, "run_states", None)
+        self._store = store if isinstance(store, StateStore) else None
         self._adopt_pending()
 
     def _adopt_pending(self) -> None:

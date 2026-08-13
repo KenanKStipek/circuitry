@@ -24,7 +24,7 @@ import pytest
 pytest.importorskip("textual")
 
 from textual.pilot import Pilot
-from textual.widgets import OptionList, Static
+from textual.widgets import OptionList, Select, Static
 
 from circuitry.cli.library_sources import (
     CurationSource,
@@ -610,12 +610,18 @@ def test_enter_hands_the_entry_to_the_run_view_from_any_source(
         await pilot.press("enter")
         await pilot.pause()
         view = pilot.app.current_view()
-        return pilot.app.pending_run, entry.source, view.slug if view else ""
+        # The Run view consumes ``pending_run`` on mount, so what proves the
+        # hand-off is the orchestration it opened on, not the cleared slot.
+        run_screen = pilot.app.base_screen()
+        choice = run_screen._choice_for(
+            run_screen.query_one("#run-orchestration", Select).value
+        )
+        return choice.path if choice else None, entry.source, view.slug if view else ""
 
-    pending, source, slug = run_app(scenario)
+    opened, source, slug = run_app(scenario)
     assert source == "hub"
     assert slug == "run"
-    assert pending is not None and pending.name in ("dupe.yml", "hub_review.yml")
+    assert opened is not None and opened.name in ("dupe.yml", "hub_review.yml")
 
 
 def test_ejecting_a_github_entry_writes_the_cached_bytes(
