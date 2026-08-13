@@ -42,6 +42,44 @@ mypy src                           # static types
 
 If you only changed one area, run the targeted suite first (e.g. `pytest tests/cli -q`) and run the full suite before pushing.
 
+## Changelog fragments
+
+Do **not** edit `CHANGELOG.md`'s `## [Unreleased]` section. With several PRs in
+flight, every one of them appends to the same hunk and every one of them
+conflicts the moment the first merges. Instead, add a **new file** under
+[`changelog.d/`](changelog.d/README.md):
+
+```
+changelog.d/<issue-or-pr-number>.<type>.md
+```
+
+`<type>` is one of `added`, `changed`, `deprecated`, `removed`, `fixed`,
+`security`. The file holds just the entry you would otherwise have written:
+
+```markdown
+- **`cof run --profile`.** Run-level adapter/model defaults from `profiles/<name>.yml`.
+```
+
+Because each PR writes its own path, parallel PRs merge in any order without
+conflicts. Verify locally:
+
+```bash
+python scripts/build-changelog.py --check     # fragment names + contents
+python scripts/build-changelog.py --dry-run   # the section your entry lands in
+```
+
+CI enforces this: a PR that changes code under `src/` or `scripts/` (or bumps
+`pyproject.toml`) must add a fragment, and no PR may edit the Unreleased section
+directly. If a change genuinely has nothing to announce, add the `no-changelog`
+label or put `[skip-changelog]` in the PR title.
+
+At release time a maintainer runs `python scripts/build-changelog.py`, which
+merges every fragment into `## [Unreleased]` (section order, then filename) and
+deletes them. See [RELEASING.md](RELEASING.md).
+
+Same reasoning applies to other shared lists — add new `docs/index.md` links at
+the **end** of their section rather than in the middle.
+
 ## Commit message format
 
 We use [Conventional Commits](https://www.conventionalcommits.org/) for the subject line. The release pipeline derives the next version from these prefixes, so the format is enforced.
@@ -65,7 +103,7 @@ Before opening a PR:
 - [ ] All tests pass locally (`pytest -q`)
 - [ ] `ruff check .` and `mypy src` are clean
 - [ ] You added or updated tests for any behavior change
-- [ ] You added a line under `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md)
+- [ ] You added a changelog fragment — a **new file** `changelog.d/<issue-or-pr>.<type>.md` — rather than editing [`CHANGELOG.md`](CHANGELOG.md) (see [Changelog fragments](#changelog-fragments))
 - [ ] If you changed the public API surface (see [`docs/stability.md`](docs/stability.md)), the change is intentional and called out in the PR description
 - [ ] If you changed bundled orchestrations under `src/circuitry/bundled/orchestrations/`, you re-ran `scripts/sync-bundled` so the repo-root copies match
 
