@@ -15,6 +15,22 @@ bash scripts/smoke-curation.sh
 CI is `.github/workflows/quality.yml` (pytest matrix 3.10–3.13, ruff, mypy,
 smoke). A PR is shippable when every check is green.
 
+## Changelog — write a fragment, never edit `CHANGELOG.md`
+Every change ships its release note as a **new file**, `changelog.d/<issue-or-pr>.<type>.md`
+(`type` ∈ added / changed / deprecated / removed / fixed / security), containing
+just the entry's markdown bullet. New file per PR = parallel PRs never conflict.
+
+- Do **not** touch `CHANGELOG.md`'s `## [Unreleased]` section — CI rejects it.
+  It is compiled from fragments at release time by `python scripts/build-changelog.py`.
+- Nothing to announce (pure refactor, CI-only)? Add the `no-changelog` label or
+  put `[skip-changelog]` in the PR title.
+- Check your work locally: `python scripts/build-changelog.py --check` (validates
+  fragments) and `--dry-run` (prints the compiled section).
+- Same conflict logic for other shared lists: append new `docs/index.md` links at
+  the **END** of their section, never mid-list.
+
+See `changelog.d/README.md`.
+
 ## Agent workflow
 Work is managed via GitHub issues; labels drive state and autonomy
 (same scheme as CyberDiner).
