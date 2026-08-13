@@ -115,10 +115,10 @@ inputs:
   topic: "widgets"
 effects:
   summarize:
-    model: tier-1
+    model: cheap
     provider: cyberdiner
   sub.deep_analysis:
-    model: tier-4
+    model: good-fast
   my_reflector:
     enabled: false
 persistence:
@@ -144,8 +144,8 @@ persistence:
     assert profile.adapter == "ollama"
     assert profile.model == "llama3.2"
     assert profile.inputs == {"topic": "widgets"}
-    assert profile.effects["summarize"] == {"model": "tier-1", "provider": "cyberdiner"}
-    assert profile.effects["sub.deep_analysis"] == {"model": "tier-4"}
+    assert profile.effects["summarize"] == {"model": "cheap", "provider": "cyberdiner"}
+    assert profile.effects["sub.deep_analysis"] == {"model": "good-fast"}
     assert profile.effects["my_reflector"] == {"enabled": False}
     assert profile.persistence == {"backend": "jsonl-file", "path": "runs.jsonl"}
 
@@ -171,7 +171,7 @@ def test_load_profile_rejects_unknown_effect_path_and_names_valid_ones(
     orch_path = _orch(tmp_path)
     _write(
         orch_path.parent / "profiles" / "fast.yml",
-        "effects:\n  does_not_exist:\n    model: tier-1\n",
+        "effects:\n  does_not_exist:\n    model: cheap\n",
     )
     orch = {
         "effects": [

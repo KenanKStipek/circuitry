@@ -450,10 +450,10 @@ def test_compiled_effects_default_to_enabled() -> None:
 def test_overrides_without_enabled_leave_effects_enabled() -> None:
     orch = {"effects": [{"type": "prompt", "name": "a", "template": "a"}]}
     root = compile_orchestration(orch=orch, root_name="prime")
-    overridden, _ = apply_effect_overrides(root, {"a": {"model": "tier-1"}})
+    overridden, _ = apply_effect_overrides(root, {"a": {"model": "cheap"}})
 
     assert overridden.effects[0].enabled is True
-    assert overridden.effects[0].model == "tier-1"
+    assert overridden.effects[0].model == "cheap"
 
 
 def test_enabled_true_is_a_no_op() -> None:

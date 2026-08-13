@@ -273,18 +273,18 @@ Every run records resolved values in `runtime.effective_settings`.
 
 [CyberDiner](https://github.com/KenanKStipek/CyberDiner) is a job-queue LLM broker rather than a single completion endpoint. The `cyberdiner` adapter hides that behind the ordinary synchronous `generate()`: it submits the prompt as a job to expo, polls until the job reaches a terminal status, and returns the text. Orchestrations look no different from any other adapter's — the queue lives entirely inside the adapter.
 
-`model:` selects a **capability tier**, not a provider model name. Valid tiers: `tier-1`, `tier-2`, `tier-3`, `tier-4` (an unset `model:` falls back to `default_tier`).
+`model:` selects a **capability tier**, not a provider model name. The tier vocabulary belongs to the network, not to this client: whatever you write is sent as-is and expo validates it, so a tier added to your deployment works the day it lands. CyberDiner's seeded tiers today are `cheap`, `fast-cheap`, `fast`, `good-cheap`, `good`, `good-fast`, `alpha`. An unset `model:` falls back to `default_tier`; an unknown tier comes back as an actionable expo `400`.
 
 ```json
 {
   "default_adapter": "cyberdiner",
-  "default_model": "tier-1",
+  "default_model": "cheap",
   "runtime": {
     "adapters": {
       "cyberdiner": {
         "expo_url": "https://expo.example.com",
         "token": "ck_...",
-        "default_tier": "tier-1",
+        "default_tier": "cheap",
         "poll_interval_ms": 500,
         "timeout_seconds": 30
       }
@@ -297,7 +297,8 @@ Every run records resolved values in `runtime.effective_settings`.
 | --- | ------- | ------- |
 | `expo_url` | — (required) | Root URL of your CyberDiner expo deployment |
 | `token` | — (required) | CyberDiner API key (`ck_…`), sent as a bearer token |
-| `default_tier` | `tier-1` | Tier used when the orchestration doesn't pin a `model:` |
+| `default_tier` | `cheap` | Tier used when the orchestration doesn't pin a `model:` |
+| `valid_tiers` | — (unset) | Opt-in client-side allowlist of tier names. Unset = pass-through, expo is the authority |
 | `poll_interval_ms` | `500` | Delay between job-status polls |
 | `timeout_seconds` | `30` | Per-HTTP-request socket timeout (the whole submit+poll sequence is bounded separately by the effect's timeout) |
 
