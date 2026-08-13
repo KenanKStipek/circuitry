@@ -35,6 +35,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   deliberate config commit, and the six deliberately-disabled rules are
   justified in-file. The `ruff<0.16` / `mcp<2` emergency pins are gone from
   `requirements-dev.txt`; the mcp bound now lives in `pyproject.toml`.
+  Adopting the rule set is a wide but behaviour-preserving sweep across ~110
+  files — PEP 604 unions in place of `Optional[...]` (UP007/UP045), sorted
+  `__all__` (RUF022), sorted imports (I001), and `next(iter(x))` over
+  `list(x)[0]` (RUF015). Autofixes and hand-fixes are split into separate
+  commits so the mechanical part can be skimmed.
 - **`cof list / run / info / eject` use slash-delimited names.** `cof run hello` is now `cof run learn/hello`; `cof run article-summarizer` is now `cof run recipes/article_summarizer`. Bare last-segment names still resolve when unambiguous.
 - **Test isolation in `use`** — child effects now land at `prime.<use_name>.<child_effect>.value` by default (full-namespace mode). Existing tests/orchestrations that declared `outputs:` or used a child `interface:` are unaffected.
 
