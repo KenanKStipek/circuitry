@@ -416,9 +416,11 @@ def empty_state_lines(
     local source, and an empty library.
     """
     if query.strip():
+        scoped = [f"Only source {source!r} is in scope — s widens it."] if source else []
         return [
             f'No orchestration matches "{query.strip()}".',
             "",
+            *scoped,
             "Try fewer letters, or search an intent word or a tag.",
             "Esc clears the search and shows the whole library.",
         ]
@@ -958,6 +960,10 @@ class LibraryScreen(ViewScreen):
         self.refreshing = False
         self.entries = load_entries(self.registry)
         self.stale = stale_banner(list(failures))
+        # A fetch can add or remove categories, so the tree is rebuilt and its
+        # cursor lands back on the root; the filter follows it rather than
+        # holding a category that may no longer exist.
+        self.category = None
         self._build_tree()
         self._refresh_list()
         self._set_status(refresh_summary(list(outcomes), list(failures)))

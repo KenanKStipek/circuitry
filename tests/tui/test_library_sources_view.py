@@ -304,8 +304,11 @@ def test_an_empty_local_source_does_not_offer_a_pointless_refresh() -> None:
     assert not any("Press r" in line for line in lines)
 
 
-def test_a_search_miss_still_wins_over_the_source_copy() -> None:
-    assert '"zzz"' in empty_state_lines("zzz", source="hub", refreshable=True)[0]
+def test_a_search_miss_still_wins_over_the_source_copy_but_names_the_scope() -> None:
+    lines = empty_state_lines("zzz", source="hub", refreshable=True)
+    assert '"zzz"' in lines[0]
+    assert any("Only source 'hub' is in scope" in line for line in lines)
+    assert not any("Only source" in line for line in empty_state_lines("zzz"))
 
 
 def test_a_failure_outranks_a_notice_in_the_banner() -> None:
@@ -367,6 +370,27 @@ def test_the_status_line_names_the_source_scope(run_app: Any, multi: Any) -> Non
         return widget_text(screen, "#library-status")
 
     assert "source local" in run_app(scenario)
+
+
+def test_searching_inside_a_source_filter_keeps_the_scope_and_says_so(
+    run_app: Any, multi: Any
+) -> None:
+    """The source filter is a deliberate mode, so it says what it is hiding."""
+
+    async def scenario(pilot: Pilot[Any]) -> tuple[str | None, int, str]:
+        screen = await open_library(pilot)
+        await press_until_source(pilot, screen, "local")
+        await pilot.press("slash")
+        await pilot.pause()
+        for char in "zzzz":
+            await pilot.press(char)
+        await pilot.pause()
+        return screen.source, len(screen.matches), widget_text(screen, "#library-empty")
+
+    source, count, empty = run_app(scenario)
+    assert source == "local"
+    assert count == 0
+    assert "Only source 'local' is in scope" in empty
 
 
 def test_an_unfetched_github_source_renders_the_refresh_to_fetch_state(
