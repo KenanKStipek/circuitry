@@ -8,8 +8,8 @@ pip install "circuitry-cof[tui]"
 ```
 
 This page documents the shell — navigation, keys, layout breakpoints, logging
-and the test harness. Individual views (Library, Run, Inspect, Runs, Doctor,
-Settings) plug into it and are documented as they land.
+and the test harness — and each view as it lands (Library below; Run, Inspect,
+Runs, Doctor and Settings are still placeholders).
 
 ## Keymap
 
@@ -77,13 +77,50 @@ A log record written to stdout while Textual owns the screen shreds the frame.
   `logging.lastResort` cannot write warnings to stderr;
 - restores the original handlers on exit, including when the app crashes.
 
+## Library view (`1`)
+
+Three panes: the category tree, the orchestrations in the selected category,
+and a detail pane rendering that entry's manifest metadata.
+
+| Key | Action |
+| --- | --- |
+| `↑` / `↓` | Move through the tree or the list (whichever has focus) |
+| `Tab`-free focus | `/` jumps to search, `Enter` in search returns to the list |
+| `/` | Search name, intent and tags across the **whole** library |
+| `Esc` | Clear an active search; on a clean view, back to home |
+| `e` | Eject the highlighted orchestration into the current directory |
+
+Everything on screen comes from `curation/manifest.json` through
+`circuitry.cli.registry.load_index()` — the same reader behind `cof list` and
+`cof info`, so the TUI cannot show something the CLI disagrees with.
+
+**Search** is ranked, not just filtered: an exact name (or last segment) wins,
+then a prefix, then a substring in the name, then a hit in the intent or tags,
+and finally a fuzzy subsequence. Because a search inside one category would
+hide matches in the others, starting a search resets the tree to *All*. A query
+that matches nothing gets a written-out empty state — what was searched, what
+else to try, and that `Esc` clears it — rather than an empty box.
+
+**Eject** goes through `circuitry.cli.registry.eject_text()` /
+`write_ejected()`, the same pair `cof eject` uses, so both write identical
+bytes to the same default destination (`<category>/<name>.yml`, relative to the
+current directory). An existing file is never clobbered silently: a modal asks
+first (`y` overwrites, `n`/`Esc` keeps the file), and the status line reports
+what happened.
+
 ## Adding a view
 
 Views are declared once, in `circuitry/tui/screens.py`:
 
 ```python
 VIEWS = (
-    ViewSpec("library", "Library", "Browse bundled and shared orchestrations", "1"),
+    ViewSpec(
+        "library",
+        "Library",
+        "Browse bundled and shared orchestrations",
+        "1",
+        factory=_library_screen,
+    ),
     ...
 )
 ```
@@ -91,6 +128,8 @@ VIEWS = (
 Registration drives the home list, the number key, the Tab cycle and the help
 overlay together. To replace a placeholder, subclass `ViewScreen` (implementing
 `compose_body`) and set the spec's `factory`; nothing else in the shell changes.
+A view whose panes scroll on their own sets `BODY_CONTAINER = Vertical` so the
+body itself does not also scroll.
 
 ## Testing
 

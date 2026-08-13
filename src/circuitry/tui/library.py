@@ -15,12 +15,13 @@ itself, so the TUI cannot drift from the CLI.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import Input, OptionList, Static, Tree
 
 from ..cli.registry import eject_destination, eject_text, load_index, write_ejected
@@ -32,6 +33,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from pathlib import Path
 
     from textual.events import Mount
+
+    from .app import CircuitryApp
 
 __all__ = [
     "ConfirmOverwrite",
@@ -337,7 +340,7 @@ class LibraryScreen(ViewScreen):
     """Browse, search and eject the curation library."""
 
     #: The panes scroll individually, so the body itself must not scroll.
-    BODY_CONTAINER: ClassVar[type[Container]] = Vertical
+    BODY_CONTAINER: ClassVar[type[Widget]] = Vertical
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("slash", "search", "Search"),
@@ -577,7 +580,7 @@ class LibraryScreen(ViewScreen):
         if self._search_box.has_focus:
             self._entry_list.focus()
             return
-        self.app.action_back_or_quit()
+        cast("CircuitryApp", self.app).action_back_or_quit()
 
     def action_eject(self) -> None:
         """``e`` — write the highlighted entry's YAML into the current directory."""

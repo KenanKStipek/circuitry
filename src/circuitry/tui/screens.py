@@ -13,8 +13,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
 from textual.app import ComposeResult
-from textual.containers import Container, VerticalScroll
+from textual.containers import VerticalScroll
 from textual.screen import Screen
+from textual.widget import Widget
 from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
 from .layout import ResponsiveLayout
@@ -45,7 +46,7 @@ class CircuitryScreen(ResponsiveLayout, Screen[None]):
     """
 
     #: Container the body widgets are wrapped in.
-    BODY_CONTAINER: ClassVar[type[Container]] = VerticalScroll
+    BODY_CONTAINER: ClassVar[type[Widget]] = VerticalScroll
 
     def compose(self) -> ComposeResult:
         yield Header(id="chrome-header")
