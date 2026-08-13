@@ -1,0 +1,168 @@
+# idea_generator — brainstorms ideas for orchestrations worth adding to the library.
+#
+# Cybernetic shape:
+#   seed_themes        one cheap call proposes diverse domains of human activity
+#   theme_rounds       tree-flow each-loop: every theme brainstorms IN PARALLEL
+#                      (on CyberDiner each round is a separate network job)
+#   curate             merge all rounds + what you've already got, dedupe, rank
+#   (if …)             model-as-sensor: is the curated list strong enough?
+#     └─ gap_ideas     only runs a rescue round when the sensor says no
+#   final_list         the deliverable: a numbered list of ideas, nothing else
+#
+# Run (after -c config with cyberdiner as default adapter):
+#   cof run ./idea_generator.yml -c circuitry.config.json \
+#     -e existing_ideas="$(cat ideas-so-far.txt)" -e target_count=15 --tail
+#
+# Feed the output back in as existing_ideas on the next run and it will
+# avoid repeating itself — the "tell it what it already came up with" loop.
+
+version: 1
+
+interface:
+  inputs:
+    focus:
+      type: string
+      required: false
+      description: Optional focus area (e.g. "small business", "research", "home life"). Blank = everything.
+    existing_ideas:
+      type: string
+      required: false
+      description: Ideas already generated or already in the library — the model will avoid duplicating these.
+    target_count:
+      type: number
+      required: false
+      description: How many final ideas to aim for (default 15).
+  outputs:
+    ideas:
+      type: string
+      path: prime.final_list.value
+
+effects:
+  - type: prompt
+    name: seed_themes
+    prompt_type: array
+    schema:
+      type: array
+      items:
+        type: string
+      minItems: 4
+      maxItems: 6
+    template: |
+      You are planning a brainstorm about ORCHESTRATIONS: multi-step LLM
+      pipelines that automate things people actually do — workflows with
+      drafting, critique loops, branching decisions, and iteration, executed
+      entirely with language models (no image generation, no external tools).
+
+      Focus area (may be blank, meaning "all of human activity"): {{focus}}
+
+      Propose 4 to 6 maximally DIFFERENT domains of human activity to mine
+      for orchestration ideas. Mix professional and personal, common and
+      overlooked. If a focus area is given, pick diverse corners of it.
+
+      Return ONLY a JSON array of short domain names, e.g.
+      ["hiring", "family logistics", "scientific writing"].
+
+  - type: loop
+    name: theme_rounds
+    flow: tree
+    max_concurrency: 3
+    max_iterations: 8
+    on_error: continue
+    collect: ideas
+    each:
+      in: prime.seed_themes.value
+      as: theme
+    body:
+      - type: prompt
+        name: ideas
+        template: |
+          Domain: {{theme}}
+
+          Brainstorm 5 ideas for LLM orchestrations in this domain — each one
+          a real, recurring thing people do that decomposes into a multi-step
+          LLM pipeline (draft → critique → revise loops, classify-then-branch
+          decisions, iterate-until-good-enough). Text in, text out, LLMs only.
+
+          Rules:
+          - Real recurring human work or life tasks, not toy demos.
+          - Each idea must EARN being an orchestration: it needs steps,
+            feedback, or branching — not a single prompt.
+          - Do NOT repeat anything from this list of existing ideas:
+          {{existing_ideas}}
+
+          Output exactly 5 lines, each formatted as:
+          - Title — one-sentence description of what the pipeline does
+
+  - type: prompt
+    name: curate
+    template: |
+      Below are raw brainstorm rounds of orchestration ideas (multi-step LLM
+      pipeline ideas), possibly overlapping:
+
+      {{#prime.theme_rounds.collected.value}}
+      {{.}}
+      {{/prime.theme_rounds.collected.value}}
+
+      Ideas that ALREADY exist and must be excluded:
+      {{existing_ideas}}
+
+      Curate: merge duplicates and near-duplicates, drop anything that is
+      really just a single prompt in disguise, drop anything requiring
+      non-LLM capabilities, and rank the rest from strongest to weakest —
+      strongest meaning: common recurring task + clearly benefits from
+      multi-step structure with feedback.
+
+      Target size: {{target_count}} ideas (if that is blank, aim for 15).
+
+      Output ONLY a numbered list, each line:
+      N. Title — one-sentence description
+
+  - type: if
+    if:
+      mode: model
+      template: |
+        Target: {{target_count}} (if blank, 15) strong, clearly distinct
+        orchestration ideas.
+
+        List to judge:
+        {{prime.curate.value}}
+
+        Does this list meet the target — enough ideas, each distinct, each a
+        genuine multi-step LLM workflow? Answer yes or no.
+    then:
+      - type: prompt
+        name: gap_ideas
+        template: |
+          Respond with exactly: (no additional ideas needed)
+    else:
+      - type: prompt
+        name: gap_ideas
+        template: |
+          This curated list of orchestration ideas came up short:
+          {{prime.curate.value}}
+
+          Already-existing ideas to avoid:
+          {{existing_ideas}}
+
+          Identify what KINDS of human activity are underrepresented in the
+          list above, then brainstorm 5-8 additional ideas from those gaps.
+          Same rules: recurring real tasks, multi-step LLM pipelines with
+          feedback or branching, LLMs only.
+
+          Output exactly one line per idea:
+          - Title — one-sentence description
+
+  - type: prompt
+    name: final_list
+    template: |
+      Produce the final list of orchestration ideas.
+
+      Curated list:
+      {{prime.curate.value}}
+
+      Possible additions (ignore if it says no additional ideas are needed):
+      {{prime.gap_ideas.value}}
+
+      Merge them, remove any duplicates, keep the ranking sensible, and
+      output ONLY the final numbered list — no preamble, no commentary:
+      N. Title — one-sentence description
