@@ -179,13 +179,18 @@ def compile_orchestration(
 def apply_effect_overrides(
     root: DynamicDefinition, overrides: dict[str, dict[str, Any]]
 ) -> tuple[DynamicDefinition, set[str]]:
-    """Apply a profile's per-effect model/provider overlay onto a compiled tree.
+    """Apply a profile's per-effect model/provider/enabled overlay onto a tree.
 
     Rebuilds the immutable ``*Definition`` chain bottom-up via
     ``dataclasses.replace`` so frozen semantics are preserved — this never
     mutates ``root`` or any of its descendants. Dotted override keys use the
     same addressing as runtime state paths (relative to the ``prime`` root),
     matching ``profiles.collect_orchestration_effect_paths``.
+
+    ``enabled: false`` marks the matched effect *and every descendant* as
+    disabled, so an inspector of the compiled tree sees the same truth the
+    runtime acts on (a disabled container never executes its subtree — see
+    ``core.disabled``).
 
     Returns the rebuilt root plus the set of override keys that matched an
     effect somewhere in the tree.
@@ -212,6 +217,7 @@ def _overlay_effect(
     own_path = _scope_child(path, name) if name else path
 
     override = overrides.get(own_path) if own_path else None
+    disable = False
     if override:
         matched.add(own_path)
         model_provider: dict[str, Any] = {}
@@ -221,6 +227,7 @@ def _overlay_effect(
             model_provider["provider"] = override["provider"]
         if model_provider:
             node = replace(node, **model_provider)
+        disable = override.get("enabled") is False
 
     if isinstance(node, DynamicDefinition):
         node = replace(
@@ -264,6 +271,29 @@ def _overlay_effect(
             ),
         )
 
+    if disable:
+        node = _disable_subtree(node)
+
+    return node
+
+
+def _disable_subtree(node: EffectDef) -> EffectDef:
+    """Return *node* (and every descendant) rebuilt with ``enabled=False``."""
+    node = replace(node, enabled=False)
+
+    if isinstance(node, DynamicDefinition):
+        return replace(node, effects=[_disable_subtree(c) for c in node.effects])
+    if isinstance(node, ReflectorDefinition):
+        inner = cast(DynamicDefinition, _disable_subtree(node.inner))
+        return replace(node, inner=inner)
+    if isinstance(node, ConditionalDefinition):
+        return replace(
+            node,
+            then_effects=tuple(_disable_subtree(c) for c in node.then_effects),
+            else_effects=tuple(_disable_subtree(c) for c in node.else_effects),
+        )
+    if isinstance(node, LoopDefinition):
+        return replace(node, body=tuple(_disable_subtree(c) for c in node.body))
     return node
 
 

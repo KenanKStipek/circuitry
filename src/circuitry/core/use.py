@@ -114,6 +114,9 @@ class UseDefinition:
     on_error: Literal["fail", "skip", "continue"] = "fail"
     description: str | None = None
 
+    # False = skip execution and write a disabled node (see core.disabled).
+    enabled: bool = True
+
 
 class UseRuntime:
     """

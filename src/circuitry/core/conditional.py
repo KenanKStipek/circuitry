@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, Union
 
 from ..adapters import Adapter
 from ..output import console as _console
+from .disabled import is_enabled
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,11 @@ class ConditionalDefinition:
     # Evaluation behavior
     threshold: float = 0.5  # for model-based decisions
     on_error: Literal["fail", "continue", "skip"] = "fail"
+
+    # False = skip execution (condition + both branches) and write a disabled
+    # node. The condition itself is never separately disableable — see
+    # ``cli.profiles`` validation.
+    enabled: bool = True
 
 
 class ConditionalRuntime:
@@ -156,7 +162,12 @@ class ConditionalRuntime:
         executed_effects: list[dict[str, Any]] = []
 
         try:
-            from .dynamic import _EFFECT_STYLE, _effect_type_label, _elapsed_str
+            from .dynamic import (
+                _EFFECT_STYLE,
+                _effect_type_label,
+                _elapsed_str,
+                _skip_disabled_effect,
+            )
 
             for idx, effect in enumerate(effects_to_run):
                 effect_record = self._effect_record(effect=effect, index=idx)
@@ -164,6 +175,19 @@ class ConditionalRuntime:
                 icon, color = _EFFECT_STYLE.get(type_label, ("·", "white"))
                 name = getattr(effect, "name", None) or "?"
                 is_prompt = isinstance(effect, PromptDefinition)
+
+                if not is_enabled(effect):
+                    _skip_disabled_effect(
+                        effect,
+                        store=child_store,
+                        indent=branch_indent,
+                        icon=icon,
+                        color=color,
+                        verbose=self.verbose,
+                    )
+                    effect_record["disabled"] = True
+                    executed_effects.append(effect_record)
+                    continue
 
                 if self.verbose and not is_prompt:
                     _console.print(

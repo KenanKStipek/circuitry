@@ -141,6 +141,87 @@ def test_run_with_unknown_profile_effect_path_fails_with_actionable_error(
     assert "sub.deep_analysis" in result.error
 
 
+def _write_reflector_orch(tmp_path: Path) -> Path:
+    """The demo orchestration: agentic planning followed by a fixed effect."""
+    orch_path = tmp_path / "recipe.yml"
+    _write(
+        orch_path,
+        """
+effects:
+  - type: reflector
+    name: planner
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "plan {{topic}}"
+  - type: prompt
+    name: report
+    template: "report on <{{planner.value}}>"
+""".strip()
+        + "\n",
+    )
+    return orch_path
+
+
+@dataclass(frozen=True)
+class PlanningAdapter:
+    """Returns a plan the reflector accepts as 'nothing left to do'."""
+
+    name: str = "primary"
+    calls: list = field(default_factory=list)
+
+    def generate(self, *, model: str, prompt: str, timeout_seconds: int = 120) -> GenerateResult:
+        self.calls.append((model, prompt))
+        return GenerateResult(text="done: true\neffects: []\n", raw={})
+
+
+def _run_reflector_demo(orch_path: Path, profile_name: str | None) -> dict:
+    adapter = PlanningAdapter()
+    result = run(
+        RunRequest(
+            orchestration_path=orch_path,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            config=CircuitryConfig(),
+            adapter=adapter,
+            initial_state={"topic": "widgets"},
+            profile_name=profile_name,
+        )
+    )
+    assert result.ok is True, result.error
+    return result.state
+
+
+def test_run_with_profile_disabling_reflector_skips_planning(tmp_path: Path) -> None:
+    """Demo: same orchestration with the reflector on vs off."""
+    orch_path = _write_reflector_orch(tmp_path)
+    _write(
+        orch_path.parent / "profiles" / "no-planning.yml",
+        "effects:\n  planner:\n    enabled: false\n",
+    )
+
+    on_state = _run_reflector_demo(orch_path, None)
+    off_state = _run_reflector_demo(orch_path, "no-planning")
+
+    # Reflector on: it planned, and the node carries no disabled marker.
+    assert on_state["prime"]["planner"]["value"] is True
+    assert "disabled" not in on_state["prime"]["planner"]["meta"]
+    assert "inner" in on_state["prime"]["planner"]
+
+    # Reflector off: skip node, no planning subtree at all.
+    planner_off = off_state["prime"]["planner"]
+    assert planner_off["value"] is None
+    assert planner_off["meta"]["disabled"] is True
+    assert set(planner_off["meta"]) == {"disabled", "created_at", "completed_at"}
+    assert "inner" not in planner_off
+
+    # Downstream stays coherent: the template renders the disabled node empty.
+    assert off_state["prime"]["report"]["meta"]["prompt_sent"] == "report on <>"
+    assert off_state["prime"]["report"]["value"] is not None
+
+
 def test_run_without_profile_is_unaffected_by_profile_plumbing(tmp_path: Path) -> None:
     """Regression guard: identical RunRequests with/without profile_name=None
     must produce byte-identical state (minus timestamps/run_id)."""
