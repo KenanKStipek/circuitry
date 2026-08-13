@@ -122,8 +122,9 @@ def _collect_effect_paths(effects: Any, *, scope: str, paths: set[str]) -> None:
         if not isinstance(effect, dict):
             continue
         effect_type = str(effect.get("type") or "").strip().lower()
-        name = effect.get("name")
-        has_name = isinstance(name, str) and name.strip() != ""
+        name_value = effect.get("name")
+        name = name_value if isinstance(name_value, str) else ""
+        has_name = name.strip() != ""
         own_path = f"{scope}.{name}" if scope and has_name else (name if has_name else scope)
 
         if has_name:

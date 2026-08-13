@@ -183,18 +183,32 @@ def test_run_without_profile_is_unaffected_by_profile_plumbing(tmp_path: Path) -
 
     state_explicit_none = _run_with_explicit_none()
 
+    def _scrub(node: object) -> object:
+        """Replace every timestamp-ish key anywhere in the tree.
+
+        Every effect node carries its own meta timestamps — including the
+        `dynamic` wrapper — so this walks rather than naming nodes.
+        """
+        if isinstance(node, dict):
+            return {
+                key: "T"
+                if key in {"created_at", "completed_at", "started_at"}
+                else "RID"
+                if key == "run_id"
+                else "PATH"
+                if key == "orchestration_path"
+                else _scrub(value)
+                for key, value in node.items()
+            }
+        if isinstance(node, list):
+            return [_scrub(item) for item in node]
+        return node
+
     def _strip_volatile(state: dict) -> dict:
         clone = json.loads(json.dumps(state, default=str))
-        clone["runtime"]["last_run"]["run_id"] = "RID"
-        clone["runtime"]["last_run"]["started_at"] = "T"
-        clone["runtime"]["last_run"]["completed_at"] = "T"
-        clone["runtime"]["last_run"]["orchestration_path"] = "PATH"
         clone.pop("_run_id", None)
         clone.pop("_timestamp", None)
-        for node in (clone["prime"]["summarize"], clone["prime"]["sub"]["deep_analysis"]):
-            node["meta"]["created_at"] = "T"
-            node["meta"]["completed_at"] = "T"
-        return clone
+        return _scrub(clone)  # type: ignore[return-value]
 
     assert "profile" not in state_default["runtime"]["effective_settings"]
     assert "profile" not in state_explicit_none["runtime"]["effective_settings"]
