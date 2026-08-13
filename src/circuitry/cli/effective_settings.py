@@ -10,9 +10,12 @@ fields are intentionally NOT redacted here. The runtime snapshot embedded in
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from .config import CircuitryConfig
+
+if TYPE_CHECKING:
+    from .profiles import ProfileSettings
 
 
 @dataclass(frozen=True)
@@ -41,16 +44,20 @@ def resolve_effective_settings(
     cli_model: Optional[str] = None,
     cli_adapter: Optional[str] = None,
     cli_plugins: Optional[list[str]] = None,
+    profile: "Optional[ProfileSettings]" = None,
 ) -> EffectiveSettings:
     sources: dict[str, str] = {}
     model: Optional[str]
     adapter: Optional[str]
     plugins: list[str]
 
-    # model precedence: cli > orch > config > default
+    # model precedence: cli > profile > orch > config > default
     if cli_model is not None:
         model = cli_model
         sources["model"] = "cli"
+    elif profile is not None and profile.model is not None:
+        model = profile.model
+        sources["model"] = "profile"
     elif orch.get("model") is not None:
         raw_model = orch.get("model")
         model = str(raw_model) if raw_model is not None else None
@@ -62,10 +69,13 @@ def resolve_effective_settings(
         model = None
         sources["model"] = "default"
 
-    # adapter precedence: cli > orch > config > default
+    # adapter precedence: cli > profile > orch > config > default
     if cli_adapter is not None:
         adapter = cli_adapter
         sources["adapter"] = "cli"
+    elif profile is not None and profile.adapter is not None:
+        adapter = profile.adapter
+        sources["adapter"] = "profile"
     elif orch.get("adapter") is not None:
         raw_adapter = orch.get("adapter")
         adapter = str(raw_adapter) if raw_adapter is not None else None

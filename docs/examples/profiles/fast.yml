@@ -1,0 +1,18 @@
+# Example named profile — see docs/profiles.md for the format reference.
+# Copy into <orchestration_dir>/profiles/fast.yml or <project_root>/profiles/fast.yml
+# and run with: cof run recipe --profile fast
+adapter: ollama
+model: llama3.2
+inputs:
+  topic: "circuit design"
+effects:
+  summarize:
+    model: tier-1
+    provider: cyberdiner
+  deep_analysis:
+    model: tier-4
+  my_reflector:
+    enabled: false
+persistence:
+  backend: jsonl-file
+  path: runs.jsonl
