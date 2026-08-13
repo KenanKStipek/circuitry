@@ -118,6 +118,13 @@ def _library_screen(spec: ViewSpec) -> CircuitryScreen:
     return LibraryScreen(spec)
 
 
+def _build_run_screen(spec: ViewSpec) -> CircuitryScreen:
+    """Imported lazily: run_view imports this module for its base class."""
+    from .run_view import RunScreen
+
+    return RunScreen(spec)
+
+
 def _doctor(spec: ViewSpec) -> CircuitryScreen:
     from .doctor import DoctorScreen
 
@@ -145,7 +152,13 @@ VIEWS: tuple[ViewSpec, ...] = (
         "1",
         factory=_library_screen,
     ),
-    ViewSpec("run", "Run", "Execute an orchestration and watch effects stream", "2"),
+    ViewSpec(
+        "run",
+        "Run",
+        "Execute an orchestration and watch effects stream",
+        "2",
+        factory=_build_run_screen,
+    ),
     ViewSpec(
         "inspect",
         "Inspect",
