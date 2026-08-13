@@ -122,8 +122,15 @@ class LibrarySource(Protocol):
 class CurationSource:
     """The bundled curation library at `src/circuitry/curation/`."""
 
+    #: Ships inside the package — there is never anything to fetch.
+    REFRESHABLE = False
+
     def __init__(self, name: str = CURATION_SOURCE_NAME) -> None:
         self.name = name
+
+    def provenance(self) -> dict[str, str]:
+        """Where these entries came from, for `cof info` and the TUI detail pane."""
+        return {"type": "curation", "path": str(_curation_dir())}
 
     def list_entries(self) -> list[Entry]:
         root = _curation_dir()
@@ -165,6 +172,9 @@ class FolderSource:
     the first prompt template, inputs from `interface.inputs`.
     """
 
+    #: A local directory is always current; re-reading it is not a fetch.
+    REFRESHABLE = False
+
     def __init__(self, name: str, path: Path) -> None:
         self.name = name
         self.path = path
@@ -173,6 +183,10 @@ class FolderSource:
     def refresh(self) -> None:
         """Drop the cached scan so the next `list_entries()` re-reads disk."""
         self._cache = None
+
+    def provenance(self) -> dict[str, str]:
+        """Where these entries came from, for `cof info` and the TUI detail pane."""
+        return {"type": "folder", "path": str(self.path)}
 
     def list_entries(self) -> list[Entry]:
         if self._cache is None:
@@ -404,6 +418,35 @@ class LibraryRegistry:
             if source.name == name:
                 return source
         return None
+
+    def is_refreshable(self, name: str) -> bool:
+        """True when `refresh()` on this source would actually fetch something.
+
+        Local sources (curation, folder) are always current, so offering to
+        refresh them is noise; only a source that declares `REFRESHABLE` gets
+        a refresh affordance in the UI.
+        """
+        return bool(getattr(self.get_source(name), "REFRESHABLE", False))
+
+    @property
+    def refreshable_names(self) -> list[str]:
+        """Names of the sources worth running `refresh()` against."""
+        return [s.name for s in self.sources if getattr(s, "REFRESHABLE", False)]
+
+    def provenance(self, name: str) -> dict[str, str]:
+        """Where a source's entries came from, as ordered `label -> value` pairs.
+
+        Duck-typed on purpose: a source that has nothing to say simply omits
+        `provenance()` and gets an empty mapping, and a test double only has
+        to implement the one method to be rendered like the real thing.
+        """
+        provenance = getattr(self.get_source(name), "provenance", None)
+        if not callable(provenance):
+            return {}
+        raw = provenance()
+        if not isinstance(raw, dict):
+            return {}
+        return {str(key): str(value) for key, value in raw.items() if value not in (None, "")}
 
     def list_entries(self, *, source: Optional[str] = None) -> list[Entry]:
         """Aggregate entries across sources, in source precedence order."""

@@ -1,22 +1,29 @@
-"""Library view — browse, search and eject the curation library.
+"""Library view — browse, search, refresh and eject every configured source.
 
 Three panes: a category tree, the orchestrations in that category, and a
 detail pane rendering the manifest metadata for whatever is highlighted.
-``/`` searches every entry (name, intent, tags) and ``e`` ejects the YAML to
-the current directory.
+``/`` searches every entry (name, intent, tags), ``s`` cycles the source
+filter, ``r`` refreshes the fetchable sources, ``enter`` hands an entry to the
+Run view and ``e`` ejects the YAML to the current directory.
 
-Every fact shown here comes from :func:`circuitry.cli.registry.load_index` —
-the same reader behind ``cof list`` and ``cof info`` — and an eject goes
-through :func:`circuitry.cli.registry.eject_text`, the same reader behind
-``cof eject``. Nothing in this module parses the manifest or a curation file
-itself, so the TUI cannot drift from the CLI.
+Every fact shown here comes from :class:`circuitry.cli.library_sources.LibraryRegistry`
+— the same reader behind ``cof list``, ``cof info``, ``cof run`` and
+``cof library refresh``. Entries, provenance, refresh outcomes and the
+"not fetched yet" notice are all the registry's answers, so the TUI cannot
+drift from the CLI, and a new source type shows up here for free.
+
+Zero-config (curation only) looks exactly as it did before sources existed:
+badges, the source filter and the provenance block appear only when more than
+one source is configured, which is the same rule ``cof list`` uses for its
+Source column.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, cast
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -24,12 +31,20 @@ from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Input, OptionList, Static, Tree
 
-from ..cli.registry import eject_destination, eject_text, load_index, write_ejected
+from ..cli.library_sources import (
+    Entry,
+    LibraryFetchError,
+    LibraryRegistry,
+    LibrarySourceError,
+    RefreshResult,
+    build_registry,
+)
+from ..cli.registry import eject_destination, eject_text, write_ejected
 from .layout import ResponsiveLayout
 from .screens import ViewScreen
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from collections.abc import Sequence
+    from collections.abc import Iterable, Sequence
     from pathlib import Path
 
     from textual.events import Mount
@@ -40,14 +55,25 @@ __all__ = [
     "ConfirmOverwrite",
     "LibraryEntry",
     "LibraryScreen",
+    "ambiguous_names",
+    "banner_text",
     "categories",
     "detail_lines",
+    "empty_state_lines",
+    "entry_text",
+    "library_registry",
     "load_entries",
+    "option_label",
+    "provenance_lines",
+    "refresh_summary",
     "search",
 ]
 
 #: Label of the tree root, which means "no category filter".
 ALL_LABEL = "All"
+
+#: Label of the "no source filter" step in the ``s`` cycle.
+ALL_SOURCES_LABEL = "all"
 
 #: Shown wherever the manifest has nothing to say for a field.
 MISSING = "—"
@@ -55,16 +81,34 @@ MISSING = "—"
 #: Width of the label column in the detail pane.
 LABEL_WIDTH = 12
 
+#: Width of the label column inside the provenance block (which is indented).
+PROVENANCE_LABEL_WIDTH = 11
+
+#: Nice names for the keys a source's ``provenance()`` returns. Anything not
+#: listed is title-cased, so a new source type renders without a change here.
+PROVENANCE_LABELS: dict[str, str] = {
+    "type": "Type",
+    "path": "Path",
+    "repo": "Repo",
+    "ref": "Ref",
+    "sha": "SHA",
+    "fetched_at": "Fetched",
+    "status": "Status",
+    "token_env": "Token env",
+}
+
 
 # -- data ---------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class LibraryEntry:
-    """One curation manifest entry, in the shape this view needs.
+    """One library entry, in the shape this view needs.
 
-    ``raw`` is the untouched index entry, so anything the detail pane or an
-    eject needs is available without going back to the manifest.
+    ``raw`` is the untouched index-shaped metadata, so anything the detail
+    pane or an eject needs is available without going back to the source.
+    ``path`` is the file the entry was read from — the same path ``cof eject``
+    and ``cof run`` use, whichever source it came from.
     """
 
     name: str
@@ -72,10 +116,18 @@ class LibraryEntry:
     file: str
     intent: str
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
+    source: str = ""
+    path: Path | None = None
 
     @classmethod
-    def from_index(cls, entry: dict[str, Any]) -> LibraryEntry:
-        """Adapt a `cli.registry` index entry."""
+    def from_index(
+        cls,
+        entry: dict[str, Any],
+        *,
+        source: str = "",
+        path: Path | None = None,
+    ) -> LibraryEntry:
+        """Adapt an index-shaped metadata dict."""
         name = str(entry.get("name") or "")
         return cls(
             name=name,
@@ -83,7 +135,19 @@ class LibraryEntry:
             file=str(entry.get("file") or ""),
             intent=str(entry.get("intent") or entry.get("description") or ""),
             raw=entry,
+            source=source,
+            path=path,
         )
+
+    @classmethod
+    def from_source(cls, entry: Entry) -> LibraryEntry:
+        """Adapt a :class:`~circuitry.cli.library_sources.Entry`."""
+        return cls.from_index(entry.metadata, source=entry.source, path=entry.path)
+
+    @property
+    def qualified_name(self) -> str:
+        """``"<source>:<name>"`` — always unambiguous, as the CLI spells it."""
+        return f"{self.source}:{self.name}" if self.source else self.name
 
     @property
     def search_text(self) -> str:
@@ -92,9 +156,24 @@ class LibraryEntry:
         return " ".join([self.name, self.intent, *tags]).lower()
 
 
-def load_entries() -> list[LibraryEntry]:
-    """Every manifest entry, in manifest order."""
-    return [LibraryEntry.from_index(entry) for entry in load_index()]
+def library_registry() -> tuple[LibraryRegistry, str]:
+    """The configured registry, plus a warning when config could not be read.
+
+    A broken ``runtime.library.sources`` must not cost the user their library:
+    the browser falls back to the bundled curation source and says why, rather
+    than crashing the view on open.
+    """
+    try:
+        return build_registry(), ""
+    except (LibrarySourceError, ValueError, OSError) as exc:
+        return LibraryRegistry.default(), f"Library sources ignored — {exc}"
+
+
+def load_entries(registry: LibraryRegistry | None = None) -> list[LibraryEntry]:
+    """Every entry the registry exposes, in source-precedence order."""
+    if registry is None:
+        registry, _ = library_registry()
+    return [LibraryEntry.from_source(entry) for entry in registry.list_entries()]
 
 
 def categories(entries: Sequence[LibraryEntry]) -> list[tuple[str, int]]:
@@ -104,6 +183,18 @@ def categories(entries: Sequence[LibraryEntry]) -> list[tuple[str, int]]:
         key = entry.category or "uncategorised"
         counts[key] = counts.get(key, 0) + 1
     return list(counts.items())
+
+
+def ambiguous_names(entries: Sequence[LibraryEntry]) -> set[str]:
+    """Bare names that more than one source claims.
+
+    These are exactly the names ``cof run`` would warn about, so the browser
+    shows them source-qualified rather than listing the same label twice.
+    """
+    by_name: dict[str, set[str]] = {}
+    for entry in entries:
+        by_name.setdefault(entry.name, set()).add(entry.source)
+    return {name for name, sources in by_name.items() if len(sources) > 1}
 
 
 # -- search -------------------------------------------------------------------
@@ -131,6 +222,9 @@ def match_rank(query: str, entry: LibraryEntry) -> int | None:
         return 0
     name = entry.name.lower()
     tail = name.rsplit("/", 1)[-1]
+    # A source-qualified query means that one entry and nothing else.
+    if entry.source and needle == entry.qualified_name.lower():
+        return 0
     # An exact name wins outright, and the tail counts as a prefix too:
     # "critique" means utilities/critique, not patterns/critique_refine_loop.
     if needle in (name, tail):
@@ -152,13 +246,19 @@ def search(
     entries: Sequence[LibraryEntry],
     query: str = "",
     category: str | None = None,
+    source: str | None = None,
 ) -> list[LibraryEntry]:
-    """Entries matching ``query``, best match first, optionally one category.
+    """Entries matching ``query``, best match first, optionally scoped.
 
-    A blank query keeps manifest order — browsing should not reshuffle under
-    you — while a real query sorts by rank and then name for stability.
+    A blank query keeps source-precedence order — browsing should not reshuffle
+    under you — while a real query sorts by rank and then name for stability.
     """
-    scoped = [e for e in entries if category is None or (e.category or "uncategorised") == category]
+    scoped = [
+        e
+        for e in entries
+        if (source is None or e.source == source)
+        and (category is None or (e.category or "uncategorised") == category)
+    ]
     if not "".join(query.split()):
         return list(scoped)
     ranked: list[tuple[int, str, LibraryEntry]] = []
@@ -216,10 +316,36 @@ def _io_lines(value: Any) -> list[str]:
     return lines
 
 
-def detail_lines(entry: LibraryEntry | None) -> list[str]:
+def provenance_lines(source: str, provenance: dict[str, str]) -> list[str]:
+    """The "where did these bytes come from" block for the detail pane.
+
+    Rendered straight from whatever the source's ``provenance()`` returned, so
+    a github source shows repo/ref/pinned SHA/fetched-at and a folder source
+    shows its path without this function knowing either type exists.
+    """
+    if not source and not provenance:
+        return []
+    rows = [("Source", source)] if source else []
+    for key, value in provenance.items():
+        label = PROVENANCE_LABELS.get(key, key.replace("_", " ").capitalize())
+        rows.append((label, _short_sha(value) if key == "sha" else value))
+    return ["", "Provenance", *(f"  {label:<{PROVENANCE_LABEL_WIDTH}}{value}" for label, value in rows)]
+
+
+def _short_sha(sha: str) -> str:
+    """A pinned SHA, abbreviated the way git and ``cof library refresh`` do."""
+    return f"{sha[:7]} (pinned)" if len(sha) > 7 else sha
+
+
+def detail_lines(
+    entry: LibraryEntry | None,
+    provenance: dict[str, str] | None = None,
+) -> list[str]:
     """The detail pane's text for ``entry`` — the manifest, rendered.
 
     Returns the empty-selection copy for ``None`` so the pane is never blank.
+    ``provenance`` is omitted entirely for a single-source library, where
+    there is only one possible answer and the block would be noise.
     """
     if entry is None:
         return [
@@ -252,18 +378,106 @@ def detail_lines(entry: LibraryEntry | None) -> list[str]:
     example = str(raw.get("example") or "")
     if example:
         lines += ["", "Example", f"  {example}"]
+    if provenance is not None:
+        lines += provenance_lines(entry.source, provenance)
     lines += ["", f"Press e to eject to ./{eject_destination(raw)}"]
     return lines
 
 
-def empty_state_lines(query: str) -> list[str]:
-    """Copy for the "nothing matched" panel — never an empty box."""
+def option_label(
+    entry: LibraryEntry,
+    *,
+    show_source: bool = False,
+    ambiguous: set[str] | frozenset[str] = frozenset(),
+) -> str | Text:
+    """One row in the list: a source badge, then the name.
+
+    The name is source-qualified exactly when it is ambiguous, so two entries
+    called ``summarize`` never render as the same string. Single-source
+    libraries get the bare name they have always had.
+    """
+    name = entry.qualified_name if entry.name in ambiguous else entry.name
+    if not show_source or not entry.source:
+        return name
+    # A Rich Text, not a markup string: a source is user-named, and "[hub]"
+    # in a markup string would be parsed as a (broken) style tag.
+    return Text.assemble((f"[{entry.source}]", "dim"), " ", name)
+
+
+def empty_state_lines(
+    query: str,
+    *,
+    source: str | None = None,
+    refreshable: bool = False,
+) -> list[str]:
+    """Copy for the "nothing to show" panel — never an empty box.
+
+    Four designed states: no search hit, an un-fetched remote source, an empty
+    local source, and an empty library.
+    """
+    if query.strip():
+        return [
+            f'No orchestration matches "{query.strip()}".',
+            "",
+            "Try fewer letters, or search an intent word or a tag.",
+            "Esc clears the search and shows the whole library.",
+        ]
+    if source is not None and refreshable:
+        return [
+            f"Nothing cached for source {source!r} yet.",
+            "",
+            "Press r to fetch it — the only thing here that touches the network.",
+            "s cycles sources · Esc goes back.",
+        ]
+    if source is not None:
+        return [
+            f"Source {source!r} has no orchestrations.",
+            "",
+            "s cycles to the next source · Esc goes back.",
+        ]
     return [
-        f'No orchestration matches "{query.strip()}".',
+        "The library is empty.",
         "",
-        "Try fewer letters, or search an intent word or a tag.",
-        "Esc clears the search and shows the whole library.",
+        "Configure runtime.library.sources, or reinstall the curation library.",
     ]
+
+
+def banner_text(notices: Sequence[str], stale: str = "") -> str:
+    """The line above the panes: a failed refresh, else any source notices.
+
+    A failure outranks a notice because it is the newer, more surprising fact
+    — and it is what explains why the entries below it may be out of date.
+    """
+    if stale:
+        return stale
+    return "\n".join(notices)
+
+
+def stale_banner(failures: Sequence[str]) -> str:
+    """Failure copy that keeps the cached entries' status honest."""
+    if not failures:
+        return ""
+    return "\n".join(["Refresh failed — showing the last cached entries.", *failures])
+
+
+def refresh_summary(outcomes: Sequence[RefreshResult], failures: Sequence[str]) -> str:
+    """One status line for a finished refresh, in ``cof library refresh`` words."""
+    parts = [outcome.summary() for outcome in outcomes]
+    if failures:
+        parts.append(f"{len(failures)} failed")
+    return " · ".join(parts) if parts else "Nothing to refresh."
+
+
+def entry_text(entry: LibraryEntry) -> str | None:
+    """The bytes an eject writes for ``entry``; ``None`` if unresolvable.
+
+    The source's own file, read exactly as ``cof eject`` reads it, so an eject
+    is the same operation whichever source the entry came from. The curation
+    reader is the fallback for a manifest entry with no resolved path.
+    """
+    if entry.path is not None and entry.path.exists():
+        return entry.path.read_text(encoding="utf-8")
+    return eject_text(entry.raw)
 
 
 # -- widgets ------------------------------------------------------------------
@@ -336,15 +550,23 @@ class ConfirmOverwrite(ResponsiveLayout, ModalScreen[bool]):
         self.dismiss(False)
 
 
+#: What a refresh does: given a source name, return its outcomes (or raise
+#: :class:`LibraryFetchError`). Injectable so tests never touch the network.
+Refresher = Callable[[str], "list[RefreshResult]"]
+
+
 class LibraryScreen(ViewScreen):
-    """Browse, search and eject the curation library."""
+    """Browse, search, refresh and eject every configured library source."""
 
     #: The panes scroll individually, so the body itself must not scroll.
     BODY_CONTAINER: ClassVar[type[Widget]] = Vertical
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("slash", "search", "Search"),
+        Binding("enter", "run_entry", "Run"),
         Binding("e", "eject", "Eject"),
+        Binding("s", "cycle_source", "Source"),
+        Binding("r", "refresh_sources", "Refresh"),
         Binding("escape", "clear_or_back", "Back", show=False),
     ]
 
@@ -357,6 +579,13 @@ class LibraryScreen(ViewScreen):
     LibraryScreen #library-search {
         height: 3;
         margin: 0;
+    }
+
+    LibraryScreen #library-banner {
+        height: auto;
+        max-height: 3;
+        padding: 0 1;
+        color: $warning;
     }
 
     LibraryScreen #library-panes {
@@ -420,19 +649,37 @@ class LibraryScreen(ViewScreen):
 
     /* A four-row terminal keeps the list and nothing else. */
     LibraryScreen.-tiny #library-search,
+    LibraryScreen.-tiny #library-banner,
     LibraryScreen.-tiny #library-detail-pane,
     LibraryScreen.-tiny #library-status {
         display: none;
     }
     """
 
-    def __init__(self, spec: Any) -> None:
+    def __init__(
+        self,
+        spec: Any,
+        *,
+        registry: LibraryRegistry | None = None,
+        refresher: Refresher | None = None,
+    ) -> None:
         super().__init__(spec)
-        self.entries: list[LibraryEntry] = load_entries()
+        warning = ""
+        if registry is None:
+            registry, warning = library_registry()
+        self.registry = registry
+        self._refresher: Refresher = refresher or self._registry_refresh
+        self.entries: list[LibraryEntry] = load_entries(self.registry)
         self.matches: list[LibraryEntry] = list(self.entries)
         self.category: str | None = None
+        self.source: str | None = None
         self.term = ""
-        self.notice = ""
+        self.notice = warning
+        self.stale = ""
+        self.refreshing = False
+
+    def _registry_refresh(self, source: str) -> list[RefreshResult]:
+        return self.registry.refresh(source=source)
 
     # -- composition ---------------------------------------------------------
 
@@ -442,6 +689,7 @@ class LibraryScreen(ViewScreen):
         # compose-stack the context managers rely on does not survive.
         yield Static(f"{self.spec.name} — {self.spec.blurb}", id="library-heading")
         yield Input(placeholder="/ to search — name, intent, tags", id="library-search")
+        yield Static("", id="library-banner", markup=False)
         yield Horizontal(
             Tree(ALL_LABEL, id="library-tree"),
             Vertical(
@@ -462,6 +710,19 @@ class LibraryScreen(ViewScreen):
         self._build_tree()
         self._refresh_list()
         self._entry_list.focus()
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Hide the source keys for a library that has only one answer.
+
+        ``None`` hides the binding outright (footer and help overlay), so a
+        zero-config user is never offered a filter with one option or a
+        refresh with nothing to fetch.
+        """
+        if action == "cycle_source" and not self.registry.is_multi_source:
+            return None
+        if action == "refresh_sources" and not self.registry.refreshable_names:
+            return None
+        return True
 
     # -- widget handles ------------------------------------------------------
 
@@ -485,39 +746,86 @@ class LibraryScreen(ViewScreen):
             return None
         return self.matches[index]
 
+    @property
+    def show_source(self) -> bool:
+        """Whether source badges, filter and provenance are worth the pixels."""
+        return self.registry.is_multi_source
+
     # -- population ----------------------------------------------------------
+
+    def _source_entries(self) -> list[LibraryEntry]:
+        """Entries within the current source filter, ignoring category/query."""
+        if self.source is None:
+            return list(self.entries)
+        return [entry for entry in self.entries if entry.source == self.source]
+
+    def _refresh_targets(self) -> list[str]:
+        """Sources ``r`` would fetch: the filtered one, or every fetchable one."""
+        names = self.registry.refreshable_names
+        if self.source is None:
+            return names
+        return [self.source] if self.source in names else []
 
     def _build_tree(self) -> None:
         tree = self._categories
+        scoped = self._source_entries()
+        tree.clear()
         tree.show_root = True
         tree.root.data = ""
-        tree.root.label = f"{ALL_LABEL} ({len(self.entries)})"
-        for name, count in categories(self.entries):
+        tree.root.label = f"{ALL_LABEL} ({len(scoped)})"
+        for name, count in categories(scoped):
             tree.root.add_leaf(f"{name} ({count})", data=name)
         tree.root.expand()
 
     def _refresh_list(self) -> None:
         """Re-run the filter and repaint the list, detail pane and status."""
-        self.matches = search(self.entries, self.term, self.category)
+        self.matches = search(self.entries, self.term, self.category, self.source)
+        ambiguous = ambiguous_names(self.entries) if self.show_source else frozenset()
         options = self._entry_list
         options.clear_options()
         if self.matches:
-            options.add_options([entry.name for entry in self.matches])
+            options.add_options(
+                [
+                    option_label(entry, show_source=self.show_source, ambiguous=ambiguous)
+                    for entry in self.matches
+                ]
+            )
             options.highlighted = 0
         options.display = bool(self.matches)
         empty = self.query_one("#library-empty", Static)
         empty.display = not self.matches
-        empty.update("\n".join(empty_state_lines(self.term)))
+        empty.update(
+            "\n".join(
+                empty_state_lines(
+                    self.term,
+                    source=self.source,
+                    refreshable=bool(self._refresh_targets()),
+                )
+            )
+        )
         self._refresh_detail()
+        self._refresh_banner()
         self._refresh_status()
 
     def _refresh_detail(self) -> None:
         detail = self.query_one("#library-detail", Static)
-        detail.update("\n".join(detail_lines(self.selected_entry)))
+        entry = self.selected_entry
+        provenance = (
+            self.registry.provenance(entry.source) if (self.show_source and entry) else None
+        )
+        detail.update("\n".join(detail_lines(entry, provenance)))
+
+    def _refresh_banner(self) -> None:
+        banner = self.query_one("#library-banner", Static)
+        text = banner_text(self.registry.notices(source=self.source), self.stale)
+        banner.display = bool(text)
+        banner.update(text)
 
     def _refresh_status(self) -> None:
         scope = self.category or "all"
-        counted = f"{len(self.matches)}/{len(self.entries)} in {scope}"
+        counted = f"{len(self.matches)}/{len(self._source_entries())} in {scope}"
+        if self.show_source:
+            counted += f" · source {self.source or ALL_SOURCES_LABEL}"
         if self.term.strip():
             counted += f' · "{self.term.strip()}"'
         text = f"{counted} — {self.notice}" if self.notice else counted
@@ -540,9 +848,9 @@ class LibraryScreen(ViewScreen):
         self._refresh_detail()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        """Enter on a row is a shortcut for "show me this one"."""
+        """Enter on a row runs it — the same hand-off from every source."""
         event.stop()
-        self._refresh_detail()
+        self.action_run_entry()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         event.stop()
@@ -570,6 +878,18 @@ class LibraryScreen(ViewScreen):
         """``/`` — jump into the search box."""
         self._search_box.focus()
 
+    def action_cycle_source(self) -> None:
+        """``s`` — step the source filter: all → first → … → all."""
+        if not self.registry.is_multi_source:
+            return
+        order: list[str | None] = [None, *self.registry.source_names]
+        index = order.index(self.source) if self.source in order else 0
+        self.source = order[(index + 1) % len(order)]
+        self.category = None
+        self._build_tree()
+        self._refresh_list()
+        self._set_status(f"Source: {self.source or ALL_SOURCES_LABEL}")
+
     def action_clear_or_back(self) -> None:
         """Esc clears an active search, then falls back to the app's Back."""
         if self.term:
@@ -582,15 +902,92 @@ class LibraryScreen(ViewScreen):
             return
         cast("CircuitryApp", self.app).action_back_or_quit()
 
+    def action_run_entry(self) -> None:
+        """``enter`` — hand the highlighted entry to the Run view.
+
+        Uniform across sources: what travels is the resolved file path, which
+        is what ``cof run`` would resolve the same name to.
+        """
+        entry = self.selected_entry
+        if entry is None:
+            self._set_status("Nothing to run.")
+            return
+        if entry.path is None or not entry.path.exists():
+            self._set_status(f"No orchestration file for {entry.qualified_name}.")
+            return
+        launch = getattr(self.app, "launch_run", None)
+        if not callable(launch):  # pragma: no cover - only a bare App lacks it
+            self._set_status("Run view unavailable.")
+            return
+        launch(entry.path)
+
+    # -- refresh -------------------------------------------------------------
+
+    def action_refresh_sources(self) -> None:
+        """``r`` — fetch the fetchable sources on a worker thread.
+
+        The UI thread only ever paints: the fetch itself runs off-thread and
+        reports back through :meth:`_refresh_finished`, so the list stays
+        scrollable and searchable while the network is slow or hanging.
+        """
+        if self.refreshing:
+            self._set_status("Refresh already in flight…")
+            return
+        targets = self._refresh_targets()
+        if not targets:
+            self._set_status("Nothing to fetch — every source in scope is local.")
+            return
+        self.refreshing = True
+        self.stale = ""
+        self._refresh_banner()
+        self._set_status(f"Refreshing {', '.join(targets)}…")
+        self.run_worker(
+            lambda: self._refresh_worker(tuple(targets)),
+            thread=True,
+            name="library-refresh",
+            group="library-refresh",
+        )
+
+    def _refresh_worker(self, targets: tuple[str, ...]) -> None:
+        """Worker-thread body: fetch each target, then post the result back."""
+        outcomes: list[RefreshResult] = []
+        failures: list[str] = []
+        for name in targets:
+            try:
+                outcomes.extend(self._refresher(name))
+            except LibraryFetchError as exc:
+                failures.append(str(exc))
+            except Exception as exc:  # noqa: BLE001 - a dead worker must still report
+                failures.append(f"{name}: {exc}")
+        self.app.call_from_thread(self._refresh_finished, outcomes, failures)
+
+    def _refresh_finished(
+        self, outcomes: Iterable[RefreshResult], failures: Sequence[str]
+    ) -> None:
+        """Back on the UI thread: re-read the caches and repaint.
+
+        Re-listing after a failure is deliberate — every source reads from its
+        own cache, so a failed fetch leaves the previously fetched entries
+        exactly where they were, under a banner that says they may be stale.
+        """
+        self.refreshing = False
+        self.entries = load_entries(self.registry)
+        self.stale = stale_banner(list(failures))
+        self._build_tree()
+        self._refresh_list()
+        self._set_status(refresh_summary(list(outcomes), list(failures)))
+
+    # -- eject ---------------------------------------------------------------
+
     def action_eject(self) -> None:
         """``e`` — write the highlighted entry's YAML into the current directory."""
         entry = self.selected_entry
         if entry is None:
             self._set_status("Nothing to eject.")
             return
-        payload = eject_text(entry.raw)
+        payload = entry_text(entry)
         if payload is None:
-            self._set_status(f"No curation file found for {entry.name}.")
+            self._set_status(f"No orchestration file found for {entry.qualified_name}.")
             return
         dest = eject_destination(entry.raw)
         if dest.exists():
