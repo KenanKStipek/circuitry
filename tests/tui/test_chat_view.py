@@ -110,8 +110,15 @@ def status_of(screen: ChatScreen) -> str:
 def test_full_conversation_saves_a_file_that_passes_cof_check(
     run_app: Any, tmp_path: Path
 ) -> None:
-    """Seed form → question turn → draft turn → save → `cof check` accepts it."""
-    from circuitry.api import validate_orchestration
+    """Seed form → question turn → typed reply → draft turn → Ctrl-S → `cof check`.
+
+    Everything between the keystrokes and the file is real: the wizard
+    orchestration, its `validate_yaml` tool, its `done` gate, the draft pane's
+    validator, and the save. Only the model is scripted.
+    """
+    from typer.testing import CliRunner
+
+    from circuitry.cli.app import app as cli_app
 
     target = tmp_path / "summarize_and_translate.yml"
     runner, adapter = scripted_runner(
@@ -123,14 +130,17 @@ def test_full_conversation_saves_a_file_that_passes_cof_check(
         screen = await idle(pilot)  # turn 1, seeded by the form
         first = screen.conversation.messages[-1].content
 
-        screen = await say(pilot, "French.")  # turn 2 — the draft
+        await pilot.press(*"French.")  # turn 2 — typed into the message box
+        await pilot.press("enter")
+        screen = await idle(pilot)
 
         screen.query_one("#chat-save-path", Input).value = str(target)
-        screen.action_save_file()
+        await pilot.press("ctrl+s")
         await pilot.pause()
         return {
             "first": first,
             "roles": [m.role for m in screen.conversation.messages],
+            "reply": screen.conversation.messages[1].content,
             "done": screen.conversation.done,
             "status": status_of(screen),
         }
@@ -139,13 +149,14 @@ def test_full_conversation_saves_a_file_that_passes_cof_check(
 
     assert result["first"] == "Which language should it translate into?"
     assert result["roles"] == ["wizard", "user", "wizard"]
+    assert result["reply"] == "French."
     assert result["done"] is True
     assert str(target) in result["status"]
 
-    # The artefact, judged by the tool the human would reach for.
+    # The artefact, judged by the command the human would reach for.
     assert target.exists()
-    report = validate_orchestration(orchestration_path=target)
-    assert report["ok"] is True, report["errors"]
+    checked = CliRunner().invoke(cli_app, ["check", str(target), "--skip-preflight"])
+    assert checked.exit_code == 0, checked.output
 
     # The second turn genuinely saw the first turn's transcript.
     assert any("French." in prompt for prompt in adapter.prompts)

@@ -24,6 +24,7 @@ from circuitry.tui.wizard_host import (
     Seed,
     Turn,
     default_library_dir,
+    default_runner,
     dig,
     manifest_entry,
     run_turn,
@@ -109,6 +110,25 @@ def test_run_turn_passes_the_host_state_and_adapter_through(
     assert seen["state"] == {"goal": "g", "conversation": [], "draft": ""}
     assert seen["adapter"] is sentinel
     assert seen["orchestration_path"] == wizard_path()
+
+
+def test_default_runner_leaves_the_adapter_to_the_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adapter-agnostic by omission: unless a host supplies one, the config picks."""
+    seen: dict = {}
+
+    class _Result:
+        state: dict = {}
+
+    monkeypatch.setattr("circuitry.cli.config.resolve_config", lambda *a, **k: "resolved")
+    monkeypatch.setattr(
+        "circuitry.api.run_orchestration", lambda **kw: (seen.update(kw), _Result())[1]
+    )
+    default_runner()({"goal": "g", "conversation": [], "draft": ""})
+
+    assert seen["config"] == "resolved"
+    assert seen["adapter"] is None
 
 
 # ── the seed form ────────────────────────────────────────────────────────────
