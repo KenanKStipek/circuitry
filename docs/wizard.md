@@ -85,6 +85,11 @@ cof check my_orch.yml
 Pass `--reply answers.txt` (one reply per line) to drive it without a terminal —
 that is how the transcript below is reproduced.
 
+The TUI's [Chat view](./tui.md#chat-8--build-an-orchestration-by-talking-to-it)
+(`cof tui`, then `8`) is the same loop with a screen around it:
+`circuitry.tui.wizard_host` holds the transcript, re-validates every draft, and
+owns the two save paths. Nothing in the loop is specific to either host.
+
 ## Inside a turn
 
 ```

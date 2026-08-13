@@ -371,6 +371,11 @@ def default_library_dir(config: Optional["CircuitryConfig"] = None) -> Path:
     return FALLBACK_LIBRARY_DIR
 
 
+def _mapping(value: Any) -> dict[str, Any]:
+    """``value`` if it is a mapping, else an empty one."""
+    return value if isinstance(value, dict) else {}
+
+
 def manifest_entry(draft: str, seed: Seed) -> dict[str, Any]:
     """Build a curation-manifest-shaped entry describing ``draft``.
 
@@ -387,9 +392,9 @@ def manifest_entry(draft: str, seed: Seed) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         parsed = {}
 
-    interface = parsed.get("interface") if isinstance(parsed.get("interface"), dict) else {}
-    inputs = interface.get("inputs") if isinstance(interface.get("inputs"), dict) else {}
-    outputs = interface.get("outputs") if isinstance(interface.get("outputs"), dict) else {}
+    interface = _mapping(parsed.get("interface"))
+    inputs = _mapping(interface.get("inputs"))
+    outputs = _mapping(interface.get("outputs"))
 
     slug = seed.slug
     entry: dict[str, Any] = {

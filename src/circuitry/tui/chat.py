@@ -50,7 +50,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 __all__ = ["ChatScreen", "DraftPane", "MessageBubble", "draft_preview"]
 
-SEED_HINT = "Name it, pick a category, say what it should do — then press Enter."
+SEED_HINT = (
+    "Name it, say in one line what it should do, then press Enter.\n"
+    f"Category is one of: {', '.join(CATEGORIES)}."
+)
 EMPTY_DRAFT = "No draft yet — keep talking."
 THINKING = "Thinking…"
 DONE_NOTE = "The wizard is done. Save it with Ctrl-S, or into the library with Ctrl-G."
@@ -175,6 +178,9 @@ class ChatScreen(ViewScreen):
         self.started = seed is not None
         self.busy = False
         self.saved_path: Optional[Path] = None
+        #: Whatever the status line last said — the screen's answer to "what
+        #: happened when I pressed that?", kept as state so it is assertable.
+        self.status_text = ""
         self._closing = False
 
     # -- composition ---------------------------------------------------------
@@ -186,11 +192,7 @@ class ChatScreen(ViewScreen):
         yield Vertical(
             Static(SEED_HINT, id="chat-hint"),
             Input(value=seed.name, placeholder="name", id="seed-name"),
-            Input(
-                value=seed.category,
-                placeholder=f"category ({'/'.join(CATEGORIES)})",
-                id="seed-category",
-            ),
+            Input(value=seed.category, placeholder="category", id="seed-category"),
             Input(value=seed.goal, placeholder="what should it do?", id="seed-goal"),
             Static("", id="chat-seed-problems", markup=False),
             id="chat-seed",
@@ -398,4 +400,5 @@ class ChatScreen(ViewScreen):
         )
 
     def _status(self, text: str) -> None:
+        self.status_text = text
         self.query_one("#chat-status", Static).update(text)
