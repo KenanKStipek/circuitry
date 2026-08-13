@@ -1,0 +1,30 @@
+ ⭘                                     Circuitry — Settings                                         
+                                                                                                    
+  Settings                                                                                          
+  Effective configuration and where each value came from                                            
+                                                                                                    
+  Credentials are redacted before they reach the screen.                                            
+  model                            llama3.1:8b  (from config)                                       
+  adapter                          ollama  (from config)                                            
+  plugins                          —  (from default)                                                
+  runtime.adapters.openai.api_key  ***REDACTED***  (from config)                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+ tab Next view  ? Help  q Back / Quit                                                   ▏^p palette 
