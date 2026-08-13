@@ -8,8 +8,9 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # Install the latest released cookd binary (public releases repo).
-RUN curl -fsSL https://cyberdiner.app/install.sh | bash
-ENV PATH="/root/.local/bin:${PATH}"
+# CRITICAL: install OUTSIDE /root — the runtime volume mounts at /root and
+# shadows anything baked there during build.
+RUN curl -fsSL https://cyberdiner.app/install.sh | CYBERDINER_INSTALL_DIR=/usr/local/bin bash
 
 # Serve the cheap tier via the WS gateway (default transport when PULSAR_URL
 # is unset). EXPO_URL can stay default (api.cyberdiner.app) or be overridden
