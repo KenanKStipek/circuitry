@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .adapters import Adapter
 from .cli.config import CircuitryConfig
 from .cli.runtime_shim import (
     RunRequest,
@@ -49,6 +50,7 @@ def run_orchestration(
     config: CircuitryConfig | None = None,
     raise_on_error: bool = True,
     live_state_path: str | Path | None = None,
+    adapter: Adapter | None = None,
 ) -> RunResult:
     """
     Execute an orchestration from embedded Python.
@@ -58,6 +60,10 @@ def run_orchestration(
 
     Set *live_state_path* to enable atomic incremental state file writes
     after each effect completes, suitable for external tools (e.g. Perceptron).
+
+    Pass *adapter* to run against an already-constructed adapter instead of the
+    one the config resolves — the seam a host uses to drive an orchestration
+    over its own model transport, and the one tests use to script one.
     """
     if state is not None and state_path is not None:
         raise ValueError("Provide either 'state' or 'state_path', not both.")
@@ -72,6 +78,7 @@ def run_orchestration(
         verbose=verbose,
         config=config,
         live_state_path=Path(live_state_path) if live_state_path is not None else None,
+        adapter=adapter,
     )
     result = _run(req)
 

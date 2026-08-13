@@ -2,7 +2,7 @@
 │ Keys — Home                          │
 │ Global                               │
 │         tab  Next view               │
-│   shift+tab  Previous view        ▇▇ │
+│   shift+tab  Previous view           │
 │          ^c  Quit                    │
 │          ^q  Quit                    │
 │           1  Library                 │

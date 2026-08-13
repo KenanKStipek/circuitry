@@ -11,8 +11,8 @@
   │5  Doctor — Backend, config, and connectivity diagnostics                 │  
   │6  Settings — Effective configuration and where each value came from      │  
   │7  Validate — Check an orchestration file for schema, compile, cycle and p│  
+  │8  Chat — Describe a pipeline and let the wizard write the orchestration  │  
   ╰──────────────────────────────────────────────────────────────────────────╯  
-                                                                                
                                                                                 
                                                                                 
                                                                                 
