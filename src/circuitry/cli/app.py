@@ -8,7 +8,6 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Optional
 
-import click
 import typer
 from rich.console import Console
 from rich.markup import escape
@@ -49,7 +48,9 @@ class CircuitryGroup(TyperGroup):
     future ones are covered automatically.
     """
 
-    def invoke(self, ctx: click.Context) -> Any:
+    # ``ctx`` is typed Any because Typer vendors its own click.Context under a
+    # private module path; naming either concrete class trips mypy's override check.
+    def invoke(self, ctx: Any) -> Any:
         try:
             return super().invoke(ctx)
         except ConfigError as exc:
