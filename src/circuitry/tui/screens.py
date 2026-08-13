@@ -143,6 +143,12 @@ def _validate(spec: ViewSpec) -> CircuitryScreen:
     return ValidateScreen(spec)
 
 
+def _chat(spec: ViewSpec) -> CircuitryScreen:
+    from .chat import ChatScreen
+
+    return ChatScreen(spec)
+
+
 #: Every view the shell knows about, in navigation (and number key) order.
 VIEWS: tuple[ViewSpec, ...] = (
     ViewSpec(
@@ -186,6 +192,13 @@ VIEWS: tuple[ViewSpec, ...] = (
         "Check an orchestration file for schema, compile, cycle and preflight errors",
         "7",
         factory=_validate,
+    ),
+    ViewSpec(
+        "chat",
+        "Chat",
+        "Describe a pipeline and let the wizard write the orchestration",
+        "8",
+        factory=_chat,
     ),
 )
 

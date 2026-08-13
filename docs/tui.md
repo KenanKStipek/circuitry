@@ -12,11 +12,19 @@ and the test harness — and the views that have landed (Library, Doctor,
 Settings and Validate below). Views still to come (Run, Inspect, Runs) render a
 placeholder until they do.
 
+| Key | View |
+| --- | --- |
+| `1` | [Library](#library-view-1) |
+| `2`–`4` | Run, Inspect, Runs — placeholders |
+| `5` / `6` | [Doctor / Settings](#doctor-5-and-settings-6) |
+| `7` | [Validate](#validate-7) |
+| `8` | [Chat](#chat-8--build-an-orchestration-by-talking-to-it) |
+
 ## Keymap
 
 | Key | Action |
 | --- | --- |
-| `1`–`7` | Jump straight to a view, in registry order |
+| `1`–`8` | Jump straight to a view, in registry order |
 | `Tab` / `Shift+Tab` | Cycle forward/backward through home and every view |
 | `Enter` | Open the highlighted view from the home list |
 | `?` | Toggle the help overlay |
@@ -211,6 +219,57 @@ re-validates the current path after you have edited the file.
 
 Validation reads files and may probe the network, so it runs in a worker; the
 view sits in a `Validating…` state until the report lands.
+
+## Chat (`8`) — build an orchestration by talking to it
+
+The front end for [the wizard](./wizard.md). A light seed form — name,
+category, one-line goal — opens a conversation; from there every message you
+send re-runs `curation/agents/wizard.yml` over the transcript so far, on a
+worker thread, and paints what comes back:
+
+| Turn output | Where it lands |
+| --- | --- |
+| `say` | the next bubble in the conversation |
+| `yaml` | the pane on the right, under the validator's verdict |
+| `done` | the save hint, once the draft is also valid |
+
+The wizard handles one turn; the host owns the loop. That host —
+`circuitry.tui.wizard_host` — is deliberately free of Textual: the seed, the
+transcript, the draft, the verdict and the two save paths are the same objects
+`scripts/wizard-chat` could drive from a terminal, which is what makes the flow
+testable without a screen.
+
+**The pane's verdict is the file's verdict.** Every draft is put back through
+`runtime_shim.validate` — the gate `cof check` runs, minus preflight — rather
+than trusting the `valid` flag the wizard reports about its own work. A green
+`✔ Valid` means the file that would be written passes; a red `✘ N problems`
+lists the validator's own messages. Saving is gated on that verdict in
+`wizard_host`, not in the screen, so there is no path from an invalid draft to
+a file on disk.
+
+| Key | Command | Action |
+| --- | --- | --- |
+| `Ctrl-S` | `/save [path]` | Write the draft to the path in the save box |
+| `Ctrl-G` | `/library` | Save into the local library and index it |
+| `Ctrl-R` | `/run` | Hand the saved file to the Run view |
+
+A library save writes `<library>/<category>/<slug>.yml` plus an entry in that
+folder's `manifest.json` — the shape `FolderSource` reads and the curation
+manifest schema validates, so a saved orchestration is immediately reachable as
+`cof run <category>/<slug>`. The library is the first `folder` source in
+`runtime.library.sources` (see [library sources](./library-sources.md)), or
+`~/.circuitry/library` when none is configured. Re-saving a name replaces its
+entry rather than appending a duplicate.
+
+"Run it now" sets `app.pending_run` and opens the Run view; the Run view reads
+it on mount. Until that view lands, the hand-off is the seam and the Run screen
+is still a placeholder.
+
+The view never constructs an adapter. It calls a `TurnRunner` — by default
+`api.run_orchestration` over whatever the config resolves — which is what makes
+it adapter-agnostic, and what lets `tests/tui/test_chat_view.py` drive the real
+wizard (its `validate_yaml` tool, its revision loop, its `done` gate) over a
+scripted adapter, all the way to a saved file that `cof check` accepts.
 
 ## Adding a view
 

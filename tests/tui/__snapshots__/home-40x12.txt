@@ -7,6 +7,6 @@
  5  Doctor — Backend, config, and conne 
  6  Settings — Effective configuration  
  7  Validate — Check an orchestration f 
-                                        
+ 8  Chat — Describe a pipeline and let  
                                         
  tab Next view  ? Help  q Ba▏^p palette 

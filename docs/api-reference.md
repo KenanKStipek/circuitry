@@ -28,6 +28,10 @@ Key parameters:
 - `state` or `state_path`: initial input state
 - `dry_run`: skip model invocation and emit deterministic placeholder outputs
 - `out_path`: write resulting state to disk
+- `adapter`: an already-constructed adapter to run against, instead of the one
+  the config resolves — the seam a host uses to supply its own model transport
+  (and a test uses to script one). Preflight is skipped when it is supplied,
+  since such an adapter need not be buildable from config.
 
 ### `run_shared_orchestration`
 
