@@ -10,10 +10,12 @@ from typing import Any, Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from typer.core import TyperGroup
 
-from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, resolve_config
+from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, ConfigError, resolve_config
 from .doctor import register_doctor
 from .library_sources import (
     Entry,
@@ -33,12 +35,39 @@ from .shared_library import (
     resolve_service_profile,
 )
 
+console = Console()
+err_console = Console(stderr=True)
+
+
+class CircuitryGroup(TyperGroup):
+    """Root command group that renders config problems as one actionable line.
+
+    Every subcommand taking ``--config/-c`` reaches the same loader, so the
+    catch lives here once instead of in per-command ``try``/``except`` blocks —
+    commands registered from other modules (``doctor``, ``setup``) and any
+    future ones are covered automatically.
+    """
+
+    # ``ctx`` is typed Any because Typer vendors its own click.Context under a
+    # private module path; naming either concrete class trips mypy's override check.
+    def invoke(self, ctx: Any) -> Any:
+        try:
+            return super().invoke(ctx)
+        except ConfigError as exc:
+            # soft_wrap keeps the message on a single line regardless of
+            # terminal width, so it stays greppable when piped.
+            err_console.print(
+                f"[red]Error:[/red] {escape(str(exc))}", highlight=False, soft_wrap=True
+            )
+            raise typer.Exit(code=1) from exc
+
+
 app = typer.Typer(
+    cls=CircuitryGroup,
     add_completion=False,
     help="Circuitry — Cybernetic orchestration framework. (cof)",
     rich_markup_mode="rich",
 )
-console = Console()
 
 
 @app.callback(invoke_without_command=True)
@@ -156,13 +185,14 @@ def _do_validate(
     skip_preflight: bool = False,
 ) -> None:
     """Shared validation logic for validate and check commands."""
-    if not json_out:
-        _print_header("Circuitry · Validate")
     # Resolve config (incl. allowlist + env-var overlays) so allowlist
     # enforcement runs alongside schema checks. ``skip_preflight``
     # disables the dependency-readiness checks in offline CI / smoke
-    # contexts where binaries / hosts are not available.
+    # contexts where binaries / hosts are not available. Resolved before
+    # the header so a bad --config prints the error alone.
     cfg = resolve_config(explicit_path=config)
+    if not json_out:
+        _print_header("Circuitry · Validate")
     with console.status("[cyan]Validating…[/cyan]") if not json_out else nullcontext():
         result = validate(orchestration, config=cfg, skip_preflight=skip_preflight)
 
