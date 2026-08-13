@@ -61,6 +61,11 @@ and contribute no path segment.
 CLI > profile > orchestration > project config > global config > default
 ```
 
+`CLI` here is `cof run --adapter <name>` / `--model <name>` (also available on
+`cof run-library`). Environment variables (`CIRCUITRY_ADAPTER`,
+`CIRCUITRY_MODEL`) overlay the *config* layer, so a profile beats them and a
+flag beats both.
+
 (Project config already layers over global config before this — see
 `resolve_config` in `circuitry.cli.config`.) A run with no `--profile` is
 unaffected by this feature — profile resolution is skipped entirely.
