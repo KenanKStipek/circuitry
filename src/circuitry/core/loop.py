@@ -556,6 +556,10 @@ Should the loop continue? Answer (yes/no):"""
                 )
                 effect_record["disabled"] = True
                 executed.append(effect_record)
+                # Expose the skip node to later body effects on the same terms
+                # as a produced one (see the sibling merge below).
+                if self.defn.name:
+                    ctx = {**ctx, **iter_store.state}
                 continue
 
             if self.verbose and not is_prompt and not is_tool:

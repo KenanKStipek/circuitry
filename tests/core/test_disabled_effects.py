@@ -236,6 +236,30 @@ def test_disabled_body_effect_skips_in_every_iteration() -> None:
     assert [prompt for _, prompt in adapter.calls] == ["keep x", "keep y"]
 
 
+def test_later_body_effect_sees_a_disabled_sibling_as_empty() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "each_item",
+                "each": {"in": "items", "as": "item"},
+                "body": [
+                    {"type": "prompt", "name": "first", "template": "f"},
+                    {"type": "prompt", "name": "second", "template": "saw <{{first.value}}>"},
+                ],
+            }
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    root, _ = apply_effect_overrides(root, {"each_item.first": {"enabled": False}})
+    adapter = RecordingAdapter()
+    store = Store({"items": ["x"]})
+    DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
+
+    second = store.state["prime"]["each_item"]["iter_0"]["second"]
+    assert second["meta"]["prompt_sent"] == "saw <>"
+
+
 def test_disabled_collect_target_yields_empty_collected() -> None:
     orch = {
         "effects": [
