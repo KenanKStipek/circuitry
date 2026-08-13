@@ -16,6 +16,19 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_FILENAMES = ("circuitry.config.json", "config.json")
 
+
+class ConfigError(ValueError):
+    """A config file the user pointed at cannot be used.
+
+    Message text is user-facing: CLI commands print it verbatim after
+    ``Error:`` and exit 1, so it must read as a complete sentence.
+
+    Subclasses ``ValueError`` on purpose — the auto-discovery layers in
+    :func:`resolve_config` already catch ``ValueError`` and degrade to a
+    warning, so a broken *discovered* config keeps its softer behaviour
+    while an explicitly requested one is fatal.
+    """
+
 GLOBAL_CONFIG_DIR = Path.home() / ".config" / "circuitry"
 GLOBAL_CONFIG_PATH = GLOBAL_CONFIG_DIR / "config.json"
 
@@ -124,10 +137,43 @@ def _first_existing(paths: list[Path]) -> Optional[Path]:
     return None
 
 
+_JSON_ROOT_NAMES = {
+    list: "an array",
+    str: "a string",
+    bool: "a boolean",
+    int: "a number",
+    float: "a number",
+    type(None): "null",
+}
+
+
 def _load_json_file(path: Path) -> dict[str, Any]:
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    """Read *path* as a JSON object, raising :class:`ConfigError` on any problem."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise ConfigError(f"Config file not found: {path}") from exc
+    except IsADirectoryError as exc:
+        raise ConfigError(f"Config path is a directory, not a file: {path}") from exc
+    except OSError as exc:
+        detail = exc.strerror or str(exc)
+        raise ConfigError(f"Config file could not be read: {path} ({detail})") from exc
+    except UnicodeDecodeError as exc:
+        raise ConfigError(f"Config file is not valid UTF-8 text: {path}") from exc
+
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ConfigError(
+            f"Config file {path} is not valid JSON: "
+            f"{exc.msg} (line {exc.lineno}, column {exc.colno})"
+        ) from exc
+
     if not isinstance(raw, dict):
-        raise ValueError(f"{path} must contain a JSON object at the root.")
+        found = _JSON_ROOT_NAMES.get(type(raw), "a non-object value")
+        raise ConfigError(
+            f"Config file {path} must contain a JSON object at the root; found {found}."
+        )
     return raw
 
 
@@ -166,10 +212,7 @@ def load_config(path: Optional[Path]) -> CircuitryConfig:
     if not path:
         return CircuitryConfig()
 
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError("config.json must contain a JSON object at the root.")
-    return CircuitryConfig.from_dict(raw)
+    return CircuitryConfig.from_dict(_load_json_file(path))
 
 
 def _apply_env_vars(d: dict[str, Any]) -> dict[str, Any]:
