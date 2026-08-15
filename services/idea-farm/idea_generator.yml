@@ -4,14 +4,17 @@
 #   seed_themes        one cheap call proposes diverse domains of human activity
 #   theme_rounds       tree-flow each-loop: every theme brainstorms IN PARALLEL
 #                      (on CyberDiner each round is a separate network job)
-#   curate             merge all rounds + what you've already got, dedupe, rank
+#   curate             merge all rounds, dedupe, rank
 #   (if …)             model-as-sensor: is the curated list strong enough?
 #     └─ gap_ideas     only runs a rescue round when the sensor says no
 #   final_list         the deliverable: a numbered list of ideas, nothing else
 #
 # Prompt sizes are deliberately trimmed (3-4 themes, 4 ideas each, terse
-# outputs, 40-line dedupe window from the farm) to stay under the cook
-# fleet's per-job execution cap on CPU cooks.
+# outputs) to stay under the cook fleet's per-job execution cap on CPU cooks.
+# IMPORTANT: existing_ideas feeds ONLY the theme rounds (bounded window from
+# the farm). curate/gap/final are CONSTANT-SIZE — they see only this run's
+# rounds, so they can never outgrow the cap as the harvest accumulates.
+# Cross-run dedupe is the caller's job (the farm dedupes on write).
 
 version: 1
 
@@ -24,7 +27,7 @@ interface:
     existing_ideas:
       type: string
       required: false
-      description: Ideas already generated or already in the library — the model will avoid duplicating these.
+      description: Ideas already generated or already in the library — steers the theme rounds away from repeats.
     target_count:
       type: number
       required: false
@@ -100,9 +103,6 @@ effects:
       {{.}}
       {{/prime.theme_rounds.collected.value}}
 
-      Ideas that ALREADY exist and must be excluded:
-      {{existing_ideas}}
-
       Curate: merge duplicates and near-duplicates, drop anything that is
       really just a single prompt in disguise, drop anything requiring
       non-LLM capabilities, and rank the rest from strongest to weakest —
@@ -137,9 +137,6 @@ effects:
         template: |
           This curated list of orchestration ideas came up short:
           {{prime.curate.value}}
-
-          Already-existing ideas to avoid:
-          {{existing_ideas}}
 
           Identify what KINDS of human activity are underrepresented in the
           list above, then brainstorm 5-8 additional ideas from those gaps.
