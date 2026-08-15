@@ -12,6 +12,11 @@ Design notes:
   success AND failure. A run that dies downstream still keeps its
   upstream work (lesson from the first harvest, where two days of
   successful rounds were discarded because a later step timed out).
+- SHAPE BIAS: every FANOUT_EVERY-th run passes a shape_hint steering the
+  brainstorm toward fan-out/per-item processes (work applied across many
+  items with a merge step) — downstream consumers need tree/each-shaped
+  ideas, and unbiased crops skew heavily critique→revise. Records carry a
+  "shape" field ("fanout" | "default") as provenance.
 - Durable state: everything lives under DATA_DIR (mount a volume there).
   Restarts resume from the file — the count is derived, never trusted.
 
@@ -23,6 +28,8 @@ Env:
   IDEAS_PER_RUN         target_count passed per run    (default: 15)
   SLEEP_BETWEEN_RUNS    seconds between runs           (default: 20)
   JOB_TIMEOUT_SECONDS   per-job adapter timeout        (default: 600)
+  FANOUT_EVERY          apply the fan-out shape hint every Nth run;
+                        0 disables                     (default: 2)
   DATA_DIR              state directory                (default: /data)
 """
 
@@ -54,6 +61,14 @@ FOCI = [
     "elder care", "hobby communities", "open source maintenance",
     "film and video production", "architecture and construction planning",
 ]
+
+# Passed as the orchestration's shape_hint on biased runs. Kept terse — it is
+# injected into several prompts and must not blow the cook execution cap.
+FANOUT_HINT = (
+    "processes that operate over MANY items at once — every ticket, every "
+    "clause, every product, every applicant — where the same treatment is "
+    "applied to each item independently and the results are merged"
+)
 
 ORCH_PATH = Path(__file__).parent / "idea_generator.yml"
 
@@ -148,19 +163,23 @@ def main() -> int:
     target = int(os.environ.get("TARGET_IDEAS", "10000"))
     per_run = int(os.environ.get("IDEAS_PER_RUN", "15"))
     sleep_s = float(os.environ.get("SLEEP_BETWEEN_RUNS", "20"))
+    fanout_every = int(os.environ.get("FANOUT_EVERY", "2"))
     data_dir = Path(os.environ.get("DATA_DIR", "/data"))
     data_dir.mkdir(parents=True, exist_ok=True)
     master = data_dir / "all_ideas.jsonl"
 
     config = build_config()
     seen, by_focus = load_state(data_dir)
-    print(f"[farm] resuming with {len(seen)} unique ideas; target {target}", flush=True)
+    print(f"[farm] resuming with {len(seen)} unique ideas; target {target}; "
+          f"fan-out bias every {fanout_every or '∅'} runs", flush=True)
 
     run_no = 0
     backoff = 30.0
     while len(seen) < target:
         focus = FOCI[run_no % len(FOCI)]
         run_no += 1
+        fanout = fanout_every > 0 and run_no % fanout_every == 0
+        shape = "fanout" if fanout else "default"
         # Bounded dedupe context — keeps the curate prompt under the cook
         # fleet's per-job execution cap.
         existing = "\n".join(by_focus.get(focus, [])[-40:])
@@ -172,6 +191,7 @@ def main() -> int:
             state={
                 "focus": focus,
                 "existing_ideas": existing,
+                "shape_hint": FANOUT_HINT if fanout else "",
                 "target_count": per_run,
             },
             raise_on_error=False,
@@ -190,6 +210,7 @@ def main() -> int:
                     fh.write(json.dumps({
                         "idea": idea,
                         "focus": focus,
+                        "shape": shape,
                         "run": run_no,
                         "complete_run": bool(result.ok),
                         "ts": datetime.now(timezone.utc).isoformat(),
@@ -198,7 +219,7 @@ def main() -> int:
                     fresh += 1
 
         if not result.ok:
-            print(f"[farm] run {run_no} ({focus}) FAILED after {time.time()-started:.0f}s "
+            print(f"[farm] run {run_no} ({focus}, {shape}) FAILED after {time.time()-started:.0f}s "
                   f"(salvaged +{fresh} → {len(seen)}/{target}): {str(result.error)[:160]} — "
                   f"backing off {backoff:.0f}s", flush=True)
             time.sleep(backoff)
@@ -206,7 +227,7 @@ def main() -> int:
             continue
 
         backoff = 30.0
-        print(f"[farm] run {run_no} ({focus}): +{fresh} new, "
+        print(f"[farm] run {run_no} ({focus}, {shape}): +{fresh} new, "
               f"{len(seen)}/{target} total, {time.time()-started:.0f}s", flush=True)
         time.sleep(sleep_s)
 
