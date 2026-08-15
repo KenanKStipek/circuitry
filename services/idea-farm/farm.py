@@ -194,6 +194,7 @@ def main() -> int:
                         "complete_run": bool(result.ok),
                         "ts": datetime.now(timezone.utc).isoformat(),
                     }) + "\n")
+                    print(f"[idea] {focus} :: {idea}", flush=True)
                     fresh += 1
 
         if not result.ok:
