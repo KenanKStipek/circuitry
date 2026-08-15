@@ -6,17 +6,17 @@ Design notes:
   orchestration's existing_ideas input only receives that domain's prior
   ideas, so the prompt stays bounded no matter how large the farm grows.
   A normalized-title check on write catches exact/near-exact duplicates
-  globally. (Semantic near-dupes across domains are tolerated — curating
-  10k down is a later, cheaper problem than generating them.)
+  globally.
+- PARTIAL HARVEST: ideas are banked from whatever state a run produced —
+  final_list, curate, gap_ideas, and every completed theme round — on
+  success AND failure. A run that dies downstream still keeps its
+  upstream work (lesson from the first harvest, where two days of
+  successful rounds were discarded because a later step timed out).
 - Durable state: everything lives under DATA_DIR (mount a volume there).
   Restarts resume from the file — the count is derived, never trusted.
-- Runs in-process via circuitry's Python API (no subprocess), same
-  runtime path as `cof run`.
 
 Env:
-  CYBERDINER_EXPO_URL   expo root URL (use the project-internal
-                        http://expo:3000 when running inside the
-                        cyberdiner Northflank project — no TLS, no egress)
+  CYBERDINER_EXPO_URL   expo root URL (project-internal http://expo:3000)
   CYBERDINER_TOKEN      ck_... API key  (Northflank secret)
   TIER                  network tier per run           (default: cheap)
   TARGET_IDEAS          stop after this many uniques   (default: 10000)
@@ -39,8 +39,6 @@ from pathlib import Path
 from circuitry import run_orchestration
 from circuitry.cli.config import CircuitryConfig
 
-# Rotating focus domains — intentionally broad; the orchestration's own
-# seed_themes step diversifies further *within* each.
 FOCI = [
     "small business operations", "job hunting and careers", "academic research",
     "software engineering practice", "legal work", "healthcare administration",
@@ -82,15 +80,46 @@ def load_state(data_dir: Path) -> tuple[set[str], dict[str, list[str]]]:
     return seen, by_focus
 
 
-def extract_ideas(final_list: str) -> list[str]:
-    """Pull idea lines out of the orchestration's numbered final list."""
+def extract_ideas(text: str) -> list[str]:
+    """Pull idea lines (numbered or bulleted) out of a text blob."""
     out = []
-    for line in final_list.splitlines():
+    for line in (text or "").splitlines():
         line = line.strip()
         m = re.match(r"^(?:\d+[.)]\s*|-\s*)(.+)$", line)
         if m and len(m.group(1)) > 10:
             out.append(m.group(1).strip())
     return out
+
+
+def harvest_texts(state: dict) -> list[str]:
+    """Collect every idea-bearing text from a run's (possibly partial) state:
+    final_list, curate, gap_ideas, and each completed theme round."""
+    prime = state.get("prime") or {}
+    texts: list[str] = []
+
+    def value_of(name: str) -> str | None:
+        node = prime.get(name)
+        if isinstance(node, dict):
+            v = node.get("value")
+            if isinstance(v, str) and v.strip():
+                return v
+        return None
+
+    for name in ("final_list", "curate", "gap_ideas"):
+        v = value_of(name)
+        if v:
+            texts.append(v)
+
+    rounds = prime.get("theme_rounds")
+    if isinstance(rounds, dict):
+        for key, node in rounds.items():
+            if key.startswith("iter_") and isinstance(node, dict):
+                ideas_node = node.get("ideas")
+                if isinstance(ideas_node, dict):
+                    v = ideas_node.get("value")
+                    if isinstance(v, str) and v.strip():
+                        texts.append(v)
+    return texts
 
 
 def build_config() -> CircuitryConfig:
@@ -132,10 +161,8 @@ def main() -> int:
     while len(seen) < target:
         focus = FOCI[run_no % len(FOCI)]
         run_no += 1
-        # Bounded dedupe context: this focus's most recent 40 ideas. Kept small
-        # deliberately — the curate prompt must stay under the cook fleet's
-        # per-job execution cap (300s on CPU cooks; long prompts are what
-        # stalled the first harvest).
+        # Bounded dedupe context — keeps the curate prompt under the cook
+        # fleet's per-job execution cap.
         existing = "\n".join(by_focus.get(focus, [])[-40:])
 
         started = time.time()
@@ -150,31 +177,34 @@ def main() -> int:
             raise_on_error=False,
         )
 
+        # PARTIAL HARVEST: bank ideas from whatever state exists, ok or not.
+        fresh = 0
+        with master.open("a", encoding="utf-8") as fh:
+            for text in harvest_texts(result.state or {}):
+                for idea in extract_ideas(text):
+                    key = norm(idea)
+                    if not key or key in seen:
+                        continue
+                    seen.add(key)
+                    by_focus.setdefault(focus, []).append(idea)
+                    fh.write(json.dumps({
+                        "idea": idea,
+                        "focus": focus,
+                        "run": run_no,
+                        "complete_run": bool(result.ok),
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                    }) + "\n")
+                    fresh += 1
+
         if not result.ok:
-            print(f"[farm] run {run_no} ({focus}) FAILED: {result.error} — "
+            print(f"[farm] run {run_no} ({focus}) FAILED after {time.time()-started:.0f}s "
+                  f"(salvaged +{fresh} → {len(seen)}/{target}): {str(result.error)[:160]} — "
                   f"backing off {backoff:.0f}s", flush=True)
             time.sleep(backoff)
             backoff = min(backoff * 2, 600)
             continue
+
         backoff = 30.0
-
-        final = (result.state.get("prime", {}).get("final_list", {}) or {}).get("value") or ""
-        fresh = 0
-        with master.open("a", encoding="utf-8") as fh:
-            for idea in extract_ideas(final):
-                key = norm(idea)
-                if not key or key in seen:
-                    continue
-                seen.add(key)
-                by_focus.setdefault(focus, []).append(idea)
-                fh.write(json.dumps({
-                    "idea": idea,
-                    "focus": focus,
-                    "run": run_no,
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                }) + "\n")
-                fresh += 1
-
         print(f"[farm] run {run_no} ({focus}): +{fresh} new, "
               f"{len(seen)}/{target} total, {time.time()-started:.0f}s", flush=True)
         time.sleep(sleep_s)
@@ -186,3 +216,93 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
+""""""
