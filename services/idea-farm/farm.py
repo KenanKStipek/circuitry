@@ -22,6 +22,7 @@ Env:
   TARGET_IDEAS          stop after this many uniques   (default: 10000)
   IDEAS_PER_RUN         target_count passed per run    (default: 15)
   SLEEP_BETWEEN_RUNS    seconds between runs           (default: 20)
+  JOB_TIMEOUT_SECONDS   per-job adapter timeout        (default: 600)
   DATA_DIR              state directory                (default: /data)
 """
 
@@ -131,8 +132,11 @@ def main() -> int:
     while len(seen) < target:
         focus = FOCI[run_no % len(FOCI)]
         run_no += 1
-        # Bounded dedupe context: this focus's most recent 120 ideas.
-        existing = "\n".join(by_focus.get(focus, [])[-120:])
+        # Bounded dedupe context: this focus's most recent 40 ideas. Kept small
+        # deliberately — the curate prompt must stay under the cook fleet's
+        # per-job execution cap (300s on CPU cooks; long prompts are what
+        # stalled the first harvest).
+        existing = "\n".join(by_focus.get(focus, [])[-40:])
 
         started = time.time()
         result = run_orchestration(
@@ -182,3 +186,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+""" if False else None  # noqa
+"""
