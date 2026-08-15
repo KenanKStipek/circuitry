@@ -9,6 +9,13 @@
 #     └─ gap_ideas     only runs a rescue round when the sensor says no
 #   final_list         the deliverable: a numbered list of ideas, nothing else
 #
+# Tier split: bulk generation (seed_themes, theme_rounds) runs on the default
+# tier (cheap); the reasoning-heavy steps (curate, gap_ideas, final_list) carry
+# a per-effect `model: good` override — they merge/rank/judge, which benefits
+# from a stronger model. NOTE: those steps only complete while a good-tier
+# cook is online; if none is, the run fails at curate and the farm's partial
+# harvest still banks the theme rounds.
+#
 # Prompt sizes are deliberately trimmed (3-4 themes, 4 ideas each, terse
 # outputs) to stay under the cook fleet's per-job execution cap on CPU cooks.
 # IMPORTANT: existing_ideas feeds ONLY the theme rounds (bounded window from
@@ -95,6 +102,7 @@ effects:
 
   - type: prompt
     name: curate
+    model: good
     template: |
       Below are raw brainstorm rounds of orchestration ideas (multi-step LLM
       pipeline ideas), possibly overlapping:
@@ -134,6 +142,7 @@ effects:
     else:
       - type: prompt
         name: gap_ideas
+        model: good
         template: |
           This curated list of orchestration ideas came up short:
           {{prime.curate.value}}
@@ -148,6 +157,7 @@ effects:
 
   - type: prompt
     name: final_list
+    model: good
     template: |
       Produce the final list of orchestration ideas.
 
