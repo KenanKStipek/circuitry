@@ -16,6 +16,10 @@
 # cook is online; if none is, the run fails at curate and the farm's partial
 # harvest still banks the theme rounds.
 #
+# shape_hint (optional) biases WHAT KIND of process gets brainstormed — e.g.
+# fan-out/per-item work — without distorting the domain rotation. The farm
+# applies it on a fraction of runs and tags the banked records with the shape.
+#
 # Prompt sizes are deliberately trimmed (3-4 themes, 4 ideas each, terse
 # outputs) to stay under the cook fleet's per-job execution cap on CPU cooks.
 # IMPORTANT: existing_ideas feeds ONLY the theme rounds (bounded window from
@@ -35,6 +39,10 @@ interface:
       type: string
       required: false
       description: Ideas already generated or already in the library — steers the theme rounds away from repeats.
+    shape_hint:
+      type: string
+      required: false
+      description: Optional bias for the SHAPE of the processes brainstormed (e.g. fan-out/per-item work). Blank = no bias.
     target_count:
       type: number
       required: false
@@ -61,6 +69,10 @@ effects:
       entirely with language models (no image generation, no external tools).
 
       Focus area (may be blank, meaning "all of human activity"): {{focus}}
+      {{#shape_hint}}
+      Shape bias: {{shape_hint}}
+      Favor domains rich in that shape of work.
+      {{/shape_hint}}
 
       Propose 3 to 4 maximally DIFFERENT domains of human activity to mine
       for orchestration ideas. Mix professional and personal, common and
@@ -94,6 +106,9 @@ effects:
           - Real recurring human work or life tasks, not toy demos.
           - Each idea must EARN being an orchestration: it needs steps,
             feedback, or branching — not a single prompt.
+          {{#shape_hint}}
+          - IMPORTANT shape requirement: {{shape_hint}}
+          {{/shape_hint}}
           - Do NOT repeat anything from this list of existing ideas:
           {{existing_ideas}}
 
@@ -116,6 +131,9 @@ effects:
       non-LLM capabilities, and rank the rest from strongest to weakest —
       strongest meaning: common recurring task + clearly benefits from
       multi-step structure with feedback.
+      {{#shape_hint}}
+      Rank ideas matching this shape higher: {{shape_hint}}
+      {{/shape_hint}}
 
       Target size: {{target_count}} ideas (if that is blank, aim for 15).
 
@@ -151,6 +169,9 @@ effects:
           list above, then brainstorm 5-8 additional ideas from those gaps.
           Same rules: recurring real tasks, multi-step LLM pipelines with
           feedback or branching, LLMs only.
+          {{#shape_hint}}
+          Shape requirement: {{shape_hint}}
+          {{/shape_hint}}
 
           Output exactly one line per idea:
           - Title — one short sentence. Be terse.
