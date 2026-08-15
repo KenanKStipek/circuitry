@@ -9,12 +9,9 @@
 #     └─ gap_ideas     only runs a rescue round when the sensor says no
 #   final_list         the deliverable: a numbered list of ideas, nothing else
 #
-# Run (after -c config with cyberdiner as default adapter):
-#   cof run ./idea_generator.yml -c circuitry.config.json \
-#     -e existing_ideas="$(cat ideas-so-far.txt)" -e target_count=15 --tail
-#
-# Feed the output back in as existing_ideas on the next run and it will
-# avoid repeating itself — the "tell it what it already came up with" loop.
+# Prompt sizes are deliberately trimmed (3-4 themes, 4 ideas each, terse
+# outputs, 40-line dedupe window from the farm) to stay under the cook
+# fleet's per-job execution cap on CPU cooks.
 
 version: 1
 
@@ -45,8 +42,8 @@ effects:
       type: array
       items:
         type: string
-      minItems: 4
-      maxItems: 6
+      minItems: 3
+      maxItems: 4
     template: |
       You are planning a brainstorm about ORCHESTRATIONS: multi-step LLM
       pipelines that automate things people actually do — workflows with
@@ -55,7 +52,7 @@ effects:
 
       Focus area (may be blank, meaning "all of human activity"): {{focus}}
 
-      Propose 4 to 6 maximally DIFFERENT domains of human activity to mine
+      Propose 3 to 4 maximally DIFFERENT domains of human activity to mine
       for orchestration ideas. Mix professional and personal, common and
       overlooked. If a focus area is given, pick diverse corners of it.
 
@@ -78,7 +75,7 @@ effects:
         template: |
           Domain: {{theme}}
 
-          Brainstorm 5 ideas for LLM orchestrations in this domain — each one
+          Brainstorm 4 ideas for LLM orchestrations in this domain — each one
           a real, recurring thing people do that decomposes into a multi-step
           LLM pipeline (draft → critique → revise loops, classify-then-branch
           decisions, iterate-until-good-enough). Text in, text out, LLMs only.
@@ -90,8 +87,8 @@ effects:
           - Do NOT repeat anything from this list of existing ideas:
           {{existing_ideas}}
 
-          Output exactly 5 lines, each formatted as:
-          - Title — one-sentence description of what the pipeline does
+          Output exactly 4 lines, each formatted as:
+          - Title — one short sentence on what the pipeline does. Be terse.
 
   - type: prompt
     name: curate
@@ -114,8 +111,8 @@ effects:
 
       Target size: {{target_count}} ideas (if that is blank, aim for 15).
 
-      Output ONLY a numbered list, each line:
-      N. Title — one-sentence description
+      Output ONLY a numbered list, each line TERSE:
+      N. Title — one short sentence
 
   - type: if
     if:
@@ -150,7 +147,7 @@ effects:
           feedback or branching, LLMs only.
 
           Output exactly one line per idea:
-          - Title — one-sentence description
+          - Title — one short sentence. Be terse.
 
   - type: prompt
     name: final_list
@@ -165,4 +162,4 @@ effects:
 
       Merge them, remove any duplicates, keep the ranking sensible, and
       output ONLY the final numbered list — no preamble, no commentary:
-      N. Title — one-sentence description
+      N. Title — one short sentence
