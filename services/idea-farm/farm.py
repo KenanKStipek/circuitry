@@ -19,6 +19,8 @@ Design notes:
   "shape" field ("fanout" | "default") as provenance.
 - Durable state: everything lives under DATA_DIR (mount a volume there).
   Restarts resume from the file — the count is derived, never trusted.
+- Backoff caps at 120s: failures still bank salvage, so long sleeps only
+  idle the fleet (a single bad job used to cost 10 minutes of dead air).
 
 Env:
   CYBERDINER_EXPO_URL   expo root URL (project-internal http://expo:3000)
@@ -223,7 +225,7 @@ def main() -> int:
                   f"(salvaged +{fresh} → {len(seen)}/{target}): {str(result.error)[:160]} — "
                   f"backing off {backoff:.0f}s", flush=True)
             time.sleep(backoff)
-            backoff = min(backoff * 2, 600)
+            backoff = min(backoff * 2, 120)
             continue
 
         backoff = 30.0
