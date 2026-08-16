@@ -22,7 +22,9 @@
 # documents, calendars, spreadsheets — any number of things. The LLM is the
 # intelligence; connectors are its hands. Ideas should ALSO cover common
 # work people do at a computer: research, writing, data cleanup and
-# computation, file wrangling, design and creative production. The
+# computation, file wrangling, design and creative production. And ideas
+# may COMPOSE: one step of a process can be an existing workflow from the
+# shared library (the runtime's `use` effect makes that first-class). The
 # downstream training corpus should reflect that breadth.
 #
 # Everything runs on the DEFAULT tier (cheap). We tried routing curate/gap/
@@ -40,8 +42,9 @@
 # Curate input stays bounded: ~16-20 terse lines.
 #
 # shape_hint (optional) biases WHAT KIND of process gets brainstormed — e.g.
-# fan-out/per-item work — without distorting the domain rotation. The farm
-# applies it on a fraction of runs and tags the banked records with the shape.
+# fan-out/per-item work, connector/human-in-the-loop work, or composition —
+# without distorting the domain rotation. The farm rotates the hints and
+# tags the banked records with the shape.
 #
 # Prompt sizes are deliberately trimmed (terse outputs, bounded dedupe window)
 # to stay under the cook fleet's per-job execution cap on CPU cooks.
@@ -65,7 +68,7 @@ interface:
     shape_hint:
       type: string
       required: false
-      description: Optional bias for the SHAPE of the processes brainstormed (e.g. fan-out/per-item work). Blank = no bias.
+      description: Optional bias for the SHAPE of the processes brainstormed (e.g. fan-out/per-item work, connector work, composition). Blank = no bias.
     target_count:
       type: number
       required: false
@@ -94,7 +97,8 @@ effects:
       for input or approval), browsing the web, reading and writing files,
       calendars, spreadsheets — any number of things. They may also be pure
       computer work: research, writing, data cleanup, computation, design
-      and creative production.
+      and creative production. And they may COMPOSE: one step of a process
+      can be an existing workflow reused from a shared library.
 
       Focus area (may be blank, meaning "all of human activity"): {{focus}}
       {{#shape_hint}}
@@ -134,7 +138,9 @@ effects:
           waiting for their attention), browse the web, read/write files or
           spreadsheets, manage a calendar. They may also be pure
           computer-work: research, writing, data cleanup, computation,
-          creative production.
+          creative production. And they may COMPOSE: one step can reuse an
+          existing workflow from a shared library (a critique pass, a
+          summarizer, a whole sub-pipeline) wired into the process.
 
           Rules:
           - Real recurring human work or life tasks, not toy demos.
@@ -155,7 +161,8 @@ effects:
     template: |
       Below are raw brainstorm rounds of agentic orchestration ideas
       (multi-step LLM-driven processes, possibly using connectors like
-      email, browser, files, calendars), possibly overlapping:
+      email, browser, files, calendars, possibly composing existing library
+      workflows as sub-steps), possibly overlapping:
 
       {{#prime.theme_rounds.collected.value}}
       {{.}}
@@ -166,8 +173,9 @@ effects:
       and rank the rest from strongest to weakest — strongest meaning:
       common recurring task + clearly benefits from multi-step structure
       with feedback, branching, or waiting-and-reacting. Connector use
-      (email round-trips with a person, browsing, files) is welcome as long
-      as the intelligence is LLM-driven.
+      (email round-trips with a person, browsing, files) is welcome, and
+      composition — reusing a library workflow as a sub-step — is a
+      strength, as long as the intelligence is LLM-driven.
       {{#shape_hint}}
       Rank ideas matching this shape higher: {{shape_hint}}
       {{/shape_hint}}
@@ -207,7 +215,8 @@ effects:
           Same rules: recurring real tasks; multi-step LLM-driven processes
           with feedback, branching, or waiting-and-reacting; connectors
           welcome (email round-trips with a person, browsing, files,
-          calendars, spreadsheets) as are pure computer-work processes
+          calendars, spreadsheets); composition of existing library
+          workflows welcome; pure computer-work processes welcome
           (research, writing, data cleanup, computation, creative
           production).
           {{#shape_hint}}
