@@ -15,6 +15,16 @@
 #                      (circuitry#77 / CyberDiner orders 17542, 17685).
 #   final_list         the deliverable: a numbered list of ideas, nothing else
 #
+# IDEA SPACE (2026-08-16 broadening): orchestrations are AGENTIC PROCESSES,
+# not just text-in/text-out pipelines. Ideas may assume future connectors:
+# sending email and reading replies (including waiting on a human for
+# attention/approval), browsing the web, reading/writing files and
+# documents, calendars, spreadsheets — any number of things. The LLM is the
+# intelligence; connectors are its hands. Ideas should ALSO cover common
+# work people do at a computer: research, writing, data cleanup and
+# computation, file wrangling, design and creative production. The
+# downstream training corpus should reflect that breadth.
+#
 # Everything runs on the DEFAULT tier (cheap). We tried routing curate/gap/
 # final to `good` (2026-08-15) and reverted: downstream consumers re-dedupe
 # and re-curate anyway, cheap handled curation fine, and a good-only step is
@@ -76,10 +86,15 @@ effects:
       minItems: 8
       maxItems: 10
     template: |
-      You are planning a brainstorm about ORCHESTRATIONS: multi-step LLM
-      pipelines that automate things people actually do — workflows with
-      drafting, critique loops, branching decisions, and iteration, executed
-      entirely with language models (no image generation, no external tools).
+      You are planning a brainstorm about ORCHESTRATIONS: multi-step agentic
+      processes that automate things people actually do — workflows with
+      drafting, critique loops, branching decisions, and iteration, driven
+      by language models. Processes may use connectors as their hands:
+      sending email and reading the replies (including waiting on a person
+      for input or approval), browsing the web, reading and writing files,
+      calendars, spreadsheets — any number of things. They may also be pure
+      computer work: research, writing, data cleanup, computation, design
+      and creative production.
 
       Focus area (may be blank, meaning "all of human activity"): {{focus}}
       {{#shape_hint}}
@@ -89,7 +104,7 @@ effects:
 
       Propose 8 to 10 maximally DIFFERENT domains of human activity to mine
       for orchestration ideas. Mix professional and personal, common and
-      overlooked. If a focus area is given, pick diverse corners of it.
+      overlooked — including everyday work done at a computer.
 
       Return ONLY a JSON array of short domain names, e.g.
       ["hiring", "family logistics", "scientific writing"].
@@ -110,15 +125,22 @@ effects:
         template: |
           Domain: {{theme}}
 
-          Brainstorm 2 ideas for LLM orchestrations in this domain — each one
-          a real, recurring thing people do that decomposes into a multi-step
-          LLM pipeline (draft → critique → revise loops, classify-then-branch
-          decisions, iterate-until-good-enough). Text in, text out, LLMs only.
+          Brainstorm 2 ideas for agentic orchestrations in this domain —
+          each one a real, recurring thing people do that decomposes into a
+          multi-step process driven by language models (draft → critique →
+          revise loops, classify-then-branch decisions,
+          iterate-until-good-enough). Processes MAY use connectors: send an
+          email and act on the reply (including nudging a person and
+          waiting for their attention), browse the web, read/write files or
+          spreadsheets, manage a calendar. They may also be pure
+          computer-work: research, writing, data cleanup, computation,
+          creative production.
 
           Rules:
           - Real recurring human work or life tasks, not toy demos.
           - Each idea must EARN being an orchestration: it needs steps,
-            feedback, or branching — not a single prompt.
+            feedback, branching, or waiting-and-reacting — not a single
+            prompt and not a single connector call.
           {{#shape_hint}}
           - IMPORTANT shape requirement: {{shape_hint}}
           {{/shape_hint}}
@@ -126,23 +148,26 @@ effects:
           {{existing_ideas}}
 
           Output exactly 2 lines, each formatted as:
-          - Title — one short sentence on what the pipeline does. Be terse.
+          - Title — one short sentence on what the process does. Be terse.
 
   - type: prompt
     name: curate
     template: |
-      Below are raw brainstorm rounds of orchestration ideas (multi-step LLM
-      pipeline ideas), possibly overlapping:
+      Below are raw brainstorm rounds of agentic orchestration ideas
+      (multi-step LLM-driven processes, possibly using connectors like
+      email, browser, files, calendars), possibly overlapping:
 
       {{#prime.theme_rounds.collected.value}}
       {{.}}
       {{/prime.theme_rounds.collected.value}}
 
       Curate: merge duplicates and near-duplicates, drop anything that is
-      really just a single prompt in disguise, drop anything requiring
-      non-LLM capabilities, and rank the rest from strongest to weakest —
-      strongest meaning: common recurring task + clearly benefits from
-      multi-step structure with feedback.
+      really just a single prompt or a single connector call in disguise,
+      and rank the rest from strongest to weakest — strongest meaning:
+      common recurring task + clearly benefits from multi-step structure
+      with feedback, branching, or waiting-and-reacting. Connector use
+      (email round-trips with a person, browsing, files) is welcome as long
+      as the intelligence is LLM-driven.
       {{#shape_hint}}
       Rank ideas matching this shape higher: {{shape_hint}}
       {{/shape_hint}}
@@ -161,25 +186,30 @@ effects:
       mode: model
       template: |
         Target: {{target_count}} (if blank, 15) strong, clearly distinct
-        orchestration ideas.
+        agentic orchestration ideas.
 
         List to judge:
         {{prime.curate.value}}
 
         Does this list FALL SHORT of the target — too few ideas, weak or
         duplicative entries, or items that are really just single prompts
-        rather than genuine multi-step LLM workflows? Answer yes or no.
+        or single connector calls rather than genuine multi-step processes?
+        Answer yes or no.
     then:
       - type: prompt
         name: gap_ideas
         template: |
-          This curated list of orchestration ideas came up short:
+          This curated list of agentic orchestration ideas came up short:
           {{prime.curate.value}}
 
           Identify what KINDS of human activity are underrepresented in the
           list above, then brainstorm 5-8 additional ideas from those gaps.
-          Same rules: recurring real tasks, multi-step LLM pipelines with
-          feedback or branching, LLMs only.
+          Same rules: recurring real tasks; multi-step LLM-driven processes
+          with feedback, branching, or waiting-and-reacting; connectors
+          welcome (email round-trips with a person, browsing, files,
+          calendars, spreadsheets) as are pure computer-work processes
+          (research, writing, data cleanup, computation, creative
+          production).
           {{#shape_hint}}
           Shape requirement: {{shape_hint}}
           {{/shape_hint}}
@@ -190,7 +220,7 @@ effects:
   - type: prompt
     name: final_list
     template: |
-      Produce the final list of orchestration ideas.
+      Produce the final list of agentic orchestration ideas.
 
       Curated list:
       {{prime.curate.value}}
