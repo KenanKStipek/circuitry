@@ -1313,13 +1313,13 @@ def gen_cmd(
     # Load structured rules from bundled rules/ directory
     initial_state: dict[str, Any] = {"user_request": prompt}
     try:
-        from circuitry.rules import load_all_rules, load_rules_for
+        from circuitry.rules import EFFECT_TYPES, load_all_rules, load_rules_for
 
         rules_pkg = importlib.resources.files("circuitry") / "bundled" / "rules"
         rules_dir = Path(str(rules_pkg))
         if rules_dir.is_dir():
             initial_state["rules"] = load_all_rules(rules_dir)
-            for etype in ("prompt", "dynamic", "loop", "conditional", "tool", "reflector"):
+            for etype in EFFECT_TYPES:
                 initial_state[f"rules_{etype}"] = load_rules_for(etype, rules_dir=rules_dir)
     except Exception:
         pass  # Best-effort; gen still works without rules

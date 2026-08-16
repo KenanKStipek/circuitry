@@ -18,6 +18,9 @@ fields:
     type: integer
     min: 1
     note: "Maximum parallel workers for tree flow."
+  stop_on_error:
+    type: boolean
+    note: "Halt remaining children when one fails. Usually omitted — prefer on_error, which covers the same intent per effect."
   on_error:
     enum: [fail, skip, continue]
     default: fail

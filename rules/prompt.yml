@@ -28,12 +28,32 @@ fields:
   model:
     type: string
     note: "Per-effect model override. Usually omitted (inherited from config)."
+  provider:
+    type: string
+    note: "Per-effect provider override. Usually omitted (inherited from config)."
+  provider_fallbacks:
+    type: array
+    items: string
+    note: "Ordered list of fallback providers tried when the primary fails. Usually omitted — runner/config policy, not author-facing."
   params:
     type: object
     note: "Provider-specific generation parameters (temperature, top_p, etc.)."
   deterministic:
     type: boolean
     note: "If true, use temperature=0."
+  inputs:
+    type: object
+    note: "Prompt-local key/value pairs available to this template only. Prefer referencing shared state via {{prime.<name>.value}}; use inputs for constants scoped to this one call."
+  assets:
+    type: array
+    items: "{kind: image|file|audio, ref: string}"
+    note: "Non-text attachments passed to the model. kind is the asset type, ref a resolvable identifier or path. Only for multimodal-capable models."
+  retries:
+    type: object
+    properties:
+      max_attempts: "integer, min 1"
+      backoff_ms: "integer, min 0"
+    note: "Retry policy for this call. Usually omitted — runner/config policy, not author-facing."
   timeout_ms:
     type: integer
   on_error:
