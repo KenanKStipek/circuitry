@@ -13,15 +13,15 @@ Design notes:
   upstream work (lesson from the first harvest, where two days of
   successful rounds were discarded because a later step timed out).
 - SHAPE BIAS: rotating hints steer WHAT KIND of process gets brainstormed.
-  Every FANOUT_EVERY-th run biases toward fan-out/per-item processes;
-  every CONNECTOR_EVERY-th (non-fanout) run biases toward connector-using,
-  human-in-the-loop processes (email round-trips, browsing, files); every
-  COMPOSITION_EVERY-th remaining run biases toward COMPOSITE processes
-  that reuse existing library orchestrations as sub-steps (the runtime's
-  `use` effect makes this a first-class capability). Downstream consumers
-  need all shapes, and unbiased crops skew heavily critique→revise.
+  Precedence per run: fan-out (FANOUT_EVERY), connector (CONNECTOR_EVERY),
+  composition (COMPOSITION_EVERY), threshold (THRESHOLD_EVERY), monitor
+  (MONITOR_EVERY), else default. Downstream consumers need all shapes;
+  a 469-idea crossover analysis (2026-08-16) showed unbiased crops are 89%
+  draft→critique→revise with quality-bar loops at 13% and observe-and-branch
+  at 11% — the two new variants target exactly those gaps.
   Records carry a "shape" field
-  ("fanout" | "connector" | "composition" | "default") as provenance.
+  ("fanout" | "connector" | "composition" | "threshold" | "monitor" |
+  "default") as provenance.
 - Durable state: everything lives under DATA_DIR (mount a volume there).
   Restarts resume from the file — the count is derived, never trusted.
 - Backoff caps at 120s: failures still bank salvage, so long sleeps only
@@ -43,6 +43,12 @@ Env:
   COMPOSITION_EVERY     apply the composition shape hint every Nth run
                         (when neither above applies); 0 disables
                                                        (default: 5)
+  THRESHOLD_EVERY       apply the quality-bar/loop-until shape hint every
+                        Nth run (when none above applies); 0 disables
+                                                       (default: 7)
+  MONITOR_EVERY         apply the observe-and-branch shape hint every Nth
+                        run (when none above applies); 0 disables
+                                                       (default: 11)
   DATA_DIR              state directory                (default: /data)
 """
 
@@ -127,6 +133,22 @@ COMPOSITION_HINT = (
     "process is itself an existing workflow from a shared library (a "
     "critique pass, a summarizer, a research sweep, a whole sub-pipeline), "
     "invoked with its own inputs and its outputs wired into the next step"
+)
+
+THRESHOLD_HINT = (
+    "processes with a MEASURABLE quality bar — produce something, then "
+    "score or check it against an explicit threshold, rubric, or budget "
+    "(readability grade, test pass rate, word limit, error count, cost cap) "
+    "and loop until the bar is met or a retry budget runs out — the "
+    "measurement, not vibes, decides when to stop"
+)
+
+MONITOR_HINT = (
+    "processes that WATCH a stream of incoming things — new messages, "
+    "submissions, tickets, readings, edits — and BRANCH on what they "
+    "observe: classify each arrival into a regime (urgent/routine, "
+    "compliant/violating, normal/anomalous) and take a genuinely different "
+    "path per regime, escalating or acting only when warranted"
 )
 
 ORCH_PATH = Path(__file__).parent / "idea_generator.yml"
@@ -219,15 +241,21 @@ def build_config() -> CircuitryConfig:
 
 
 def pick_shape(run_no: int, fanout_every: int, connector_every: int,
-               composition_every: int) -> tuple[str, str]:
+               composition_every: int, threshold_every: int,
+               monitor_every: int) -> tuple[str, str]:
     """Rotating shape bias. Precedence: fan-out, then connector, then
-    composition, else default. Returns (shape_name, shape_hint)."""
+    composition, then threshold, then monitor, else default.
+    Returns (shape_name, shape_hint)."""
     if fanout_every > 0 and run_no % fanout_every == 0:
         return "fanout", FANOUT_HINT
     if connector_every > 0 and run_no % connector_every == 0:
         return "connector", CONNECTOR_HINT
     if composition_every > 0 and run_no % composition_every == 0:
         return "composition", COMPOSITION_HINT
+    if threshold_every > 0 and run_no % threshold_every == 0:
+        return "threshold", THRESHOLD_HINT
+    if monitor_every > 0 and run_no % monitor_every == 0:
+        return "monitor", MONITOR_HINT
     return "default", ""
 
 
@@ -238,6 +266,8 @@ def main() -> int:
     fanout_every = int(os.environ.get("FANOUT_EVERY", "2"))
     connector_every = int(os.environ.get("CONNECTOR_EVERY", "3"))
     composition_every = int(os.environ.get("COMPOSITION_EVERY", "5"))
+    threshold_every = int(os.environ.get("THRESHOLD_EVERY", "7"))
+    monitor_every = int(os.environ.get("MONITOR_EVERY", "11"))
     data_dir = Path(os.environ.get("DATA_DIR", "/data"))
     data_dir.mkdir(parents=True, exist_ok=True)
     master = data_dir / "all_ideas.jsonl"
@@ -247,7 +277,9 @@ def main() -> int:
     print(f"[farm] resuming with {len(seen)} unique ideas; target {target}; "
           f"{len(FOCI)} foci; fan-out bias every {fanout_every or '∅'}; "
           f"connector bias every {connector_every or '∅'}; "
-          f"composition bias every {composition_every or '∅'} runs", flush=True)
+          f"composition bias every {composition_every or '∅'}; "
+          f"threshold bias every {threshold_every or '∅'}; "
+          f"monitor bias every {monitor_every or '∅'} runs", flush=True)
 
     run_no = 0
     backoff = 30.0
@@ -255,7 +287,8 @@ def main() -> int:
         focus = FOCI[run_no % len(FOCI)]
         run_no += 1
         shape, hint = pick_shape(run_no, fanout_every, connector_every,
-                                 composition_every)
+                                 composition_every, threshold_every,
+                                 monitor_every)
         # Bounded dedupe context — keeps the curate prompt under the cook
         # fleet's per-job execution cap.
         existing = "\n".join(by_focus.get(focus, [])[-40:])
