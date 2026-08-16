@@ -21,8 +21,13 @@
 # a hard dependency on whichever cooks serve that tier. Wide-and-cheap beats
 # narrow-and-smart for this workload.
 #
-# Fan-out width: 5-6 theme rounds at concurrency 5 — sized for a small fleet
-# (~3 cooks / capacity 5). Curate input stays bounded: ~24 terse lines.
+# Fan-out width (2026-08-16 reshape): 8-10 theme rounds × 2 ideas each at
+# concurrency 8 — was 5-6 rounds × 4 ideas at concurrency 5. Same raw idea
+# yield (~16-20/run) in jobs half the size: faster per-job turnaround on CPU
+# cooks (comfortably under the execution cap), better spread across the
+# fleet now that the gateway hands each cook exactly one job at a time
+# (CyberDiner#337), and a claim-timeout or failure costs 2 ideas, not 4.
+# Curate input stays bounded: ~16-20 terse lines.
 #
 # shape_hint (optional) biases WHAT KIND of process gets brainstormed — e.g.
 # fan-out/per-item work — without distorting the domain rotation. The farm
@@ -68,8 +73,8 @@ effects:
       type: array
       items:
         type: string
-      minItems: 5
-      maxItems: 6
+      minItems: 8
+      maxItems: 10
     template: |
       You are planning a brainstorm about ORCHESTRATIONS: multi-step LLM
       pipelines that automate things people actually do — workflows with
@@ -82,7 +87,7 @@ effects:
       Favor domains rich in that shape of work.
       {{/shape_hint}}
 
-      Propose 5 to 6 maximally DIFFERENT domains of human activity to mine
+      Propose 8 to 10 maximally DIFFERENT domains of human activity to mine
       for orchestration ideas. Mix professional and personal, common and
       overlooked. If a focus area is given, pick diverse corners of it.
 
@@ -92,8 +97,8 @@ effects:
   - type: loop
     name: theme_rounds
     flow: tree
-    max_concurrency: 5
-    max_iterations: 8
+    max_concurrency: 8
+    max_iterations: 12
     on_error: continue
     collect: ideas
     each:
@@ -105,7 +110,7 @@ effects:
         template: |
           Domain: {{theme}}
 
-          Brainstorm 4 ideas for LLM orchestrations in this domain — each one
+          Brainstorm 2 ideas for LLM orchestrations in this domain — each one
           a real, recurring thing people do that decomposes into a multi-step
           LLM pipeline (draft → critique → revise loops, classify-then-branch
           decisions, iterate-until-good-enough). Text in, text out, LLMs only.
@@ -120,7 +125,7 @@ effects:
           - Do NOT repeat anything from this list of existing ideas:
           {{existing_ideas}}
 
-          Output exactly 4 lines, each formatted as:
+          Output exactly 2 lines, each formatted as:
           - Title — one short sentence on what the pipeline does. Be terse.
 
   - type: prompt
