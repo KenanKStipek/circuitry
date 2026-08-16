@@ -5,8 +5,14 @@
 #   theme_rounds       tree-flow each-loop: every theme brainstorms IN PARALLEL
 #                      (on CyberDiner each round is a separate network job)
 #   curate             merge all rounds, dedupe, rank
-#   (if …)             model-as-sensor: is the curated list strong enough?
-#     └─ gap_ideas     only runs a rescue round when the sensor says no
+#   (if …)             model-as-sensor: does the curated list FALL SHORT?
+#     └─ gap_ideas     rescue round — ONLY runs when the sensor says yes.
+#                      When the list is fine, NO effect runs and
+#                      prime.gap_ideas is simply absent (renders empty in
+#                      final_list). Previously the healthy path burned a
+#                      full network job echoing "(no additional ideas
+#                      needed)" — one wasted fleet slot per healthy run
+#                      (circuitry#77 / CyberDiner orders 17542, 17685).
 #   final_list         the deliverable: a numbered list of ideas, nothing else
 #
 # Everything runs on the DEFAULT tier (cheap). We tried routing curate/gap/
@@ -141,6 +147,10 @@ effects:
       Output ONLY a numbered list, each line TERSE:
       N. Title — one short sentence
 
+  # Model-as-sensor, inverted from the original phrasing so the RESCUE round
+  # is the only branch: when the list is fine, nothing runs and no network
+  # job is submitted. (The old shape ran a job whose entire output was the
+  # sentinel "(no additional ideas needed)".)
   - type: if
     if:
       mode: model
@@ -151,14 +161,10 @@ effects:
         List to judge:
         {{prime.curate.value}}
 
-        Does this list meet the target — enough ideas, each distinct, each a
-        genuine multi-step LLM workflow? Answer yes or no.
+        Does this list FALL SHORT of the target — too few ideas, weak or
+        duplicative entries, or items that are really just single prompts
+        rather than genuine multi-step LLM workflows? Answer yes or no.
     then:
-      - type: prompt
-        name: gap_ideas
-        template: |
-          Respond with exactly: (no additional ideas needed)
-    else:
       - type: prompt
         name: gap_ideas
         template: |
@@ -184,7 +190,7 @@ effects:
       Curated list:
       {{prime.curate.value}}
 
-      Possible additions (ignore if it says no additional ideas are needed):
+      Possible additions (may be blank — if blank, there are none):
       {{prime.gap_ideas.value}}
 
       Merge them, remove any duplicates, keep the ranking sensible, and
