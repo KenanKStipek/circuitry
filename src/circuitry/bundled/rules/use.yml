@@ -47,7 +47,7 @@ example: |
     name: summarize_step
     ref: utilities/summarize
     inputs:
-      article_text: "{{prime.fetch.value}}"
+      text: "{{prime.fetch.value}}"
       max_words: 50
     outputs:
       summary: prime.summarize.value
