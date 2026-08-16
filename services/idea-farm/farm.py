@@ -15,10 +15,13 @@ Design notes:
 - SHAPE BIAS: rotating hints steer WHAT KIND of process gets brainstormed.
   Every FANOUT_EVERY-th run biases toward fan-out/per-item processes;
   every CONNECTOR_EVERY-th (non-fanout) run biases toward connector-using,
-  human-in-the-loop processes (email round-trips, browsing, files) —
-  downstream consumers need both shapes, and unbiased crops skew heavily
-  critique→revise. Records carry a "shape" field
-  ("fanout" | "connector" | "default") as provenance.
+  human-in-the-loop processes (email round-trips, browsing, files); every
+  COMPOSITION_EVERY-th remaining run biases toward COMPOSITE processes
+  that reuse existing library orchestrations as sub-steps (the runtime's
+  `use` effect makes this a first-class capability). Downstream consumers
+  need all shapes, and unbiased crops skew heavily critique→revise.
+  Records carry a "shape" field
+  ("fanout" | "connector" | "composition" | "default") as provenance.
 - Durable state: everything lives under DATA_DIR (mount a volume there).
   Restarts resume from the file — the count is derived, never trusted.
 - Backoff caps at 120s: failures still bank salvage, so long sleeps only
@@ -35,8 +38,11 @@ Env:
   FANOUT_EVERY          apply the fan-out shape hint every Nth run;
                         0 disables                     (default: 2)
   CONNECTOR_EVERY       apply the connector/human-in-the-loop shape hint
-                        every Nth run (skipped when the fan-out hint
-                        already applies); 0 disables   (default: 3)
+                        every Nth run (when fan-out doesn't apply);
+                        0 disables                     (default: 3)
+  COMPOSITION_EVERY     apply the composition shape hint every Nth run
+                        (when neither above applies); 0 disables
+                                                       (default: 5)
   DATA_DIR              state directory                (default: /data)
 """
 
@@ -114,6 +120,13 @@ CONNECTOR_HINT = (
     "and act on the reply, nudge a person and wait for their attention or "
     "approval, browse the web, read and write files or spreadsheets — with "
     "the LLM deciding each next step from what comes back"
+)
+
+COMPOSITION_HINT = (
+    "processes COMPOSED from smaller reusable workflows — one step of the "
+    "process is itself an existing workflow from a shared library (a "
+    "critique pass, a summarizer, a research sweep, a whole sub-pipeline), "
+    "invoked with its own inputs and its outputs wired into the next step"
 )
 
 ORCH_PATH = Path(__file__).parent / "idea_generator.yml"
@@ -205,13 +218,16 @@ def build_config() -> CircuitryConfig:
     )
 
 
-def pick_shape(run_no: int, fanout_every: int, connector_every: int) -> tuple[str, str]:
-    """Rotating shape bias: fan-out takes precedence, then connector, else
-    default. Returns (shape_name, shape_hint)."""
+def pick_shape(run_no: int, fanout_every: int, connector_every: int,
+               composition_every: int) -> tuple[str, str]:
+    """Rotating shape bias. Precedence: fan-out, then connector, then
+    composition, else default. Returns (shape_name, shape_hint)."""
     if fanout_every > 0 and run_no % fanout_every == 0:
         return "fanout", FANOUT_HINT
     if connector_every > 0 and run_no % connector_every == 0:
         return "connector", CONNECTOR_HINT
+    if composition_every > 0 and run_no % composition_every == 0:
+        return "composition", COMPOSITION_HINT
     return "default", ""
 
 
@@ -221,6 +237,7 @@ def main() -> int:
     sleep_s = float(os.environ.get("SLEEP_BETWEEN_RUNS", "20"))
     fanout_every = int(os.environ.get("FANOUT_EVERY", "2"))
     connector_every = int(os.environ.get("CONNECTOR_EVERY", "3"))
+    composition_every = int(os.environ.get("COMPOSITION_EVERY", "5"))
     data_dir = Path(os.environ.get("DATA_DIR", "/data"))
     data_dir.mkdir(parents=True, exist_ok=True)
     master = data_dir / "all_ideas.jsonl"
@@ -228,15 +245,17 @@ def main() -> int:
     config = build_config()
     seen, by_focus = load_state(data_dir)
     print(f"[farm] resuming with {len(seen)} unique ideas; target {target}; "
-          f"{len(FOCI)} foci; fan-out bias every {fanout_every or '∅'} runs; "
-          f"connector bias every {connector_every or '∅'} runs", flush=True)
+          f"{len(FOCI)} foci; fan-out bias every {fanout_every or '∅'}; "
+          f"connector bias every {connector_every or '∅'}; "
+          f"composition bias every {composition_every or '∅'} runs", flush=True)
 
     run_no = 0
     backoff = 30.0
     while len(seen) < target:
         focus = FOCI[run_no % len(FOCI)]
         run_no += 1
-        shape, hint = pick_shape(run_no, fanout_every, connector_every)
+        shape, hint = pick_shape(run_no, fanout_every, connector_every,
+                                 composition_every)
         # Bounded dedupe context — keeps the curate prompt under the cook
         # fleet's per-job execution cap.
         existing = "\n".join(by_focus.get(focus, [])[-40:])
