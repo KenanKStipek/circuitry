@@ -118,12 +118,12 @@ def report(master: Path, threshold: float = DEFAULT_DUP_THRESHOLD,
     worst = sorted(stats.items(), key=lambda kv: (kv[1][0] / kv[1][1], -kv[1][1]))
     print("[qa] weakest foci:", flush=True)
     for focus, (on, count) in worst[:10]:
-        print(f"[qa]   {on / count:5.1%}  {on:4d}/{count:<4d}  {focus}", flush=True)
+        print(f"[qa]   {on / count:6.1%}  {on:4d}/{count:<4d}  {focus}", flush=True)
 
     shapes = Counter(str(rec.get("shape", "unknown")) for rec in records)
     print("[qa] shape distribution:", flush=True)
     for shape, count in shapes.most_common():
-        print(f"[qa]   {count / total:5.1%}  {count:5d}  {shape}", flush=True)
+        print(f"[qa]   {count / total:6.1%}  {count:5d}  {shape}", flush=True)
 
     dupes = sorted((c for c in clusters if len(c) > 1), key=len, reverse=True)
     print(f"[qa] near-dup clusters: {len(dupes)} "

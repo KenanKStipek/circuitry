@@ -11,7 +11,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -295,6 +295,74 @@ def test_cluster_groups_every_record_exactly_once() -> None:
     clusters = qa_corpus.cluster(CORPUS, farm.DEFAULT_DUP_THRESHOLD)
     flat = sorted(pos for members in clusters for pos in members)
     assert flat == list(range(len(CORPUS)))
+
+
+class _Idled(Exception):
+    """Raised in place of the farm's post-completion idle sleep."""
+
+
+# One fabricated run's output: an on-focus idea for FOCI[0] ("small business
+# operations"), an off-focus drifter, and a near-duplicate of the first.
+RUN_OUTPUT = "\n".join([
+    "1. Invoice Chasing Ladder for Small Business Cash Flow — nudges late payers.",
+    "2. Retirement Savings Forecast — projects post-career income.",
+    "3. Invoice chasing ladders for small business cash flow — nudge late payers.",
+])
+
+
+def _harvest_one_run(tmp_path: Path, monkeypatch, target: str) -> list[dict]:
+    """Drive farm.main() through exactly one fabricated run and return the
+    records it banked."""
+    monkeypatch.setattr(farm, "build_config", lambda: None)
+    monkeypatch.setattr(
+        farm, "run_orchestration",
+        lambda **kwargs: SimpleNamespace(
+            ok=True, state={"prime": {"final_list": {"value": RUN_OUTPUT}}}, error=None,
+        ),
+    )
+
+    def fake_sleep(seconds: float) -> None:
+        if seconds >= 3600:  # the "DONE — idling" loop
+            raise _Idled
+
+    monkeypatch.setattr(farm.time, "sleep", fake_sleep)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TARGET_IDEAS", target)
+    monkeypatch.setenv("SLEEP_BETWEEN_RUNS", "0")
+
+    with pytest.raises(_Idled):
+        farm.main()
+    return [json.loads(line) for line in
+            (tmp_path / "all_ideas.jsonl").read_text(encoding="utf-8").splitlines()]
+
+
+def test_one_harvest_run_filters_and_logs(tmp_path: Path, monkeypatch, capsys) -> None:
+    """The off-focus line and the near-duplicate are dropped, the survivor is
+    banked in the unchanged record format, and both reject counts are logged."""
+    banked = _harvest_one_run(tmp_path, monkeypatch, target="1")
+
+    assert len(banked) == 1
+    assert banked[0]["idea"].startswith("Invoice Chasing Ladder")
+    assert set(banked[0]) == {"idea", "focus", "shape", "run", "complete_run", "ts"}
+    assert banked[0]["focus"] == farm.FOCI[0]
+    assert banked[0]["run"] == 1 and banked[0]["complete_run"] is True
+
+    out = capsys.readouterr().out
+    assert "focus_rejects=1" in out
+    assert "near_dups=1" in out
+    assert "[focus-reject]" in out and "Retirement Savings Forecast" in out
+    assert "[near-dup]" in out
+
+
+def test_focus_check_can_be_disabled(tmp_path: Path, monkeypatch) -> None:
+    """FOCUS_CHECK=0 banks the drifter again; dedupe still applies."""
+    monkeypatch.setenv("FOCUS_CHECK", "0")
+    banked = _harvest_one_run(tmp_path, monkeypatch, target="2")
+
+    assert [rec["idea"].split(" —")[0] for rec in banked] == [
+        "Invoice Chasing Ladder for Small Business Cash Flow",
+        "Retirement Savings Forecast",
+    ]
 
 
 def test_focus_adherence_counts_per_focus() -> None:

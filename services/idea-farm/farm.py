@@ -484,6 +484,7 @@ def main() -> int:
         # PARTIAL HARVEST: bank ideas from whatever state exists, ok or not.
         fresh = 0
         focus_rejects = 0
+        near_dups = 0
         wanted = focus_tokens(focus) if focus_check else frozenset()
         with master.open("a", encoding="utf-8") as fh:
             for text in harvest_texts(result.state or {}):
@@ -492,7 +493,14 @@ def main() -> int:
                         focus_rejects += 1
                         print(f"[focus-reject] {focus} :: {idea}", flush=True)
                         continue
-                    if not index.add(idea):
+                    hit = index.match(idea)
+                    if hit is not None:
+                        if hit >= 0:  # similarity, not the exact-key path
+                            near_dups += 1
+                            print(f"[near-dup] {title_of(idea).strip()} ≈ "
+                                  f"{index.titles[hit]}", flush=True)
+                        continue
+                    if not index.add(idea):  # no title survived normalization
                         continue
                     by_focus.setdefault(focus, []).append(idea)
                     fh.write(json.dumps({
@@ -508,7 +516,8 @@ def main() -> int:
 
         if not result.ok:
             print(f"[farm] run {run_no} ({focus}, {shape}) FAILED after {time.time()-started:.0f}s "
-                  f"(salvaged +{fresh}, focus_rejects={focus_rejects} → {len(index)}/{target}): "
+                  f"(salvaged +{fresh}, focus_rejects={focus_rejects}, "
+                  f"near_dups={near_dups} → {len(index)}/{target}): "
                   f"{str(result.error)[:160]} — backing off {backoff:.0f}s", flush=True)
             time.sleep(backoff)
             backoff = min(backoff * 2, 120)
@@ -516,7 +525,7 @@ def main() -> int:
 
         backoff = 30.0
         print(f"[farm] run {run_no} ({focus}, {shape}): +{fresh} new, "
-              f"focus_rejects={focus_rejects}, "
+              f"focus_rejects={focus_rejects}, near_dups={near_dups}, "
               f"{len(index)}/{target} total, {time.time()-started:.0f}s", flush=True)
         time.sleep(sleep_s)
 
