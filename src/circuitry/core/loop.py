@@ -623,7 +623,7 @@ Should the loop continue? Answer (yes/no):"""
                         verbose=self.verbose,
                         depth=self.depth + 2,
                         ancestors=self._child_ancestors,
-                    ).execute(store=iter_store)
+                    ).execute(store=iter_store, ctx_override=ctx)
 
                 elif isinstance(effect, ConditionalDefinition):
                     ConditionalRuntime(
