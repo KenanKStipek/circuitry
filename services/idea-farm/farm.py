@@ -5,8 +5,19 @@ Design notes:
 - Sharded dedupe: each run focuses on ONE domain from FOCI (rotating). The
   orchestration's existing_ideas input only receives that domain's prior
   ideas, so the prompt stays bounded no matter how large the farm grows.
-  A normalized-title check on write catches exact/near-exact duplicates
-  globally.
+  Duplicate detection is GLOBAL on write: an exact normalized-title key
+  (fast path) plus a Jaccard token-set similarity check against every idea
+  banked so far (IdeaIndex). Exact keys alone missed one-word/casing
+  variants — "Drafting and tracking team meeting summaries" vs "Drafting
+  and Tracking Meeting Summaries" both banked (owner corpus review,
+  2026-08-16; effective uniqueness estimated 60-80% of nominal).
+- FOCUS ADHERENCE: runs drifted off their assigned focus and regressed to
+  generic business-process templates ("world-building and fiction series"
+  producing "Retirement Savings Forecast"), which also defeats the
+  sharded-dedupe premise — the same generic idea lands under several foci.
+  The prompts now demand the focus's own artifacts and actors, and harvest
+  rejects any idea line sharing no content word with the focus phrase
+  (counted per run as focus_rejects).
 - PARTIAL HARVEST: ideas are banked from whatever state a run produced —
   final_list, curate, gap_ideas, and every completed theme round — on
   success AND failure. A run that dies downstream still keeps its
@@ -49,6 +60,13 @@ Env:
   MONITOR_EVERY         apply the observe-and-branch shape hint every Nth
                         run (when none above applies); 0 disables
                                                        (default: 11)
+  DUP_THRESHOLD         Jaccard similarity at or above which two titles
+                        count as the same idea         (default: 0.7)
+  FOCUS_CHECK           1 = reject harvested ideas with no content-word
+                        overlap with the run's focus; 0 = bank everything
+                                                       (default: 1)
+  QA_ON_BOOT            1 = print a qa_corpus report over the existing
+                        corpus before the first run    (default: 0)
   DATA_DIR              state directory                (default: /data)
 """
 
@@ -154,15 +172,162 @@ MONITOR_HINT = (
 ORCH_PATH = Path(__file__).parent / "idea_generator.yml"
 
 
+# Words carrying no topical signal. Kept deliberately small: every word
+# dropped here is one the similarity and focus checks can no longer see.
+STOPWORDS = frozenset("""
+a an the and or but of for to in on at by with from into over under across
+via per as is are be being been that this these those it its your their our
+using use used automatically automated auto new each any all every some
+""".split())
+
+DEFAULT_DUP_THRESHOLD = 0.7
+
+# Shortest token that may match a focus word by prefix. Below this, prefix
+# matching pairs up unrelated stems ("art" / "article").
+MIN_PREFIX_MATCH = 4
+
+
+def stem(word: str) -> str:
+    """Crude suffix stripper — enough to fold plural/gerund variants of the
+    same word onto one token ("summaries"/"summary", "responsing"/"response").
+    Deliberately not Porter: pure stdlib, no dependency, and the similarity
+    check only needs both sides of a near-dup pair to land together."""
+    w = word
+    # Plural first, then gerund, then a bare trailing "e" — applied in
+    # sequence rather than as alternatives so that every variant of a word
+    # converges on one stem ("meetings" → "meeting" → "meet", matching the
+    # stem of "meeting"; branching would have left the two apart).
+    if len(w) > 4 and w.endswith("ies"):
+        w = w[:-3] + "y"
+    elif len(w) > 4 and w.endswith("es") and not w.endswith("ses"):
+        w = w[:-2]
+    elif len(w) > 2 and w.endswith("s") and not w.endswith("ss"):
+        w = w[:-1]
+    for suffix in ("ing", "ed"):
+        if len(w) - len(suffix) >= 4 and w.endswith(suffix):
+            w = w[: -len(suffix)]
+            break
+    if len(w) > 3 and w.endswith("e"):
+        w = w[:-1]
+    return w
+
+
+def content_tokens(text: str) -> frozenset[str]:
+    """Stemmed content words of a phrase — stopwords and punctuation gone.
+    Hyphens split ("follow-ups" → follow, up) so hyphenation variants of the
+    same phrase produce the same token set."""
+    words = re.split(r"[^a-z0-9]+", (text or "").lower())
+    return frozenset(stem(w) for w in words if w and w not in STOPWORDS and len(w) > 1)
+
+
+def title_of(idea: str) -> str:
+    """The title portion of an idea line — everything before the em-dash."""
+    return idea.split("—")[0].split(" - ")[0]
+
+
 def norm(title: str) -> str:
     """Normalized dedupe key for an idea line's title portion."""
-    t = title.split("—")[0].split(" - ")[0]
+    t = title_of(title)
     return re.sub(r"[^a-z0-9 ]", "", t.lower()).strip()
 
 
-def load_state(data_dir: Path) -> tuple[set[str], dict[str, list[str]]]:
-    """Rebuild (seen_keys, per-focus idea lines) from the master JSONL."""
-    seen: set[str] = set()
+def jaccard(a: frozenset[str], b: frozenset[str]) -> float:
+    """Token-set overlap in [0, 1]. Empty on either side scores 0."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def focus_tokens(focus: str) -> frozenset[str]:
+    """Content words of a focus phrase, e.g. "resume and portfolio upkeep"
+    → {resume, portfolio, upkeep}."""
+    return content_tokens(focus)
+
+
+def matches_focus(idea: str, wanted: frozenset[str]) -> bool:
+    """True when the idea line shares a content word with the focus phrase.
+
+    Cheap adherence net, not a precision instrument: it exists to catch gross
+    drift (a retirement-savings idea harvested under "world-building and
+    fiction series"), so matching is lenient — a prefix relation in either
+    direction counts, which folds "financ(e)" onto "financial". A blank focus
+    accepts everything."""
+    if not wanted:
+        return True
+    for token in content_tokens(idea):
+        for want in wanted:
+            if token == want:
+                return True
+            shorter, longer = sorted((token, want), key=len)
+            if len(shorter) >= MIN_PREFIX_MATCH and longer.startswith(shorter):
+                return True
+    return False
+
+
+class IdeaIndex:
+    """Global duplicate detector over banked idea titles.
+
+    Two tiers, both pure-python: an exact normalized-title set (the original
+    key, kept as the fast path) and a Jaccard similarity check over stemmed
+    title token sets. Candidates for the similarity pass come from an
+    inverted token→ids index, so a new idea is only compared against ideas
+    sharing at least one content word rather than the whole corpus."""
+
+    def __init__(self, threshold: float = DEFAULT_DUP_THRESHOLD) -> None:
+        self.threshold = threshold
+        self.keys: set[str] = set()
+        self.token_sets: list[frozenset[str]] = []
+        self.titles: list[str] = []
+        self._postings: dict[str, list[int]] = {}
+
+    def __len__(self) -> int:
+        return len(self.token_sets)
+
+    def match(self, idea: str) -> int | None:
+        """Index of the banked idea this one duplicates, or None if new.
+        Exact-key hits report -1 (no positional information needed)."""
+        if norm(idea) in self.keys:
+            return -1
+        tokens = content_tokens(title_of(idea))
+        if not tokens:
+            return None
+        best, best_score = None, 0.0
+        candidates: set[int] = set()
+        for token in tokens:
+            candidates.update(self._postings.get(token, ()))
+        for idx in candidates:
+            score = jaccard(tokens, self.token_sets[idx])
+            if score >= self.threshold and score > best_score:
+                best, best_score = idx, score
+        return best
+
+    def add(self, idea: str) -> bool:
+        """Bank the idea unless it duplicates one already held.
+        Returns True when it was new."""
+        if self.match(idea) is not None:
+            return False
+        key = norm(idea)
+        if not key:
+            return False
+        self.keys.add(key)
+        tokens = content_tokens(title_of(idea))
+        idx = len(self.token_sets)
+        self.token_sets.append(tokens)
+        self.titles.append(title_of(idea).strip())
+        for token in tokens:
+            self._postings.setdefault(token, []).append(idx)
+        return True
+
+
+def load_state(
+    data_dir: Path, threshold: float = DEFAULT_DUP_THRESHOLD
+) -> tuple[IdeaIndex, dict[str, list[str]]]:
+    """Rebuild (dedupe index, per-focus idea lines) from the master JSONL.
+
+    Read-only: the master file's format and layout are untouched, so a farm
+    that resumes on an older corpus picks up exactly where it left off — it
+    simply holds a stricter duplicate key from here on."""
+    index = IdeaIndex(threshold)
     by_focus: dict[str, list[str]] = {}
     master = data_dir / "all_ideas.jsonl"
     if master.exists():
@@ -171,9 +336,9 @@ def load_state(data_dir: Path) -> tuple[set[str], dict[str, list[str]]]:
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            seen.add(norm(rec["idea"]))
+            index.add(rec["idea"])
             by_focus.setdefault(rec["focus"], []).append(rec["idea"])
-    return seen, by_focus
+    return index, by_focus
 
 
 def extract_ideas(text: str) -> list[str]:
@@ -268,22 +433,32 @@ def main() -> int:
     composition_every = int(os.environ.get("COMPOSITION_EVERY", "5"))
     threshold_every = int(os.environ.get("THRESHOLD_EVERY", "7"))
     monitor_every = int(os.environ.get("MONITOR_EVERY", "11"))
+    threshold = float(os.environ.get("DUP_THRESHOLD", str(DEFAULT_DUP_THRESHOLD)))
+    focus_check = os.environ.get("FOCUS_CHECK", "1") != "0"
     data_dir = Path(os.environ.get("DATA_DIR", "/data"))
     data_dir.mkdir(parents=True, exist_ok=True)
     master = data_dir / "all_ideas.jsonl"
 
     config = build_config()
-    seen, by_focus = load_state(data_dir)
-    print(f"[farm] resuming with {len(seen)} unique ideas; target {target}; "
+    index, by_focus = load_state(data_dir, threshold)
+
+    if os.environ.get("QA_ON_BOOT") == "1":
+        from qa_corpus import report  # local module; import kept lazy
+
+        report(master, threshold=threshold)
+
+    print(f"[farm] resuming with {len(index)} unique ideas; target {target}; "
           f"{len(FOCI)} foci; fan-out bias every {fanout_every or '∅'}; "
           f"connector bias every {connector_every or '∅'}; "
           f"composition bias every {composition_every or '∅'}; "
           f"threshold bias every {threshold_every or '∅'}; "
-          f"monitor bias every {monitor_every or '∅'} runs", flush=True)
+          f"monitor bias every {monitor_every or '∅'} runs; "
+          f"dup threshold {threshold}; "
+          f"focus check {'on' if focus_check else 'off'}", flush=True)
 
     run_no = 0
     backoff = 30.0
-    while len(seen) < target:
+    while len(index) < target:
         focus = FOCI[run_no % len(FOCI)]
         run_no += 1
         shape, hint = pick_shape(run_no, fanout_every, connector_every,
@@ -308,13 +483,17 @@ def main() -> int:
 
         # PARTIAL HARVEST: bank ideas from whatever state exists, ok or not.
         fresh = 0
+        focus_rejects = 0
+        wanted = focus_tokens(focus) if focus_check else frozenset()
         with master.open("a", encoding="utf-8") as fh:
             for text in harvest_texts(result.state or {}):
                 for idea in extract_ideas(text):
-                    key = norm(idea)
-                    if not key or key in seen:
+                    if not matches_focus(idea, wanted):
+                        focus_rejects += 1
+                        print(f"[focus-reject] {focus} :: {idea}", flush=True)
                         continue
-                    seen.add(key)
+                    if not index.add(idea):
+                        continue
                     by_focus.setdefault(focus, []).append(idea)
                     fh.write(json.dumps({
                         "idea": idea,
@@ -329,18 +508,19 @@ def main() -> int:
 
         if not result.ok:
             print(f"[farm] run {run_no} ({focus}, {shape}) FAILED after {time.time()-started:.0f}s "
-                  f"(salvaged +{fresh} → {len(seen)}/{target}): {str(result.error)[:160]} — "
-                  f"backing off {backoff:.0f}s", flush=True)
+                  f"(salvaged +{fresh}, focus_rejects={focus_rejects} → {len(index)}/{target}): "
+                  f"{str(result.error)[:160]} — backing off {backoff:.0f}s", flush=True)
             time.sleep(backoff)
             backoff = min(backoff * 2, 120)
             continue
 
         backoff = 30.0
         print(f"[farm] run {run_no} ({focus}, {shape}): +{fresh} new, "
-              f"{len(seen)}/{target} total, {time.time()-started:.0f}s", flush=True)
+              f"focus_rejects={focus_rejects}, "
+              f"{len(index)}/{target} total, {time.time()-started:.0f}s", flush=True)
         time.sleep(sleep_s)
 
-    print(f"[farm] DONE — {len(seen)} unique ideas in {master}. Idling.", flush=True)
+    print(f"[farm] DONE — {len(index)} unique ideas in {master}. Idling.", flush=True)
     while True:  # deployment services restart on exit; idle instead
         time.sleep(3600)
 
