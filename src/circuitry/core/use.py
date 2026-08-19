@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from ..adapters import Adapter
 from ..output import console as _console
+from .outputs import normalize_outputs
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -109,7 +110,9 @@ class UseDefinition:
     orchestration: str | None = None
     inline: str | None = None
     inputs: dict[str, Any] | None = None
-    outputs: dict[str, str] | None = None
+    #: name -> state path. Values may be the canonical ``{path: ...}`` object
+    #: or the bare-path shorthand; both normalize through ``core.outputs``.
+    outputs: dict[str, Any] | None = None
     validate: bool = True
     on_error: Literal["fail", "skip", "continue"] = "fail"
     description: str | None = None
@@ -278,15 +281,13 @@ class UseRuntime:
         if self.defn.outputs is not None:
             return None  # explicit mapping takes precedence
 
-        iface_outputs = interface.get("outputs")
-        if isinstance(iface_outputs, dict) and iface_outputs:
-            auto_outputs: dict[str, str] = {}
-            for key, spec in iface_outputs.items():
-                if isinstance(spec, dict) and "path" in spec:
-                    auto_outputs[key] = spec["path"]
-            return auto_outputs if auto_outputs else None
-
-        return None
+        # Same canonical shape as `use.outputs`: objects with a `path`, with
+        # the bare-string shorthand accepted too (see core.outputs).
+        iface_outputs = normalize_outputs(
+            interface.get("outputs"),
+            context=f"Use effect '{self.defn.name}': child interface.outputs",
+        )
+        return iface_outputs or None
 
     def _load_child_orch(self, ctx: dict[str, Any]) -> tuple[dict[str, Any], str, str]:
         """Load the child orchestration dict, a display label, and a cycle-identity string.
@@ -407,8 +408,14 @@ class UseRuntime:
                 ancestors=self._ancestors,
             ).execute(store=child_store)
 
-            # Extract outputs (explicit > auto-generated from interface > full child state)
-            effective_outputs = self.defn.outputs or auto_outputs
+            # Extract outputs (explicit > auto-generated from interface > full child state).
+            # The compiler already normalized `outputs`, but a UseDefinition can
+            # also be built directly (embedded API, tests) — normalize again so
+            # both spellings work on every path in.
+            explicit_outputs = normalize_outputs(
+                self.defn.outputs, context=f"Use effect '{self.defn.name}'"
+            )
+            effective_outputs = explicit_outputs or auto_outputs
             if effective_outputs:
                 result: dict[str, Any] = {}
                 for output_key, child_path in effective_outputs.items():
