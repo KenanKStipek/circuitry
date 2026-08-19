@@ -60,14 +60,14 @@ def _normalize_one(spec: Any, *, context: str, key: str) -> str:
         return path
 
     if isinstance(spec, Mapping):
-        path = spec.get("path")
-        if not isinstance(path, str) or not path.strip():
+        declared = spec.get("path")
+        if not isinstance(declared, str) or not declared.strip():
             raise ValueError(
                 f"{context}: output '{key}' has no 'path'. "
                 f"Canonical form is {key}: {{path: prime.<effect>.value}} "
                 f"(the bare string {key}: prime.<effect>.value is also accepted)."
             )
-        return path.strip()
+        return declared.strip()
 
     raise ValueError(
         f"{context}: output '{key}' must be an object with a 'path' key "

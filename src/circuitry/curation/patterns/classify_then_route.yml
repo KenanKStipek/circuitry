@@ -27,8 +27,8 @@ effects:
         - comparison          # asks "X vs Y?"
         - howto               # asks "how do I do X?"
     outputs:
-      label: prime.classify.value.label
-      confidence: prime.classify.value.confidence
+      label: {path: prime.classify.value.label}
+      confidence: {path: prime.classify.value.confidence}
 
   - type: if
     name: answer

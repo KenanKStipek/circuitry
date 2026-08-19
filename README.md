@@ -397,12 +397,16 @@ A named scope that composes effects with explicit control flow topology.
 ```
 
 Flow models:
-- **chain** (aliases: `chain_of_thought`, `cot`) — sequential, each effect sees prior state
-- **tree** (aliases: `tree_of_thought`, `tot`) — parallel execution
+- **chain** — sequential, each effect sees prior state
+- **tree** — parallel execution
 
-### Conditional
+(`chain_of_thought`/`cot` and `tree_of_thought`/`tot` still parse as deprecated
+aliases; `cof validate` warns on them. Write `chain` and `tree`.)
+
+### If
 
 Cybernetic branching. The system inspects its own state and selects a path.
+(`type: conditional` still parses as a deprecated alias; write `type: if`.)
 
 ```yaml
 - type: if
@@ -474,8 +478,12 @@ Composition primitive. Runs another orchestration as an isolated sub-step with e
     article_text: "{{prime.fetch.value}}"
     max_words: 50
   outputs:
-    summary: prime.summarize.value
+    summary: {path: prime.summarize.value, type: string}
 ```
+
+`use.outputs` and `interface.outputs` take the same shape: an object per name,
+`path` required, `type` and `description` optional. A bare path string is
+accepted as shorthand in both, but the object form is the one to write.
 
 State is fully isolated — the child orchestration runs in its own store. Only mapped inputs are passed in, only mapped outputs are extracted.
 

@@ -46,7 +46,7 @@ effects:
           text: "{{transcript}}"
           max_words: 25
         outputs:
-          summary: prime.summarize.value
+          summary: {path: prime.summarize.value}
 
       - type: use
         name: attendees_step
@@ -55,7 +55,7 @@ effects:
           text: "{{transcript}}"
           fields: [attendees]
         outputs:
-          extracted: prime.extract.value
+          extracted: {path: prime.extract.value}
 
   # Top-level aliases for the interface output paths.
   - type: prompt
