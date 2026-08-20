@@ -477,11 +477,17 @@ def parse_complexity_settings(
     block = _as_mapping(raw, path)
     _reject_unknown_keys(block, _COMPLEXITY_KEYS, path)
 
+    def sub_block(key: str) -> Any:
+        # Absent or explicitly null means "defaults"; anything else — including
+        # an empty list — still has to be an object.
+        value = block.get(key)
+        return {} if value is None else value
+
     settings = ComplexitySettings(
-        scoring=_parse_scoring(block.get("scoring") or {}, f"{path}.scoring"),
-        routing=_parse_routing(block.get("routing") or {}, f"{path}.routing"),
+        scoring=_parse_scoring(sub_block("scoring"), f"{path}.scoring"),
+        routing=_parse_routing(sub_block("routing"), f"{path}.routing"),
         decomposition=_parse_decomposition(
-            block.get("decomposition") or {}, f"{path}.decomposition"
+            sub_block("decomposition"), f"{path}.decomposition"
         ),
     )
     _check_prerequisites(settings, path)

@@ -233,6 +233,21 @@ def test_unknown_nested_keys_are_rejected(block: dict[str, object], needle: str)
     assert needle in str(excinfo.value)
 
 
+@pytest.mark.parametrize("value", [[], "on", 3])
+def test_sub_block_must_be_an_object(value: object) -> None:
+    with pytest.raises(ComplexityConfigError) as excinfo:
+        parse_complexity_settings({"scoring": value})
+
+    assert "runtime.complexity.scoring must be an object" in str(excinfo.value)
+
+
+def test_null_sub_block_means_defaults() -> None:
+    settings = parse_complexity_settings({"scoring": None, "routing": None})
+
+    assert settings.scoring.enabled is False
+    assert settings.routing.respect_explicit is True
+
+
 def test_unknown_weight_signal_lists_the_valid_signals() -> None:
     with pytest.raises(ComplexityConfigError) as excinfo:
         parse_complexity_settings({"scoring": {"weights": {"vibes": 1}}})
