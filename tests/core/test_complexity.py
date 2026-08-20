@@ -10,7 +10,7 @@ import ast
 import importlib.util
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import FrozenInstanceError, dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -708,10 +708,12 @@ def test_junk_weights_warn_and_fall_back() -> None:
 def test_a_non_mapping_weight_table_falls_back_to_the_defaults(junk: Any) -> None:
     result = score(TRIVIAL_REWRITE, weights=junk)
 
-    assert result == score(TRIVIAL_REWRITE, weights=None) or any(
-        "expected a mapping" in warning for warning in result.warnings
-    )
+    assert any("expected a mapping" in warning for warning in result.warnings)
     assert result.weight_total == pytest.approx(sum(DEFAULT_WEIGHTS.values()))
+    assert [entry.weight for entry in result.signals] == [
+        pytest.approx(DEFAULT_WEIGHTS[name]) for name in SIGNAL_NAMES
+    ]
+    assert result.score == score(TRIVIAL_REWRITE).score
 
 
 @pytest.mark.parametrize(
@@ -820,5 +822,5 @@ def test_signal_score_is_immutable() -> None:
     entry = score(TRIVIAL_REWRITE).signals[0]
 
     assert isinstance(entry, SignalScore)
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         entry.contribution = 1.0  # type: ignore[misc]
