@@ -11,9 +11,16 @@ KenanKStipek/CyberDiner), using the same two endpoints: ``POST
 returns a ``jobId``; ``GET {expo_url}/beta/jobs/{jobId}`` is polled
 (default every 500ms) until the job leaves the in-flight states
 (``pending``/``assigned``/``running``) and reaches a terminal one
-(``complete``/``completed``/``failed``/``cancelled``). No asyncio, no
-threads — a prompt effect simply blocks like it does on every other
-adapter.
+(``complete``/``completed``/``failed``/``cancelled``/``timedOut``). No
+asyncio, no threads — a prompt effect simply blocks like it does on every
+other adapter.
+
+``timedOut`` is expo's own verdict, not ours: its timeout service retires
+a job no cook claimed within ~5 minutes (``job.timed_out``,
+``reason=claim_timeout``). Treating it as terminal is what keeps a dead
+job from being polled until this client's much longer
+``timeout_seconds`` expires, under an error message that blames the
+client's clock for a server-side outcome.
 
 Wire format — ground truth is ``apps/expo/src/models/job.rs`` in
 KenanKStipek/CyberDiner, which carries ``#[serde(rename_all =
@@ -56,7 +63,17 @@ from .base import GenerateResult
 #: Terminal success. Both spellings are real: cookd's client polls for
 #: ``complete``, expo's ``ReportResultRequest`` writes ``completed``.
 _SUCCESS_STATUSES = frozenset({"complete", "completed"})
-_TERMINAL_STATUSES = _SUCCESS_STATUSES | frozenset({"failed", "cancelled"})
+
+#: Terminal *server-side* timeout: expo's timeout service moves a job no
+#: cook claimed in time (~5 minutes) out of the queue and emits
+#: ``job.timed_out`` with ``reason=claim_timeout``. Polling past that point
+#: is polling a job expo has already declared dead, so it is terminal here
+#: too — see ``_normalize_status`` for why one key covers every spelling.
+_TIMED_OUT_STATUSES = frozenset({"timedout"})
+
+_TERMINAL_STATUSES = (
+    _SUCCESS_STATUSES | _TIMED_OUT_STATUSES | frozenset({"failed", "cancelled"})
+)
 
 #: Tier names expo seeds a deployment with. Suggestions only — expo's
 #: ``tier_service`` is the authority, a deployment can define others, and
@@ -114,6 +131,31 @@ def _unwrap(body: dict[str, Any], url: str) -> dict[str, Any]:
             f"ApiEnvelope). Got: {json.dumps(body)[:200]}"
         )
     return data
+
+
+def _normalize_status(status: Any) -> str:
+    """Fold a wire status onto a comparison key: lowercase, alphanumerics only.
+
+    expo's job model carries ``#[serde(rename_all = "camelCase")]``, so its
+    ``TimedOut`` variant should reach us as ``timedOut`` — but the same
+    state is spelled ``TimedOut`` in the Rust enum and ``timed_out`` in the
+    ``job.timed_out`` event name, and this client cannot see which one a
+    given deployment serializes. Every spelling lands on one key, which is
+    the same defensiveness already applied to ``complete``/``completed``:
+    the cost of accepting a variant expo never sends is zero, and the cost
+    of missing the one it does send is a ten-minute hang per dead job.
+    """
+    return "".join(ch for ch in str(status or "").lower() if ch.isalnum())
+
+
+def _error_detail(job: dict[str, Any]) -> str:
+    """Trailing ``(errorCode=…, errorMessage=…)`` for whichever expo sent."""
+    parts = [
+        f"{key}={value!r}"
+        for key in ("errorCode", "errorMessage")
+        if (value := job.get(key))
+    ]
+    return f" ({', '.join(parts)})" if parts else ""
 
 
 def _as_int(value: Any) -> int | None:
@@ -214,7 +256,7 @@ class CyberdinerAdapter:
         poll_url = f"{base}/beta/jobs/{job_id}"
         poll_interval_seconds = max(0.0, self.poll_interval_ms) / 1000.0
         status = job.get("status")
-        while status not in _TERMINAL_STATUSES:
+        while _normalize_status(status) not in _TERMINAL_STATUSES:
             if time.monotonic() >= deadline:
                 raise RuntimeError(
                     f"cyberdiner: timed out after {timeout_seconds}s waiting for "
@@ -237,10 +279,17 @@ class CyberdinerAdapter:
             )
             status = job.get("status")
 
-        if status == "failed":
+        terminal = _normalize_status(status)
+        if terminal in _TIMED_OUT_STATUSES:
+            raise RuntimeError(
+                f"cyberdiner: job {job_id} timed out server-side before being "
+                f"claimed (reason=claim_timeout) — no cook served tier "
+                f"{tier!r} in time." + _error_detail(job)
+            )
+        if terminal == "failed":
             error_message = job.get("errorMessage") or "unknown error"
             raise RuntimeError(f"cyberdiner: job {job_id} failed: {error_message}")
-        if status == "cancelled":
+        if terminal == "cancelled":
             raise RuntimeError(f"cyberdiner: job {job_id} was cancelled.")
 
         return GenerateResult(

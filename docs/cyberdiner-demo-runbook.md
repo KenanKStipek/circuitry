@@ -234,6 +234,7 @@ Optional knobs: `CYBERDINER_TIER` (default `cheap`) and
 | `doctor` shows `['host:…']` for cyberdiner | expo unreachable — check the URL (root URL, no `/beta` suffix), VPN, TLS |
 | `cyberdiner: HTTP 401 …` | bad or revoked API key; mint a fresh `ck_…` |
 | `cyberdiner: timed out … (last status='pending')` | no cook is serving that tier, or the fleet is cold — start a cook, try another tier, or raise `timeout_seconds` |
+| `cyberdiner: job <id> timed out server-side before being claimed …` | expo retired the job itself (~5 min, `reason=claim_timeout`): no cook was serving that tier in time — start a cook for it, or submit to a tier the fleet is actually covering |
 | `cyberdiner: job <id> failed: …` | the cook reported failure; the message is expo's `errorMessage` verbatim |
 | `cyberdiner: HTTP 422 … missing field` \| `… is not a CyberDiner job envelope` | the endpoint isn't an expo `/beta` job route (proxy, wrong host, or an expo predating the camelCase + `data`-envelope format) |
 | `cyberdiner: HTTP 400 … unknown tier 'gpt-4o'` | tiers are the model names, not provider models — use one your expo knows (`cheap`, `fast`, `good`, `good-fast`, `alpha` …) |

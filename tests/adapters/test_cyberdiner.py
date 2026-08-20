@@ -444,6 +444,69 @@ def test_generate_failed_status_raises_with_error_message(
         adapter.generate(model="cheap", prompt="hi", timeout_seconds=10)
 
 
+@pytest.mark.parametrize("wire_status", ["timedOut", "TimedOut", "timed_out"])
+def test_generate_timed_out_status_is_terminal_and_stops_polling(
+    monkeypatch: pytest.MonkeyPatch, wire_status: str
+) -> None:
+    """expo's claim timeout ends the poll loop immediately, not at our deadline.
+
+    Every spelling of the status is honored: the wire value is expo's
+    camelCase ``timedOut``, but the Rust enum reads ``TimedOut`` and the
+    event name ``job.timed_out``, and a client that recognizes only one of
+    them polls a dead job until ``timeout_seconds`` runs out.
+    """
+    clock = _install_clock(monkeypatch)
+    scripted = _ScriptedUrlopen(
+        [
+            _job(jobId="job-9", status="pending"),
+            _job(jobId="job-9", status=wire_status),
+            _job(jobId="job-9", status=wire_status),
+        ]
+    )
+    monkeypatch.setattr("urllib.request.urlopen", scripted)
+
+    adapter = _adapter(poll_interval_ms=500)
+    with pytest.raises(RuntimeError) as exc:
+        adapter.generate(model="good-fast", prompt="hi", timeout_seconds=600)
+
+    message = str(exc.value)
+    assert "job-9" in message
+    assert "timed out server-side before being claimed" in message
+    assert "reason=claim_timeout" in message
+    assert "good-fast" in message
+    # The client timeout is never reached: one submit + one poll, ~0.5s.
+    assert len(scripted.calls) == 2
+    assert clock.now == pytest.approx(0.5)
+    # And it does not masquerade as the client-side timeout error.
+    assert "timed out after 600s" not in message
+
+
+def test_generate_timed_out_status_includes_expo_error_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_clock(monkeypatch)
+    scripted = _ScriptedUrlopen(
+        [
+            _job(jobId="job-10", status="pending"),
+            _job(
+                jobId="job-10",
+                status="timedOut",
+                errorCode="CLAIM_TIMEOUT",
+                errorMessage="no cook claimed the job within 300s",
+            ),
+        ]
+    )
+    monkeypatch.setattr("urllib.request.urlopen", scripted)
+
+    adapter = _adapter()
+    with pytest.raises(RuntimeError) as exc:
+        adapter.generate(model="cheap", prompt="hi", timeout_seconds=600)
+
+    message = str(exc.value)
+    assert "CLAIM_TIMEOUT" in message
+    assert "no cook claimed the job within 300s" in message
+
+
 def test_generate_cancelled_status_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_clock(monkeypatch)
     scripted = _ScriptedUrlopen(
