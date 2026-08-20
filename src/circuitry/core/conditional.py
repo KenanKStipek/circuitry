@@ -221,7 +221,7 @@ class ConditionalRuntime:
                             verbose=self.verbose,
                             depth=self.depth + 2,
                             ancestors=self._ancestors,
-                        ).execute(store=child_store)
+                        ).execute(store=child_store, ctx_override=ctx)
 
                     elif isinstance(effect, ConditionalDefinition):
                         ConditionalRuntime(

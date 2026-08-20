@@ -707,6 +707,30 @@ Reference a specific iteration from outside the loop:
 template: "First result: {{prime.explain.iter_0.summary.value}}"
 ```
 
+### Iteration Bindings Inside Nested Containers
+
+`{{<each.as>}}` and `{{_loop_index}}` reach every effect in the body, however
+deeply it is wrapped — an `if` branch, a grouping `dynamic`, an inner loop, or
+any combination of them:
+
+```yaml
+- type: loop
+  name: outer
+  each: {in: items, as: item}
+  body:
+    - type: dynamic          # grouping wrapper
+      name: wrap
+      effects:
+        - type: prompt
+          name: nested
+          template: "sees: {{item.name}}"   # renders the current element
+```
+
+Inside a nested `dynamic`, its own children stay addressable by the short
+sibling path (`{{wrap.nested.value}}`) as well as the absolute one, and a name
+collision resolves to the nearer node — the dynamic's own child wins over an
+outer binding of the same name.
+
 ---
 
 ## Patterns & Antipatterns
