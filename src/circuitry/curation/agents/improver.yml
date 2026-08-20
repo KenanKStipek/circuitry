@@ -204,5 +204,5 @@ effects:
           yaml_a: "{{input_yaml}}"
           yaml_b: "{{prime.generate.final_yaml.value}}"
         outputs:
-          converged: prime.judge.value
+          converged: {path: prime.judge.value}
         on_error: continue

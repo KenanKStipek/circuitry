@@ -35,7 +35,7 @@ effects:
       text: "{{article_text}}"
       max_words: "{{max_words}}"
     outputs:
-      summary: prime.summarize.value
+      summary: {path: prime.summarize.value}
 
   # Step 2 — trim to the precise cap. The utility's word target is a soft hint;
   # this pass enforces a hard limit and removes any boilerplate the model added.

@@ -7,9 +7,9 @@ fields:
     note: "Map of input-name -> {type, required, description}. OBJECT form per input, e.g. article_text: {type: string, required: true, description: ...}."
   outputs:
     type: object
-    note: "Map of output-name -> {type, path}. OBJECT form REQUIRED — path points at an effect output (e.g. path: prime.summarize.value). Do NOT use the bare-string shorthand here; that form belongs to a use effect's outputs mapping, not to interface.outputs."
+    note: "Map of output-name -> {path, type?, description?}. Same canonical shape as a use effect's outputs — path points at an effect output in THIS document (e.g. path: prime.summarize.value). The bare string form (summary: prime.summarize.value) is accepted shorthand for {path: ...}; write the object form."
 constraints:
-  - "interface.outputs entries are objects with path (and usually type) — never bare path strings."
+  - "interface.outputs and use.outputs take the same shape — object with path (canonical), bare path string (shorthand). There is no interface-only spelling."
   - "Every interface.outputs path must reference an effect defined in this document."
   - "Declare an interface whenever the orchestration is reusable-shaped — it is what makes composition (use) validated and self-documenting."
 example: |

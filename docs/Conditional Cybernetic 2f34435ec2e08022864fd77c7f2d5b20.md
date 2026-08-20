@@ -120,7 +120,7 @@ A Conditional is declared declaratively in the orchestration domain object langu
 ### **Required Fields**
 
 ```
-type: conditional | if
+type: if
 if: object
 then: array
 ```

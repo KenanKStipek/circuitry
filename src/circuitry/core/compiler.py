@@ -7,6 +7,7 @@ from typing import Any, Literal, Union, cast
 from .conditional import ConditionalDefinition, ConditionDef
 from .dynamic import DynamicDefinition
 from .loop import LoopDefinition, LoopEachDef, LoopWhileDef
+from .outputs import normalize_outputs
 from .primes import REFLECTOR_PRIME_V1
 from .prompt import (
     AssetRefDef,
@@ -716,9 +717,11 @@ def _compile_use(
     if inputs is not None and not isinstance(inputs, dict):
         inputs = None
 
-    outputs = effect.get("outputs") or None
-    if outputs is not None and not isinstance(outputs, dict):
-        outputs = None
+    # Canonical form is `name: {path: ...}`; the bare-string shorthand
+    # `name: prime.x.value` normalizes to the same thing (see core.outputs).
+    outputs = normalize_outputs(
+        effect.get("outputs") or None, context=f"Use effect '{name}'"
+    ) or None
 
     validate_flag = bool(effect.get("validate", True))
 

@@ -209,6 +209,13 @@ def _do_validate(
         console.print("[red]Invalid[/red]")
         for e in result.get("errors", []):
             console.print(f" - {e}")
+
+    # Advisory only — deprecated aliases and type-keyword names still run.
+    # Printed for both outcomes; never affects the exit code.
+    for w in result.get("warnings", []):
+        console.print(f"[yellow]Warning:[/yellow] {w}")
+
+    if not result["ok"]:
         raise typer.Exit(code=1)
 
 

@@ -48,6 +48,6 @@ effects:
       candidates: "{{prime.variants.collected.value}}"
       objective: "Most engaging opening that earns a reader's continued attention without overpromising."
     outputs:
-      index: prime.judge.value.index
-      candidate: prime.judge.value.candidate
-      reason: prime.judge.value.reason
+      index: {path: prime.judge.value.index}
+      candidate: {path: prime.judge.value.candidate}
+      reason: {path: prime.judge.value.reason}

@@ -33,7 +33,7 @@ effects:
         - lines_removed
         - language
     outputs:
-      meta: prime.extract.value
+      meta: {path: prime.extract.value}
 
   # Structured review pass. Single LLM call producing an array of issues.
   - type: prompt

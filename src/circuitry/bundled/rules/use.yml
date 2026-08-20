@@ -24,7 +24,7 @@ fields:
     note: "Map of child-input-name -> value or interpolation (e.g. article_text: \"{{prime.fetch.value}}\"). Only mapped inputs are visible to the child — state is otherwise fully isolated."
   outputs:
     type: object
-    note: "Map of output-name -> child state path (STRING form, e.g. summary: prime.summarize.value). Auto-generated when the child declares an interface. NOTE: this string form is specific to use.outputs — an orchestration's own interface.outputs uses the object form with path/type."
+    note: "Map of output-name -> {path, type?, description?}, where path is a state path in the CHILD (e.g. summary: {path: prime.summarize.value, type: string}). The bare string form (summary: prime.summarize.value) is accepted shorthand for {path: ...}; write the object form. Same shape as interface.outputs — see the common section. Auto-generated when the child declares an interface."
   validate:
     type: boolean
     default: true
@@ -50,4 +50,4 @@ example: |
       text: "{{prime.fetch.value}}"
       max_words: 50
     outputs:
-      summary: prime.summarize.value
+      summary: {path: prime.summarize.value, type: string}

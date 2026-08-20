@@ -506,17 +506,29 @@ def validate(
 ) -> dict[str, Any]:
     text = orchestration_path.read_text(encoding="utf-8").strip()
     if not text:
-        return {"ok": False, "errors": ["Orchestration file is empty."]}
+        return {"ok": False, "errors": ["Orchestration file is empty."], "warnings": []}
+
+    # Advisory lint (deprecated aliases, type-keyword effect names). Populated
+    # as soon as the document parses and carried through every exit below —
+    # warnings never change ``ok``, so a file can be valid and still noisy.
+    lint_warnings: list[str] = []
 
     try:
         orch = load_orchestration_file(orchestration_path)
+
+        from ..core.lint import lint_orchestration
+        lint_warnings = lint_orchestration(orch)
 
         schema = _load_schema()
         if schema is not None:
             validator = _jsonschema.Draft7Validator(schema)
             schema_errors = sorted(validator.iter_errors(orch), key=str)
             if schema_errors:
-                return {"ok": False, "errors": [e.message for e in schema_errors]}
+                return {
+                    "ok": False,
+                    "errors": [e.message for e in schema_errors],
+                    "warnings": lint_warnings,
+                }
 
         # Allowlist gate. Skipped when caller supplies no config — keeps
         # programmatic callers (tests, MCP server, internal scripts)
@@ -525,7 +537,11 @@ def validate(
         if config is not None:
             allowlist_errors = check_allowlist(orch=orch, config=config)
             if allowlist_errors:
-                return {"ok": False, "errors": allowlist_errors}
+                return {
+                    "ok": False,
+                    "errors": allowlist_errors,
+                    "warnings": lint_warnings,
+                }
 
         compile_orchestration(orch=orch, root_name="prime")
 
@@ -539,6 +555,7 @@ def validate(
             return {
                 "ok": False,
                 "errors": [f"Cycle: {' → '.join(cycle)}"],
+                "warnings": lint_warnings,
             }
 
         # Preflight gate (Story 1). Same gating policy as allowlist — only
@@ -550,11 +567,15 @@ def validate(
             preflight_results = preflight(orchestration_path, config)
             preflight_errors = format_preflight_errors(preflight_results)
             if preflight_errors:
-                return {"ok": False, "errors": preflight_errors}
+                return {
+                    "ok": False,
+                    "errors": preflight_errors,
+                    "warnings": lint_warnings,
+                }
 
-        return {"ok": True, "errors": []}
+        return {"ok": True, "errors": [], "warnings": lint_warnings}
     except Exception as e:
-        return {"ok": False, "errors": [str(e)]}
+        return {"ok": False, "errors": [str(e)], "warnings": lint_warnings}
 
 
 def preflight(

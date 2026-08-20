@@ -26,6 +26,10 @@ from circuitry.adapters.base import GenerateResult
 from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.runtime_shim import RunRequest, RunResult, run
 from circuitry.core.compiler import compile_orchestration
+from circuitry.core.lint import (
+    DEPRECATED_EFFECT_TYPE_ALIASES,
+    DEPRECATED_FLOW_ALIASES,
+)
 from circuitry.core.primes import WIZARD_PRIME_V1
 from circuitry.plugins.validate_yaml import ValidateYamlPlugin
 
@@ -616,14 +620,30 @@ def _schema() -> dict[str, Any]:
 
 
 def test_prime_documents_every_effect_type() -> None:
+    """Every type the schema accepts is taught — except the deprecated aliases,
+    which the schema still parses and the prime deliberately does not teach."""
     defs = _schema()["$defs"]
     types = defs["EffectDef"]["else"]["else"]["else"]["else"]["else"]["else"]["else"][
         "properties"
     ]["type"]["enum"]
     for effect_type in types:
+        if effect_type in DEPRECATED_EFFECT_TYPE_ALIASES:
+            continue
         assert f" {effect_type} " in WIZARD_PRIME_V1 or f"{effect_type} —" in (
             WIZARD_PRIME_V1
         ), f"WIZARD_PRIME does not document effect type {effect_type!r}"
+
+
+def test_prime_teaches_one_spelling_per_construct() -> None:
+    """Issue #89: aliases still parse, but nothing the corpus reads spells them
+    — a prime that names both spellings dilutes the training signal."""
+    spellings = [f"type: {alias}" for alias in DEPRECATED_EFFECT_TYPE_ALIASES]
+    spellings += [f"flow: {alias}" for alias in DEPRECATED_FLOW_ALIASES]
+    spellings += list(DEPRECATED_FLOW_ALIASES)  # cot/tot are not English words
+    for spelling in spellings:
+        assert spelling not in WIZARD_PRIME_V1, (
+            f"WIZARD_PRIME still teaches the deprecated spelling {spelling!r}"
+        )
 
 
 def test_prime_documents_the_naming_rule_and_reserved_names() -> None:
@@ -636,7 +656,13 @@ def test_prime_documents_prompt_types_and_flows() -> None:
     defs = _schema()["$defs"]
     for prompt_type in defs["PromptEffect"]["properties"]["prompt_type"]["enum"]:
         assert prompt_type in WIZARD_PRIME_V1
-    for flow in defs["FlowModel"]["enum"]:
+    canonical_flows = [
+        flow
+        for flow in defs["FlowModel"]["enum"]
+        if flow not in DEPRECATED_FLOW_ALIASES
+    ]
+    assert canonical_flows == ["chain", "tree"]
+    for flow in canonical_flows:
         assert flow in WIZARD_PRIME_V1
     for policy in defs["OnErrorLoop"]["enum"]:
         assert policy in WIZARD_PRIME_V1

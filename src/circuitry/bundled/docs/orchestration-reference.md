@@ -27,7 +27,7 @@ Top-level fields of an orchestration YAML file:
 | `adapter` | string | no | from config.json | Adapter: `ollama`, `openai`, `anthropic`, `litellm` |
 | `model` | string | no | from config.json | Model identifier (e.g. `llama3`, `gpt-4o`, `claude-haiku-20240307`) |
 | `flow` | string | no | `chain` | Top-level flow for the implicit root dynamic |
-| `version` | number | no | — | Optional compatibility version |
+| `version` | string | no | — | Free-form version string for **this document**, e.g. `"1.2.0"`. Not a schema version and not a feature gate — the runtime reads it and ignores it. Omit unless you are versioning the file |
 
 Additional top-level keys (e.g. `runtime`, `plugins`) are allowed and used by the runtime configuration layer.
 
@@ -115,7 +115,7 @@ A named container that executes child effects sequentially (`chain`) or in paral
 |-------|------|----------|---------|-------------|
 | `type` | `"dynamic"` | yes | — | |
 | `name` | string | yes | — | Name pattern; must be unique among siblings |
-| `flow` | string | no | `chain` | `chain`, `chain_of_thought`, `cot`, `tree`, `tree_of_thought`, `tot` |
+| `flow` | string | no | `chain` | `chain` or `tree` |
 | `effects` | array | yes | — | Non-empty list of child effects |
 | `description` | string | no | — | |
 | `max_concurrency` | integer | no | — | Max parallel executions for tree flow |
@@ -158,15 +158,15 @@ A named container that executes child effects sequentially (`chain`) or in paral
 
 ---
 
-### `if` / `conditional`
+### `if`
 
-Evaluates a condition against state and executes exactly one branch (`then` or `else`). Non-selected branches produce no effects. Name is optional — named conditionals record decision metadata to state.
+Evaluates a condition against state and executes exactly one branch (`then` or `else`). Non-selected branches produce no effects. Name is optional — a named `if` records decision metadata to state.
 
 **State output path (named):** `prime.<name>.<branch_effect_name>.value`
 
 | Field | Type | Required | Default | Constraints |
 |-------|------|----------|---------|-------------|
-| `type` | `"if"` or `"conditional"` | yes | — | Both accepted |
+| `type` | `"if"` | yes | — | `"conditional"` also parses as a deprecated alias; always write `"if"` |
 | `name` | string | no | — | Optional; enables state recording of the decision |
 | `if` | object | yes | — | Condition definition |
 | `if.mode` | string | no | `model` | `model` or `cel` |
@@ -465,6 +465,30 @@ Reference a specific iteration from outside the loop:
 template: "First result: {{prime.explain.iter_0.summary.value}}"
 ```
 
+### Iteration Bindings Inside Nested Containers
+
+`{{<each.as>}}` and `{{_loop_index}}` reach every effect in the body, however
+deeply it is wrapped — an `if` branch, a grouping `dynamic`, an inner loop, or
+any combination of them:
+
+```yaml
+- type: loop
+  name: outer
+  each: {in: items, as: item}
+  body:
+    - type: dynamic          # grouping wrapper
+      name: wrap
+      effects:
+        - type: prompt
+          name: nested
+          template: "sees: {{item.name}}"   # renders the current element
+```
+
+Inside a nested `dynamic`, its own children stay addressable by the short
+sibling path (`{{wrap.nested.value}}`) as well as the absolute one, and a name
+collision resolves to the nearer node — the dynamic's own child wins over an
+outer binding of the same name.
+
 ---
 
 ## Patterns & Antipatterns
@@ -479,8 +503,8 @@ template: "First result: {{prime.explain.iter_0.summary.value}}"
 
 ### Named vs Transparent Control
 
-- **Named** loops and conditionals record wrapper metadata (iteration count, decision result) to state — use when you need to inspect or reference the control structure itself
-- **Unnamed** (transparent) loops and conditionals execute without wrapper records — simpler, lower overhead
+- **Named** loops and `if` effects record wrapper metadata (iteration count, decision result) to state — use when you need to inspect or reference the control structure itself
+- **Unnamed** (transparent) loops and `if` effects execute without wrapper records — simpler, lower overhead
 
 ### Staged Prompts Over Single-Shot
 
@@ -564,13 +588,13 @@ The following rules are sufficient for generating structurally correct Circuitry
 1. Top-level fields: `adapter` (string), `model` (string), `effects` (array). Only `effects` is required. Additional top-level keys are allowed.
 2. `adapter` and `model` are only required when the orchestration contains `prompt` or `reflector` effects. Tool-only orchestrations (`type: tool` effects only) do not need `adapter` or `model`.
 3. Valid `adapter` values: `ollama`, `openai`, `anthropic`, `litellm`.
-4. Valid `flow` values: `chain`, `chain_of_thought`, `cot` (all sequential); `tree`, `tree_of_thought`, `tot` (all parallel).
+4. Valid `flow` values: `chain` (sequential) and `tree` (parallel). Write nothing else — `chain_of_thought`/`cot` and `tree_of_thought`/`tot` still parse but are deprecated and warned about.
 
 **Effect types and required fields:**
-5. Valid `type` values: `prompt`, `dynamic`, `if`, `conditional`, `loop`, `reflector`, `tool`.
+5. Valid `type` values: `prompt`, `dynamic`, `if`, `loop`, `reflector`, `tool`, `use`. (`conditional` still parses as an alias of `if` but is deprecated and warned about — always write `if`.)
 6. `prompt`: requires `name` and exactly one of `template` or `messages`. Optional: `prompt_type` (default `text`), `schema` (required when `prompt_type: json`). Do NOT use `prompt_type: image` — use `type: tool, provider: comfyui` for image generation.
 7. `dynamic`: requires `name`, `effects` (non-empty array), optional `flow` (default `chain`).
-8. `if` / `conditional`: requires `if` (condition object) and `then` (array). `name` is optional. `else` is optional.
+8. `if`: requires `if` (condition object) and `then` (array). `name` is optional. `else` is optional.
 9. `loop`: requires `body` (non-empty array) and exactly one of `each` or `while`. `name` is optional.
 10. `reflector`: requires `name` and `effects` (non-empty array).
 11. `tool`: requires `name` and `provider`. Supported providers: `ffmpeg` (requires `params.input` and `params.output`), `comfyui` (requires `prompt` and `model` as top-level fields; `params` for sampler settings). Top-level `prompt` supports Mustache rendering. All string values in `params` also support Mustache rendering.
@@ -578,6 +602,8 @@ The following rules are sufficient for generating structurally correct Circuitry
 **Naming:**
 12. All `name` values must match `^[A-Za-z_][A-Za-z0-9_]*$` — letters, digits, underscores; must start with letter or underscore; no spaces or dots. The pattern `iter_<N>` (e.g. `iter_0`) is reserved and must not be used as a name.
 13. Effect names must be unique among siblings within the same scope.
+13a. Never name an effect after an effect type (`use`, `loop`, `if`, `dynamic`, `prompt`, `tool`, `reflector`). Name it after the job it does — `summarize_article`, not `prompt`. Generic names are what make two siblings collide; validation warns on them.
+13b. Outputs — in `use.outputs` and `interface.outputs` alike — are objects: `summary: {path: prime.summarize.value, type: string}`. A bare path string is accepted as shorthand in both, but write the object form.
 
 **State path addressing:**
 14. In templates (Mustache): use `{{key}}` for initial state keys; use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
