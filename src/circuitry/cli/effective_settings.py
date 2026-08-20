@@ -12,6 +12,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
+from .complexity_config import (
+    ComplexitySettings,
+    DEFAULT_COMPLEXITY_SETTINGS,
+    resolve_complexity_settings,
+)
 from .config import CircuitryConfig
 
 if TYPE_CHECKING:
@@ -27,6 +32,8 @@ class EffectiveSettings:
     sources: dict[
         str, str
     ]  # where each value came from (cli/orchestration/config/default)
+    # Typed view of runtime["complexity"], validated at resolution time.
+    complexity: ComplexitySettings = DEFAULT_COMPLEXITY_SETTINGS
 
 
 def _merge_runtime(
@@ -138,10 +145,55 @@ def resolve_effective_settings(
     elif isinstance((cfg.runtime or {}).get("persistence"), dict):
         sources["persistence"] = "config"
 
+    # complexity: no separate plumbing — the block rides the same shallow
+    # runtime merge above, so an orchestration-level block replaces the
+    # config-level one wholesale. Resolving it here means a malformed block
+    # fails at config resolution rather than mid-run, and records provenance
+    # alongside model/adapter/persistence.
+    complexity = resolve_complexity_settings(runtime)
+    _record_complexity_sources(
+        sources,
+        config_block=(cfg.runtime or {}).get("complexity"),
+        orch_block=orch_runtime.get("complexity"),
+    )
+
     return EffectiveSettings(
         model=model,
         adapter=adapter,
         plugins=plugins,
         runtime=runtime,
         sources=sources,
+        complexity=complexity,
     )
+
+
+def _record_complexity_sources(
+    sources: dict[str, str],
+    *,
+    config_block: Any,
+    orch_block: Any,
+) -> None:
+    """Record which layer supplied the complexity block and each sub-block.
+
+    Sub-block provenance is not redundant with the block-level entry: the
+    runtime merge replaces the whole `complexity` key, so an orchestration
+    block that only defines `routing` leaves `scoring` on its defaults even
+    when the config file defined one.
+    """
+    orch_is_block = isinstance(orch_block, dict)
+    config_is_block = isinstance(config_block, dict)
+
+    if orch_is_block:
+        winner: dict[str, Any] = orch_block
+        sources["complexity"] = "orchestration"
+    elif config_is_block:
+        winner = config_block
+        sources["complexity"] = "config"
+    else:
+        winner = {}
+        sources["complexity"] = "default"
+
+    for key in ("scoring", "routing", "decomposition"):
+        sources[f"complexity.{key}"] = (
+            sources["complexity"] if key in winner else "default"
+        )
