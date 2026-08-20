@@ -633,8 +633,8 @@ downstream handling is uniform:
 }
 ```
 
-The per-effect `on_effect_complete` hook still fires for the node, so
-observability sees the skip rather than a gap.
+The per-effect `on_effect_start` / `on_effect_complete` hooks still fire for
+the node, so observability sees the skip rather than a gap.
 
 **Rules:**
 
