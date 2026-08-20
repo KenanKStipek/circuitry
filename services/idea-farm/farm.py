@@ -11,13 +11,31 @@ Design notes:
   variants — "Drafting and tracking team meeting summaries" vs "Drafting
   and Tracking Meeting Summaries" both banked (owner corpus review,
   2026-08-16; effective uniqueness estimated 60-80% of nominal).
+  The similarity runs over TWO token sets and keeps the better score: the
+  title's, and a lead window of the first DUP_LEAD_WORDS content words of
+  the full line. A 469-idea QA pass (2026-08-19) found the dominant
+  survivor was a pair whose difference sat entirely in the trailing clause
+  — harmless when the line carries an em-dash (the title key already folds
+  those together) but fatal when the model wrote no separator the splitter
+  recognised, since the whole line then became the key and the differing
+  tail dragged similarity to ~0.5. The lead window keys such lines on
+  their opening instead; title_of also recognises en-dashes, bars and
+  colons now.
 - FOCUS ADHERENCE: runs drifted off their assigned focus and regressed to
   generic business-process templates ("world-building and fiction series"
   producing "Retirement Savings Forecast"), which also defeats the
   sharded-dedupe premise — the same generic idea lands under several foci.
   The prompts now demand the focus's own artifacts and actors, and harvest
-  rejects any idea line sharing no content word with the focus phrase
-  (counted per run as focus_rejects).
+  re-checks each line (counted per run as focus_rejects). The check targets
+  that TEMPLATE REGRESSION rather than topical purity: downstream intake
+  (MAJOR Psi) treats focus as advisory provenance and reclassifies domain
+  itself, so an on-topic idea phrased in vocabulary the focus phrase does
+  not contain is a real idea, not drift. Default FOCUS_CHECK=template
+  rejects a line only when it is off-focus AND matches a known
+  cross-domain office template that is not native to the focus;
+  FOCUS_CHECK=strict restores the blunt any-off-focus rejection. Lines
+  that are merely off-focus are still counted (off_focus) so adherence
+  stays visible without costing ideas.
 - PARTIAL HARVEST: ideas are banked from whatever state a run produced —
   final_list, curate, gap_ideas, and every completed theme round — on
   success AND failure. A run that dies downstream still keeps its
@@ -62,9 +80,13 @@ Env:
                                                        (default: 11)
   DUP_THRESHOLD         Jaccard similarity at or above which two titles
                         count as the same idea         (default: 0.7)
-  FOCUS_CHECK           1 = reject harvested ideas with no content-word
-                        overlap with the run's focus; 0 = bank everything
-                                                       (default: 1)
+  DUP_LEAD_WORDS        how many leading content words of the full idea
+                        line form the second (tail-proof) dedupe key;
+                        0 disables the lead key        (default: 8)
+  FOCUS_CHECK           template = reject only off-focus ideas that match a
+                        generic office template not native to the focus;
+                        strict = reject every off-focus idea; off = bank
+                        everything                     (default: template)
   QA_ON_BOOT            1 = print a qa_corpus report over the existing
                         corpus before the first run    (default: 0)
   DATA_DIR              state directory                (default: /data)
@@ -182,9 +204,28 @@ using use used automatically automated auto new each any all every some
 
 DEFAULT_DUP_THRESHOLD = 0.7
 
+# Length of the lead window — the first N content words of a full idea line,
+# used as a second dedupe key alongside the title's. Eight is about a title's
+# worth of words: long enough that two genuinely different ideas rarely share
+# a whole window, short enough that a differing trailing clause stays outside
+# it. (Twelve was measured too wide: the observed patient-demographics pair
+# scored 0.50 at 12 and 1.00 at 8.)
+DEFAULT_LEAD_WORDS = 8
+
 # Shortest token that may match a focus word by prefix. Below this, prefix
 # matching pairs up unrelated stems ("art" / "article").
 MIN_PREFIX_MATCH = 4
+
+# Separators a model actually uses between an idea's title and its gloss.
+# The prompt asks for "Title — one short sentence"; en-dashes, horizontal
+# bars and double hyphens show up anyway.
+DASH_SPLIT = re.compile(r"\s*[—–―]+\s*|\s+-{1,2}\s+")
+COLON_SPLIT = re.compile(r":\s+")
+
+# A colon only counts as a title boundary when what precedes it can stand as
+# a title on its own. Without this, "Meeting notes: <anything>" would collapse
+# every such idea onto one key.
+MIN_TITLE_TOKENS = 3
 
 
 def stem(word: str) -> str:
@@ -212,17 +253,57 @@ def stem(word: str) -> str:
     return w
 
 
+def ordered_content_tokens(text: str) -> list[str]:
+    """Stemmed content words of a phrase in reading order, first occurrence
+    only — stopwords and punctuation gone. Hyphens split ("follow-ups" →
+    follow, up) so hyphenation variants of the same phrase produce the same
+    tokens. Order matters only to the lead window; everything else takes the
+    set."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for word in re.split(r"[^a-z0-9]+", (text or "").lower()):
+        if not word or word in STOPWORDS or len(word) <= 1:
+            continue
+        token = stem(word)
+        if token not in seen:
+            seen.add(token)
+            out.append(token)
+    return out
+
+
 def content_tokens(text: str) -> frozenset[str]:
-    """Stemmed content words of a phrase — stopwords and punctuation gone.
-    Hyphens split ("follow-ups" → follow, up) so hyphenation variants of the
-    same phrase produce the same token set."""
-    words = re.split(r"[^a-z0-9]+", (text or "").lower())
-    return frozenset(stem(w) for w in words if w and w not in STOPWORDS and len(w) > 1)
+    """Stemmed content words of a phrase, as a set."""
+    return frozenset(ordered_content_tokens(text))
 
 
 def title_of(idea: str) -> str:
-    """The title portion of an idea line — everything before the em-dash."""
-    return idea.split("—")[0].split(" - ")[0]
+    """The title portion of an idea line — everything before the dash.
+
+    Recognises em-dash, en-dash, horizontal bar and spaced hyphens, plus a
+    colon when the head before it is substantial enough to be a title. When
+    no boundary is found the whole line is the title; the lead window
+    (`lead_tokens`) is what keeps those lines dedupable."""
+    text = (idea or "").strip()
+    head = DASH_SPLIT.split(text, maxsplit=1)[0]
+    if head != text:
+        return head
+    colon_head = COLON_SPLIT.split(text, maxsplit=1)[0]
+    if colon_head != text and len(content_tokens(colon_head)) >= MIN_TITLE_TOKENS:
+        return colon_head
+    return text
+
+
+def lead_tokens(idea: str, lead_words: int = DEFAULT_LEAD_WORDS) -> frozenset[str]:
+    """The first `lead_words` content words of the FULL idea line.
+
+    The tail-proof half of the dedupe key. Two records that open identically
+    and diverge only in a trailing clause share this set even when no
+    separator was written for `title_of` to find — the failure mode a
+    469-idea QA pass (2026-08-19) found dominant in the banked corpus.
+    `lead_words <= 0` disables it."""
+    if lead_words <= 0:
+        return frozenset()
+    return frozenset(ordered_content_tokens(idea)[:lead_words])
 
 
 def norm(title: str) -> str:
@@ -251,7 +332,13 @@ def matches_focus(idea: str, wanted: frozenset[str]) -> bool:
     drift (a retirement-savings idea harvested under "world-building and
     fiction series"), so matching is lenient — a prefix relation in either
     direction counts, which folds "financ(e)" onto "financial". A blank focus
-    accepts everything."""
+    accepts everything.
+
+    This is the ADHERENCE metric, not the rejection rule. Plenty of on-topic
+    ideas describe themselves in vocabulary the focus phrase never uses
+    ("Continuity Bible Keeper" under "world-building and fiction series"
+    only passes because it says "fiction"), so rejecting on this alone costs
+    real ideas — see `generic_template`."""
     if not wanted:
         return True
     for token in content_tokens(idea):
@@ -264,39 +351,171 @@ def matches_focus(idea: str, wanted: frozenset[str]) -> bool:
     return False
 
 
+# The generic business-process templates runs regress to when they lose their
+# focus, each with the foci it is legitimately native to. Drift is not "this
+# idea uses words the focus phrase lacks" — downstream intake reclassifies
+# domain itself and treats focus as advisory provenance — it is "this run
+# produced the same office workflow every unfocused run produces". Only the
+# latter is worth spending an idea on.
+#
+# (name, marker words, foci this template genuinely belongs to)
+#
+# Home phrases must name their domain with DISTINCTIVE words. A generic one
+# leaks: "travel planning" in a home list makes "cooking and meal planning"
+# look native via the shared stem "plan", and the template stops firing where
+# it should. GENERIC_HOME_WORDS below guards that.
+GENERIC_TEMPLATES: tuple[tuple[str, str, str], ...] = (
+    ("contract-review",
+     "contract clause redline indemnity liability agreement counterparty nda "
+     "termination renewal obligation",
+     "legal contract clause law procurement vendor compliance insurance real "
+     "estate client onboarding sales"),
+    ("resume-screening",
+     "resume cv applicant candidate screening shortlist recruiter recruiting "
+     "interview hiring",
+     "job hunting career human resource recruiting screening resume portfolio "
+     "candidate applicant interview hiring volunteer"),
+    ("expense-approval",
+     "expense reimbursement receipt spend approval policy corporate",
+     "accounting tax bookkeeping expense finance procurement vendor nonprofit "
+     "grant business travel"),
+    ("invoice-chasing",
+     "invoice billing overdue payable receivable collections payment dunning",
+     "accounting tax bookkeeping invoice billing finance sales business "
+     "subscription bill customer freelance"),
+    ("loan-underwriting",
+     "loan mortgage underwriting borrower creditworthiness lending application "
+     "approval",
+     "finance insurance real estate accounting banking lending mortgage loan"),
+    ("retirement-forecast",
+     "retirement savings pension annuity investment contribution forecast "
+     "projection",
+     "finance insurance accounting tax retirement pension elder investment "
+     "savings"),
+    ("performance-review",
+     "performance appraisal employee manager rating promotion competency cycle",
+     "human resource employee recruiting coaching teaching curriculum fitness"),
+    ("risk-register",
+     "risk heatmap register severity likelihood mitigation matrix scoring",
+     "insurance legal compliance risk audit manufacturing logistics safety "
+     "security"),
+)
+
+# Words too common across the focus list to identify a template's home domain.
+# A home phrase containing one of these would silently exempt unrelated foci.
+GENERIC_HOME_WORDS = frozenset(
+    stem(w) for w in
+    "planning plan work working management managing tracking track operations "
+    "review reviewing report reporting writing content data personal".split()
+)
+
+# How many of a template's marker words an idea must hit before it counts as
+# that template. One is coincidence ("contract" appears in plenty of honest
+# ideas); two is a pattern.
+MIN_TEMPLATE_MARKERS = 2
+
+FOCUS_CHECK_OFF = "off"
+FOCUS_CHECK_TEMPLATE = "template"
+FOCUS_CHECK_STRICT = "strict"
+
+
+def parse_focus_check(raw: str | None) -> str:
+    """FOCUS_CHECK env → mode. Legacy "1"/"0" keep working ("1" now means the
+    retuned template check, which is what "1" was always trying to be)."""
+    value = (raw or "").strip().lower()
+    if value in ("0", "off", "false", "no"):
+        return FOCUS_CHECK_OFF
+    if value == FOCUS_CHECK_STRICT:
+        return FOCUS_CHECK_STRICT
+    return FOCUS_CHECK_TEMPLATE
+
+
+def generic_template(idea: str, focus: str) -> str | None:
+    """Name of the generic office template this idea has regressed to, or
+    None. A template only counts when the run's focus is NOT one it belongs
+    to — "Retirement Savings Forecast" is regression under "world-building
+    and fiction series" and the entire point of the run under "personal
+    finance"."""
+    tokens = content_tokens(idea)
+    if not tokens:
+        return None
+    wanted = content_tokens(focus)
+    for name, markers, home in GENERIC_TEMPLATES:
+        if len(tokens & content_tokens(markers)) < MIN_TEMPLATE_MARKERS:
+            continue
+        if wanted and wanted & content_tokens(home):
+            continue  # native to this focus — not drift
+        return name
+    return None
+
+
+def reject_reason(idea: str, focus: str, mode: str) -> str | None:
+    """Why this harvested line should be dropped, or None to bank it.
+
+    `mode` is FOCUS_CHECK_OFF (bank everything), FOCUS_CHECK_TEMPLATE (drop
+    only off-focus lines that regressed to a foreign office template) or
+    FOCUS_CHECK_STRICT (drop every off-focus line)."""
+    if mode == FOCUS_CHECK_OFF or not focus:
+        return None
+    if matches_focus(idea, content_tokens(focus)):
+        return None
+    if mode == FOCUS_CHECK_STRICT:
+        return "off-focus"
+    template = generic_template(idea, focus)
+    return f"template:{template}" if template else None
+
+
 class IdeaIndex:
-    """Global duplicate detector over banked idea titles.
+    """Global duplicate detector over banked ideas.
 
-    Two tiers, both pure-python: an exact normalized-title set (the original
-    key, kept as the fast path) and a Jaccard similarity check over stemmed
-    title token sets. Candidates for the similarity pass come from an
-    inverted token→ids index, so a new idea is only compared against ideas
-    sharing at least one content word rather than the whole corpus."""
+    Three tiers, all pure-python:
 
-    def __init__(self, threshold: float = DEFAULT_DUP_THRESHOLD) -> None:
+    1. an exact normalized-title set — the original key, kept as fast path;
+    2. Jaccard over the title's stemmed token set — catches the casing,
+       word-order and one-extra-word variants ("Drafting and tracking team
+       meeting summaries" / "Drafting and Tracking Meeting Summaries");
+    3. Jaccard over the LEAD WINDOW, the first `lead_words` content words of
+       the full line — catches pairs that open identically and differ only
+       in a trailing clause, which tier 2 misses whenever the model wrote no
+       separator for `title_of` to split on.
+
+    A pair counts as duplicate if EITHER similarity clears the threshold;
+    the two windows fail on opposite inputs, so the max is the useful score.
+    Candidates come from an inverted token→ids index over both windows, so a
+    new idea is only scored against ideas sharing at least one content word
+    rather than against the whole corpus."""
+
+    def __init__(self, threshold: float = DEFAULT_DUP_THRESHOLD,
+                 lead_words: int = DEFAULT_LEAD_WORDS) -> None:
         self.threshold = threshold
+        self.lead_words = lead_words
         self.keys: set[str] = set()
         self.token_sets: list[frozenset[str]] = []
+        self.lead_sets: list[frozenset[str]] = []
         self.titles: list[str] = []
         self._postings: dict[str, list[int]] = {}
 
     def __len__(self) -> int:
         return len(self.token_sets)
 
+    def _windows(self, idea: str) -> tuple[frozenset[str], frozenset[str]]:
+        return content_tokens(title_of(idea)), lead_tokens(idea, self.lead_words)
+
     def match(self, idea: str) -> int | None:
         """Index of the banked idea this one duplicates, or None if new.
         Exact-key hits report -1 (no positional information needed)."""
         if norm(idea) in self.keys:
             return -1
-        tokens = content_tokens(title_of(idea))
-        if not tokens:
+        tokens, lead = self._windows(idea)
+        if not tokens and not lead:
             return None
         best, best_score = None, 0.0
         candidates: set[int] = set()
-        for token in tokens:
+        for token in tokens | lead:
             candidates.update(self._postings.get(token, ()))
         for idx in candidates:
-            score = jaccard(tokens, self.token_sets[idx])
+            score = max(jaccard(tokens, self.token_sets[idx]),
+                        jaccard(lead, self.lead_sets[idx]))
             if score >= self.threshold and score > best_score:
                 best, best_score = idx, score
         return best
@@ -310,24 +529,26 @@ class IdeaIndex:
         if not key:
             return False
         self.keys.add(key)
-        tokens = content_tokens(title_of(idea))
+        tokens, lead = self._windows(idea)
         idx = len(self.token_sets)
         self.token_sets.append(tokens)
+        self.lead_sets.append(lead)
         self.titles.append(title_of(idea).strip())
-        for token in tokens:
+        for token in tokens | lead:
             self._postings.setdefault(token, []).append(idx)
         return True
 
 
 def load_state(
-    data_dir: Path, threshold: float = DEFAULT_DUP_THRESHOLD
+    data_dir: Path, threshold: float = DEFAULT_DUP_THRESHOLD,
+    lead_words: int = DEFAULT_LEAD_WORDS,
 ) -> tuple[IdeaIndex, dict[str, list[str]]]:
     """Rebuild (dedupe index, per-focus idea lines) from the master JSONL.
 
     Read-only: the master file's format and layout are untouched, so a farm
     that resumes on an older corpus picks up exactly where it left off — it
     simply holds a stricter duplicate key from here on."""
-    index = IdeaIndex(threshold)
+    index = IdeaIndex(threshold, lead_words)
     by_focus: dict[str, list[str]] = {}
     master = data_dir / "all_ideas.jsonl"
     if master.exists():
@@ -434,18 +655,19 @@ def main() -> int:
     threshold_every = int(os.environ.get("THRESHOLD_EVERY", "7"))
     monitor_every = int(os.environ.get("MONITOR_EVERY", "11"))
     threshold = float(os.environ.get("DUP_THRESHOLD", str(DEFAULT_DUP_THRESHOLD)))
-    focus_check = os.environ.get("FOCUS_CHECK", "1") != "0"
+    lead_words = int(os.environ.get("DUP_LEAD_WORDS", str(DEFAULT_LEAD_WORDS)))
+    focus_mode = parse_focus_check(os.environ.get("FOCUS_CHECK"))
     data_dir = Path(os.environ.get("DATA_DIR", "/data"))
     data_dir.mkdir(parents=True, exist_ok=True)
     master = data_dir / "all_ideas.jsonl"
 
     config = build_config()
-    index, by_focus = load_state(data_dir, threshold)
+    index, by_focus = load_state(data_dir, threshold, lead_words)
 
     if os.environ.get("QA_ON_BOOT") == "1":
         from qa_corpus import report  # local module; import kept lazy
 
-        report(master, threshold=threshold)
+        report(master, threshold=threshold, lead_words=lead_words)
 
     print(f"[farm] resuming with {len(index)} unique ideas; target {target}; "
           f"{len(FOCI)} foci; fan-out bias every {fanout_every or '∅'}; "
@@ -453,8 +675,8 @@ def main() -> int:
           f"composition bias every {composition_every or '∅'}; "
           f"threshold bias every {threshold_every or '∅'}; "
           f"monitor bias every {monitor_every or '∅'} runs; "
-          f"dup threshold {threshold}; "
-          f"focus check {'on' if focus_check else 'off'}", flush=True)
+          f"dup threshold {threshold} (lead window {lead_words or '∅'}); "
+          f"focus check {focus_mode}", flush=True)
 
     run_no = 0
     backoff = 30.0
@@ -484,15 +706,21 @@ def main() -> int:
         # PARTIAL HARVEST: bank ideas from whatever state exists, ok or not.
         fresh = 0
         focus_rejects = 0
+        off_focus = 0
         near_dups = 0
-        wanted = focus_tokens(focus) if focus_check else frozenset()
+        wanted = focus_tokens(focus)
         with master.open("a", encoding="utf-8") as fh:
             for text in harvest_texts(result.state or {}):
                 for idea in extract_ideas(text):
-                    if not matches_focus(idea, wanted):
+                    reason = reject_reason(idea, focus, focus_mode)
+                    if reason:
                         focus_rejects += 1
-                        print(f"[focus-reject] {focus} :: {idea}", flush=True)
+                        print(f"[focus-reject:{reason}] {focus} :: {idea}", flush=True)
                         continue
+                    # Banked but not obviously on-topic: tracked, not dropped.
+                    # Adherence stays measurable without costing real ideas.
+                    if not matches_focus(idea, wanted):
+                        off_focus += 1
                     hit = index.match(idea)
                     if hit is not None:
                         if hit >= 0:  # similarity, not the exact-key path
@@ -517,7 +745,8 @@ def main() -> int:
         if not result.ok:
             print(f"[farm] run {run_no} ({focus}, {shape}) FAILED after {time.time()-started:.0f}s "
                   f"(salvaged +{fresh}, focus_rejects={focus_rejects}, "
-                  f"near_dups={near_dups} → {len(index)}/{target}): "
+                  f"off_focus={off_focus}, near_dups={near_dups} "
+                  f"→ {len(index)}/{target}): "
                   f"{str(result.error)[:160]} — backing off {backoff:.0f}s", flush=True)
             time.sleep(backoff)
             backoff = min(backoff * 2, 120)
@@ -525,7 +754,8 @@ def main() -> int:
 
         backoff = 30.0
         print(f"[farm] run {run_no} ({focus}, {shape}): +{fresh} new, "
-              f"focus_rejects={focus_rejects}, near_dups={near_dups}, "
+              f"focus_rejects={focus_rejects}, off_focus={off_focus}, "
+              f"near_dups={near_dups}, "
               f"{len(index)}/{target} total, {time.time()-started:.0f}s", flush=True)
         time.sleep(sleep_s)
 

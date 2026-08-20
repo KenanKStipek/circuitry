@@ -56,9 +56,39 @@ def test_content_tokens_drops_stopwords_and_splits_hyphens() -> None:
     )
 
 
-def test_title_of_takes_the_part_before_the_dash() -> None:
-    assert farm.title_of("Recipe Scaler — resizes a recipe").strip() == "Recipe Scaler"
-    assert farm.title_of("Recipe Scaler - resizes").strip() == "Recipe Scaler"
+@pytest.mark.parametrize("line", [
+    "Recipe Scaler — resizes a recipe",     # em-dash, the prompted format
+    "Recipe Scaler – resizes a recipe",     # en-dash
+    "Recipe Scaler ― resizes a recipe",     # horizontal bar
+    "Recipe Scaler - resizes a recipe",     # spaced hyphen
+    "Recipe Scaler -- resizes a recipe",    # double hyphen
+])
+def test_title_of_takes_the_part_before_the_dash(line: str) -> None:
+    assert farm.title_of(line).strip() == "Recipe Scaler"
+
+
+def test_title_of_splits_on_a_colon_when_the_head_is_a_title() -> None:
+    assert farm.title_of("Frost Date Sowing Planner: schedules the beds").strip() == (
+        "Frost Date Sowing Planner"
+    )
+
+
+def test_title_of_keeps_a_short_colon_head_whole() -> None:
+    """"Meeting notes: <anything>" must not collapse every such idea onto one
+    key — a two-word head is not a title."""
+    line = "Meeting notes: pulls owners and dates out of the transcript"
+    assert farm.title_of(line) == line
+
+
+def test_title_of_falls_back_to_the_whole_line() -> None:
+    line = "Anonymize patient demographics across thousands of records"
+    assert farm.title_of(line) == line
+
+
+def test_lead_tokens_window_the_opening_of_the_full_line() -> None:
+    line = "Draft the weekly grant report and mail it to every programme officer"
+    assert farm.lead_tokens(line, 3) == frozenset({"draft", "weekly", "grant"})
+    assert farm.lead_tokens(line, 0) == frozenset()  # 0 disables the window
 
 
 # ── near-duplicate detection ─────────────────────────────────────────────
@@ -74,6 +104,60 @@ OBSERVED_DUP_PAIRS = [
     ("Resume Screening Workflow — ranks applicants.",
      "Resume Screening Workflows — ranks the applicants."),
 ]
+
+
+# The failure mode a 469-idea QA pass (2026-08-19) found dominant: the pair's
+# difference lives entirely in the trailing clause. Harmless when the line
+# carries a separator title_of knows — the title key folds those together
+# already — and fatal when it does not, because the whole line then becomes
+# the key and the differing tail drags Jaccard to ~0.5. One fixture per form
+# the model actually emits.
+_ANON_HEAD = ("Anonymize patient demographics across thousands of records by "
+              "classifying sensitive fields")
+
+OBSERVED_TAIL_PAIRS = [
+    pytest.param(f"{_ANON_HEAD} and applying the right redaction rule to each",
+                 f"{_ANON_HEAD}, then routing each record to a human reviewer",
+                 id="no-separator"),
+    pytest.param(f"{_ANON_HEAD} – applies the right redaction rule per field",
+                 f"{_ANON_HEAD} – routes uncertain records to a reviewer",
+                 id="en-dash"),
+    pytest.param(f"{_ANON_HEAD}: applies the right redaction rule per field",
+                 f"{_ANON_HEAD}: routes uncertain records to a reviewer",
+                 id="colon"),
+    pytest.param(f"{_ANON_HEAD} — applies the right redaction rule per field",
+                 f"{_ANON_HEAD} — routes uncertain records to a reviewer",
+                 id="em-dash"),
+]
+
+
+@pytest.mark.parametrize("first,second", OBSERVED_TAIL_PAIRS)
+def test_ideas_differing_only_in_the_tail_are_caught(first: str, second: str) -> None:
+    index = farm.IdeaIndex()
+    assert index.add(first) is True
+    assert index.add(second) is False, "tail-only variant slipped past the index"
+    assert len(index) == 1
+
+
+def test_the_title_key_alone_missed_the_unseparated_tail_pair() -> None:
+    """Guards the premise of the lead window: with no separator to split on,
+    the title key sees two long, mostly-different strings."""
+    first, second = OBSERVED_TAIL_PAIRS[0].values
+    assert farm.norm(first) != farm.norm(second)
+    title_only = farm.jaccard(farm.content_tokens(farm.title_of(first)),
+                              farm.content_tokens(farm.title_of(second)))
+    assert title_only < farm.DEFAULT_DUP_THRESHOLD
+    lead = farm.jaccard(farm.lead_tokens(first), farm.lead_tokens(second))
+    assert lead >= farm.DEFAULT_DUP_THRESHOLD
+
+
+def test_lead_window_can_be_disabled() -> None:
+    """DUP_LEAD_WORDS=0 falls back to title-only matching — the behaviour that
+    banked the pair in the first place."""
+    first, second = OBSERVED_TAIL_PAIRS[0].values
+    index = farm.IdeaIndex(lead_words=0)
+    assert index.add(first) is True
+    assert index.add(second) is True
 
 
 @pytest.mark.parametrize("first,second", OBSERVED_DUP_PAIRS)
@@ -171,6 +255,99 @@ def test_focus_match_reads_the_whole_line_not_just_the_title() -> None:
 
 def test_blank_focus_accepts_everything() -> None:
     assert farm.matches_focus("Anything At All — really.", farm.focus_tokens("")) is True
+
+
+# ── generic-template regression (the rejection rule) ─────────────────────
+
+@pytest.mark.parametrize("focus,idea,template", [
+    ("resume and portfolio upkeep",
+     "Contract Risk Heatmap — scores each clause for liability.", "contract-review"),
+    ("world-building and fiction series",
+     "Retirement Savings Forecast — projects pension income.", "retirement-forecast"),
+    ("graphic design briefs and iteration",
+     "Loan Application Review Pipeline — screens each borrower.", "loan-underwriting"),
+    ("cooking and meal planning",
+     "Expense Report Approval Router — checks receipts against policy.",
+     "expense-approval"),
+])
+def test_generic_template_regression_is_named(focus: str, idea: str,
+                                              template: str) -> None:
+    assert farm.generic_template(idea, focus) == template
+    assert farm.reject_reason(idea, focus, farm.FOCUS_CHECK_TEMPLATE) == (
+        f"template:{template}"
+    )
+
+
+@pytest.mark.parametrize("focus,idea", [
+    # Each of these IS the template — under the focus it is native to.
+    ("personal finance", "Retirement Savings Forecast — projects pension income."),
+    ("legal work", "Contract Risk Heatmap — scores each clause for liability."),
+    ("human resources", "Resume Screening Ladder — ranks each applicant."),
+    ("accounting and tax", "Invoice Chasing Ladder — nudges overdue payers."),
+])
+def test_a_template_native_to_its_focus_is_not_drift(focus: str, idea: str) -> None:
+    assert farm.generic_template(idea, focus) is None
+    assert farm.reject_reason(idea, focus, farm.FOCUS_CHECK_TEMPLATE) is None
+
+
+@pytest.mark.parametrize("focus,idea", [
+    ("world-building and fiction series",
+     "Continuity Bible Keeper — keeps names, dates and lineages consistent."),
+    ("parenting and family logistics",
+     "Permission Slip Tracker — chases the signatures each trip needs."),
+    ("personal finance",
+     "Literature Review Digest — summarises each paper's method and result."),
+])
+def test_off_focus_but_not_a_template_is_kept(focus: str, idea: str) -> None:
+    """Downstream intake reclassifies domain itself and treats focus as
+    advisory provenance, so an idea phrased outside the focus phrase's
+    vocabulary is a real idea. Only template regression costs it its place —
+    unless the operator asks for strict mode."""
+    assert farm.reject_reason(idea, focus, farm.FOCUS_CHECK_TEMPLATE) is None
+    assert farm.reject_reason(idea, focus, farm.FOCUS_CHECK_STRICT) is not None
+
+
+def test_template_home_phrases_stay_distinctive() -> None:
+    """A generic word in a home phrase silently exempts unrelated foci — the
+    stem "plan" once made "cooking and meal planning" look like a native home
+    for expense approvals, and the template stopped firing."""
+    for name, _markers, home in farm.GENERIC_TEMPLATES:
+        leaked = farm.content_tokens(home) & farm.GENERIC_HOME_WORDS
+        assert not leaked, f"{name} home phrase leaks generic words: {sorted(leaked)}"
+
+
+def test_every_template_fires_on_at_least_one_real_focus() -> None:
+    """Markers must be reachable: each template has to be able to fire under
+    some focus in the rotation, or it is dead configuration."""
+    for name, markers, _home in farm.GENERIC_TEMPLATES:
+        idea = " ".join(markers.split()[:farm.MIN_TEMPLATE_MARKERS])
+        assert any(farm.generic_template(idea, focus) is not None
+                   for focus in farm.FOCI), f"{name} never fires"
+
+
+def test_a_single_shared_marker_word_is_not_a_template() -> None:
+    """One marker is coincidence; MIN_TEMPLATE_MARKERS is what makes it a
+    pattern."""
+    idea = "Trail Approval Ladder — walks each new path past the land trust."
+    assert farm.generic_template(idea, "hobby communities") is None
+
+
+def test_off_mode_banks_everything() -> None:
+    idea = "Retirement Savings Forecast — projects pension income."
+    assert farm.reject_reason(idea, "game design", farm.FOCUS_CHECK_OFF) is None
+
+
+@pytest.mark.parametrize("raw,mode", [
+    (None, farm.FOCUS_CHECK_TEMPLATE),
+    ("", farm.FOCUS_CHECK_TEMPLATE),
+    ("1", farm.FOCUS_CHECK_TEMPLATE),        # legacy value
+    ("template", farm.FOCUS_CHECK_TEMPLATE),
+    ("0", farm.FOCUS_CHECK_OFF),             # legacy value
+    ("off", farm.FOCUS_CHECK_OFF),
+    ("STRICT", farm.FOCUS_CHECK_STRICT),
+])
+def test_focus_check_env_parsing(raw: str | None, mode: str) -> None:
+    assert farm.parse_focus_check(raw) == mode
 
 
 # ── resume / state file ──────────────────────────────────────────────────
@@ -310,14 +487,15 @@ RUN_OUTPUT = "\n".join([
 ])
 
 
-def _harvest_one_run(tmp_path: Path, monkeypatch, target: str) -> list[dict]:
+def _harvest_one_run(tmp_path: Path, monkeypatch, target: str,
+                     output: str = RUN_OUTPUT) -> list[dict]:
     """Drive farm.main() through exactly one fabricated run and return the
     records it banked."""
     monkeypatch.setattr(farm, "build_config", lambda: None)
     monkeypatch.setattr(
         farm, "run_orchestration",
         lambda **kwargs: SimpleNamespace(
-            ok=True, state={"prime": {"final_list": {"value": RUN_OUTPUT}}}, error=None,
+            ok=True, state={"prime": {"final_list": {"value": output}}}, error=None,
         ),
     )
 
@@ -349,8 +527,10 @@ def test_one_harvest_run_filters_and_logs(tmp_path: Path, monkeypatch, capsys) -
 
     out = capsys.readouterr().out
     assert "focus_rejects=1" in out
+    assert "off_focus=0" in out
     assert "near_dups=1" in out
-    assert "[focus-reject]" in out and "Retirement Savings Forecast" in out
+    assert "[focus-reject:template:retirement-forecast]" in out
+    assert "Retirement Savings Forecast" in out
     assert "[near-dup]" in out
 
 
@@ -365,7 +545,83 @@ def test_focus_check_can_be_disabled(tmp_path: Path, monkeypatch) -> None:
     ]
 
 
+def test_off_focus_non_template_ideas_are_banked_and_counted(
+    tmp_path: Path, monkeypatch, capsys,
+) -> None:
+    """The retuned check costs no real ideas: an off-focus line that is not a
+    template regression banks, and the run log still shows it as off_focus so
+    adherence stays measurable."""
+    banked = _harvest_one_run(
+        tmp_path, monkeypatch, target="2",
+        output="\n".join([
+            "1. Invoice Chasing Ladder for Small Business Cash Flow — nudges payers.",
+            "2. Continuity Bible Keeper — keeps a saga's lineages consistent.",
+        ]),
+    )
+
+    assert banked[1]["idea"].startswith("Continuity Bible Keeper")
+    out = capsys.readouterr().out
+    assert "focus_rejects=0" in out and "off_focus=1" in out
+
+
 def test_focus_adherence_counts_per_focus() -> None:
     stats = qa_corpus.focus_adherence(CORPUS)
     assert stats["meeting notes and follow-ups"] == (2, 2)
     assert stats["world-building and fiction series"] == (0, 1)
+
+
+# ── qa_corpus: shape metrics ─────────────────────────────────────────────
+
+def test_shape_missing_or_blank_counts_as_default() -> None:
+    """Records banked before the shape field existed are unbiased runs."""
+    assert qa_corpus.shape_of({"idea": "x"}) == "default"
+    assert qa_corpus.shape_of({"idea": "x", "shape": ""}) == "default"
+    assert qa_corpus.shape_of({"idea": "x", "shape": "fanout"}) == "fanout"
+
+
+def test_shape_uniqueness_is_measured_within_each_shape() -> None:
+    records = [
+        {"idea": "Ticket Triage Ladder — routes each ticket.", "shape": "fanout",
+         "focus": "customer support"},
+        {"idea": "Ticket triage ladders — route the tickets.", "shape": "fanout",
+         "focus": "customer support"},
+        {"idea": "Backlog Grooming Digest — ranks each story.", "shape": "fanout",
+         "focus": "product management"},
+        {"idea": "Alert Regime Classifier — branches per severity.",
+         "focus": "log and metric triage"},   # pre-field record → default
+    ]
+    stats = qa_corpus.shape_uniqueness(records, farm.DEFAULT_DUP_THRESHOLD,
+                                       farm.DEFAULT_LEAD_WORDS)
+    assert stats["fanout"] == (3, 2)   # the two ticket-triage lines collapse
+    assert stats["default"] == (1, 1)
+
+
+def test_cross_shape_clusters_flag_re_skinned_ideas() -> None:
+    """The same idea banked under two hints is the shape bias re-skinning
+    rather than generating — the signal a downstream tree/each quota needs."""
+    clusters = qa_corpus.cluster(CORPUS, farm.DEFAULT_DUP_THRESHOLD)
+    crossers = qa_corpus.cross_shape_clusters(CORPUS, clusters)
+    # CORPUS[0] (default) and CORPUS[1] (fanout) are the same meeting-summary
+    # idea under two shapes; nothing else in the fixture pairs up.
+    assert [sorted(members) for members in crossers] == [[0, 1]]
+
+
+def test_template_regressions_are_counted_not_merely_off_focus() -> None:
+    hits = qa_corpus.template_regressions(CORPUS)
+    # CORPUS[2] is a contract-review template filed under world-building.
+    assert hits == [(2, "contract-review")]
+
+
+def test_report_prints_the_shape_and_drift_sections(tmp_path: Path, capsys) -> None:
+    master = tmp_path / "all_ideas.jsonl"
+    _write_corpus(master, CORPUS)
+    before = master.read_bytes()
+
+    qa_corpus.report(master)
+
+    assert master.read_bytes() == before
+    out = capsys.readouterr().out
+    assert "within-shape effective uniqueness" in out
+    assert "cross-shape near-dup clusters: 1" in out
+    assert "generic-template regressions: 1/4" in out
+    assert "contract-review" in out
