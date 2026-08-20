@@ -72,7 +72,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Literal, Mapping, Sequence
+from typing import Any, Iterable, Literal, Mapping, NamedTuple, Sequence
 
 __all__ = [
     "DEFAULT_KEYWORD_WEIGHTS",
@@ -720,6 +720,199 @@ def _schema_of(definition: Any, warnings: list[str]) -> Mapping[str, Any] | None
     return schema
 
 
+class _Measurement(NamedTuple):
+    """One signal, measured but not yet weighted.
+
+    The weighting arithmetic lives in :func:`_assemble`; a ``_measure_*``
+    function's only job is to turn input into a raw number, a normalized value,
+    and enough detail to explain both.
+    """
+
+    name: str
+    raw: float
+    normalized: float
+    estimated: bool
+    detail: dict[str, Any]
+    note: str
+
+
+def _measure_prompt_size(text: str, *, mode: ScoreMode) -> _Measurement:
+    """Token estimate of the prompt actually being measured.
+
+    In static mode there is no rendered prompt yet, so the template's own size
+    stands in for it — an underestimate (interpolated state only adds), which
+    is why the measurement is flagged as an estimate.
+    """
+    tokens = _estimate_tokens(text)
+    rendered = mode == "rendered"
+    return _Measurement(
+        name="prompt_size",
+        raw=float(tokens),
+        normalized=_saturate(tokens, _SIZE_HALF_TOKENS),
+        estimated=not rendered,
+        detail={
+            "characters": len(text),
+            "tokens": tokens,
+            "source": "rendered_prompt" if rendered else "template",
+            "chars_per_token": _CHARS_PER_TOKEN,
+            "half_point_tokens": _SIZE_HALF_TOKENS,
+        },
+        note=(
+            f"~{tokens} tokens of "
+            f"{'rendered prompt' if rendered else 'template (estimate)'}"
+        ),
+    )
+
+
+def _measure_state_references(template: str) -> _Measurement:
+    """Distinct ``{{...}}`` references in the template.
+
+    Always read off the template, never the rendered prompt: rendering has
+    already substituted the references away, so counting there would report
+    zero for every prompt.
+    """
+    references, sections = _extract_references(template)
+    return _Measurement(
+        name="state_references",
+        raw=float(len(references)),
+        normalized=_saturate(len(references), _REFERENCE_HALF_COUNT),
+        estimated=False,
+        detail={
+            "references": references,
+            "sections": sections,
+            "half_point_count": _REFERENCE_HALF_COUNT,
+        },
+        note=f"{len(references)} distinct reference(s)"
+        + (f", {len(sections)} section(s)" if sections else ""),
+    )
+
+
+def _measure_output_type(type_name: str, type_normal: float) -> _Measurement:
+    """``prompt_type`` mapped onto the fixed :data:`_TYPE_NORMALS` scale."""
+    return _Measurement(
+        name="output_type",
+        raw=type_normal,
+        normalized=type_normal,
+        estimated=False,
+        detail={"prompt_type": type_name, "scale": dict(_TYPE_NORMALS)},
+        note=f"prompt_type={type_name}",
+    )
+
+
+def _measure_schema_shape(schema: Mapping[str, Any] | None) -> _Measurement:
+    """Depth and breadth of a declared output schema, weighted evenly."""
+    depth, fields = _walk_schema(schema)
+    normalized = _clamp01(
+        0.5 * _saturate(depth, _SCHEMA_DEPTH_HALF)
+        + 0.5 * _saturate(fields, _SCHEMA_FIELDS_HALF)
+    )
+    return _Measurement(
+        name="schema_shape",
+        raw=float(fields),
+        normalized=normalized,
+        estimated=False,
+        detail={
+            "depth": depth,
+            "fields": fields,
+            "declared": schema is not None,
+            "half_point_depth": _SCHEMA_DEPTH_HALF,
+            "half_point_fields": _SCHEMA_FIELDS_HALF,
+        },
+        note=(
+            f"schema depth {depth}, {fields} field(s)"
+            if schema is not None
+            else "no schema declared"
+        ),
+    )
+
+
+def _measure_output_size(
+    schema: Mapping[str, Any] | None, params: Any
+) -> _Measurement:
+    """Largest declared output limit, in estimated tokens.
+
+    Declared limits are read rather than guessed, so this is not flagged as an
+    estimate — ``estimated`` is reserved for the static-mode size signal, which
+    keeps :attr:`ComplexityScore.estimated` exactly equivalent to
+    ``mode == "static"``.
+    """
+    tokens, detail = _declared_output_tokens(schema, params)
+    return _Measurement(
+        name="output_size",
+        raw=_round(tokens),
+        normalized=_saturate(tokens, _OUTPUT_SIZE_HALF_TOKENS),
+        estimated=False,
+        detail={
+            **detail,
+            "estimated_tokens": _round(tokens),
+            "tokens_per_item": _TOKENS_PER_ITEM,
+            "half_point_tokens": _OUTPUT_SIZE_HALF_TOKENS,
+        },
+        note=(
+            f"~{tokens:.0f} tokens declared ({', '.join(sorted(detail))})"
+            if detail
+            else "no declared output limit"
+        ),
+    )
+
+
+def _measure_structure(context: StructureContext) -> _Measurement:
+    """Structural position: nesting, loop bodies, reflector provenance.
+
+    Nesting contributes at most half the signal on its own; a loop body adds
+    0.15 per enclosing loop (capped at two, past which more nesting says
+    nothing new), and reflector provenance a flat 0.2 — a generated prompt was
+    never read by a human before it ran.
+    """
+    normalized = _clamp01(
+        0.5 * _saturate(context.depth, _DEPTH_HALF)
+        + 0.15 * min(context.loop_depth, 2)
+        + (0.2 if context.reflector_generated else 0.0)
+    )
+    notes = [f"depth {context.depth}"]
+    if context.in_loop:
+        notes.append(f"inside {context.loop_depth} loop(s)")
+    if context.reflector_generated:
+        notes.append("reflector-generated")
+    return _Measurement(
+        name="structure",
+        raw=float(context.depth),
+        normalized=normalized,
+        estimated=False,
+        detail={
+            "depth": context.depth,
+            "loop_depth": context.loop_depth,
+            "in_loop": context.in_loop,
+            "reflector_generated": context.reflector_generated,
+            "half_point_depth": _DEPTH_HALF,
+        },
+        note=", ".join(notes),
+    )
+
+
+def _measure_keywords(
+    haystack: str, table: Mapping[str, float], *, mode: ScoreMode
+) -> _Measurement:
+    """Matched keyword weights, summed and clamped to 1.0."""
+    matches = _match_keywords(haystack, table)
+    return _Measurement(
+        name="keywords",
+        raw=float(len(matches)),
+        normalized=_clamp01(sum(weight for _, weight in matches)),
+        estimated=False,
+        detail={
+            "matched": {phrase: weight for phrase, weight in matches},
+            "table_size": len(table),
+            "source": "rendered_prompt" if mode == "rendered" else "template",
+        },
+        note=(
+            f"matched {', '.join(phrase for phrase, _ in matches)}"
+            if matches
+            else "no keyword matches"
+        ),
+    )
+
+
 def score(
     definition: Any = None,
     *,
@@ -790,180 +983,31 @@ def score(
             "template: no template or messages found; size read as empty."
         )
 
-    measured: list[tuple[str, float, float, bool, dict[str, Any], str]] = []
-
-    # --- prompt_size ---------------------------------------------------
-    sized_text = rendered_prompt if mode == "rendered" else template
-    tokens = _estimate_tokens(sized_text or "")
-    size_estimated = mode == "static"
-    measured.append(
-        (
-            "prompt_size",
-            float(tokens),
-            _saturate(tokens, _SIZE_HALF_TOKENS),
-            size_estimated,
-            {
-                "characters": len(sized_text or ""),
-                "tokens": tokens,
-                "source": "rendered_prompt" if mode == "rendered" else "template",
-                "chars_per_token": _CHARS_PER_TOKEN,
-                "half_point_tokens": _SIZE_HALF_TOKENS,
-            },
-            (
-                f"~{tokens} tokens of "
-                f"{'rendered prompt' if mode == 'rendered' else 'template (estimate)'}"
-            ),
-        )
-    )
-
-    # --- state_references ----------------------------------------------
-    # Always read off the template: a rendered prompt has already had its
-    # references substituted away, so counting there would report zero.
-    references, sections = _extract_references(template)
-    measured.append(
-        (
-            "state_references",
-            float(len(references)),
-            _saturate(len(references), _REFERENCE_HALF_COUNT),
-            False,
-            {
-                "references": references,
-                "sections": sections,
-                "half_point_count": _REFERENCE_HALF_COUNT,
-            },
-            f"{len(references)} distinct reference(s)"
-            + (f", {len(sections)} section(s)" if sections else ""),
-        )
-    )
-
-    # --- output_type -----------------------------------------------------
-    type_name, type_normal = _prompt_type(definition, warnings)
-    measured.append(
-        (
-            "output_type",
-            type_normal,
-            type_normal,
-            False,
-            {"prompt_type": type_name, "scale": dict(_TYPE_NORMALS)},
-            f"prompt_type={type_name}",
-        )
-    )
-
-    # --- schema_shape ----------------------------------------------------
-    schema = _schema_of(definition, warnings)
-    schema_depth, schema_fields = _walk_schema(schema)
-    schema_normal = _clamp01(
-        0.5 * _saturate(schema_depth, _SCHEMA_DEPTH_HALF)
-        + 0.5 * _saturate(schema_fields, _SCHEMA_FIELDS_HALF)
-    )
-    measured.append(
-        (
-            "schema_shape",
-            float(schema_fields),
-            schema_normal,
-            False,
-            {
-                "depth": schema_depth,
-                "fields": schema_fields,
-                "declared": schema is not None,
-                "half_point_depth": _SCHEMA_DEPTH_HALF,
-                "half_point_fields": _SCHEMA_FIELDS_HALF,
-            },
-            (
-                f"schema depth {schema_depth}, {schema_fields} field(s)"
-                if schema is not None
-                else "no schema declared"
-            ),
-        )
-    )
-
-    # --- output_size -----------------------------------------------------
-    output_tokens, output_detail = _declared_output_tokens(
-        schema, _get(definition, "params")
-    )
-    measured.append(
-        (
-            "output_size",
-            _round(output_tokens),
-            _saturate(output_tokens, _OUTPUT_SIZE_HALF_TOKENS),
-            # Declared limits are read, not guessed, so this is not an
-            # estimate — ``estimated`` is reserved for the static-mode size
-            # signal, which keeps ``ComplexityScore.estimated`` exactly
-            # equivalent to ``mode == "static"``.
-            False,
-            {
-                **output_detail,
-                "estimated_tokens": _round(output_tokens),
-                "tokens_per_item": _TOKENS_PER_ITEM,
-                "half_point_tokens": _OUTPUT_SIZE_HALF_TOKENS,
-            },
-            (
-                f"~{output_tokens:.0f} tokens declared "
-                f"({', '.join(sorted(output_detail))})"
-                if output_detail
-                else "no declared output limit"
-            ),
-        )
-    )
-
-    # --- structure -------------------------------------------------------
-    structure_normal = _clamp01(
-        0.5 * _saturate(context.depth, _DEPTH_HALF)
-        + 0.15 * min(context.loop_depth, 2)
-        + (0.2 if context.reflector_generated else 0.0)
-    )
-    structure_notes = [f"depth {context.depth}"]
-    if context.in_loop:
-        structure_notes.append(f"inside {context.loop_depth} loop(s)")
-    if context.reflector_generated:
-        structure_notes.append("reflector-generated")
-    measured.append(
-        (
-            "structure",
-            float(context.depth),
-            structure_normal,
-            False,
-            {
-                "depth": context.depth,
-                "loop_depth": context.loop_depth,
-                "in_loop": context.in_loop,
-                "reflector_generated": context.reflector_generated,
-                "half_point_depth": _DEPTH_HALF,
-            },
-            ", ".join(structure_notes),
-        )
-    )
-
-    # --- keywords --------------------------------------------------------
+    # The text a size- or keyword-facing signal should look at: the real
+    # prompt when there is one, the template when there is not.
+    measurable_text = rendered_prompt if mode == "rendered" else template
     description = _get(definition, "description", "")
     haystack = "\n".join(
         part
         for part in (
-            rendered_prompt if mode == "rendered" else template,
+            measurable_text,
             description if isinstance(description, str) else "",
         )
         if part
     )
-    matches = _match_keywords(haystack, table)
-    keyword_normal = _clamp01(sum(weight for _, weight in matches))
-    measured.append(
-        (
-            "keywords",
-            float(len(matches)),
-            keyword_normal,
-            False,
-            {
-                "matched": {phrase: weight for phrase, weight in matches},
-                "table_size": len(table),
-                "source": "rendered_prompt" if mode == "rendered" else "template",
-            },
-            (
-                f"matched {', '.join(phrase for phrase, _ in matches)}"
-                if matches
-                else "no keyword matches"
-            ),
-        )
-    )
+
+    schema = _schema_of(definition, warnings)
+    type_name, type_normal = _prompt_type(definition, warnings)
+
+    measured = [
+        _measure_prompt_size(measurable_text or "", mode=mode),
+        _measure_state_references(template),
+        _measure_output_type(type_name, type_normal),
+        _measure_schema_shape(schema),
+        _measure_output_size(schema, _get(definition, "params")),
+        _measure_structure(context),
+        _measure_keywords(haystack, table, mode=mode),
+    ]
 
     return _assemble(
         measured=measured,
@@ -975,7 +1019,7 @@ def score(
 
 def _assemble(
     *,
-    measured: Iterable[tuple[str, float, float, bool, dict[str, Any], str]],
+    measured: Iterable[_Measurement],
     weights: Mapping[str, float],
     mode: ScoreMode,
     warnings: list[str],
@@ -992,9 +1036,10 @@ def _assemble(
     # numbers then gets the reported total exactly, instead of a value that
     # differs in the last place because the scorer used more precision than it
     # printed.
-    weight_total = _round(
-        sum(max(0.0, _round(_number(weights.get(name, 0.0)))) for name, *_ in entries)
-    )
+    def _weight_of(name: str) -> float:
+        return max(0.0, _round(_number(weights.get(name, 0.0))))
+
+    weight_total = _round(sum(_weight_of(entry.name) for entry in entries))
 
     if weight_total <= 0:
         warnings.append(
@@ -1003,24 +1048,25 @@ def _assemble(
 
     signals: list[SignalScore] = []
     total = 0.0
-    for name, raw, normalized, estimated, detail, note in entries:
-        weight = max(0.0, _round(_number(weights.get(name, 0.0))))
-        normalized = _round(_clamp01(normalized))
-        contribution = (
-            0.0 if weight_total <= 0 else MAX_SCORE * weight * normalized / weight_total
+    for entry in entries:
+        weight = _weight_of(entry.name)
+        normalized = _round(_clamp01(entry.normalized))
+        contribution = _round(
+            0.0
+            if weight_total <= 0
+            else MAX_SCORE * weight * normalized / weight_total
         )
-        contribution = _round(contribution)
         total += contribution
         signals.append(
             SignalScore(
-                name=name,
-                raw=_round(raw),
+                name=entry.name,
+                raw=_round(entry.raw),
                 normalized=normalized,
                 weight=weight,
                 contribution=contribution,
-                estimated=estimated,
-                detail=detail,
-                note=note,
+                estimated=entry.estimated,
+                detail=entry.detail,
+                note=entry.note,
             )
         )
 
