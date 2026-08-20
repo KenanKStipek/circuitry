@@ -144,6 +144,11 @@ class DynamicRuntime:
             dyn["value"] = False
             raise ValueError(meta["error"])
 
+        # Below the unsupported-flow guard, which rejects the container
+        # before it ever dispatches: a container that cannot run announces
+        # neither start nor complete.
+        store.fire_effect_start(self.defn.name, dyn)
+
         # A container parent (loop body, conditional branch, enclosing dynamic)
         # hands down the context its own children render against — iteration
         # bindings, root inputs, absolute state paths.  Layer this dynamic's
@@ -265,6 +270,9 @@ class DynamicRuntime:
             dyn["value"] = False
             meta["error"] = str(e)
             meta["completed_at"] = _now_iso()
+            # Balances the start fired above: a container that failed still
+            # closes its pair, carrying value False and meta.error.
+            store.fire_effect_complete(self.defn.name, dyn)
             raise
 
     def _execute_effect(

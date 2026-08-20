@@ -74,6 +74,10 @@ class RunRequest:
     # Per-effect completion notifications: ``(effect_path, effect_node)``,
     # the same payload runtime plugins receive from ``on_effect_complete``.
     effect_observer: Optional[Callable[[str, dict[str, Any]], None]] = None
+    # The counterpart, fired before each effect dispatches: same
+    # ``(effect_path, effect_node)`` payload runtime plugins receive from
+    # ``on_effect_start``.
+    effect_start_observer: Optional[Callable[[str, dict[str, Any]], None]] = None
     skip_preflight: bool = False
     # Caller-level overrides, ranked above the orchestration's own
     # ``adapter``/``model`` (the ``cli`` tier of resolve_effective_settings).
@@ -345,11 +349,14 @@ def run(req: RunRequest) -> RunResult:
             # Write initial snapshot so watchers see the pending state
             on_write(state)
 
-        # Story 2: per-effect lifecycle hook. Fires after each effect's
-        # node["value"] is finalized. Skipped silently for plugins that
-        # don't implement on_effect_complete. ``req.effect_observer`` rides
-        # the same hook, which is how a live UI learns an effect landed
-        # without diffing whole state snapshots.
+        # Story 2: per-effect lifecycle hooks. ``on_effect_start`` fires
+        # before an effect dispatches, ``on_effect_complete`` once its
+        # node["value"] is finalized; both are skipped silently for plugins
+        # that don't implement them. ``req.effect_start_observer`` /
+        # ``req.effect_observer`` ride the same hooks, which is how a live UI
+        # learns an effect started or landed without diffing whole state
+        # snapshots.
+        start_observers: list[Callable[[str, dict[str, Any]], None]] = []
         effect_observers: list[Callable[[str, dict[str, Any]], None]] = []
         if plugins:
             _plugin_ctx = PluginContext(
@@ -359,6 +366,18 @@ def run(req: RunRequest) -> RunResult:
                 validate_only=req.validate_only,
                 runtime_config=effective.runtime,
             )
+
+            def _notify_plugins_start(
+                effect_path: str, effect_node: dict[str, Any]
+            ) -> None:
+                invoke_plugins(
+                    plugins=plugins,
+                    hook_name="on_effect_start",
+                    state=state,
+                    context=_plugin_ctx,
+                    effect_path=effect_path,
+                    effect_node=effect_node,
+                )
 
             def _notify_plugins(
                 effect_path: str, effect_result: dict[str, Any]
@@ -372,23 +391,19 @@ def run(req: RunRequest) -> RunResult:
                     effect_result=effect_result,
                 )
 
+            start_observers.append(_notify_plugins_start)
             effect_observers.append(_notify_plugins)
+        if req.effect_start_observer is not None:
+            start_observers.append(req.effect_start_observer)
         if req.effect_observer is not None:
             effect_observers.append(req.effect_observer)
 
-        effect_complete_cb: Optional[Callable[[str, dict[str, Any]], None]]
-        if not effect_observers:
-            effect_complete_cb = None
-        elif len(effect_observers) == 1:
-            effect_complete_cb = effect_observers[0]
-        else:
-            def effect_complete_cb(  # type: ignore[no-redef]
-                effect_path: str, effect_result: dict[str, Any]
-            ) -> None:
-                for observer in effect_observers:
-                    observer(effect_path, effect_result)
-
-        store = Store(state, on_write=on_write, effect_complete=effect_complete_cb)
+        store = Store(
+            state,
+            on_write=on_write,
+            effect_complete=_compose_effect_observers(effect_observers),
+            effect_start=_compose_effect_observers(start_observers),
+        )
 
         runtime = DynamicRuntime(
             root_def,
@@ -479,6 +494,22 @@ def run(req: RunRequest) -> RunResult:
         except Exception:
             logger.error("Error during error-handling cleanup", exc_info=True)
         return RunResult(ok=False, state=state, warnings=warnings, error=str(e))
+
+
+def _compose_effect_observers(
+    observers: list[Callable[[str, dict[str, Any]], None]],
+) -> Optional[Callable[[str, dict[str, Any]], None]]:
+    """Fold per-effect observers into the single callback ``Store`` takes."""
+    if not observers:
+        return None
+    if len(observers) == 1:
+        return observers[0]
+
+    def fan_out(effect_path: str, effect_node: dict[str, Any]) -> None:
+        for observer in observers:
+            observer(effect_path, effect_node)
+
+    return fan_out
 
 
 def _record_library_pins(

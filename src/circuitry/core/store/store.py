@@ -14,15 +14,18 @@ class Store:
 
     Thread-safe: all mutations are protected by a reentrant lock.
     Child stores created via ``child()`` share the parent's lock,
-    ``on_write`` callback, and ``effect_complete`` callback so that
-    concurrent access from parallel (tree) execution paths is serialised
-    correctly and per-effect lifecycle hooks see the canonical absolute
-    state path of every effect result.
+    ``on_write`` callback, and the ``effect_start`` / ``effect_complete``
+    callbacks so that concurrent access from parallel (tree) execution paths
+    is serialised correctly and per-effect lifecycle hooks see the canonical
+    absolute state path of every effect result.
     """
 
     state: dict[str, Any]
     on_write: Optional[Callable[[dict[str, Any]], None]] = None
     effect_complete: Optional[
+        Callable[[str, dict[str, Any]], None]
+    ] = None
+    effect_start: Optional[
         Callable[[str, dict[str, Any]], None]
     ] = None
     _path_prefix: str = ""
@@ -68,7 +71,7 @@ class Store:
 
     def child(self, path: str) -> "Store":
         """Return a child Store rooted at *path*, sharing the same lock,
-        on_write callback, effect_complete callback, and accumulating an
+        on_write callback, effect lifecycle callbacks, and accumulating an
         absolute path prefix for canonical effect paths."""
         node = self.ensure_dict(path)
         new_prefix = f"{self._path_prefix}.{path}" if self._path_prefix else path
@@ -76,9 +79,27 @@ class Store:
             state=node,
             on_write=self.on_write,
             effect_complete=self.effect_complete,
+            effect_start=self.effect_start,
             _path_prefix=new_prefix,
             _lock=self._lock,
         )
+
+    def effect_path(self, name: str) -> str:
+        """The canonical dotted path of the effect *name* in this store."""
+        return f"{self._path_prefix}.{name}" if self._path_prefix else name
+
+    def fire_effect_start(self, name: str, effect_node: dict[str, Any]) -> None:
+        """Notify ``effect_start`` (if set) that *name* is about to dispatch.
+
+        The mirror of :meth:`fire_effect_complete`: same canonical dotted
+        path, same callback shape. The payload is the effect's live state
+        node as it stands *before* dispatch — meta the runtime has already
+        recorded (adapter, model, and the complexity score when scoring is
+        enabled) is therefore visible at start.
+        """
+        if self.effect_start is None:
+            return
+        self.effect_start(self.effect_path(name), effect_node)
 
     def fire_effect_complete(
         self, name: str, effect_result: dict[str, Any]
@@ -89,11 +110,14 @@ class Store:
         and invokes the callback. Failures inside the callback are the
         callback's responsibility (the runtime catches via
         ``invoke_plugins`` semantics).
+
+        Every effect that fires this also fires :meth:`fire_effect_start`
+        first — including the error paths, so the pair stays balanced when
+        an effect fails.
         """
         if self.effect_complete is None:
             return
-        full_path = f"{self._path_prefix}.{name}" if self._path_prefix else name
-        self.effect_complete(full_path, effect_result)
+        self.effect_complete(self.effect_path(name), effect_result)
 
     def dump_json(self, out_path: Path, *, pretty: bool = False) -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
