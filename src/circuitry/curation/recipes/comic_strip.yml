@@ -507,4 +507,4 @@ effects:
       text: "Title: {{prime.write_concept.value.title}}. Setting: {{prime.write_concept.value.setting}}. Tone: {{prime.write_concept.value.tone}}."
       max_words: 15
     outputs:
-      summary: prime.summarize.value
+      summary: {path: prime.summarize.value}

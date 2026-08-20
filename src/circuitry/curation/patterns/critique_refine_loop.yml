@@ -49,9 +49,9 @@ effects:
           content: "{{prime.seed_text.value}}"
           criteria: "clarity, accuracy, brevity, voice"
         outputs:
-          score: prime.critique.value.score
-          issues: prime.critique.value.issues
-          strengths: prime.critique.value.strengths
+          score: {path: prime.critique.value.score}
+          issues: {path: prime.critique.value.issues}
+          strengths: {path: prime.critique.value.strengths}
 
       - type: use
         name: refine_step
@@ -60,7 +60,7 @@ effects:
           content: "{{prime.seed_text.value}}"
           feedback: "{{prime.review.iter_0.critique_step.value}}"
         outputs:
-          refined: prime.refine.value
+          refined: {path: prime.refine.value}
 
   # After the loop, expose the latest refinement as the orchestration's final answer.
   - type: prompt

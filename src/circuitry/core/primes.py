@@ -120,8 +120,11 @@ Circuitry JSON Schema. It must be the orchestration file and nothing else.
 effects:   REQUIRED. A list of effects, executed in order.
 flow:      chain (default, sequential — each effect sees prior outputs)
            | tree (parallel — all effects see the same input snapshot).
-           Aliases: chain_of_thought, cot | tree_of_thought, tot.
+           Write `chain` or `tree`. Nothing else.
 interface: OPTIONAL. Declares typed inputs/outputs (see INTERFACE below).
+version:   OPTIONAL. A free-form version string for this file, e.g. "1.2.0".
+           Not a schema version, not a feature gate — the runtime ignores it.
+           Omit it unless the human is actually versioning the file.
 adapter:   OPTIONAL. Omit — it comes from the user's config.json.
 model:     OPTIONAL. Omit — it comes from the user's config.json.
 
@@ -130,6 +133,10 @@ model:     OPTIONAL. Omit — it comes from the user's config.json.
 - Never `iter_<N>` (iter_0, iter_1, ...) — reserved for loop iteration segments.
 - Names must be unique among siblings in the same list.
 - A name is a path segment, never a path: use `summarize`, NOT `prime.summarize`.
+- Never name an effect after an effect TYPE (`use`, `loop`, `if`, `dynamic`,
+  `prompt`, `tool`, `reflector`). Name it after the job: `summarize_article`,
+  `critique_draft`. Type-keyword names are generic, so two of them collide as
+  siblings — and validation warns about them.
 
 === THE SEVEN PRIMITIVES ===
 
@@ -159,14 +166,14 @@ model:     OPTIONAL. Omit — it comes from the user's config.json.
        flow: chain
        effects: [ ... ]
 
-3) if (alias: conditional) — evaluates a condition, runs exactly ONE branch.
+3) if — evaluates a condition, runs exactly ONE branch. Always `type: if`.
    Required: type, if, then. Optional: name, else, threshold, on_error.
    The `if` block is a condition: mode: model needs `template`;
    mode: cel needs `expr`.
    Give `then` and `else` the SAME inner effect names so the downstream state
-   path is the same whichever branch runs. An UNNAMED conditional merges its
-   branch effects into the parent scope (prime.<inner>.value); a NAMED one
-   nests them (prime.<cond_name>.<inner>.value) and records the decision.
+   path is the same whichever branch runs. An UNNAMED `if` merges its branch
+   effects into the parent scope (prime.<inner>.value); a NAMED one nests them
+   (prime.<if_name>.<inner>.value) and records the decision.
      - type: if
        if:
          mode: cel
@@ -216,15 +223,15 @@ model:     OPTIONAL. Omit — it comes from the user's config.json.
    Required: type, name, and exactly ONE of ref | path | inline.
    ref points into the curation library ('utilities/critique'); path points at a
    file; inline is a Mustache template that renders to YAML at runtime.
-   Optional: inputs (become the child's top-level state), outputs (map names to
-   dot-paths in the child's final state), validate, on_error.
+   Optional: inputs (become the child's top-level state), outputs (see OUTPUTS
+   below — same shape as interface.outputs), validate, on_error.
      - type: use
        name: critique
        ref: utilities/critique
        inputs:
          text: "{{prime.draft.value}}"
        outputs:
-         notes: prime.critique.value
+         notes: {path: prime.critique.value}
 
 7) reflector — plans its own effects, then runs them, for max_iterations cycles.
    Required: type, name, effects (non-empty). Optional: plan_from_step,
@@ -256,7 +263,16 @@ Declare what the orchestration takes and returns so `use` can wire it up:
       article: {type: string, required: true, description: Text to summarize.}
     outputs:
       summary: {type: string, path: prime.summarize.value, description: Result.}
-Input types: string, number, boolean, array, object. Every output needs a path.
+Input types: string, number, boolean, array, object.
+
+=== OUTPUTS ===
+`interface.outputs` and `use.outputs` take the SAME shape. Write the object
+form in both — an object per name, `path` required, `type` and `description`
+optional:
+  outputs:
+    summary: {path: prime.summarize.value, type: string}
+(A bare string — summary: prime.summarize.value — is also accepted in both
+places and means the same thing, but write the object form.)
 
 === HOUSE STYLE ===
 - Open the file with a # comment block: what it does, its inputs, its primary

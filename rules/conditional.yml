@@ -1,6 +1,6 @@
 type: if
-aliases: [conditional]
 summary: Evaluates a condition and executes exactly one branch (then or else).
+also_accepted: "type: conditional parses as an alias of type: if. Deprecated — always write type: if. `cof validate` warns on the alias."
 required: [type, if, then]
 fields:
   name:

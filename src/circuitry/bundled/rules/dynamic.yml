@@ -11,9 +11,10 @@ fields:
     note: "Child effects to execute. Must be non-empty."
   flow:
     type: string
-    enum: [chain, chain_of_thought, cot, tree, tree_of_thought, tot]
+    enum: [chain, tree]
     default: chain
     note: "chain = sequential (each child sees prior outputs). tree = parallel (all children see same input snapshot)."
+    also_accepted: "chain_of_thought and cot parse as chain; tree_of_thought and tot parse as tree. Deprecated — write chain or tree."
   max_concurrency:
     type: integer
     min: 1
