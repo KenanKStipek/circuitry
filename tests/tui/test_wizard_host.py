@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import ClassVar
 
 import jsonschema
 import pytest
 import yaml
+from scripted_wizard import INVALID_DRAFT, VALID_DRAFT
 
 from circuitry.tui.wizard_host import (
     CATEGORIES,
@@ -35,8 +37,6 @@ from circuitry.tui.wizard_host import (
     wizard_path,
 )
 
-from scripted_wizard import INVALID_DRAFT, VALID_DRAFT
-
 MANIFEST_SCHEMA = Path("src/circuitry/schema/curation-manifest.schema.json")
 
 SEED = Seed(name="Summarize And Translate", category="recipes", goal="Summarize, then translate.")
@@ -49,7 +49,7 @@ def test_turn_paths_are_the_paths_the_wizard_declares() -> None:
     """The one part of the wizard a host copies verbatim. Check, don't trust."""
     interface = yaml.safe_load(wizard_path().read_text(encoding="utf-8"))["interface"]
     declared = {name: spec["path"] for name, spec in interface["outputs"].items()}
-    assert TURN_PATHS == declared
+    assert declared == TURN_PATHS
 
 
 def test_dig_walks_and_misses_cleanly() -> None:
@@ -97,7 +97,7 @@ def test_run_turn_passes_the_host_state_and_adapter_through(
     seen: dict = {}
 
     class _Result:
-        state: dict = {}
+        state: ClassVar[dict] = {}
 
     def fake_run(**kwargs: object) -> object:
         seen.update(kwargs)
@@ -119,7 +119,7 @@ def test_default_runner_leaves_the_adapter_to_the_config(
     seen: dict = {}
 
     class _Result:
-        state: dict = {}
+        state: ClassVar[dict] = {}
 
     monkeypatch.setattr("circuitry.cli.config.resolve_config", lambda *a, **k: "resolved")
     monkeypatch.setattr(

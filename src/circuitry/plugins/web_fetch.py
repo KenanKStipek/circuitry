@@ -28,7 +28,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 _DEFAULT_UA = "circuitry/0.1 (+https://github.com/kenankstipek/circuitry)"
 
 

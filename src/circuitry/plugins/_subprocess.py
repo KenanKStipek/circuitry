@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from ..preflight import CheckResult
 from .base import ToolResult
@@ -86,7 +87,7 @@ def run_binary(
     re-raised as a clearer ``RuntimeError`` so the missing binary case
     is unambiguous.
     """
-    cmd = [binary] + _validate_args(args)
+    cmd = [binary, *_validate_args(args)]
     try:
         proc = subprocess.run(
             cmd,

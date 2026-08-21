@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Literal, Union
 
 from ..adapters import Adapter
 from ..output import console as _console
@@ -38,8 +39,8 @@ class ConditionDef:
     """Defines how a condition is evaluated."""
 
     mode: Literal["model", "cel"] = "model"
-    template: Optional[str] = None  # for mode: model
-    expr: Optional[str] = None  # for mode: cel
+    template: str | None = None  # for mode: model
+    expr: str | None = None  # for mode: cel
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,7 @@ class ConditionalDefinition:
     - name: optional (named decision vs transparent control)
     """
 
-    name: Optional[str]
+    name: str | None
     condition: ConditionDef
     then_effects: Sequence[EffectDef]
     else_effects: Sequence[EffectDef] = ()
@@ -140,12 +141,12 @@ class ConditionalRuntime:
                 meta["completed_at"] = _now_iso()
             if self.defn.on_error == "fail":
                 raise
-            elif self.defn.on_error == "skip":
+            if self.defn.on_error == "skip":
                 if node:
                     node["value"] = {"result": None, "branch": None, "effects": {}}
                 return
-            else:  # continue - default to else branch
-                result = False
+            # continue - default to else branch
+            result = False
 
         branch = "then" if result else "else"
         effects_to_run = self.defn.then_effects if result else self.defn.else_effects
@@ -338,8 +339,7 @@ class ConditionalRuntime:
         """Evaluate the condition and return a boolean result."""
         if self.defn.condition.mode == "cel":
             return self._evaluate_cel(ctx=ctx)
-        else:
-            return self._evaluate_model(ctx=ctx)
+        return self._evaluate_model(ctx=ctx)
 
     def _evaluate_model(self, *, ctx: dict[str, Any]) -> bool:
         """Cybernetic evaluation: invoke model with rendered template."""

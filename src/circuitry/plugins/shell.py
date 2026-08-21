@@ -36,7 +36,6 @@ from ..preflight import CheckResult
 from ._subprocess import resolve_binary, run_binary
 from .base import ToolResult
 
-
 _DEFAULT_ALLOWED: tuple[str, ...] = (
     "ls", "cat", "head", "tail", "wc", "echo", "pwd", "date",
 )

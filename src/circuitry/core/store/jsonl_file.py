@@ -32,7 +32,7 @@ class JsonlFileStatePersistence:
         return "jsonl-file"
 
     @staticmethod
-    def from_config(config: dict[str, Any]) -> "JsonlFileStatePersistence":
+    def from_config(config: dict[str, Any]) -> JsonlFileStatePersistence:
         raw_path = str(config.get("path") or config.get("db_path") or "").strip()
         if not raw_path:
             raise ValueError(
@@ -61,8 +61,8 @@ class JsonlFileStatePersistence:
             ) from e
 
         # Scan backwards: the last matching record is the latest snapshot.
-        for line in reversed(lines):
-            line = line.strip()
+        for raw_line in reversed(lines):
+            line = raw_line.strip()
             if not line:
                 continue
             try:

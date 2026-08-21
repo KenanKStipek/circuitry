@@ -22,8 +22,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import NamedTuple, Sequence
+from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -129,8 +130,7 @@ def normalise_entry(text: str) -> list[str]:
     if lines[0].startswith(BULLET_PREFIXES):
         return lines
     out = ["- " + lines[0].lstrip()]
-    for line in lines[1:]:
-        out.append("  " + line.lstrip() if line.strip() else "")
+    out.extend("  " + line.lstrip() if line.strip() else "" for line in lines[1:])
     return out
 
 
@@ -254,15 +254,18 @@ def compile_changelog(changelog_text: str, fragments: Sequence[Fragment]) -> str
 
 
 def _check(fragments_dir: Path, fragments: Sequence[Fragment]) -> int:
-    problems: list[str] = []
-    for path in unknown_fragment_files(fragments_dir):
-        problems.append(
+    problems: list[str] = [
+        (
             f"{path}: not a valid fragment name — expected <id>.<type>.md with "
             f"<type> in {', '.join(SECTION_ORDER)}"
         )
-    for fragment in fragments:
-        if not normalise_entry(fragment.text):
-            problems.append(f"{fragment.path}: fragment is empty")
+        for path in unknown_fragment_files(fragments_dir)
+    ]
+    problems.extend(
+        f"{fragment.path}: fragment is empty"
+        for fragment in fragments
+        if not normalise_entry(fragment.text)
+    )
     for problem in problems:
         print(f"error: {problem}", file=sys.stderr)
     if problems:

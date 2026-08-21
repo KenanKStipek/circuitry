@@ -11,11 +11,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from circuitry.adapters.base import GenerateResult
 from circuitry.core.compiler import compile_orchestration
 from circuitry.core.dynamic import DynamicRuntime
 from circuitry.core.store import Store
-
-from circuitry.adapters.base import GenerateResult
 
 
 @dataclass

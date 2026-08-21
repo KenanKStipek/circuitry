@@ -6,11 +6,11 @@ from .sqlite import SQLiteStatePersistence
 from .store import Store
 
 __all__ = [
-    "Store",
-    "PersistenceBackend",
-    "build_persistence_backend",
     "JsonlFileStatePersistence",
     "MongodbStatePersistence",
+    "PersistenceBackend",
     "PostgresStatePersistence",
     "SQLiteStatePersistence",
+    "Store",
+    "build_persistence_backend",
 ]

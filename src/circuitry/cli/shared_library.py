@@ -100,7 +100,7 @@ def resolve_service_profile(
 
     raw = profiles.get(profile_name)
     if not isinstance(raw, dict):
-        available = ", ".join(sorted(str(k) for k in profiles.keys()))
+        available = ", ".join(sorted(str(k) for k in profiles))
         raise ValueError(
             f"Unknown service profile: {profile_name!r}. Available: {available}"
         )
@@ -200,15 +200,13 @@ def _resolve_asset_version(
             )
         return (requested_version, resolved)
 
-    latest_version = sorted(candidates.keys(), key=_version_sort_key)[-1]
+    latest_version = max(candidates.keys(), key=_version_sort_key)
     return (latest_version, candidates[latest_version])
 
 
 def _version_sort_key(version: str) -> tuple[Any, ...]:
     parts = version.replace("-", ".").split(".")
-    key: list[Any] = []
-    for part in parts:
-        key.append(int(part) if part.isdigit() else part)
+    key: list[Any] = [int(part) if part.isdigit() else part for part in parts]
     return tuple(key)
 
 

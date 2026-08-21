@@ -18,7 +18,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 # ---------------------------------------------------------------------------
 # Validation helpers
 # ---------------------------------------------------------------------------

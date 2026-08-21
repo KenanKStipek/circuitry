@@ -22,7 +22,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 _VALID_SORT = ("pid", "cpu", "memory", "name")
 
 
@@ -60,9 +59,10 @@ class ProcessListPlugin:
         for proc in psutil.process_iter(attrs=attrs):
             try:
                 info = proc.info
-                if name_filter:
-                    if name_filter.lower() not in (info.get("name") or "").lower():
-                        continue
+                if name_filter and name_filter.lower() not in (
+                    info.get("name") or ""
+                ).lower():
+                    continue
                 rows.append({
                     "pid": int(info.get("pid") or 0),
                     "name": info.get("name") or "",

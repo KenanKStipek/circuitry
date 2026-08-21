@@ -179,9 +179,8 @@ def load_state(data_dir: Path) -> tuple[set[str], dict[str, list[str]]]:
 def extract_ideas(text: str) -> list[str]:
     """Pull idea lines (numbered or bulleted) out of a text blob."""
     out = []
-    for line in (text or "").splitlines():
-        line = line.strip()
-        m = re.match(r"^(?:\d+[.)]\s*|-\s*)(.+)$", line)
+    for raw in (text or "").splitlines():
+        m = re.match(r"^(?:\d+[.)]\s*|-\s*)(.+)$", raw.strip())
         if m and len(m.group(1)) > 10:
             out.append(m.group(1).strip())
     return out

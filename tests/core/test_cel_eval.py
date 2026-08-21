@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from circuitry.core.cel_eval import evaluate_cel
 
-
 # ---------------------------------------------------------------------------
 # Correctness tests (backward compatibility)
 # ---------------------------------------------------------------------------

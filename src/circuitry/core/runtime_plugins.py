@@ -203,10 +203,7 @@ def _load_single_plugin(plugin_id: str) -> RuntimePlugin:
                 "Plugin module must expose a 'plugin' symbol or use module:attr"
             )
 
-    if callable(attr):
-        instance = attr()
-    else:
-        instance = attr
+    instance = attr() if callable(attr) else attr
 
     _validate_plugin(instance, plugin_id)
     return instance

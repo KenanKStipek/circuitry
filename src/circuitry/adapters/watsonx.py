@@ -34,7 +34,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import GenerateResult
 
-
 # Module-level token cache: api_key -> (token, expires_at_epoch_seconds).
 # A 5-minute buffer is subtracted from the IAM-reported lifetime so we
 # never use a token that's about to expire mid-flight.

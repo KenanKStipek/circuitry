@@ -10,11 +10,11 @@ fields are intentionally NOT redacted here. The runtime snapshot embedded in
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from .complexity_config import (
-    ComplexitySettings,
     DEFAULT_COMPLEXITY_SETTINGS,
+    ComplexitySettings,
     resolve_complexity_settings,
 )
 from .config import CircuitryConfig
@@ -25,8 +25,8 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class EffectiveSettings:
-    model: Optional[str]
-    adapter: Optional[str]
+    model: str | None
+    adapter: str | None
     plugins: list[str]
     runtime: dict[str, Any]
     sources: dict[
@@ -48,14 +48,14 @@ def resolve_effective_settings(
     *,
     cfg: CircuitryConfig,
     orch: dict[str, Any],
-    cli_model: Optional[str] = None,
-    cli_adapter: Optional[str] = None,
-    cli_plugins: Optional[list[str]] = None,
-    profile: "Optional[ProfileSettings]" = None,
+    cli_model: str | None = None,
+    cli_adapter: str | None = None,
+    cli_plugins: list[str] | None = None,
+    profile: ProfileSettings | None = None,
 ) -> EffectiveSettings:
     sources: dict[str, str] = {}
-    model: Optional[str]
-    adapter: Optional[str]
+    model: str | None
+    adapter: str | None
     plugins: list[str]
 
     # model precedence: cli > profile > orch > config > default

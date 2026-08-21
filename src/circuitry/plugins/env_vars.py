@@ -26,7 +26,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 _SECRET_PATTERN = re.compile(
     r"(?:API[_-]?KEY|TOKEN|PASSWORD|PASSWD|SECRET|CREDENTIAL|PRIVATE[_-]?KEY)",
     re.IGNORECASE,

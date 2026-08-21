@@ -26,9 +26,10 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..adapters import Adapter
@@ -163,13 +164,13 @@ class Turn:
     """What one wizard run hands back — the turn contract, unpacked."""
 
     say: str
-    yaml: Optional[str] = None
+    yaml: str | None = None
     done: bool = False
-    valid: Optional[bool] = None
+    valid: bool | None = None
     errors: tuple[str, ...] = ()
 
     @classmethod
-    def from_state(cls, state: dict[str, Any]) -> "Turn":
+    def from_state(cls, state: dict[str, Any]) -> Turn:
         raw_errors = dig(state, TURN_PATHS["errors"]) or []
         yaml_text = dig(state, TURN_PATHS["yaml"])
         valid = dig(state, TURN_PATHS["valid"])
@@ -192,8 +193,8 @@ TurnRunner = Callable[[dict[str, Any]], Turn]
 def run_turn(
     state: dict[str, Any],
     *,
-    config: Optional["CircuitryConfig"] = None,
-    adapter: Optional["Adapter"] = None,
+    config: CircuitryConfig | None = None,
+    adapter: Adapter | None = None,
     verbose: bool = False,
 ) -> Turn:
     """Run the wizard once over ``{goal, conversation, draft}``."""
@@ -211,8 +212,8 @@ def run_turn(
 
 def default_runner(
     *,
-    config: Optional["CircuitryConfig"] = None,
-    adapter: Optional["Adapter"] = None,
+    config: CircuitryConfig | None = None,
+    adapter: Adapter | None = None,
 ) -> TurnRunner:
     """A runner over the config on disk — what the view uses when unconfigured."""
 
@@ -276,7 +277,7 @@ class Conversation:
     seed: Seed
     messages: list[Message] = field(default_factory=list)
     draft: str = ""
-    status: Optional[DraftStatus] = None
+    status: DraftStatus | None = None
     done: bool = False
 
     def state(self) -> dict[str, Any]:
@@ -351,7 +352,7 @@ def save_to_file(draft: str, path: Path) -> Path:
     return path
 
 
-def default_library_dir(config: Optional["CircuitryConfig"] = None) -> Path:
+def default_library_dir(config: CircuitryConfig | None = None) -> Path:
     """The local library: the first configured folder source, else the fallback.
 
     A folder source is what makes a saved orchestration reachable as
@@ -366,7 +367,7 @@ def default_library_dir(config: Optional["CircuitryConfig"] = None) -> Path:
         for source in registry.sources:
             if isinstance(source, FolderSource):
                 return source.path
-    except Exception:  # noqa: BLE001 - a broken config must not block saving
+    except Exception:
         pass
     return FALLBACK_LIBRARY_DIR
 

@@ -21,7 +21,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 _DEFAULT_SECTIONS = ("cpu", "memory", "disk", "network", "boot", "load")
 
 

@@ -34,7 +34,6 @@ from ..preflight import CheckResult
 from ._subprocess import check_binary, resolve_binary
 from .base import ToolResult
 
-
 _GPG_CANDIDATES = ("gpg", "gpg2")
 _VALID_MODES = ("encrypt", "decrypt", "sign", "verify")
 
@@ -153,7 +152,7 @@ def _run_verify(
     """
     sig = params["signature"]
     payload = params.get("input")
-    cmd = base_cmd + ["--verify"]
+    cmd = [*base_cmd, "--verify"]
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         if from_path:

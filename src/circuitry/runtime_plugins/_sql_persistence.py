@@ -117,7 +117,7 @@ class SqlPersistenceBase:
 
     def _setup_connection(self, conn: Any) -> None:
         """Per-connection setup (pragmas, isolation level, etc). Default no-op."""
-        return None
+        return
 
     # ------------------------------------------------------------------
     # Configuration

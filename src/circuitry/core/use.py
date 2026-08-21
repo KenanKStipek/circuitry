@@ -376,7 +376,7 @@ class UseRuntime:
 
             # Cycle detection — runtime call-stack tracking by resolved identity.
             if identity in call_stack:
-                cycle_path = " → ".join(call_stack + [identity])
+                cycle_path = " → ".join([*call_stack, identity])
                 raise RecursionError(
                     f"use '{self.defn.name}': cycle detected — {cycle_path}"
                 )
@@ -460,7 +460,7 @@ class UseRuntime:
                 raise RuntimeError(
                     f"use '{self.defn.name}' -> {label}: {e}"
                 ) from e
-            elif self.defn.on_error == "skip":
+            if self.defn.on_error == "skip":
                 node["value"] = None
             # continue: keep going with None value
         finally:

@@ -24,23 +24,46 @@ import pytest
 from circuitry.core.runtime_plugins import PluginContext, load_plugins
 from circuitry.runtime_plugins import (
     azure_blob as azure_blob_mod,
+)
+from circuitry.runtime_plugins import (
     couchdb as couchdb_mod,
+)
+from circuitry.runtime_plugins import (
     dynamodb as dynamodb_mod,
+)
+from circuitry.runtime_plugins import (
     elasticsearch as es_mod,
+)
+from circuitry.runtime_plugins import (
     firestore as firestore_mod,
+)
+from circuitry.runtime_plugins import (
     gcs as gcs_mod,
+)
+from circuitry.runtime_plugins import (
     jsonl_file as jsonl_mod,
+)
+from circuitry.runtime_plugins import (
     memcached as memcached_mod,
+)
+from circuitry.runtime_plugins import (
     mongodb as mongodb_mod,
+)
+from circuitry.runtime_plugins import (
     opensearch as opensearch_mod,
+)
+from circuitry.runtime_plugins import (
     r2 as r2_mod,
+)
+from circuitry.runtime_plugins import (
     redis as redis_mod,
+)
+from circuitry.runtime_plugins import (
     s3 as s3_mod,
 )
 from circuitry.runtime_plugins._snapshot_persistence import (
     SnapshotPersistenceBase,
 )
-
 
 STORAGE_PLUGINS = [
     ("mongodb", "pymongo", "pymongo"),
@@ -127,7 +150,7 @@ class _FakeMongoClient:
         self._collections: dict[tuple[str, str], _FakeCollection] = {}
         self.closed = False
 
-    def __getitem__(self, db_name: str) -> "_FakeMongoDB":
+    def __getitem__(self, db_name: str) -> _FakeMongoDB:
         return _FakeMongoDB(self, db_name)
 
     def close(self) -> None:
@@ -184,7 +207,7 @@ def test_mongodb_lifecycle_writes_snapshot_per_phase(
     plugin.on_run_success(state={"name": "K", "out": "done"}, context=ctx)
 
     client = holder["c"]
-    coll = list(client._collections.values())[0]
+    coll = next(iter(client._collections.values()))
     assert len(coll.upserts) == 2  # start + success
     start_doc = coll.upserts[0][1]
     assert start_doc["status"] == "running"
@@ -205,7 +228,7 @@ def test_mongodb_failure_records_error(
     plugin.on_run_start(state={}, context=ctx)
     plugin.on_run_failure(state={}, context=ctx, error="boom")
 
-    coll = list(holder["c"]._collections.values())[0]
+    coll = next(iter(holder["c"]._collections.values()))
     fail_doc = coll.upserts[-1][1]
     assert fail_doc["status"] == "failed"
     assert fail_doc["error"] == "boom"
@@ -222,7 +245,7 @@ def test_mongodb_skips_per_effect_update_by_default(
         state={"x": 1}, context=ctx,
         effect_path="prime.greet", effect_result={"value": "hi"},
     )
-    coll = list(holder["c"]._collections.values())[0]
+    coll = next(iter(holder["c"]._collections.values()))
     # Only the start event wrote so far — effect skipped.
     assert len(coll.upserts) == 1
 
@@ -248,7 +271,7 @@ def test_mongodb_update_per_effect_when_configured(
         state={"x": 1}, context=ctx,
         effect_path="prime.greet", effect_result={"value": "hi"},
     )
-    coll = list(holder["c"]._collections.values())[0]
+    coll = next(iter(holder["c"]._collections.values()))
     assert len(coll.upserts) == 2  # start + per-effect update
 
 
@@ -708,7 +731,7 @@ def test_azure_blob_uses_connection_string(
 
     class FakeBlobServiceClient:
         @classmethod
-        def from_connection_string(cls, cstr: str) -> "FakeBlobServiceClient":
+        def from_connection_string(cls, cstr: str) -> FakeBlobServiceClient:
             captured["connection_string"] = cstr
             return cls()
 
@@ -864,7 +887,7 @@ def test_snapshot_includes_canonical_fields(
     ctx = _make_context(tmp_path, "mongodb")
     plugin.on_run_start(state={"k": "v"}, context=ctx)
 
-    coll = list(holder["c"]._collections.values())[0]
+    coll = next(iter(holder["c"]._collections.values()))
     doc = coll.upserts[0][1]
     for required in (
         "run_id", "orchestration_path", "status", "started_at",

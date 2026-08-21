@@ -28,7 +28,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 _LINEAR_ENDPOINT = "https://api.linear.app/graphql"
 
 _LIST_ISSUES_QUERY = """

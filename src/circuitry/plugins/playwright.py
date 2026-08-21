@@ -35,7 +35,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 _VALID_BROWSERS = ("chromium", "firefox", "webkit")
 
 
@@ -89,7 +88,9 @@ class PlaywrightPlugin:
         timeout_seconds: int = 300,
     ) -> ToolResult:
         try:
-            from playwright.sync_api import sync_playwright  # type: ignore[import-not-found]
+            from playwright.sync_api import (
+                sync_playwright,  # type: ignore[import-not-found]
+            )
         except ImportError as exc:
             raise RuntimeError(
                 "playwright: playwright not installed. Install with: "

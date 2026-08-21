@@ -53,8 +53,12 @@ class OpentelemetryPlugin:
         return (not missing, missing)
 
     def _build_provider(self) -> Any:
-        from opentelemetry.sdk.resources import Resource  # type: ignore[import-not-found]
-        from opentelemetry.sdk.trace import TracerProvider  # type: ignore[import-not-found]
+        from opentelemetry.sdk.resources import (
+            Resource,  # type: ignore[import-not-found]
+        )
+        from opentelemetry.sdk.trace import (
+            TracerProvider,  # type: ignore[import-not-found]
+        )
         from opentelemetry.sdk.trace.export import (  # type: ignore[import-not-found]
             BatchSpanProcessor,
             ConsoleSpanExporter,
@@ -131,7 +135,10 @@ class OpentelemetryPlugin:
                 attributes=attrs,
             ) as span:
                 if error:
-                    from opentelemetry.trace import Status, StatusCode  # type: ignore[import-not-found]
+                    from opentelemetry.trace import (  # type: ignore[import-not-found]
+                        Status,
+                        StatusCode,
+                    )
                     span.set_status(Status(StatusCode.ERROR, error))
 
     def on_run_success(self, *, state: dict[str, Any], context: Any) -> None:
@@ -152,7 +159,10 @@ class OpentelemetryPlugin:
         with self._lock:
             if self._run_span is not None:
                 if not success:
-                    from opentelemetry.trace import Status, StatusCode  # type: ignore[import-not-found]
+                    from opentelemetry.trace import (  # type: ignore[import-not-found]
+                        Status,
+                        StatusCode,
+                    )
                     self._run_span.set_status(
                         Status(StatusCode.ERROR, error or "run failed")
                     )

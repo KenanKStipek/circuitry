@@ -14,7 +14,6 @@ from circuitry.cli.detect import (
     detect_openai,
 )
 
-
 # --- DetectionResult ---
 
 

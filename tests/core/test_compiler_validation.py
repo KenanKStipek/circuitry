@@ -65,7 +65,7 @@ def test_compile_rejects_duplicate_sibling_names_nested_scope() -> None:
         ]
     }
     with pytest.raises(
-        ValueError, match="Duplicate effect name 'step' in scope 'prime.outer'"
+        ValueError, match=r"Duplicate effect name 'step' in scope 'prime\.outer'"
     ):
         compile_orchestration(orch=orch, root_name="prime")
 

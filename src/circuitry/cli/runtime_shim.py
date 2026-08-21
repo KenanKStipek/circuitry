@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 from uuid import uuid4
 
 from ..adapters import Adapter, build_adapter
@@ -60,32 +61,32 @@ def load_schema() -> dict[str, Any] | None:
 @dataclass(frozen=True)
 class RunRequest:
     orchestration_path: Path
-    state_path: Optional[Path]
-    out_path: Optional[Path]
+    state_path: Path | None
+    out_path: Path | None
     dry_run: bool
     validate_only: bool
     initial_state: dict[str, Any] | None = None
     shared_library_metadata: dict[str, Any] | None = None
     verbose: bool = False
     config: CircuitryConfig | None = None
-    live_state_path: Optional[Path] = None
-    adapter: Optional[Adapter] = None
-    state_observer: Optional[Callable[[dict[str, Any]], None]] = None
+    live_state_path: Path | None = None
+    adapter: Adapter | None = None
+    state_observer: Callable[[dict[str, Any]], None] | None = None
     # Per-effect completion notifications: ``(effect_path, effect_node)``,
     # the same payload runtime plugins receive from ``on_effect_complete``.
-    effect_observer: Optional[Callable[[str, dict[str, Any]], None]] = None
+    effect_observer: Callable[[str, dict[str, Any]], None] | None = None
     # The counterpart, fired before each effect dispatches: same
     # ``(effect_path, effect_node)`` payload runtime plugins receive from
     # ``on_effect_start``.
-    effect_start_observer: Optional[Callable[[str, dict[str, Any]], None]] = None
+    effect_start_observer: Callable[[str, dict[str, Any]], None] | None = None
     skip_preflight: bool = False
     # Caller-level overrides, ranked above the orchestration's own
     # ``adapter``/``model`` (the ``cli`` tier of resolve_effective_settings).
     # ``adapter_override`` is ignored when ``adapter`` supplies an instance —
     # that already pins the transport.
-    adapter_override: Optional[str] = None
-    model_override: Optional[str] = None
-    profile_name: Optional[str] = None
+    adapter_override: str | None = None
+    model_override: str | None = None
+    profile_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -93,7 +94,7 @@ class RunResult:
     ok: bool
     state: dict[str, Any]
     warnings: list[str]
-    error: Optional[str] = None
+    error: str | None = None
 
 
 def _now_iso() -> str:
@@ -101,7 +102,7 @@ def _now_iso() -> str:
 
 
 def _load_state(
-    path: Optional[Path], initial_state: dict[str, Any] | None = None
+    path: Path | None, initial_state: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     if initial_state is not None:
         # Isolate runtime mutations from caller-owned dictionaries.
@@ -335,7 +336,7 @@ def run(req: RunRequest) -> RunResult:
         if req.state_observer is not None:
             callbacks.append(req.state_observer)
 
-        on_write: Optional[Callable[[dict[str, Any]], None]]
+        on_write: Callable[[dict[str, Any]], None] | None
         if not callbacks:
             on_write = None
         elif len(callbacks) == 1:
@@ -492,13 +493,13 @@ def run(req: RunRequest) -> RunResult:
                     persistence_node["status"] = "failed"
                 persistence_node["error"] = str(e)
         except Exception:
-            logger.error("Error during error-handling cleanup", exc_info=True)
+            logger.exception("Error during error-handling cleanup")
         return RunResult(ok=False, state=state, warnings=warnings, error=str(e))
 
 
 def _compose_effect_observers(
     observers: list[Callable[[str, dict[str, Any]], None]],
-) -> Optional[Callable[[str, dict[str, Any]], None]]:
+) -> Callable[[str, dict[str, Any]], None] | None:
     """Fold per-effect observers into the single callback ``Store`` takes."""
     if not observers:
         return None
@@ -795,10 +796,9 @@ def _has_prompt_effects(defn: Any) -> bool:
         return _has_prompt_effects(defn.inner)
 
     from ..core.use import UseDefinition
-    if isinstance(defn, UseDefinition):
-        return True  # conservatively assume child orchestration has prompts
 
-    return False
+    # Conservatively assume a child orchestration has prompts.
+    return isinstance(defn, UseDefinition)
 
 
 def _require_resolved_settings(

@@ -41,8 +41,8 @@ class DetectionResult:
 
 def _curl_json_get(url: str, timeout: int = 5) -> dict[str, Any]:
     """Quick GET via urllib (no extra deps). Raises on failure."""
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     req = urllib.request.Request(url, method="GET")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -114,6 +114,7 @@ def detect_ffmpeg() -> BackendStatus:
                 capture_output=True,
                 text=True,
                 timeout=5,
+                check=False,
             )
             first_line = result.stdout.split("\n")[0] if result.stdout else "found"
             return BackendStatus(name="ffmpeg", available=True, detail=first_line)

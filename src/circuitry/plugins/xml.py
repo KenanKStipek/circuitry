@@ -32,7 +32,7 @@ from .base import ToolResult
 def _node_to_dict(node: Any) -> dict[str, Any]:
     return {
         "tag": str(node.tag),
-        "attrib": {k: v for k, v in node.attrib.items()},
+        "attrib": dict(node.attrib.items()),
         "text": node.text or "",
         "children": [_node_to_dict(c) for c in list(node)],
     }

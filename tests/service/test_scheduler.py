@@ -5,7 +5,6 @@ from pathlib import Path
 
 from circuitry.service import RecurringScheduler, ScheduledJob
 
-
 BASE = datetime(2026, 2, 19, 12, 0, tzinfo=timezone.utc)
 
 

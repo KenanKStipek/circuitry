@@ -138,7 +138,7 @@ def test_run_creates_runs_row_and_effect_results(
 
     runs = _query_rows(db, "SELECT run_id, status, inputs FROM runs")
     assert len(runs) == 1
-    run_id, status, inputs_json = runs[0]
+    _run_id, status, inputs_json = runs[0]
     assert status == "success"
     assert json.loads(inputs_json) == {"name": "Kenan"}
 
