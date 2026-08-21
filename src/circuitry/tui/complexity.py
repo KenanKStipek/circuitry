@@ -175,9 +175,14 @@ class EffectComplexity:
     warnings: tuple[str, ...] = ()
 
     @property
+    def number(self) -> str:
+        """Just the rounded score, padded so ``7`` and ``100`` line up."""
+        return f"{self.score:>{SCORE_WIDTH}.0f}"
+
+    @property
     def cell(self) -> str:
         """The run view's gutter cell: the rounded score, then the band."""
-        return f"{self.score:>{SCORE_WIDTH}.0f} {self.band}".rstrip()
+        return f"{self.number} {self.band}".rstrip()
 
     @property
     def summary(self) -> str:

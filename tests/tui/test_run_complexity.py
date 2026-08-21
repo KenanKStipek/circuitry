@@ -309,7 +309,7 @@ def test_a_start_event_puts_a_score_on_a_still_running_row() -> None:
     draft = nodes[0]
     assert draft.status == ex.RUNNING
     assert draft.complexity is not None and draft.complexity.score == 62.0
-    assert draft.score_cell == " 62 high"
+    assert draft.score_cell() == " 62 high"
     assert " 62 high  ├─ ◐ draft" in ex.render_text(nodes)
 
 
@@ -336,7 +336,7 @@ def test_an_unusable_start_payload_falls_back_to_the_snapshot() -> None:
 def test_effects_with_no_score_render_a_dash_or_nothing() -> None:
     """No blanks, no ``None`` — and no dashes down the rows that cannot score."""
     nodes = ex.build_tree(_plan(), _state(), scores={"prime.draft": FULL_SCORE})
-    cells = {node.label: node.score_cell for node in _walk(nodes)}
+    cells = {node.label: node.score_cell() for node in _walk(nodes)}
     assert cells == {"draft": " 62 high", "polish": NO_SCORE.rjust(3), "save": ""}
     text = ex.render_text(nodes)
     assert "None" not in text
@@ -367,7 +367,7 @@ def test_containers_and_groups_never_claim_a_score() -> None:
         }
     }
     nodes = ex.build_tree(plan, state, scores={"prime.over_items.iter_0.handle": FULL_SCORE})
-    cells = {node.kind: node.score_cell for node in _walk(nodes)}
+    cells = {node.kind: node.score_cell() for node in _walk(nodes)}
     assert cells["loop"] == "" and cells["iteration"] == ""
     assert cells["prompt"] == " 62 high"
 
@@ -404,14 +404,26 @@ def test_an_error_row_does_not_repeat_its_effects_score() -> None:
 # -- narrow terminals ---------------------------------------------------------
 
 
-def test_a_narrow_tree_drops_the_column_rather_than_the_rows() -> None:
+def test_the_column_gives_up_its_band_before_it_gives_up_the_number() -> None:
+    """Squeezing the column is fair; squeezing the tree beside it is not."""
     nodes = ex.build_tree(_plan(), _state(), scores={"prime.draft": FULL_SCORE})
-    column = ex.score_column_width(nodes)
-    roomy = ex.render_text(nodes, width=column + ex.MIN_TREE_WIDTH)
-    tight = ex.render_text(nodes, width=column + ex.MIN_TREE_WIDTH - 1)
+    full = ex.score_column_width(nodes)
+    terse = ex.score_column(nodes, width=full + ex.MIN_TREE_WIDTH - 1)
 
-    assert "62 high" in roomy
-    assert "62 high" not in tight
+    assert terse.width == len(" 62") + ex.SCORE_GAP
+    assert terse.bands is False
+    text = ex.render_text(nodes, width=full + ex.MIN_TREE_WIDTH - 1)
+    assert " 62  ├─ ◐ draft" in text
+    assert "high" not in text
+
+
+def test_a_tree_with_no_room_at_all_drops_the_column_not_the_rows() -> None:
+    nodes = ex.build_tree(_plan(), _state(), scores={"prime.draft": FULL_SCORE})
+    roomy = ex.render_text(nodes, width=ex.MIN_TREE_WIDTH + ex.SCORE_WIDTH + ex.SCORE_GAP)
+    tight = ex.render_text(nodes, width=ex.MIN_TREE_WIDTH + ex.SCORE_WIDTH + ex.SCORE_GAP - 1)
+
+    assert " 62" in roomy
+    assert "62" not in tight
     # Every row survives the suppression, at its full width.
     assert tight == ex.render_text(ex.build_tree(_plan(), _state()))
     assert [line.split("─ ")[-1] for line in tight.split("\n")] == [
@@ -421,10 +433,25 @@ def test_a_narrow_tree_drops_the_column_rather_than_the_rows() -> None:
     ]
 
 
+def test_the_tree_never_gets_less_than_the_minimum() -> None:
+    """Whatever the column decides, the rows keep their cells."""
+    nodes = ex.build_tree(_plan(), _state(), scores={"prime.draft": FULL_SCORE})
+    for width in range(0, 80):
+        assert width - ex.score_column_width(nodes, width) >= ex.MIN_TREE_WIDTH or (
+            ex.score_column_width(nodes, width) == 0
+        )
+
+
 def test_an_unknown_width_keeps_the_column() -> None:
     """A pane that has not been laid out has not said there is no room."""
     nodes = ex.build_tree(_plan(), _state(), scores={"prime.draft": FULL_SCORE})
     assert "62 high" in ex.render_text(nodes, width=None)
+
+
+def test_the_column_survives_an_eighty_column_terminal() -> None:
+    """The pane is ~2/5 of the screen; the feature has to fit in that."""
+    nodes = ex.build_tree(_plan(), _state(), scores={"prime.draft": FULL_SCORE})
+    assert ex.score_column_width(nodes, width=32) > 0
 
 
 @pytest.mark.parametrize("width", [0, 1, 4, 10, 24, 40, 120])
@@ -646,6 +673,31 @@ def test_a_run_with_no_scores_draws_the_tree_it_always_drew(
     tree = run_app(scenario, size=(100, 30))
     assert "None" not in tree and NO_SCORE not in tree
     assert tree.split("\n")[0].startswith("├─ ")
+
+
+def test_an_eighty_column_terminal_keeps_the_number(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """80x24 is the ordinary terminal; the feature has to survive it.
+
+    The execution pane is a fraction of the screen, so there is no room for
+    the band there — the number stays, which is the part that ranks.
+    """
+    runner = HeldRun(score=FULL_SCORE)
+
+    async def scenario(pilot: Pilot[Any]) -> str:
+        screen = await _open(pilot, _screen(_write(tmp_path, LIVE), runner))
+        screen.query_one("#run-launch", Button).press()
+        assert await _settle(pilot, lambda: runner.started.is_set())
+        assert await _settle(pilot, lambda: "62" in screen.tree_text)
+        tree = screen.tree_text
+        runner.release.set()
+        assert await _settle(pilot, lambda: screen.last_result is not None)
+        return tree
+
+    tree = run_app(scenario, size=(80, 24))
+    assert " 62  ├─ ◐ draft" in tree
+    assert "high" not in tree
 
 
 def test_a_narrow_terminal_drops_the_column_not_the_effect_names(

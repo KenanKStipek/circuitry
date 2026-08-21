@@ -270,10 +270,17 @@ one — loops, conditionals, `iter n` groups, tools — are left blank rather th
 dashed, because a column of dashes down the structural rows reads as breakage.
 A run where *nothing* is scored draws no column at all.
 
-On a narrow terminal the column is dropped whole rather than shaved: below
-`MIN_TREE_WIDTH` cells of tree the score goes and every effect name stays, on
-the grounds that a truncated effect name costs more than a hidden score the
-inspector will show in full anyway.
+On a narrow terminal the column gives ground, never the tree. The tree's
+`MIN_TREE_WIDTH` cells are not negotiable, so as the pane shrinks the column
+first drops the band name and keeps the number, then drops out entirely:
+
+```
+120 cols        100 cols         80 cols       60 cols
+ 62 high  ├─…    62 high  ├─…     62  ├─…      ├─ ◐ draft
+```
+
+A truncated effect name costs more than a hidden score, and the inspector shows
+the score in full either way.
 
 Bands come from `runtime.complexity.routing` when a band table named one, so
 the view never contradicts the router. With no table there is still a number to

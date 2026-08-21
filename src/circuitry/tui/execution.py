@@ -56,6 +56,7 @@ __all__ = [
     "ExecNode",
     "PlanNode",
     "RenderLine",
+    "ScoreColumn",
     "Totals",
     "build_tree",
     "count_effects",
@@ -64,6 +65,7 @@ __all__ = [
     "plan_from_orchestration",
     "render_lines",
     "render_text",
+    "score_column",
     "score_column_width",
     "sum_tokens",
     "totals_for",
@@ -96,11 +98,11 @@ GROUP_KINDS = frozenset({"iteration", "branch"})
 #: Cells between the score column and the tree it annotates.
 SCORE_GAP = 2
 
-#: Cells the tree itself must keep before the score column earns its place.
-#: Below this the column is dropped whole rather than narrowing the rows it
-#: sits beside — a truncated effect name costs more than a hidden score,
-#: which is one keypress away in the inspector either way.
-MIN_TREE_WIDTH = 28
+#: Cells the tree itself must keep, whatever the score column would like.
+#: The same number :data:`circuitry.tui.layout.TINY_WIDTH` calls the point
+#: below which a screen has nothing to spare — the column gives up its band
+#: name, then gives up entirely, rather than pushing the tree under this.
+MIN_TREE_WIDTH = 24
 
 #: How the runtime spells each effect type, normalised to one name.
 _KINDS: dict[str, str] = {
@@ -233,8 +235,7 @@ class ExecNode:
     def parallel(self) -> bool:
         return self.flow == "tree"
 
-    @property
-    def score_cell(self) -> str:
+    def score_cell(self, *, band: bool = True) -> str:
         """This row's score column: the score, a dash, or nothing.
 
         A dash means "a prompt that has no score" — scoring off, or the
@@ -242,9 +243,12 @@ class ExecNode:
         loops, conditionals and iteration groups are not scored, and a
         column of dashes down the structural rows would read as an error
         rather than as the absence of one.
+
+        ``band=False`` drops the band name and keeps the number, which is
+        what a column too narrow for both spends its cells on.
         """
         if self.complexity is not None:
-            return self.complexity.cell
+            return self.complexity.cell if band else self.complexity.number
         return NO_SCORE.rjust(SCORE_WIDTH) if self.kind == "prompt" else ""
 
 
@@ -666,31 +670,58 @@ class RenderLine:
         return f"{self.gutter}{self.text}"
 
 
-def score_column_width(nodes: Sequence[ExecNode], width: int | None = None) -> int:
-    """Cells the score column needs, or 0 when it should not be drawn.
+@dataclass(frozen=True)
+class ScoreColumn:
+    """How much of the score column fits, and therefore what it says."""
+
+    #: Total cells the column occupies, separator included. 0 = not drawn.
+    width: int = 0
+    #: Whether there is room for the band name beside the number.
+    bands: bool = True
+
+    def cell(self, node: ExecNode) -> str:
+        """``node``'s cell, padded to the column (empty when not drawn)."""
+        if self.width <= 0:
+            return ""
+        return node.score_cell(band=self.bands).ljust(self.width - SCORE_GAP) + " " * SCORE_GAP
+
+
+def score_column(nodes: Sequence[ExecNode], width: int | None = None) -> ScoreColumn:
+    """Size the score column for ``nodes`` in ``width`` cells of tree.
 
     Sized to the widest cell actually present, so a run whose scores all
     read ``low`` costs less gutter than one that reaches ``moderate`` —
     and a run with no scores at all (scoring off, no prompt effects) costs
     none, leaving the tree byte-identical to what it drew before.
 
-    ``width`` is the space the whole tree has. When the column would leave
-    the tree less than :data:`MIN_TREE_WIDTH` cells it is dropped whole:
-    the acceptance criterion is that a narrow terminal loses the score,
-    not that every other column gets shaved to keep it.
+    ``width`` is the space the whole tree has, or ``None`` for "not laid
+    out yet, draw everything". The tree's own :data:`MIN_TREE_WIDTH` cells
+    are not negotiable, so a column that will not fit gives up its band
+    name first and then gives up entirely. What it never does is take the
+    room out of the rows beside it: a truncated effect name costs more
+    than a hidden score, which the inspector shows in full either way.
     """
     rows = _walk(nodes)
     if not any(node.complexity is not None for node in rows):
         # Nothing was scored — scoring is off, or nothing here is a prompt.
         # A column of dashes would announce a feature that is not running.
-        return 0
-    widest = max((len(node.score_cell) for node in rows), default=0)
-    if not widest:
-        return 0
-    column = widest + SCORE_GAP
-    if width is not None and width - column < MIN_TREE_WIDTH:
-        return 0
-    return column
+        return ScoreColumn(0)
+
+    def fits(bands: bool) -> ScoreColumn | None:
+        widest = max((len(node.score_cell(band=bands)) for node in rows), default=0)
+        if not widest:
+            return None
+        column = widest + SCORE_GAP
+        if width is not None and width - column < MIN_TREE_WIDTH:
+            return None
+        return ScoreColumn(column, bands)
+
+    return fits(True) or fits(False) or ScoreColumn(0)
+
+
+def score_column_width(nodes: Sequence[ExecNode], width: int | None = None) -> int:
+    """Cells the score column needs, or 0 when it should not be drawn."""
+    return score_column(nodes, width).width
 
 
 def _walk(nodes: Sequence[ExecNode]) -> list[ExecNode]:
@@ -713,34 +744,27 @@ def render_lines(
     not been laid out yet wants.
     """
     lines: list[RenderLine] = []
-    _render(nodes, "", score_column_width(nodes, width), lines)
+    _render(nodes, "", score_column(nodes, width), lines)
     return lines
 
 
 def _render(
-    nodes: Sequence[ExecNode], prefix: str, column: int, out: list[RenderLine]
+    nodes: Sequence[ExecNode], prefix: str, column: ScoreColumn, out: list[RenderLine]
 ) -> None:
     for index, node in enumerate(nodes):
         last = index == len(nodes) - 1
         stem = "└─ " if last else "├─ "
         out.append(
-            RenderLine(f"{prefix}{stem}{_row(node)}", node.status, _gutter(node, column))
+            RenderLine(f"{prefix}{stem}{_row(node)}", node.status, column.cell(node))
         )
         below = f"{prefix}{'   ' if last else '│  '}"
         if node.error:
             # The error hangs off the row above and describes the same
             # effect, so it never repeats that effect's score.
             out.append(
-                RenderLine(f"{below}   ↳ {_error_text(node)}", FAILED, " " * column)
+                RenderLine(f"{below}   ↳ {_error_text(node)}", FAILED, " " * column.width)
             )
         _render(node.children, below, column, out)
-
-
-def _gutter(node: ExecNode, column: int) -> str:
-    """One row's score cell, padded to the column (empty when suppressed)."""
-    if column <= 0:
-        return ""
-    return node.score_cell.ljust(column - SCORE_GAP) + " " * SCORE_GAP
 
 
 def _row(node: ExecNode) -> str:
