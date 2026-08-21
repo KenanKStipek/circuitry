@@ -165,7 +165,11 @@ def test_module_imports_nothing_that_could_touch_the_world() -> None:
             if node.module:
                 imported.add(node.module.split(".")[0])
 
-    assert imported <= {"__future__", "re", "dataclasses", "typing"}, imported
+    # `collections.abc` is where the ABCs the typing aliases used to point at
+    # actually live (UP035); like the rest of this list it is pure stdlib and
+    # touches nothing.
+    allowed = {"__future__", "collections", "re", "dataclasses", "typing"}
+    assert imported <= allowed, imported
 
 
 def test_module_loads_standalone_without_the_circuitry_package() -> None:

@@ -501,9 +501,11 @@ class ProfileDraft:
                 "filename and a CLI argument. Use letters, digits, '.', '-' or '_'."
             )
         conditions = collect_orchestration_condition_paths(orch)
-        for path in sorted(self.effects):
-            if path in conditions:
-                issues.append(condition_refusal(path, profile_name=self.name))
+        issues.extend(
+            condition_refusal(path, profile_name=self.name)
+            for path in sorted(self.effects)
+            if path in conditions
+        )
         if self.persistence is not None:
             missing = self.persistence.missing_keys()
             if missing:

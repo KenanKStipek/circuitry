@@ -156,10 +156,7 @@ class DynamicRuntime:
         # store namespace on top of it so the short sibling paths inside this
         # dynamic keep resolving, with local nodes winning name collisions
         # (same precedence the loop body uses for its own siblings).
-        if ctx_override is None:
-            ctx = store.state
-        else:
-            ctx = {**ctx_override, **store.state}
+        ctx = store.state if ctx_override is None else {**ctx_override, **store.state}
         child_store = store.child(self.defn.name)
 
         # Build ancestor context for children (this dynamic is now a parent).

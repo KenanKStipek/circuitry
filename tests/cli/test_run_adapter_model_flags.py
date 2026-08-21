@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -218,7 +219,7 @@ def test_run_library_flags_are_recorded_as_cli(
         version = "1.0.0"
         source = "test"
         file_path = orch
-        metadata: dict = {}
+        metadata: ClassVar[dict] = {}
 
     monkeypatch.setattr(
         app_module, "fetch_shared_orchestration", lambda **kwargs: _Asset()

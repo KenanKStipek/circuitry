@@ -287,8 +287,10 @@ class StructureContext:
 
         else:
             return cls(), [
-                f"structure: expected a mapping or StructureContext, got "
-                f"{type(value).__name__}; treated as top-level."
+                (
+                    "structure: expected a mapping or StructureContext, got "
+                    f"{type(value).__name__}; treated as top-level."
+                )
             ]
 
         def _int(key: str) -> int:
@@ -445,8 +447,7 @@ class ComplexityScore:
             f"{' ' * 27}(Σw={self.weight_total:.3f})"
             f" → {self.score:6.2f}"
         )
-        for warning in self.warnings:
-            lines.append(f"! {warning}")
+        lines.extend(f"! {warning}" for warning in self.warnings)
         return "\n".join(lines)
 
 
@@ -672,9 +673,11 @@ def _resolve_weights(
         )
         return resolved
 
-    for key in sorted(str(k) for k in weights.keys()):
-        if key not in resolved:
-            warnings.append(f"weights.{key}: unknown signal; ignored.")
+    warnings.extend(
+        f"weights.{key}: unknown signal; ignored."
+        for key in sorted(str(k) for k in weights)
+        if key not in resolved
+    )
 
     for name in SIGNAL_NAMES:
         if name not in weights:
@@ -902,7 +905,7 @@ def _measure_keywords(
         normalized=_clamp01(sum(weight for _, weight in matches)),
         estimated=False,
         detail={
-            "matched": {phrase: weight for phrase, weight in matches},
+            "matched": dict(matches),
             "table_size": len(table),
             "source": "rendered_prompt" if mode == "rendered" else "template",
         },
@@ -949,14 +952,13 @@ def score(
 
     if definition is None and rendered_prompt is None:
         warnings.append("definition: nothing to score; every signal read as empty.")
-    elif definition is not None and not isinstance(definition, Mapping):
-        # Objects are fine (duck-typed via getattr) but scalars are not.
-        if isinstance(definition, (str, bytes, int, float, bool)):
-            warnings.append(
-                f"definition: expected a mapping or definition object, got "
-                f"{type(definition).__name__}; every signal read as empty."
-            )
-            definition = None
+    # Objects are fine (duck-typed via getattr) but scalars are not.
+    elif isinstance(definition, (str, bytes, int, float, bool)):
+        warnings.append(
+            "definition: expected a mapping or definition object, got "
+            f"{type(definition).__name__}; every signal read as empty."
+        )
+        definition = None
 
     resolved_weights = _resolve_weights(weights, warnings)
     context, structure_warnings = StructureContext.from_any(structure)

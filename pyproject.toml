@@ -249,6 +249,12 @@ ignore = [
     # Module-level singletons (`_manager`, plugin registries) are set
     # through `global` by design and are covered by tests.
     "PLW0603",
+    # Ambiguous-unicode. These guard against homoglyph confusion in
+    # identifiers; what they actually fire on here is deliberate typography
+    # in prose and rendered output — `–`, `×`, `Σ`, `→` in the complexity
+    # score's docstrings and its report lines. "Fixing" them would mean
+    # writing the weighted-mean formula with an ASCII `x`.
+    "RUF001", "RUF002", "RUF003",
 ]
 
 [tool.ruff.lint.flake8-bugbear]

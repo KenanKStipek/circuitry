@@ -60,8 +60,8 @@ def test_loop_iterations_and_use_namespaces_are_addressable(nodes: Any) -> None:
 
 def test_prime_comes_first(nodes: Any) -> None:
     """A person opens this to look at ``prime``; the bookkeeping can wait."""
-    assert [node.key for node in nodes][0] == "prime"
-    assert set(node.key for node in nodes) == {"prime", "runtime", "topic"}
+    assert next(node.key for node in nodes) == "prime"
+    assert {node.key for node in nodes} == {"prime", "runtime", "topic"}
 
 
 def test_a_copied_path_is_template_usable(nodes: Any) -> None:

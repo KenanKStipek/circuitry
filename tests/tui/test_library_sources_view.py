@@ -266,7 +266,7 @@ def test_a_source_qualified_query_finds_exactly_that_entry() -> None:
         LibraryEntry(name="dupe", category="", file="d.yml", intent="", source="local"),
         LibraryEntry(name="dupe", category="", file="d.yml", intent="", source="hub"),
     ]
-    assert [e.source for e in search(entries, "hub:dupe")][0] == "hub"
+    assert [e.source for e in search(entries, "hub:dupe")] == ["hub"]
 
 
 def test_search_can_be_scoped_to_one_source(sources: Any) -> None:
@@ -432,7 +432,7 @@ def test_the_ambiguous_name_is_listed_once_per_source_and_qualified(
 
 
 def test_r_fetches_the_hub_and_the_new_entries_appear(run_app: Any, multi: Any) -> None:
-    registry, hub = multi
+    _, hub = multi
 
     async def scenario(pilot: Pilot[Any]) -> tuple[list[str], str]:
         screen = await open_library(pilot)
@@ -466,7 +466,7 @@ def test_refreshing_inside_a_source_filter_fetches_only_that_source(
 
 def test_refresh_never_blocks_input(run_app: Any, multi: Any) -> None:
     """AC: the view stays usable while a fetch is in flight."""
-    registry, hub = multi
+    _, hub = multi
     hub.gate = threading.Event()
 
     async def scenario(pilot: Pilot[Any]) -> tuple[str, bool, str, str]:
@@ -495,7 +495,7 @@ def test_refresh_never_blocks_input(run_app: Any, multi: Any) -> None:
 
 
 def test_a_second_r_while_one_is_in_flight_says_so(run_app: Any, multi: Any) -> None:
-    registry, hub = multi
+    _, hub = multi
     hub.gate = threading.Event()
 
     async def scenario(pilot: Pilot[Any]) -> tuple[str, int]:
@@ -519,7 +519,7 @@ def test_a_failed_refresh_keeps_the_cached_entries_and_says_they_are_stale(
     run_app: Any, multi: Any
 ) -> None:
     """AC: failure is a designed state — cached entries stay, banner explains."""
-    registry, hub = multi
+    _, hub = multi
 
     async def scenario(pilot: Pilot[Any]) -> tuple[list[str], str, str]:
         screen = await open_library(pilot)
@@ -542,7 +542,7 @@ def test_a_failed_refresh_keeps_the_cached_entries_and_says_they_are_stale(
 def test_a_refresh_that_only_fails_leaves_the_empty_state_intact(
     run_app: Any, multi: Any
 ) -> None:
-    registry, hub = multi
+    _, hub = multi
     hub.fail = "404 — check 'repo', 'ref', and 'path'"
 
     async def scenario(pilot: Pilot[Any]) -> tuple[str, str, int]:
@@ -730,7 +730,7 @@ def test_snapshot_of_an_unfetched_github_source(
 def test_snapshot_of_a_failed_refresh(
     run_app: Any, multi: Any, capture_frame: Any, snapshot: Any
 ) -> None:
-    registry, hub = multi
+    _, hub = multi
 
     async def scenario(pilot: Pilot[Any]) -> str:
         screen = await open_library(pilot)
@@ -751,7 +751,7 @@ def test_a_broken_sources_config_falls_back_to_curation_and_says_so(
     def explode() -> Any:
         raise LibrarySourceError("runtime.library.sources must be a non-empty list")
 
-    monkeypatch.setattr(library_module, "build_registry", lambda: explode())
+    monkeypatch.setattr(library_module, "build_registry", explode)
 
     async def scenario(pilot: Pilot[Any]) -> tuple[list[str], str]:
         screen = await open_library(pilot)
