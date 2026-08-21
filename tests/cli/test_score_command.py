@@ -534,6 +534,34 @@ effects:
     assert "missing required field 'name'" in result.output
 
 
+def test_an_unrecognised_effect_type_still_gets_a_row() -> None:
+    """A future effect type must surface as unscoreable, never be dropped."""
+    from dataclasses import dataclass
+
+    from circuitry.cli.complexity_config import ComplexitySettings, ScoringSettings
+    from circuitry.cli.score import _walk
+
+    @dataclass(frozen=True)
+    class MysteryDefinition:
+        name: str = "mystery"
+
+    rows: list = []
+    _walk(
+        MysteryDefinition(),
+        scope="",
+        depth=0,
+        loop_depth=0,
+        disabled=False,
+        settings=ComplexitySettings(scoring=ScoringSettings(enabled=True)),
+        rows=rows,
+    )
+
+    (row,) = rows
+    assert row.path == "mystery"
+    assert row.scoreable is False
+    assert "MysteryDefinition" in row.reason
+
+
 def test_score_is_deterministic(tmp_path: Path) -> None:
     orch = _write(tmp_path, "full.yml", FULL_ORCH)
     config = _empty_config(tmp_path)

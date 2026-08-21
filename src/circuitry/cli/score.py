@@ -93,6 +93,10 @@ TOOL_REASON = (
     "is no prompt to score."
 )
 DISABLED_REASON = "disabled for this run by the profile, so it will not execute."
+UNKNOWN_REASON = (
+    "unrecognised effect type '{type_name}': this preview does not know how to "
+    "score it. Please report it."
+)
 
 #: How many signals the table names per effect. Three is enough to explain a
 #: surprising number; the full breakdown is one ``--json`` away.
@@ -293,6 +297,20 @@ def _walk(
                 rows=rows,
             )
         return
+
+    # Unreachable for the effect types the compiler emits today. It exists so
+    # that an eighth one shows up as a row nobody can score rather than
+    # vanishing from the table — a preview that quietly drops effects is the
+    # single failure mode this command is built to avoid.
+    type_name = type(node).__name__
+    rows.append(
+        ScoredEffect(
+            path=own_path or type_name,
+            type=type_name,
+            scoreable=False,
+            reason=UNKNOWN_REASON.format(type_name=type_name),
+        )
+    )
 
 
 def _score_prompt_row(
