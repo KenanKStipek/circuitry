@@ -95,6 +95,69 @@ Recognised signals and their default weights:
 An unrecognised signal name is an error rather than a silent no-op, so a typo
 in `weights` cannot quietly do nothing.
 
+#### What scoring writes to state
+
+With `scoring.enabled: true`, every prompt effect's state node gains a
+`meta.complexity` entry:
+
+```json
+"prime": {
+  "triage": {
+    "value": "...",
+    "meta": {
+      "adapter": "ollama",
+      "model": "llama3",
+      "complexity": {
+        "score": 34.7,
+        "max_score": 100.0,
+        "mode": "rendered",
+        "estimated": false,
+        "weight_total": 7.0,
+        "signals": {
+          "prompt_size": {
+            "raw": 412.0, "normalized": 0.34, "weight": 1.0,
+            "contribution": 4.86, "note": "~412 tokens of rendered prompt"
+          },
+          "state_references": { "...": "..." }
+        },
+        "warnings": []
+      }
+    }
+  }
+}
+```
+
+Three properties are contractual:
+
+- **Written before dispatch.** The entry lands in the same meta block that
+  records the resolved adapter and model, before the adapter is called — so it
+  is still on the node when the prompt *fails*, which is when you most want to
+  know how hard the prompt was. It is likewise present on a `--dry-run` node.
+- **Absent, not empty, when disabled.** With scoring off there is no
+  `complexity` key at all — not `null`, not `{}`. A run with the switch off
+  produces the same state tree as a build without the feature.
+- **Addressable from CEL.** `signals` is keyed by signal name rather than being
+  a list, so an orchestration can branch on how hard its own step was:
+
+  ```yaml
+  - type: conditional
+    name: gate
+    if:
+      mode: cel
+      expr: "state.prime.triage.meta.complexity.score > 60.0"
+    then:
+      - {type: prompt, name: deep_review, template: "..."}
+    else:
+      - {type: prompt, name: quick_pass, template: "..."}
+  ```
+
+`mode` is always `rendered` at runtime — the score measures the prompt actually
+sent, interpolated state included, not the template. Per-signal `detail` (the
+counted reference names, the normalization tables) is not persisted — it would
+multiply the size of every prompt node to explain what each signal's `note`
+already summarizes. Re-score the effect with
+`circuitry.core.complexity.score()` to get it back.
+
 ### `routing`
 
 | Field | Type | Default | Description |
