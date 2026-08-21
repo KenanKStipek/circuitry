@@ -30,11 +30,13 @@ _ALL_FILES = [
     "conditional",
     "tool",
     "reflector",
+    "use",
+    "interface",
     "patterns",
 ]
 
-# Per-type files (excludes common and patterns which are section files).
-EFFECT_TYPES = ["prompt", "dynamic", "loop", "conditional", "tool", "reflector"]
+# Per-type files (excludes common, interface, and patterns which are section files).
+EFFECT_TYPES = ["prompt", "dynamic", "loop", "conditional", "tool", "reflector", "use"]
 
 
 def load_rule_file(rules_dir: Path, name: str) -> str:

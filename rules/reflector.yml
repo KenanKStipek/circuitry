@@ -34,6 +34,9 @@ fields:
     type: string
     default: generated
     note: "State key where generated effects are recorded."
+  prime_template:
+    type: string
+    note: "Custom prime template driving the planning cycle, overriding the built-in REFLECTOR_PRIME_V1. Usually omitted — the built-in prime is tuned for plan generation."
 state_paths:
   output: "prime.<name>.value"
 constraints:
@@ -47,5 +50,11 @@ example: |
       - type: prompt
         name: propose_steps
         prompt_type: json
+        schema:
+          type: object
+          required: [steps, done]
+          properties:
+            steps: {type: array, items: {type: string}}
+            done: {type: boolean}
         template: |
           Analyze the current state and propose next steps...

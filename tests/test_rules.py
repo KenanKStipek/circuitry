@@ -23,6 +23,7 @@ _RULE_TO_SCHEMA = {
     "conditional": "ConditionalEffect",
     "tool": "ToolEffect",
     "reflector": "ReflectorEffect",
+    "use": "UseEffect",
 }
 
 
