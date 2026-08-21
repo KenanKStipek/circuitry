@@ -20,6 +20,14 @@ launch — and then repainted from the run's events. Repaints are
 coalesced onto a timer rather than done per event, so a chatty run
 cannot starve the input queue; the model doing the overlaying lives in
 :mod:`circuitry.tui.execution`.
+
+To the left of the tree runs the complexity column, when scoring is on.
+It is fed by ``effect_start`` rather than ``effect_complete``, which is
+the whole point: the score is written before the model is called, so a
+row can say how hard its effect is *while it is running* instead of
+reporting it after the fact. Effects nobody scored keep the column but
+not a number, and a terminal too narrow for both loses the column rather
+than the tree.
 """
 
 from __future__ import annotations
@@ -208,6 +216,14 @@ class RunScreen(ViewScreen):
             super().__init__()
             self.state = state
 
+    class RunEffectStart(Message):
+        """One effect is about to dispatch (already a private copy)."""
+
+        def __init__(self, path: str, node: dict[str, Any]) -> None:
+            super().__init__()
+            self.path = path
+            self.node = node
+
     class RunEffectComplete(Message):
         """One effect finished writing its node (already a private copy)."""
 
@@ -279,7 +295,15 @@ class RunScreen(ViewScreen):
         self._plan: tuple[PlanNode, ...] = ()
         self._run_state: dict[str, Any] = {}
         self._completed: set[str] = set()
+        #: ``meta.complexity`` per effect path, as ``effect_start`` reported
+        #: it. Kept beside the state rather than in it: the score is written
+        #: before dispatch, so it exists a whole effect before any snapshot
+        #: carrying it does.
+        self._scores: dict[str, Any] = {}
         self._exec_nodes: tuple[ExecNode, ...] = ()
+        #: Width the tree pane last reported, so the plain-text view matches
+        #: the drawn one even after the widget has gone away.
+        self._tree_width: int | None = None
         self._totals = Totals()
         self._started_at: float | None = None
         self._final_elapsed: float | None = None
@@ -587,6 +611,7 @@ class RunScreen(ViewScreen):
             request,
             on_state=self._observe_state,
             on_effect=self._observe_effect,
+            on_effect_start=self._observe_effect_start,
             on_finish=self._observe_finish,
             runner=self._runner,
         )
@@ -622,6 +647,9 @@ class RunScreen(ViewScreen):
             self._store.publish(state)
         self.post_message(self.RunStateUpdate(state))
 
+    def _observe_effect_start(self, path: str, node: dict[str, Any]) -> None:
+        self.post_message(self.RunEffectStart(path, node))
+
     def _observe_effect(self, path: str, node: dict[str, Any]) -> None:
         self.post_message(self.RunEffectComplete(path, node))
 
@@ -639,6 +667,16 @@ class RunScreen(ViewScreen):
         self._run_state = message.state
         if self._session is not None and self._session.running:
             self._set_status(f"{RUNNING} ({self._updates} state updates)")
+
+    def on_run_screen_run_effect_start(self, message: RunEffectStart) -> None:
+        message.stop()
+        # The whole point of the start hook: the score is on the node before
+        # the model is called, so the row can say how hard the effect is
+        # while it is still running rather than once it has finished.
+        meta = message.node.get("meta")
+        score = meta.get("complexity") if isinstance(meta, dict) else None
+        if score is not None:
+            self._scores[message.path] = score
 
     def on_run_screen_run_effect_complete(self, message: RunEffectComplete) -> None:
         message.stop()
@@ -665,6 +703,7 @@ class RunScreen(ViewScreen):
         self._plan = plan
         self._run_state = {}
         self._completed = set()
+        self._scores = {}
         self._started_at = None
         self._final_elapsed = None
         self._in_flight = False
@@ -674,6 +713,7 @@ class RunScreen(ViewScreen):
         """Start the clock and the repaint tick for a launch."""
         self._run_state = {}
         self._completed = set()
+        self._scores = {}
         self._started_at = self._clock()
         self._final_elapsed = None
         self._in_flight = True
@@ -702,6 +742,7 @@ class RunScreen(ViewScreen):
             self._plan,
             self._run_state,
             completed=self._completed,
+            scores=self._scores,
             # The session is the authority on whether work is in flight:
             # the first snapshot lands only once the first effect does.
             running=True if self._in_flight else None,
@@ -713,8 +754,9 @@ class RunScreen(ViewScreen):
             # A run outlives the screen when the user navigates away; the
             # model still tracks it, there is just nothing to draw on.
             return
-        lines = render_lines(self._exec_nodes)
         tree = self.query_one("#run-tree", Static)
+        self._tree_width = _pane_width(tree)
+        lines = render_lines(self._exec_nodes, width=self._tree_width)
         tree.update(_tree_text(lines) if lines else Text(NO_TREE, style="dim"))
         self.query_one("#run-footer", Static).update(format_totals(self._totals))
 
@@ -737,8 +779,15 @@ class RunScreen(ViewScreen):
 
     @property
     def tree_text(self) -> str:
-        """The tree pane's rows as plain text, outliving the widget."""
-        return render_text(self._exec_nodes) if self._exec_nodes else NO_TREE
+        """The tree pane's rows as plain text, outliving the widget.
+
+        Rendered at the pane's current width, so what this returns is what
+        the pane shows — including whether a narrow terminal has dropped
+        the score column.
+        """
+        if not self._exec_nodes:
+            return NO_TREE
+        return render_text(self._exec_nodes, width=self._tree_width)
 
     @property
     def footer_text(self) -> str:
@@ -794,12 +843,29 @@ class RunScreen(ViewScreen):
         return self._status_text
 
 
+def _pane_width(widget: Static) -> int | None:
+    """The drawable width of the tree pane, or ``None`` before layout.
+
+    A widget that has not been laid out reports a zero size, which is not
+    the same claim as "there is no room" — the score column stays until
+    the first real measurement says otherwise.
+    """
+    width = widget.content_size.width or widget.size.width
+    return width if width > 0 else None
+
+
 def _tree_text(lines: list[RenderLine]) -> Text:
-    """Colour each tree row by the status of the effect it describes."""
+    """Colour each tree row by the status of the effect it describes.
+
+    The score column is dimmed rather than status-coloured: it says how
+    hard the effect is, which does not change as the effect runs.
+    """
     text = Text()
     for index, line in enumerate(lines):
         if index:
             text.append("\n")
+        if line.gutter:
+            text.append(line.gutter, style="dim")
         text.append(line.text, style=_STATUS_STYLES.get(line.status, ""))
     return text
 

@@ -5,7 +5,8 @@ orchestration addresses it by dot-path (``prime.draft.value``). So the
 inspector is a filesystem browser over that dict: one node per key, the
 path of the highlighted node is exactly what a template would write, and
 selecting a node shows its value in full plus the ``meta`` of the effect
-it belongs to.
+it belongs to — including, when scoring is on, the complexity score and
+the per-signal breakdown that produced it.
 
 Three sources feed the same tree:
 
@@ -32,6 +33,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .complexity import EffectComplexity
+from .complexity import read as read_complexity
 from .execution import DONE, FAILED, GLYPHS, PENDING, RUNNING, SKIPPED
 
 __all__ = [
@@ -330,6 +333,9 @@ class EffectMeta:
     error: str = ""
     branch: str = ""
     disabled: bool = False
+    #: The complexity score, when the effect has one. ``None`` is the
+    #: ordinary case: scoring is off by default and only prompts are scored.
+    complexity: EffectComplexity | None = None
 
     @classmethod
     def from_mapping(cls, meta: Mapping[str, Any] | None) -> EffectMeta:
@@ -345,6 +351,7 @@ class EffectMeta:
             error=_text(meta.get("error")),
             branch=_text(meta.get("branch")),
             disabled=bool(meta.get("disabled")),
+            complexity=read_complexity(meta),
         )
 
     @property
@@ -384,6 +391,8 @@ class EffectMeta:
             ("created", self.created_at or MISSING),
             ("completed", completed),
         ]
+        if self.complexity is not None:
+            rows.append(("complexity", self.complexity.summary))
         if self.branch:
             rows.append(("branch", self.branch))
         if self.error:
@@ -409,17 +418,25 @@ def _time(value: str) -> datetime | None:
 
 
 def detail_lines(node: StateNode | None, *, width: int = 12) -> list[str]:
-    """The detail pane for ``node``: its path, its meta, then its value."""
+    """The detail pane for ``node``: its path, its meta, then its value.
+
+    A scored effect gets one section more: the signal breakdown behind its
+    complexity score, strongest signal first, with the ones that account
+    for most of the number marked. A score is a claim about the prompt,
+    and this is the argument for it.
+    """
     if node is None:
         return ["Nothing selected.", "", "Move the cursor in the tree to inspect a value."]
     lines = [node.path, type_line(node), ""]
     if node.meta is not None:
+        meta = EffectMeta.from_mapping(node.meta)
         lines.append(f"meta — {node.meta_path or node.path}")
-        lines += [
-            f"  {label.ljust(width)}{value}"
-            for label, value in EffectMeta.from_mapping(node.meta).rows()
-        ]
+        lines += [f"  {label.ljust(width)}{value}" for label, value in meta.rows()]
         lines.append("")
+        if meta.complexity is not None:
+            lines.append("complexity signals")
+            lines += [f"  {line}" for line in meta.complexity.breakdown_lines()]
+            lines.append("")
     lines.append("value")
     body = full_value_text(node.value)
     lines += body.split("\n") if body else [MISSING]

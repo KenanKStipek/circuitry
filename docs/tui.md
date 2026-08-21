@@ -247,6 +247,46 @@ Two event sources feed it:
   finishes, so these notifications are what let a parallel sibling be marked
   off as soon as *it* is done.
 
+#### The complexity column
+
+When `runtime.complexity.scoring` is on, a column to the left of the tree
+reports each prompt effect's score and band:
+
+```
+ 62 high  ├─ ◐ draft
+  —       ├─ · polish
+          └─ · save
+```
+
+It is fed by `effect_start_observer`, not by the completion hook, and that is
+the whole point. `core/prompt.py` writes `meta.complexity` *before* the model
+is called, so the score is knowable while the effect is still running — which
+is when it is worth knowing. A column populated on completion would report how
+hard a prompt was after there was nothing left to do about it.
+
+Absences are the common case and are drawn as such. `—` marks a prompt with no
+score: scoring off, or the effect not yet reached. Rows that could never carry
+one — loops, conditionals, `iter n` groups, tools — are left blank rather than
+dashed, because a column of dashes down the structural rows reads as breakage.
+A run where *nothing* is scored draws no column at all.
+
+On a narrow terminal the column gives ground, never the tree. The tree's
+`MIN_TREE_WIDTH` cells are not negotiable, so as the pane shrinks the column
+first drops the band name and keeps the number, then drops out entirely:
+
+```
+120 cols        100 cols         80 cols       60 cols
+ 62 high  ├─…    62 high  ├─…     62  ├─…      ├─ ◐ draft
+```
+
+A truncated effect name costs more than a hidden score, and the inspector shows
+the score in full either way.
+
+Bands come from `runtime.complexity.routing` when a band table named one, so
+the view never contradicts the router. With no table there is still a number to
+describe, and `circuitry/tui/complexity.py` supplies the default names —
+`low` / `moderate` / `high` / `severe`, quartiles of the 0–100 range.
+
 Because state is published when an effect *finishes*, the effect currently in
 flight would otherwise look pending. The view infers it from the structure
 instead: under a running chain the next unfinished effect is under way; under
@@ -296,6 +336,27 @@ value belongs to (a value inherits its effect's meta, so `prime.draft.value`
 still reports the adapter, model, tokens, timestamps and error that produced
 it), and then the value itself — verbatim for strings, pretty-printed JSON for
 structures.
+
+**A scored effect gets one section more.** Between the meta panel and the value
+sits the signal breakdown behind its complexity score — every signal the scorer
+weighed, strongest first, with the points it added, its share of the total, and
+the scorer's own one-line note. The signals that account for most of the number
+are marked `▸` and named again underneath, because "which signals dominated" is
+the question the pane exists to answer:
+
+```
+  complexity   62.0/100  high  (rendered)
+  …
+complexity signals
+  ▸ prompt_size   40.0   65%  ~900 tokens of rendered prompt
+    schema_shape  15.0   24%  schema depth 2, 6 field(s)
+    keywords       7.0   11%  matched analyze, compare
+  dominated by prompt_size
+```
+
+A `~` after a signal's name means the measurement was inferred rather than
+observed — a template's size standing in for a rendered prompt's. Effects with
+no score show no section at all rather than an empty one.
 
 **`y` copies the dot-path** exactly as a template would write it —
 `prime.over_items.iter_0.handle.value` — which is the point of the view: find
