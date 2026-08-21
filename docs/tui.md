@@ -8,23 +8,25 @@ pip install "circuitry-cof[tui]"
 ```
 
 This page documents the shell — navigation, keys, layout breakpoints, logging
-and the test harness — and the views that have landed (Library, Doctor,
-Settings and Validate below). Views still to come (Run, Inspect, Runs) render a
-placeholder until they do.
+and the test harness — and the views that have landed. Views still to come
+(Inspect) render a placeholder until they do.
 
 | Key | View |
 | --- | --- |
 | `1` | [Library](#library-view-1) |
-| `2`–`4` | Run, Inspect, Runs — placeholders |
+| `2` | [Run](#run-view-2) |
+| `3` | Inspect — placeholder |
+| `4` | [Runs](#runs-view-4--the-state-inspector) |
 | `5` / `6` | [Doctor / Settings](#doctor-5-and-settings-6) |
 | `7` | [Validate](#validate-7) |
 | `8` | [Chat](#chat-8--build-an-orchestration-by-talking-to-it) |
+| `9` | [Profiles](#profiles-9--edit-a-named-profile) |
 
 ## Keymap
 
 | Key | Action |
 | --- | --- |
-| `1`–`8` | Jump straight to a view, in registry order |
+| `1`–`9` | Jump straight to a view, in registry order |
 | `Tab` / `Shift+Tab` | Cycle forward/backward through home and every view |
 | `Enter` | Open the highlighted view from the home list |
 | `?` | Toggle the help overlay |
@@ -34,6 +36,11 @@ placeholder until they do.
 `q` and `Esc` are deliberately "back then quit": quitting is never more than
 one level away, and never a surprise from inside a view. `Ctrl-C` is bound with
 Textual `priority` so it wins over the screen-level copy binding.
+
+A screen holding unsaved work can put itself in front of that: `show_view` and
+`show_home` route through `CircuitryScreen.confirm_leave(proceed)`, whose
+default is to call `proceed` immediately. Overriding it covers the number keys,
+`Tab` and `q`/`Esc` in one place — see [Profiles](#profiles-9--edit-a-named-profile).
 
 Views replace one another rather than stacking, so the screen stack is never
 deeper than home + view (+ the help overlay).
@@ -97,11 +104,17 @@ and a detail pane rendering that entry's manifest metadata.
 | `Tab`-free focus | `/` jumps to search, `Enter` in search returns to the list |
 | `/` | Search name, intent and tags across the **whole** library |
 | `Esc` | Clear an active search; on a clean view, back to home |
+| `Enter` | Run the highlighted orchestration (hands it to the Run view) |
 | `e` | Eject the highlighted orchestration into the current directory |
+| `s` | Cycle the source filter: all → each configured source → all |
+| `r` | Refresh the fetchable sources in scope |
 
-Everything on screen comes from `curation/manifest.json` through
-`circuitry.cli.registry.load_index()` — the same reader behind `cof list` and
-`cof info`, so the TUI cannot show something the CLI disagrees with.
+Everything on screen comes from
+`circuitry.cli.library_sources.LibraryRegistry` — the same reader behind
+`cof list`, `cof info`, `cof run` and `cof library refresh`, so the TUI cannot
+show something the CLI disagrees with, and a new source type appears here for
+free. See [library-sources.md](library-sources.md) for how sources are
+configured.
 
 **Search** is ranked, not just filtered: an exact name (or last segment) wins,
 then a prefix, then a substring in the name, then a hit in the intent or tags,
@@ -110,12 +123,29 @@ hide matches in the others, starting a search resets the tree to *All*. A query
 that matches nothing gets a written-out empty state — what was searched, what
 else to try, and that `Esc` clears it — rather than an empty box.
 
-**Eject** goes through `circuitry.cli.registry.eject_text()` /
-`write_ejected()`, the same pair `cof eject` uses, so both write identical
-bytes to the same default destination (`<category>/<name>.yml`, relative to the
-current directory). An existing file is never clobbered silently: a modal asks
-first (`y` overwrites, `n`/`Esc` keeps the file), and the status line reports
-what happened.
+**Sources.** With only the bundled curation library configured — the default —
+the view looks exactly as it always has. Configure more than one source and
+each row grows a `[source]` badge, the detail pane grows a **Provenance**
+block (type, and for a `github` source its repo, ref, pinned SHA and
+fetched-at), and the status line names the source scope. A bare name that more
+than one source claims is listed source-qualified (`hub:summarize`), which is
+the same spelling `cof run` accepts to disambiguate it.
+
+**Refresh** (`r`) is the only thing in the view that touches the network, and
+it runs on a worker thread: the list stays scrollable and searchable while a
+fetch is in flight, and the status line says what is being fetched. With a
+source filter active it fetches just that source. A failed fetch is a designed
+state, not a blank screen — the previously cached entries stay exactly where
+they were, under a banner carrying the failure and saying they may be stale. A
+`github` source that has never been fetched shows a "press `r` to fetch" panel
+plus the same notice `cof list` prints.
+
+**Run** (`Enter`) and **eject** (`e`) are uniform across sources: both act on
+the file the registry resolved the entry to, which is the file `cof run` and
+`cof eject` would use for the same name. An existing file is never clobbered
+silently: a modal asks first (`y` overwrites, `n`/`Esc` keeps the file), and
+the status line reports what happened. The default eject destination is
+`<category>/<name>.yml`, relative to the current directory.
 
 ## Run view (`2`)
 
@@ -139,6 +169,21 @@ what happened.
    Adapter options come from the adapters you have configured, minus
    `host_claude`, which can only be injected at runtime.
 
+   Model options are whatever config and the selected orchestration name,
+   plus whatever the picked adapter reports from its optional
+   `list_models()` hook (see
+   [Adapter Conformance](./adapter-conformance.md)) — installed Ollama
+   tags, CyberDiner tiers, current Claude models. That question is asked
+   on a worker thread with a note under the dropdown while it is in
+   flight, so a sleeping daemon never freezes the UI; an adapter that
+   cannot answer just leaves the list as it was. The same data is
+   available from the CLI as `cof list --models <adapter>`.
+
+   No enumeration is complete, so the list always ends with `custom…`,
+   which swaps the dropdown for a free-text box that accepts any model
+   string — parity with `cof run --model`. Enter on an empty box gives
+   the dropdown back.
+
 `Tab` belongs to view navigation, so `Enter` is what walks the form: it moves
 to the next field and, from the last one, lands on Launch.
 
@@ -153,13 +198,147 @@ messages posted from the worker thread.
 the next state write, the runtime unwinds through its ordinary error path, and
 the result is a normal failed `RunResult`. Nothing is left half-torn-down.
 
-The status line carries the whole signal for now — `Running…`, `Done`,
-`Failed: …`, `Cancelled`. The execution view that renders effects as they
-stream lands in the next story; `RunScreen.last_result` is where it picks up.
+The status line carries the run's headline — `Running…`, `Done`, `Failed: …`,
+`Cancelled` — and `RunScreen.last_result` holds the finished `RunResult`.
 
 Logic that is not a widget lives in `circuitry/tui/launch.py` (discovery, the
 typed form, override options, `RunSession`) and is tested without booting an
 app.
+
+### Watching it run
+
+The right-hand pane is the execution view (the panes stack below the compact
+breakpoint). It is drawn from two things: the *plan* — the orchestration's own
+structure, read as soon as you pick a file, so the shape is visible before you
+commit — and the run's *events*.
+
+```
+├─ ✓ items (1.5s, ↑7 ↓13)
+└─ ◐ over_items each
+   ├─ ✓ iter 0
+   │  └─ ✓ handle (1.5s, ↑7 ↓13)
+   └─ ◐ iter 1
+      └─ ◐ handle
+↑14 ↓26 tok  ·  4.2s  ·  2/4 effects
+```
+
+Glyphs: `·` pending, `◐` running, `✓` done, `✗` failed, `⊘` skipped (compiled
+out). Each row carries its elapsed time and token counts once its effect
+lands; a failure is printed underneath the row it belongs to, together with the
+`on_error` policy that decided what happened next (`↳ adapter timed out
+[on_error: continue]`). Loops grow `iter n` children as they iterate — until
+the first one lands the body is shown as a preview — and a named conditional
+shows both branches until it decides, then only the branch it took.
+
+The footer aggregates the run: tokens sent and received summed over every
+effect's `meta` in state (including effects the tree cannot show, such as a
+sub-orchestration's internals), wall-clock elapsed, and effects finished out of
+those known so far — a number that grows as a loop discovers its iterations.
+
+Two event sources feed it:
+
+- **`state_observer`** — full state snapshots. The runtime publishes one as
+  each effect lands, which is what fills in statuses, timings and tokens.
+- **`effect_observer`** — `RunRequest`'s per-effect hook, the same one runtime
+  plugins see as `on_effect_complete`, carrying `(effect_path, effect_node)`.
+  Its counterpart `effect_start_observer` (`on_effect_start`) fires the same
+  payload before an effect dispatches.
+  Tree flow merges its children's state back only once the last sibling
+  finishes, so these notifications are what let a parallel sibling be marked
+  off as soon as *it* is done.
+
+Because state is published when an effect *finishes*, the effect currently in
+flight would otherwise look pending. The view infers it from the structure
+instead: under a running chain the next unfinished effect is under way; under
+a running `flow: tree` node, all of them are.
+
+Repaints are coalesced onto a 10 Hz tick rather than done per event, so a
+chatty run cannot starve the input queue — cancelling still lands immediately
+mid-run.
+
+The model behind all of this — plan parsing, the snapshot overlay, the
+aggregates and the rendered rows — lives in `circuitry/tui/execution.py` and
+has no Textual import, so it is tested by feeding it states directly.
+
+## Runs view (`4`) — the state inspector
+
+Where the Run view answers *what is happening*, `4` answers *what is in
+state*. Circuitry state is a nested dict and every template addresses it by
+dot-path, so the view is a filesystem browser over that dict: the tree on the
+left, the selected node in full on the right.
+
+```
+▼ demo.yml                          │ prime.draft.value
+├── ▼ prime  {6 keys}               │ string · 342 chars · 1 line
+│   ├── ▼ draft  {2 keys}           │
+│   │   ├── value  "Cybernetics is  │ meta — prime.draft
+│   │   └── ▶ meta  {6 keys}        │   status      ✓ done
+│   ├── ▶ over_items  {3 keys}      │   adapter     openai
+│   └── ▶ gate  {2 keys}            │   model       gpt-4o-mini
+├── topic  "cybernetics"            │   tokens      ↑120 ↓340
+└── ▶ runtime  {2 keys}             │   created     2024-05-01T10:00:00+00:00
+                                    │   completed   2024-05-01T10:00:04+00:00  (4.0s)
+```
+
+| Key | Action |
+| --- | --- |
+| `↑` / `↓`, `Enter` | Move through the tree; expand or collapse a node |
+| `y` | Copy the highlighted node's dot-path |
+| `o` | Jump to the path box (open a saved state file) |
+| `Esc` | Leave file mode; on the run source, back to home |
+| `Ctrl-R` | Replay the last `cof run` |
+| `Ctrl-X` | Cancel a replay in flight |
+
+**Rows** show the key and a one-line preview by type — `{6 keys}`, `[2 items]`,
+`"text…" (342 chars)`, `true`, `null`. **The detail pane** is where a truncated
+value is expanded: the path, the type and size, the `meta` of the effect the
+value belongs to (a value inherits its effect's meta, so `prime.draft.value`
+still reports the adapter, model, tokens, timestamps and error that produced
+it), and then the value itself — verbatim for strings, pretty-printed JSON for
+structures.
+
+**`y` copies the dot-path** exactly as a template would write it —
+`prime.over_items.iter_0.handle.value` — which is the point of the view: find
+the value, copy its address, paste it into `{{…}}`. A key that is not a plain
+name gets the bracket form (`prime["a.b"]`) rather than a path that would not
+resolve.
+
+Three sources feed the same tree:
+
+- **live** — the run in flight. Runs publish each snapshot into a `StateStore`
+  the *app* owns, not the screen, so a run launched from the Run view keeps
+  filling this in after you navigate away from it. The view polls the store on
+  a 5 Hz tick; publishing is a reference swap under a lock, so watching never
+  makes the run wait.
+- **post-run** — the same store once the run has landed.
+- **file** — a JSON document written earlier by `cof run --out` or
+  `--live-state`. Type its path in the box (`o` jumps there) and `Esc` hands
+  the view back to the run. File mode ignores live snapshots on purpose:
+  opening yesterday's state must not be overwritten by today's run.
+
+A file that is missing, is a directory, is too large, is not JSON or does not
+hold an object gets a written-out error state — what is wrong, and what to try
+next (a half-written `--live-state` file is an ordinary thing to catch
+mid-write, so that hint says to open it again in a moment). Nothing raises.
+
+**Redaction** is not re-applied here. `runtime.effective_settings` is redacted
+by `circuitry.cli.redaction` on the way *into* state; the inspector shows what
+is stored, because an inspector that hid more than the file contains would
+misreport the file.
+
+**`Ctrl-R` replays the last run** — the arguments `cof run` stashes in
+`~/.config/circuitry/last-run.json`, the same ones `cof run --last` reads
+(`circuitry.cli.last_run` owns that file for both). The replay goes through
+the same `RunSession` the Run view launches, with the stashed orchestration,
+`-e` inputs, adapter/model overrides, profile and `--dry-run`; it publishes
+into the store, so the tree fills in as it goes. Two things it will not do:
+replay a run whose `-e` values were redacted before being stashed (the literal
+marker would be sent as a real value — the same refusal `cof run --last`
+makes), and rewrite the stashed `--out` / `--live-state` files, because a
+keypress in a browser should not overwrite an artefact on disk.
+
+The model — the tree, the previews, the meta panel, file loading and the store
+— lives in `circuitry/tui/inspector.py` and imports no Textual.
 
 ## Doctor (`5`) and Settings (`6`)
 
@@ -261,15 +440,81 @@ manifest schema validates, so a saved orchestration is immediately reachable as
 `~/.circuitry/library` when none is configured. Re-saving a name replaces its
 entry rather than appending a duplicate.
 
-"Run it now" sets `app.pending_run` and opens the Run view; the Run view reads
-it on mount. Until that view lands, the hand-off is the seam and the Run screen
-is still a placeholder.
+"Run it now" sets `app.pending_run` and opens the Run view, which consumes the
+slot on mount: it selects the saved file (adding it to the picker if the scan
+never saw it) and clears `pending_run`, so returning to Run later opens clean.
+The Profile view uses the same seam, additionally setting `app.pending_profile`.
 
 The view never constructs an adapter. It calls a `TurnRunner` — by default
 `api.run_orchestration` over whatever the config resolves — which is what makes
 it adapter-agnostic, and what lets `tests/tui/test_chat_view.py` drive the real
 wizard (its `validate_yaml` tool, its revision loop, its `done` gate) over a
 scripted adapter, all the way to a saved file that `cof check` accepts.
+
+## Profiles (`9`) — edit a named profile
+
+`9` opens the profile editor: everything [`docs/profiles.md`](profiles.md)
+describes, without opening the YAML.
+
+Picking an orchestration compiles it through the validate-only path
+(`compile_orchestration`) and renders the tree that comes back. A file that
+does not compile says so and renders no tree — there is nothing to pick models
+for. Each row is one effect, indented under its container:
+
+| Row | What it offers |
+| --- | --- |
+| An effect | provider picker, model picker, free-text box, enabled toggle |
+| A reflector | the same, flagged — the override reaches the subtree it plans |
+| A container | the same, noting that disabling it disables everything inside |
+| A condition (`if` / `while`) | rendered, pickers disabled, toggle refuses |
+| An anonymous container | a structural row — it contributes no path segment |
+
+The pickers list the adapters you have configured and every model named in
+config or in the selected orchestration; `custom…` reveals a text box for
+anything they do not enumerate. A model a profile already names is folded into
+its picker, so reopening a profile never silently resets a field. Row paths are
+the same dotted addresses the profile loader validates against
+(`collect_orchestration_effect_paths`) — there is a test asserting the two
+agree.
+
+Around the tree: `adapter`/`model` run defaults, an `inputs` panel generated
+from `interface.inputs` (only what you actually type is written — an untouched
+optional input does not bake its default into the file), and a persistence
+panel whose backend dropdown reveals exactly that backend's keys. Switching
+backends drops the previous one's keys, because backends take disjoint keys and
+a partial overlay would produce a chimera.
+
+| Key | Action |
+| --- | --- |
+| `Ctrl-S` | Save to `<orchestration_dir>/profiles/<name>.yml` |
+| `Ctrl-D` | Duplicate under a fresh name (`fast` → `fast-copy`) |
+| `Ctrl-O` | Drop every orphan override |
+| `Ctrl-R` | Save if needed, then open Run pre-loaded with this profile |
+
+Two refusals are the *engine's*, not the view's:
+
+- **Conditions.** Toggling a conditional's `if` or a loop's `while` springs the
+  switch back and prints
+  `circuitry.cli.profiles.condition_target_message` verbatim — the same
+  sentence `cof run --profile` would fail with. Both call the one function; a
+  test asserts the two strings are equal.
+- **Orphans.** A profile naming effects the orchestration no longer defines is
+  *opened* rather than rejected (`parse_profile_document` skips path
+  validation), and the stale keys are listed as orphan rows. `Ctrl-O` drops
+  them. Saving is blocked while any remain, so the editor can never write a
+  file the loader would refuse.
+
+The dirty indicator under the buttons tracks the draft against what is on disk.
+Navigating away with unsaved edits — number key, `Tab`, `q` or `Esc` — goes
+through `confirm_leave` and asks first.
+
+Everything that is not a widget lives in `circuitry/tui/profile_edit.py`: the
+effect tree, `ProfileDraft` (the working copy, and the only thing that writes a
+file), the backend table, and profile discovery. What it writes is a plain
+profile document — `tests/tui/test_profile_edit.py` round-trips it through the
+engine's own `load_profile`, and `tests/tui/test_profile_view.py` builds "fast"
+and "thorough" in the pilot and then runs one through `runtime_shim.run` to
+check the toggle the editor wrote is the toggle the runtime honoured.
 
 ## Adding a view
 

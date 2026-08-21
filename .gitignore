@@ -90,3 +90,9 @@ _bmad-output/
 # Internal planning (not part of public repo)
 # ================================
 _planning/
+
+# local run artifacts (never commit — config carries the API token)
+circuitry.config.json
+ideas.txt
+build.json
+run.json

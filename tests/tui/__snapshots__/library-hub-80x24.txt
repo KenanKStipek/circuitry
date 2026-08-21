@@ -1,0 +1,24 @@
+ ⭘                           Circuitry — Library                                
+                                                                                
+  Library — Browse bundled and shared orchestrations                            
+  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎  
+  ▊  / to search — name, intent, tags                                        ▎  
+  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎  
+  ╭──────────────╮╭─────────────────────╮╭───────────────────────────────────╮  
+  │▼ All (2)     ││[hub] hub:dupe       ││ dupe                              │  
+  │└── uncategori││[hub] hub_review     ││                                   │  
+  │              ││                     ││ The hub copy of an ambiguous      │  
+  │              ││                     ││ name.                             │  
+  │              ││                     ││                                   │  
+  │              ││                     ││ Category    —                  ▁▁ │  
+  │              ││                     ││ File        dupe.yml              │  
+  │              ││                     ││ Difficulty  —                     │  
+  │              ││                     ││ Primitives  —                     │  
+  │              ││                     ││ Backends    —                     │  
+  │              ││                     ││ Tags        —                     │  
+  │              ││                     ││                                   │  
+  │         ▍    ││                     ││ Inputs                            │  
+  ╰──────────────╯╰─────────────────────╯╰───────────────────────────────────╯  
+  2/2 in all · source hub — Source: hub                                         
+                                                                                
+ ⏎ Run  tab Next view  / Search  e Eject  s Source  r Refresh  ? Hel▏^p palette 

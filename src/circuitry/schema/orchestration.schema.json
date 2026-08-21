@@ -18,8 +18,8 @@
       "description": "Top-level flow for the implicit root dynamic. Defaults to chain."
     },
     "version": {
-      "type": "number",
-      "description": "Optional schema/compatibility version number."
+      "type": ["string", "number"],
+      "description": "Optional free-form version string for THIS orchestration document (e.g. '1.2.0'), for the author's own tracking. It is not a schema version and not a runtime feature gate — the runtime reads it and ignores it. Numbers are accepted for back-compat; a string is canonical."
     },
     "effects": {
       "type": "array",
@@ -44,16 +44,8 @@
         },
         "outputs": {
           "type": "object",
-          "description": "Output declarations. Keys are output names exposed to the parent.",
-          "additionalProperties": {
-            "type": "object",
-            "properties": {
-              "type": { "type": "string", "description": "Output type: string, number, boolean, array, object." },
-              "path": { "type": "string", "description": "Dot-delimited state path to extract (e.g. 'prime.summarize.value')." },
-              "description": { "type": "string" }
-            },
-            "required": ["path"]
-          }
+          "description": "Output declarations. Keys are output names exposed to the parent. Canonical value form is an object with a 'path' — the same shape 'use.outputs' takes. A bare state-path string is accepted as shorthand.",
+          "additionalProperties": { "$ref": "#/$defs/OutputDecl" }
         }
       }
     }
@@ -75,10 +67,29 @@
       ]
     },
 
+    "OutputDecl": {
+      "description": "One declared output. Canonical form is an object carrying a 'path' (plus optional 'type' and 'description'). The bare string form is accepted shorthand for {path: <string>} and means exactly the same thing. Both forms work in 'use.outputs' and 'interface.outputs' alike.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["path"],
+          "properties": {
+            "type": { "type": "string", "description": "Output type: string, number, boolean, array, object. Optional." },
+            "path": { "type": "string", "description": "Dot-delimited state path to extract (e.g. 'prime.summarize.value')." },
+            "description": { "type": "string" }
+          }
+        },
+        {
+          "type": "string",
+          "description": "Shorthand for {path: <this string>}."
+        }
+      ]
+    },
+
     "FlowModel": {
       "type": "string",
       "enum": ["chain", "chain_of_thought", "cot", "tree", "tree_of_thought", "tot"],
-      "description": "Execution topology. chain/chain_of_thought/cot = sequential (each effect sees prior outputs). tree/tree_of_thought/tot = parallel (all effects see input snapshot)."
+      "description": "Execution topology. Canonical values are 'chain' (sequential — each effect sees prior outputs) and 'tree' (parallel — all effects see the same input snapshot). Also accepted, deprecated, and not documented elsewhere: chain_of_thought and cot for chain; tree_of_thought and tot for tree. `cof validate` warns on them."
     },
 
     "OnErrorDefault": {
@@ -95,7 +106,7 @@
 
     "ConditionDef": {
       "type": "object",
-      "description": "Condition definition for if/conditional and while loop.",
+      "description": "Condition definition for an if effect and for a loop's while.",
       "required": ["mode"],
       "properties": {
         "mode": {
@@ -181,7 +192,7 @@
                     "properties": {
                       "type": {
                         "enum": ["prompt", "dynamic", "if", "conditional", "loop", "reflector", "tool", "use"],
-                        "description": "Unknown effect type. Must be one of: prompt, dynamic, if, conditional, loop, reflector, tool, use."
+                        "description": "Unknown effect type. Must be one of: prompt, dynamic, if, loop, reflector, tool, use. ('conditional' is also accepted as a deprecated alias of 'if'.)"
                       }
                     }
                   }
@@ -281,9 +292,13 @@
     "ConditionalEffect": {
       "type": "object",
       "required": ["type", "if", "then"],
-      "description": "Evaluates a condition and executes exactly one branch. Name is optional — named conditionals record decision metadata.",
+      "description": "Evaluates a condition and executes exactly one branch. Canonical type is 'if'. Name is optional — named conditionals record decision metadata.",
       "properties": {
-        "type": { "type": "string", "enum": ["if", "conditional"] },
+        "type": {
+          "type": "string",
+          "enum": ["if", "conditional"],
+          "description": "Canonical value is 'if'. 'conditional' is also accepted as a deprecated alias; `cof validate` warns on it."
+        },
         "name": { "$ref": "#/$defs/NamePattern" },
         "description": { "type": "string" },
         "if": { "$ref": "#/$defs/ConditionDef" },
@@ -453,14 +468,14 @@
     "UseEffect": {
       "type": "object",
       "required": ["type", "name"],
-      "description": "Runs another orchestration as an isolated sub-step. Provide exactly one of 'ref' (curation library lookup), 'path' (filesystem), or 'inline' (Mustache template yielding YAML). The 'orchestration' field is deprecated — use 'ref' or 'path' instead.",
+      "description": "Runs another orchestration as an isolated sub-step. Provide exactly one of 'ref' (library lookup across configured sources), 'path' (filesystem), or 'inline' (Mustache template yielding YAML). The 'orchestration' field is deprecated — use 'ref' or 'path' instead.",
       "properties": {
         "type": { "const": "use" },
         "name": { "$ref": "#/$defs/NamePattern" },
         "description": { "type": "string" },
         "ref": {
           "type": "string",
-          "description": "Curation library lookup. Slash-delimited names like 'utilities/critique' resolve to 'curation/utilities/critique.yml'. Mutually exclusive with 'path', 'orchestration', and 'inline'."
+          "description": "Library lookup across every source configured in runtime.library.sources. A bare, slash-delimited name like 'utilities/critique' searches sources in precedence order (curation-only by default, resolving to 'curation/utilities/critique.yml'). A source-qualified name — '<source>:<name>', e.g. 'hub:utilities/critique' — resolves in exactly that source and never falls through. Remote (github) sources are served from a SHA-pinned cache and record the commit into runtime.library_refs; refresh them with `cof library refresh <source>`. Mutually exclusive with 'path', 'orchestration', and 'inline'."
         },
         "path": {
           "type": "string",
@@ -487,8 +502,8 @@
         },
         "outputs": {
           "type": "object",
-          "description": "Output mapping. Keys become fields in this effect's .value. Values are dot-paths into the child's final state (e.g. 'prime.summarize.value'). When omitted, the entire child state is exposed at prime.<use_name>.<child_effect>.value (full-namespace mode).",
-          "additionalProperties": { "type": "string" }
+          "description": "Output mapping. Keys become fields in this effect's .value. Canonical value form is an object with a 'path' into the child's final state — {path: 'prime.summarize.value'} — the same shape 'interface.outputs' takes; a bare path string is accepted shorthand. When omitted, the entire child state is exposed at prime.<use_name>.<child_effect>.value (full-namespace mode).",
+          "additionalProperties": { "$ref": "#/$defs/OutputDecl" }
         },
         "on_error": { "$ref": "#/$defs/OnErrorDefault" }
       },

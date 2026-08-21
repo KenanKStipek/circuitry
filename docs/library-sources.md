@@ -197,6 +197,35 @@ A colon only acts as a qualifier when the prefix names a configured source, so
 values like `C:/tmp/orch.yml` are never mistaken for a qualified reference.
 A literal path that exists on disk still wins over any library lookup.
 
+### From inside an orchestration — `use ref:`
+
+The same two forms work in a [`use` effect's `ref:`](./orchestration-reference.md#use),
+which is what lets one orchestration compose others across sources:
+
+```yaml
+- type: use
+  name: critique_step
+  ref: hub:utilities/critique   # or a bare `utilities/critique` for precedence order
+  inputs:
+    content: "{{prime.draft.value}}"
+    criteria: "clarity, accuracy"
+```
+
+Two things follow from resolving through sources rather than the curation
+library alone:
+
+- **Resolutions are pinned.** Each resolved ref is recorded in the run state at
+  `runtime.library_refs` as `{ref, source, path, sha, cache_path, resolved_at}`.
+  For a `github` source that pin is the commit the cache was fetched at, so a
+  later run reproduces the identical tree offline — nothing but
+  `cof library refresh` ever touches the network. Local sources pin the resolved
+  path with a `null` sha.
+- **An unfetched source fails early.** A `ref:` into a source whose cache is
+  empty fails at validate / preflight time — before any effect runs — naming the
+  exact `cof library refresh <source>` command, including for refs reached
+  transitively through other orchestrations. Static cycle detection also follows
+  cross-source refs into their cache paths.
+
 ## Listing
 
 ```sh
@@ -208,6 +237,10 @@ cof list --json             # machine-readable
 `cof list` grows a **Source** column — and `--json` a `source` key — only when
 more than one source is configured, which is what keeps single-source output
 byte-identical.
+
+The TUI's library view (`cof tui`, then `1`) browses the same registry: source
+badges, an `s` source filter, `r` to refresh without blocking the UI, and the
+provenance of whatever is highlighted. See [tui.md](tui.md#library-view-1).
 
 ## Relationship to `runtime.library` shared-library retrieval
 

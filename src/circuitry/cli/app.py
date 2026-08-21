@@ -10,11 +10,14 @@ from typing import Any
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from typer.core import TyperGroup
 
-from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, resolve_config
+from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, ConfigError, resolve_config
 from .doctor import register_doctor
+from .last_run import LAST_RUN_PATH
 from .library_sources import (
     Entry,
     LibraryFetchError,
@@ -33,12 +36,39 @@ from .shared_library import (
     resolve_service_profile,
 )
 
+console = Console()
+err_console = Console(stderr=True)
+
+
+class CircuitryGroup(TyperGroup):
+    """Root command group that renders config problems as one actionable line.
+
+    Every subcommand taking ``--config/-c`` reaches the same loader, so the
+    catch lives here once instead of in per-command ``try``/``except`` blocks —
+    commands registered from other modules (``doctor``, ``setup``) and any
+    future ones are covered automatically.
+    """
+
+    # ``ctx`` is typed Any because Typer vendors its own click.Context under a
+    # private module path; naming either concrete class trips mypy's override check.
+    def invoke(self, ctx: Any) -> Any:
+        try:
+            return super().invoke(ctx)
+        except ConfigError as exc:
+            # soft_wrap keeps the message on a single line regardless of
+            # terminal width, so it stays greppable when piped.
+            err_console.print(
+                f"[red]Error:[/red] {escape(str(exc))}", highlight=False, soft_wrap=True
+            )
+            raise typer.Exit(code=1) from exc
+
+
 app = typer.Typer(
+    cls=CircuitryGroup,
     add_completion=False,
     help="Circuitry — Cybernetic orchestration framework. (cof)",
     rich_markup_mode="rich",
 )
-console = Console()
 
 
 @app.callback(invoke_without_command=True)
@@ -60,7 +90,9 @@ def _root(ctx: typer.Context) -> None:
 register_doctor(app)
 register_setup(app)
 
-_LAST_RUN_PATH = GLOBAL_CONFIG_DIR / "last-run.json"
+#: Aliased from :mod:`circuitry.cli.last_run`, which the TUI's replay reads
+#: too — one location, so the two can never disagree about where the stash is.
+_LAST_RUN_PATH = LAST_RUN_PATH
 
 
 def _print_header(title: str) -> None:
@@ -156,13 +188,14 @@ def _do_validate(
     skip_preflight: bool = False,
 ) -> None:
     """Shared validation logic for validate and check commands."""
-    if not json_out:
-        _print_header("Circuitry · Validate")
     # Resolve config (incl. allowlist + env-var overlays) so allowlist
     # enforcement runs alongside schema checks. ``skip_preflight``
     # disables the dependency-readiness checks in offline CI / smoke
-    # contexts where binaries / hosts are not available.
+    # contexts where binaries / hosts are not available. Resolved before
+    # the header so a bad --config prints the error alone.
     cfg = resolve_config(explicit_path=config)
+    if not json_out:
+        _print_header("Circuitry · Validate")
     with console.status("[cyan]Validating…[/cyan]") if not json_out else nullcontext():
         result = validate(orchestration, config=cfg, skip_preflight=skip_preflight)
 
@@ -176,6 +209,13 @@ def _do_validate(
         console.print("[red]Invalid[/red]")
         for e in result.get("errors", []):
             console.print(f" - {e}")
+
+    # Advisory only — deprecated aliases and type-keyword names still run.
+    # Printed for both outcomes; never affects the exit code.
+    for w in result.get("warnings", []):
+        console.print(f"[yellow]Warning:[/yellow] {w}")
+
+    if not result["ok"]:
         raise typer.Exit(code=1)
 
 
@@ -252,9 +292,15 @@ RUN_EPILOG = """
   cof run article-summarizer -e article_text='...'
   cof run ./my-orch.yml -e topic=cats --tail
   cof run ./my-orch.yml --live-state ./state.json
+  cof run learn/hello -e name=World --model gpt-oss:20b
+  cof run learn/hello -e name=World --adapter ollama --model llama3.1:8b
   cof run --last
 
 [bold]Resolution order:[/bold] local file path > bundled orchestration name.
+
+[bold]Settings precedence:[/bold] CLI flags (--adapter/--model) > --profile >
+orchestration > environment (CIRCUITRY_ADAPTER/CIRCUITRY_MODEL) > config file
+> defaults. Env vars overlay the config layer, so a flag or profile beats them.
 Run [bold]cof list[/bold] to see available bundled orchestrations.
 
 [yellow]Note:[/yellow] do not pass secrets via -e KEY=VALUE; use environment
@@ -325,6 +371,14 @@ def run_cmd(
             "wins over project-level). Precedence: CLI > profile > orchestration > config."
         ),
     ),
+    adapter: str | None = typer.Option(
+        None, "--adapter",
+        help="Adapter to use for this run. Beats CIRCUITRY_ADAPTER, --profile, and the orchestration.",
+    ),
+    model: str | None = typer.Option(
+        None, "--model",
+        help="Model to use for this run. Beats CIRCUITRY_MODEL, --profile, and the orchestration.",
+    ),
 ):
     # --last: replay stashed args
     if last:
@@ -344,6 +398,8 @@ def run_cmd(
         tail = stashed.get("tail", False)
         skip_preflight = stashed.get("skip_preflight", False)
         profile = stashed.get("profile")
+        adapter = stashed.get("adapter")
+        model = stashed.get("model")
 
         # Refuse to replay if the previous run stashed redacted secrets — the
         # sentinel string would silently flow into the new run as a literal.
@@ -400,6 +456,10 @@ def run_cmd(
         console.print(f"[bold]State (out):[/bold] {out or '—'}")
         if live_state:
             console.print(f"[bold]Live state:[/bold] {live_state}")
+        if adapter:
+            console.print(f"[bold]Adapter (override):[/bold] {adapter}")
+        if model:
+            console.print(f"[bold]Model (override):[/bold] {model}")
         console.print(f"[bold]Dry run:[/bold] {dry_run}")
 
     # Build initial state from --state file + -e overrides
@@ -424,6 +484,8 @@ def run_cmd(
         live_state_path=live_state,
         skip_preflight=skip_preflight,
         profile_name=profile,
+        adapter_override=adapter,
+        model_override=model,
     )
 
     with (
@@ -473,6 +535,8 @@ def run_cmd(
             "tail": tail,
             "skip_preflight": skip_preflight,
             "profile": profile,
+            "adapter": adapter,
+            "model": model,
         })
 
     if tail:
@@ -600,6 +664,14 @@ def run_library_cmd(
         False, "--tail",
         help="Print only the final effect's value as plain text. Ideal for piping.",
     ),
+    adapter: str | None = typer.Option(
+        None, "--adapter",
+        help="Adapter to use for this run. Beats CIRCUITRY_ADAPTER and the orchestration.",
+    ),
+    model: str | None = typer.Option(
+        None, "--model",
+        help="Model to use for this run. Beats CIRCUITRY_MODEL and the orchestration.",
+    ),
 ):
     # Auto-pipe detection
     if not sys.stdout.isatty():
@@ -643,6 +715,10 @@ def run_library_cmd(
         console.print(f"[bold]State (out):[/bold] {out or '—'}")
         if live_state:
             console.print(f"[bold]Live state:[/bold] {live_state}")
+        if adapter:
+            console.print(f"[bold]Adapter (override):[/bold] {adapter}")
+        if model:
+            console.print(f"[bold]Model (override):[/bold] {model}")
         console.print(f"[bold]Dry run:[/bold] {dry_run}")
 
     # Build initial state from --state file + -e overrides
@@ -666,6 +742,8 @@ def run_library_cmd(
         verbose=verbose,
         config=effective_cfg,
         live_state_path=live_state,
+        adapter_override=adapter,
+        model_override=model,
     )
 
     with (
@@ -716,7 +794,10 @@ def run_library_cmd(
 
 @app.command(
     "list",
-    help="List available bundled orchestrations (or compiled-in extensions with --extensions).",
+    help=(
+        "List available bundled orchestrations (compiled-in extensions with "
+        "--extensions, an adapter's models with --models <adapter>)."
+    ),
 )
 def list_cmd(
     category: str | None = typer.Option(
@@ -731,6 +812,12 @@ def list_cmd(
         "-x",
         help="List compiled-in adapters / tool plugins / runtime plugins with allowlist status.",
     ),
+    models: str | None = typer.Option(
+        None,
+        "--models",
+        "-M",
+        help="List the models an adapter offers (e.g. --models ollama). Same data the TUI's model picker uses.",
+    ),
     source: str | None = typer.Option(
         None, "--source", "-S", help="Only list entries from this library source."
     ),
@@ -738,6 +825,10 @@ def list_cmd(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
 ):
+    if models is not None:
+        _list_models(adapter_name=models, json_out=json_out, config_path=config)
+        return
+
     if extensions:
         _list_extensions(json_out=json_out, config_path=config)
         return
@@ -810,6 +901,59 @@ def list_cmd(
     console.print()
     console.print("[dim]Run with:[/dim] cof run <name> [dim](e.g.[/dim] cof run hello -e name=World[dim])[/dim]")
     console.print("[dim]Backends: [green]available[/green] [red]not detected[/red][/dim]")
+
+
+def _list_models(
+    *, adapter_name: str, json_out: bool, config_path: Path | None
+) -> None:
+    """Render the models one adapter offers — CLI parity with the TUI picker.
+
+    Adapters answer optionally (see ``circuitry.adapters.models``): an
+    adapter that cannot enumerate, or a backend that is not running,
+    reports nothing rather than failing. Only an unknown adapter name is
+    an error — that one is a typo, not a missing daemon.
+    """
+    from ..adapters.factory import ADAPTER_REGISTRY
+    from ..adapters.models import list_adapter_models
+
+    name = (adapter_name or "").strip().lower()
+    if name not in ADAPTER_REGISTRY:
+        known = ", ".join(sorted(ADAPTER_REGISTRY))
+        if json_out:
+            console.print_json(
+                json.dumps({"adapter": name, "error": "unknown adapter", "models": []})
+            )
+        else:
+            console.print(f"[red]Error:[/red] Unknown adapter: {adapter_name}")
+            console.print(f"[dim]Known adapters: {known}[/dim]")
+        raise typer.Exit(code=1)
+
+    cfg = resolve_config(explicit_path=config_path)
+    names = list_adapter_models(adapter_name=name, runtime=cfg.runtime or {})
+
+    if json_out:
+        console.print_json(
+            json.dumps({"adapter": name, "models": names}, ensure_ascii=False)
+        )
+        return
+
+    if not names:
+        console.print(f"[yellow]No models reported by {name}.[/yellow]")
+        console.print(
+            "[dim]The adapter may not enumerate models, or its backend may not "
+            "be reachable — run `cof doctor`. Any model string still works with "
+            "`cof run --model <name>`.[/dim]"
+        )
+        return
+
+    _print_header(f"Circuitry · Models · {name}")
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Model", style="bold")
+    for model_name in names:
+        table.add_row(model_name)
+    console.print(table)
+    console.print()
+    console.print(f"[dim]Run with:[/dim] cof run <name> --adapter {name} --model <model>")
 
 
 def _list_extensions(*, json_out: bool, config_path: Path | None) -> None:
@@ -1177,13 +1321,13 @@ def gen_cmd(
     # Load structured rules from bundled rules/ directory
     initial_state: dict[str, Any] = {"user_request": prompt}
     try:
-        from circuitry.rules import load_all_rules, load_rules_for
+        from circuitry.rules import EFFECT_TYPES, load_all_rules, load_rules_for
 
         rules_pkg = importlib.resources.files("circuitry") / "bundled" / "rules"
         rules_dir = Path(str(rules_pkg))
         if rules_dir.is_dir():
             initial_state["rules"] = load_all_rules(rules_dir)
-            for etype in ("prompt", "dynamic", "loop", "conditional", "tool", "reflector"):
+            for etype in EFFECT_TYPES:
                 initial_state[f"rules_{etype}"] = load_rules_for(etype, rules_dir=rules_dir)
     except Exception:
         pass  # Best-effort; gen still works without rules

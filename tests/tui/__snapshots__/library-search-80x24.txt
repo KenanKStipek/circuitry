@@ -21,4 +21,4 @@
   ╰──────────────╯╰─────────────────────╯╰───────────────────────────────────╯  
   6/29 in all · "hello"                                                         
                                                                                 
- tab Next view  / Search                                            ▏^p palette 
+ ⏎ Run  tab Next view  / Search                                     ▏^p palette 

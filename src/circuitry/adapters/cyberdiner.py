@@ -7,12 +7,36 @@ synchronous ``generate()``: submit, poll, block until the job completes,
 then return the text. That is exactly what cookd's own ``ask`` command
 does (``apps/cook/cookd/src/commands/ask.rs`` in
 KenanKStipek/CyberDiner), using the same two endpoints: ``POST
-{expo_url}/beta/jobs`` with ``{prompt, tier}`` and a bearer token
-returns a ``job_id``; ``GET {expo_url}/beta/jobs/{job_id}`` is polled
+{expo_url}/beta/jobs`` with ``{prompt, tierName}`` and a bearer token
+returns a ``jobId``; ``GET {expo_url}/beta/jobs/{jobId}`` is polled
 (default every 500ms) until the job leaves the in-flight states
 (``pending``/``assigned``/``running``) and reaches a terminal one
-(``complete``/``failed``/``cancelled``). No asyncio, no threads — a
-prompt effect simply blocks like it does on every other adapter.
+(``complete``/``completed``/``failed``/``cancelled``/``timedOut``). No
+asyncio, no threads — a prompt effect simply blocks like it does on every
+other adapter.
+
+``timedOut`` is expo's own verdict, not ours: its timeout service retires
+a job no cook claimed within ~5 minutes (``job.timed_out``,
+``reason=claim_timeout``). Treating it as terminal is what keeps a dead
+job from being polled until this client's much longer
+``timeout_seconds`` expires, under an error message that blames the
+client's clock for a server-side outcome.
+
+Wire format — ground truth is ``apps/expo/src/models/job.rs`` in
+KenanKStipek/CyberDiner, which carries ``#[serde(rename_all =
+"camelCase")]`` and returns every job inside an ``ApiEnvelope``:
+
+* request:  ``{"prompt": ..., "tierName": ...}`` (expo also accepts an
+  optional ``priority`` of ``normal``/``fast``; the adapter omits it —
+  a future ``runtime.adapters.cyberdiner.priority`` config knob)
+* response: ``{"data": {"jobId", "status", "tierName", "priority",
+  "prompt", "createdAt", "result", "tokensProcessed", "durationMs",
+  "completedAt", "assignedAt", "errorCode", "errorMessage"}}`` — for
+  both the create call and every poll.
+
+Two spellings of terminal success are accepted: cookd's client checks
+``complete`` while expo's ``ReportResultRequest`` writes ``completed``.
+Accepting both is deliberate defensiveness, not indecision.
 
 Authentication: a CyberDiner API key (``ck_...``, minted via expo's
 ``api_keys`` routes or the web app), supplied as
@@ -36,16 +60,109 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import GenerateResult
 
-_VALID_TIERS = ("tier-1", "tier-2", "tier-3", "tier-4")
-_TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled"})
+#: Terminal success. Both spellings are real: cookd's client polls for
+#: ``complete``, expo's ``ReportResultRequest`` writes ``completed``.
+_SUCCESS_STATUSES = frozenset({"complete", "completed"})
+
+#: Terminal *server-side* timeout: expo's timeout service moves a job no
+#: cook claimed in time (~5 minutes) out of the queue and emits
+#: ``job.timed_out`` with ``reason=claim_timeout``. Polling past that point
+#: is polling a job expo has already declared dead, so it is terminal here
+#: too — see ``_normalize_status`` for why one key covers every spelling.
+_TIMED_OUT_STATUSES = frozenset({"timedout"})
+
+_TERMINAL_STATUSES = (
+    _SUCCESS_STATUSES | _TIMED_OUT_STATUSES | frozenset({"failed", "cancelled"})
+)
+
+#: Tier names expo seeds a deployment with. Suggestions only — expo's
+#: ``tier_service`` is the authority, a deployment can define others, and
+#: ``valid_tiers`` in config supersedes this list when set.
+SEED_TIERS: tuple[str, ...] = (
+    "cheap",
+    "fast-cheap",
+    "fast",
+    "good-cheap",
+    "good",
+    "good-fast",
+    "alpha",
+)
 
 
-def _resolve_tier(model: str, default_tier: str) -> str:
-    tier = (model or "").strip() or default_tier
-    if tier not in _VALID_TIERS:
-        valid = ", ".join(_VALID_TIERS)
-        raise ValueError(f"cyberdiner: unknown tier {tier!r}. Valid tiers: {valid}.")
+def _resolve_tier(
+    model: str, default_tier: str, valid_tiers: tuple[str, ...] = ()
+) -> str:
+    """Map an orchestration ``model:`` onto a CyberDiner tier name.
+
+    The tier vocabulary belongs to the network, not to this client: expo's
+    ``tier_service::validate_tier`` is the authority, and its 400 already
+    surfaces through the adapter's actionable HTTP error path. So any
+    non-empty tier passes through untouched. Set ``valid_tiers`` in adapter
+    config to opt into client-side validation against a known list.
+    """
+    tier = (model or "").strip() or (default_tier or "").strip()
+    if not tier:
+        raise ValueError(
+            "cyberdiner: no tier resolved. Pin `model:` in the orchestration "
+            "or set runtime.adapters.cyberdiner.default_tier."
+        )
+    if valid_tiers and tier not in valid_tiers:
+        valid = ", ".join(valid_tiers)
+        raise ValueError(
+            f"cyberdiner: unknown tier {tier!r}. Configured "
+            f"runtime.adapters.cyberdiner.valid_tiers: {valid}."
+        )
     return tier
+
+
+def _unwrap(body: dict[str, Any], url: str) -> dict[str, Any]:
+    """Peel expo's ``ApiEnvelope`` off a job response.
+
+    Every expo job route answers ``{"data": {...}}``. A response without
+    that envelope means we are not talking to the API we think we are —
+    say so, rather than letting a ``.get()`` chain silently produce an
+    empty completion.
+    """
+    data = body.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError(
+            f"cyberdiner: response from {url} is not a CyberDiner job envelope — "
+            "expected a top-level `data` object (expo wraps every job in "
+            f"ApiEnvelope). Got: {json.dumps(body)[:200]}"
+        )
+    return data
+
+
+def _normalize_status(status: Any) -> str:
+    """Fold a wire status onto a comparison key: lowercase, alphanumerics only.
+
+    expo's job model carries ``#[serde(rename_all = "camelCase")]``, so its
+    ``TimedOut`` variant should reach us as ``timedOut`` — but the same
+    state is spelled ``TimedOut`` in the Rust enum and ``timed_out`` in the
+    ``job.timed_out`` event name, and this client cannot see which one a
+    given deployment serializes. Every spelling lands on one key, which is
+    the same defensiveness already applied to ``complete``/``completed``:
+    the cost of accepting a variant expo never sends is zero, and the cost
+    of missing the one it does send is a ten-minute hang per dead job.
+    """
+    return "".join(ch for ch in str(status or "").lower() if ch.isalnum())
+
+
+def _error_detail(job: dict[str, Any]) -> str:
+    """Trailing ``(errorCode=…, errorMessage=…)`` for whichever expo sent."""
+    parts = [
+        f"{key}={value!r}"
+        for key in ("errorCode", "errorMessage")
+        if (value := job.get(key))
+    ]
+    return f" ({', '.join(parts)})" if parts else ""
+
+
+def _as_int(value: Any) -> int | None:
+    """Coerce a JSON number to ``int``, or ``None`` if it isn't one."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value)
 
 
 @dataclass(frozen=True)
@@ -53,7 +170,10 @@ class CyberdinerAdapter:
     name: str = "cyberdiner"
     expo_url: str = ""
     token: str = ""
-    default_tier: str = "tier-1"
+    default_tier: str = "cheap"
+    # Empty = pass-through: the network validates tier names. Populate it
+    # (from config) only to fail fast against a known-good list.
+    valid_tiers: tuple[str, ...] = ()
     poll_interval_ms: int = 500
     # Per-HTTP-request socket timeout; distinct from generate()'s
     # timeout_seconds, which bounds the whole submit+poll sequence.
@@ -114,24 +234,29 @@ class CyberdinerAdapter:
                 "(ck_...), minted via expo's api_keys routes or the web app."
             )
 
-        tier = _resolve_tier(model, self.default_tier)
+        tier = _resolve_tier(model, self.default_tier, tuple(self.valid_tiers))
         base = self.expo_url.rstrip("/")
         req_timeout = max(0.001, min(float(self.timeout_seconds), float(timeout_seconds)))
         deadline = time.monotonic() + timeout_seconds
 
-        job = self._request(
-            method="POST",
-            url=f"{base}/beta/jobs",
-            payload={"prompt": prompt, "tier": tier},
-            timeout=req_timeout,
+        submit_url = f"{base}/beta/jobs"
+        job = _unwrap(
+            self._request(
+                method="POST",
+                url=submit_url,
+                payload={"prompt": prompt, "tierName": tier},
+                timeout=req_timeout,
+            ),
+            submit_url,
         )
-        job_id = job.get("job_id")
+        job_id = job.get("jobId")
         if not job_id:
-            raise RuntimeError(f"cyberdiner: submit response missing job_id: {job!r}")
+            raise RuntimeError(f"cyberdiner: submit response missing jobId: {job!r}")
 
+        poll_url = f"{base}/beta/jobs/{job_id}"
         poll_interval_seconds = max(0.0, self.poll_interval_ms) / 1000.0
         status = job.get("status")
-        while status not in _TERMINAL_STATUSES:
+        while _normalize_status(status) not in _TERMINAL_STATUSES:
             if time.monotonic() >= deadline:
                 raise RuntimeError(
                     f"cyberdiner: timed out after {timeout_seconds}s waiting for "
@@ -143,26 +268,55 @@ class CyberdinerAdapter:
                     f"cyberdiner: timed out after {timeout_seconds}s waiting for "
                     f"job {job_id} to complete (last status={status!r})."
                 )
-            job = self._request(
-                method="GET",
-                url=f"{base}/beta/jobs/{job_id}",
-                payload=None,
-                timeout=req_timeout,
+            job = _unwrap(
+                self._request(
+                    method="GET",
+                    url=poll_url,
+                    payload=None,
+                    timeout=req_timeout,
+                ),
+                poll_url,
             )
             status = job.get("status")
 
-        if status == "failed":
-            error_message = job.get("error_message") or "unknown error"
+        terminal = _normalize_status(status)
+        if terminal in _TIMED_OUT_STATUSES:
+            raise RuntimeError(
+                f"cyberdiner: job {job_id} timed out server-side before being "
+                f"claimed (reason=claim_timeout) — no cook served tier "
+                f"{tier!r} in time." + _error_detail(job)
+            )
+        if terminal == "failed":
+            error_message = job.get("errorMessage") or "unknown error"
             raise RuntimeError(f"cyberdiner: job {job_id} failed: {error_message}")
-        if status == "cancelled":
+        if terminal == "cancelled":
             raise RuntimeError(f"cyberdiner: job {job_id} was cancelled.")
 
         return GenerateResult(
             text=str(job.get("result") or ""),
-            raw={"job_id": job_id, "status": status, "tier": tier},
+            raw={
+                "jobId": job_id,
+                "status": status,
+                "tierName": tier,
+                "durationMs": job.get("durationMs"),
+                "data": job,
+            },
             tokens_sent=None,
-            tokens_received=None,
+            # expo reports one `tokensProcessed` counter per job, not a
+            # prompt/completion split, so it lands on tokens_received as an
+            # approximation: it includes the prompt's tokens too.
+            tokens_received=_as_int(job.get("tokensProcessed")),
         )
+
+    def list_models(self) -> list[str]:
+        """Tier names to offer as ``model:`` values.
+
+        The configured ``valid_tiers`` when set — that is this
+        deployment's own vocabulary — else the seed names. No network
+        call: expo has no tier-listing endpoint, and a picker should not
+        need a token to show suggestions.
+        """
+        return list(self.valid_tiers) if self.valid_tiers else list(SEED_TIERS)
 
     def check(self) -> CheckResult:
         missing: list[str] = []

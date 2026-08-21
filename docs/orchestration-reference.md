@@ -26,10 +26,13 @@ Top-level fields of an orchestration YAML file:
 | `effects` | array | **yes** | — | Ordered list of top-level effects to execute |
 | `adapter` | string | no | from config.json | Adapter: e.g. `ollama`, `openai`, `anthropic`, `litellm`, `cyberdiner` (job queue; `model:` is a tier), `host_claude` (MCP-only — see below). Full compiled-in list: `cof list --extensions` |
 | `model` | string | no | from config.json | Model identifier (e.g. `llama3`, `gpt-4o`, `claude-haiku-20240307`) |
-| `flow` | string | no | `chain` | Top-level flow for the implicit root dynamic |
-| `version` | number | no | — | Optional compatibility version |
+| `flow` | string | no | `chain` | Top-level flow for the implicit root dynamic. `chain` or `tree` |
+| `version` | string | no | — | Free-form version string for **this document**, e.g. `"1.2.0"` |
+| `interface` | object | no | — | Declared `inputs` / `outputs` — see [Interface](#interface) |
 
 Additional top-level keys (e.g. `runtime`, `plugins`) are allowed and used by the runtime configuration layer.
+
+**About `version`.** It is the author's own version string for the file — a changelog handle, nothing more. It is **not** a schema version and **not** a feature gate: the runtime reads it and ignores it, and no behaviour anywhere keys off its value. Numbers are still accepted for back-compat with files written before this was pinned down, but a string is canonical. Omit the field entirely unless you are actually versioning the document.
 
 **Minimal valid file:**
 ```yaml
@@ -115,7 +118,7 @@ A named container that executes child effects sequentially (`chain`) or in paral
 |-------|------|----------|---------|-------------|
 | `type` | `"dynamic"` | yes | — | |
 | `name` | string | yes | — | Name pattern; must be unique among siblings |
-| `flow` | string | no | `chain` | `chain`, `chain_of_thought`, `cot`, `tree`, `tree_of_thought`, `tot` |
+| `flow` | string | no | `chain` | `chain` or `tree`. See [Deprecated spellings](#deprecated-spellings) |
 | `effects` | array | yes | — | Non-empty list of child effects |
 | `description` | string | no | — | |
 | `max_concurrency` | integer | no | — | Max parallel executions for tree flow |
@@ -158,15 +161,15 @@ A named container that executes child effects sequentially (`chain`) or in paral
 
 ---
 
-### `if` / `conditional`
+### `if`
 
-Evaluates a condition against state and executes exactly one branch (`then` or `else`). Non-selected branches produce no effects. Name is optional — named conditionals record decision metadata to state.
+Evaluates a condition against state and executes exactly one branch (`then` or `else`). Non-selected branches produce no effects. Name is optional — a named `if` records decision metadata to state.
 
 **State output path (named):** `prime.<name>.<branch_effect_name>.value`
 
 | Field | Type | Required | Default | Constraints |
 |-------|------|----------|---------|-------------|
-| `type` | `"if"` or `"conditional"` | yes | — | Both accepted |
+| `type` | `"if"` | yes | — | `"conditional"` also parses; see [Deprecated spellings](#deprecated-spellings) |
 | `name` | string | no | — | Optional; enables state recording of the decision |
 | `if` | object | yes | — | Condition definition |
 | `if.mode` | string | no | `model` | `model` or `cel` |
@@ -437,13 +440,13 @@ Runs another orchestration as an isolated sub-step. State is fully isolated: dec
 |-------|------|----------|---------|-------------|
 | `type` | `"use"` | yes | — | |
 | `name` | string | yes | — | Pattern `^[A-Za-z_][A-Za-z0-9_]*$` |
-| `ref` | string | * | — | Curation library lookup, slash-delimited (e.g. `utilities/critique`) |
+| `ref` | string | * | — | Library lookup across configured sources. Bare (`utilities/critique`) or source-qualified (`hub:utilities/critique`) |
 | `path` | string | * | — | Filesystem path (absolute, cwd-relative, or parent-orchestration-relative) |
 | `inline` | string | * | — | Mustache template that renders to orchestration YAML at runtime |
 | `orchestration` | string | * | — | **DEPRECATED** — use `ref` or `path` instead. Still accepted; emits `DeprecationWarning` |
 | `validate` | bool | no | `true` | Schema-validate inline YAML before execution |
 | `inputs` | object | no | `{}` | Map of name → value passed to child as initial state. String values are Mustache-rendered |
-| `outputs` | object | no | — | Map of result-key → child dot-path. When present, switches to declared-outputs mode |
+| `outputs` | object | no | — | Declared outputs — see [Outputs](#outputs). When present, switches to declared-outputs mode |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `description` | string | no | — | |
 
@@ -451,7 +454,9 @@ Runs another orchestration as an isolated sub-step. State is fully isolated: dec
 
 **Reference fields:**
 
-- **`ref`** — curation library lookup. The slash-delimited name resolves under `src/circuitry/curation/`. For example, `ref: utilities/critique` → `src/circuitry/curation/utilities/critique.yml`. Use this for any curation entry (the canonical mode).
+- **`ref`** — library lookup across every source configured in [`runtime.library.sources`](./library-sources.md). With the default configuration (curation only) a slash-delimited name resolves under `src/circuitry/curation/`: `ref: utilities/critique` → `src/circuitry/curation/utilities/critique.yml`. With more sources configured, refs come in two forms:
+  - **Bare** — `ref: utilities/critique` searches sources in precedence order and takes the first match. If more than one source matches, the run logs a warning naming the others.
+  - **Source-qualified** — `ref: hub:utilities/critique` resolves in exactly the source named `hub` and never falls through to another source. A colon only qualifies when the prefix names a configured source, so a value like `C:/tmp/orch.yml` is never mistaken for one.
 - **`path`** — filesystem path. Absolute, cwd-relative, or relative to the parent orchestration's directory. Use this for orchestrations that aren't in the curation library (e.g. project-local helpers).
 - **`inline`** — Mustache template that renders to YAML at runtime. The template typically references a prior prompt's structured output (`{{prime.plan.value}}`) and is fully validated against the schema before execution unless `validate: false`.
 - **`orchestration`** — **deprecated**. Functionally a hybrid of `path` and `ref` with a fallback chain. Existing files still work but emit a deprecation warning at compile time. Migrate to `ref` (for library entries) or `path` (for filesystem references).
@@ -463,9 +468,38 @@ Runs another orchestration as an isolated sub-step. State is fully isolated: dec
 | Declared-outputs | `outputs:` is set, OR child orchestration declares an `interface:` with `outputs` | `prime.<use_name>.value` is a flat dict of declared keys mapped to dot-path values from the child state |
 | Full-namespace | No `outputs:` set, no interface outputs | The entire child `prime` subtree is exposed at `prime.<use_name>.<child_effect>.value` (matches `dynamic` namespacing) |
 
+**Recorded pins (`runtime.library_refs`):**
+
+Every `ref:` that resolves through a library source is recorded in the run state under `runtime.library_refs`, and mirrored onto the effect's own `meta.library_ref`:
+
+```json
+{
+  "ref": "hub:utilities/critique",
+  "source": "hub",
+  "path": "/home/me/.cache/circuitry/library/hub/6f1c…/utilities/critique.yml",
+  "sha": "6f1c9a2…",
+  "cache_path": "/home/me/.cache/circuitry/library/hub/6f1c9a2…",
+  "resolved_at": "2026-01-30T12:00:00+00:00"
+}
+```
+
+For a `github` source, `sha` is the pinned commit the cache was fetched at and `cache_path` is the directory it was served from — which is what makes a later run reproduce the identical tree with **no network access at all** (only `cof library refresh` ever fetches). Local sources (`curation`, `folder`) have no commit to pin, so `sha` and `cache_path` are `null` and the resolved `path` is the record. Pins are recorded at every nesting depth, so a ref three orchestrations deep still shows up in the root run state.
+
+**Unfetched sources fail early:**
+
+A `ref:` pointing at a source whose cache has never been populated fails at **validate / preflight** time — never mid-run — with the command that fixes it:
+
+```
+library_ref:hub:utilities/critique: not ready — use ref 'hub:utilities/critique' cannot be
+resolved: Library source 'hub' (owner/name@main) has not been fetched yet — run
+`cof library refresh hub`. Run `cof library refresh hub` before this orchestration runs.
+```
+
+The check follows the static `use` graph, so a ref reached transitively through other orchestrations is caught just as early. Genuinely unknown refs (a typo, an entry that no source carries) are not a preflight failure — they surface as the `use` effect's own error at run time.
+
 **Cycle detection:**
 
-The runtime tracks a per-execution call stack of resolved orchestration paths. If A invokes B which invokes A, a `RecursionError` is raised before infinite recursion happens. The same check runs statically during `validate()` — cycles are detected at validate time before any execution. Inline-mode subs are excluded from the static check (their content renders at runtime) but the runtime hashes the rendered YAML, so an inline template producing identical YAML in a parent of itself will still be caught.
+The runtime tracks a per-execution call stack of resolved orchestration paths. If A invokes B which invokes A, a `RecursionError` is raised before infinite recursion happens. The same check runs statically during `validate()` — cycles are detected at validate time before any execution. The static walk follows `ref:` edges **across sources**, resolving remote entries to their cache paths, so a cycle that closes through a `github` source (A in a folder → B in the hub cache → A) is caught statically too. Inline-mode subs are excluded from the static check (their content renders at runtime) but the runtime hashes the rendered YAML, so an inline template producing identical YAML in a parent of itself will still be caught.
 
 **Example — library reference, declared outputs:**
 ```yaml
@@ -476,8 +510,18 @@ The runtime tracks a per-execution call stack of resolved orchestration paths. I
     content: "{{prime.draft.value}}"
     criteria: "clarity, accuracy, brevity"
   outputs:
-    score: prime.score.value
-    notes: prime.notes.value
+    score: {path: prime.score.value, type: number}
+    notes: {path: prime.notes.value, type: string}
+```
+
+**Example — source-qualified library reference:**
+```yaml
+- type: use
+  name: hub_critique
+  ref: hub:utilities/critique   # exactly the source named 'hub'; never another
+  inputs:
+    content: "{{prime.draft.value}}"
+    criteria: "clarity, accuracy"
 ```
 
 **Example — filesystem path, full-namespace mode:**
@@ -501,6 +545,64 @@ The runtime tracks a per-execution call stack of resolved orchestration paths. I
   inline: "{{prime.plan.value}}"
   validate: true
 ```
+
+---
+
+## Outputs
+
+`use.outputs` and `interface.outputs` declare the same thing — *expose this state path under this name* — and take the same shape. One canonical form covers both:
+
+```yaml
+outputs:
+  summary: {path: prime.summarize.value, type: string}
+  score:   {path: prime.rate.value, type: number, description: 0–10 quality score}
+```
+
+| Key | Required | Meaning |
+|-----|----------|---------|
+| `path` | **yes** | Dot-delimited state path in the orchestration that produces the value |
+| `type` | no | `string`, `number`, `boolean`, `array`, `object` — declaration metadata |
+| `description` | no | Prose for humans and for library listings |
+
+**Also accepted:** a bare state-path string is shorthand for `{path: <string>}`, and works in both contexts:
+
+```yaml
+outputs:
+  summary: prime.summarize.value      # identical to {path: prime.summarize.value}
+```
+
+Both spellings compile to the same `name → path` mapping and always have — the shorthand is sugar, not a second syntax. Write the object form; it is what the docs, the rules files, and the curation library use, and it is the one that has somewhere to put `type`.
+
+### Interface
+
+An orchestration declares its contract with a top-level `interface:` block. `inputs` are validated when a `use` effect invokes it; `outputs` auto-generate the caller's output mapping, so callers don't repeat dot-paths:
+
+```yaml
+interface:
+  inputs:
+    article: {type: string, required: true, description: Text to summarize.}
+  outputs:
+    summary: {path: prime.summarize.value, type: string}
+```
+
+An explicit `outputs:` on the `use` effect takes precedence over the child's `interface.outputs`.
+
+---
+
+## Deprecated spellings
+
+Circuitry's parser is deliberately forgiving: every spelling below still parses and runs, and none of them will ever fail validation. They are simply not what the language teaches — one construct, one spelling, everywhere in the docs, the rules files, and the curation library.
+
+| Deprecated | Canonical | Where |
+|------------|-----------|-------|
+| `type: conditional` | `type: if` | Effect type |
+| `flow: chain_of_thought`, `flow: cot` | `flow: chain` | Any `flow` field |
+| `flow: tree_of_thought`, `flow: tot` | `flow: tree` | Any `flow` field |
+| `orchestration:` on a `use` | `ref:` or `path:` | `use` effect |
+
+`cof validate` (and `cof check`, the TUI Validate view, and the MCP `validate_orchestration` tool) reports these as **warnings**. Warnings never change the exit code — a file full of them is still a valid file.
+
+The same command warns when an effect is **named after an effect type** (`use`, `loop`, `if`, `dynamic`, `prompt`, `tool`, `reflector`). Name effects after the job they do — `summarize_article`, not `prompt`. Type-keyword names are generic, which is exactly why two of them end up siblings in one scope and collide.
 
 ---
 
@@ -531,20 +633,20 @@ downstream handling is uniform:
 }
 ```
 
-The per-effect `on_effect_complete` hook still fires for the node, so
-observability sees the skip rather than a gap.
+The per-effect `on_effect_start` / `on_effect_complete` hooks still fire for
+the node, so observability sees the skip rather than a gap.
 
 **Rules:**
 
 | Situation | Behavior |
 |-----------|----------|
-| Disabled container (`dynamic` / `loop` / `conditional` / `reflector`) | The whole subtree is disabled — the container's node is written as disabled and nothing inside it runs (no child nodes appear at all) |
+| Disabled container (`dynamic` / `loop` / `if` / `reflector`) | The whole subtree is disabled — the container's node is written as disabled and nothing inside it runs (no child nodes appear at all) |
 | Disabled `loop` body effect | Skipped in every iteration; `prime.<loop>.iter_<n>.<name>` is a skip node |
 | Disabled `loop` `collect` target | Each iteration's slot is a skip node, and `prime.<loop>.collected.value` omits it — `collected` reports only values that were actually produced |
 | Disabled effect inside an `if`/`else` branch | Skipped when that branch is selected; the branch's other effects run normally |
-| A container's *condition* (`if:` on a conditional, `while:` on a loop) | Not disableable — it is a condition, not an effect, and a container with no condition has no defined branch. Targeting `<name>.if`, `<name>.while`, or `<name>.condition` fails profile validation with an actionable error. Disable the whole container instead |
+| A container's *condition* (`if:` on an `if` effect, `while:` on a loop) | Not disableable — it is a condition, not an effect, and a container with no condition has no defined branch. Targeting `<name>.if`, `<name>.while`, or `<name>.condition` fails profile validation with an actionable error. Disable the whole container instead |
 | Unknown effect path | Fails profile validation, listing the orchestration's valid paths |
-| Anonymous (transparent) `conditional`/`loop` | Contributes no path segment, so it has no address to disable — disable its individual named children instead |
+| Anonymous (transparent) `if`/`loop` | Contributes no path segment, so it has no address to disable — disable its individual named children instead |
 
 **Downstream coherence.** A disabled node's `value` is `null`, so:
 
@@ -605,6 +707,30 @@ Reference a specific iteration from outside the loop:
 template: "First result: {{prime.explain.iter_0.summary.value}}"
 ```
 
+### Iteration Bindings Inside Nested Containers
+
+`{{<each.as>}}` and `{{_loop_index}}` reach every effect in the body, however
+deeply it is wrapped — an `if` branch, a grouping `dynamic`, an inner loop, or
+any combination of them:
+
+```yaml
+- type: loop
+  name: outer
+  each: {in: items, as: item}
+  body:
+    - type: dynamic          # grouping wrapper
+      name: wrap
+      effects:
+        - type: prompt
+          name: nested
+          template: "sees: {{item.name}}"   # renders the current element
+```
+
+Inside a nested `dynamic`, its own children stay addressable by the short
+sibling path (`{{wrap.nested.value}}`) as well as the absolute one, and a name
+collision resolves to the nearer node — the dynamic's own child wins over an
+outer binding of the same name.
+
 ---
 
 ## Patterns & Antipatterns
@@ -619,8 +745,8 @@ template: "First result: {{prime.explain.iter_0.summary.value}}"
 
 ### Named vs Transparent Control
 
-- **Named** loops and conditionals record wrapper metadata (iteration count, decision result) to state — use when you need to inspect or reference the control structure itself
-- **Unnamed** (transparent) loops and conditionals execute without wrapper records — simpler, lower overhead
+- **Named** loops and `if` effects record wrapper metadata (iteration count, decision result) to state — use when you need to inspect or reference the control structure itself
+- **Unnamed** (transparent) loops and `if` effects execute without wrapper records — simpler, lower overhead
 
 ### Staged Prompts Over Single-Shot
 
@@ -703,14 +829,14 @@ The following rules are sufficient for generating structurally correct Circuitry
 **File structure:**
 1. Top-level fields: `adapter` (string), `model` (string), `effects` (array). Only `effects` is required. Additional top-level keys are allowed.
 2. `adapter` and `model` are only required when the orchestration contains `prompt` or `reflector` effects. Tool-only orchestrations (`type: tool` effects only) do not need `adapter` or `model`.
-3. Valid `adapter` values: any name in the compiled-in adapter registry (`cof list --extensions`) — e.g. `ollama`, `openai`, `anthropic`, `litellm`, `cyberdiner`, `host_claude`. Two need special handling. `cyberdiner` is a job-queue broker: `model:` must be a capability tier (`tier-1`…`tier-4`), not a provider model name, and `runtime.adapters.cyberdiner.expo_url` / `token` must be set in config — never in the YAML. `host_claude` is MCP-only (the host Claude session generates each prompt — set via `circuitry-mcp` rather than config.json. By default rejects non-Claude `model:` pins; pass `override_model=True` to `run_orchestration` to ignore the pin and run through Claude regardless).
-4. Valid `flow` values: `chain`, `chain_of_thought`, `cot` (all sequential); `tree`, `tree_of_thought`, `tot` (all parallel).
+3. Valid `adapter` values: any name in the compiled-in adapter registry (`cof list --extensions`) — e.g. `ollama`, `openai`, `anthropic`, `litellm`, `cyberdiner`, `host_claude`. Two need special handling. `cyberdiner` is a job-queue broker: `model:` must be a capability tier (`cheap`, `fast-cheap`, `fast`, `good-cheap`, `good`, `good-fast`, `alpha` — the network owns the list), not a provider model name, and `runtime.adapters.cyberdiner.expo_url` / `token` must be set in config — never in the YAML. `host_claude` is MCP-only (the host Claude session generates each prompt — set via `circuitry-mcp` rather than config.json. By default rejects non-Claude `model:` pins; pass `override_model=True` to `run_orchestration` to ignore the pin and run through Claude regardless).
+4. Valid `flow` values: `chain` (sequential) and `tree` (parallel). Write nothing else — `chain_of_thought`/`cot` and `tree_of_thought`/`tot` still parse but are deprecated and warned about.
 
 **Effect types and required fields:**
-5. Valid `type` values: `prompt`, `dynamic`, `if`, `conditional`, `loop`, `reflector`, `tool`.
+5. Valid `type` values: `prompt`, `dynamic`, `if`, `loop`, `reflector`, `tool`, `use`. (`conditional` still parses as an alias of `if` but is deprecated and warned about — always write `if`.)
 6. `prompt`: requires `name` and exactly one of `template` or `messages`. Optional: `prompt_type` (default `text`), `schema` (required when `prompt_type: json`). Do NOT use `prompt_type: image` — use `type: tool, provider: comfyui` for image generation.
 7. `dynamic`: requires `name`, `effects` (non-empty array), optional `flow` (default `chain`).
-8. `if` / `conditional`: requires `if` (condition object) and `then` (array). `name` is optional. `else` is optional.
+8. `if`: requires `if` (condition object) and `then` (array). `name` is optional. `else` is optional.
 9. `loop`: requires `body` (non-empty array) and exactly one of `each` or `while`. `name` is optional.
 10. `reflector`: requires `name` and `effects` (non-empty array).
 11. `tool`: requires `name` and `provider`. Tool effects are for non-LLM side-effects only — generating images, processing video/audio, file conversion. Never use a tool effect for text summarization, analysis, writing, coding, or data extraction — those are `prompt` effects. Supported providers: `ffmpeg` (requires `params.input` and `params.output`), `comfyui` (requires `prompt` and `model` as top-level fields; `params` for sampler settings). Top-level `prompt` supports Mustache rendering. All string values in `params` also support Mustache rendering.
@@ -718,6 +844,7 @@ The following rules are sufficient for generating structurally correct Circuitry
 **Naming:**
 12. All `name` values must match `^[A-Za-z_][A-Za-z0-9_]*$` — letters, digits, underscores; must start with letter or underscore; no spaces or dots. The pattern `iter_<N>` (e.g. `iter_0`) is reserved and must not be used as a name.
 13. Effect names must be unique among siblings within the same scope.
+13a. Never name an effect after an effect type (`use`, `loop`, `if`, `dynamic`, `prompt`, `tool`, `reflector`). Name it after the job it does — `summarize_article`, not `prompt`. Generic names are what make two siblings collide; validation warns on them.
 
 **State path addressing:**
 14. In templates (Mustache): use `{{key}}` for initial state keys; use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
@@ -742,5 +869,6 @@ The following rules are sufficient for generating structurally correct Circuitry
 **Composition via `use`:**
 26. **Prefer `ref:` over `path:` for curation entries** — `ref: utilities/critique` is a stable library lookup; `path:` is for project-local files outside the curation library. Never use the deprecated `orchestration:` field — it emits a deprecation warning and exists only for back-compat.
 27. **Declare `outputs:` when the caller needs specific fields** — produces a flat dict at `prime.<use_name>.value`. Omit `outputs:` (and the child `interface:`) to opt into full-namespace mode where every child effect is reachable at `prime.<use_name>.<child_effect>.value`.
+27a. **Write outputs as objects** — `summary: {path: prime.summarize.value, type: string}`, in `use.outputs` and `interface.outputs` alike. The bare-string form (`summary: prime.summarize.value`) is accepted in both places and means the same thing, but the object form is the one to write.
 28. **Declare an `interface:` block on reusable utilities** — typed `inputs` (with `required: true`) get validated automatically; typed `outputs` with `path:` auto-generate the caller's output mapping so callers don't have to repeat dot-paths. The curation library at `src/circuitry/curation/utilities/` is the canonical exemplar.
 29. **Don't form `use:` cycles.** A→B→A is detected at validate time and at runtime. If two utilities legitimately need to call each other, factor out the shared logic into a third utility they both call.

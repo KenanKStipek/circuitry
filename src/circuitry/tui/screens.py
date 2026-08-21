@@ -57,6 +57,17 @@ class CircuitryScreen(ResponsiveLayout, Screen[None]):
         """Yield the widgets that make up this screen's body."""
         return iter(())
 
+    def confirm_leave(self, proceed: Callable[[], None]) -> None:
+        """Guard navigation away from this screen; call ``proceed`` when free.
+
+        The default is to leave immediately, which is what every screen
+        without unsaved work wants. A screen holding an unsaved edit (the
+        Profile view) overrides this to ask first, and calls ``proceed`` only
+        if the answer is yes — so one hook covers the number keys, Tab, and
+        ``q``/``Esc`` alike.
+        """
+        proceed()
+
 
 class ViewScreen(CircuitryScreen):
     """A screen that belongs to a registered view."""
@@ -125,6 +136,13 @@ def _build_run_screen(spec: ViewSpec) -> CircuitryScreen:
     return RunScreen(spec)
 
 
+def _runs(spec: ViewSpec) -> CircuitryScreen:
+    """Imported lazily: runs_view imports this module for its base class."""
+    from .runs_view import RunsScreen
+
+    return RunsScreen(spec)
+
+
 def _doctor(spec: ViewSpec) -> CircuitryScreen:
     from .doctor import DoctorScreen
 
@@ -149,6 +167,12 @@ def _chat(spec: ViewSpec) -> CircuitryScreen:
     return ChatScreen(spec)
 
 
+def _profiles(spec: ViewSpec) -> CircuitryScreen:
+    from .profile_view import ProfileScreen
+
+    return ProfileScreen(spec)
+
+
 #: Every view the shell knows about, in navigation (and number key) order.
 VIEWS: tuple[ViewSpec, ...] = (
     ViewSpec(
@@ -171,7 +195,13 @@ VIEWS: tuple[ViewSpec, ...] = (
         "Orchestration metadata, schema validation, and warnings",
         "3",
     ),
-    ViewSpec("runs", "Runs", "History of past runs and their final state", "4"),
+    ViewSpec(
+        "runs",
+        "Runs",
+        "Inspect run state as a tree, open a saved state file, replay the last run",
+        "4",
+        factory=_runs,
+    ),
     ViewSpec(
         "doctor",
         "Doctor",
@@ -199,6 +229,13 @@ VIEWS: tuple[ViewSpec, ...] = (
         "Describe a pipeline and let the wizard write the orchestration",
         "8",
         factory=_chat,
+    ),
+    ViewSpec(
+        "profiles",
+        "Profiles",
+        "Edit named profiles: per-effect models, toggles, inputs and persistence",
+        "9",
+        factory=_profiles,
     ),
 )
 

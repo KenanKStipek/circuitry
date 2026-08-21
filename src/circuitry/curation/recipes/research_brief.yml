@@ -44,7 +44,7 @@ effects:
       task: "{{topic}}"
       max_steps: 4
     outputs:
-      steps: prime.decompose.value
+      steps: {path: prime.decompose.value}
 
   # 2. Gather: answer each sub-question independently, in parallel.
   - type: loop
@@ -85,6 +85,6 @@ effects:
       content: "{{prime.brief.value}}"
       criteria: "factual specificity, audience fit, no hedging filler, paragraph-level coherence"
     outputs:
-      score: prime.critique.value.score
-      issues: prime.critique.value.issues
-      strengths: prime.critique.value.strengths
+      score: {path: prime.critique.value.score}
+      issues: {path: prime.critique.value.issues}
+      strengths: {path: prime.critique.value.strengths}

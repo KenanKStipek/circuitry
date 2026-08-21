@@ -39,11 +39,12 @@ Last Updated: 2026-05-08
 - [Shared Library Retrieval](./shared-library.md)
 - [Shared Library Contributions](./shared-library-contributions.md)
 - [Shared Library Growth](./shared-library-growth.md)
-- [Terminal UI](./tui.md) — app chrome (keymap, help overlay, resize breakpoints, TUI-mode logging) and the Doctor, Settings and Validate views
+- [Terminal UI](./tui.md) — app chrome (keymap, help overlay, resize breakpoints, TUI-mode logging) and the Library, Run, Runs, Doctor, Settings, Validate and Chat views
 - [Editor Highlighting](./editor-highlighting.md)
 - [Perceptron Boundary](./perceptron-boundary.md)
 - [Troubleshooting State Paths](./troubleshooting-state-paths.md)
 - [Project Scan Sections](./project-scan-sections.md)
+- [Complexity Configuration](./complexity-config.md) — `runtime.complexity`: the scoring/routing/decomposition switches, their defaults, and precedence
 
 ## Existing Domain Documentation
 

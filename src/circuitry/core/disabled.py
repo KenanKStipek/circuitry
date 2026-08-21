@@ -11,8 +11,9 @@ uniform skip node::
     {"value": None, "meta": {"disabled": True, "created_at": ..., "completed_at": ...}}
 
 which deliberately mirrors the shape ``on_error: skip`` leaves behind, so
-downstream template/CEL handling is uniform. ``fire_effect_complete`` still
-fires for the node — observability sees the skip rather than a gap.
+downstream template/CEL handling is uniform. ``fire_effect_start`` /
+``fire_effect_complete`` still fire for the node — observability sees the
+skip rather than a gap.
 
 Disabling a container (dynamic/loop/conditional/reflector) disables its whole
 subtree: the container node is written as disabled and nothing inside it runs.
@@ -61,6 +62,9 @@ def write_disabled_node(*, store: Store, name: str) -> dict[str, Any]:
         "created_at": now,
         "completed_at": now,
     }
+    # A skip is a zero-length effect: it still opens and closes its pair so
+    # an observer counting starts against completes stays balanced.
+    store.fire_effect_start(name, node)
     store.fire_effect_complete(name, node)
     if store.on_write:
         store.on_write(store.state)

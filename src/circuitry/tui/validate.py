@@ -61,6 +61,7 @@ class IssueList(Vertical):
     IssueList .issue-body { height: auto; }
     IssueList .issue-ok { color: $success; }
     IssueList .issue-skipped { color: $text-muted; margin-top: 1; }
+    IssueList .issue-warning { color: $warning; }
     """
 
     def show(self, report: ValidationReport | None) -> None:
@@ -70,6 +71,19 @@ class IssueList(Vertical):
             return
         if report.ok:
             self.mount(Static(OK_STATE, classes="issue-ok"))
+        if report.warnings:
+            # Advisory, so it gets its own heading rather than joining the
+            # error classes — none of these make the file invalid.
+            self.mount(
+                Static(f"Warnings ({len(report.warnings)})", classes="issue-kind")
+            )
+            self.mount(
+                Static(
+                    "\n".join(f"  {w}" for w in report.warnings),
+                    classes="issue-warning",
+                    markup=False,
+                )
+            )
         for kind in report.kinds():
             issues = report.of_kind(kind)
             self.mount(

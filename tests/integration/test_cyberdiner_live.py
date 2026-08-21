@@ -15,7 +15,7 @@ Run them by hand:
     export CYBERDINER_TOKEN=ck_...
     pytest tests/integration/test_cyberdiner_live.py -q
 
-Optional knobs: ``CYBERDINER_TIER`` (default ``tier-1``) and
+Optional knobs: ``CYBERDINER_TIER`` (default ``cheap``) and
 ``CYBERDINER_TIMEOUT_SECONDS`` (default 180) — a cold cook fleet can take
 a while to pick up the first job. See ``docs/cyberdiner-demo-runbook.md``
 for the full end-to-end demo.
@@ -43,7 +43,7 @@ TOKEN_ENV = "CYBERDINER_TOKEN"
 TIER_ENV = "CYBERDINER_TIER"
 TIMEOUT_ENV = "CYBERDINER_TIMEOUT_SECONDS"
 
-DEFAULT_TIER = "tier-1"
+DEFAULT_TIER = "cheap"
 DEFAULT_TIMEOUT_SECONDS = 180
 
 # Candidate names for the bundled cyberdiner example (issue #6). When none
@@ -155,8 +155,9 @@ def test_generate_returns_text_from_live_network(live: LiveSettings) -> None:
     assert validate_generate_result(result, adapter_name="cyberdiner") == []
     assert result.text.strip(), "Live cyberdiner job returned an empty completion."
     assert result.raw is not None
-    assert result.raw.get("status") == "complete"
-    assert result.raw.get("tier") == live.tier
+    # expo writes `completed`; cookd's client polls for `complete` — both real.
+    assert result.raw.get("status") in ("complete", "completed")
+    assert result.raw.get("tierName") == live.tier
 
 
 def test_run_orchestration_completes_against_live_network(

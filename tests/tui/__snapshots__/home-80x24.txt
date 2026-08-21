@@ -7,13 +7,13 @@
   │1  Library — Browse bundled and shared orchestrations                     │  
   │2  Run — Execute an orchestration and watch effects stream                │  
   │3  Inspect — Orchestration metadata, schema validation, and warnings      │  
-  │4  Runs — History of past runs and their final state                      │  
+  │4  Runs — Inspect run state as a tree, open a saved state file, replay the│  
   │5  Doctor — Backend, config, and connectivity diagnostics                 │  
   │6  Settings — Effective configuration and where each value came from      │  
   │7  Validate — Check an orchestration file for schema, compile, cycle and p│  
   │8  Chat — Describe a pipeline and let the wizard write the orchestration  │  
+  │9  Profiles — Edit named profiles: per-effect models, toggles, inputs and │  
   ╰──────────────────────────────────────────────────────────────────────────╯  
-                                                                                
                                                                                 
                                                                                 
                                                                                 

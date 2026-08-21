@@ -21,4 +21,4 @@
   ╰──────────────╯╰─────────────────────╯╰───────────────────────────────────╯  
   0/29 in all · "zzzz"                                                          
                                                                                 
- tab Next view  / Search                                            ▏^p palette 
+ ⏎ Run  tab Next view  / Search                                     ▏^p palette 

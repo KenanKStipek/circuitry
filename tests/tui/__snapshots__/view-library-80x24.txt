@@ -21,4 +21,4 @@
   ╰──────────────╯╰─────────────────────╯╰───────────────────────────────────╯  
   29/29 in all                                                                  
                                                                                 
- tab Next view  / Search  e Eject  ? Help  q Back / Quit            ▏^p palette 
+ ⏎ Run  tab Next view  / Search  e Eject  s Source  r Refresh  ? Hel▏^p palette 

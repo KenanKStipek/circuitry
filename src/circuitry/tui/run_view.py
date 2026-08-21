@@ -1,4 +1,4 @@
-"""The Run view: pick an orchestration, fill its inputs, launch it.
+"""The Run view: pick an orchestration, fill its inputs, watch it run.
 
 The picker lists local orchestration files and the bundled curation
 library. Selecting one reads its ``interface.inputs`` and generates a typed
@@ -12,15 +12,24 @@ thread and posts messages back here. The UI thread never blocks, and
 cancelling unwinds the run through its ordinary error path. Everything
 that is not a widget lives in :mod:`circuitry.tui.launch`.
 
-The execution view proper lands in a later story; this screen shows the
-minimal running / done / failed signal in its place.
+Below the form sits the execution view: a tree mirroring the
+orchestration's structure with a status glyph, elapsed and token counts
+per effect, and a footer aggregating the run. It is drawn from the plan
+the moment an orchestration is picked — so the shape is visible before
+launch — and then repainted from the run's events. Repaints are
+coalesced onto a timer rather than done per event, so a chatty run
+cannot starve the input queue; the model doing the overlaying lives in
+:mod:`circuitry.tui.execution`.
 """
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
@@ -29,13 +38,29 @@ from textual.widgets import Button, Input, Label, Select, Static
 
 from ..cli.config import CircuitryConfig, resolve_config
 from ..cli.runtime_shim import RunRequest, RunResult
+from . import execution
+from .execution import (
+    ExecNode,
+    PlanNode,
+    RenderLine,
+    Totals,
+    build_tree,
+    format_totals,
+    plan_from_orchestration,
+    render_lines,
+    render_text,
+    totals_for,
+)
+from .inspector import StateStore
 from .launch import (
+    CUSTOM_MODEL,
     NO_OVERRIDE,
     InputField,
     OrchestrationChoice,
     OrchestrationForm,
     Runner,
     RunSession,
+    adapter_models,
     adapter_options,
     build_initial_state,
     default_text,
@@ -47,6 +72,8 @@ from .launch import (
 from .screens import ViewScreen, ViewSpec
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from textual.events import Mount
+
     from circuitry.adapters import Adapter
 
 __all__ = ["RunScreen"]
@@ -58,6 +85,32 @@ CANCELLING = "Cancelling…"
 DONE = "Done"
 FAILED = "Failed"
 CANCELLED = "Cancelled"
+
+#: Placeholder for the tree pane before an orchestration is picked.
+NO_TREE = "No orchestration picked — the effect tree appears here."
+
+#: What the note under the model dropdown says while an adapter is being
+#: asked what it offers, and what it says when nothing came back.
+LOADING_MODELS = "Asking {adapter} for its models…"
+NO_ADAPTER_MODELS = "{adapter} did not report any models — pick or type one."
+
+#: Placeholder in the free-text model box.
+CUSTOM_MODEL_HINT = "Type any model name (same as --model)"
+
+#: How often the execution view repaints while a run is in flight. Events
+#: arrive far faster than a person reads, so they are coalesced onto this
+#: tick; anything the user types is handled in the gaps.
+REFRESH_SECONDS = 0.1
+
+#: Row colour per effect status. Keyed off :mod:`circuitry.tui.execution`'s
+#: names rather than this module's same-spelled run states.
+_STATUS_STYLES: dict[str, str] = {
+    execution.PENDING: "dim",
+    execution.RUNNING: "bold yellow",
+    execution.DONE: "green",
+    execution.FAILED: "bold red",
+    execution.SKIPPED: "dim italic",
+}
 
 
 class RunScreen(ViewScreen):
@@ -71,6 +124,15 @@ class RunScreen(ViewScreen):
 
     RunScreen .field-error {
         color: $error;
+    }
+
+    RunScreen .hidden {
+        display: none;
+    }
+
+    RunScreen #run-model-note {
+        color: $text-muted;
+        height: auto;
     }
 
     RunScreen #run-status {
@@ -91,8 +153,46 @@ class RunScreen(ViewScreen):
         margin-top: 1;
     }
 
+    RunScreen #run-panes {
+        height: auto;
+    }
+
+    RunScreen #run-setup {
+        width: 3fr;
+        height: auto;
+        padding-right: 1;
+    }
+
+    RunScreen #run-execution {
+        width: 2fr;
+        height: auto;
+    }
+
+    RunScreen #run-tree {
+        height: auto;
+        margin-top: 1;
+    }
+
+    RunScreen #run-footer {
+        height: auto;
+        margin-top: 1;
+        text-style: bold;
+        color: $text-muted;
+    }
+
     RunScreen.-compact .form-label {
         margin-top: 0;
+    }
+
+    /* Side by side needs width; below the breakpoint the panes stack. */
+    RunScreen.-compact #run-panes {
+        layout: vertical;
+    }
+
+    RunScreen.-compact #run-setup,
+    RunScreen.-compact #run-execution {
+        width: 1fr;
+        padding-right: 0;
     }
     """
 
@@ -108,6 +208,14 @@ class RunScreen(ViewScreen):
             super().__init__()
             self.state = state
 
+    class RunEffectComplete(Message):
+        """One effect finished writing its node (already a private copy)."""
+
+        def __init__(self, path: str, node: dict[str, Any]) -> None:
+            super().__init__()
+            self.path = path
+            self.node = node
+
     class RunFinished(Message):
         """The worker thread is done, successfully or not."""
 
@@ -115,6 +223,14 @@ class RunScreen(ViewScreen):
             super().__init__()
             self.result = result
             self.cancelled = cancelled
+
+    class AdapterModelsLoaded(Message):
+        """An adapter answered ``list_models()`` on a worker thread."""
+
+        def __init__(self, adapter: str, models: list[str]) -> None:
+            super().__init__()
+            self.adapter = adapter
+            self.models = models
 
     def __init__(
         self,
@@ -125,6 +241,7 @@ class RunScreen(ViewScreen):
         adapter: Adapter | None = None,
         runner: Runner | None = None,
         root: Path | None = None,
+        clock: Callable[[], float] | None = None,
         name: str | None = None,
         id: str | None = None,
         classes: str | None = None,
@@ -140,52 +257,137 @@ class RunScreen(ViewScreen):
         self._runner = runner
         self._form: OrchestrationForm | None = None
         self._fields: list[tuple[InputField, Input]] = []
+        # Models the selected adapter reported, and the adapter that
+        # reported them — a slow answer arriving after the user moved on
+        # must not repopulate the dropdown for a different adapter.
+        self._adapter_models: list[str] = []
+        self._models_for: str | None = None
+        self._custom_model = False
         self._session: RunSession | None = None
         self._updates = 0
         self._status_text = IDLE
+        #: Named profile applied to the next launch, when the view was opened
+        #: through a hand-off that carried one.
+        self.profile_name: str | None = None
         #: Last finished result, for tests and for the execution view to pick up.
         self.last_result: RunResult | None = None
+
+        # -- execution view state ------------------------------------------
+        # ``_clock`` is injectable so a test can pin the wall-clock reading
+        # the footer shows.
+        self._clock: Callable[[], float] = clock if clock is not None else time.monotonic
+        self._plan: tuple[PlanNode, ...] = ()
+        self._run_state: dict[str, Any] = {}
+        self._completed: set[str] = set()
+        self._exec_nodes: tuple[ExecNode, ...] = ()
+        self._totals = Totals()
+        self._started_at: float | None = None
+        self._final_elapsed: float | None = None
+        self._in_flight = False
+        self._repaint: Any = None
+        #: The app's state store, captured on mount so a run can keep
+        #: publishing into it after this screen is replaced.
+        self._store: StateStore | None = None
 
     # -- composition ---------------------------------------------------------
 
     def compose_body(self) -> ComposeResult:
         yield Static(self.spec.name, classes="view-title")
         yield Static(self.spec.blurb, classes="view-blurb")
-
-        yield Label("Orchestration", classes="form-label")
-        yield Select(
-            [(choice.option, choice.key) for choice in self._choices],
-            prompt="Pick an orchestration",
-            id="run-orchestration",
-        )
-
-        yield Vertical(id="run-form")
-
-        yield Label("Adapter", classes="form-label")
-        yield Select(
-            _override_options(adapter_options(self._config)),
-            value=NO_OVERRIDE,
-            allow_blank=False,
-            id="run-adapter",
-        )
-        yield Label("Model", classes="form-label")
-        yield Select(
-            _override_options(model_options(self._config)),
-            value=NO_OVERRIDE,
-            allow_blank=False,
-            id="run-model",
-        )
-
+        # Setup on the left, the run itself on the right — so launching
+        # does not scroll the controls away, and watching does not hide
+        # them. Below the breakpoint the two panes stack.
         yield Horizontal(
-            Button("Launch", variant="primary", id="run-launch"),
-            Button("Cancel run", id="run-cancel", disabled=True),
-            id="run-actions",
+            Vertical(*self._setup_pane(), id="run-setup"),
+            Vertical(*self._execution_pane(), id="run-execution"),
+            id="run-panes",
         )
-        yield Static(IDLE, id="run-status")
+
+    def _setup_pane(self) -> list[Any]:
+        return [
+            Label("Orchestration", classes="form-label"),
+            Select(
+                [(choice.option, choice.key) for choice in self._choices],
+                prompt="Pick an orchestration",
+                id="run-orchestration",
+            ),
+            Vertical(id="run-form"),
+            Label("Adapter", classes="form-label"),
+            Select(
+                _override_options(adapter_options(self._config)),
+                value=NO_OVERRIDE,
+                allow_blank=False,
+                id="run-adapter",
+            ),
+            Label("Model", classes="form-label"),
+            Select(
+                _model_options(model_options(self._config)),
+                value=NO_OVERRIDE,
+                allow_blank=False,
+                id="run-model",
+            ),
+            Input(
+                placeholder=CUSTOM_MODEL_HINT,
+                id="run-model-custom",
+                classes="hidden",
+            ),
+            Static("", id="run-model-note", classes="view-note hidden"),
+            Horizontal(
+                Button("Launch", variant="primary", id="run-launch"),
+                Button("Cancel run", id="run-cancel", disabled=True),
+                id="run-actions",
+            ),
+            Static(IDLE, id="run-status"),
+        ]
+
+    def _execution_pane(self) -> list[Any]:
+        return [
+            Static(NO_TREE, id="run-tree"),
+            Static(format_totals(Totals()), id="run-footer"),
+        ]
+
+    def _on_mount(self, event: Mount) -> None:
+        super()._on_mount(event)
+        store = getattr(self.app, "run_states", None)
+        self._store = store if isinstance(store, StateStore) else None
+        self._adopt_pending()
+
+    def _adopt_pending(self) -> None:
+        """Pre-load whatever handed us here (Chat's "run it", Profile's "run
+        with this profile"), then clear the hand-off so a later visit to the
+        view opens clean."""
+        path = getattr(self.app, "pending_run", None)
+        if not isinstance(path, Path):
+            return
+        self.profile_name = getattr(self.app, "pending_profile", None)
+        self.app.pending_run = None  # type: ignore[attr-defined]
+        self.app.pending_profile = None  # type: ignore[attr-defined]
+
+        choice = next(
+            (c for c in self._choices if c.path.resolve() == path.resolve()), None
+        )
+        if choice is None:
+            # Handed a file the picker never scanned (a fresh save, or one
+            # outside the scan roots). It is still launchable, so offer it.
+            choice = OrchestrationChoice(
+                key=str(path), label=path.name, path=path, source="local"
+            )
+            self._choices = [choice, *self._choices]
+            select: Select[str] = self.query_one("#run-orchestration", Select)
+            select.set_options([(c.option, c.key) for c in self._choices])
+        self.query_one("#run-orchestration", Select).value = choice.key
 
     # -- selection -----------------------------------------------------------
 
     async def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "run-adapter":
+            event.stop()
+            self._load_adapter_models(event.value)
+            return
+        if event.select.id == "run-model":
+            event.stop()
+            self._set_custom_model(event.value == CUSTOM_MODEL)
+            return
         if event.select.id != "run-orchestration":
             return
         event.stop()
@@ -193,6 +395,7 @@ class RunScreen(ViewScreen):
         if choice is None:
             self._form = None
             await self._render_fields(())
+            self._reset_execution(())
             self._set_status(IDLE)
             return
         try:
@@ -200,12 +403,16 @@ class RunScreen(ViewScreen):
         except Exception as exc:
             self._form = None
             await self._render_fields(())
+            self._reset_execution(())
             self._set_status(f"{FAILED} to load {choice.label}: {exc}", "-failed")
             return
         self._form = form
         await self._render_fields(form.fields)
-        self._refresh_model_options(form)
-        self._set_status(_ready_message(form))
+        self._refresh_model_options()
+        # Draw the plan straight away: the shape of the run is worth seeing
+        # before committing to it.
+        self._reset_execution(plan_from_orchestration(form.orchestration))
+        self._set_status(_ready_message(form, self.profile_name))
 
     def _choice_for(self, value: Any) -> OrchestrationChoice | None:
         for choice in self._choices:
@@ -236,14 +443,78 @@ class RunScreen(ViewScreen):
             )
             self._fields.append((spec, box))
 
-    def _refresh_model_options(self, form: OrchestrationForm) -> None:
-        """Fold the orchestration's own model into the dropdown."""
+    def _refresh_model_options(self) -> None:
+        """Repaint the dropdown from config, orchestration, and adapter."""
+        orch = self._form.orchestration if self._form is not None else None
         select: Select[str] = self.query_one("#run-model", Select)
         current = select.value
-        options = _override_options(model_options(self._config, form.orchestration))
+        options = _model_options(
+            model_options(self._config, orch, extra=self._adapter_models)
+        )
         select.set_options(options)
         values = {value for _, value in options}
+        # ``set_options`` resets the selection; put the user's choice back
+        # when it survived the repaint.
         select.value = current if current in values else NO_OVERRIDE
+
+    # -- adapter model enumeration ------------------------------------------
+
+    def _load_adapter_models(self, adapter_name: Any) -> None:
+        """Ask the picked adapter what it offers, off the UI thread."""
+        name = adapter_name if isinstance(adapter_name, str) else ""
+        name = "" if name in (NO_OVERRIDE, Select.BLANK) else name.strip()
+        self._models_for = name or None
+        self._adapter_models = []
+        if not name:
+            self._model_note("")
+            self._refresh_model_options()
+            return
+        self._model_note(LOADING_MODELS.format(adapter=name))
+        self.run_worker(
+            lambda: self._fetch_models(name),
+            thread=True,
+            exclusive=True,
+            group="adapter-models",
+        )
+
+    def _fetch_models(self, name: str) -> None:
+        """Worker body: ``list_models()`` never raises, so neither does this."""
+        self.post_message(self.AdapterModelsLoaded(name, adapter_models(self._config, name)))
+
+    def on_run_screen_adapter_models_loaded(self, message: AdapterModelsLoaded) -> None:
+        message.stop()
+        if message.adapter != self._models_for:
+            # The user moved on while the answer was in flight.
+            return
+        self._adapter_models = message.models
+        self._refresh_model_options()
+        if message.models:
+            count = len(message.models)
+            self._model_note(
+                f"{count} model{'s' if count != 1 else ''} from {message.adapter}."
+            )
+        else:
+            self._model_note(NO_ADAPTER_MODELS.format(adapter=message.adapter))
+
+    def _model_note(self, text: str) -> None:
+        """Say what the dropdown is doing — and take no room when silent."""
+        note = self.query_one("#run-model-note", Static)
+        note.update(text)
+        note.set_class(not text, "hidden")
+
+    def _set_custom_model(self, on: bool) -> None:
+        """Swap the dropdown for a free-text box, or put it back."""
+        if on == self._custom_model:
+            return
+        self._custom_model = on
+        select = self.query_one("#run-model", Select)
+        box = self.query_one("#run-model-custom", Input)
+        select.set_class(on, "hidden")
+        box.set_class(not on, "hidden")
+        if on:
+            box.focus()
+        else:
+            box.value = ""
 
     # -- launching -----------------------------------------------------------
 
@@ -258,6 +529,14 @@ class RunScreen(ViewScreen):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Enter walks the form — Tab belongs to view navigation."""
         event.stop()
+        if event.input.id == "run-model-custom":
+            # Enter on an empty box is the way back to the dropdown.
+            if not event.input.value.strip():
+                self.query_one("#run-model", Select).value = NO_OVERRIDE
+                self._set_custom_model(False)
+                return
+            self.query_one("#run-launch", Button).focus()
+            return
         boxes = [box for _, box in self._fields]
         if event.input in boxes:
             index = boxes.index(event.input)
@@ -296,15 +575,18 @@ class RunScreen(ViewScreen):
             config=self._config,
             adapter=self._adapter,
             adapter_override=_override_value(self.query_one("#run-adapter", Select)),
-            model_override=_override_value(self.query_one("#run-model", Select)),
+            model_override=self._model_override(),
             skip_preflight=False,
+            profile_name=self.profile_name,
         )
 
         self._updates = 0
         self.last_result = None
+        self._begin_execution()
         session = RunSession(
             request,
             on_state=self._observe_state,
+            on_effect=self._observe_effect,
             on_finish=self._observe_finish,
             runner=self._runner,
         )
@@ -312,6 +594,12 @@ class RunScreen(ViewScreen):
         self._set_running(True)
         self._set_status(RUNNING)
         session.start()
+
+    def _model_override(self) -> str | None:
+        """Whatever the model control currently says, or ``None``."""
+        if self._custom_model:
+            return self.query_one("#run-model-custom", Input).value.strip() or None
+        return _override_value(self.query_one("#run-model", Select))
 
     def action_cancel_run(self) -> None:
         """Ask the in-flight run to stop; a no-op when nothing is running."""
@@ -326,28 +614,159 @@ class RunScreen(ViewScreen):
     # widgets from here would not be.
 
     def _observe_state(self, state: dict[str, Any]) -> None:
+        # Published to the app's store *here* rather than from the message
+        # handler: the store is what the Runs view inspects, and a run
+        # outlives the screen that launched it — once the user navigates
+        # away this screen stops receiving messages, but the run goes on.
+        if self._store is not None:
+            self._store.publish(state)
         self.post_message(self.RunStateUpdate(state))
+
+    def _observe_effect(self, path: str, node: dict[str, Any]) -> None:
+        self.post_message(self.RunEffectComplete(path, node))
 
     def _observe_finish(self, result: RunResult) -> None:
         cancelled = self._session is not None and self._session.cancelled
+        if self._store is not None:
+            self._store.finish(result.state if result.ok else None)
         self.post_message(self.RunFinished(result, cancelled=cancelled))
 
     def on_run_screen_run_state_update(self, message: RunStateUpdate) -> None:
         message.stop()
         self._updates += 1
+        # Recorded, not drawn: the repaint timer picks this up on its next
+        # tick, so a burst of writes costs one render, not one each.
+        self._run_state = message.state
         if self._session is not None and self._session.running:
             self._set_status(f"{RUNNING} ({self._updates} state updates)")
+
+    def on_run_screen_run_effect_complete(self, message: RunEffectComplete) -> None:
+        message.stop()
+        # Parallel siblings merge their state back only once the last one
+        # lands; this is what lets the tree mark them off as they finish.
+        self._completed.add(message.path)
 
     def on_run_screen_run_finished(self, message: RunFinished) -> None:
         message.stop()
         self.last_result = message.result
         self._set_running(False)
+        self._end_execution(message.result)
         if message.cancelled:
             self._set_status(CANCELLED, "-failed")
         elif message.result.ok:
             self._set_status(f"{DONE} ({self._updates} state updates)", "-done")
         else:
             self._set_status(f"{FAILED}: {message.result.error}", "-failed")
+
+    # -- the execution view --------------------------------------------------
+
+    def _reset_execution(self, plan: tuple[PlanNode, ...]) -> None:
+        """Adopt a new plan and draw it as a wholly pending run."""
+        self._plan = plan
+        self._run_state = {}
+        self._completed = set()
+        self._started_at = None
+        self._final_elapsed = None
+        self._in_flight = False
+        self._paint()
+
+    def _begin_execution(self) -> None:
+        """Start the clock and the repaint tick for a launch."""
+        self._run_state = {}
+        self._completed = set()
+        self._started_at = self._clock()
+        self._final_elapsed = None
+        self._in_flight = True
+        if self._store is not None:
+            self._store.begin(label=self._form.choice.label if self._form else "")
+        self._paint()
+        self.reveal_execution()
+        if self._repaint is None:
+            self._repaint = self.set_interval(REFRESH_SECONDS, self._paint)
+
+    def _end_execution(self, result: RunResult) -> None:
+        """Freeze the wall clock and draw the run's final state."""
+        self._in_flight = False
+        if self._repaint is not None:
+            self._repaint.stop()
+            self._repaint = None
+        if self._started_at is not None:
+            self._final_elapsed = max(self._clock() - self._started_at, 0.0)
+        if isinstance(result.state, dict) and result.state:
+            self._run_state = result.state
+        self._paint()
+
+    def _paint(self) -> None:
+        """Rebuild the tree and footer from whatever is known right now."""
+        self._exec_nodes = build_tree(
+            self._plan,
+            self._run_state,
+            completed=self._completed,
+            # The session is the authority on whether work is in flight:
+            # the first snapshot lands only once the first effect does.
+            running=True if self._in_flight else None,
+        )
+        self._totals = totals_for(
+            self._exec_nodes, self._run_state, elapsed=self._elapsed()
+        )
+        if not self.is_mounted:
+            # A run outlives the screen when the user navigates away; the
+            # model still tracks it, there is just nothing to draw on.
+            return
+        lines = render_lines(self._exec_nodes)
+        tree = self.query_one("#run-tree", Static)
+        tree.update(_tree_text(lines) if lines else Text(NO_TREE, style="dim"))
+        self.query_one("#run-footer", Static).update(format_totals(self._totals))
+
+    def _elapsed(self) -> float | None:
+        if self._final_elapsed is not None:
+            return self._final_elapsed
+        if self._started_at is None:
+            return None
+        return max(self._clock() - self._started_at, 0.0)
+
+    @property
+    def execution_nodes(self) -> tuple[ExecNode, ...]:
+        """The tree as last drawn (used by tests)."""
+        return self._exec_nodes
+
+    @property
+    def totals(self) -> Totals:
+        """The footer's aggregate numbers as last drawn (used by tests)."""
+        return self._totals
+
+    @property
+    def tree_text(self) -> str:
+        """The tree pane's rows as plain text, outliving the widget."""
+        return render_text(self._exec_nodes) if self._exec_nodes else NO_TREE
+
+    @property
+    def footer_text(self) -> str:
+        """The footer bar as plain text, outliving the widget."""
+        return format_totals(self._totals)
+
+    def reveal_execution(self) -> None:
+        """Scroll the tree into view — a launch is a request to watch it.
+
+        Done once per launch rather than on every repaint, so a user who
+        scrolls back up to the form is left alone.
+        """
+        try:
+            self.query_one("#run-tree", Static).scroll_visible(top=True, animate=False)
+        except Exception:  # noqa: BLE001 - a scroll is never worth an error
+            return
+
+    def show_state(self, state: dict[str, Any], *, elapsed: float | None = None) -> None:
+        """Apply a state snapshot directly, without a run behind it.
+
+        The scripted entry point: snapshot tests and embedders drive the
+        execution view with a state they wrote themselves, pinning the
+        wall clock rather than reading it.
+        """
+        self._run_state = state
+        if elapsed is not None:
+            self._final_elapsed = elapsed
+        self._paint()
 
     # -- small helpers -------------------------------------------------------
 
@@ -375,9 +794,28 @@ class RunScreen(ViewScreen):
         return self._status_text
 
 
+def _tree_text(lines: list[RenderLine]) -> Text:
+    """Colour each tree row by the status of the effect it describes."""
+    text = Text()
+    for index, line in enumerate(lines):
+        if index:
+            text.append("\n")
+        text.append(line.text, style=_STATUS_STYLES.get(line.status, ""))
+    return text
+
+
 def _override_options(values: list[str]) -> list[tuple[str, str]]:
     """Dropdown options with the "leave it alone" sentinel first."""
     return [(f"{NO_OVERRIDE} default", NO_OVERRIDE), *((value, value) for value in values)]
+
+
+def _model_options(values: list[str]) -> list[tuple[str, str]]:
+    """Model options: sentinel, what we know about, then the escape hatch.
+
+    ``custom…`` is always last and always present — no enumeration can be
+    complete, and the flag equivalent (``--model``) takes any string.
+    """
+    return [*_override_options(values), (CUSTOM_MODEL, CUSTOM_MODEL)]
 
 
 def _override_value(select: Select[str]) -> str | None:
@@ -388,14 +826,15 @@ def _override_value(select: Select[str]) -> str | None:
     return value
 
 
-def _ready_message(form: OrchestrationForm) -> str:
+def _ready_message(form: OrchestrationForm, profile: str | None = None) -> str:
+    suffix = f" Profile: {profile}." if profile else ""
     required = sum(1 for spec in form.fields if spec.required)
     if not form.fields:
-        return f"{form.choice.label} — no inputs declared."
+        return f"{form.choice.label} — no inputs declared.{suffix}"
     return (
         f"{form.choice.label} — {len(form.fields)} input"
         f"{'s' if len(form.fields) != 1 else ''}"
-        f" ({required} required)."
+        f" ({required} required).{suffix}"
     )
 
 

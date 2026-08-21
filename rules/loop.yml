@@ -40,6 +40,10 @@ fields:
   max_iterations:
     type: integer
     default: 100
+  min_iterations:
+    type: integer
+    min: 0
+    note: "Minimum iterations to run before the while condition is checked. Only meaningful for while-loops."
   on_error:
     enum: [fail, break, continue]
     default: fail

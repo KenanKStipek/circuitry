@@ -9,6 +9,8 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..adapters.anthropic import AnthropicAdapter
+
 
 @dataclass
 class BackendStatus:
@@ -84,7 +86,7 @@ def detect_anthropic() -> BackendStatus:
             name="anthropic",
             available=True,
             detail=f"API key set ({key[:8]}...)",
-            models=["claude-opus-4-20250514", "claude-sonnet-4-20250514", "claude-haiku-4-20250414"],
+            models=list(AnthropicAdapter.KNOWN_MODELS),
         )
     return BackendStatus(name="anthropic", available=False, detail="ANTHROPIC_API_KEY not set")
 

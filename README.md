@@ -164,9 +164,14 @@ cof run hello -e name=World --live-state ./state.live.json
 # Apply a named profile (run-level defaults + per-effect model/provider overrides)
 cof run recipe --profile fast
 
+# Override the adapter/model for a single run (highest-priority layer)
+cof run learn/hello -e name=World --model gpt-oss:20b
+cof run learn/hello -e name=World --adapter ollama --model llama3.1:8b
+
 # Browse, inspect, and eject orchestrations
 cof list                          # bundled orchestrations
 cof list --extensions             # compiled-in adapters / tool plugins / runtime plugins
+cof list --models ollama          # models an adapter offers (--json for scripts)
 cof info recipes/article_summarizer
 cof info recipes/article_summarizer --json
 cof eject recipes/comic_strip
@@ -231,11 +236,18 @@ The plain `cof run …` CLI continues to work as-is. The MCP server is a strict 
 
 Circuitry uses layered config resolution (highest priority wins):
 
-1. CLI flags (`--config`, inline `-e`)
-2. Environment variables (`CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER`, `CIRCUITRY_ADAPTER_URL`, `CIRCUITRY_COMFYUI_URL`)
-3. Project-local config (`circuitry.config.json` or `config.json` in cwd)
-4. Global config (`~/.config/circuitry/config.json`)
-5. Sane defaults (ollama at localhost:11434, comfyui at localhost:8188)
+1. CLI flags (`--adapter`, `--model`, `--config`, inline `-e`)
+2. `--profile` (see [docs/profiles.md](docs/profiles.md))
+3. The orchestration's own `adapter:` / `model:` / `runtime:`
+4. Environment variables (`CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER`, `CIRCUITRY_ADAPTER_URL`, `CIRCUITRY_COMFYUI_URL`)
+5. Project-local config (`circuitry.config.json` or `config.json` in cwd)
+6. Global config (`~/.config/circuitry/config.json`)
+7. Sane defaults (ollama at localhost:11434, comfyui at localhost:8188)
+
+Environment variables overlay the config-file layer, so both `--adapter`/`--model`
+and a profile outrank them. Where each value came from is recorded per run in
+`runtime.effective_settings.sources` (`cli`, `profile`, `orchestration`, `config`,
+`default`).
 
 ```json
 {
@@ -273,18 +285,18 @@ Every run records resolved values in `runtime.effective_settings`.
 
 [CyberDiner](https://github.com/KenanKStipek/CyberDiner) is a job-queue LLM broker rather than a single completion endpoint. The `cyberdiner` adapter hides that behind the ordinary synchronous `generate()`: it submits the prompt as a job to expo, polls until the job reaches a terminal status, and returns the text. Orchestrations look no different from any other adapter's — the queue lives entirely inside the adapter.
 
-`model:` selects a **capability tier**, not a provider model name. Valid tiers: `tier-1`, `tier-2`, `tier-3`, `tier-4` (an unset `model:` falls back to `default_tier`).
+`model:` selects a **capability tier**, not a provider model name. The tier vocabulary belongs to the network, not to this client: whatever you write is sent as-is and expo validates it, so a tier added to your deployment works the day it lands. CyberDiner's seeded tiers today are `cheap`, `fast-cheap`, `fast`, `good-cheap`, `good`, `good-fast`, `alpha`. An unset `model:` falls back to `default_tier`; an unknown tier comes back as an actionable expo `400`.
 
 ```json
 {
   "default_adapter": "cyberdiner",
-  "default_model": "tier-1",
+  "default_model": "cheap",
   "runtime": {
     "adapters": {
       "cyberdiner": {
         "expo_url": "https://expo.example.com",
         "token": "ck_...",
-        "default_tier": "tier-1",
+        "default_tier": "cheap",
         "poll_interval_ms": 500,
         "timeout_seconds": 30
       }
@@ -297,13 +309,14 @@ Every run records resolved values in `runtime.effective_settings`.
 | --- | ------- | ------- |
 | `expo_url` | — (required) | Root URL of your CyberDiner expo deployment |
 | `token` | — (required) | CyberDiner API key (`ck_…`), sent as a bearer token |
-| `default_tier` | `tier-1` | Tier used when the orchestration doesn't pin a `model:` |
+| `default_tier` | `cheap` | Tier used when the orchestration doesn't pin a `model:` |
+| `valid_tiers` | — (unset) | Opt-in client-side allowlist of tier names. Unset = pass-through, expo is the authority |
 | `poll_interval_ms` | `500` | Delay between job-status polls |
 | `timeout_seconds` | `30` | Per-HTTP-request socket timeout (the whole submit+poll sequence is bounded separately by the effect's timeout) |
 
 **The token is a secret: it belongs in config.json or the environment, never in an orchestration YAML.** Orchestration files are meant to be committed, ejected, and shared; adapter credentials are resolved from the config layers at run time and are redacted from serialized run state. `cof doctor` reports whether `expo_url`/`token` are set and whether the host answers.
 
-> **Caveat:** expo's `/beta` API surface (`POST /beta/jobs`, `GET /beta/jobs/{job_id}`) is pre-stability and may change without notice. Pin your expo deployment accordingly.
+> **Caveat:** expo's `/beta` API surface (`POST /beta/jobs`, `GET /beta/jobs/{jobId}`) is pre-stability and may change without notice. Pin your expo deployment accordingly.
 
 Runnable example: [`learn/cyberdiner_hello`](src/circuitry/curation/learn/cyberdiner_hello.yml) — `cof info learn/cyberdiner_hello`.
 
@@ -384,12 +397,16 @@ A named scope that composes effects with explicit control flow topology.
 ```
 
 Flow models:
-- **chain** (aliases: `chain_of_thought`, `cot`) — sequential, each effect sees prior state
-- **tree** (aliases: `tree_of_thought`, `tot`) — parallel execution
+- **chain** — sequential, each effect sees prior state
+- **tree** — parallel execution
 
-### Conditional
+(`chain_of_thought`/`cot` and `tree_of_thought`/`tot` still parse as deprecated
+aliases; `cof validate` warns on them. Write `chain` and `tree`.)
+
+### If
 
 Cybernetic branching. The system inspects its own state and selects a path.
+(`type: conditional` still parses as a deprecated alias; write `type: if`.)
 
 ```yaml
 - type: if
@@ -461,8 +478,12 @@ Composition primitive. Runs another orchestration as an isolated sub-step with e
     article_text: "{{prime.fetch.value}}"
     max_words: 50
   outputs:
-    summary: prime.summarize.value
+    summary: {path: prime.summarize.value, type: string}
 ```
+
+`use.outputs` and `interface.outputs` take the same shape: an object per name,
+`path` required, `type` and `description` optional. A bare path string is
+accepted as shorthand in both, but the object form is the one to write.
 
 State is fully isolated — the child orchestration runs in its own store. Only mapped inputs are passed in, only mapped outputs are extracted.
 

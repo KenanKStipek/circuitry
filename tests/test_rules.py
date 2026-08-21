@@ -23,6 +23,7 @@ _RULE_TO_SCHEMA = {
     "conditional": "ConditionalEffect",
     "tool": "ToolEffect",
     "reflector": "ReflectorEffect",
+    "use": "UseEffect",
 }
 
 
@@ -154,16 +155,25 @@ def test_naming_pattern_matches_schema(schema_defs: dict):
 
 
 def test_flow_values_match_schema(schema_defs: dict):
+    """The rules teach the canonical flows only (issue #89) — so they must match
+    the schema enum with the deprecated aliases taken out, exactly."""
+    from circuitry.core.lint import DEPRECATED_FLOW_ALIASES
+
     common = _load_rule("common")
-    rule_flows = (
-        set(common["file_structure"]["valid_flows"]["sequential"])
-        | set(common["file_structure"]["valid_flows"]["parallel"])
-    )
+    rule_flows = {
+        common["file_structure"]["valid_flows"]["sequential"],
+        common["file_structure"]["valid_flows"]["parallel"],
+    }
 
-    schema_flows = set(schema_defs["FlowModel"]["enum"])
+    canonical_schema_flows = {
+        flow
+        for flow in schema_defs["FlowModel"]["enum"]
+        if flow not in DEPRECATED_FLOW_ALIASES
+    }
 
-    assert rule_flows == schema_flows, (
-        f"Common valid_flows {rule_flows} != schema FlowModel {schema_flows}"
+    assert rule_flows == canonical_schema_flows, (
+        f"Common valid_flows {rule_flows} != canonical schema FlowModel "
+        f"{canonical_schema_flows}"
     )
 
 

@@ -30,8 +30,8 @@ def test_apply_effect_overrides_targets_top_level_and_nested_paths() -> None:
     new_root, matched = apply_effect_overrides(
         root,
         {
-            "summarize": {"model": "tier-1", "provider": "cyberdiner"},
-            "sub.deep_analysis": {"model": "tier-4"},
+            "summarize": {"model": "cheap", "provider": "cyberdiner"},
+            "sub.deep_analysis": {"model": "good-fast"},
         },
     )
 
@@ -39,12 +39,12 @@ def test_apply_effect_overrides_targets_top_level_and_nested_paths() -> None:
 
     summarize = new_root.effects[0]
     assert summarize.name == "summarize"
-    assert summarize.model == "tier-1"
+    assert summarize.model == "cheap"
     assert summarize.provider == "cyberdiner"
 
     nested = new_root.effects[1].effects[0]
     assert nested.name == "deep_analysis"
-    assert nested.model == "tier-4"
+    assert nested.model == "good-fast"
 
     # Original tree is untouched (frozen semantics preserved).
     assert root.effects[0].model is None
@@ -101,8 +101,8 @@ def test_per_effect_overlay_reaches_prompt_runtime() -> None:
     overridden, _ = apply_effect_overrides(
         root,
         {
-            "summarize": {"model": "tier-1"},
-            "sub.deep_analysis": {"model": "tier-4"},
+            "summarize": {"model": "cheap"},
+            "sub.deep_analysis": {"model": "good-fast"},
         },
     )
 
@@ -110,7 +110,7 @@ def test_per_effect_overlay_reaches_prompt_runtime() -> None:
     store = Store({})
     DynamicRuntime(overridden, adapter=adapter, model="run-default").execute(store=store)
 
-    assert store.get("prime.summarize.meta.model") == "tier-1"
-    assert store.get("prime.sub.deep_analysis.meta.model") == "tier-4"
-    assert ("primary", "tier-1") in adapter.calls
-    assert ("primary", "tier-4") in adapter.calls
+    assert store.get("prime.summarize.meta.model") == "cheap"
+    assert store.get("prime.sub.deep_analysis.meta.model") == "good-fast"
+    assert ("primary", "cheap") in adapter.calls
+    assert ("primary", "good-fast") in adapter.calls

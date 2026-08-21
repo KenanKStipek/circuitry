@@ -11,13 +11,17 @@ fields:
     note: "Child effects to execute. Must be non-empty."
   flow:
     type: string
-    enum: [chain, chain_of_thought, cot, tree, tree_of_thought, tot]
+    enum: [chain, tree]
     default: chain
     note: "chain = sequential (each child sees prior outputs). tree = parallel (all children see same input snapshot)."
+    also_accepted: "chain_of_thought and cot parse as chain; tree_of_thought and tot parse as tree. Deprecated — write chain or tree."
   max_concurrency:
     type: integer
     min: 1
     note: "Maximum parallel workers for tree flow."
+  stop_on_error:
+    type: boolean
+    note: "Halt remaining children when one fails. Usually omitted — prefer on_error, which covers the same intent per effect."
   on_error:
     enum: [fail, skip, continue]
     default: fail

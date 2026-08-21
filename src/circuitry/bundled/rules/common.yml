@@ -7,13 +7,29 @@ file_structure:
     - adapter (string, optional — inherited from config)
     - model (string, optional — inherited from config)
     - flow (string, optional — default chain)
+    - version (string, optional — free-form; see below)
+    - interface (object, optional — declared inputs/outputs; see the interface section)
   notes:
     - "adapter and model are only needed when the orchestration contains prompt or reflector effects."
     - "Tool-only orchestrations do not need adapter or model."
+    - "version is a free-form version string for this document (e.g. '1.2.0'), for the author's own tracking. It is NOT a schema version and NOT a feature gate — the runtime reads it and ignores it. Omit it unless you are actually versioning the file."
+    - "Declare interface when the orchestration is meant to be composed by a use effect."
   valid_adapters: [ollama, openai, anthropic, litellm]
   valid_flows:
-    sequential: [chain, chain_of_thought, cot]
-    parallel: [tree, tree_of_thought, tot]
+    sequential: chain
+    parallel: tree
+    also_accepted: "chain_of_thought and cot parse as chain; tree_of_thought and tot parse as tree. Deprecated — always write chain or tree."
+
+effect_fields:
+  summary: "Fields accepted by every effect type, in addition to the type-specific fields."
+  description:
+    type: string
+    note: "Free-text note about what the effect does. Optional, never interpolated — documentation only."
+  labels:
+    type: object
+    note: "Free-form key/value metadata carried through to traces (dynamic, if/conditional, and loop effects). Usually omitted — observability tagging, not behaviour."
+  on_error:
+    note: "fail (default) / skip / continue on every effect except loop, which uses fail / break / continue."
 
 naming:
   pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
@@ -22,7 +38,19 @@ naming:
     - "Must start with a letter or underscore."
     - "iter_N (e.g. iter_0) is reserved — never use it as a name."
     - "Names must be unique among siblings in the same scope."
+    - "Never name an effect after an effect type (use, loop, if, dynamic, prompt, tool, reflector). Name it after the job it does — summarize_article, not prompt. Type-keyword names are generic, so two of them end up siblings and collide. `cof validate` warns on them."
     - "Prefer singular names (summarize_article, draft_section). A plural name (summarize_articles, extract_points) is a smell — the effect likely does multiple things and should be split into a loop or tree dynamic with a singular-named body effect."
+
+outputs:
+  summary: "Both use.outputs and interface.outputs declare the same thing — expose this state path under this name — in the same canonical shape."
+  canonical: |
+    outputs:
+      summary: {path: prime.summarize.value, type: string}
+  fields:
+    path: "REQUIRED. Dot-delimited state path in the producing orchestration."
+    type: "Optional. string | number | boolean | array | object."
+    description: "Optional."
+  also_accepted: "The bare string form (summary: prime.summarize.value) is sugar for {path: ...} and works in both contexts. Write the object form."
 
 state_paths:
   in_templates:
@@ -35,3 +63,8 @@ state_paths:
     prefix: "state."
     example: "state.prime.<effect_name>.value"
     note: "Always include the state. prefix in CEL. Never omit it."
+
+yaml_style:
+  - "Quote any scalar containing a colon-space, a leading {{, or a leading special character — an unquoted \"Summarize: {{text}}\" is a YAML parse error, not a string."
+  - "Use a block scalar (|) for multi-line templates rather than quoting each line."
+  - "Emit plain YAML only — no markdown fences, no commentary around the document."

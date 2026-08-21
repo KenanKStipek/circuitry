@@ -28,7 +28,7 @@ from scripted_wizard import (
     draft,
 )
 from textual.pilot import Pilot
-from textual.widgets import Input
+from textual.widgets import Input, Select
 
 from circuitry.tui.app import CircuitryApp
 from circuitry.tui.chat import EMPTY_DRAFT, ChatScreen, draft_preview
@@ -388,17 +388,26 @@ def test_run_it_now_hands_the_saved_path_to_the_run_view(
     target = tmp_path / "runnable.yml"
     runner, _ = scripted_runner(draft("Built it.", done=True))
 
-    async def scenario(pilot: Pilot[Any]) -> tuple[Any, Any]:
+    async def scenario(pilot: Pilot[Any]) -> tuple[Any, Any, Any]:
         screen = await idle(pilot)
         screen.query_one("#chat-save-path", Input).value = str(target)
         screen.action_save_file()
         screen.action_run_it()
         await pilot.pause()
-        return pilot.app.pending_run, pilot.app.current_view().slug
+        await pilot.pause()
+        run_screen = pilot.app.base_screen()
+        return (
+            run_screen.query_one("#run-orchestration", Select).value,
+            pilot.app.pending_run,
+            pilot.app.current_view().slug,
+        )
 
-    pending, slug = run_app(scenario, app=chat_app(runner), size=(120, 40))
-    assert pending == target
+    selected, pending, slug = run_app(scenario, app=chat_app(runner), size=(120, 40))
     assert slug == "run"
+    # The Run view consumes the hand-off on mount: it opens on the saved file,
+    # and clears the slot so a later visit does not re-open it.
+    assert selected == str(target)
+    assert pending is None
 
 
 def test_run_it_now_before_saving_says_so(run_app: Any) -> None:

@@ -145,7 +145,21 @@ class DynamicRuntime:
             dyn["value"] = False
             raise ValueError(meta["error"])
 
-        ctx = ctx_override if ctx_override is not None else store.state
+        # Below the unsupported-flow guard, which rejects the container
+        # before it ever dispatches: a container that cannot run announces
+        # neither start nor complete.
+        store.fire_effect_start(self.defn.name, dyn)
+
+        # A container parent (loop body, conditional branch, enclosing dynamic)
+        # hands down the context its own children render against — iteration
+        # bindings, root inputs, absolute state paths.  Layer this dynamic's
+        # store namespace on top of it so the short sibling paths inside this
+        # dynamic keep resolving, with local nodes winning name collisions
+        # (same precedence the loop body uses for its own siblings).
+        if ctx_override is None:
+            ctx = store.state
+        else:
+            ctx = {**ctx_override, **store.state}
         child_store = store.child(self.defn.name)
 
         # Build ancestor context for children (this dynamic is now a parent).
@@ -257,6 +271,9 @@ class DynamicRuntime:
             dyn["value"] = False
             meta["error"] = str(e)
             meta["completed_at"] = _now_iso()
+            # Balances the start fired above: a container that failed still
+            # closes its pair, carrying value False and meta.error.
+            store.fire_effect_complete(self.defn.name, dyn)
             raise
 
     def _execute_effect(

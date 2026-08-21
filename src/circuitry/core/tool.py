@@ -221,6 +221,10 @@ class ToolRuntime:
                     _console.print(line)
             return
 
+        # Below the dry-run return, which writes its node without firing
+        # complete — start mirrors that exactly so the pair stays balanced.
+        store.fire_effect_start(self.defn.name, node)
+
         # Render top-level prompt/model, then merge with params (params take precedence)
         top_level: dict[str, Any] = {}
         if self.defn.prompt is not None:
@@ -307,9 +311,11 @@ class ToolRuntime:
                     _console.print(line)
             meta["error"] = str(e)
             meta["completed_at"] = _now_iso()
-            if self.defn.on_error == "fail":
-                raise
             if self.defn.on_error == "skip":
                 node["value"] = None
             # continue: keep going with None value
+            # Fires before the re-raise so the start/complete pair stays
+            # balanced on the failure path too — the node carries meta.error.
             store.fire_effect_complete(self.defn.name, node)
+            if self.defn.on_error == "fail":
+                raise

@@ -1,0 +1,53 @@
+type: use
+summary: Runs another orchestration as an isolated sub-step with explicit input/output mapping. The composition primitive.
+required: [type, name]
+one_of: [ref, path, orchestration, inline]
+fields:
+  name:
+    type: string
+    pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+    note: "Required — outputs are exposed under prime.<name>. Never name it 'use'; name it for what the composed step does (e.g. summarize_step)."
+  ref:
+    type: string
+    note: "Curation-library lookup, slash-delimited (e.g. utilities/critique, recipes/article_summarizer). Optionally source-qualified as <source>:<name> (e.g. \"hub:utilities/critique\"). ONLY valid values are entries advertised in the deployment's library catalog — never a state path, never invented."
+  path:
+    type: string
+    note: "Filesystem path to an orchestration file. Absolute, cwd-relative, or parent-orchestration-relative."
+  orchestration:
+    type: string
+    note: "DEPRECATED — named shared-library orchestration. Use ref (library) or path (filesystem) instead."
+  inline:
+    type: string
+    note: "Mustache template that renders to orchestration YAML at runtime. For LLM-generated plans: pair a prompt effect that generates the YAML with a use effect whose inline references it (e.g. inline: \"{{prime.generate_plan.value}}\")."
+  inputs:
+    type: object
+    note: "Map of child-input-name -> value or interpolation (e.g. article_text: \"{{prime.fetch.value}}\"). Only mapped inputs are visible to the child — state is otherwise fully isolated."
+  outputs:
+    type: object
+    note: "Map of output-name -> {path, type?, description?}, where path is a state path in the CHILD (e.g. summary: {path: prime.summarize.value, type: string}). The bare string form (summary: prime.summarize.value) is accepted shorthand for {path: ...}; write the object form. Same shape as interface.outputs — see the common section. Auto-generated when the child declares an interface."
+  validate:
+    type: boolean
+    default: true
+    note: "Schema-validate inline YAML before execution. Keep true for LLM-generated plans."
+  on_error:
+    enum: [fail, skip, continue]
+    default: fail
+state_paths:
+  mapped_output: "prime.<name>.<output_name>.value"
+  full_namespace: "prime.<name>.<child_effect>.value (only when neither outputs: nor a child interface declares outputs)"
+constraints:
+  - "Exactly one of ref, path, orchestration, or inline."
+  - "ref must exist in the advertised library catalog — a ref pointing at a state path (prime.*) is INVALID; to pass data to the child, use inputs:."
+  - "A use effect never has prompt fields (template, schema, prompt_type, deterministic) — those belong to prompt effects. If the step is a model call, it is type: prompt, not type: use."
+  - "Child state is isolated: the child cannot read the parent's state except through inputs:."
+  - "Cycle detection rejects orchestration graphs that recurse on themselves."
+  - "Prefer use over re-deriving equivalent effects inline when a library entry's interface fits the need; build inline when no entry fits."
+example: |
+  - type: use
+    name: summarize_step
+    ref: utilities/summarize
+    inputs:
+      text: "{{prime.fetch.value}}"
+      max_words: 50
+    outputs:
+      summary: {path: prime.summarize.value, type: string}

@@ -1,0 +1,242 @@
+# idea_generator — brainstorms ideas for orchestrations worth adding to the library.
+#
+# Cybernetic shape:
+#   seed_themes        one cheap call proposes diverse domains of human activity
+#   theme_rounds       tree-flow each-loop: every theme brainstorms IN PARALLEL
+#                      (on CyberDiner each round is a separate network job)
+#   curate             merge all rounds, dedupe, rank
+#   (if …)             model-as-sensor: does the curated list FALL SHORT?
+#     └─ gap_ideas     rescue round — ONLY runs when the sensor says yes.
+#                      When the list is fine, NO effect runs and
+#                      prime.gap_ideas is simply absent (renders empty in
+#                      final_list). Previously the healthy path burned a
+#                      full network job echoing "(no additional ideas
+#                      needed)" — one wasted fleet slot per healthy run
+#                      (circuitry#77 / CyberDiner orders 17542, 17685).
+#   final_list         the deliverable: a numbered list of ideas, nothing else
+#
+# IDEA SPACE (2026-08-16 broadening): orchestrations are AGENTIC PROCESSES,
+# not just text-in/text-out pipelines. Ideas may assume future connectors:
+# sending email and reading replies (including waiting on a human for
+# attention/approval), browsing the web, reading/writing files and
+# documents, calendars, spreadsheets — any number of things. The LLM is the
+# intelligence; connectors are its hands. Ideas should ALSO cover common
+# work people do at a computer: research, writing, data cleanup and
+# computation, file wrangling, design and creative production. And ideas
+# may COMPOSE: one step of a process can be an existing workflow from the
+# shared library (the runtime's `use` effect makes that first-class). The
+# downstream training corpus should reflect that breadth.
+#
+# Everything runs on the DEFAULT tier (cheap). We tried routing curate/gap/
+# final to `good` (2026-08-15) and reverted: downstream consumers re-dedupe
+# and re-curate anyway, cheap handled curation fine, and a good-only step is
+# a hard dependency on whichever cooks serve that tier. Wide-and-cheap beats
+# narrow-and-smart for this workload.
+#
+# Fan-out width (2026-08-16 reshape): 8-10 theme rounds × 2 ideas each at
+# concurrency 8 — was 5-6 rounds × 4 ideas at concurrency 5. Same raw idea
+# yield (~16-20/run) in jobs half the size: faster per-job turnaround on CPU
+# cooks (comfortably under the execution cap), better spread across the
+# fleet now that the gateway hands each cook exactly one job at a time
+# (CyberDiner#337), and a claim-timeout or failure costs 2 ideas, not 4.
+# Curate input stays bounded: ~16-20 terse lines.
+#
+# shape_hint (optional) biases WHAT KIND of process gets brainstormed — e.g.
+# fan-out/per-item work, connector/human-in-the-loop work, or composition —
+# without distorting the domain rotation. The farm rotates the hints and
+# tags the banked records with the shape.
+#
+# Prompt sizes are deliberately trimmed (terse outputs, bounded dedupe window)
+# to stay under the cook fleet's per-job execution cap on CPU cooks.
+# IMPORTANT: existing_ideas feeds ONLY the theme rounds (bounded window from
+# the farm). curate/gap/final are CONSTANT-SIZE — they see only this run's
+# rounds, so they can never outgrow the cap as the harvest accumulates.
+# Cross-run dedupe is the caller's job (the farm dedupes on write).
+
+version: 1
+
+interface:
+  inputs:
+    focus:
+      type: string
+      required: false
+      description: Optional focus area (e.g. "small business", "research", "home life"). Blank = everything.
+    existing_ideas:
+      type: string
+      required: false
+      description: Ideas already generated or already in the library — steers the theme rounds away from repeats.
+    shape_hint:
+      type: string
+      required: false
+      description: Optional bias for the SHAPE of the processes brainstormed (e.g. fan-out/per-item work, connector work, composition). Blank = no bias.
+    target_count:
+      type: number
+      required: false
+      description: How many final ideas to aim for (default 15).
+  outputs:
+    ideas:
+      type: string
+      path: prime.final_list.value
+
+effects:
+  - type: prompt
+    name: seed_themes
+    prompt_type: array
+    schema:
+      type: array
+      items:
+        type: string
+      minItems: 8
+      maxItems: 10
+    template: |
+      You are planning a brainstorm about ORCHESTRATIONS: multi-step agentic
+      processes that automate things people actually do — workflows with
+      drafting, critique loops, branching decisions, and iteration, driven
+      by language models. Processes may use connectors as their hands:
+      sending email and reading the replies (including waiting on a person
+      for input or approval), browsing the web, reading and writing files,
+      calendars, spreadsheets — any number of things. They may also be pure
+      computer work: research, writing, data cleanup, computation, design
+      and creative production. And they may COMPOSE: one step of a process
+      can be an existing workflow reused from a shared library.
+
+      Focus area (may be blank, meaning "all of human activity"): {{focus}}
+      {{#shape_hint}}
+      Shape bias: {{shape_hint}}
+      Favor domains rich in that shape of work.
+      {{/shape_hint}}
+
+      Propose 8 to 10 maximally DIFFERENT domains of human activity to mine
+      for orchestration ideas. Mix professional and personal, common and
+      overlooked — including everyday work done at a computer.
+
+      Return ONLY a JSON array of short domain names, e.g.
+      ["hiring", "family logistics", "scientific writing"].
+
+  - type: loop
+    name: theme_rounds
+    flow: tree
+    max_concurrency: 8
+    max_iterations: 12
+    on_error: continue
+    collect: ideas
+    each:
+      in: prime.seed_themes.value
+      as: theme
+    body:
+      - type: prompt
+        name: ideas
+        template: |
+          Domain: {{theme}}
+
+          Brainstorm 2 ideas for agentic orchestrations in this domain —
+          each one a real, recurring thing people do that decomposes into a
+          multi-step process driven by language models (draft → critique →
+          revise loops, classify-then-branch decisions,
+          iterate-until-good-enough). Processes MAY use connectors: send an
+          email and act on the reply (including nudging a person and
+          waiting for their attention), browse the web, read/write files or
+          spreadsheets, manage a calendar. They may also be pure
+          computer-work: research, writing, data cleanup, computation,
+          creative production. And they may COMPOSE: one step can reuse an
+          existing workflow from a shared library (a critique pass, a
+          summarizer, a whole sub-pipeline) wired into the process.
+
+          Rules:
+          - Real recurring human work or life tasks, not toy demos.
+          - Each idea must EARN being an orchestration: it needs steps,
+            feedback, branching, or waiting-and-reacting — not a single
+            prompt and not a single connector call.
+          {{#shape_hint}}
+          - IMPORTANT shape requirement: {{shape_hint}}
+          {{/shape_hint}}
+          - Do NOT repeat anything from this list of existing ideas:
+          {{existing_ideas}}
+
+          Output exactly 2 lines, each formatted as:
+          - Title — one short sentence on what the process does. Be terse.
+
+  - type: prompt
+    name: curate
+    template: |
+      Below are raw brainstorm rounds of agentic orchestration ideas
+      (multi-step LLM-driven processes, possibly using connectors like
+      email, browser, files, calendars, possibly composing existing library
+      workflows as sub-steps), possibly overlapping:
+
+      {{#prime.theme_rounds.collected.value}}
+      {{.}}
+      {{/prime.theme_rounds.collected.value}}
+
+      Curate: merge duplicates and near-duplicates, drop anything that is
+      really just a single prompt or a single connector call in disguise,
+      and rank the rest from strongest to weakest — strongest meaning:
+      common recurring task + clearly benefits from multi-step structure
+      with feedback, branching, or waiting-and-reacting. Connector use
+      (email round-trips with a person, browsing, files) is welcome, and
+      composition — reusing a library workflow as a sub-step — is a
+      strength, as long as the intelligence is LLM-driven.
+      {{#shape_hint}}
+      Rank ideas matching this shape higher: {{shape_hint}}
+      {{/shape_hint}}
+
+      Target size: {{target_count}} ideas (if that is blank, aim for 15).
+
+      Output ONLY a numbered list, each line TERSE:
+      N. Title — one short sentence
+
+  # Model-as-sensor, inverted from the original phrasing so the RESCUE round
+  # is the only branch: when the list is fine, nothing runs and no network
+  # job is submitted. (The old shape ran a job whose entire output was the
+  # sentinel "(no additional ideas needed)".)
+  - type: if
+    if:
+      mode: model
+      template: |
+        Target: {{target_count}} (if blank, 15) strong, clearly distinct
+        agentic orchestration ideas.
+
+        List to judge:
+        {{prime.curate.value}}
+
+        Does this list FALL SHORT of the target — too few ideas, weak or
+        duplicative entries, or items that are really just single prompts
+        or single connector calls rather than genuine multi-step processes?
+        Answer yes or no.
+    then:
+      - type: prompt
+        name: gap_ideas
+        template: |
+          This curated list of agentic orchestration ideas came up short:
+          {{prime.curate.value}}
+
+          Identify what KINDS of human activity are underrepresented in the
+          list above, then brainstorm 5-8 additional ideas from those gaps.
+          Same rules: recurring real tasks; multi-step LLM-driven processes
+          with feedback, branching, or waiting-and-reacting; connectors
+          welcome (email round-trips with a person, browsing, files,
+          calendars, spreadsheets); composition of existing library
+          workflows welcome; pure computer-work processes welcome
+          (research, writing, data cleanup, computation, creative
+          production).
+          {{#shape_hint}}
+          Shape requirement: {{shape_hint}}
+          {{/shape_hint}}
+
+          Output exactly one line per idea:
+          - Title — one short sentence. Be terse.
+
+  - type: prompt
+    name: final_list
+    template: |
+      Produce the final list of agentic orchestration ideas.
+
+      Curated list:
+      {{prime.curate.value}}
+
+      Possible additions (may be blank — if blank, there are none):
+      {{prime.gap_ideas.value}}
+
+      Merge them, remove any duplicates, keep the ranking sensible, and
+      output ONLY the final numbered list — no preamble, no commentary:
+      N. Title — one short sentence

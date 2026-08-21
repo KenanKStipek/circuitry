@@ -50,7 +50,7 @@ def _build_openai(cfg: dict[str, Any]) -> Adapter:
 def _build_anthropic(cfg: dict[str, Any]) -> Adapter:
     return AnthropicAdapter(
         base_url=cfg.get("base_url") or "https://api.anthropic.com",
-        default_model=cfg.get("default_model") or "claude-sonnet-4-20250514",
+        default_model=cfg.get("default_model") or AnthropicAdapter.default_model,
         max_tokens=int(cfg.get("max_tokens") or 4096),
     )
 
@@ -191,10 +191,16 @@ def _build_tgi(cfg: dict[str, Any]) -> Adapter:
 
 
 def _build_cyberdiner(cfg: dict[str, Any]) -> Adapter:
+    raw_valid_tiers = cfg.get("valid_tiers") or ()
+    if isinstance(raw_valid_tiers, str):
+        raw_valid_tiers = (raw_valid_tiers,)
     return CyberdinerAdapter(
         expo_url=cfg.get("expo_url") or "",
         token=cfg.get("token") or "",
-        default_tier=cfg.get("default_tier") or "tier-1",
+        default_tier=cfg.get("default_tier") or "cheap",
+        valid_tiers=tuple(
+            str(tier).strip() for tier in raw_valid_tiers if str(tier).strip()
+        ),
         poll_interval_ms=int(cfg.get("poll_interval_ms") or 500),
         timeout_seconds=int(cfg.get("timeout_seconds") or 30),
     )

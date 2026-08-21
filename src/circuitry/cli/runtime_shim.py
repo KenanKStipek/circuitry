@@ -72,6 +72,13 @@ class RunRequest:
     live_state_path: Path | None = None
     adapter: Adapter | None = None
     state_observer: Callable[[dict[str, Any]], None] | None = None
+    # Per-effect completion notifications: ``(effect_path, effect_node)``,
+    # the same payload runtime plugins receive from ``on_effect_complete``.
+    effect_observer: Callable[[str, dict[str, Any]], None] | None = None
+    # The counterpart, fired before each effect dispatches: same
+    # ``(effect_path, effect_node)`` payload runtime plugins receive from
+    # ``on_effect_start``.
+    effect_start_observer: Callable[[str, dict[str, Any]], None] | None = None
     skip_preflight: bool = False
     # Caller-level overrides, ranked above the orchestration's own
     # ``adapter``/``model`` (the ``cli`` tier of resolve_effective_settings).
@@ -144,7 +151,9 @@ def run(req: RunRequest) -> RunResult:
             cli_adapter=req.adapter_override,
             profile=profile,
         )
-        runtime_config = effective.runtime
+        # One shared dict for the whole run: `use` effects append their library
+        # pins to it as they resolve, at any nesting depth.
+        runtime_config = effective.runtime if effective.runtime is not None else {}
         persistence = build_persistence_backend(effective.runtime)
         plugins, plugin_events = _initialize_plugins(
             effective.plugins, allowed=cfg.enabled_plugins
@@ -341,10 +350,15 @@ def run(req: RunRequest) -> RunResult:
             # Write initial snapshot so watchers see the pending state
             on_write(state)
 
-        # Story 2: per-effect lifecycle hook. Fires after each effect's
-        # node["value"] is finalized. Skipped silently for plugins that
-        # don't implement on_effect_complete.
-        effect_complete_cb: Callable[[str, dict[str, Any]], None] | None = None
+        # Story 2: per-effect lifecycle hooks. ``on_effect_start`` fires
+        # before an effect dispatches, ``on_effect_complete`` once its
+        # node["value"] is finalized; both are skipped silently for plugins
+        # that don't implement them. ``req.effect_start_observer`` /
+        # ``req.effect_observer`` ride the same hooks, which is how a live UI
+        # learns an effect started or landed without diffing whole state
+        # snapshots.
+        start_observers: list[Callable[[str, dict[str, Any]], None]] = []
+        effect_observers: list[Callable[[str, dict[str, Any]], None]] = []
         if plugins:
             _plugin_ctx = PluginContext(
                 run_id=run_id,
@@ -354,7 +368,19 @@ def run(req: RunRequest) -> RunResult:
                 runtime_config=effective.runtime,
             )
 
-            def effect_complete_cb(  # type: ignore[no-redef]
+            def _notify_plugins_start(
+                effect_path: str, effect_node: dict[str, Any]
+            ) -> None:
+                invoke_plugins(
+                    plugins=plugins,
+                    hook_name="on_effect_start",
+                    state=state,
+                    context=_plugin_ctx,
+                    effect_path=effect_path,
+                    effect_node=effect_node,
+                )
+
+            def _notify_plugins(
                 effect_path: str, effect_result: dict[str, Any]
             ) -> None:
                 invoke_plugins(
@@ -366,19 +392,32 @@ def run(req: RunRequest) -> RunResult:
                     effect_result=effect_result,
                 )
 
-        store = Store(state, on_write=on_write, effect_complete=effect_complete_cb)
+            start_observers.append(_notify_plugins_start)
+            effect_observers.append(_notify_plugins)
+        if req.effect_start_observer is not None:
+            start_observers.append(req.effect_start_observer)
+        if req.effect_observer is not None:
+            effect_observers.append(req.effect_observer)
+
+        store = Store(
+            state,
+            on_write=on_write,
+            effect_complete=_compose_effect_observers(effect_observers),
+            effect_start=_compose_effect_observers(start_observers),
+        )
 
         runtime = DynamicRuntime(
             root_def,
             adapter=adapter,
             model=resolved_model,
-            runtime_config=effective.runtime or {},
+            runtime_config=runtime_config,
             dry_run=req.dry_run,
             timeout_seconds=timeout_seconds,
             verbose=req.verbose,
         )
         runtime.execute(store=store)
 
+        _record_library_pins(state, runtime_config)
         state["runtime"]["last_run"]["completed_at"] = _now_iso()
 
         success_events = invoke_plugins(
@@ -415,6 +454,9 @@ def run(req: RunRequest) -> RunResult:
 
     except Exception as e:
         try:
+            # Pins resolved before the failure still describe what this run
+            # reached for — keep them for the post-mortem.
+            _record_library_pins(state, runtime_config)
             if run_id is None:
                 run_id = str(uuid4())
             plugins_meta = state.setdefault("runtime", {}).setdefault("plugins", {})
@@ -455,6 +497,39 @@ def run(req: RunRequest) -> RunResult:
         return RunResult(ok=False, state=state, warnings=warnings, error=str(e))
 
 
+def _compose_effect_observers(
+    observers: list[Callable[[str, dict[str, Any]], None]],
+) -> Callable[[str, dict[str, Any]], None] | None:
+    """Fold per-effect observers into the single callback ``Store`` takes."""
+    if not observers:
+        return None
+    if len(observers) == 1:
+        return observers[0]
+
+    def fan_out(effect_path: str, effect_node: dict[str, Any]) -> None:
+        for observer in observers:
+            observer(effect_path, effect_node)
+
+    return fan_out
+
+
+def _record_library_pins(
+    state: dict[str, Any], runtime_config: dict[str, Any] | None
+) -> None:
+    """Copy the run's `use ref:` pins into `runtime.library_refs`.
+
+    Each pin carries source, ref, resolved path, and — for SHA-pinned remote
+    sources — the commit and cache directory it was served from, which is what
+    a later offline re-run reproduces.
+    """
+    from ..core.library_ref import STATE_KEY, collect_pins
+
+    pins = collect_pins(runtime_config)
+    if not pins:
+        return
+    state.setdefault("runtime", {})[STATE_KEY] = pins
+
+
 def validate(
     orchestration_path: Path,
     *,
@@ -463,17 +538,29 @@ def validate(
 ) -> dict[str, Any]:
     text = orchestration_path.read_text(encoding="utf-8").strip()
     if not text:
-        return {"ok": False, "errors": ["Orchestration file is empty."]}
+        return {"ok": False, "errors": ["Orchestration file is empty."], "warnings": []}
+
+    # Advisory lint (deprecated aliases, type-keyword effect names). Populated
+    # as soon as the document parses and carried through every exit below —
+    # warnings never change ``ok``, so a file can be valid and still noisy.
+    lint_warnings: list[str] = []
 
     try:
         orch = load_orchestration_file(orchestration_path)
+
+        from ..core.lint import lint_orchestration
+        lint_warnings = lint_orchestration(orch)
 
         schema = _load_schema()
         if schema is not None:
             validator = _jsonschema.Draft7Validator(schema)
             schema_errors = sorted(validator.iter_errors(orch), key=str)
             if schema_errors:
-                return {"ok": False, "errors": [e.message for e in schema_errors]}
+                return {
+                    "ok": False,
+                    "errors": [e.message for e in schema_errors],
+                    "warnings": lint_warnings,
+                }
 
         # Allowlist gate. Skipped when caller supplies no config — keeps
         # programmatic callers (tests, MCP server, internal scripts)
@@ -482,16 +569,25 @@ def validate(
         if config is not None:
             allowlist_errors = check_allowlist(orch=orch, config=config)
             if allowlist_errors:
-                return {"ok": False, "errors": allowlist_errors}
+                return {
+                    "ok": False,
+                    "errors": allowlist_errors,
+                    "warnings": lint_warnings,
+                }
 
         compile_orchestration(orch=orch, root_name="prime")
 
         from ..core.cycle_check import detect_cycles
-        cycle = detect_cycles(orch, root_path=orchestration_path)
+        cycle = detect_cycles(
+            orch,
+            root_path=orchestration_path,
+            runtime=(config.runtime if config is not None else None),
+        )
         if cycle is not None:
             return {
                 "ok": False,
                 "errors": [f"Cycle: {' → '.join(cycle)}"],
+                "warnings": lint_warnings,
             }
 
         # Preflight gate (Story 1). Same gating policy as allowlist — only
@@ -503,11 +599,15 @@ def validate(
             preflight_results = preflight(orchestration_path, config)
             preflight_errors = format_preflight_errors(preflight_results)
             if preflight_errors:
-                return {"ok": False, "errors": preflight_errors}
+                return {
+                    "ok": False,
+                    "errors": preflight_errors,
+                    "warnings": lint_warnings,
+                }
 
-        return {"ok": True, "errors": []}
+        return {"ok": True, "errors": [], "warnings": lint_warnings}
     except Exception as e:
-        return {"ok": False, "errors": [str(e)]}
+        return {"ok": False, "errors": [str(e)], "warnings": lint_warnings}
 
 
 def preflight(
@@ -521,6 +621,7 @@ def preflight(
       * ``adapter:<name>``
       * ``tool:<name>``
       * ``runtime_plugin:<name>``
+      * ``library_ref:<ref>``
 
     Adapters that can only be built at runtime (host_claude needs a
     request_handler) are reported as ok with a deferred message; preflight
@@ -530,6 +631,18 @@ def preflight(
     adapter_refs, tool_refs = walk_orchestration_refs(orch)
     runtime_cfg = config.runtime or {}
     results: list[tuple[str, CheckResult]] = []
+
+    # `use ref:` entries served by a source that was never refreshed fail here,
+    # before any effect runs, carrying the `cof library refresh` command that
+    # fixes them. Resolvable-but-missing refs are left to the run's own error.
+    from ..core.library_ref import check_use_refs
+
+    for ref, message in check_use_refs(
+        orch, root_path=orchestration_path, runtime=runtime_cfg
+    ):
+        results.append(
+            (f"library_ref:{ref}", CheckResult(ok=False, missing=[], message=message))
+        )
 
     for adapter_name in sorted(adapter_refs):
         try:

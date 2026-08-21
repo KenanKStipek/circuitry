@@ -3,10 +3,10 @@
  1  Library — Browse bundled and shared 
  2  Run — Execute an orchestration and  
  3  Inspect — Orchestration metadata, s 
- 4  Runs — History of past runs and the 
+ 4  Runs — Inspect run state as a tree, 
  5  Doctor — Backend, config, and conne 
  6  Settings — Effective configuration  
  7  Validate — Check an orchestration f 
  8  Chat — Describe a pipeline and let  
-                                        
+ 9  Profiles — Edit named profiles: per 
  tab Next view  ? Help  q Ba▏^p palette 

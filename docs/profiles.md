@@ -29,10 +29,10 @@ inputs:
   topic: "circuit design"   # merged into the initial state (CLI -e wins)
 effects:                    # keyed by dotted effect path, as in state
   summarize:
-    model: tier-1
+    model: cheap
     provider: cyberdiner
   deep_analysis:
-    model: tier-4
+    model: good-fast
   my_reflector:
     enabled: false           # do not execute this effect for this run
 persistence:                 # where this run's state snapshot lands
@@ -61,6 +61,11 @@ and contribute no path segment.
 CLI > profile > orchestration > project config > global config > default
 ```
 
+`CLI` here is `cof run --adapter <name>` / `--model <name>` (also available on
+`cof run-library`). Environment variables (`CIRCUITRY_ADAPTER`,
+`CIRCUITRY_MODEL`) overlay the *config* layer, so a profile beats them and a
+flag beats both.
+
 (Project config already layers over global config before this — see
 `resolve_config` in `circuitry.cli.config`.) A run with no `--profile` is
 unaffected by this feature — profile resolution is skipped entirely.
@@ -86,7 +91,8 @@ executed, and its node is written as a skip marker mirroring `on_error: skip`:
 { "value": null, "meta": { "disabled": true, "created_at": "...", "completed_at": "..." } }
 ```
 
-`on_effect_complete` still fires for that node, so observability sees the skip.
+`on_effect_start` and `on_effect_complete` still fire for that node, so
+observability sees the skip.
 Disabling a container (`dynamic`/`loop`/`conditional`/`reflector`) disables its
 whole subtree.
 
@@ -185,6 +191,11 @@ than overwriting resumed values.
 ```bash
 cof run recipe --profile fast
 ```
+
+Or edit one without touching the YAML: `cof tui`, then `9` for the profile
+editor — the effect tree with a picker and a toggle per row, panels for the
+run defaults, inputs and persistence, and save/duplicate/switch across named
+profiles. See [Profiles (`9`)](tui.md#profiles-9--edit-a-named-profile).
 
 ## Runtime Metadata
 

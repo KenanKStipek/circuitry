@@ -86,6 +86,9 @@ def default_cache_root() -> Path:
 class GitHubSource:
     """A GitHub repository subtree, consumed from a SHA-pinned local cache."""
 
+    #: The one source type where `refresh()` does real work (a network fetch).
+    REFRESHABLE = True
+
     def __init__(
         self,
         *,
@@ -163,6 +166,27 @@ class GitHubSource:
         if folder is None:
             return None
         return folder.resolve(ref)
+
+    def provenance(self) -> dict[str, str]:
+        """Repo, ref, pinned SHA and fetch time — everything a reader needs
+        to know *which* bytes they are looking at.
+
+        Read from the cache index, so it describes the tree actually on disk
+        rather than what the next refresh would produce.
+        """
+        details: dict[str, str] = {"type": "github", "repo": self.repo, "ref": self.ref}
+        if self.path:
+            details["path"] = self.path
+        index = self.read_index() or {}
+        sha = str(index.get("sha") or "")
+        if sha:
+            details["sha"] = sha
+            details["fetched_at"] = str(index.get("fetched_at") or "")
+        else:
+            details["status"] = "not fetched"
+        if self.token_env:
+            details["token_env"] = f"${self.token_env}"
+        return details
 
     def notice(self) -> str | None:
         """A user-facing hint when the cache cannot serve this source yet."""

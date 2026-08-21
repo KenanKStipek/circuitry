@@ -39,6 +39,7 @@ from ..cli.orchestration_loader import load_orchestration_file
 from ..cli.redaction import redact
 from ..core.compiler import compile_orchestration
 from ..core.cycle_check import detect_cycles
+from ..core.lint import lint_orchestration
 from ..core.runtime_plugins import load_plugins
 from ..plugins.factory import PLUGIN_REGISTRY, build_plugin
 from ..preflight import CheckResult, call_check
@@ -345,6 +346,9 @@ class ValidationReport:
     issues: tuple[ValidationIssue, ...] = ()
     #: Gates that could not run (no config supplied, jsonschema absent, ...).
     skipped: tuple[str, ...] = ()
+    #: Advisory lint (deprecated aliases, type-keyword names). Deliberately
+    #: outside :attr:`issues` — a warned-about file is still a valid file.
+    warnings: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -408,6 +412,8 @@ def validate_report(
             (ValidationIssue("load", f"Expected a mapping at the top level, got {type(orch).__name__}."),),
         )
 
+    warnings = tuple(lint_orchestration(orch))
+
     schema = runtime_shim.load_schema()
     if schema is None:
         skipped.append("schema")
@@ -435,8 +441,12 @@ def validate_report(
         issues.append(ValidationIssue("compile", str(exc)))
 
     try:
-        cycle = detect_cycles(orch, root_path=path)
-    except Exception as exc:
+        cycle = detect_cycles(
+            orch,
+            root_path=path,
+            runtime=(config.runtime if config is not None else None),
+        )
+    except Exception as exc:  # noqa: BLE001 - unreadable sub-orchestration, etc.
         issues.append(ValidationIssue("cycle", str(exc)))
     else:
         if cycle is not None:
@@ -461,7 +471,7 @@ def validate_report(
                 if not result.ok
             ]
 
-    return ValidationReport(path, tuple(issues), tuple(skipped))
+    return ValidationReport(path, tuple(issues), tuple(skipped), warnings)
 
 
 class DiagnosticsSource(Protocol):
