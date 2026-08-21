@@ -446,7 +446,7 @@ def validate_report(
             root_path=path,
             runtime=(config.runtime if config is not None else None),
         )
-    except Exception as exc:  # noqa: BLE001 - unreadable sub-orchestration, etc.
+    except Exception as exc:
         issues.append(ValidationIssue("cycle", str(exc)))
     else:
         if cycle is not None:

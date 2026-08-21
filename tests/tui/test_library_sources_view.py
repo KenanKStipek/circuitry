@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 
@@ -107,18 +107,18 @@ class FakeHub:
         self.repo = "owner/hub"
         self.ref = "main"
         self.cache_root = cache_root
-        self.sha: Optional[str] = None
+        self.sha: str | None = None
         self.fetched_at = ""
         #: Set to a message to make the next fetch fail.
-        self.fail: Optional[str] = None
+        self.fail: str | None = None
         #: Set to hold the fetch open, so a test can drive the UI mid-refresh.
-        self.gate: Optional[threading.Event] = None
+        self.gate: threading.Event | None = None
         self.calls = 0
         self.files = {"hub_review.yml": HUB_PIPELINE, "dupe.yml": DUPE_HUB}
 
     # -- LibrarySource protocol ---------------------------------------------
 
-    def _folder(self) -> Optional[FolderSource]:
+    def _folder(self) -> FolderSource | None:
         if self.sha is None:
             return None
         return FolderSource(self.name, self.cache_root / self.sha)
@@ -127,11 +127,11 @@ class FakeHub:
         folder = self._folder()
         return folder.list_entries() if folder is not None else []
 
-    def resolve(self, ref: str) -> Optional[Path]:
+    def resolve(self, ref: str) -> Path | None:
         folder = self._folder()
         return folder.resolve(ref) if folder is not None else None
 
-    def notice(self) -> Optional[str]:
+    def notice(self) -> str | None:
         if self.sha is not None:
             return None
         return (
@@ -252,7 +252,7 @@ def test_ambiguous_names_are_the_ones_more_than_one_source_claims() -> None:
 def test_the_badge_is_only_drawn_for_a_multi_source_library() -> None:
     entry = LibraryEntry(name="one", category="", file="one.yml", intent="", source="hub")
     assert option_label(entry) == "one"
-    assert "[hub] one" == str(option_label(entry, show_source=True))
+    assert str(option_label(entry, show_source=True)) == "[hub] one"
 
 
 def test_an_ambiguous_row_is_shown_source_qualified() -> None:

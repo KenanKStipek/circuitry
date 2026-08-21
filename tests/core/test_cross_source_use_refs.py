@@ -14,7 +14,7 @@ import base64
 import json
 import urllib.parse
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from unittest.mock import MagicMock
 from urllib.error import URLError
 
@@ -42,7 +42,7 @@ class _FakeResponse:
     def read(self) -> bytes:
         return self._body
 
-    def __enter__(self) -> "_FakeResponse":
+    def __enter__(self) -> _FakeResponse:
         return self
 
     def __exit__(self, *args: Any) -> None:
@@ -58,7 +58,7 @@ class FakeGitHub:
         self.offline = False
         self.calls = 0
 
-    def install(self, monkeypatch: pytest.MonkeyPatch) -> "FakeGitHub":
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
         def fake_urlopen(req: Any, timeout: int = 0) -> _FakeResponse:
             self.calls += 1
             if self.offline:
@@ -115,7 +115,7 @@ def _write(path: Path, content: Any) -> Path:
     return path
 
 
-def _config(tmp_path: Path, *, sources: Optional[list[dict[str, Any]]] = None) -> CircuitryConfig:
+def _config(tmp_path: Path, *, sources: list[dict[str, Any]] | None = None) -> CircuitryConfig:
     return CircuitryConfig(
         default_model="test-model",
         default_adapter="ollama",

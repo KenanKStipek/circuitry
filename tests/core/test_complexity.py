@@ -12,7 +12,7 @@ import json
 import sys
 from dataclasses import FrozenInstanceError, dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 
@@ -93,12 +93,12 @@ class _DefinitionLike:
     """Stand-in for a compiled definition object (attributes, not keys)."""
 
     name: str
-    template: Optional[str] = None
+    template: str | None = None
     prompt_type: str = "text"
-    schema: Optional[dict[str, Any]] = None
-    params: Optional[dict[str, Any]] = None
-    description: Optional[str] = None
-    messages: Optional[list[Any]] = None
+    schema: dict[str, Any] | None = None
+    params: dict[str, Any] | None = None
+    description: str | None = None
+    messages: list[Any] | None = None
 
 
 def _sum_contributions(result: ComplexityScore) -> float:
@@ -555,7 +555,7 @@ def test_scaling_every_weight_leaves_the_score_unchanged() -> None:
 
 def test_all_zero_weights_score_zero_with_a_warning() -> None:
     result = score(
-        SCHEMA_CONSTRAINED_EXTRACTION, weights={name: 0.0 for name in SIGNAL_NAMES}
+        SCHEMA_CONSTRAINED_EXTRACTION, weights=dict.fromkeys(SIGNAL_NAMES, 0.0)
     )
 
     assert result.score == MIN_SCORE

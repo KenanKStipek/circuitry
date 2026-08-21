@@ -16,6 +16,7 @@ import yaml
 
 pytest.importorskip("textual")
 
+from state_fixture import fixture_state
 from textual.pilot import Pilot
 from textual.widgets import Input, Static, Tree
 
@@ -29,8 +30,6 @@ from circuitry.tui.launch import OrchestrationChoice
 from circuitry.tui.run_view import RunScreen
 from circuitry.tui.runs_view import EMPTY_SOURCE, FILE, LIVE, POST_RUN, RunsScreen
 from circuitry.tui.screens import VIEWS
-
-from state_fixture import fixture_state
 
 RUNS_SPEC = next(spec for spec in VIEWS if spec.slug == "runs")
 RUN_SPEC = next(spec for spec in VIEWS if spec.slug == "run")

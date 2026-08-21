@@ -390,7 +390,7 @@ class LibraryRegistry:
         return cls([_build_source(spec, index) for index, spec in enumerate(raw_sources)])
 
     @classmethod
-    def from_runtime(cls, runtime: dict[str, Any] | None = None) -> "LibraryRegistry":
+    def from_runtime(cls, runtime: dict[str, Any] | None = None) -> LibraryRegistry:
         """Build from a bare `runtime` mapping rather than a `CircuitryConfig`.
 
         The core runtime only ever carries the resolved `runtime` dict (see
@@ -400,7 +400,7 @@ class LibraryRegistry:
         return cls.from_config(CircuitryConfig(runtime=dict(runtime or {})))
 
     @classmethod
-    def default(cls) -> "LibraryRegistry":
+    def default(cls) -> LibraryRegistry:
         return cls([CurationSource()])
 
     # -- queries ------------------------------------------------------------

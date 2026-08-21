@@ -22,9 +22,9 @@ from textual.widgets import Input, Select, Static, Switch
 
 from circuitry.adapters.base import GenerateResult
 from circuitry.cli.config import CircuitryConfig
-from circuitry.tui.app import CircuitryApp
 from circuitry.cli.runtime_shim import RunRequest
 from circuitry.cli.runtime_shim import run as shim_run
+from circuitry.tui.app import CircuitryApp
 from circuitry.tui.launch import OrchestrationChoice
 from circuitry.tui.profile_edit import (
     NO_OVERRIDE,

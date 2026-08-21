@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .complexity_config import (
-    ComplexitySettings,
     DEFAULT_COMPLEXITY_SETTINGS,
+    ComplexitySettings,
     resolve_complexity_settings,
 )
 from .config import CircuitryConfig

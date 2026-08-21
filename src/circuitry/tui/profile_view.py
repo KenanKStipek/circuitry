@@ -28,7 +28,7 @@ Everything that is not a widget lives in :mod:`circuitry.tui.profile_edit`.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -188,7 +188,7 @@ class ProfileScreen(ViewScreen):
         root: Path | None = None,
         cwd: Path | None = None,
         name: str | None = None,
-        id: str | None = None,  # noqa: A002 - Textual's parameter name
+        id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(spec, name=name, id=id, classes=classes)
@@ -323,7 +323,7 @@ class ProfileScreen(ViewScreen):
             # effect tree to pick models for, and saying so beats rendering
             # a tree built from a file the engine would reject.
             compile_orchestration(orch=orch)
-        except Exception as exc:  # noqa: BLE001 - any load/compile failure is user-facing
+        except Exception as exc:
             self._choice = None
             self._orch = {}
             await self._render_tree([])
@@ -367,7 +367,7 @@ class ProfileScreen(ViewScreen):
         name = str(value)
         try:
             draft = load_draft(name, orchestration_path=self._choice.path, cwd=self._cwd)
-        except Exception as exc:  # noqa: BLE001 - a bad file must not kill the view
+        except Exception as exc:
             self._set_status(f"Could not open profile {name!r}: {exc}", "-failed")
             return
         await self._adopt(draft)
@@ -480,7 +480,7 @@ class ProfileScreen(ViewScreen):
         for index, spec in enumerate(self._input_fields):
             try:
                 box = self.query_one(f"#pin-{index}", Input)
-            except Exception:  # noqa: BLE001 - panel is mid-rebuild
+            except Exception:
                 continue
             raw[spec.name] = box.value
         return raw
@@ -656,7 +656,7 @@ class ProfileScreen(ViewScreen):
         for spec_field in self._backend_fields:
             try:
                 box = self.query_one(f"#pers-{spec_field.key}", Input)
-            except Exception:  # noqa: BLE001 - panel is mid-rebuild
+            except Exception:
                 continue
             text = box.value.strip()
             if text:
@@ -883,7 +883,7 @@ def _picker(
 ) -> Select[str]:
     return Select(
         _picker_options(options, current, custom=custom),
-        value=current if current else NO_OVERRIDE,
+        value=current or NO_OVERRIDE,
         allow_blank=False,
         id=widget_id,
     )
@@ -892,7 +892,7 @@ def _picker(
 def _set_picker(select: Select[str], options: list[str], current: str | None) -> None:
     """Repoint an already-mounted picker without remounting it."""
     select.set_options(_picker_options(options, current))
-    select.value = current if current else NO_OVERRIDE
+    select.value = current or NO_OVERRIDE
 
 
 def _custom_box(widget_id: str, placeholder: str) -> Input:
@@ -981,12 +981,12 @@ def _ready_message(choice: OrchestrationChoice, tree: list[EffectNode]) -> str:
 def _safe_config() -> CircuitryConfig:
     try:
         return resolve_config()
-    except Exception:  # noqa: BLE001 - a bad config file must not kill the view
+    except Exception:
         return CircuitryConfig()
 
 
-def _safe_choices(root: Optional[Path]) -> list[OrchestrationChoice]:
+def _safe_choices(root: Path | None) -> list[OrchestrationChoice]:
     try:
         return discover_orchestrations(root)
-    except Exception:  # noqa: BLE001 - discovery touches the filesystem
+    except Exception:
         return []

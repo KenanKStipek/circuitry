@@ -243,7 +243,7 @@ class EffectOverride:
         return out
 
     @classmethod
-    def from_mapping(cls, raw: Any) -> "EffectOverride":
+    def from_mapping(cls, raw: Any) -> EffectOverride:
         if not isinstance(raw, dict):
             return cls()
         model = raw.get("model")
@@ -359,7 +359,7 @@ class PersistenceDraft:
         ]
 
     @classmethod
-    def from_mapping(cls, raw: Any) -> "PersistenceDraft | None":
+    def from_mapping(cls, raw: Any) -> PersistenceDraft | None:
         if not isinstance(raw, dict):
             return None
         backend = str(raw.get("backend") or "").strip()
@@ -524,7 +524,7 @@ class ProfileDraft:
         self.baseline = body
         return path
 
-    def duplicate(self, name: str) -> "ProfileDraft":
+    def duplicate(self, name: str) -> ProfileDraft:
         """A copy under a new name, unsaved (so it reads as dirty)."""
         return ProfileDraft(
             name=name,

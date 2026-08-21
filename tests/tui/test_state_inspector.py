@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from state_fixture import LONG_VALUE, T0, T1, every_path, fixture_state
 
 from circuitry.cli.last_run import LastRun, read_last_run, state_from_env_pairs
 from circuitry.cli.redaction import REDACTED
@@ -28,8 +29,6 @@ from circuitry.tui.inspector import (
     preview,
     render_text,
 )
-
-from state_fixture import LONG_VALUE, T0, T1, every_path, fixture_state
 
 
 @pytest.fixture

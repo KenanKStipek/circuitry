@@ -753,7 +753,7 @@ class RunScreen(ViewScreen):
         """
         try:
             self.query_one("#run-tree", Static).scroll_visible(top=True, animate=False)
-        except Exception:  # noqa: BLE001 - a scroll is never worth an error
+        except Exception:
             return
 
     def show_state(self, state: dict[str, Any], *, elapsed: float | None = None) -> None:

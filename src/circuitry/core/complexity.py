@@ -71,8 +71,9 @@ degrades to a neutral measurement and appends a line to
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Literal, Mapping, NamedTuple, Sequence
+from typing import Any, Literal, NamedTuple
 
 __all__ = [
     "DEFAULT_KEYWORD_WEIGHTS",
@@ -212,7 +213,7 @@ def _number(value: Any) -> float:
 
 
 def _clamp01(value: float) -> float:
-    return 0.0 if value < 0.0 else (1.0 if value > 1.0 else value)
+    return 0.0 if value < 0.0 else (min(value, 1.0))
 
 
 def _saturate(value: float, half: float) -> float:
@@ -265,7 +266,7 @@ class StructureContext:
         return self.loop_depth > 0
 
     @classmethod
-    def from_any(cls, value: Any) -> tuple["StructureContext", list[str]]:
+    def from_any(cls, value: Any) -> tuple[StructureContext, list[str]]:
         """Build a context from a mapping, an instance, or ``None``.
 
         Returns the context plus any warnings raised while coercing it. Junk
