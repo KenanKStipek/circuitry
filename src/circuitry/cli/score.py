@@ -480,7 +480,12 @@ def register_score(app: typer.Typer) -> None:
         ),
     ) -> None:
         cfg = resolve_config(explicit_path=config)
-        orch = load_orchestration_file(orchestration)
+
+        try:
+            orch = load_orchestration_file(orchestration)
+        except ValueError as exc:
+            err_console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(code=1) from exc
 
         profile_settings: Optional[ProfileSettings] = None
         if profile:

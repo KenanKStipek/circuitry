@@ -95,6 +95,9 @@ Recognised signals and their default weights:
 An unrecognised signal name is an error rather than a silent no-op, so a typo
 in `weights` cannot quietly do nothing.
 
+To see what these settings produce for a given orchestration before running it,
+use [`cof score`](./score-command.md).
+
 ### `routing`
 
 | Field | Type | Default | Description |

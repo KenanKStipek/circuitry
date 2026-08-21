@@ -45,6 +45,7 @@ Last Updated: 2026-05-08
 - [Troubleshooting State Paths](./troubleshooting-state-paths.md)
 - [Project Scan Sections](./project-scan-sections.md)
 - [Complexity Configuration](./complexity-config.md) — `runtime.complexity`: the scoring/routing/decomposition switches, their defaults, and precedence
+- [`cof score`](./score-command.md) — the static per-effect complexity preview: dotted paths, unscoreable effects, and the `--json` payload
 
 ## Existing Domain Documentation
 
