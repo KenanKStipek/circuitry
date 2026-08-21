@@ -91,7 +91,8 @@ executed, and its node is written as a skip marker mirroring `on_error: skip`:
 { "value": null, "meta": { "disabled": true, "created_at": "...", "completed_at": "..." } }
 ```
 
-`on_effect_complete` still fires for that node, so observability sees the skip.
+`on_effect_start` and `on_effect_complete` still fire for that node, so
+observability sees the skip.
 Disabling a container (`dynamic`/`loop`/`conditional`/`reflector`) disables its
 whole subtree.
 

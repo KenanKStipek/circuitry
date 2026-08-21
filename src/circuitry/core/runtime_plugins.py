@@ -40,6 +40,20 @@ class RuntimePlugin(Protocol):
     # that don't implement it default to ok=True (see core.preflight.call_check).
     def check(self) -> CheckResult: ...
 
+    # Optional: fired immediately before each effect dispatches, carrying the
+    # effect's state node as it stands at that moment (the complexity score
+    # included, when scoring is enabled). The mirror of on_effect_complete —
+    # same optionality guard, so a plugin may implement either, both, or
+    # neither.
+    def on_effect_start(
+        self,
+        *,
+        state: dict[str, Any],
+        context: PluginContext,
+        effect_path: str,
+        effect_node: dict[str, Any],
+    ) -> None: ...
+
     # Optional (Story 2): fired after each effect's node["value"] is written.
     # Plugins missing this method are skipped via hasattr guard in
     # invoke_plugins so external plugins predating this hook keep working.
@@ -106,6 +120,7 @@ def invoke_plugins(
     error: str | None = None,
     effect_path: str | None = None,
     effect_result: dict[str, Any] | None = None,
+    effect_node: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
 
@@ -119,6 +134,18 @@ def invoke_plugins(
             elif hook_name == "on_run_failure":
                 plugin.on_run_failure(
                     state=state, context=context, error=error or "unknown error"
+                )
+            elif hook_name == "on_effect_start":
+                # Optional hook, same guard as on_effect_complete — a plugin
+                # that only implements the completion half is untouched.
+                start_handler = getattr(plugin, "on_effect_start", None)
+                if start_handler is None or not callable(start_handler):
+                    continue
+                start_handler(
+                    state=state,
+                    context=context,
+                    effect_path=effect_path or "",
+                    effect_node=effect_node or {},
                 )
             elif hook_name == "on_effect_complete":
                 # Optional hook — plugins that predate Story 2 are skipped

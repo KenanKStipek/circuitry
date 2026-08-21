@@ -152,6 +152,9 @@ class LoopRuntime:
             meta["min_iterations"] = self.defn.min_iterations
             child_store = store.child(self.defn.name)
             iterations_effects: list[dict[str, Any]] = []
+            # Before the first iteration, so the loop's own start brackets
+            # every start/complete pair its body produces.
+            store.fire_effect_start(self.defn.name, node)
         else:
             node = None
             meta = None
@@ -391,6 +394,10 @@ class LoopRuntime:
                     node["collected"] = {
                         "value": self._collect_values(node, iteration_count)
                     }
+            if is_named and self.defn.name:
+                # Balances the start fired before the first iteration — a
+                # loop that blew up still closes its pair.
+                store.fire_effect_complete(self.defn.name, node or {})
             raise
 
     def _collect_values(

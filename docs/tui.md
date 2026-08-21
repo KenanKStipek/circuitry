@@ -241,6 +241,8 @@ Two event sources feed it:
   each effect lands, which is what fills in statuses, timings and tokens.
 - **`effect_observer`** — `RunRequest`'s per-effect hook, the same one runtime
   plugins see as `on_effect_complete`, carrying `(effect_path, effect_node)`.
+  Its counterpart `effect_start_observer` (`on_effect_start`) fires the same
+  payload before an effect dispatches.
   Tree flow merges its children's state back only once the last sibling
   finishes, so these notifications are what let a parallel sibling be marked
   off as soon as *it* is done.
