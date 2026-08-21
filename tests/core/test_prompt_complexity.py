@@ -12,11 +12,15 @@ from __future__ import annotations
 import copy
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from circuitry.adapters.base import GenerateResult
+from circuitry.cli.config import CircuitryConfig
+from circuitry.cli.runtime_shim import RunRequest, run
 from circuitry.core.compiler import compile_orchestration
 from circuitry.core.dynamic import DynamicRuntime
 from circuitry.core.store import Store
@@ -243,3 +247,57 @@ def test_cel_condition_branches_on_the_recorded_score() -> None:
     assert flipped.get("prime.gate.meta.branch") == "else"
     assert flipped.get("prime.gate.quick_pass.value") == "echo:quick"
     assert flipped.get("prime.gate.deep_review") is None
+
+
+def test_config_block_reaches_the_runtime_through_a_real_run(
+    tmp_path: Path,
+) -> None:
+    """The demo path end to end: `runtime.complexity` in a config file, a run
+    through the CLI shim, a score on the state written to disk, and a
+    conditional in the same orchestration branching on it.
+
+    The unit tests above hand `PromptRuntime` a runtime dict directly; this one
+    exists to prove that config actually arrives there.
+    """
+    orch = {
+        "effects": [
+            _prompt_orch()["effects"][0],
+            {
+                "type": "conditional",
+                "name": "gate",
+                "if": {
+                    "mode": "cel",
+                    "expr": "state.prime.task.meta.complexity.score > 5.0",
+                },
+                "then": [
+                    {"type": "prompt", "name": "deep_review", "template": "deep"}
+                ],
+            },
+        ]
+    }
+    orch_path = tmp_path / "orch.yml"
+    orch_path.write_text(yaml.dump(orch, sort_keys=False), encoding="utf-8")
+
+    result = run(
+        RunRequest(
+            orchestration_path=orch_path,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            initial_state={},
+            adapter=EchoAdapter(name="echo"),
+            skip_preflight=True,
+            config=CircuitryConfig(runtime=copy.deepcopy(SCORING_ON)),
+        )
+    )
+
+    assert result.ok, result.error
+
+    # Round-tripped through JSON: whatever is written here has to survive
+    # serialization to a state file.
+    written = json.loads(json.dumps(result.state))
+    complexity = written["prime"]["task"]["meta"]["complexity"]
+    assert complexity["score"] > 5.0
+    assert complexity["signals"]["state_references"]["raw"] == 2.0
+    assert written["prime"]["gate"]["meta"]["branch"] == "then"
