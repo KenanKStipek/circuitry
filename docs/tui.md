@@ -348,9 +348,9 @@ the question the pane exists to answer:
   complexity   62.0/100  high  (rendered)
   …
 complexity signals
-  ▸ prompt_size   40.0   65%  ~900 tokens of rendered prompt
-    schema_shape  15.0   24%  schema depth 2, 6 field(s)
-    keywords       7.0   11%  matched analyze, compare
+  ▸ prompt_size     40.0   65%  ~900 tokens of rendered prompt
+    output_schema   15.0   24%  schema depth 2, 6 field(s)
+    keywords         7.0   11%  matched analyze, compare
   dominated by prompt_size
 ```
 
