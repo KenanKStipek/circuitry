@@ -98,6 +98,12 @@ class CircuitryApp(App[None]):
         height: auto;
     }
 
+    /* A row must fill the list, not hug its text — otherwise it never learns
+       how much room it has and ellipsising it is guesswork. */
+    #home-views ViewRow {
+        width: 1fr;
+    }
+
     CircuitryScreen.-compact #home-views {
         border: none;
     }
@@ -132,7 +138,10 @@ class CircuitryApp(App[None]):
             Binding(spec.key, f"show_view('{spec.slug}')", spec.name, show=False)
             for spec in VIEWS
         ),
-        Binding("tab", "next_view", "Next view", priority=True),
+        # Tab is off the footer, not out of the app: it is the least
+        # surprising key in any TUI, and the fifteen cells it was spending
+        # there are worth more to "? Help" on a screen with six bindings.
+        Binding("tab", "next_view", "Next view", show=False, priority=True),
         Binding("shift+tab", "previous_view", "Previous view", show=False, priority=True),
         Binding("ctrl+n", "focus_next", "Next field"),
         Binding("ctrl+b", "focus_previous", "Previous field", show=False),

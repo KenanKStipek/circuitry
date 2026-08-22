@@ -32,7 +32,12 @@ from circuitry.tui.complexity import (
     band_for,
 )
 from circuitry.tui.complexity import read as read_complexity
-from circuitry.tui.inspector import EffectMeta, build_state_nodes, detail_lines, find_node
+from circuitry.tui.inspector import (
+    EffectMeta,
+    build_state_nodes,
+    detail_lines,
+    find_node,
+)
 
 T0 = "2026-01-01T00:00:00+00:00"
 T1 = "2026-01-01T00:00:01.500000+00:00"
@@ -436,7 +441,7 @@ def test_a_tree_with_no_room_at_all_drops_the_column_not_the_rows() -> None:
 def test_the_tree_never_gets_less_than_the_minimum() -> None:
     """Whatever the column decides, the rows keep their cells."""
     nodes = ex.build_tree(_plan(), _state(), scores={"prime.draft": FULL_SCORE})
-    for width in range(0, 80):
+    for width in range(80):
         assert width - ex.score_column_width(nodes, width) >= ex.MIN_TREE_WIDTH or (
             ex.score_column_width(nodes, width) == 0
         )
@@ -639,7 +644,7 @@ def test_the_score_appears_while_the_effect_is_still_running(
     async def scenario(pilot: Pilot[Any]) -> tuple[str, str, str]:
         screen = await _open(pilot, _screen(_write(tmp_path, LIVE), runner))
         screen.query_one("#run-launch", Button).press()
-        assert await _settle(pilot, lambda: runner.started.is_set())
+        assert await _settle(pilot, runner.started.is_set)
         assert await _settle(pilot, lambda: "62 high" in screen.tree_text)
         mid_tree, mid_status = screen.tree_text, _row(screen, "draft").status
         runner.release.set()
@@ -664,7 +669,7 @@ def test_a_run_with_no_scores_draws_the_tree_it_always_drew(
     async def scenario(pilot: Pilot[Any]) -> str:
         screen = await _open(pilot, _screen(_write(tmp_path, LIVE), runner))
         screen.query_one("#run-launch", Button).press()
-        assert await _settle(pilot, lambda: runner.started.is_set())
+        assert await _settle(pilot, runner.started.is_set)
         runner.release.set()
         assert await _settle(pilot, lambda: screen.last_result is not None)
         await pilot.pause()
@@ -688,7 +693,7 @@ def test_an_eighty_column_terminal_keeps_the_number(
     async def scenario(pilot: Pilot[Any]) -> str:
         screen = await _open(pilot, _screen(_write(tmp_path, LIVE), runner))
         screen.query_one("#run-launch", Button).press()
-        assert await _settle(pilot, lambda: runner.started.is_set())
+        assert await _settle(pilot, runner.started.is_set)
         assert await _settle(pilot, lambda: "62" in screen.tree_text)
         tree = screen.tree_text
         runner.release.set()
@@ -709,7 +714,7 @@ def test_a_narrow_terminal_drops_the_column_not_the_effect_names(
     async def scenario(pilot: Pilot[Any]) -> tuple[str, str]:
         screen = await _open(pilot, _screen(_write(tmp_path, LIVE), runner))
         screen.query_one("#run-launch", Button).press()
-        assert await _settle(pilot, lambda: runner.started.is_set())
+        assert await _settle(pilot, runner.started.is_set)
         assert await _settle(pilot, lambda: "62 high" in screen.tree_text)
         roomy = screen.tree_text
         await pilot.resize_terminal(30, 12)

@@ -58,6 +58,10 @@ EMPTY_DRAFT = "No draft yet — keep talking."
 THINKING = "Thinking…"
 DONE_NOTE = "The wizard is done. Save it with Ctrl-S, or into the library with Ctrl-G."
 
+#: First thing in the transcript pane, so the left half is never a blank box
+#: while the first turn is in flight.
+TRANSCRIPT_OPENER = "The wizard has read your seed and is writing back."
+
 #: Lines of draft shown in the pane. A 200-line orchestration in a scroll
 #: container is a wall; the file on disk is the artefact, not this preview.
 PREVIEW_LINES = 40
@@ -158,9 +162,11 @@ class ChatScreen(ViewScreen):
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("ctrl+s", "save_file", "Save to file"),
-        Binding("ctrl+g", "save_library", "Save to library"),
-        Binding("ctrl+r", "run_it", "Run it now"),
+        # Terse on purpose: the footer truncates from the right, and a long
+        # description here is paid for by "? Help" falling off the end.
+        Binding("ctrl+s", "save_file", "Save file"),
+        Binding("ctrl+g", "save_library", "To library"),
+        Binding("ctrl+r", "run_it", "Run it"),
     ]
 
     def __init__(
@@ -259,6 +265,7 @@ class ChatScreen(ViewScreen):
     def _begin(self) -> None:
         """First turn: the seed alone, no user message yet."""
         self.query_one("#chat-message", Input).focus()
+        self._append("note", TRANSCRIPT_OPENER)
         self._run_turn()
 
     def send(self, text: str) -> None:

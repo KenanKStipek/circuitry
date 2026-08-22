@@ -33,7 +33,7 @@ than the tree.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -46,7 +46,6 @@ from textual.widgets import Button, Input, Label, Select, Static
 
 from ..cli.config import CircuitryConfig, resolve_config
 from ..cli.runtime_shim import RunRequest, RunResult
-from . import execution
 from .execution import (
     ExecNode,
     PlanNode,
@@ -78,6 +77,7 @@ from .launch import (
     placeholder_for,
 )
 from .screens import ViewScreen, ViewSpec
+from .theme import status_style
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from textual.events import Mount
@@ -97,6 +97,13 @@ CANCELLED = "Cancelled"
 #: Placeholder for the tree pane before an orchestration is picked.
 NO_TREE = "No orchestration picked — the effect tree appears here."
 
+#: Shown in place of the picker when discovery came back with nothing. An
+#: empty dropdown is a dead end; this says whose turn it is.
+NO_CHOICES = (
+    "Nothing to run yet — no orchestration files here and no library on the "
+    "path. Write one in Chat, or eject one from Library."
+)
+
 #: What the note under the model dropdown says while an adapter is being
 #: asked what it offers, and what it says when nothing came back.
 LOADING_MODELS = "Asking {adapter} for its models…"
@@ -110,15 +117,6 @@ CUSTOM_MODEL_HINT = "Type any model name (same as --model)"
 #: tick; anything the user types is handled in the gaps.
 REFRESH_SECONDS = 0.1
 
-#: Row colour per effect status. Keyed off :mod:`circuitry.tui.execution`'s
-#: names rather than this module's same-spelled run states.
-_STATUS_STYLES: dict[str, str] = {
-    execution.PENDING: "dim",
-    execution.RUNNING: "bold yellow",
-    execution.DONE: "green",
-    execution.FAILED: "bold red",
-    execution.SKIPPED: "dim italic",
-}
 
 
 class RunScreen(ViewScreen):
@@ -335,6 +333,11 @@ class RunScreen(ViewScreen):
                 prompt="Pick an orchestration",
                 id="run-orchestration",
             ),
+            Static(
+                NO_CHOICES,
+                id="run-no-choices",
+                classes="view-note" if not self._choices else "view-note hidden",
+            ),
             Vertical(id="run-form"),
             Label("Adapter", classes="form-label"),
             Select(
@@ -367,7 +370,7 @@ class RunScreen(ViewScreen):
     def _execution_pane(self) -> list[Any]:
         return [
             Static(NO_TREE, id="run-tree"),
-            Static(format_totals(Totals()), id="run-footer"),
+            Static(format_totals(Totals()), id="run-footer", classes="hidden"),
         ]
 
     def _on_mount(self, event: Mount) -> None:
@@ -375,6 +378,11 @@ class RunScreen(ViewScreen):
         store = getattr(self.app, "run_states", None)
         self._store = store if isinstance(store, StateStore) else None
         self._adopt_pending()
+        self._show_no_choices()
+
+    def _show_no_choices(self) -> None:
+        """Keep the "nothing to run" note in step with what the picker holds."""
+        self.query_one("#run-no-choices", Static).set_class(bool(self._choices), "hidden")
 
     def _adopt_pending(self) -> None:
         """Pre-load whatever handed us here (Chat's "run it", Profile's "run
@@ -757,8 +765,13 @@ class RunScreen(ViewScreen):
         tree = self.query_one("#run-tree", Static)
         self._tree_width = _pane_width(tree)
         lines = render_lines(self._exec_nodes, width=self._tree_width)
-        tree.update(_tree_text(lines) if lines else Text(NO_TREE, style="dim"))
-        self.query_one("#run-footer", Static).update(format_totals(self._totals))
+        variables = getattr(self.app, "theme_variables", None)
+        tree.update(_tree_text(lines, variables) if lines else Text(NO_TREE, style="dim"))
+        # Zeroed totals beside an empty tree are noise, not information — the
+        # footer earns its row once there is a run to total.
+        footer = self.query_one("#run-footer", Static)
+        footer.update(format_totals(self._totals))
+        footer.set_class(not lines, "hidden")
 
     def _elapsed(self) -> float | None:
         if self._final_elapsed is not None:
@@ -854,8 +867,12 @@ def _pane_width(widget: Static) -> int | None:
     return width if width > 0 else None
 
 
-def _tree_text(lines: list[RenderLine]) -> Text:
+def _tree_text(lines: list[RenderLine], variables: Mapping[str, str] | None) -> Text:
     """Colour each tree row by the status of the effect it describes.
+
+    Colours come from the running theme (``variables``) rather than from ANSI
+    names, so "done" is the same green the rest of the app calls ``$success``
+    — and stays legible when that theme is a light one.
 
     The score column is dimmed rather than status-coloured: it says how
     hard the effect is, which does not change as the effect runs.
@@ -866,7 +883,7 @@ def _tree_text(lines: list[RenderLine]) -> Text:
             text.append("\n")
         if line.gutter:
             text.append(line.gutter, style="dim")
-        text.append(line.text, style=_STATUS_STYLES.get(line.status, ""))
+        text.append(line.text, style=status_style(line.status, variables))
     return text
 
 
