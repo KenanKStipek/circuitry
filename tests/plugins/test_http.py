@@ -13,7 +13,6 @@ from circuitry.plugins import build_plugin
 from circuitry.plugins.base import validate_tool_result
 from circuitry.plugins.http import HttpPlugin
 
-
 # ---------------------------------------------------------------------------
 # urlopen mock helpers
 # ---------------------------------------------------------------------------
@@ -30,7 +29,7 @@ class _FakeResponse:
     def read(self) -> bytes:
         return self._body
 
-    def __enter__(self) -> "_FakeResponse":
+    def __enter__(self) -> _FakeResponse:
         return self
 
     def __exit__(self, *args: Any) -> None:

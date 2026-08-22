@@ -126,7 +126,7 @@ def test_a_finished_effect_carries_its_elapsed_and_tokens() -> None:
     assert "✓ draft (1.0s, ↑11 ↓22)" in render_text(nodes)
 
 
-def test_the_effect_in_flight_is_shown_running_while_the_root_is(  # noqa: D103
+def test_the_effect_in_flight_is_shown_running_while_the_root_is(
 ) -> None:
     """State only lands when an effect finishes, so the tree infers the rest."""
     plan = plan_from_orchestration(CHAIN)

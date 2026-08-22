@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Literal, Optional, Sequence
+from typing import Any, Literal
 
 from ..adapters import Adapter, build_adapter
 from ..adapters.base import GenerateResult
@@ -130,35 +131,35 @@ class PromptDefinition:
     name: str
 
     # Primary input form (exactly one must be provided)
-    template: Optional[str] = None
-    messages: Optional[Sequence[MessageDef]] = None
+    template: str | None = None
+    messages: Sequence[MessageDef] | None = None
 
     # Typing and decoding
     prompt_type: PromptType = "text"
-    schema: Optional[dict[str, Any]] = None
+    schema: dict[str, Any] | None = None
 
     # Model configuration
-    model: Optional[str] = None
-    provider: Optional[str] = None
-    provider_fallbacks: Optional[Sequence[str]] = None
+    model: str | None = None
+    provider: str | None = None
+    provider_fallbacks: Sequence[str] | None = None
 
     # Execution parameters
-    params: Optional[dict[str, Any]] = None
-    timeout_ms: Optional[int] = None
+    params: dict[str, Any] | None = None
+    timeout_ms: int | None = None
     deterministic: bool = False
 
     # Prompt-local structured values
-    inputs: Optional[dict[str, Any]] = None
+    inputs: dict[str, Any] | None = None
 
     # Non-text inputs
-    assets: Optional[Sequence[AssetRefDef]] = None
+    assets: Sequence[AssetRefDef] | None = None
 
     # Reliability
-    retries: Optional[RetryPolicyDef] = None
+    retries: RetryPolicyDef | None = None
     on_error: Literal["fail", "skip", "continue"] = "fail"
 
     # Description (for documentation/LLM guidance)
-    description: Optional[str] = None
+    description: str | None = None
 
     # False = skip execution and write a disabled node (see core.disabled).
     enabled: bool = True
@@ -420,8 +421,10 @@ class PromptRuntime:
                 0, self._parse_provider_token(self.defn.provider, default_model)
             )
 
-        for provider_token in self.defn.provider_fallbacks or ():
-            attempts.append(self._parse_provider_token(provider_token, default_model))
+        attempts.extend(
+            self._parse_provider_token(provider_token, default_model)
+            for provider_token in self.defn.provider_fallbacks or ()
+        )
 
         deduped: list[tuple[str, str]] = []
         seen: set[tuple[str, str]] = set()
@@ -588,5 +591,5 @@ class PromptRuntime:
             # jsonschema not installed, skip validation
             pass
         except jsonschema.ValidationError as e:
-            raise ValueError(f"Schema validation failed: {e.message}")
+            raise ValueError(f"Schema validation failed: {e.message}") from e
 

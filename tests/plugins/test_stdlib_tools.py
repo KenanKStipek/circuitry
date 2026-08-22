@@ -37,7 +37,6 @@ from circuitry.plugins.tar import TarPlugin
 from circuitry.plugins.uuid import UuidPlugin
 from circuitry.plugins.zip import ZipPlugin
 
-
 STDLIB_PLUGIN_NAMES = [
     "clock", "math", "regex", "json", "fs", "csv", "email_smtp",
     "tar", "zip", "gzip", "port_check", "env_vars", "hash",
@@ -313,7 +312,7 @@ def test_email_smtp_sends_via_mocked_smtp(monkeypatch: pytest.MonkeyPatch) -> No
             sent["host"] = host
             sent["port"] = port
 
-        def __enter__(self) -> "FakeSMTP":
+        def __enter__(self) -> FakeSMTP:
             return self
 
         def __exit__(self, *args: Any) -> None:

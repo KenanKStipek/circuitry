@@ -160,10 +160,14 @@ def effect_results_ddl(dialect: SqlDialect) -> str:
 
 
 INDEX_DDL = (
-    "CREATE INDEX IF NOT EXISTS idx_effect_results_run "
-    "ON effect_results (run_id)",
-    "CREATE INDEX IF NOT EXISTS idx_effect_results_path "
-    "ON effect_results (state_path)",
+    (
+        "CREATE INDEX IF NOT EXISTS idx_effect_results_run "
+        "ON effect_results (run_id)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_effect_results_path "
+        "ON effect_results (state_path)"
+    ),
 )
 
 

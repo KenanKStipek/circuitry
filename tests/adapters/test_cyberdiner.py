@@ -8,6 +8,7 @@ so poll-cadence and timeout behavior is deterministic without real delays.
 from __future__ import annotations
 
 import io
+import itertools
 import json as _json
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,6 @@ from circuitry.cli.redaction import REDACTED
 from circuitry.cli.registry import resolve_bundled
 from circuitry.cli.runtime_shim import RunRequest, run
 
-
 # ---------------------------------------------------------------------------
 # urlopen / clock fakes
 # ---------------------------------------------------------------------------
@@ -39,7 +39,7 @@ class _FakeResponse:
     def read(self) -> bytes:
         return self._body
 
-    def __enter__(self) -> "_FakeResponse":
+    def __enter__(self) -> _FakeResponse:
         return self
 
     def __exit__(self, *args: Any) -> None:
@@ -571,7 +571,7 @@ def test_poll_cadence_honors_poll_interval(monkeypatch: pytest.MonkeyPatch) -> N
 
     # Poll calls (excluding the initial submit) should be ~0.5s apart.
     poll_times = calls[1:]
-    for prev, nxt in zip(poll_times, poll_times[1:]):
+    for prev, nxt in itertools.pairwise(poll_times):
         assert nxt - prev == pytest.approx(0.5)
 
 

@@ -11,20 +11,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 import pytest
 
 pytest.importorskip("textual")
 
-from textual.pilot import Pilot
-from textual.widgets import Input, Select
-
-from circuitry.tui.app import CircuitryApp
-from circuitry.tui.chat import EMPTY_DRAFT, ChatScreen, draft_preview
-from circuitry.tui.screens import VIEWS, CircuitryScreen
-from circuitry.tui.wizard_host import Seed, Turn, TurnRunner, run_turn
 from scripted_wizard import (
     INVALID_DRAFT,
     VALID_DRAFT,
@@ -33,6 +27,13 @@ from scripted_wizard import (
     ask,
     draft,
 )
+from textual.pilot import Pilot
+from textual.widgets import Input, Select
+
+from circuitry.tui.app import CircuitryApp
+from circuitry.tui.chat import EMPTY_DRAFT, ChatScreen, draft_preview
+from circuitry.tui.screens import VIEWS, CircuitryScreen
+from circuitry.tui.wizard_host import Seed, Turn, TurnRunner, run_turn
 
 SEED = Seed(name="Summarize And Translate", category="recipes", goal="Summarize, then translate.")
 
@@ -63,8 +64,8 @@ def scripted_runner(*turns: ScriptedTurn) -> tuple[TurnRunner, ScriptedWizardAda
 def chat_app(
     runner: TurnRunner,
     *,
-    seed: Optional[Seed] = SEED,
-    library_dir: Optional[Path] = None,
+    seed: Seed | None = SEED,
+    library_dir: Path | None = None,
 ) -> ViewApp:
     return ViewApp(ChatScreen(CHAT, runner=runner, seed=seed, library_dir=library_dir))
 

@@ -962,7 +962,7 @@ class LibraryScreen(ViewScreen):
                 outcomes.extend(self.registry.refresh(source=name))
             except LibraryFetchError as exc:
                 failures.append(str(exc))
-            except Exception as exc:  # noqa: BLE001 - a dead worker must still report
+            except Exception as exc:
                 failures.append(f"{name}: {exc}")
         self.app.call_from_thread(self._refresh_finished, outcomes, failures)
 

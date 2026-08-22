@@ -7,7 +7,8 @@ from typing import Any
 import yaml  # type: ignore[import-untyped]
 
 try:
-    from toon_format import decode as _toon_decode, encode as _toon_encode
+    from toon_format import decode as _toon_decode
+    from toon_format import encode as _toon_encode
 except ImportError:
     _toon_decode = None  # type: ignore[assignment]
     _toon_encode = None  # type: ignore[assignment]
@@ -58,14 +59,13 @@ def load_orchestration_file(path: Path) -> dict[str, Any]:
 def serialize_orchestration(data: dict[str, Any], fmt: str) -> str:
     if fmt == "yaml":
         return yaml.dump(data, default_flow_style=False, sort_keys=False)
-    elif fmt == "json":
+    if fmt == "json":
         return json.dumps(data, indent=2, ensure_ascii=False)
-    elif fmt == "toon":
+    if fmt == "toon":
         if _toon_encode is None:
             raise ImportError(
                 "The 'toon-format' package is required to serialize to TOON. "
                 "Install it with: pip install git+https://github.com/toon-format/toon-python.git"
             )
         return _toon_encode(data)
-    else:
-        raise ValueError(f"Unsupported output format: {fmt!r}. Supported: yaml, json, toon")
+    raise ValueError(f"Unsupported output format: {fmt!r}. Supported: yaml, json, toon")

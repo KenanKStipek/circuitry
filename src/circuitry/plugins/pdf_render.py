@@ -26,7 +26,6 @@ from ..preflight import CheckResult
 from ._subprocess import resolve_binary
 from .base import ToolResult
 
-
 _CANDIDATES = ("weasyprint", "wkhtmltopdf")
 
 

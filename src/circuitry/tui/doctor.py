@@ -20,7 +20,7 @@ have installed.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import TYPE_CHECKING, ClassVar, Optional
+from typing import TYPE_CHECKING, ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -117,7 +117,7 @@ class EffectiveSettingsPanel(Static):
         self,
         rows: tuple[SettingRow, ...] = (),
         *,
-        id: Optional[str] = None,  # noqa: A002 - Textual's parameter name
+        id: str | None = None,
     ) -> None:
         super().__init__(id=id, markup=False)
         self.rows = rows
@@ -137,7 +137,7 @@ class _DiagnosticsScreen(ViewScreen):
         self,
         spec: ViewSpec,
         *,
-        diagnostics: Optional[DiagnosticsSource] = None,
+        diagnostics: DiagnosticsSource | None = None,
     ) -> None:
         super().__init__(spec)
         self._diagnostics = diagnostics
@@ -167,7 +167,7 @@ class DoctorScreen(_DiagnosticsScreen):
         self,
         spec: ViewSpec,
         *,
-        diagnostics: Optional[DiagnosticsSource] = None,
+        diagnostics: DiagnosticsSource | None = None,
     ) -> None:
         super().__init__(spec, diagnostics=diagnostics)
         self._rows: dict[str, CheckRow] = {}
@@ -227,7 +227,7 @@ class DoctorScreen(_DiagnosticsScreen):
                 target = futures[future]
                 try:
                     check = future.result()
-                except Exception as exc:  # noqa: BLE001 - a check may raise anything
+                except Exception as exc:
                     check = ExtensionCheck(target, "error", (), str(exc))
                 if self._closing:
                     return

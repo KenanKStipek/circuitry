@@ -64,7 +64,7 @@ class CloudflareWorkersAIAdapter:
         if not cfg.base_url:
             return CheckResult(
                 ok=False,
-                missing=list(result.missing) + ["env:CF_ACCOUNT_ID"],
+                missing=[*list(result.missing), "env:CF_ACCOUNT_ID"],
                 message="set CF_ACCOUNT_ID to your Cloudflare account UUID.",
             )
         return result

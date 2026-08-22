@@ -6,7 +6,7 @@ import os
 import sys
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -184,7 +184,7 @@ def _do_validate(
     orchestration: Path,
     json_out: bool,
     *,
-    config: Optional[Path] = None,
+    config: Path | None = None,
     skip_preflight: bool = False,
 ) -> None:
     """Shared validation logic for validate and check commands."""
@@ -219,7 +219,7 @@ def _do_validate(
         raise typer.Exit(code=1)
 
 
-def _library_registry(config_path: Optional[Path] = None) -> LibraryRegistry:
+def _library_registry(config_path: Path | None = None) -> LibraryRegistry:
     """Build the configured library registry, reporting config errors as CLI errors."""
     try:
         return build_registry(config_path=config_path)
@@ -317,17 +317,17 @@ replay redacted runs.
     epilog=RUN_EPILOG,
 )
 def run_cmd(
-    orchestration: Optional[str] = typer.Argument(
+    orchestration: str | None = typer.Argument(
         None,
         help="Path to orchestration file, or name of a bundled orchestration.",
     ),
-    config: Optional[Path] = typer.Option(
+    config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
-    state: Optional[Path] = typer.Option(
+    state: Path | None = typer.Option(
         None, "--state", "-s", help="Optional input state JSON."
     ),
-    out: Optional[Path] = typer.Option(
+    out: Path | None = typer.Option(
         None, "--out", "-o", help="Write resulting state JSON to this path."
     ),
     pretty: bool = typer.Option(
@@ -344,11 +344,11 @@ def run_cmd(
     ),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress non-essential output."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed progress."),
-    live_state: Optional[Path] = typer.Option(
+    live_state: Path | None = typer.Option(
         None, "--live-state",
         help="Write state atomically to this file after each effect. For live monitoring.",
     ),
-    env_vars: Optional[list[str]] = typer.Option(
+    env_vars: list[str] | None = typer.Option(
         None, "-e",
         help="Inline state variable (KEY=VALUE). Repeatable.",
     ),
@@ -364,18 +364,18 @@ def run_cmd(
         False, "--skip-preflight",
         help="Bypass dependency preflight; run even if check()s reported missing deps.",
     ),
-    profile: Optional[str] = typer.Option(
+    profile: str | None = typer.Option(
         None, "--profile",
         help=(
             "Named profile to apply (profiles/<name>.yml, orchestration-scoped "
             "wins over project-level). Precedence: CLI > profile > orchestration > config."
         ),
     ),
-    adapter: Optional[str] = typer.Option(
+    adapter: str | None = typer.Option(
         None, "--adapter",
         help="Adapter to use for this run. Beats CIRCUITRY_ADAPTER, --profile, and the orchestration.",
     ),
-    model: Optional[str] = typer.Option(
+    model: str | None = typer.Option(
         None, "--model",
         help="Model to use for this run. Beats CIRCUITRY_MODEL, --profile, and the orchestration.",
     ),
@@ -448,12 +448,12 @@ def run_cmd(
     if not (quiet or json_out):
         _print_header("Circuitry · Run")
         console.print(
-            f"[bold]Config:[/bold] {config if config else '— (resolved)'}"
+            f"[bold]Config:[/bold] {config or '— (resolved)'}"
         )
         orch_label = orchestration if str(orch_path) == orchestration else f"{orchestration} ({orch_path})"
         console.print(f"[bold]Orchestration:[/bold] {orch_label}")
-        console.print(f"[bold]State (in):[/bold] {state if state else '—'}")
-        console.print(f"[bold]State (out):[/bold] {out if out else '—'}")
+        console.print(f"[bold]State (in):[/bold] {state or '—'}")
+        console.print(f"[bold]State (out):[/bold] {out or '—'}")
         if live_state:
             console.print(f"[bold]Live state:[/bold] {live_state}")
         if adapter:
@@ -564,7 +564,7 @@ def run_cmd(
 @app.command("fetch", help="Fetch a shared library orchestration.")
 def fetch_cmd(
     asset_id: str = typer.Argument(..., help="Shared library asset identifier."),
-    version: Optional[str] = typer.Option(
+    version: str | None = typer.Option(
         None, "--version", "-V", help="Specific asset version. Defaults to latest."
     ),
     out: Path = typer.Option(
@@ -573,10 +573,10 @@ def fetch_cmd(
         "-o",
         help="Output path for fetched orchestration.",
     ),
-    config: Optional[Path] = typer.Option(
+    config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
-    auth_token: Optional[str] = typer.Option(
+    auth_token: str | None = typer.Option(
         None,
         "--auth-token",
         help="Shared library auth token (or set CIRCUITRY_LIBRARY_TOKEN).",
@@ -602,7 +602,7 @@ def fetch_cmd(
             console.print_json(json.dumps({"ok": False, "error": str(e)}))
         else:
             console.print(f"[red]Fetch failed:[/red] {e}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
     payload = {"ok": True, "asset": asset.metadata, "out_path": str(out)}
     if json_out:
@@ -616,26 +616,26 @@ def fetch_cmd(
 @app.command("run-library", help="Fetch and run a shared library orchestration.")
 def run_library_cmd(
     asset_id: str = typer.Argument(..., help="Shared library asset identifier."),
-    version: Optional[str] = typer.Option(
+    version: str | None = typer.Option(
         None, "--version", "-V", help="Specific asset version. Defaults to latest."
     ),
-    config: Optional[Path] = typer.Option(
+    config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
-    auth_token: Optional[str] = typer.Option(
+    auth_token: str | None = typer.Option(
         None,
         "--auth-token",
         help="Shared library auth token (or set CIRCUITRY_LIBRARY_TOKEN).",
     ),
-    service_profile: Optional[str] = typer.Option(
+    service_profile: str | None = typer.Option(
         None,
         "--service-profile",
         help="Apply runtime overrides from runtime.library.service_profiles.<name>.",
     ),
-    state: Optional[Path] = typer.Option(
+    state: Path | None = typer.Option(
         None, "--state", "-s", help="Optional input state JSON."
     ),
-    out: Optional[Path] = typer.Option(
+    out: Path | None = typer.Option(
         None, "--out", "-o", help="Write resulting state JSON to this path."
     ),
     pretty: bool = typer.Option(
@@ -652,11 +652,11 @@ def run_library_cmd(
     ),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress non-essential output."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed progress."),
-    live_state: Optional[Path] = typer.Option(
+    live_state: Path | None = typer.Option(
         None, "--live-state",
         help="Write state atomically to this file after each effect. For live monitoring.",
     ),
-    env_vars: Optional[list[str]] = typer.Option(
+    env_vars: list[str] | None = typer.Option(
         None, "-e",
         help="Inline state variable (KEY=VALUE). Repeatable.",
     ),
@@ -664,11 +664,11 @@ def run_library_cmd(
         False, "--tail",
         help="Print only the final effect's value as plain text. Ideal for piping.",
     ),
-    adapter: Optional[str] = typer.Option(
+    adapter: str | None = typer.Option(
         None, "--adapter",
         help="Adapter to use for this run. Beats CIRCUITRY_ADAPTER and the orchestration.",
     ),
-    model: Optional[str] = typer.Option(
+    model: str | None = typer.Option(
         None, "--model",
         help="Model to use for this run. Beats CIRCUITRY_MODEL and the orchestration.",
     ),
@@ -701,7 +701,7 @@ def run_library_cmd(
             console.print_json(json.dumps({"ok": False, "error": str(e)}))
         else:
             console.print(f"[red]Shared library retrieval failed:[/red] {e}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
     if not (quiet or json_out):
         _print_header("Circuitry · Run Library")
@@ -709,10 +709,10 @@ def run_library_cmd(
         console.print(f"[bold]Source:[/bold] {asset.source}")
         console.print(f"[bold]Resolved path:[/bold] {asset.file_path}")
         console.print(
-            f"[bold]Service profile:[/bold] {service_profile if service_profile else '—'}"
+            f"[bold]Service profile:[/bold] {service_profile or '—'}"
         )
-        console.print(f"[bold]State (in):[/bold] {state if state else '—'}")
-        console.print(f"[bold]State (out):[/bold] {out if out else '—'}")
+        console.print(f"[bold]State (in):[/bold] {state or '—'}")
+        console.print(f"[bold]State (out):[/bold] {out or '—'}")
         if live_state:
             console.print(f"[bold]Live state:[/bold] {live_state}")
         if adapter:
@@ -800,7 +800,7 @@ def run_library_cmd(
     ),
 )
 def list_cmd(
-    category: Optional[str] = typer.Option(
+    category: str | None = typer.Option(
         None, "--category", "-C", help="Filter by category (example, utility, creative, tooling, template)."
     ),
     json_out: bool = typer.Option(
@@ -812,16 +812,16 @@ def list_cmd(
         "-x",
         help="List compiled-in adapters / tool plugins / runtime plugins with allowlist status.",
     ),
-    models: Optional[str] = typer.Option(
+    models: str | None = typer.Option(
         None,
         "--models",
         "-M",
         help="List the models an adapter offers (e.g. --models ollama). Same data the TUI's model picker uses.",
     ),
-    source: Optional[str] = typer.Option(
+    source: str | None = typer.Option(
         None, "--source", "-S", help="Only list entries from this library source."
     ),
-    config: Optional[Path] = typer.Option(
+    config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
 ):
@@ -904,7 +904,7 @@ def list_cmd(
 
 
 def _list_models(
-    *, adapter_name: str, json_out: bool, config_path: Optional[Path]
+    *, adapter_name: str, json_out: bool, config_path: Path | None
 ) -> None:
     """Render the models one adapter offers — CLI parity with the TUI picker.
 
@@ -956,7 +956,7 @@ def _list_models(
     console.print(f"[dim]Run with:[/dim] cof run <name> --adapter {name} --model <model>")
 
 
-def _list_extensions(*, json_out: bool, config_path: Optional[Path]) -> None:
+def _list_extensions(*, json_out: bool, config_path: Path | None) -> None:
     """Render compiled-in adapters / tool plugins / runtime plugins with
     allowlist status."""
     from ..adapters.factory import ADAPTER_REGISTRY
@@ -971,7 +971,7 @@ def _list_extensions(*, json_out: bool, config_path: Optional[Path]) -> None:
     # for now there's no in-tree set, so derive from cfg.plugins.
     runtime_compiled = sorted(set(cfg.plugins or []))
 
-    def status(name: str, allowed: Optional[list[str]]) -> str:
+    def status(name: str, allowed: list[str] | None) -> str:
         if allowed is None:
             return "compiled-in (default-open)"
         return "enabled" if name in allowed else "disabled (not in allowlist)"
@@ -997,7 +997,7 @@ def _list_extensions(*, json_out: bool, config_path: Optional[Path]) -> None:
 
     _print_header("Circuitry · Extensions")
 
-    def render_section(title: str, names: list[str], allowed: Optional[list[str]]) -> None:
+    def render_section(title: str, names: list[str], allowed: list[str] | None) -> None:
         table = Table(title=title, show_header=True, header_style="bold cyan")
         table.add_column("Name", style="bold")
         table.add_column("Status")
@@ -1041,7 +1041,7 @@ def _detect_backends(cfg: CircuitryConfig) -> set[str]:
 def info_cmd(
     name: str = typer.Argument(..., help="Name of the orchestration."),
     json_out: bool = typer.Option(False, "--json", help="Output machine-readable JSON only."),
-    config: Optional[Path] = typer.Option(
+    config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
 ):
@@ -1105,10 +1105,10 @@ def info_cmd(
 @app.command("eject", help="Copy a bundled orchestration to the current directory for editing.")
 def eject_cmd(
     name: str = typer.Argument(..., help="Name of the orchestration to eject."),
-    out: Optional[Path] = typer.Option(
+    out: Path | None = typer.Option(
         None, "--out", "-o", help="Output path. Defaults to ./<filename>."
     ),
-    config: Optional[Path] = typer.Option(
+    config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
 ):
@@ -1126,9 +1126,10 @@ def eject_cmd(
         raise typer.Exit(code=1)
 
     dest = out or eject_destination(entry)
-    if dest.exists():
-        if not typer.confirm(f"{dest} already exists. Overwrite?", default=False):
-            raise typer.Exit(code=0)
+    if dest.exists() and not typer.confirm(
+        f"{dest} already exists. Overwrite?", default=False
+    ):
+        raise typer.Exit(code=0)
 
     write_ejected(bundled_path.read_text(encoding="utf-8"), dest)
     console.print(f"[green]Ejected:[/green] {dest}")
@@ -1149,11 +1150,11 @@ app.add_typer(library_app, name="library")
     "command that touches the network for a library source.",
 )
 def library_refresh_cmd(
-    source: Optional[str] = typer.Argument(
+    source: str | None = typer.Argument(
         None, help="Source to refresh. Omit to refresh every configured source."
     ),
     json_out: bool = typer.Option(False, "--json", help="Output machine-readable JSON only."),
-    config: Optional[Path] = typer.Option(
+    config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
 ):
@@ -1209,7 +1210,7 @@ def validate_cmd(
     json_out: bool = typer.Option(
         False, "--json", help="Output machine-readable JSON only."
     ),
-    config: Optional[Path] = typer.Option(
+    config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
     skip_preflight: bool = typer.Option(
@@ -1229,7 +1230,7 @@ def check_cmd(
     json_out: bool = typer.Option(
         False, "--json", help="Output machine-readable JSON only."
     ),
-    config: Optional[Path] = typer.Option(
+    config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
     ),
     skip_preflight: bool = typer.Option(
@@ -1272,10 +1273,10 @@ def gen_cmd(
     prompt: str = typer.Argument(
         ..., help="Natural language description of the orchestration to generate."
     ),
-    out: Optional[Path] = typer.Option(
+    out: Path | None = typer.Option(
         None, "--out", "-o", help="Write resulting state JSON to this file (live-updated during run)."
     ),
-    config: Optional[Path] = typer.Option(
+    config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config JSON."
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed progress."),
@@ -1309,9 +1310,9 @@ def gen_cmd(
     try:
         pkg = importlib.resources.files("circuitry") / "curation" / "agents" / "meta_orchestrator.yml"
         meta_orch_path = Path(str(pkg))
-    except Exception:
+    except Exception as e:
         console.print("[red]Error:[/red] Could not locate curation/agents/meta_orchestrator.yml")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
     if not meta_orch_path.exists():
         console.print("[red]Error:[/red] curation/agents/meta_orchestrator.yml not found.")
@@ -1336,9 +1337,10 @@ def gen_cmd(
         plugins_pkg = importlib.resources.files("circuitry") / "bundled" / "docs" / "plugins"
         plugins_dir = Path(str(plugins_pkg))
         if plugins_dir.is_dir():
-            parts = []
-            for md_file in sorted(plugins_dir.glob("*.md")):
-                parts.append(md_file.read_text(encoding="utf-8").strip())
+            parts = [
+                md_file.read_text(encoding="utf-8").strip()
+                for md_file in sorted(plugins_dir.glob("*.md"))
+            ]
             if parts:
                 initial_state["plugins"] = "\n\n---\n\n".join(parts)
     except Exception:
@@ -1404,7 +1406,7 @@ def gen_cmd(
     # Strip preamble text before the first effects: or adapter: line
     _clean_lines = yaml_text.splitlines()
     for _i, _line in enumerate(_clean_lines):
-        if _line.startswith("effects:") or _line.startswith("adapter:"):
+        if _line.startswith(("effects:", "adapter:")):
             yaml_text = "\n".join(_clean_lines[_i:]).strip()
             break
 
@@ -1493,7 +1495,8 @@ def tui_cmd():
 
 @app.command("version", help="Print version.")
 def version_cmd():
-    from importlib.metadata import PackageNotFoundError, version as pkg_version
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as pkg_version
 
     # Distribution name is `circuitry-cof` on PyPI; the legacy `circuitry`
     # lookup is kept as a fallback for editable installs that pre-date the

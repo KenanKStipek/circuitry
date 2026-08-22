@@ -89,7 +89,7 @@ def _normalise_entry(entry: dict[str, Any]) -> dict[str, Any]:
 
 def _name_matches(query: str, entry_name: str, entry_stem: str) -> bool:
     """Loose name matching: exact, dash↔underscore, slash-stripped, stem."""
-    if query == entry_name or query == entry_stem:
+    if query in (entry_name, entry_stem):
         return True
     norm_query = query.replace("-", "_")
     norm_entry = entry_name.replace("-", "_")

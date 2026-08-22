@@ -14,7 +14,12 @@ import pytest
 from typer.testing import CliRunner
 
 from circuitry.cli.app import app
-from circuitry.cli.config import ConfigError, _load_json_file, load_config, resolve_config
+from circuitry.cli.config import (
+    ConfigError,
+    _load_json_file,
+    load_config,
+    resolve_config,
+)
 
 runner = CliRunner()
 

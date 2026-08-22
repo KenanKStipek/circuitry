@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Literal, Sequence, Union
+from typing import TYPE_CHECKING, Any, Literal, Union
 
 from ..adapters import Adapter
 from ..output import console as _console
@@ -155,10 +156,7 @@ class DynamicRuntime:
         # store namespace on top of it so the short sibling paths inside this
         # dynamic keep resolving, with local nodes winning name collisions
         # (same precedence the loop body uses for its own siblings).
-        if ctx_override is None:
-            ctx = store.state
-        else:
-            ctx = {**ctx_override, **store.state}
+        ctx = store.state if ctx_override is None else {**ctx_override, **store.state}
         child_store = store.child(self.defn.name)
 
         # Build ancestor context for children (this dynamic is now a parent).
@@ -284,14 +282,13 @@ class DynamicRuntime:
         cb_start: Callable[[], None] | None = None,
         cb_done: Callable[[str], None] | None = None,
         cb_error: Callable[[str], None] | None = None,
-        tracker: "_TreeStatus | None" = None,
+        tracker: _TreeStatus | None = None,
     ) -> None:
         """Execute a single effect within the dynamic."""
         # Local imports to avoid circular imports at module load time
         from .conditional import ConditionalDefinition, ConditionalRuntime
         from .loop import LoopDefinition, LoopRuntime
         from .reflector import ReflectorDefinition, ReflectorRuntime
-
         from .tool import ToolDefinition, ToolRuntime
         from .use import UseDefinition, UseRuntime
 

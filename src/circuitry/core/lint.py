@@ -18,7 +18,8 @@ Warnings surface through ``cof validate`` / ``cof check`` and the MCP
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 __all__ = [
     "CANONICAL_EFFECT_TYPES",

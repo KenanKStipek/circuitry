@@ -19,7 +19,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 _NAMED_NAMESPACES: dict[str, _uuid.UUID] = {
     "dns": _uuid.NAMESPACE_DNS,
     "url": _uuid.NAMESPACE_URL,

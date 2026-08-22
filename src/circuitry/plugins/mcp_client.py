@@ -68,9 +68,10 @@ import asyncio
 import importlib.util
 import json as _json
 import shutil
+from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Coroutine
+from typing import Any
 
 from ..preflight import CheckResult
 from .base import ToolResult
@@ -127,7 +128,9 @@ def _dump_block(block: Any) -> dict[str, Any]:
             result = dump(mode="json")
             if isinstance(result, dict):
                 return result
-        except Exception:  # noqa: BLE001 — raw dump is best-effort metadata
+        except Exception:
+            # Raw dump is best-effort metadata; fall through to the
+            # hand-rolled shape below rather than failing the tool call.
             pass
     return {"type": getattr(block, "type", None), "text": getattr(block, "text", None)}
 
@@ -333,14 +336,28 @@ class McpPlugin:
                     await session.initialize()
                     yield session
         else:  # http (streamable)
-            from mcp.client.streamable_http import streamablehttp_client
+            # mcp 2.0 renamed streamablehttp_client -> streamable_http_client,
+            # dropped its `headers=` kwarg in favour of a caller-supplied httpx
+            # client, and narrowed the yield from (read, write, get_session_id)
+            # to (read, write).
+            from mcp.client.streamable_http import (
+                create_mcp_http_client,
+                streamable_http_client,
+            )
 
-            async with streamablehttp_client(
-                str(cfg["url"]), headers=cfg.get("headers") or None
-            ) as (read, write, _get_session_id):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    yield session
+            headers_cfg = cfg.get("headers") or None
+            headers = (
+                {str(k): str(v) for k, v in dict(headers_cfg).items()}
+                if headers_cfg is not None
+                else None
+            )
+            async with create_mcp_http_client(headers=headers) as http_client:
+                async with streamable_http_client(
+                    str(cfg["url"]), http_client=http_client
+                ) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        yield session
 
     def check(self) -> CheckResult:
         missing: list[str] = []

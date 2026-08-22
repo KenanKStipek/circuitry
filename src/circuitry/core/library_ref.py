@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..cli.library_sources import LibraryRegistry, LibrarySource
@@ -48,8 +48,8 @@ class ResolvedRef:
     ref: str
     source: str
     path: Path
-    sha: Optional[str] = None
-    cache_path: Optional[str] = None
+    sha: str | None = None
+    cache_path: str | None = None
     ambiguous_sources: list[str] = field(default_factory=list)
 
     def as_pin(self) -> dict[str, Any]:
@@ -64,7 +64,7 @@ class ResolvedRef:
         }
 
 
-def build_registry(runtime: Optional[dict[str, Any]] = None) -> "LibraryRegistry":
+def build_registry(runtime: dict[str, Any] | None = None) -> LibraryRegistry:
     """A registry for the given runtime config (curation-only when absent)."""
     from ..cli.library_sources import LibraryRegistry
 
@@ -74,9 +74,9 @@ def build_registry(runtime: Optional[dict[str, Any]] = None) -> "LibraryRegistry
 def resolve_ref(
     ref: str,
     *,
-    runtime: Optional[dict[str, Any]] = None,
-    registry: Optional["LibraryRegistry"] = None,
-) -> Optional[ResolvedRef]:
+    runtime: dict[str, Any] | None = None,
+    registry: LibraryRegistry | None = None,
+) -> ResolvedRef | None:
     """Resolve a bare or source-qualified `ref:` across configured sources.
 
     Returns ``None`` when nothing matches, and raises
@@ -116,7 +116,7 @@ def resolve_ref(
     )
 
 
-def record_pin(runtime_config: Optional[dict[str, Any]], resolved: ResolvedRef) -> None:
+def record_pin(runtime_config: dict[str, Any] | None, resolved: ResolvedRef) -> None:
     """Append a pin to the run's shared runtime config, deduped by identity.
 
     The runtime config dict is threaded through every nested `use`, so pins
@@ -136,7 +136,7 @@ def record_pin(runtime_config: Optional[dict[str, Any]], resolved: ResolvedRef) 
     pins.append(resolved.as_pin())
 
 
-def collect_pins(runtime_config: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
+def collect_pins(runtime_config: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Every pin recorded during a run, in resolution order."""
     if not runtime_config:
         return []
@@ -149,8 +149,8 @@ def collect_pins(runtime_config: Optional[dict[str, Any]]) -> list[dict[str, Any
 def check_use_refs(
     orch: dict[str, Any],
     *,
-    root_path: Optional[Path] = None,
-    runtime: Optional[dict[str, Any]] = None,
+    root_path: Path | None = None,
+    runtime: dict[str, Any] | None = None,
 ) -> list[tuple[str, str]]:
     """Walk the static `use` graph, reporting refs that need a refresh.
 
@@ -167,7 +167,7 @@ def check_use_refs(
     seen_refs: set[str] = set()
     visited: set[str] = set()
 
-    def walk(node: dict[str, Any], parent_dir: Optional[Path]) -> None:
+    def walk(node: dict[str, Any], parent_dir: Path | None) -> None:
         for kind, value in collect_use_refs(node):
             if kind == "ref":
                 if value in seen_refs:
@@ -200,14 +200,14 @@ def check_use_refs(
 # ── internals ────────────────────────────────────────────────────────────────
 
 
-def _require_fetched(ref: str, source: "LibrarySource") -> None:
+def _require_fetched(ref: str, source: LibrarySource) -> None:
     notice = _notice(source)
     if notice:
         raise LibraryRefError(_refresh_message(ref, [(source.name, notice)]))
 
 
 def _unfetched(
-    registry: "LibraryRegistry", *, only: Optional[str] = None
+    registry: LibraryRegistry, *, only: str | None = None
 ) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     for source in registry.sources:
@@ -219,7 +219,7 @@ def _unfetched(
     return out
 
 
-def _notice(source: "LibrarySource") -> Optional[str]:
+def _notice(source: LibrarySource) -> str | None:
     notice = getattr(source, "notice", None)
     if not callable(notice):
         return None
@@ -237,8 +237,8 @@ def _refresh_message(ref: str, unfetched: list[tuple[str, str]]) -> str:
 
 
 def _pin_fields(
-    source: Optional["LibrarySource"], path: Path
-) -> tuple[Optional[str], Optional[str]]:
+    source: LibrarySource | None, path: Path
+) -> tuple[str | None, str | None]:
     """Commit SHA and cache directory, for sources that pin one (github)."""
     if source is None:
         return (None, None)

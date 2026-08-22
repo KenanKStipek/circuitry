@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from .config import ConfigError
 
@@ -93,8 +93,8 @@ class ComplexityBand:
     """
 
     model: str
-    max: Optional[float] = None
-    name: Optional[str] = None
+    max: float | None = None
+    name: str | None = None
 
     @property
     def is_catch_all(self) -> bool:
@@ -335,11 +335,11 @@ def _parse_band(raw: Any, path: str) -> ComplexityBand:
         raise ComplexityConfigError(f"{path} is missing required field 'model'.")
     model = _as_non_empty_str(block["model"], f"{path}.model")
 
-    upper: Optional[float] = None
+    upper: float | None = None
     if block.get("max") is not None:
         upper = _as_score(block["max"], f"{path}.max")
 
-    name: Optional[str] = None
+    name: str | None = None
     if block.get("name") is not None:
         name = _as_non_empty_str(block["name"], f"{path}.name")
 
@@ -375,7 +375,7 @@ def _parse_bands(raw: Any, path: str) -> tuple[ComplexityBand, ...]:
             f"[{len(bands) - 1}] or append a new entry."
         )
 
-    previous: Optional[float] = None
+    previous: float | None = None
     for index, band in enumerate(bands):
         if band.max is None:
             continue
@@ -495,7 +495,7 @@ def parse_complexity_settings(
 
 
 def resolve_complexity_settings(
-    runtime: Optional[Mapping[str, Any]],
+    runtime: Mapping[str, Any] | None,
 ) -> ComplexitySettings:
     """Resolve ``runtime.complexity`` out of an already-merged runtime dict.
 

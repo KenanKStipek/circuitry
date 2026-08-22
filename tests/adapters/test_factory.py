@@ -8,14 +8,13 @@ from circuitry.adapters.litellm import LiteLLMAdapter
 from circuitry.adapters.ollama import OllamaAdapter
 from circuitry.adapters.openai import OpenAIAdapter
 
-
 # ---------------------------------------------------------------------------
 # Unknown adapter name
 # ---------------------------------------------------------------------------
 
 
 def test_unknown_adapter_raises_value_error() -> None:
-    with pytest.raises(ValueError, match="Unknown adapter.*'nope'"):
+    with pytest.raises(ValueError, match=r"Unknown adapter.*'nope'"):
         build_adapter(adapter_name="nope", runtime={})
 
 

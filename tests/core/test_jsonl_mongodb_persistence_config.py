@@ -8,10 +8,11 @@ tests use (``tests/runtime_plugins/test_storage_plugins.py``).
 from __future__ import annotations
 
 import json
+import re
 import sys
 import types
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -21,7 +22,6 @@ from circuitry.core.store import (
     build_persistence_backend,
 )
 from circuitry.core.store.mongodb import sanitize_uri
-
 
 # ----------------------------------------------------------------------
 # Fake pymongo
@@ -62,7 +62,7 @@ class _FakeDatabase:
 
 
 class _FakeMongoClient:
-    instances: list["_FakeMongoClient"] = []
+    instances: ClassVar[list[_FakeMongoClient]] = []
 
     def __init__(self, uri: str, *args: Any, **kwargs: Any) -> None:
         del args, kwargs
@@ -101,7 +101,7 @@ def fake_pymongo(monkeypatch: pytest.MonkeyPatch) -> dict[str, _FakeDatabase]:
 
 
 def test_jsonl_requires_path() -> None:
-    with pytest.raises(ValueError, match="requires runtime.persistence.path"):
+    with pytest.raises(ValueError, match=re.escape("requires runtime.persistence.path")):
         JsonlFileStatePersistence.from_config({})
 
 
@@ -172,7 +172,7 @@ def test_jsonl_describe_exposes_path(tmp_path: Path) -> None:
 
 
 def test_mongodb_requires_uri() -> None:
-    with pytest.raises(ValueError, match="requires runtime.persistence.uri"):
+    with pytest.raises(ValueError, match=re.escape("requires runtime.persistence.uri")):
         MongodbStatePersistence.from_config({"database": "db"})
 
 

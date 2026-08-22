@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 
@@ -107,18 +107,18 @@ class FakeHub:
         self.repo = "owner/hub"
         self.ref = "main"
         self.cache_root = cache_root
-        self.sha: Optional[str] = None
+        self.sha: str | None = None
         self.fetched_at = ""
         #: Set to a message to make the next fetch fail.
-        self.fail: Optional[str] = None
+        self.fail: str | None = None
         #: Set to hold the fetch open, so a test can drive the UI mid-refresh.
-        self.gate: Optional[threading.Event] = None
+        self.gate: threading.Event | None = None
         self.calls = 0
         self.files = {"hub_review.yml": HUB_PIPELINE, "dupe.yml": DUPE_HUB}
 
     # -- LibrarySource protocol ---------------------------------------------
 
-    def _folder(self) -> Optional[FolderSource]:
+    def _folder(self) -> FolderSource | None:
         if self.sha is None:
             return None
         return FolderSource(self.name, self.cache_root / self.sha)
@@ -127,11 +127,11 @@ class FakeHub:
         folder = self._folder()
         return folder.list_entries() if folder is not None else []
 
-    def resolve(self, ref: str) -> Optional[Path]:
+    def resolve(self, ref: str) -> Path | None:
         folder = self._folder()
         return folder.resolve(ref) if folder is not None else None
 
-    def notice(self) -> Optional[str]:
+    def notice(self) -> str | None:
         if self.sha is not None:
             return None
         return (
@@ -252,7 +252,7 @@ def test_ambiguous_names_are_the_ones_more_than_one_source_claims() -> None:
 def test_the_badge_is_only_drawn_for_a_multi_source_library() -> None:
     entry = LibraryEntry(name="one", category="", file="one.yml", intent="", source="hub")
     assert option_label(entry) == "one"
-    assert "[hub] one" == str(option_label(entry, show_source=True))
+    assert str(option_label(entry, show_source=True)) == "[hub] one"
 
 
 def test_an_ambiguous_row_is_shown_source_qualified() -> None:
@@ -266,7 +266,7 @@ def test_a_source_qualified_query_finds_exactly_that_entry() -> None:
         LibraryEntry(name="dupe", category="", file="d.yml", intent="", source="local"),
         LibraryEntry(name="dupe", category="", file="d.yml", intent="", source="hub"),
     ]
-    assert [e.source for e in search(entries, "hub:dupe")][0] == "hub"
+    assert [e.source for e in search(entries, "hub:dupe")] == ["hub"]
 
 
 def test_search_can_be_scoped_to_one_source(sources: Any) -> None:
@@ -432,7 +432,7 @@ def test_the_ambiguous_name_is_listed_once_per_source_and_qualified(
 
 
 def test_r_fetches_the_hub_and_the_new_entries_appear(run_app: Any, multi: Any) -> None:
-    registry, hub = multi
+    _, hub = multi
 
     async def scenario(pilot: Pilot[Any]) -> tuple[list[str], str]:
         screen = await open_library(pilot)
@@ -466,7 +466,7 @@ def test_refreshing_inside_a_source_filter_fetches_only_that_source(
 
 def test_refresh_never_blocks_input(run_app: Any, multi: Any) -> None:
     """AC: the view stays usable while a fetch is in flight."""
-    registry, hub = multi
+    _, hub = multi
     hub.gate = threading.Event()
 
     async def scenario(pilot: Pilot[Any]) -> tuple[str, bool, str, str]:
@@ -495,7 +495,7 @@ def test_refresh_never_blocks_input(run_app: Any, multi: Any) -> None:
 
 
 def test_a_second_r_while_one_is_in_flight_says_so(run_app: Any, multi: Any) -> None:
-    registry, hub = multi
+    _, hub = multi
     hub.gate = threading.Event()
 
     async def scenario(pilot: Pilot[Any]) -> tuple[str, int]:
@@ -519,7 +519,7 @@ def test_a_failed_refresh_keeps_the_cached_entries_and_says_they_are_stale(
     run_app: Any, multi: Any
 ) -> None:
     """AC: failure is a designed state — cached entries stay, banner explains."""
-    registry, hub = multi
+    _, hub = multi
 
     async def scenario(pilot: Pilot[Any]) -> tuple[list[str], str, str]:
         screen = await open_library(pilot)
@@ -542,7 +542,7 @@ def test_a_failed_refresh_keeps_the_cached_entries_and_says_they_are_stale(
 def test_a_refresh_that_only_fails_leaves_the_empty_state_intact(
     run_app: Any, multi: Any
 ) -> None:
-    registry, hub = multi
+    _, hub = multi
     hub.fail = "404 — check 'repo', 'ref', and 'path'"
 
     async def scenario(pilot: Pilot[Any]) -> tuple[str, str, int]:
@@ -730,7 +730,7 @@ def test_snapshot_of_an_unfetched_github_source(
 def test_snapshot_of_a_failed_refresh(
     run_app: Any, multi: Any, capture_frame: Any, snapshot: Any
 ) -> None:
-    registry, hub = multi
+    _, hub = multi
 
     async def scenario(pilot: Pilot[Any]) -> str:
         screen = await open_library(pilot)
@@ -751,7 +751,7 @@ def test_a_broken_sources_config_falls_back_to_curation_and_says_so(
     def explode() -> Any:
         raise LibrarySourceError("runtime.library.sources must be a non-empty list")
 
-    monkeypatch.setattr(library_module, "build_registry", lambda: explode())
+    monkeypatch.setattr(library_module, "build_registry", explode)
 
     async def scenario(pilot: Pilot[Any]) -> tuple[list[str], str]:
         screen = await open_library(pilot)

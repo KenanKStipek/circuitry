@@ -14,7 +14,7 @@ source is caught before anything runs.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import yaml  # type: ignore[import-untyped]
 
@@ -70,10 +70,10 @@ def resolve_reference(
     kind: str,
     value: str,
     *,
-    parent_dir: Optional[Path],
-    registry: Optional["LibraryRegistry"] = None,
-    runtime: Optional[dict[str, Any]] = None,
-) -> Optional[Path]:
+    parent_dir: Path | None,
+    registry: LibraryRegistry | None = None,
+    runtime: dict[str, Any] | None = None,
+) -> Path | None:
     """Resolve a `ref:` / `path:` value to an absolute file path, or None if unresolvable.
 
     `ref:` goes through the library registry (cross-source, cache paths
@@ -86,7 +86,7 @@ def resolve_reference(
     if registry is None:
         registry = build_registry(runtime)
 
-    def library_lookup(ref: str) -> Optional[Path]:
+    def library_lookup(ref: str) -> Path | None:
         try:
             resolved = resolve_ref(ref, registry=registry)
         except LibraryRefError:
@@ -121,9 +121,9 @@ def load_orch(path: Path) -> dict[str, Any]:
 def detect_cycles(
     root_orch: dict[str, Any],
     *,
-    root_path: Optional[Path] = None,
-    runtime: Optional[dict[str, Any]] = None,
-) -> Optional[list[str]]:
+    root_path: Path | None = None,
+    runtime: dict[str, Any] | None = None,
+) -> list[str] | None:
     """Walk the static `use:` graph from root_orch.
 
     Returns None if no cycle is found. Returns a list of orchestration paths
@@ -149,7 +149,7 @@ def detect_cycles(
     color: dict[str, int] = {}
     parent_chain: list[str] = []
 
-    def visit(orch: dict[str, Any], identity: str, parent_dir: Optional[Path]) -> Optional[list[str]]:
+    def visit(orch: dict[str, Any], identity: str, parent_dir: Path | None) -> list[str] | None:
         state = color.get(identity, 0)
         if state == 1:
             # Cycle: find where identity appears in chain and slice
@@ -157,7 +157,7 @@ def detect_cycles(
                 idx = parent_chain.index(identity)
             except ValueError:
                 idx = 0
-            return parent_chain[idx:] + [identity]
+            return [*parent_chain[idx:], identity]
         if state == 2:
             return None
 

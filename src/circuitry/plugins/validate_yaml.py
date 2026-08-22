@@ -95,8 +95,10 @@ def _validate_document(document: str, *, run_compile: bool) -> list[str]:
 
     if not isinstance(parsed, dict):
         return [
-            "Orchestration must be a YAML mapping with an 'effects' key, "
-            f"got {type(parsed).__name__}."
+            (
+                "Orchestration must be a YAML mapping with an 'effects' key, "
+                f"got {type(parsed).__name__}."
+            )
         ]
     if "effects" not in parsed:
         return ["Orchestration is missing the required top-level 'effects' key."]
@@ -162,7 +164,7 @@ class ValidateYamlPlugin:
         )
         if len(errors) > limit:
             hidden = len(errors) - limit
-            errors = errors[:limit] + [f"... and {hidden} more error(s)."]
+            errors = [*errors[:limit], f"... and {hidden} more error(s)."]
 
         value: dict[str, Any] = {
             "ok": not errors,

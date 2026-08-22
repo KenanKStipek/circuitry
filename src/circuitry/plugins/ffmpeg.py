@@ -72,14 +72,16 @@ def _build_drawtext_filter(cfg: dict[str, Any]) -> str:
         raw_text = raw_text[:-1]
     text_escaped = _escape_drawtext_text(raw_text)
     parts = [f"text={text_escaped}"]
-    for key in (
-        "x", "y", "fontsize", "fontfile", "fontcolor",
-        "box", "boxcolor", "boxborderw",
-        "shadowx", "shadowy", "shadowcolor",
-        "borderw", "bordercolor",
-    ):
-        if key in cfg:
-            parts.append(f"{key}={_sanitize_drawtext_value(cfg[key])}")
+    parts.extend(
+        f"{key}={_sanitize_drawtext_value(cfg[key])}"
+        for key in (
+            "x", "y", "fontsize", "fontfile", "fontcolor",
+            "box", "boxcolor", "boxborderw",
+            "shadowx", "shadowy", "shadowcolor",
+            "borderw", "bordercolor",
+        )
+        if key in cfg
+    )
     return "drawtext=" + ":".join(parts)
 
 

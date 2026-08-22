@@ -61,7 +61,7 @@ def test_list_orchestrations_returns_known_bundled() -> None:
     assert any("hello" in n for n in names)
     # Each entry has expected keys.
     for e in entries:
-        assert set(["name", "file", "description", "category"]).issubset(e.keys())
+        assert {"name", "file", "description", "category"}.issubset(e.keys())
 
 
 # ---------------------------------------------------------------------------
