@@ -21,6 +21,15 @@ was compiled out. A named loop grows ``iter_<n>`` children as it goes; a
 named conditional records ``meta.branch``. Anonymous (transparent)
 control effects write straight into their parent's node, so they resolve
 against the same scope and take their status from their children.
+
+Complexity scores arrive the other way round. The runtime writes
+``meta.complexity`` *before* an effect dispatches and hands the node to
+``on_effect_start``, but state snapshots are published on write — so the
+score of the effect currently in flight is in the start event and nowhere
+else yet. :func:`build_tree` therefore takes a ``scores`` overlay keyed by
+effect path, which wins over anything the snapshot happens to carry; that
+is what puts a score on a row while it is still running rather than after
+it lands.
 """
 
 from __future__ import annotations
@@ -31,17 +40,23 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
+from .complexity import NO_SCORE, SCORE_WIDTH, EffectComplexity
+from .complexity import read as read_complexity
+
 __all__ = [
     "CONTAINER_KINDS",
     "DONE",
     "FAILED",
     "GLYPHS",
+    "MIN_TREE_WIDTH",
     "PENDING",
     "RUNNING",
+    "SCORE_GAP",
     "SKIPPED",
     "ExecNode",
     "PlanNode",
     "RenderLine",
+    "ScoreColumn",
     "Totals",
     "build_tree",
     "count_effects",
@@ -50,6 +65,8 @@ __all__ = [
     "plan_from_orchestration",
     "render_lines",
     "render_text",
+    "score_column",
+    "score_column_width",
     "sum_tokens",
     "totals_for",
 ]
@@ -77,6 +94,15 @@ CONTAINER_KINDS = frozenset({"dynamic", "loop", "conditional", "reflector"})
 
 #: Synthetic grouping rows: structure, not work. Excluded from done/total.
 GROUP_KINDS = frozenset({"iteration", "branch"})
+
+#: Cells between the score column and the tree it annotates.
+SCORE_GAP = 2
+
+#: Cells the tree itself must keep, whatever the score column would like.
+#: The same number :data:`circuitry.tui.layout.TINY_WIDTH` calls the point
+#: below which a screen has nothing to spare — the column gives up its band
+#: name, then gives up entirely, rather than pushing the tree under this.
+MIN_TREE_WIDTH = 24
 
 #: How the runtime spells each effect type, normalised to one name.
 _KINDS: dict[str, str] = {
@@ -196,6 +222,9 @@ class ExecNode:
     detail: str = ""
     #: ``tree`` when this node runs its children in parallel.
     flow: str = ""
+    #: The effect's complexity score, when one was recorded for it. Only
+    #: prompt effects are ever scored, and only when scoring is enabled.
+    complexity: EffectComplexity | None = None
     children: tuple[ExecNode, ...] = field(default_factory=tuple)
 
     @property
@@ -206,6 +235,22 @@ class ExecNode:
     def parallel(self) -> bool:
         return self.flow == "tree"
 
+    def score_cell(self, *, band: bool = True) -> str:
+        """This row's score column: the score, a dash, or nothing.
+
+        A dash means "a prompt that has no score" — scoring off, or the
+        effect not yet reached. Nothing means the question does not apply:
+        loops, conditionals and iteration groups are not scored, and a
+        column of dashes down the structural rows would read as an error
+        rather than as the absence of one.
+
+        ``band=False`` drops the band name and keeps the number, which is
+        what a column too narrow for both spends its cells on.
+        """
+        if self.complexity is not None:
+            return self.complexity.cell if band else self.complexity.number
+        return NO_SCORE.rjust(SCORE_WIDTH) if self.kind == "prompt" else ""
+
 
 def effect_scope(state: Mapping[str, Any]) -> Mapping[str, Any] | None:
     """The node every top-level effect writes under (``prime``)."""
@@ -213,11 +258,35 @@ def effect_scope(state: Mapping[str, Any]) -> Mapping[str, Any] | None:
     return root if isinstance(root, Mapping) else None
 
 
+@dataclass(frozen=True)
+class _Overlay:
+    """What the run's events know that the latest snapshot does not.
+
+    Both halves exist for the same reason — a snapshot is published when
+    an effect *writes*, so it lags the lifecycle hooks on either side of
+    the write.
+    """
+
+    #: Effect paths seen via ``effect_complete``.
+    completed: frozenset[str] = frozenset()
+    #: ``meta.complexity`` payloads seen via ``effect_start``, by path.
+    scores: Mapping[str, Any] = field(default_factory=dict)
+
+    def complexity(self, path: str, meta: Mapping[str, Any] | None) -> EffectComplexity | None:
+        """The score for ``path``: the start event's, else the snapshot's."""
+        if path in self.scores:
+            started = read_complexity({"complexity": self.scores[path]})
+            if started is not None:
+                return started
+        return read_complexity(meta)
+
+
 def build_tree(
     plan: Sequence[PlanNode],
     state: Mapping[str, Any] | None = None,
     *,
     completed: Iterable[str] = (),
+    scores: Mapping[str, Any] | None = None,
     running: bool | None = None,
 ) -> tuple[ExecNode, ...]:
     """Overlay a state snapshot on ``plan`` and return the rows to draw.
@@ -227,13 +296,20 @@ def build_tree(
     so those notifications are the only way to show a parallel sibling
     finishing ahead of its neighbours.
 
+    ``scores`` carries ``meta.complexity`` payloads seen via
+    ``effect_start``, keyed by the same effect paths. They take precedence
+    over the snapshot: the score is written before dispatch, so the effect
+    in flight has one here and nowhere else. An effect missing from both
+    simply has no score, which is the common case.
+
     ``running`` overrides what the snapshot implies about the run being
     in flight — a caller holding the run session knows before the first
     snapshot arrives.
     """
     snapshot = state or {}
     scope = effect_scope(snapshot)
-    nodes = _nodes(plan, scope, set(completed), ROOT_KEY)
+    overlay = _Overlay(frozenset(completed), scores if scores is not None else {})
+    nodes = _nodes(plan, scope, overlay, ROOT_KEY)
     root = _root_meta(scope)
     if _in_flight(root) if running is None else running:
         # The runtime writes an effect's node before it starts but only
@@ -286,16 +362,16 @@ def _running_now(node: ExecNode) -> ExecNode:
 def _nodes(
     plan: Sequence[PlanNode],
     scope: Mapping[str, Any] | None,
-    completed: set[str],
+    overlay: _Overlay,
     path: str,
 ) -> tuple[ExecNode, ...]:
-    return tuple(_node(item, scope, completed, path) for item in plan)
+    return tuple(_node(item, scope, overlay, path) for item in plan)
 
 
 def _node(
     plan: PlanNode,
     scope: Mapping[str, Any] | None,
-    completed: set[str],
+    overlay: _Overlay,
     path: str,
 ) -> ExecNode:
     # A named effect owns a node in state; an anonymous control effect is
@@ -313,8 +389,8 @@ def _node(
     meta = node.get("meta") if isinstance(node, Mapping) else None
     meta = meta if isinstance(meta, Mapping) else None
 
-    children = _children(plan, node, child_scope, completed, node_path)
-    status = _status(meta, children, done=node_path in completed)
+    children = _children(plan, node, child_scope, overlay, node_path)
+    status = _status(meta, children, done=node_path in overlay.completed)
     if status == RUNNING:
         children = _advance(children, parallel=plan.flow == "tree")
     error = str(meta.get("error")) if meta and meta.get("error") else None
@@ -330,6 +406,7 @@ def _node(
         on_error=plan.on_error if error else "",
         detail=_detail(plan, meta),
         flow=plan.flow,
+        complexity=overlay.complexity(node_path, meta),
         children=children,
     )
 
@@ -338,33 +415,33 @@ def _children(
     plan: PlanNode,
     node: Mapping[str, Any] | None,
     scope: Mapping[str, Any] | None,
-    completed: set[str],
+    overlay: _Overlay,
     path: str,
 ) -> tuple[ExecNode, ...]:
     if plan.kind == "loop":
-        return _loop_children(plan, scope, completed, path)
+        return _loop_children(plan, scope, overlay, path)
     if plan.kind == "conditional":
-        return _branch_children(plan, node, scope, completed, path)
-    return _nodes(plan.children, scope, completed, path)
+        return _branch_children(plan, node, scope, overlay, path)
+    return _nodes(plan.children, scope, overlay, path)
 
 
 def _loop_children(
     plan: PlanNode,
     scope: Mapping[str, Any] | None,
-    completed: set[str],
+    overlay: _Overlay,
     path: str,
 ) -> tuple[ExecNode, ...]:
     """Iterations as they appear; the body as a preview until one does."""
     iterations = _iteration_keys(scope)
     if not iterations:
-        return _nodes(plan.children, None, completed, path)
+        return _nodes(plan.children, None, overlay, path)
     rows: list[ExecNode] = []
     for index, key in iterations:
         iter_scope = scope.get(key) if isinstance(scope, Mapping) else None
         body = _nodes(
             plan.children,
             iter_scope if isinstance(iter_scope, Mapping) else None,
-            completed,
+            overlay,
             f"{path}.{key}",
         )
         rows.append(
@@ -393,7 +470,7 @@ def _branch_children(
     plan: PlanNode,
     node: Mapping[str, Any] | None,
     scope: Mapping[str, Any] | None,
-    completed: set[str],
+    overlay: _Overlay,
     path: str,
 ) -> tuple[ExecNode, ...]:
     """The taken branch once it is known, both branches before that."""
@@ -401,7 +478,7 @@ def _branch_children(
     branch = meta.get("branch") if isinstance(meta, Mapping) else None
 
     def group(name: str, plans: Sequence[PlanNode], live: bool) -> ExecNode:
-        rows = _nodes(plans, scope if live else None, completed, path)
+        rows = _nodes(plans, scope if live else None, overlay, path)
         return ExecNode(
             label=name,
             kind="branch",
@@ -576,28 +653,118 @@ def totals_for(
 
 @dataclass(frozen=True)
 class RenderLine:
-    """One drawable row: its text, and the status that colours it."""
+    """One drawable row: its text, and the status that colours it.
+
+    ``gutter`` is the score column, already padded to the column's width
+    (empty when the column is not being drawn). It is kept apart from
+    ``text`` so a caller can style the two differently; :attr:`full` is
+    the row as it reads on screen.
+    """
 
     text: str
     status: str
+    gutter: str = ""
+
+    @property
+    def full(self) -> str:
+        return f"{self.gutter}{self.text}"
 
 
-def render_lines(nodes: Sequence[ExecNode]) -> list[RenderLine]:
-    """Flatten the tree into rows with box-drawing connectors."""
+@dataclass(frozen=True)
+class ScoreColumn:
+    """How much of the score column fits, and therefore what it says."""
+
+    #: Total cells the column occupies, separator included. 0 = not drawn.
+    width: int = 0
+    #: Whether there is room for the band name beside the number.
+    bands: bool = True
+
+    def cell(self, node: ExecNode) -> str:
+        """``node``'s cell, padded to the column (empty when not drawn)."""
+        if self.width <= 0:
+            return ""
+        return node.score_cell(band=self.bands).ljust(self.width - SCORE_GAP) + " " * SCORE_GAP
+
+
+def score_column(nodes: Sequence[ExecNode], width: int | None = None) -> ScoreColumn:
+    """Size the score column for ``nodes`` in ``width`` cells of tree.
+
+    Sized to the widest cell actually present, so a run whose scores all
+    read ``low`` costs less gutter than one that reaches ``moderate`` —
+    and a run with no scores at all (scoring off, no prompt effects) costs
+    none, leaving the tree byte-identical to what it drew before.
+
+    ``width`` is the space the whole tree has, or ``None`` for "not laid
+    out yet, draw everything". The tree's own :data:`MIN_TREE_WIDTH` cells
+    are not negotiable, so a column that will not fit gives up its band
+    name first and then gives up entirely. What it never does is take the
+    room out of the rows beside it: a truncated effect name costs more
+    than a hidden score, which the inspector shows in full either way.
+    """
+    rows = _walk(nodes)
+    if not any(node.complexity is not None for node in rows):
+        # Nothing was scored — scoring is off, or nothing here is a prompt.
+        # A column of dashes would announce a feature that is not running.
+        return ScoreColumn(0)
+
+    def fits(bands: bool) -> ScoreColumn | None:
+        widest = max((len(node.score_cell(band=bands)) for node in rows), default=0)
+        if not widest:
+            return None
+        column = widest + SCORE_GAP
+        if width is not None and width - column < MIN_TREE_WIDTH:
+            return None
+        return ScoreColumn(column, bands)
+
+    return fits(True) or fits(False) or ScoreColumn(0)
+
+
+def score_column_width(nodes: Sequence[ExecNode], width: int | None = None) -> int:
+    """Cells the score column needs, or 0 when it should not be drawn."""
+    return score_column(nodes, width).width
+
+
+def _walk(nodes: Sequence[ExecNode]) -> list[ExecNode]:
+    """Every node of the tree, parents before children."""
+    out: list[ExecNode] = []
+    for node in nodes:
+        out.append(node)
+        out.extend(_walk(node.children))
+    return out
+
+
+def render_lines(
+    nodes: Sequence[ExecNode], *, width: int | None = None
+) -> list[RenderLine]:
+    """Flatten the tree into rows with box-drawing connectors.
+
+    ``width`` is how many cells the tree has to draw in; pass it and the
+    score column suppresses itself when there is no room for it. Omitting
+    it means "unknown, draw everything", which is what a caller that has
+    not been laid out yet wants.
+    """
     lines: list[RenderLine] = []
-    _render(nodes, "", lines)
+    _render(nodes, "", score_column(nodes, width), lines)
     return lines
 
 
-def _render(nodes: Sequence[ExecNode], prefix: str, out: list[RenderLine]) -> None:
+def _render(
+    nodes: Sequence[ExecNode], prefix: str, column: ScoreColumn, out: list[RenderLine]
+) -> None:
     for index, node in enumerate(nodes):
         last = index == len(nodes) - 1
         stem = "└─ " if last else "├─ "
-        out.append(RenderLine(f"{prefix}{stem}{_row(node)}", node.status))
+        out.append(
+            RenderLine(f"{prefix}{stem}{_row(node)}", node.status, column.cell(node))
+        )
         below = f"{prefix}{'   ' if last else '│  '}"
         if node.error:
-            out.append(RenderLine(f"{below}   ↳ {_error_text(node)}", FAILED))
-        _render(node.children, below, out)
+            # The error hangs off the row above and describes the same
+            # effect, so it never repeats that effect's score.
+            out.append(
+                RenderLine(f"{below}   ↳ {_error_text(node)}", FAILED, " " * column.width)
+            )
+        _render(node.children, below, column, out)
 
 
 def _row(node: ExecNode) -> str:
@@ -631,9 +798,9 @@ def _seconds(value: float) -> str:
     return f"{value:.1f}s"
 
 
-def render_text(nodes: Sequence[ExecNode]) -> str:
+def render_text(nodes: Sequence[ExecNode], *, width: int | None = None) -> str:
     """The whole tree as plain text (what tests assert against)."""
-    return "\n".join(line.text for line in render_lines(nodes))
+    return "\n".join(line.full for line in render_lines(nodes, width=width))
 
 
 def format_totals(totals: Totals) -> str:

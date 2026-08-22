@@ -455,11 +455,13 @@ class RunSession:
         *,
         on_state: StateCallback | None = None,
         on_effect: EffectCallback | None = None,
+        on_effect_start: EffectCallback | None = None,
         on_finish: FinishCallback | None = None,
         runner: Runner | None = None,
     ) -> None:
         self._on_state = on_state
         self._on_effect = on_effect
+        self._on_effect_start = on_effect_start
         self._on_finish = on_finish
         self._runner: Runner = runner if runner is not None else shim_run
         self._cancelled = threading.Event()
@@ -467,6 +469,7 @@ class RunSession:
             request,
             state_observer=self._observe,
             effect_observer=self._observe_effect,
+            effect_start_observer=self._observe_effect_start,
         )
         self._thread = threading.Thread(
             target=self._execute, name="circuitry-tui-run", daemon=True
@@ -511,6 +514,18 @@ class RunSession:
             # live runtime state, or an observed run would drift from an
             # unobserved one.
             self._on_state(deepcopy(state))
+
+    def _observe_effect_start(self, path: str, node: dict[str, Any]) -> None:
+        """One effect is about to dispatch. Deep-copied like everything else.
+
+        This is the only moment the UI can learn something about an effect
+        *before* it runs — the node already carries the resolved adapter and
+        model, the rendered prompt, and the complexity score when scoring is
+        on. Not a cancellation point: the run stops at the next state write,
+        which keeps the unwind out of the lifecycle hooks.
+        """
+        if self._on_effect_start is not None:
+            self._on_effect_start(path, deepcopy(node))
 
     def _observe_effect(self, path: str, node: dict[str, Any]) -> None:
         """One effect landed. Deep-copied for the same reason as state.
