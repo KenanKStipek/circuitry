@@ -11,7 +11,6 @@ import pytest
 from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.runtime_shim import RunRequest, run
 
-
 if os.getenv("CIRCUITRY_RUN_INTEGRATION") != "1":
     pytest.skip(
         "Integration tests disabled. Set CIRCUITRY_RUN_INTEGRATION=1 to enable.",

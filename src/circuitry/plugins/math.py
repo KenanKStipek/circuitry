@@ -23,7 +23,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 _BIN_OPS: dict[type, Any] = {
     ast.Add: _op.add,
     ast.Sub: _op.sub,

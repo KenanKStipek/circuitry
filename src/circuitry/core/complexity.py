@@ -71,8 +71,9 @@ degrades to a neutral measurement and appends a line to
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Literal, Mapping, NamedTuple, Sequence
+from typing import Any, Literal, NamedTuple
 
 __all__ = [
     "DEFAULT_KEYWORD_WEIGHTS",
@@ -212,7 +213,7 @@ def _number(value: Any) -> float:
 
 
 def _clamp01(value: float) -> float:
-    return 0.0 if value < 0.0 else (1.0 if value > 1.0 else value)
+    return 0.0 if value < 0.0 else (min(value, 1.0))
 
 
 def _saturate(value: float, half: float) -> float:
@@ -265,7 +266,7 @@ class StructureContext:
         return self.loop_depth > 0
 
     @classmethod
-    def from_any(cls, value: Any) -> tuple["StructureContext", list[str]]:
+    def from_any(cls, value: Any) -> tuple[StructureContext, list[str]]:
         """Build a context from a mapping, an instance, or ``None``.
 
         Returns the context plus any warnings raised while coercing it. Junk
@@ -286,8 +287,10 @@ class StructureContext:
 
         else:
             return cls(), [
-                f"structure: expected a mapping or StructureContext, got "
-                f"{type(value).__name__}; treated as top-level."
+                (
+                    "structure: expected a mapping or StructureContext, got "
+                    f"{type(value).__name__}; treated as top-level."
+                )
             ]
 
         def _int(key: str) -> int:
@@ -444,8 +447,7 @@ class ComplexityScore:
             f"{' ' * 27}(Σw={self.weight_total:.3f})"
             f" → {self.score:6.2f}"
         )
-        for warning in self.warnings:
-            lines.append(f"! {warning}")
+        lines.extend(f"! {warning}" for warning in self.warnings)
         return "\n".join(lines)
 
 
@@ -671,9 +673,11 @@ def _resolve_weights(
         )
         return resolved
 
-    for key in sorted(str(k) for k in weights.keys()):
-        if key not in resolved:
-            warnings.append(f"weights.{key}: unknown signal; ignored.")
+    warnings.extend(
+        f"weights.{key}: unknown signal; ignored."
+        for key in sorted(str(k) for k in weights)
+        if key not in resolved
+    )
 
     for name in SIGNAL_NAMES:
         if name not in weights:
@@ -901,7 +905,7 @@ def _measure_keywords(
         normalized=_clamp01(sum(weight for _, weight in matches)),
         estimated=False,
         detail={
-            "matched": {phrase: weight for phrase, weight in matches},
+            "matched": dict(matches),
             "table_size": len(table),
             "source": "rendered_prompt" if mode == "rendered" else "template",
         },
@@ -948,14 +952,13 @@ def score(
 
     if definition is None and rendered_prompt is None:
         warnings.append("definition: nothing to score; every signal read as empty.")
-    elif definition is not None and not isinstance(definition, Mapping):
-        # Objects are fine (duck-typed via getattr) but scalars are not.
-        if isinstance(definition, (str, bytes, int, float, bool)):
-            warnings.append(
-                f"definition: expected a mapping or definition object, got "
-                f"{type(definition).__name__}; every signal read as empty."
-            )
-            definition = None
+    # Objects are fine (duck-typed via getattr) but scalars are not.
+    elif isinstance(definition, (str, bytes, int, float, bool)):
+        warnings.append(
+            "definition: expected a mapping or definition object, got "
+            f"{type(definition).__name__}; every signal read as empty."
+        )
+        definition = None
 
     resolved_weights = _resolve_weights(weights, warnings)
     context, structure_warnings = StructureContext.from_any(structure)

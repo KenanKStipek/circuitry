@@ -74,7 +74,8 @@ def binding_rows(app: App[Any]) -> list[HelpRow]:
 class HelpTable(Static):
     """Key/description rows, re-flowed to whatever width is available."""
 
-    def __init__(self, rows: list[HelpRow], *, id: str | None = None) -> None:  # noqa: A002
+    # `id` shadows the builtin because it is Textual's own parameter name.
+    def __init__(self, rows: list[HelpRow], *, id: str | None = None) -> None:
         super().__init__("", id=id)
         self.rows = rows
 

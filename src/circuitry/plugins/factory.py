@@ -1,30 +1,75 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from . import (
     awk as _awk_mod,
+)
+from . import (
     diff_patch as _diff_patch_mod,
+)
+from . import (
     docker as _docker_mod,
+)
+from . import (
     exiftool as _exiftool_mod,
+)
+from . import (
     gh as _gh_mod,
+)
+from . import (
     git as _git_mod,
+)
+from . import (
     gpg as _gpg_mod,
+)
+from . import (
     imagemagick as _imagemagick_mod,
+)
+from . import (
     kubectl as _kubectl_mod,
+)
+from . import (
     linter as _linter_mod,
+)
+from . import (
     mediainfo as _mediainfo_mod,
+)
+from . import (
     ocr as _ocr_mod,
+)
+from . import (
     pandoc as _pandoc_mod,
+)
+from . import (
     pdf_render as _pdf_render_mod,
+)
+from . import (
     ping as _ping_mod,
+)
+from . import (
     pytest as _pytest_mod,
+)
+from . import (
     ripgrep as _ripgrep_mod,
+)
+from . import (
     sed as _sed_mod,
+)
+from . import (
     sevenz as _sevenz_mod,
+)
+from . import (
     traceroute as _traceroute_mod,
+)
+from . import (
     weather as _weather_mod,
+)
+from . import (
     web_search as _web_search_mod,
+)
+from . import (
     yt_dlp as _yt_dlp_mod,
 )
 from .base import ToolPlugin

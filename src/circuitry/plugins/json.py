@@ -23,7 +23,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 _PATH_TOKEN = re.compile(r"([A-Za-z_][A-Za-z0-9_-]*)|\[(-?\d+)\]")
 
 

@@ -22,7 +22,7 @@ over any configured adapter, and a test supplies a scripted one.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Optional
+from typing import TYPE_CHECKING, ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -121,7 +121,7 @@ class DraftPane(Vertical):
         yield Static("", id="draft-errors", markup=False)
         yield Static("", id="draft-yaml", markup=False)
 
-    def show(self, draft: str, status: Optional[DraftStatus]) -> None:
+    def show(self, draft: str, status: DraftStatus | None) -> None:
         """Render a draft and the verdict on it (``None`` = nothing checked)."""
         headline = self.query_one("#draft-status", Static)
         headline.remove_class(*self.STATE_CLASSES)
@@ -167,9 +167,9 @@ class ChatScreen(ViewScreen):
         self,
         spec: ViewSpec,
         *,
-        runner: Optional[TurnRunner] = None,
-        library_dir: Optional[Path] = None,
-        seed: Optional[Seed] = None,
+        runner: TurnRunner | None = None,
+        library_dir: Path | None = None,
+        seed: Seed | None = None,
     ) -> None:
         super().__init__(spec)
         self._runner = runner or default_runner()
@@ -177,7 +177,7 @@ class ChatScreen(ViewScreen):
         self.conversation = Conversation(seed or Seed())
         self.started = seed is not None
         self.busy = False
-        self.saved_path: Optional[Path] = None
+        self.saved_path: Path | None = None
         #: Whatever the status line last said — the screen's answer to "what
         #: happened when I pressed that?", kept as state so it is assertable.
         self.status_text = ""
@@ -298,12 +298,12 @@ class ChatScreen(ViewScreen):
         state = self.conversation.state()
         try:
             turn = self._runner(state)
-        except Exception as exc:  # noqa: BLE001 - never let a worker die silently
+        except Exception as exc:
             self._hand_back(None, f"{type(exc).__name__}: {exc}")
             return
         self._hand_back(turn, None)
 
-    def _hand_back(self, turn: Optional[Turn], error: Optional[str]) -> None:
+    def _hand_back(self, turn: Turn | None, error: str | None) -> None:
         if self._closing:
             return
         try:
@@ -312,7 +312,7 @@ class ChatScreen(ViewScreen):
             # The app stopped between the turn finishing and the hand-off.
             self._closing = True
 
-    def _finish(self, turn: Optional[Turn], error: Optional[str]) -> None:
+    def _finish(self, turn: Turn | None, error: str | None) -> None:
         self.busy = False
         box = self.query_one("#chat-message", Input)
         box.disabled = False

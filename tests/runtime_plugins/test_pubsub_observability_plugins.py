@@ -18,24 +18,41 @@ import sys
 import types
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
 from circuitry.core.runtime_plugins import PluginContext, load_plugins
 from circuitry.runtime_plugins import (
     cloudwatch as cloudwatch_mod,
+)
+from circuitry.runtime_plugins import (
     datadog as datadog_mod,
+)
+from circuitry.runtime_plugins import (
     honeycomb as honeycomb_mod,
+)
+from circuitry.runtime_plugins import (
     kafka as kafka_mod,
+)
+from circuitry.runtime_plugins import (
     loki as loki_mod,
+)
+from circuitry.runtime_plugins import (
     nats as nats_mod,
+)
+from circuitry.runtime_plugins import (
     opentelemetry as otel_mod,
+)
+from circuitry.runtime_plugins import (
     prometheus as prometheus_mod,
+)
+from circuitry.runtime_plugins import (
     rabbitmq as rabbitmq_mod,
+)
+from circuitry.runtime_plugins import (
     sentry as sentry_mod,
 )
-
 
 PUBSUB_PLUGINS = [
     ("kafka", "confluent_kafka", "confluent-kafka"),
@@ -371,7 +388,7 @@ class _FakeSpan:
     def end(self) -> None:
         self.ended = True
 
-    def __enter__(self) -> "_FakeSpan":
+    def __enter__(self) -> _FakeSpan:
         return self
 
     def __exit__(self, *args: Any) -> None:
@@ -648,14 +665,14 @@ def test_prometheus_increments_run_counter(
     histograms: list[tuple[str, float]] = []
 
     class FakeRegistry:
-        _names_to_collectors: dict = {}
+        _names_to_collectors: ClassVar[dict] = {}
 
     class FakeCounter:
         def __init__(self, name: str, doc: str, labelnames: list | None = None, registry: Any = None) -> None:
             self.name = name
             self.labelnames = labelnames or []
 
-        def labels(self, **kwargs: Any) -> "FakeCounter":
+        def labels(self, **kwargs: Any) -> FakeCounter:
             self._labels = kwargs
             return self
 
@@ -669,7 +686,7 @@ def test_prometheus_increments_run_counter(
         def observe(self, value: float) -> None:
             histograms.append((self.name, value))
 
-    fake.CollectorRegistry = lambda: FakeRegistry()
+    fake.CollectorRegistry = FakeRegistry
     fake.Counter = FakeCounter
     fake.Histogram = FakeHistogram
     fake.REGISTRY = FakeRegistry()

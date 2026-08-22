@@ -29,11 +29,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from ..adapters import HostClaudeAdapter, HostPromptRequest, RunCancelled
 from ..cli.config import resolve_config
-from ..cli.runtime_shim import RunRequest, run as run_orchestration
+from ..cli.runtime_shim import RunRequest
+from ..cli.runtime_shim import run as run_orchestration
 
 logger = logging.getLogger(__name__)
 
@@ -71,11 +72,11 @@ class Run:
     status: RunStatus = RunStatus.PENDING
     state: dict[str, Any] = field(default_factory=dict)
     pending_prompts: dict[str, PendingPrompt] = field(default_factory=dict)
-    error: Optional[str] = None
+    error: str | None = None
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
-    thread: Optional[threading.Thread] = field(default=None, repr=False)
+    thread: threading.Thread | None = field(default=None, repr=False)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    completed_at: Optional[datetime] = None
+    completed_at: datetime | None = None
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
 
@@ -106,7 +107,7 @@ class RunManager:
         self,
         *,
         orchestration_path: Path,
-        initial_state: Optional[dict[str, Any]] = None,
+        initial_state: dict[str, Any] | None = None,
         override_model: bool = False,
         override_to: str = "",
     ) -> Run:
@@ -302,7 +303,7 @@ class RunManager:
         first parallel branch. Returns early on cancel.
         """
         deadline = _monotonic() + self._quiesce_max_wait
-        last_keys: Optional[frozenset[str]] = None
+        last_keys: frozenset[str] | None = None
         last_change = _monotonic()
 
         while True:

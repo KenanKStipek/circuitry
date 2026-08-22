@@ -52,7 +52,7 @@ class MongodbStatePersistence:
         return "mongodb"
 
     @staticmethod
-    def from_config(config: dict[str, Any]) -> "MongodbStatePersistence":
+    def from_config(config: dict[str, Any]) -> MongodbStatePersistence:
         uri = str(config.get("uri") or config.get("dsn") or "").strip()
         if not uri:
             raise ValueError(

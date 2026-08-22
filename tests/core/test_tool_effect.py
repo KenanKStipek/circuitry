@@ -6,11 +6,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from circuitry.core.compiler import compile_orchestration, _compile_effect
+from circuitry.core.compiler import _compile_effect, compile_orchestration
 from circuitry.core.store import Store
 from circuitry.core.tool import ToolDefinition, ToolRuntime
 from circuitry.plugins.base import ToolResult
-
 
 # ---------------------------------------------------------------------------
 # Compiler tests

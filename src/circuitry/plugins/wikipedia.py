@@ -25,16 +25,14 @@ from .base import ToolResult
 
 
 def _walk_sections(sections: Any) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for section in sections or []:
-        out.append(
-            {
-                "title": section.title,
-                "text": section.text,
-                "subsections": _walk_sections(section.sections),
-            }
-        )
-    return out
+    return [
+        {
+            "title": section.title,
+            "text": section.text,
+            "subsections": _walk_sections(section.sections),
+        }
+        for section in sections or []
+    ]
 
 
 @dataclass(frozen=True)

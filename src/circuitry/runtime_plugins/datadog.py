@@ -74,7 +74,7 @@ class DatadogPlugin:
             return
         meta = effect_result.get("meta") if isinstance(effect_result, dict) else {}
         meta = meta if isinstance(meta, dict) else {}
-        tags = self._tags + [f"effect_path:{effect_path}"]
+        tags = [*self._tags, f"effect_path:{effect_path}"]
         self._statsd.increment("circuitry.effects.completed", tags=tags)
         for metric_name, key in (
             ("circuitry.tokens.sent", "tokens_sent"),

@@ -12,7 +12,10 @@ from pathlib import Path
 import pytest
 
 from circuitry.cli.config import CircuitryConfig
-from circuitry.cli.effective_settings import EffectiveSettings, resolve_effective_settings
+from circuitry.cli.effective_settings import (
+    EffectiveSettings,
+    resolve_effective_settings,
+)
 from circuitry.cli.redaction import REDACTED
 from circuitry.preflight import CheckResult
 from circuitry.tui.diagnostics import (
@@ -189,7 +192,7 @@ def test_a_broken_file_reports_every_error_class_at_once() -> None:
 def test_each_error_class_says_something_specific() -> None:
     report = validate_report(FIXTURES / "broken.yml", config=CircuitryConfig())
     assert "bad name" in report.of_kind("schema")[0].message
-    assert "/effects/0/name" == report.of_kind("schema")[0].location
+    assert report.of_kind("schema")[0].location == "/effects/0/name"
     assert "whitespace is not allowed" in report.of_kind("compile")[0].message
     assert "broken.yml" in report.of_kind("cycle")[0].message
     assert "definitely_not_an_adapter" in report.of_kind("preflight")[0].line()

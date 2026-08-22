@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Optional, Protocol
+from typing import Any, Literal, Protocol
 
 from ..adapters import build_adapter
 from ..adapters.factory import ADAPTER_REGISTRY
@@ -144,7 +144,7 @@ class ExtensionCheck:
     target: CheckTarget
     state: CheckState = "checking"
     missing: tuple[str, ...] = ()
-    message: Optional[str] = None
+    message: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -172,7 +172,7 @@ class ExtensionCheck:
         return f"{self.target.name}  {STATE_LABELS[self.state]} — {self.detail}"
 
 
-def _allowed_or_compiled(allowed: Optional[list[str]], compiled: Any) -> list[str]:
+def _allowed_or_compiled(allowed: list[str] | None, compiled: Any) -> list[str]:
     """Allowlisted names when one is configured, else everything compiled in."""
     if allowed is None:
         return sorted(compiled)
@@ -330,7 +330,7 @@ class ValidationIssue:
 
     kind: str
     message: str
-    location: Optional[str] = None
+    location: str | None = None
     hints: tuple[str, ...] = ()
 
     def line(self) -> str:
@@ -372,7 +372,7 @@ def _preflight_message(result: CheckResult) -> str:
     return " — ".join(parts) or "not ready"
 
 
-def _schema_location(error: Any) -> Optional[str]:
+def _schema_location(error: Any) -> str | None:
     path = getattr(error, "absolute_path", None)
     if not path:
         return None
@@ -382,7 +382,7 @@ def _schema_location(error: Any) -> Optional[str]:
 def validate_report(
     path: Path,
     *,
-    config: Optional[CircuitryConfig] = None,
+    config: CircuitryConfig | None = None,
     skip_preflight: bool = False,
 ) -> ValidationReport:
     """Run every validation gate against ``path`` and collect all findings.
@@ -404,7 +404,7 @@ def validate_report(
 
     try:
         orch = load_orchestration_file(path)
-    except Exception as exc:  # noqa: BLE001 - any loader failure is a load issue
+    except Exception as exc:
         return ValidationReport(path, (ValidationIssue("load", str(exc)),))
     if not isinstance(orch, dict):
         return ValidationReport(
@@ -437,7 +437,7 @@ def validate_report(
 
     try:
         compile_orchestration(orch=orch, root_name="prime")
-    except Exception as exc:  # noqa: BLE001 - compiler raises bare ValueErrors
+    except Exception as exc:
         issues.append(ValidationIssue("compile", str(exc)))
 
     try:
@@ -446,7 +446,7 @@ def validate_report(
             root_path=path,
             runtime=(config.runtime if config is not None else None),
         )
-    except Exception as exc:  # noqa: BLE001 - unreadable sub-orchestration, etc.
+    except Exception as exc:
         issues.append(ValidationIssue("cycle", str(exc)))
     else:
         if cycle is not None:
@@ -457,7 +457,7 @@ def validate_report(
     else:
         try:
             results = runtime_shim.preflight(path, config)
-        except Exception as exc:  # noqa: BLE001 - a probe may raise anything
+        except Exception as exc:
             issues.append(ValidationIssue("preflight", str(exc)))
         else:
             issues += [
@@ -514,8 +514,8 @@ class Diagnostics:
 
 def load_diagnostics(
     *,
-    config_path: Optional[Path] = None,
-    orchestration_path: Optional[Path] = None,
+    config_path: Path | None = None,
+    orchestration_path: Path | None = None,
 ) -> Diagnostics:
     """Resolve the machine's config the way ``cof doctor`` resolves it."""
     raw_config = load_config(find_config_path(explicit_path=config_path))
@@ -523,7 +523,7 @@ def load_diagnostics(
     if orchestration_path is not None:
         try:
             orch = load_orchestration_file(orchestration_path)
-        except Exception:  # noqa: BLE001 - a bad file must not sink the view
+        except Exception:
             orch = {}
     return Diagnostics(
         config=resolve_config(explicit_path=config_path),

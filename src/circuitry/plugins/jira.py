@@ -110,9 +110,11 @@ class JiraPlugin:
         missing: list[str] = []
         if importlib.util.find_spec("atlassian") is None:
             missing.append("library:atlassian-python-api")
-        for env in ("JIRA_URL", "JIRA_USER", "JIRA_TOKEN"):
-            if not os.environ.get(env):
-                missing.append(f"env:{env}")
+        missing.extend(
+            f"env:{env}"
+            for env in ("JIRA_URL", "JIRA_USER", "JIRA_TOKEN")
+            if not os.environ.get(env)
+        )
         if missing:
             return CheckResult(ok=False, missing=missing)
         return CheckResult(ok=True, missing=[])

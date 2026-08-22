@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Optional
 
 from circuitry.adapters.base import GenerateResult
 from circuitry.preflight import CheckResult
@@ -53,9 +52,9 @@ INVALID_DRAFT = """effects:
 class ScriptedTurn:
     """One turn of the script: ask a question, or hand back a draft."""
 
-    question: Optional[str] = None
+    question: str | None = None
     say: str = ""
-    yaml: Optional[str] = None
+    yaml: str | None = None
     done: bool = False
 
     @property

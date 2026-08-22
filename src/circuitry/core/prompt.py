@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Literal, Optional, Sequence
+from typing import Any, Literal
 
 from ..adapters import Adapter, build_adapter
 from ..adapters.base import GenerateResult
@@ -92,6 +93,60 @@ def _render(template: str, ctx: dict[str, Any]) -> str:
 PromptType = Literal["text", "json", "boolean", "tool", "number", "array", "object"]
 
 
+#: ``runtime.complexity.scoring.weights`` and the scorer name the same seven
+#: signals differently — the config surface speaks the user's vocabulary
+#: (``prompt_type``, ``output_schema``, ``structural_position``) while
+#: :mod:`circuitry.core.complexity` names them after what it measures
+#: (``output_type``, ``schema_shape``, ``structure``). Translating here rather
+#: than passing the config table straight through is the difference between a
+#: configured weight taking effect and being silently discarded as an unknown
+#: signal.
+_CONFIG_WEIGHT_TO_SIGNAL: dict[str, str] = {
+    "prompt_size": "prompt_size",
+    "state_references": "state_references",
+    "prompt_type": "output_type",
+    "output_schema": "schema_shape",
+    "output_size": "output_size",
+    "structural_position": "structure",
+    "keywords": "keywords",
+}
+
+
+def _complexity_meta(result: Any) -> dict[str, Any]:
+    """Serialize a :class:`~circuitry.core.complexity.ComplexityScore` for state.
+
+    Two deliberate departures from ``ComplexityScore.to_dict()``, which is the
+    wire format for ``cof score`` rather than for a state node:
+
+    * ``signals`` is a mapping keyed by signal name, not a list. A CEL
+      condition addresses state by path, so a list would only be reachable by
+      positional index — ``signals.prompt_size.contribution`` is a branchable
+      expression, ``signals[0].contribution`` is a hostage to report order.
+    * Per-signal ``detail`` is dropped. It carries the counted reference names
+      and the full normalization tables, which would multiply the size of every
+      prompt node in a persisted run to explain a number the ``note`` already
+      summarizes. Re-score the effect to get it back.
+    """
+    return {
+        "score": result.score,
+        "max_score": result.max_score,
+        "mode": result.mode,
+        "estimated": result.estimated,
+        "weight_total": result.weight_total,
+        "signals": {
+            signal.name: {
+                "raw": signal.raw,
+                "normalized": signal.normalized,
+                "weight": signal.weight,
+                "contribution": signal.contribution,
+                "note": signal.note,
+            }
+            for signal in result.signals
+        },
+        "warnings": list(result.warnings),
+    }
+
+
 @dataclass(frozen=True)
 class MessageDef:
     """A single message in a messages-based prompt."""
@@ -130,35 +185,35 @@ class PromptDefinition:
     name: str
 
     # Primary input form (exactly one must be provided)
-    template: Optional[str] = None
-    messages: Optional[Sequence[MessageDef]] = None
+    template: str | None = None
+    messages: Sequence[MessageDef] | None = None
 
     # Typing and decoding
     prompt_type: PromptType = "text"
-    schema: Optional[dict[str, Any]] = None
+    schema: dict[str, Any] | None = None
 
     # Model configuration
-    model: Optional[str] = None
-    provider: Optional[str] = None
-    provider_fallbacks: Optional[Sequence[str]] = None
+    model: str | None = None
+    provider: str | None = None
+    provider_fallbacks: Sequence[str] | None = None
 
     # Execution parameters
-    params: Optional[dict[str, Any]] = None
-    timeout_ms: Optional[int] = None
+    params: dict[str, Any] | None = None
+    timeout_ms: int | None = None
     deterministic: bool = False
 
     # Prompt-local structured values
-    inputs: Optional[dict[str, Any]] = None
+    inputs: dict[str, Any] | None = None
 
     # Non-text inputs
-    assets: Optional[Sequence[AssetRefDef]] = None
+    assets: Sequence[AssetRefDef] | None = None
 
     # Reliability
-    retries: Optional[RetryPolicyDef] = None
+    retries: RetryPolicyDef | None = None
     on_error: Literal["fail", "skip", "continue"] = "fail"
 
     # Description (for documentation/LLM guidance)
-    description: Optional[str] = None
+    description: str | None = None
 
     # False = skip execution and write a disabled node (see core.disabled).
     enabled: bool = True
@@ -169,7 +224,24 @@ class PromptRuntime:
     Executes a PromptDefinition against adapter + store.
     Writes:
       <name>.value
-      <name>.meta{created_at, completed_at, adapter, model, prompt_sent, tokens_sent, tokens_received, error}
+      <name>.meta{created_at, completed_at, adapter, model, prompt_type,
+                  prompt_sent, tokens_sent, tokens_received, error, dry_run,
+                  fallback_attempts, fallback_recovered, retries_used?,
+                  complexity?}
+
+    ``complexity`` is the one conditional key: it is present only when
+    ``runtime.complexity.scoring.enabled`` is true, and absent entirely — not
+    null, not an empty object — when it is not, so turning scoring off leaves
+    the state tree byte-identical to a build without the feature. When present
+    it carries ``{score, max_score, mode, estimated, weight_total, signals,
+    warnings}``, with ``signals`` keyed by signal name so a CEL condition can
+    branch on ``state.<path>.meta.complexity.score`` or on any single signal's
+    contribution.
+
+    Every one of these keys except the result-bearing ones (``value``,
+    ``tokens_*``, ``completed_at``, ``error``) is written *before* dispatch.
+    That is what makes the complexity score readable on an effect that failed,
+    which is the case worth diagnosing.
     """
 
     def __init__(
@@ -234,6 +306,13 @@ class PromptRuntime:
         meta["dry_run"] = self.dry_run
         meta["fallback_attempts"] = []
         meta["fallback_recovered"] = False
+
+        # Scored here, alongside the rest of the pre-dispatch meta, so the
+        # score is on the node before anything can go wrong. A post-success
+        # write would omit exactly the effects worth explaining.
+        complexity = self._score_complexity(rendered_prompt=prompt_sent)
+        if complexity is not None:
+            meta["complexity"] = complexity
 
         # Everything an observer needs to reason about the decision being
         # dispatched — resolved adapter/model, the rendered prompt, and the
@@ -409,6 +488,69 @@ class PromptRuntime:
             if self.defn.on_error == "fail":
                 raise
 
+    def _score_complexity(self, *, rendered_prompt: str) -> dict[str, Any] | None:
+        """Score this prompt, or ``None`` when scoring is off.
+
+        ``None`` is the "add no key" signal, and it is returned for a scoring
+        failure as well as for a disabled switch: a diagnostic that cannot be
+        produced must not become a reason the effect itself does not run.
+        Scoring is otherwise pure and cheap — no model call, no IO — so it is
+        safe to do on the dispatch path.
+        """
+        # Imported lazily: ``core`` reaching into ``cli`` at module scope would
+        # invert the dependency the rest of this package maintains.
+        from ..cli.complexity_config import resolve_complexity_settings
+        from .complexity import score as score_complexity
+
+        try:
+            settings = resolve_complexity_settings(self.runtime_config)
+        except Exception:
+            # An invalid block is rejected at config resolution long before a
+            # run reaches here; if one somehow does, the run is more valuable
+            # than the score.
+            logger.warning(
+                "Could not resolve runtime.complexity; skipping the complexity "
+                "score for prompt %r",
+                self.defn.name,
+                exc_info=True,
+            )
+            return None
+
+        if not settings.scoring.enabled:
+            return None
+
+        weights = {
+            _CONFIG_WEIGHT_TO_SIGNAL[name]: value
+            for name, value in settings.scoring.weights.items()
+            if name in _CONFIG_WEIGHT_TO_SIGNAL
+        }
+        # An unconfigured keyword table resolves to ``{}``, which the scorer
+        # reads as "disable the keyword signal". Only an explicit table should
+        # replace the defaults, so empty means "unset" here.
+        keyword_weights = dict(settings.scoring.keywords) or None
+
+        try:
+            result = score_complexity(
+                self.defn,
+                rendered_prompt=rendered_prompt,
+                weights=weights,
+                keyword_weights=keyword_weights,
+                # The runtime knows its own nesting; loop membership and
+                # reflector provenance are not plumbed through to a prompt yet
+                # and default to the top-level case.
+                structure={"depth": self.depth},
+            )
+        except Exception:
+            logger.warning(
+                "Complexity scoring failed for prompt %r; the effect will run "
+                "without a recorded score",
+                self.defn.name,
+                exc_info=True,
+            )
+            return None
+
+        return _complexity_meta(result)
+
     def _build_attempts(self, *, default_model: str) -> list[tuple[str, str]]:
         attempts: list[tuple[str, str]] = []
 
@@ -420,8 +562,10 @@ class PromptRuntime:
                 0, self._parse_provider_token(self.defn.provider, default_model)
             )
 
-        for provider_token in self.defn.provider_fallbacks or ():
-            attempts.append(self._parse_provider_token(provider_token, default_model))
+        attempts.extend(
+            self._parse_provider_token(provider_token, default_model)
+            for provider_token in self.defn.provider_fallbacks or ()
+        )
 
         deduped: list[tuple[str, str]] = []
         seen: set[tuple[str, str]] = set()
@@ -588,5 +732,5 @@ class PromptRuntime:
             # jsonschema not installed, skip validation
             pass
         except jsonschema.ValidationError as e:
-            raise ValueError(f"Schema validation failed: {e.message}")
+            raise ValueError(f"Schema validation failed: {e.message}") from e
 

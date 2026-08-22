@@ -38,7 +38,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 _DEFAULT_PERSIST = "./.chromadb"
 
 

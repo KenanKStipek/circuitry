@@ -59,7 +59,7 @@ class CsvPlugin:
         rows = list(reader)
         if has_header and rows:
             header, *body = rows
-            value: Any = [dict(zip(header, row)) for row in body]
+            value: Any = [dict(zip(header, row, strict=False)) for row in body]
         else:
             value = rows
         return ToolResult(

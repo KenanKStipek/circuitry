@@ -41,7 +41,7 @@ def test_extract_done_false() -> None:
 
 def test_extract_done_true() -> None:
     text = yaml.dump({"done": True, "effects": [{"type": "prompt", "name": "a", "template": "hi"}]})
-    done, cleaned = _extract_done_flag(text)
+    done, _cleaned = _extract_done_flag(text)
     assert done is True
 
 

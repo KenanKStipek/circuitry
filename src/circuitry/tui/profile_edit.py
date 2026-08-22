@@ -243,7 +243,7 @@ class EffectOverride:
         return out
 
     @classmethod
-    def from_mapping(cls, raw: Any) -> "EffectOverride":
+    def from_mapping(cls, raw: Any) -> EffectOverride:
         if not isinstance(raw, dict):
             return cls()
         model = raw.get("model")
@@ -359,7 +359,7 @@ class PersistenceDraft:
         ]
 
     @classmethod
-    def from_mapping(cls, raw: Any) -> "PersistenceDraft | None":
+    def from_mapping(cls, raw: Any) -> PersistenceDraft | None:
         if not isinstance(raw, dict):
             return None
         backend = str(raw.get("backend") or "").strip()
@@ -501,9 +501,11 @@ class ProfileDraft:
                 "filename and a CLI argument. Use letters, digits, '.', '-' or '_'."
             )
         conditions = collect_orchestration_condition_paths(orch)
-        for path in sorted(self.effects):
-            if path in conditions:
-                issues.append(condition_refusal(path, profile_name=self.name))
+        issues.extend(
+            condition_refusal(path, profile_name=self.name)
+            for path in sorted(self.effects)
+            if path in conditions
+        )
         if self.persistence is not None:
             missing = self.persistence.missing_keys()
             if missing:
@@ -524,7 +526,7 @@ class ProfileDraft:
         self.baseline = body
         return path
 
-    def duplicate(self, name: str) -> "ProfileDraft":
+    def duplicate(self, name: str) -> ProfileDraft:
         """A copy under a new name, unsaved (so it reads as dirty)."""
         return ProfileDraft(
             name=name,

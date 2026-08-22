@@ -158,6 +158,7 @@ def repo(tmp_path: Path) -> Path:
             cwd=root,
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.returncode == 0, result.stderr
 
@@ -182,6 +183,7 @@ def _commit(repo: Path, message: str) -> None:
             cwd=repo,
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.returncode == 0, result.stderr
 

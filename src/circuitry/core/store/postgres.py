@@ -18,7 +18,7 @@ class PostgresStatePersistence:
         return "postgres"
 
     @staticmethod
-    def from_config(config: dict[str, Any]) -> "PostgresStatePersistence":
+    def from_config(config: dict[str, Any]) -> PostgresStatePersistence:
         dsn = str(config.get("dsn") or "").strip()
         if not dsn:
             raise ValueError(

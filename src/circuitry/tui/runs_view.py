@@ -57,7 +57,7 @@ from .inspector import (
     load_state_file,
     render_text,
 )
-from .launch import RunSession, Runner
+from .launch import Runner, RunSession
 from .screens import ViewScreen, ViewSpec
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -183,7 +183,7 @@ class RunsScreen(ViewScreen):
         adapter: Adapter | None = None,
         runner: Runner | None = None,
         name: str | None = None,
-        id: str | None = None,  # noqa: A002 - Textual's parameter name
+        id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(spec, name=name, id=id, classes=classes)
@@ -667,5 +667,5 @@ def _safe_config(stashed: LastRun) -> CircuitryConfig:
     """The stashed run's config, falling back to defaults rather than failing."""
     try:
         return resolve_config(explicit_path=stashed.config_path)
-    except Exception:  # noqa: BLE001 - a bad config file must not kill the view
+    except Exception:
         return CircuitryConfig()

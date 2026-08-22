@@ -29,7 +29,6 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult
 
-
 _DUCKDUCKGO_IA = "https://api.duckduckgo.com/"
 
 
