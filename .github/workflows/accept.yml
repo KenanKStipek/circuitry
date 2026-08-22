@@ -1,0 +1,20 @@
+name: Accept PR
+on:
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [labeled]
+jobs:
+  accept:
+    if: |
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/accept')) ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'accepted')
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    uses: KenanKStipek/agent-loop/.github/workflows/accept.yml@v1
+    secrets: inherit
+    # require_demo stays at its default (false): circuitry has no Vercel
+    # preview surface, so there is nothing to record and demo.yml is not
+    # installed here.

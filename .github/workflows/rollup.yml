@@ -1,0 +1,11 @@
+name: Roll-up
+on:
+  issues:
+    types: [closed]
+jobs:
+  rollup:
+    permissions:
+      issues: write
+      contents: read
+    uses: KenanKStipek/agent-loop/.github/workflows/rollup.yml@v1
+    secrets: inherit

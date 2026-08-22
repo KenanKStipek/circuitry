@@ -1,11 +1,26 @@
+# Thin caller for the hub finalizer.
+# workflow_run is the trigger that actually matters: GitHub does NOT
+# deliver check_suite events for suites created by GitHub Actions
+# (anti-recursion), so CI completing never fires check_suite. The
+# check_suite trigger below still catches non-Actions suites.
+#
+# CIRCUITRY NOTE: the workflows filter must match this repo's CI workflow
+# `name:`, which is `quality` (see .github/workflows/quality.yml line 1) —
+# NOT "CI" as the hub template ships. The previous version of this file had
+# no workflow_run trigger at all, which is why the finalizer never fired:
+# WIP markers were never dropped and PRs sat as drafts after their runs
+# finished (observed on PR #121).
 name: Finalize
 
 on:
+  workflow_run:
+    workflows: ["quality"]
+    types: [completed]
   check_suite:
     types: [completed]
 
 jobs:
   finalize:
-    if: startsWith(github.event.check_suite.head_branch, 'claude/')
+    if: startsWith(github.event.workflow_run.head_branch || github.event.check_suite.head_branch, 'claude/')
     uses: KenanKStipek/agent-loop/.github/workflows/finalize.yml@v1
     secrets: inherit

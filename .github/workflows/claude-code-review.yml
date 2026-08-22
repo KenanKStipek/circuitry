@@ -1,40 +1,28 @@
 name: Claude Code Review
-
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened, edited]
-
+    types: [opened, ready_for_review, reopened, edited]
 concurrency:
   group: claude-review-${{ github.event.pull_request.number }}
   cancel-in-progress: true
-
 jobs:
   claude-review:
     # Skip drafts and WIP-marked PRs so agent runs don't burn a review per push;
-    # the final review fires on ready_for_review or the gh pr edit that drops WIP.
+    # the final review fires on the gh pr edit that drops the WIP marker (or
+    # ready_for_review for draft PRs). synchronize is intentionally omitted —
+    # iteration reviews go through @claude PR comments (claude.yml) instead.
+    #
+    # CIRCUITRY NOTE: the previous inlined version included `synchronize` and
+    # guarded on the loose substring 'WIP'. That is why PR #84 ended up with
+    # three overlapping claude-review runs cancelling each other and showing
+    # mergeable_state=unstable with every real check green.
     if: |
       github.event.pull_request.draft == false &&
-      !contains(github.event.pull_request.body, 'WIP')
-    runs-on: ubuntu-latest
+      !contains(github.event.pull_request.body, '**WIP — run in progress**')
     permissions:
       contents: read
       pull-requests: read
       issues: read
       id-token: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Run Claude Code Review
-        id: claude-review
-        uses: anthropics/claude-code-action@v1
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          allowed_bots: 'claude[bot],claude'
-          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
-          plugins: 'code-review@claude-code-plugins'
-          claude_args: '--model claude-sonnet-5'
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+    uses: KenanKStipek/agent-loop/.github/workflows/claude-review.yml@v1
+    secrets: inherit
