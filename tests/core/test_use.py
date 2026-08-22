@@ -799,6 +799,30 @@ def test_nested_use_namespaces_to_arbitrary_depth(tmp_path: Path) -> None:
     ]
 
 
+def test_a_use_inside_a_loop_nests_under_its_iteration(tmp_path: Path) -> None:
+    """The prefix is whatever the parent store says it is, containers included."""
+    child = _write_orch(tmp_path, "child.yml", _child_orch("greet"))
+    store, _, completed = _recording_store()
+
+    _run_orch(
+        {
+            "effects": [
+                {
+                    "type": "loop",
+                    "name": "spin",
+                    "while": {"mode": "cel", "expr": "false"},
+                    "min_iterations": 2,
+                    "body": [{"type": "use", "name": "sub", "path": str(child)}],
+                }
+            ]
+        },
+        store,
+    )
+
+    assert "prime.spin.iter_0.sub.greet" in completed
+    assert "prime.spin.iter_1.sub.greet" in completed
+
+
 def test_start_and_complete_stay_bracketed_when_the_child_fails(
     tmp_path: Path,
 ) -> None:
