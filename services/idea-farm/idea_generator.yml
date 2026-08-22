@@ -41,6 +41,17 @@
 # (CyberDiner#337), and a claim-timeout or failure costs 2 ideas, not 4.
 # Curate input stays bounded: ~16-20 terse lines.
 #
+# FOCUS ADHERENCE (2026-08-17): an owner review of ~160 banked ideas found
+# runs regressing to generic business-process templates regardless of their
+# assigned focus ("world-building and fiction series" → "Retirement Savings
+# Forecast"). That is not only off-target, it defeats the farm's sharded
+# dedupe — the same generic idea lands under several foci in different
+# shards. Every focus-aware prompt below therefore demands the domain's own
+# artifacts and actors by name and explicitly rejects cross-domain office
+# templates; curate and final_list drop drifters rather than rank them.
+# Fewer, on-focus ideas is the desired outcome. The farm re-checks on
+# harvest (content-word overlap with the focus phrase) as a backstop.
+#
 # shape_hint (optional) biases WHAT KIND of process gets brainstormed — e.g.
 # fan-out/per-item work, connector/human-in-the-loop work, or composition —
 # without distorting the domain rotation. The farm rotates the hints and
@@ -106,12 +117,22 @@ effects:
       Favor domains rich in that shape of work.
       {{/shape_hint}}
 
+      {{#focus}}
+      Propose 8 to 10 maximally DIFFERENT sub-areas INSIDE "{{focus}}" —
+      every one must be a slice of that focus, named in its own vocabulary
+      (its artifacts, its people, its recurring moments). Do NOT drift to
+      neighbouring or generic business domains: for "{{focus}}", a generic
+      answer like "contract review", "expense reports" or "hiring" is wrong
+      unless it is genuinely part of that focus.
+      {{/focus}}
+      {{^focus}}
       Propose 8 to 10 maximally DIFFERENT domains of human activity to mine
       for orchestration ideas. Mix professional and personal, common and
       overlooked — including everyday work done at a computer.
+      {{/focus}}
 
       Return ONLY a JSON array of short domain names, e.g.
-      ["hiring", "family logistics", "scientific writing"].
+      ["family logistics", "scientific writing", "trail maintenance"].
 
   - type: loop
     name: theme_rounds
@@ -128,6 +149,9 @@ effects:
         name: ideas
         template: |
           Domain: {{theme}}
+          {{#focus}}
+          Focus area (NON-NEGOTIABLE): {{focus}}
+          {{/focus}}
 
           Brainstorm 2 ideas for agentic orchestrations in this domain —
           each one a real, recurring thing people do that decomposes into a
@@ -147,6 +171,16 @@ effects:
           - Each idea must EARN being an orchestration: it needs steps,
             feedback, branching, or waiting-and-reacting — not a single
             prompt and not a single connector call.
+          {{#focus}}
+          - Every idea must be CONCRETELY about {{focus}}: name that
+            domain's own artifacts, actors, or documents in the idea
+            itself, so a reader could not mistake it for any other field.
+          - REJECT generic cross-domain office processes (contract clause
+            review, resume screening, expense approval, invoice chasing,
+            retirement forecasting, loan review) unless they are genuinely
+            native to {{focus}}. They are the drift that ruins this
+            harvest — a wrong-domain idea is worse than one idea fewer.
+          {{/focus}}
           {{#shape_hint}}
           - IMPORTANT shape requirement: {{shape_hint}}
           {{/shape_hint}}
@@ -168,9 +202,20 @@ effects:
       {{.}}
       {{/prime.theme_rounds.collected.value}}
 
-      Curate: merge duplicates and near-duplicates, drop anything that is
-      really just a single prompt or a single connector call in disguise,
-      and rank the rest from strongest to weakest — strongest meaning:
+      {{#focus}}
+      Every one of these was supposed to be concretely about {{focus}}.
+      DROP any that is not — a generic cross-domain office process
+      (contract review, resume screening, expense approval and friends)
+      that could have come from any other field is off-target and must not
+      survive curation, however well written. Returning fewer, on-focus
+      ideas is the correct outcome.
+      {{/focus}}
+
+      Curate: merge duplicates and near-duplicates — including ones that
+      differ only in wording, word order, or a single extra word — drop
+      anything that is really just a single prompt or a single connector
+      call in disguise, and rank the rest from strongest to weakest —
+      strongest meaning:
       common recurring task + clearly benefits from multi-step structure
       with feedback, branching, or waiting-and-reacting. Connector use
       (email round-trips with a person, browsing, files) is welcome, and
@@ -210,6 +255,12 @@ effects:
           This curated list of agentic orchestration ideas came up short:
           {{prime.curate.value}}
 
+          {{#focus}}
+          Every idea must be concretely about {{focus}} — name that
+          domain's own artifacts, actors, or documents. Generic
+          cross-domain office processes do not count as gap fillers.
+          {{/focus}}
+
           Identify what KINDS of human activity are underrepresented in the
           list above, then brainstorm 5-8 additional ideas from those gaps.
           Same rules: recurring real tasks; multi-step LLM-driven processes
@@ -237,6 +288,13 @@ effects:
       Possible additions (may be blank — if blank, there are none):
       {{prime.gap_ideas.value}}
 
-      Merge them, remove any duplicates, keep the ranking sensible, and
+      Merge them, remove any duplicates — including titles that differ only
+      in wording, casing, or one word — keep the ranking sensible, and
       output ONLY the final numbered list — no preamble, no commentary:
       N. Title — one short sentence
+      {{#focus}}
+
+      Every line must be concretely about {{focus}}, naming that domain's
+      artifacts or actors. Drop anything generic enough to belong to any
+      other domain.
+      {{/focus}}
