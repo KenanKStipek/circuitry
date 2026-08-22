@@ -36,8 +36,12 @@ The **Band** column appears only when a band table is configured
 `routing.enabled` is false, so a table can be sanity-checked against real
 scores before the router is switched on.
 
-**Dominant signals** are the three signals that contributed the most score
-points, largest first. The full breakdown — every signal's raw measurement,
+**Dominant signals** are the signals that explain the number: taken
+largest-first until their contributions account for half the score, so one
+signal is named where one signal did it and several where the score is a broad
+average. This is the same selection the TUI's run view and inspector use
+(`circuitry.tui.complexity`), so a preview and a run never disagree about which
+signals drove an effect. The full breakdown — every signal's raw measurement,
 normalized value, weight and contribution — is one `--json` away.
 
 ## What the preview cannot know
