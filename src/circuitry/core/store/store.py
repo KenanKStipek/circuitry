@@ -19,6 +19,12 @@ class Store:
     callbacks so that concurrent access from parallel (tree) execution paths
     is serialised correctly and per-effect lifecycle hooks see the canonical
     absolute state path of every effect result.
+
+    They also carry a reference to the *root* state dict, so that a write
+    deep in the tree still publishes a whole-run snapshot to ``on_write``
+    rather than the subtree it happened to occur in — a subtree snapshot
+    would overwrite ``--live-state`` with a fragment that no consumer can
+    place.
     """
 
     state: dict[str, Any]
@@ -27,6 +33,13 @@ class Store:
     effect_start: Callable[[str, dict[str, Any]], None] | None = None
     _path_prefix: str = ""
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    #: The top-level state dict this store is a view into; None for a root.
+    _root_state: dict[str, Any] | None = field(default=None, repr=False)
+
+    @property
+    def root_state(self) -> dict[str, Any]:
+        """The whole-run state dict — this store's own state if it is a root."""
+        return self.state if self._root_state is None else self._root_state
 
     def get(self, path: str, default: Any = None) -> Any:
         cur: Any = self.state
@@ -64,12 +77,12 @@ class Store:
             parent = self.ensure_dict(parent_path) if parent_path else self.state
             parent[key] = value
             if self.on_write:
-                self.on_write(self.state)
+                self.on_write(self.root_state)
 
     def child(self, path: str) -> Store:
         """Return a child Store rooted at *path*, sharing the same lock,
-        on_write callback, effect lifecycle callbacks, and accumulating an
-        absolute path prefix for canonical effect paths."""
+        on_write callback, effect lifecycle callbacks, and root state, and
+        accumulating an absolute path prefix for canonical effect paths."""
         node = self.ensure_dict(path)
         new_prefix = f"{self._path_prefix}.{path}" if self._path_prefix else path
         return Store(
@@ -79,6 +92,7 @@ class Store:
             effect_start=self.effect_start,
             _path_prefix=new_prefix,
             _lock=self._lock,
+            _root_state=self.root_state,
         )
 
     def effect_path(self, name: str) -> str:

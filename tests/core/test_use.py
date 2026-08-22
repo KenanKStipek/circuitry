@@ -697,3 +697,318 @@ def test_schema_validates_use_with_validate_false() -> None:
 
     result = validate(path)
     assert result["ok"] is True
+
+
+# ── Observability: callbacks propagate into the child store ──────────────────
+#
+# A `use` child runs in its own Store. Left uninstrumented that store is a
+# black hole: nothing inside it reaches `--live-state`, the TUI or any
+# persistence plugin. The parent's callbacks are handed down instead, with
+# child effect paths rewritten to nest under the use effect's own path so
+# observers see one tree rather than colliding top-level names.
+
+
+def _child_orch(*names: str) -> dict:
+    return {"effects": [{"type": "prompt", "name": n, "template": n} for n in names]}
+
+
+def _recording_store() -> tuple[Store, list[str], list[str]]:
+    """A root Store whose lifecycle callbacks log the paths they are given."""
+    started: list[str] = []
+    completed: list[str] = []
+    store = Store(
+        state={},
+        effect_start=lambda path, node: started.append(path),
+        effect_complete=lambda path, node: completed.append(path),
+    )
+    return store, started, completed
+
+
+def _run_orch(orch: dict, store: Store, **kwargs) -> None:
+    DynamicRuntime(
+        compile_orchestration(orch=orch),
+        adapter=_mock_adapter(),
+        model="test-model",
+        **kwargs,
+    ).execute(store=store)
+
+
+def test_child_effects_fire_lifecycle_callbacks_at_namespaced_paths(
+    tmp_path: Path,
+) -> None:
+    """Child effects announce themselves under the parent use effect's path."""
+    child = _write_orch(tmp_path, "child.yml", _child_orch("greet", "farewell"))
+    store, started, completed = _recording_store()
+
+    _run_orch({"effects": [{"type": "use", "name": "sub", "path": str(child)}]}, store)
+
+    assert started == ["prime", "prime.sub", "prime.sub.greet", "prime.sub.farewell"]
+    assert completed == ["prime.sub.greet", "prime.sub.farewell", "prime.sub", "prime"]
+
+
+def test_child_effect_paths_do_not_collide_with_parent_effects(
+    tmp_path: Path,
+) -> None:
+    """A child effect sharing a parent effect's name stays distinguishable."""
+    child = _write_orch(tmp_path, "child.yml", _child_orch("greet"))
+    store, _, completed = _recording_store()
+
+    _run_orch(
+        {
+            "effects": [
+                {"type": "prompt", "name": "greet", "template": "parent"},
+                {"type": "use", "name": "sub", "path": str(child)},
+            ]
+        },
+        store,
+    )
+
+    assert completed == ["prime.greet", "prime.sub.greet", "prime.sub", "prime"]
+
+
+def test_nested_use_namespaces_to_arbitrary_depth(tmp_path: Path) -> None:
+    """Two levels of `use` compose their prefixes rather than flattening."""
+    grandchild = _write_orch(tmp_path, "grandchild.yml", _child_orch("leaf"))
+    child = _write_orch(
+        tmp_path,
+        "child.yml",
+        {
+            "effects": [
+                {"type": "prompt", "name": "twig", "template": "t"},
+                {"type": "use", "name": "inner", "path": str(grandchild)},
+            ]
+        },
+    )
+    store, started, completed = _recording_store()
+
+    _run_orch({"effects": [{"type": "use", "name": "outer", "path": str(child)}]}, store)
+
+    assert started == [
+        "prime",
+        "prime.outer",
+        "prime.outer.twig",
+        "prime.outer.inner",
+        "prime.outer.inner.leaf",
+    ]
+    assert completed == [
+        "prime.outer.twig",
+        "prime.outer.inner.leaf",
+        "prime.outer.inner",
+        "prime.outer",
+        "prime",
+    ]
+
+
+def test_start_and_complete_stay_bracketed_when_the_child_fails(
+    tmp_path: Path,
+) -> None:
+    """A use whose child blows up still closes every pair it opened."""
+    child = _write_orch(
+        tmp_path,
+        "child.yml",
+        {
+            "effects": [
+                {
+                    "type": "tool",
+                    "name": "divide",
+                    "provider": "math",
+                    "params": {"expression": "1/0"},
+                }
+            ]
+        },
+    )
+    events: list[str] = []
+    store = Store(
+        state={},
+        effect_start=lambda path, node: events.append(f"start:{path}"),
+        effect_complete=lambda path, node: events.append(f"complete:{path}"),
+    )
+
+    with pytest.raises(Exception):
+        _run_orch(
+            {"effects": [{"type": "use", "name": "sub", "path": str(child)}]}, store
+        )
+
+    stack: list[str] = []
+    for event in events:
+        kind, _, path = event.partition(":")
+        if kind == "start":
+            stack.append(path)
+        else:
+            assert stack and stack.pop() == path, f"unbalanced: {events}"
+    assert not stack, f"unclosed starts: {stack}"
+    assert "start:prime.sub.divide" in events
+
+
+def test_dry_run_use_still_brackets_its_own_node(tmp_path: Path) -> None:
+    """The dry-run short-circuit closes the start it fired."""
+    child = _write_orch(tmp_path, "child.yml", _child_orch("greet"))
+    store, started, completed = _recording_store()
+
+    _run_orch(
+        {"effects": [{"type": "use", "name": "sub", "path": str(child)}]},
+        store,
+        dry_run=True,
+    )
+
+    assert started == ["prime", "prime.sub"]
+    assert completed == ["prime.sub", "prime"]
+
+
+def test_on_write_snapshots_mirror_child_effects_as_they_run(tmp_path: Path) -> None:
+    """`--live-state` observers see child effects mid-flight, under the use node."""
+    from copy import deepcopy
+
+    child = _write_orch(tmp_path, "child.yml", _child_orch("greet", "farewell"))
+    snapshots: list[dict] = []
+    store = Store(state={}, on_write=lambda s: snapshots.append(deepcopy(s)))
+
+    _run_orch(
+        {
+            "effects": [
+                {
+                    "type": "use",
+                    "name": "sub",
+                    "path": str(child),
+                    "outputs": {"greeting": "prime.greet.value"},
+                }
+            ]
+        },
+        store,
+    )
+
+    mirrored = [s for s in snapshots if "greet" in s.get("prime", {}).get("sub", {})]
+    assert mirrored, "no snapshot carried the child's effects"
+    assert mirrored[-1]["prime"]["sub"]["greet"]["value"] == "mock response"
+    assert mirrored[-1]["prime"]["sub"]["farewell"]["value"] == "mock response"
+    # Every snapshot is a whole-run snapshot, never a fragment of one.
+    assert all("prime" in s for s in snapshots)
+
+
+def test_nested_use_snapshots_mirror_to_arbitrary_depth(tmp_path: Path) -> None:
+    """The grandchild's effects reach the parent's observers too."""
+    from copy import deepcopy
+
+    grandchild = _write_orch(tmp_path, "grandchild.yml", _child_orch("leaf"))
+    child = _write_orch(
+        tmp_path,
+        "child.yml",
+        {"effects": [{"type": "use", "name": "inner", "path": str(grandchild)}]},
+    )
+    snapshots: list[dict] = []
+    store = Store(state={}, on_write=lambda s: snapshots.append(deepcopy(s)))
+
+    _run_orch(
+        {
+            "effects": [
+                {
+                    "type": "use",
+                    "name": "outer",
+                    "path": str(child),
+                    "outputs": {"leaf": "prime.inner.leaf.value"},
+                }
+            ]
+        },
+        store,
+    )
+
+    deep = [
+        s
+        for s in snapshots
+        if "leaf" in s.get("prime", {}).get("outer", {}).get("inner", {})
+    ]
+    assert deep, "no snapshot reached the grandchild"
+    assert deep[-1]["prime"]["outer"]["inner"]["leaf"]["value"] == "mock response"
+
+
+def test_mirroring_does_not_leak_child_state_into_the_parent(tmp_path: Path) -> None:
+    """Observation only: the output mapping still decides what lands in state."""
+    child = _write_orch(tmp_path, "child.yml", _child_orch("greet", "farewell"))
+    store = Store(state={}, on_write=lambda s: None)
+
+    _run_orch(
+        {
+            "effects": [
+                {
+                    "type": "use",
+                    "name": "sub",
+                    "path": str(child),
+                    "inputs": {"secret": "shh"},
+                    "outputs": {"greeting": "prime.greet.value"},
+                }
+            ]
+        },
+        store,
+    )
+
+    sub = store.state["prime"]["sub"]
+    assert sub["value"] == {"greeting": "mock response"}
+    assert "greet" not in sub and "farewell" not in sub
+    assert "secret" not in store.state and "secret" not in store.state["prime"]
+
+
+def test_child_effects_reach_the_live_state_file_mid_run(tmp_path: Path) -> None:
+    """End to end: a watcher tailing --live-state sees the child working."""
+    import json
+    from dataclasses import dataclass, field
+
+    from circuitry.adapters.base import GenerateResult
+    from circuitry.cli.config import CircuitryConfig
+    from circuitry.cli.runtime_shim import RunRequest, run
+
+    live_path = tmp_path / "live.json"
+
+    @dataclass
+    class _WatchingAdapter:
+        """Reads the live-state file every time it is asked to generate."""
+
+        name: str = "mock"
+        seen: list[dict] = field(default_factory=list)
+
+        def generate(
+            self, *, model: str, prompt: str, timeout_seconds: int = 120
+        ) -> GenerateResult:
+            if live_path.exists():
+                self.seen.append(json.loads(live_path.read_text(encoding="utf-8")))
+            return GenerateResult(
+                text="response", raw={}, tokens_sent=1, tokens_received=1
+            )
+
+    child = _write_orch(tmp_path, "child.yml", _child_orch("greet", "farewell"))
+    parent = _write_orch(
+        tmp_path,
+        "parent.yml",
+        {
+            "adapter": "mock",
+            "model": "mock-1",
+            "effects": [
+                {
+                    "type": "use",
+                    "name": "sub",
+                    "path": str(child),
+                    "outputs": {"greeting": "prime.greet.value"},
+                }
+            ],
+        },
+    )
+
+    adapter = _WatchingAdapter()
+    result = run(
+        RunRequest(
+            orchestration_path=parent,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            initial_state={},
+            adapter=adapter,
+            config=CircuitryConfig(),
+            live_state_path=live_path,
+            skip_preflight=True,
+        )
+    )
+
+    assert result.ok
+    # The second child prompt ran once the first had landed, so the file it
+    # read already carried that child effect — under the use effect's path.
+    assert adapter.seen[-1]["prime"]["sub"]["greet"]["value"] == "response"
