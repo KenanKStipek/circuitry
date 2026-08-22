@@ -62,6 +62,13 @@ nest inside their container's pair. Effects that fire neither are the ones
 that never dispatch: a tool in `--dry-run`, and the bodies of `flow: tree`
 and parallel loops, whose isolated per-thread stores carry no callbacks.
 
+A `use` effect fires its own pair and its child orchestration's effects fire
+theirs inside it, at paths namespaced under the use node: a child effect
+`greet` inside `use: sub` reports as `prime.sub.greet`, and a `use` nested in
+a `use` composes the same way (`prime.outer.inner.leaf`). The child's *state*
+stays isolated — what a plugin receives is the child's own effect node, and
+what lands in parent state is still whatever the `outputs:` mapping declares.
+
 Embedded callers get the same two events without writing a plugin, via
 `RunRequest.effect_start_observer` and `RunRequest.effect_observer` — both
 `(effect_path, effect_node)` callables, composed with (not in place of) any

@@ -824,7 +824,7 @@ def test_start_and_complete_stay_bracketed_when_the_child_fails(
         effect_complete=lambda path, node: events.append(f"complete:{path}"),
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError):
         _run_orch(
             {"effects": [{"type": "use", "name": "sub", "path": str(child)}]}, store
         )

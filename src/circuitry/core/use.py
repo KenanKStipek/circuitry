@@ -415,7 +415,7 @@ class UseRuntime:
         return load_orchestration_file(resolved_path), str(resolved_path), identity
 
     def _child_on_write(
-        self, store: Store, node: dict[str, Any]
+        self, store: Store, node: dict[str, Any], node_path: str
     ) -> Callable[[dict[str, Any]], None] | None:
         """The child's ``on_write``: republish the parent run, child included.
 
@@ -435,7 +435,6 @@ class UseRuntime:
             return None
 
         root_state = store.root_state
-        node_path = store.effect_path(self.defn.name)
 
         def _publish(child_snapshot: dict[str, Any]) -> None:
             parent_on_write(
@@ -520,9 +519,14 @@ class UseRuntime:
             # Check interface: validate required inputs, auto-generate output mapping
             auto_outputs = self._check_interface(child_orch, child_state)
 
+            # Isolated state, shared observation: the child keeps its own
+            # state dict (and its explicit inputs/outputs mapping) but
+            # inherits the parent's callbacks, its lock — so a snapshot is
+            # never composed mid-write — and a path prefix that nests its
+            # effects under this one.
             child_store = Store(
                 state=child_state,
-                on_write=self._child_on_write(store, node),
+                on_write=self._child_on_write(store, node, node_path),
                 effect_complete=_namespaced_effect_cb(
                     store.effect_complete, node_path
                 ),
