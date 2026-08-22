@@ -38,16 +38,17 @@ known before the run either.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from ..core.compiler import apply_effect_overrides, compile_orchestration
-from ..core.complexity import MAX_SCORE, ComplexityScore, SignalScore, StructureContext
+from ..core.complexity import MAX_SCORE, ComplexityScore, StructureContext
 from ..core.complexity import score as score_prompt
 from ..core.conditional import ConditionalDefinition
 from ..core.dynamic import DynamicDefinition
@@ -56,6 +57,14 @@ from ..core.prompt import PromptDefinition
 from ..core.reflector import ReflectorDefinition
 from ..core.tool import ToolDefinition
 from ..core.use import UseDefinition
+
+# Which signals "dominated" a score is a presentation question the TUI already
+# answered (#107), and a preview that disagreed with the run view about the
+# same effect would be its own small lie. ``tui.complexity`` imports nothing
+# from ``textual`` — it reads the payload shape ``ComplexityScore.to_dict()``
+# produces — so depending on it here does not drag in the optional extra.
+from ..tui.complexity import EffectComplexity, SignalBreakdown
+from ..tui.complexity import read as read_complexity
 from .complexity_config import ComplexityBand, ComplexitySettings
 from .config import resolve_config
 from .effective_settings import resolve_effective_settings
@@ -98,12 +107,8 @@ UNKNOWN_REASON = (
     "score it. Please report it."
 )
 
-#: How many signals the table names per effect. Three is enough to explain a
-#: surprising number; the full breakdown is one ``--json`` away.
-_DOMINANT_SIGNALS = 3
 
-
-def _join(scope: str, name: Optional[str]) -> str:
+def _join(scope: str, name: str | None) -> str:
     """Append *name* to a dotted scope, matching ``compiler._scope_child``."""
     if not name:
         return scope
@@ -117,27 +122,28 @@ class ScoredEffect:
     path: str
     type: str
     scoreable: bool
-    reason: Optional[str] = None
-    result: Optional[ComplexityScore] = None
-    band: Optional[ComplexityBand] = None
+    reason: str | None = None
+    result: ComplexityScore | None = None
+    band: ComplexityBand | None = None
+    #: The same reading of *result* the TUI builds from a runtime score, used
+    #: for dominant-signal selection so preview and run view agree.
+    view: EffectComplexity | None = None
 
     @property
-    def score(self) -> Optional[float]:
+    def score(self) -> float | None:
         return self.result.score if self.result is not None else None
 
-    def dominant_signals(self, limit: int = _DOMINANT_SIGNALS) -> list[SignalScore]:
-        """The signals that actually moved the number, largest first.
+    def dominant_signals(self) -> list[SignalBreakdown]:
+        """The signals that account for most of the score, largest first.
 
-        Ties break on name so the output is byte-stable run to run, and signals
-        contributing nothing are dropped — listing them would pad the row
-        without explaining anything.
+        Delegated to :attr:`circuitry.tui.complexity.EffectComplexity.dominant`:
+        the shortest strongest-first run whose contributions reach
+        :data:`~circuitry.tui.complexity.DOMINANT_SHARE` of the total — one
+        signal when one signal did it, several when the score is a broad
+        average — rather than a fixed top-N, which would name three signals
+        even where the first explains everything.
         """
-        if self.result is None:
-            return []
-        ranked = sorted(
-            self.result.signals, key=lambda s: (-s.contribution, s.name)
-        )
-        return [entry for entry in ranked if entry.contribution > 0][:limit]
+        return list(self.view.dominant) if self.view is not None else []
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -158,7 +164,7 @@ class ScoredEffect:
 
 def _band_for(
     value: float, bands: Sequence[ComplexityBand]
-) -> Optional[ComplexityBand]:
+) -> ComplexityBand | None:
     """First band whose inclusive ``max`` covers *value*; the catch-all last.
 
     Mirrors the band-table contract validated in
@@ -337,20 +343,41 @@ def _score_prompt_row(
         keyword_weights=keywords,
         structure=StructureContext(depth=depth, loop_depth=loop_depth),
     )
+    band = _band_for(result.score, settings.routing.bands)
     return ScoredEffect(
         path=path,
         type="prompt",
         scoreable=True,
         result=result,
-        band=_band_for(result.score, settings.routing.bands),
+        band=band,
+        view=_view_for(result, band),
     )
+
+
+def _view_for(
+    result: ComplexityScore, band: ComplexityBand | None
+) -> EffectComplexity | None:
+    """Read *result* the way the TUI reads a runtime score.
+
+    ``read`` takes exactly the payload
+    :meth:`~circuitry.core.complexity.ComplexityScore.to_dict` produces, which
+    is what this command emits under ``--json``, so the preview and the run
+    view are looking at the same object through the same lens. The configured
+    band travels with it; with no band table there is nothing to declare and
+    the reader falls back to its own default names, which the table only shows
+    when a table was configured.
+    """
+    payload: dict[str, Any] = dict(result.to_dict())
+    if band is not None:
+        payload["band"] = {"name": band.name or "", "model": band.model or ""}
+    return read_complexity({"complexity": payload})
 
 
 def score_orchestration(
     orch: dict[str, Any],
     *,
     settings: ComplexitySettings,
-    profile: Optional[ProfileSettings] = None,
+    profile: ProfileSettings | None = None,
 ) -> list[ScoredEffect]:
     """Compile *orch* and score every prompt effect in the frozen tree.
 
@@ -397,8 +424,8 @@ def _build_payload(
     rows: Sequence[ScoredEffect],
     *,
     orchestration: Path,
-    config: Optional[Path],
-    profile: Optional[str],
+    config: Path | None,
+    profile: str | None,
     settings: ComplexitySettings,
 ) -> dict[str, Any]:
     return {
@@ -451,7 +478,7 @@ def _render_table(
     return table
 
 
-def _scoring_disabled_message(config_path: Optional[Path]) -> str:
+def _scoring_disabled_message(config_path: Path | None) -> str:
     where = f" in {config_path}" if config_path is not None else ""
     return (
         f"Complexity scoring is disabled{where}. `cof score` previews the "
@@ -478,13 +505,13 @@ def register_score(app: typer.Typer) -> None:
             readable=True,
             help="Path to orchestration file.",
         ),
-        config: Optional[Path] = typer.Option(
+        config: Path | None = typer.Option(
             None,
             "--config",
             "-c",
             help="Path to config JSON (or use CIRCUITRY_CONFIG).",
         ),
-        profile: Optional[str] = typer.Option(
+        profile: str | None = typer.Option(
             None,
             "--profile",
             help=(
@@ -505,7 +532,7 @@ def register_score(app: typer.Typer) -> None:
             err_console.print(f"[red]Error:[/red] {exc}")
             raise typer.Exit(code=1) from exc
 
-        profile_settings: Optional[ProfileSettings] = None
+        profile_settings: ProfileSettings | None = None
         if profile:
             try:
                 profile_settings = load_profile(

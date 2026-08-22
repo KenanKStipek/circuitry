@@ -14,6 +14,7 @@ from circuitry.cli.app import app
 from circuitry.cli.complexity_config import SCORER_SIGNAL_NAMES, ScoringSettings
 from circuitry.cli.score import ESTIMATE_NOTICE
 from circuitry.core.complexity import SIGNAL_NAMES
+from circuitry.tui.complexity import read as read_complexity
 
 runner = CliRunner()
 
@@ -85,6 +86,30 @@ effects:
     template: "Hello {{name}}"
 """
 
+# Every signal the scorer measures is non-trivial here — a nested prompt with a
+# declared schema and a JSON output type — so a weight that fails to reach the
+# scorer shows up as a score that did not move. Scoring is deliberately *not*
+# enabled in the orchestration: these settings have to arrive through
+# ``--config``, which is the path the weight names travel.
+SIGNAL_RICH_ORCH = """\
+effects:
+  - type: loop
+    name: refine
+    while:
+      mode: cel
+      expr: "false"
+    body:
+      - type: prompt
+        name: extract
+        prompt_type: json
+        schema:
+          type: object
+          properties:
+            title: {type: string}
+            tags: {type: array, items: {type: string}}
+        template: "Extract structured fields from {{doc}}."
+"""
+
 DISABLED_ORCH = """\
 effects:
   - type: prompt
@@ -120,6 +145,20 @@ def _empty_config(tmp_path: Path) -> Path:
     have, and the assertions here are about the orchestration's settings.
     """
     return _write(tmp_path, "config.json", json.dumps({}))
+
+
+def _scoring_config(
+    tmp_path: Path, name: str, *, weights: dict[str, float] | None = None
+) -> Path:
+    """A config that turns scoring on, optionally with a tuned weight table."""
+    scoring: dict[str, object] = {"enabled": True}
+    if weights is not None:
+        scoring["weights"] = weights
+    return _write(
+        tmp_path,
+        f"{name}.json",
+        json.dumps({"runtime": {"complexity": {"scoring": scoring}}}),
+    )
 
 
 def _score_json(orch_path: Path, config: Path, *args: str) -> dict:
@@ -580,3 +619,68 @@ def test_scorer_weights_translate_config_signal_names() -> None:
 
 def test_every_config_signal_maps_onto_a_scorer_signal() -> None:
     assert set(SCORER_SIGNAL_NAMES.values()) == set(SIGNAL_NAMES)
+
+
+@pytest.mark.parametrize("weight_name", sorted(SCORER_SIGNAL_NAMES))
+def test_every_config_weight_moves_the_preview_score(
+    tmp_path: Path, weight_name: str
+) -> None:
+    """Each documented weight demonstrably reaches the scorer.
+
+    Three of the seven are named differently on the two sides (#123), and the
+    scorer answers an unknown signal name with a warning and its own defaults —
+    so a weight that fails to translate produces no error, just a number that
+    ignores the setting. Parametrizing over the whole table is the only way to
+    catch the next one.
+    """
+    orch = _write(tmp_path, "shaped.yml", SIGNAL_RICH_ORCH)
+    base = _scoring_config(tmp_path, "base")
+    tuned = _scoring_config(tmp_path, weight_name, weights={weight_name: 50.0})
+
+    assert (
+        _score_json(orch, tuned)["effects"][0]["score"]
+        != _score_json(orch, base)["effects"][0]["score"]
+    )
+
+
+# ---------------------------------------------------------------------------
+# dominant-signal selection, shared with the TUI
+# ---------------------------------------------------------------------------
+
+
+def test_dominant_signals_are_the_tui_reading_of_the_same_score(
+    tmp_path: Path,
+) -> None:
+    """The preview and the run view must not disagree about the same effect.
+
+    ``--json`` emits the breakdown in exactly the shape ``tui.complexity.read``
+    consumes, so feeding it back gives the reading the TUI would show; the
+    named dominant signals have to match it.
+    """
+    orch = _write(tmp_path, "shaped.yml", SIGNAL_RICH_ORCH)
+    effect = _score_json(orch, _scoring_config(tmp_path, "on"))["effects"][0]
+
+    view = read_complexity({"complexity": effect["breakdown"]})
+    assert view is not None
+    assert [entry["name"] for entry in effect["dominant_signals"]] == [
+        signal.name for signal in view.dominant
+    ]
+
+
+def test_dominant_signals_stop_at_the_signals_that_explain_the_score(
+    tmp_path: Path,
+) -> None:
+    """The list is the shortest one covering ``DOMINANT_SHARE`` of the total.
+
+    Not a fixed top-N: with one weight dwarfing the rest, one signal explains
+    the number and naming two more would only pad the row.
+    """
+    orch = _write(tmp_path, "shaped.yml", SIGNAL_RICH_ORCH)
+    skewed = _scoring_config(
+        tmp_path, "skewed", weights={"state_references": 500.0}
+    )
+
+    effect = _score_json(orch, skewed)["effects"][0]
+    assert [entry["name"] for entry in effect["dominant_signals"]] == [
+        "state_references"
+    ]

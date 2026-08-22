@@ -61,6 +61,10 @@ DEFAULT_WEIGHTS: dict[str, float] = {
 #: than rename either surface — the config names are documented and shipped —
 #: the translation lives here, in the module that owns the config vocabulary,
 #: so every consumer of a configured weight table agrees on the mapping.
+#: Both consumers today — the runtime path in :mod:`circuitry.core.prompt` and
+#: the preview in :mod:`circuitry.cli.score` — go through
+#: :meth:`ScoringSettings.scorer_weights`; a per-call-site copy of this table
+#: is the bug #123 exists to prevent.
 SCORER_SIGNAL_NAMES: dict[str, str] = {
     "prompt_size": "prompt_size",
     "state_references": "state_references",
