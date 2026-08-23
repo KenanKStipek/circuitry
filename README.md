@@ -304,7 +304,8 @@ Every run records resolved values in `runtime.effective_settings`.
         "token": "ck_...",
         "default_tier": "cheap",
         "poll_interval_ms": 500,
-        "timeout_seconds": 30
+        "timeout_seconds": 30,
+        "max_in_flight": 0
       }
     }
   }
@@ -319,6 +320,7 @@ Every run records resolved values in `runtime.effective_settings`.
 | `valid_tiers` | — (unset) | Opt-in client-side allowlist of tier names. Unset = pass-through, expo is the authority |
 | `poll_interval_ms` | `500` | Delay between job-status polls |
 | `timeout_seconds` | `30` | Per-HTTP-request socket timeout (the whole submit+poll sequence is bounded separately by the effect's timeout) |
+| `max_in_flight` | `0` (unbounded) | Max jobs this adapter holds submitted-but-not-terminal at once. A caller past the cap blocks until one completes — backpressure for orchestrations whose loop concurrency can outpace the fleet's actual claim rate within expo's claim-timeout window |
 
 **The token is a secret: it belongs in config.json or the environment, never in an orchestration YAML.** Orchestration files are meant to be committed, ejected, and shared; adapter credentials are resolved from the config layers at run time and are redacted from serialized run state. `cof doctor` reports whether `expo_url`/`token` are set and whether the host answers.
 

@@ -33,6 +33,7 @@ from ..tui.wizard_host import (
 )
 from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, ConfigError, resolve_config
 from .doctor import register_doctor
+from .explain_routing import make_explain_routing_observer
 from .last_run import LAST_RUN_PATH
 from .library_sources import (
     Entry,
@@ -312,6 +313,7 @@ RUN_EPILOG = """
   cof run ./my-orch.yml --live-state ./state.json
   cof run learn/hello -e name=World --model gpt-oss:20b
   cof run learn/hello -e name=World --adapter ollama --model llama3.1:8b
+  cof run ./my-orch.yml --explain-routing
   cof run --last
 
 [bold]Resolution order:[/bold] local file path > bundled orchestration name.
@@ -407,6 +409,14 @@ def run_cmd(
         None, "--model",
         help="Model to use for this run. Beats CIRCUITRY_MODEL, --profile, and the orchestration.",
     ),
+    explain_routing: bool = typer.Option(
+        False, "--explain-routing",
+        help=(
+            "Print each prompt effect's complexity score, band, and model "
+            "choice as it dispatches. Needs runtime.complexity.scoring.enabled; "
+            "prints nothing if scoring is off. Suppressed by --quiet/--json."
+        ),
+    ),
 ):
     # --last: replay stashed args
     if last:
@@ -428,6 +438,7 @@ def run_cmd(
         profile = stashed.get("profile")
         adapter = stashed.get("adapter")
         model = stashed.get("model")
+        explain_routing = stashed.get("explain_routing", False)
 
         # Refuse to replay if the previous run stashed redacted secrets — the
         # sentinel string would silently flow into the new run as a literal.
@@ -524,6 +535,15 @@ def run_cmd(
         else:
             initial_state = inline
 
+    # --explain-routing prints its own line per prompt effect as it dispatches
+    # (see cli.explain_routing); --quiet and --json both mean "no prose on
+    # stdout", so either suppresses it same as the header/status text above.
+    effect_start_observer = (
+        make_explain_routing_observer(console.print)
+        if explain_routing and not (quiet or json_out)
+        else None
+    )
+
     req = RunRequest(
         orchestration_path=orch_path,
         state_path=state if initial_state is None else None,
@@ -539,6 +559,7 @@ def run_cmd(
         profile_record=profile_record,
         adapter_override=adapter,
         model_override=model,
+        effect_start_observer=effect_start_observer,
     )
 
     with (
@@ -594,6 +615,7 @@ def run_cmd(
             "profile": profile,
             "adapter": adapter,
             "model": model,
+            "explain_routing": explain_routing,
         })
 
     if tail:

@@ -126,6 +126,7 @@ With `scoring.enabled: true`, every prompt effect's state node gains a
     "meta": {
       "adapter": "ollama",
       "model": "llama3",
+      "model_reason": "default",
       "complexity": {
         "score": 34.7,
         "max_score": 100.0,
@@ -206,6 +207,43 @@ surfaces before you flip the switch.
 
 Model names pass through untouched: for the `cyberdiner` adapter they are tier
 names and expo is the authority; for local adapters they are real model names.
+
+#### Watching it happen: `cof run --explain-routing`
+
+`cof score` previews scores before a run; `--explain-routing` prints them
+*during* one, as each prompt effect dispatches:
+
+```
+$ cof run pipeline.yml --explain-routing
+▸ intro   score 14.4/100 · routing off · model llama3 · why default
+▸ refine.critique  score 42.5/100 · band heavy · model llama3 · why default
+```
+
+One line per prompt effect, printed the moment before it dispatches — the
+same `on_effect_start` window `meta.complexity` is written in, so the line
+never lags or races the call it describes. Needs
+`runtime.complexity.scoring.enabled: true`; with scoring off it prints
+nothing, on every effect, silently — there is no score to report and no
+separate switch to check.
+
+Each line reads straight off the node's pre-dispatch meta, with no
+recomputation:
+
+- **score** — `meta.complexity.score` / `max_score`.
+- **band** — `meta.complexity.band`, present only when
+  `routing.enabled: true`. It names the row of the band table the score falls
+  in; with routing off the line says `routing off` in its place rather than
+  guessing a name for a table that isn't configured.
+- **model** — `meta.model`, the model actually about to be dispatched.
+- **why** — `meta.model_reason`: `explicit` when the effect names its own
+  `model:`, `default` when it inherits the run's. A band naming a different
+  model than `why: default` shows is not a contradiction — the band is a
+  description of where the score sits, not yet a dispatch decision; nothing
+  today substitutes the routed model in for the default one.
+
+`--quiet` and `--json` both suppress it, same as the rest of a run's prose
+output. It composes with `--verbose`: the two report different things (token
+counts and timing vs. score and model choice), so nothing is printed twice.
 
 ### `decomposition`
 

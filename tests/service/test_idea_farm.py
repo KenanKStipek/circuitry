@@ -14,6 +14,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
+import yaml
 
 SERVICE_DIR = Path(__file__).resolve().parents[2] / "services" / "idea-farm"
 
@@ -532,6 +533,63 @@ def test_one_harvest_run_filters_and_logs(tmp_path: Path, monkeypatch, capsys) -
     assert "[focus-reject:template:retirement-forecast]" in out
     assert "Retirement Savings Forecast" in out
     assert "[near-dup]" in out
+    # The fabricated state carries no `gap_ideas` node — the rescue round was
+    # never submitted, and the log says so rather than reading as a failure.
+    assert "gap_ideas=skipped (no content)" in out
+
+
+# ── gap-fill skip vs ran (circuitry#77) ──────────────────────────────────
+
+def test_gap_ideas_ran_is_false_when_the_node_is_absent() -> None:
+    """The model-as-sensor `then` branch never executed — no job submitted."""
+    assert farm.gap_ideas_ran({"prime": {"final_list": {"value": "1. x"}}}) is False
+
+
+def test_gap_ideas_ran_is_false_on_a_blank_value() -> None:
+    assert farm.gap_ideas_ran({"prime": {"gap_ideas": {"value": "   "}}}) is False
+
+
+def test_gap_ideas_ran_is_true_when_the_rescue_round_produced_content() -> None:
+    assert farm.gap_ideas_ran(
+        {"prime": {"gap_ideas": {"value": "- Extra Idea — fills a gap."}}}
+    ) is True
+
+
+def test_gap_ideas_ran_handles_missing_prime() -> None:
+    assert farm.gap_ideas_ran({}) is False
+
+
+def test_run_summary_reports_gap_ideas_ran_when_the_rescue_round_fired(
+    tmp_path: Path, monkeypatch, capsys,
+) -> None:
+    monkeypatch.setattr(farm, "build_config", lambda: None)
+    monkeypatch.setattr(
+        farm, "run_orchestration",
+        lambda **kwargs: SimpleNamespace(
+            ok=True,
+            state={
+                "prime": {
+                    "final_list": {"value": RUN_OUTPUT},
+                    "gap_ideas": {"value": "- Gap Filler Idea — closes a gap."},
+                }
+            },
+            error=None,
+        ),
+    )
+
+    def fake_sleep(seconds: float) -> None:
+        if seconds >= 3600:
+            raise _Idled
+
+    monkeypatch.setattr(farm.time, "sleep", fake_sleep)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TARGET_IDEAS", "1")
+    monkeypatch.setenv("SLEEP_BETWEEN_RUNS", "0")
+
+    with pytest.raises(_Idled):
+        farm.main()
+
+    assert "gap_ideas=ran" in capsys.readouterr().out
 
 
 def test_focus_check_can_be_disabled(tmp_path: Path, monkeypatch) -> None:
@@ -625,3 +683,63 @@ def test_report_prints_the_shape_and_drift_sections(tmp_path: Path, capsys) -> N
     assert "cross-shape near-dup clusters: 1" in out
     assert "generic-template regressions: 1/4" in out
     assert "contract-review" in out
+
+
+# ── build_config: fleet backpressure wiring (circuitry#77) ──────────────
+
+def _set_required_env(monkeypatch) -> None:
+    monkeypatch.setenv("CYBERDINER_EXPO_URL", "https://expo.example.test")
+    monkeypatch.setenv("CYBERDINER_TOKEN", "ck_test")
+
+
+def test_build_config_defaults_max_in_flight_below_theme_concurrency(monkeypatch) -> None:
+    """Out of the box the adapter caps in-flight jobs below theme_rounds'
+    max_concurrency (8 in idea_generator.yml), so a fresh deploy doesn't
+    reproduce the burst that died TimedOut."""
+    _set_required_env(monkeypatch)
+    monkeypatch.delenv("MAX_IN_FLIGHT_JOBS", raising=False)
+
+    config = farm.build_config()
+
+    assert config.runtime["adapters"]["cyberdiner"]["max_in_flight"] == 4
+
+
+def test_build_config_honors_max_in_flight_jobs_env_override(monkeypatch) -> None:
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("MAX_IN_FLIGHT_JOBS", "10")
+
+    config = farm.build_config()
+
+    assert config.runtime["adapters"]["cyberdiner"]["max_in_flight"] == 10
+
+
+def test_build_config_max_in_flight_can_be_disabled(monkeypatch) -> None:
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("MAX_IN_FLIGHT_JOBS", "0")
+
+    config = farm.build_config()
+
+    assert config.runtime["adapters"]["cyberdiner"]["max_in_flight"] == 0
+
+
+# ── idea_generator.yml: no unconditional echo job (circuitry#77) ────────
+
+def test_gap_fill_round_only_runs_behind_the_model_as_sensor_if() -> None:
+    """Regression guard for the original bug: the rescue round used to run
+    unconditionally and submit a job whose entire output was the sentinel
+    "(no additional ideas needed)". `gap_ideas` must live ONLY inside an
+    `if`'s `then` branch — never as a top-level (always-runs) effect — so a
+    healthy run (sensor says the list is fine) submits no job for it."""
+    orch = yaml.safe_load(
+        (SERVICE_DIR / "idea_generator.yml").read_text(encoding="utf-8")
+    )
+    top_level_names = {e.get("name") for e in orch["effects"]}
+    assert "gap_ideas" not in top_level_names
+
+    if_effects = [e for e in orch["effects"] if e.get("type") == "if"]
+    assert len(if_effects) == 1
+    gate = if_effects[0]
+    assert gate["if"]["mode"] == "model"
+    then_names = {e.get("name") for e in gate.get("then", [])}
+    assert then_names == {"gap_ideas"}
+    assert not gate.get("else")

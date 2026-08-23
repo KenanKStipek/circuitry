@@ -205,19 +205,29 @@ class PromptRuntime:
     Executes a PromptDefinition against adapter + store.
     Writes:
       <name>.value
-      <name>.meta{created_at, completed_at, adapter, model, prompt_type,
-                  prompt_sent, tokens_sent, tokens_received, error, dry_run,
-                  fallback_attempts, fallback_recovered, retries_used?,
-                  complexity?}
+      <name>.meta{created_at, completed_at, adapter, model, model_reason,
+                  prompt_type, prompt_sent, tokens_sent, tokens_received,
+                  error, dry_run, fallback_attempts, fallback_recovered,
+                  retries_used?, complexity?}
+
+    ``model`` is the resolved model — a per-effect ``model:`` when the
+    definition names one, the run's default otherwise — and ``model_reason``
+    says which: ``"explicit"`` or ``"default"``. A third value, ``"router"``,
+    is reserved for once a band-based router substitutes the default half of
+    that choice; nothing here does that substitution yet.
 
     ``complexity`` is the one conditional key: it is present only when
     ``runtime.complexity.scoring.enabled`` is true, and absent entirely — not
     null, not an empty object — when it is not, so turning scoring off leaves
     the state tree byte-identical to a build without the feature. When present
     it carries ``{score, max_score, mode, estimated, weight_total, signals,
-    warnings}``, with ``signals`` keyed by signal name so a CEL condition can
-    branch on ``state.<path>.meta.complexity.score`` or on any single signal's
-    contribution.
+    warnings, band?}``, with ``signals`` keyed by signal name so a CEL
+    condition can branch on ``state.<path>.meta.complexity.score`` or on any
+    single signal's contribution. ``band`` is itself conditional on
+    ``runtime.complexity.routing.enabled`` — ``{name, model}`` naming the band
+    the score falls in and the model that band names. It is a description of
+    where the score sits in the table, not a dispatch decision: it never
+    changes ``model``/``model_reason`` above.
 
     Every one of these keys except the result-bearing ones (``value``,
     ``tokens_*``, ``completed_at``, ``error``) is written *before* dispatch.
@@ -274,11 +284,23 @@ class PromptRuntime:
         # Materialize prompt input
         prompt_sent = self._materialize_input(effective_ctx)
 
+        # Resolved once, ahead of the meta block that reports it: a per-effect
+        # ``model:`` always wins over the run's default, and dispatch further
+        # down (_build_attempts) must build its attempt chain from this same
+        # value rather than recomputing it — the resolution rule has exactly
+        # one place to live.
+        resolved_model = self.defn.model or self.model
+
         # Record metadata
         meta["created_at"] = _now_iso()
         meta["completed_at"] = None
         meta["adapter"] = getattr(self.adapter, "name", "unknown")
-        meta["model"] = self.model
+        meta["model"] = resolved_model
+        # "explicit" when this effect names its own model, "default" when it
+        # inherits the run's. Reserved for a third value, "router", once a
+        # band-based router substitutes the default half of this choice —
+        # this is the field that decision will be recorded in.
+        meta["model_reason"] = "explicit" if self.defn.model else "default"
         meta["prompt_type"] = self.defn.prompt_type
         meta["prompt_sent"] = prompt_sent
         meta["tokens_sent"] = None
@@ -303,7 +325,6 @@ class PromptRuntime:
 
         indent = "  " * self.depth
         estimated_out = len(prompt_sent) // 4
-        resolved_model = self.defn.model or self.model
         t0 = time.monotonic()
         target = _adapter_target(self.adapter, resolved_model) if self.verbose else ""
 
@@ -341,7 +362,6 @@ class PromptRuntime:
 
         attempts_meta: list[dict[str, Any]] = []
         try:
-            resolved_model = self.defn.model or self.model
             attempts = self._build_attempts(default_model=resolved_model)
 
             for _attempt in range(max_attempts):
@@ -480,7 +500,7 @@ class PromptRuntime:
         """
         # Imported lazily: ``core`` reaching into ``cli`` at module scope would
         # invert the dependency the rest of this package maintains.
-        from ..cli.complexity_config import resolve_complexity_settings
+        from ..cli.complexity_config import band_for, resolve_complexity_settings
         from .complexity import score as score_complexity
 
         try:
@@ -533,7 +553,19 @@ class PromptRuntime:
             )
             return None
 
-        return _complexity_meta(result)
+        meta = _complexity_meta(result)
+
+        # The band this score falls in, per the configured routing table —
+        # informational, not a dispatch decision: nothing here substitutes
+        # ``resolved_model`` yet, that is the router's job once it exists. A
+        # non-empty band table always has a catch-all (config resolution
+        # enforces it), so a band is found whenever one is configured.
+        if settings.routing.enabled and settings.routing.bands:
+            band = band_for(result.score, settings.routing.bands)
+            if band is not None:
+                meta["band"] = {"name": band.name or "", "model": band.model or ""}
+
+        return meta
 
     def _build_attempts(self, *, default_model: str) -> list[tuple[str, str]]:
         attempts: list[tuple[str, str]] = []
