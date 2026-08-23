@@ -347,6 +347,60 @@ scores, no bands, no lines, and `meta.model_reason` back to
 | `max_chunks` | integer | `8` | Maximum chunks a plan may produce. `1` or greater. |
 | `on_failure` | string | `route_up` | `route_up` runs the original prompt on a more capable model; `fail` propagates the error. |
 
+#### What a decomposition actually does
+
+When a prompt effect's recorded score **strictly exceeds** `threshold` (a score
+equal to the threshold does not trigger), the runtime replaces the single model
+call with three bounded steps:
+
+1. **Plan.** The bundled planner (`agents/decompose`, see
+   [the shared library](shared-library.md)) runs in an isolated store, handed
+   the effect's raw template, a listing of the context keys it could read, its
+   output shape, and `max_chunks`. The planner run itself has decomposition
+   switched off — its own planning prompt would otherwise trigger the feature
+   it implements.
+2. **Validate.** The emitted YAML must parse, pass the orchestration schema,
+   keep the fan-out within `[2, max_chunks]`, and contain a top-level effect
+   that actually writes the planner-reported `result_path`
+   (`prime.merge.value`). An invalid plan never runs.
+3. **Execute and write back.** The emitted orchestration runs as a
+   state-isolated child seeded with a *copy* of the effect's render context —
+   same inline-identity cycle guard as a `use` child, same namespaced
+   observability (child effects announce under the decomposing effect's node,
+   and live-state snapshots mirror them there). The value at `result_path` is
+   written at the **original effect's own path**, so a downstream
+   `{{prime.<name>.value}}` reference resolves unchanged and nothing else in
+   the orchestration knows the substitution happened.
+
+The attempt is recorded at `meta.decomposition` on the effect node —
+`{decomposed, outcome, reason, score, threshold, depth, max_depth, plan,
+chunk_count, yaml, result_path, fallback_model, error}` — whether it
+decomposed, routed up, ran as-is, or failed. Like `meta.complexity`, the key is
+absent entirely when the feature never triggered.
+
+Chunks are scored too, inside the child, so an over-complex chunk decomposes
+again — that is what `max_depth` bounds. At the ceiling the effect **routes
+up** instead of decomposing: it runs once on the routing table's catch-all
+(most capable) band model, or — with routing off — simply runs as-is, and the
+depth it stopped at is recorded. The ceiling is checked before the planner
+runs, so a depth-limited effect costs no extra calls.
+
+`on_failure` governs the three real failure paths — the planner failing, an
+invalid plan, and the child execution failing:
+
+- `route_up` (the default) falls back exactly like the depth ceiling: the
+  original prompt runs on the catch-all band model (or as-is with routing off),
+  the failure is recorded under `meta.decomposition.reason`, and the run
+  lives. A decomposition attempt can never turn a working run into a failed
+  one.
+- `fail` propagates like any other effect error (`meta.error` is set, the
+  effect's own `on_error` applies).
+
+Either way the child's scratch state is discarded whole on failure — nothing
+partial ever lands at the original effect's path. `respect_explicit` from the
+routing block covers the fallback too: an effect that pins its own `model:`
+keeps it when route-up would otherwise substitute one.
+
 ## Precedence
 
 The block rides the normal `runtime.*` precedence — **orchestration over
