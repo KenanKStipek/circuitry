@@ -28,14 +28,27 @@ and the test harness — and the views that have landed. Views still to come
 | --- | --- |
 | `1`–`9` | Jump straight to a view, in registry order |
 | `Tab` / `Shift+Tab` | Cycle forward/backward through home and every view |
+| `Ctrl-N` / `Ctrl-B` | Move the keyboard to the next/previous widget on this screen |
 | `Enter` | Open the highlighted view from the home list |
 | `?` | Toggle the help overlay |
 | `q` / `Esc` | Back to home; from home, quit |
-| `Ctrl-C` | Quit, from anywhere, always |
+| `Ctrl-C` / `Ctrl-Q` | Quit, from anywhere, always |
 
 `q` and `Esc` are deliberately "back then quit": quitting is never more than
-one level away, and never a surprise from inside a view. `Ctrl-C` is bound with
-Textual `priority` so it wins over the screen-level copy binding.
+one level away, and never a surprise from inside a view. `Ctrl-C` and `Ctrl-Q`
+are bound with Textual `priority` so they win over the screen-level copy
+binding — and over anything a modal might want.
+
+Taking `Tab` for the views leaves a screen's own widgets with no way to hand
+the keyboard on, which is what `Ctrl-N` / `Ctrl-B` are for: they are the focus
+ring, and they are the reason every dropdown, box and button in this app is
+reachable without a mouse. `tests/tui/test_walkthrough.py` walks each view's
+ring and asserts it visits everything the screen can focus.
+
+One rule the binding table cannot state for itself: **the number keys are
+live, but a focused text box still gets to keep the digit** — otherwise a
+pipeline called `step2` would be unnameable. `Esc` and `Tab` are the way out
+of a box, and the help overlay's footer says so.
 
 A screen holding unsaved work can put itself in front of that: `show_view` and
 `show_home` route through `CircuitryScreen.confirm_leave(proceed)`, whose
@@ -79,6 +92,29 @@ Every screen body is a scroll container, which is what keeps a full-size view
 renderable in a 10x4 terminal. The suite renders each screen from 80x24 down
 to 1x1 and asserts the frame stays rectangular.
 
+## One theme
+
+Nothing in the TUI names a colour. CSS rules use Textual's `$` tokens
+(`$success`, `$error`, `$text-muted`), and the handful of places that build a
+Rich `Text` by hand — the run tree, mainly, which cannot write a `$token` —
+resolve one through `circuitry.tui.theme`:
+
+- `status_style(status, app.theme_variables)` → the Rich style for a row
+  describing an effect in that status, coloured by the **running** theme
+- `theme_colour(name, variables)` → one variable, with CSS-only values (`auto
+  60%`) dropped rather than handed to Rich
+- `OK_GLYPH` / `BAD_GLYPH` → the tick and the cross, re-exported from
+  `execution.GLYPHS` so a view reporting a verdict uses the same marks the run
+  tree uses for a finished and a failed effect
+
+That indirection is the whole light-terminal story. A hard-coded `green` is the
+terminal's bright green on any background; `$success` under Solarized Light is a
+dark olive. `tests/tui/test_theme.py` enforces both halves against the source:
+no module may write out an ANSI colour name, and no module may draw a glyph
+that means the same as one already in `GLYPHS`. Both are checked against the
+files rather than against a rendering, because the failure mode is a *new* view
+hard-coding a colour — which a snapshot of today's views would never notice.
+
 ## Logging in TUI mode
 
 A log record written to stdout while Textual owns the screen shreds the frame.
@@ -101,7 +137,7 @@ and a detail pane rendering that entry's manifest metadata.
 | Key | Action |
 | --- | --- |
 | `↑` / `↓` | Move through the tree or the list (whichever has focus) |
-| `Tab`-free focus | `/` jumps to search, `Enter` in search returns to the list |
+| `Ctrl-N` / `Ctrl-B` | Walk the ring: search → tree → list → detail pane |
 | `/` | Search name, intent and tags across the **whole** library |
 | `Esc` | Clear an active search; on a clean view, back to home |
 | `Enter` | Run the highlighted orchestration (hands it to the Run view) |
@@ -185,7 +221,13 @@ the status line reports what happened. The default eject destination is
    the dropdown back.
 
 `Tab` belongs to view navigation, so `Enter` is what walks the form: it moves
-to the next field and, from the last one, lands on Launch.
+to the next field and, from the last one, lands on Launch. `Ctrl-N` / `Ctrl-B`
+walk the whole setup pane — picker, generated inputs, adapter, model, Launch —
+which is how the two dropdowns are reached without a mouse.
+
+With nothing to run (no orchestration files, no library on the path) the
+picker says so in place of offering an empty dropdown, and the totals footer
+stays hidden until there is a run to total.
 
 The run itself executes `runtime_shim.run` on a worker thread, so the UI never
 blocks. Its `state_observer` is pure — it deep-copies each snapshot before

@@ -282,7 +282,7 @@ def test_a_valid_draft_turns_the_pane_green(run_app: Any, capture_frame: Any) ->
 
     frame, status = run_app(scenario, app=chat_app(runner), size=(140, 50))
     assert status is not None and status.ok
-    assert "✔ Valid" in frame
+    assert "✓ Valid" in frame
     assert "type: prompt" in frame  # the draft itself is on screen
 
 
@@ -299,7 +299,7 @@ def test_an_invalid_draft_turns_the_pane_red_and_lists_the_errors(
     frame, convo = run_app(scenario, app=chat_app(runner), size=(140, 50))
     assert convo.status is not None and not convo.status.ok
     assert convo.done is False
-    assert "✘" in frame
+    assert "✗" in frame
     assert "iter_0" in frame  # the validator's own words, not a summary
 
 

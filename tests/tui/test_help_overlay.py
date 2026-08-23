@@ -140,3 +140,70 @@ def test_overlay_renders_a_message_when_there_is_nothing_to_show(run_app: Any) -
         return str(table.render())
 
     assert "No bindings" in run_app(scenario)
+
+
+# -- the footer is the overlay's shop window ---------------------------------
+
+
+def _footer(frame: str) -> str:
+    return frame.rstrip("\n").split("\n")[-1]
+
+
+@pytest.mark.parametrize("spec", VIEWS, ids=[spec.slug for spec in VIEWS])
+def test_the_help_key_survives_an_eighty_column_footer(
+    run_app: Any, render: Any, spec: Any
+) -> None:
+    """``? Help`` stays on the footer at the width everybody has.
+
+    The footer fills left to right and truncates whatever runs off the end,
+    ordering by where a binding was declared rather than by how much anyone
+    needs it. That makes "does ``?`` still fit" a property of the *copy* on
+    every other binding on the screen — so it is checked here instead of
+    being left to whoever adds the next screen-level key.
+
+    Views that open with the keyboard in a text box are exempt, because there
+    ``?`` genuinely does not fire; :func:`test_a_focused_text_box_takes_the_
+    single_character_keys_off_the_footer` covers that case instead.
+    """
+
+    async def has_help(pilot: Pilot[Any]) -> bool:
+        await pilot.press(spec.key)
+        await pilot.pause()
+        return "question_mark" in pilot.app.active_bindings
+
+    if not run_app(has_help, size=(80, 24)):
+        pytest.skip(f"{spec.slug} opens with the keyboard in a text box")
+    footer = _footer(render(size=(80, 24), keys=[spec.key]))
+    assert "? Help" in footer, f"{spec.slug} footer crowded out the help key: {footer!r}"
+
+
+def test_a_focused_text_box_takes_the_single_character_keys_off_the_footer(
+    run_app: Any,
+) -> None:
+    """When ``?`` cannot fire, the footer does not claim it can.
+
+    Textual drops printable-character bindings from ``active_bindings`` while
+    a text box has the keyboard, because the box gets the character. Both the
+    footer and the overlay are built from that table, so both stay honest —
+    and Ctrl-N, which is not printable, is what brings the keys back.
+    """
+
+    async def scenario(pilot: Pilot[Any]) -> tuple[list[str], list[str]]:
+        app: CircuitryApp = pilot.app  # type: ignore[assignment]
+        await pilot.press("8")  # Chat opens with the seed form focused
+        await pilot.pause()
+        in_box = [row.key for row in binding_rows(app)]
+        # Walk the ring until the keyboard is off the seed boxes.
+        for _ in range(4):
+            await pilot.press("ctrl+n")
+            await pilot.pause()
+            if "question_mark" in app.active_bindings:
+                break
+        out_of_box = [row.key for row in binding_rows(app)]
+        return in_box, out_of_box
+
+    in_box, out_of_box = run_app(scenario, size=(80, 24))
+    assert "?" not in in_box, "the overlay offered a key the text box was eating"
+    assert "q" not in in_box
+    assert "?" in out_of_box, "Ctrl-N did not give the single-character keys back"
+    assert "1" in out_of_box

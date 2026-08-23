@@ -1,7 +1,7 @@
  ⭘                                       Circuitry — Run                                            
                                                                                                     
   Run                                                                                               
-  Execute an orchestration and watch effects stream                                                 
+  Run an orchestration and watch the effects land                                                   
                                                                                                     
                                                                                                     
   Orchestration                                           ├─ ✓ items (1.5s, ↑7 ↓13)                 
@@ -27,4 +27,4 @@
   ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔                                                                  
        Launch        Cancel run                                                                     
                                                                                                     
- tab Next view  ^r Launch  ^x Cancel run  ? Help  q Back / Quit                         ▏^p palette 
+ ^r Launch  ^x Cancel run  ^n Next field  ? Help  q Back / Quit                                     

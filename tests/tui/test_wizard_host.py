@@ -237,13 +237,13 @@ def test_seed_categories_are_the_ones_the_manifest_schema_allows() -> None:
 def test_validate_draft_passes_a_real_orchestration() -> None:
     status = validate_draft(VALID_DRAFT)
     assert status.ok and status.errors == ()
-    assert status.headline() == "✔ Valid"
+    assert status.headline() == "✓ Valid"
 
 
 def test_validate_draft_rejects_a_reserved_name() -> None:
     status = validate_draft(INVALID_DRAFT)
     assert not status.ok and status.errors
-    assert status.headline().startswith("✘")
+    assert status.headline().startswith("✗")
 
 
 def test_validate_draft_rejects_an_empty_draft() -> None:
@@ -446,5 +446,5 @@ def test_default_library_dir_falls_back_when_a_config_is_broken() -> None:
 
 
 def test_draft_status_headline_counts_problems() -> None:
-    assert DraftStatus(False, ("one",)).headline() == "✘ 1 problem"
-    assert DraftStatus(False, ("one", "two")).headline() == "✘ 2 problems"
+    assert DraftStatus(False, ("one",)).headline() == "✗ 1 problem"
+    assert DraftStatus(False, ("one", "two")).headline() == "✗ 2 problems"

@@ -18,18 +18,21 @@ from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
-from .layout import ResponsiveLayout
+from .layout import ResponsiveLayout, fit
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from textual.events import Mount
+    from textual.events import Mount, Resize
 
 __all__ = [
+    "HOME_ROW_BUDGET",
     "VIEWS",
     "CircuitryScreen",
     "HomeScreen",
     "PlaceholderScreen",
+    "ViewRow",
     "ViewScreen",
     "ViewSpec",
+    "home_row",
     "view_by_key",
     "view_index",
 ]
@@ -51,7 +54,11 @@ class CircuitryScreen(ResponsiveLayout, Screen[None]):
     def compose(self) -> ComposeResult:
         yield Header(id="chrome-header")
         yield self.BODY_CONTAINER(*self.compose_body(), id="body")
-        yield Footer(id="chrome-footer")
+        # The footer truncates from the right, so every cell it spends on a
+        # key nobody asked for is a cell taken off "? Help" — which is the
+        # one row that leads to all the others. Textual's command palette
+        # hint costs twelve of them and is still listed in the overlay.
+        yield Footer(id="chrome-footer", show_command_palette=False)
 
     def compose_body(self) -> ComposeResult:
         """Yield the widgets that make up this screen's body."""
@@ -91,13 +98,14 @@ class ViewScreen(CircuitryScreen):
 class PlaceholderScreen(ViewScreen):
     """Stand-in body for a view that has not been built yet."""
 
+    #: What a placeholder says instead of nothing. "Later story" is our word
+    #: for it, not the reader's — they want to know what to press *now*.
+    NOTE = "Not built yet. Until it is, 7 Validate covers most of this ground."
+
     def compose_body(self) -> ComposeResult:
         yield Static(self.spec.name, classes="view-title")
         yield Static(self.spec.blurb, classes="view-blurb")
-        yield Static(
-            "Not built yet — this view lands in a later story.",
-            classes="view-note",
-        )
+        yield Static(self.NOTE, classes="view-note")
 
 
 @dataclass(frozen=True)
@@ -174,6 +182,11 @@ def _profiles(spec: ViewSpec) -> CircuitryScreen:
 
 
 #: Every view the shell knows about, in navigation (and number key) order.
+#:
+#: Blurbs are kept short enough that ``"<key>  <name> — <blurb>"`` fits an
+#: 80-column home list whole — see :data:`HOME_ROW_BUDGET`, which is checked.
+#: Narrower than that and :class:`ViewRow` ellipsises them; wider and they
+#: simply read.
 VIEWS: tuple[ViewSpec, ...] = (
     ViewSpec(
         "library",
@@ -185,7 +198,7 @@ VIEWS: tuple[ViewSpec, ...] = (
     ViewSpec(
         "run",
         "Run",
-        "Execute an orchestration and watch effects stream",
+        "Run an orchestration and watch the effects land",
         "2",
         factory=_build_run_screen,
     ),
@@ -198,7 +211,7 @@ VIEWS: tuple[ViewSpec, ...] = (
     ViewSpec(
         "runs",
         "Runs",
-        "Inspect run state as a tree, open a saved state file, replay the last run",
+        "Walk a run's state as a tree, open a saved one, replay the last",
         "4",
         factory=_runs,
     ),
@@ -219,21 +232,21 @@ VIEWS: tuple[ViewSpec, ...] = (
     ViewSpec(
         "validate",
         "Validate",
-        "Check an orchestration file for schema, compile, cycle and preflight errors",
+        "Check a file for schema, compile, cycle and preflight errors",
         "7",
         factory=_validate,
     ),
     ViewSpec(
         "chat",
         "Chat",
-        "Describe a pipeline and let the wizard write the orchestration",
+        "Describe a pipeline; the wizard writes the orchestration",
         "8",
         factory=_chat,
     ),
     ViewSpec(
         "profiles",
         "Profiles",
-        "Edit named profiles: per-effect models, toggles, inputs and persistence",
+        "Per-effect models, toggles and inputs, saved under a name",
         "9",
         factory=_profiles,
     ),
@@ -253,23 +266,52 @@ def view_index(spec: ViewSpec) -> int:
     return VIEWS.index(spec)
 
 
+#: Cells a home row gets in an 80-column terminal: the screen, less the body's
+#: horizontal padding and the list's border. Every row is written to fit it,
+#: because an 80-column terminal is the one everybody has.
+HOME_ROW_BUDGET = 80 - 4 - 2
+
+
+def home_row(spec: ViewSpec) -> str:
+    """The home list's line for ``spec`` — the key, the name, the blurb."""
+    return f"{spec.key}  {spec.name} — {spec.blurb}"
+
+
+class ViewRow(Label):
+    """One home row, ellipsised to the width it actually gets.
+
+    A ``Label`` sizes itself to its text and then lets the list clip whatever
+    hangs over the edge, which reads as a sentence that stopped mid-word. The
+    row is stretched to the list's width in CSS so ``size.width`` is the real
+    budget, and :func:`~circuitry.tui.layout.fit` spends it.
+    """
+
+    def __init__(self, spec: ViewSpec) -> None:
+        super().__init__(id=f"row-{spec.slug}")
+        self.line = home_row(spec)
+
+    def on_mount(self) -> None:
+        self._reflow(self.size.width)
+
+    def on_resize(self, event: Resize) -> None:
+        self._reflow(event.size.width)
+
+    def _reflow(self, width: int) -> None:
+        self.update(fit(self.line, width) if width > 0 else self.line)
+
+
 class HomeScreen(CircuitryScreen):
     """Landing screen: the view list, one row per registered view."""
 
     def compose_body(self) -> ComposeResult:
         yield Static("Circuitry", id="home-title")
         yield Static(
-            "Cybernetic orchestration framework. Pick a view, or press ? for keys.",
+            "Nine views, no mouse. Pick one, or press ? and the app will "
+            "tell you every key it knows.",
             id="home-tagline",
         )
         yield ListView(
-            *(
-                ListItem(
-                    Label(f"{spec.key}  {spec.name} — {spec.blurb}"),
-                    id=f"view-{spec.slug}",
-                )
-                for spec in VIEWS
-            ),
+            *(ListItem(ViewRow(spec), id=f"view-{spec.slug}") for spec in VIEWS),
             id="home-views",
         )
 

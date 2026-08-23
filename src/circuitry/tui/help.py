@@ -167,7 +167,14 @@ class HelpOverlay(ResponsiveLayout, ModalScreen[None]):
             yield Static(self.heading, id="help-title")
             with VerticalScroll(id="help-body"):
                 yield HelpTable(self.rows, id="help-rows")
-            yield Static("Esc or ? to close", id="help-hint")
+            # The number keys are the one rule the binding table cannot state
+            # for itself: they are live, and a focused text box still gets to
+            # keep the digit. Saying so here is cheaper than a surprise.
+            yield Static(
+                "Esc or ? closes this. In a text box the digits are text — "
+                "press Esc or Tab first.",
+                id="help-hint",
+            )
 
     def action_close(self) -> None:
         self.dismiss(None)

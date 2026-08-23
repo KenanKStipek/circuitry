@@ -27,4 +27,4 @@
                                                                                                     
                                                                                                     
                                                                                                     
- tab Next view  ^r Re-run checks  ? Help  q Back / Quit                                 ▏^p palette 
+ ^r Re-run checks  ^n Next field  ? Help  q Back / Quit                                             

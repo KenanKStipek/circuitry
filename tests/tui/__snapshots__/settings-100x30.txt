@@ -27,4 +27,4 @@
                                                                                                     
                                                                                                     
                                                                                                     
- tab Next view  ? Help  q Back / Quit                                                   ▏^p palette 
+ ^n Next field  ? Help  q Back / Quit                                                               

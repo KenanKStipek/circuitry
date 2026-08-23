@@ -74,8 +74,10 @@ LIVE = "live"
 POST_RUN = "post-run"
 FILE = "file"
 
-#: Shown when there is nothing to inspect yet.
-EMPTY_SOURCE = "No run state yet — launch a run from the Run view, or open a --out file below."
+#: Shown when there is nothing to inspect yet. Short enough to survive an
+#: 80-column status line whole: this is the one row that cannot wrap, and a
+#: sentence clipped at "or open a --out" is worse than a shorter one.
+EMPTY_SOURCE = "No run state yet — launch one in Run, or open a state file above."
 
 #: Placeholder for the tree root before anything is loaded.
 NO_STATE = "no state"

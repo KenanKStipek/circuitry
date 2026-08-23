@@ -31,6 +31,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .theme import BAD_GLYPH, OK_GLYPH
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..adapters import Adapter
     from ..cli.config import CircuitryConfig
@@ -240,10 +242,12 @@ class DraftStatus:
     errors: tuple[str, ...] = ()
 
     def headline(self) -> str:
+        # The app's tick and cross, not a lookalike pair — the same marks the
+        # run tree uses for a finished and a failed effect.
         if self.ok:
-            return "✔ Valid"
+            return f"{OK_GLYPH} Valid"
         count = len(self.errors)
-        return f"✘ {count} problem{'' if count == 1 else 's'}"
+        return f"{BAD_GLYPH} {count} problem{'' if count == 1 else 's'}"
 
 
 def validate_draft(text: str) -> DraftStatus:

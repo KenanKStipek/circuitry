@@ -1,7 +1,7 @@
  ⭘                                     Circuitry — Profiles                                         
                                                                                                     
   Profiles                                                                                          
-  Edit named profiles: per-effect models, toggles, inputs and persistence                           
+  Per-effect models, toggles and inputs, saved under a name                                         
                                                                                                     
   Orchestration                                                                                     
   ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎    
@@ -27,4 +27,4 @@
                                                                                                     
   Model                                                                                             
                                                                                                     
- tab Next view  ^s Save profile  ^d Save as / duplicate  ^o Drop orphans  ^r Run with pr▏^p palette 
+ ^s Save  ^d Duplicate  ^o Drop orphans  ^r Run it  ^n Next field  ? Help                           

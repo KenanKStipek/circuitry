@@ -21,4 +21,4 @@
   ╰──────────────╯╰─────────────────────╯╰───────────────────────────────────╯  
   6/30 in all · "hello"                                                         
                                                                                 
- ⏎ Run  tab Next view  / Search                                     ▏^p palette 
+ ⏎ Run  / Search  ^n Next field                                                 

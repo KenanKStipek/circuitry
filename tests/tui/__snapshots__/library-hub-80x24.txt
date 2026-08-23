@@ -21,4 +21,4 @@
   ╰──────────────╯╰─────────────────────╯╰───────────────────────────────────╯  
   2/2 in all · source hub — Source: hub                                         
                                                                                 
- ⏎ Run  tab Next view  / Search  e Eject  s Source  r Refresh  ? Hel▏^p palette 
+ ⏎ Run  / Search  e Eject  s Source  r Refresh  ^n Next field  ? Help  q Back / 

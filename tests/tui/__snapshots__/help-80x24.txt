@@ -1,24 +1,24 @@
  ⭘      ╭──────────────────────────────────────────────────────────────╮        
         │                                                              │        
   Circui│  Keys — Home                                                 │        
-  Cybern│  Global                                                      │        
-        │           tab  Next view                                     │        
-  ╭─────│     shift+tab  Previous view                                 │─────╮  
-  │1  Li│            ^c  Quit                                          │     │  
-  │2  Ru│            ^q  Quit                                          │     │  
-  │3  In│             1  Library                                       │     │  
-  │4  Ru│             2  Run                                           │y the│  
-  │5  Do│             3  Inspect                                       │     │  
-  │6  Se│             4  Runs                                          │     │  
-  │7  Va│             5  Doctor                                    ▁▁  │and p│  
-  │8  Ch│             6  Settings                                      │ion  │  
-  │9  Pr│             7  Validate                                      │ and │  
-  ╰─────│             8  Chat                                          │─────╯  
-        │             9  Profiles                                      │        
+  Nine v│  Global                                                      │very    
+  key it│           tab  Next view                                     │        
+        │     shift+tab  Previous view                                 │        
+  ╭─────│            ^c  Quit                                          │─────╮  
+  │1  Li│            ^q  Quit                                          │     │  
+  │2  Ru│             1  Library                                       │     │  
+  │3  In│             2  Run                                           │     │  
+  │4  Ru│             3  Inspect                                       │last │  
+  │5  Do│             4  Runs                                      ▅▅  │     │  
+  │6  Se│             5  Doctor                                        │     │  
+  │7  Va│             6  Settings                                      │rrors│  
+  │8  Ch│             7  Validate                                      │     │  
+  │9  Pr│             8  Chat                                          │me   │  
+  ╰─────│             9  Profiles                                      │─────╯  
+        │            ^n  Next field                                    │        
+        │            ^b  Previous field                                │        
         │             ?  Help                                          │        
-        │             q  Back / Quit                                   │        
-        │           esc  Back / Quit                                   │        
-        │            ^p  palette                                       │        
-        │  Esc or ? to close                                           │        
+        │  Esc or ? closes this. In a text box the digits are text —   │        
+        │  press Esc or Tab first.                                     │        
         │                                                              │        
- tab Nex╰──────────────────────────────────────────────────────────────╯palette 
+ ^n Next╰──────────────────────────────────────────────────────────────╯        

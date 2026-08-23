@@ -2,9 +2,15 @@
 
 Responsibilities that live here and nowhere else: the screen stack and the
 navigation on top of it (number keys, Tab, ``q``/Esc back-then-quit, Ctrl-C
-always quits), the ``?`` help overlay, and the CSS breakpoints that keep the
-chrome renderable in a tiny terminal. Views themselves live in
-:mod:`circuitry.tui.screens`.
+always quits), moving the keyboard around inside a screen, the ``?`` help
+overlay, and the CSS breakpoints that keep the chrome renderable in a tiny
+terminal. Views themselves live in :mod:`circuitry.tui.screens`.
+
+Tab belongs to the *views*, not to the focus ring — which leaves a screen's
+own widgets with no way to hand the keyboard on. Ctrl-N and Ctrl-B do that
+job: they are the only reason every dropdown, box and button in this app is
+reachable without a mouse, so they are declared here alongside Tab rather
+than left to whichever screen happens to notice it needs them.
 
 Importing this module requires the ``tui`` extra — go through
 :mod:`circuitry.tui` instead.
@@ -92,6 +98,12 @@ class CircuitryApp(App[None]):
         height: auto;
     }
 
+    /* A row must fill the list, not hug its text — otherwise it never learns
+       how much room it has and ellipsising it is guesswork. */
+    #home-views ViewRow {
+        width: 1fr;
+    }
+
     CircuitryScreen.-compact #home-views {
         border: none;
     }
@@ -117,17 +129,30 @@ class CircuitryApp(App[None]):
     # Declaration order is the order the help overlay lists them in, so the
     # view keys lead. Priority is needed where a screen-level binding would
     # otherwise win: Ctrl-C (copy) and Tab/Shift+Tab (focus cycling).
+    #
+    # Ctrl-N / Ctrl-B are deliberately *not* priority: they are plain control
+    # characters no widget in this app claims, and leaving them non-priority
+    # means a widget that one day wants them can still have them.
     BINDINGS: ClassVar[list[BindingType]] = [
         *(
             Binding(spec.key, f"show_view('{spec.slug}')", spec.name, show=False)
             for spec in VIEWS
         ),
-        Binding("tab", "next_view", "Next view", priority=True),
+        # Tab is off the footer, not out of the app: it is the least
+        # surprising key in any TUI, and the fifteen cells it was spending
+        # there are worth more to "? Help" on a screen with six bindings.
+        Binding("tab", "next_view", "Next view", show=False, priority=True),
         Binding("shift+tab", "previous_view", "Previous view", show=False, priority=True),
+        Binding("ctrl+n", "focus_next", "Next field"),
+        Binding("ctrl+b", "focus_previous", "Previous field", show=False),
         Binding("question_mark", "help", "Help", key_display="?"),
         Binding("q", "back_or_quit", "Back / Quit"),
         Binding("escape", "back_or_quit", "Back / Quit", show=False),
         Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
+        # Textual binds Ctrl-Q itself, but not at priority. Declaring it
+        # here keeps every key that can end the session in one list and
+        # makes the two of them behave alike — both get out, always.
+        Binding("ctrl+q", "quit", "Quit", show=False, priority=True),
     ]
 
     def get_default_screen(self) -> HomeScreen:

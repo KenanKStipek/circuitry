@@ -171,10 +171,12 @@ class ProfileScreen(ViewScreen):
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("ctrl+s", "save", "Save profile"),
-        Binding("ctrl+d", "save_as", "Save as / duplicate"),
+        # Terse on purpose: the footer truncates from the right, and a long
+        # description here is paid for by "? Help" falling off the end.
+        Binding("ctrl+s", "save", "Save"),
+        Binding("ctrl+d", "save_as", "Duplicate"),
         Binding("ctrl+o", "drop_orphans", "Drop orphans"),
-        Binding("ctrl+r", "run_with_profile", "Run with profile"),
+        Binding("ctrl+r", "run_with_profile", "Run it"),
         Binding("q", "leave", "Back / Quit", show=False),
         Binding("escape", "leave", "Back / Quit", show=False),
     ]

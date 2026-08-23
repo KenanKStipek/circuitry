@@ -96,3 +96,6 @@ circuitry.config.json
 ideas.txt
 build.json
 run.json
+
+# the agent loop's own checkout, which the harness drops in the working tree
+.agent-loop/

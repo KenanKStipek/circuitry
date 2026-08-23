@@ -21,4 +21,4 @@
   ╰──────────────╯╰─────────────────────╯╰───────────────────────────────────╯  
   0/30 in all · "zzzz"                                                          
                                                                                 
- ⏎ Run  tab Next view  / Search                                     ▏^p palette 
+ ⏎ Run  / Search  ^n Next field                                                 

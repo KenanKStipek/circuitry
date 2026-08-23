@@ -9,4 +9,4 @@
  ▊  recipes                         ▎   
  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎   
  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎   
- tab Next view  ^s Save to f▏^p palette 
+ ^s Save file  ^g To library  ^r Run it 
