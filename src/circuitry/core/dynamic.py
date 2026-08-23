@@ -183,7 +183,7 @@ class DynamicRuntime:
                         raise RuntimeError(f"{effect_path}: {e}") from e
                     finally:
                         if store.on_write:
-                            store.on_write(store.state)
+                            store.on_write(store.root_state)
             else:
                 # Tree semantics: all effects run concurrently against the same
                 # deterministic snapshot from dynamic start, not sibling writes.
@@ -253,7 +253,7 @@ class DynamicRuntime:
                         child_store.state[key] = value
 
                 if store.on_write:
-                    store.on_write(store.state)
+                    store.on_write(store.root_state)
 
                 if tree_errors:
                     exc = TreeExecutionError(tree_errors)

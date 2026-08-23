@@ -45,6 +45,7 @@ from .orchestration_loader import serialize_orchestration
 from .redaction import REDACTED, redact_env_pairs
 from .registry import eject_destination, resolve_bundled, write_ejected
 from .runtime_shim import RunRequest, inspect_orchestration, run, validate
+from .score import register_score
 from .setup import register_setup
 from .shared_library import (
     apply_service_profile,
@@ -104,6 +105,7 @@ def _root(ctx: typer.Context) -> None:
 
 
 register_doctor(app)
+register_score(app)
 register_setup(app)
 
 #: Aliased from :mod:`circuitry.cli.last_run`, which the TUI's replay reads
@@ -387,6 +389,16 @@ def run_cmd(
             "wins over project-level). Precedence: CLI > profile > orchestration > config."
         ),
     ),
+    profile_from_state: Path | None = typer.Option(
+        None, "--profile-from-state",
+        help=(
+            "Reconstruct and apply the profile recorded at "
+            "runtime.effective_settings.profile in this state JSON (e.g. a "
+            "prior --out), instead of discovering profiles/<name>.yml by "
+            "name. Fails if that record was redacted. Mutually exclusive "
+            "with --profile."
+        ),
+    ),
     adapter: str | None = typer.Option(
         None, "--adapter",
         help="Adapter to use for this run. Beats CIRCUITRY_ADAPTER, --profile, and the orchestration.",
@@ -459,6 +471,30 @@ def run_cmd(
         console.print("[red]Error:[/red] --tail is mutually exclusive with --print and --json.")
         raise typer.Exit(code=1)
 
+    if profile and profile_from_state:
+        console.print("[red]Error:[/red] --profile and --profile-from-state are mutually exclusive.")
+        raise typer.Exit(code=1)
+
+    profile_record: dict[str, Any] | None = None
+    if profile_from_state:
+        try:
+            recorded_state = json.loads(profile_from_state.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            console.print(f"[red]Error:[/red] Could not read {profile_from_state}: {exc}")
+            raise typer.Exit(code=1) from exc
+        profile_record = (
+            recorded_state.get("runtime", {}).get("effective_settings", {}).get("profile")
+            if isinstance(recorded_state, dict)
+            else None
+        )
+        if not isinstance(profile_record, dict):
+            console.print(
+                f"[red]Error:[/red] {profile_from_state} carries no "
+                "runtime.effective_settings.profile record — that run did "
+                "not use --profile, so there is nothing to reconstruct."
+            )
+            raise typer.Exit(code=1)
+
     cfg = resolve_config(explicit_path=config)
 
     if not (quiet or json_out):
@@ -500,6 +536,7 @@ def run_cmd(
         live_state_path=live_state,
         skip_preflight=skip_preflight,
         profile_name=profile,
+        profile_record=profile_record,
         adapter_override=adapter,
         model_override=model,
     )
@@ -511,9 +548,13 @@ def run_cmd(
     ):
         result = run(req)
 
+    # Resolved --out path: the CLI flag if given, else the profile's `out:`
+    # (precedence cli > profile > default — see cli.effective_settings).
+    resolved_out = result.out_path
+
     # Write --out for both success and failure (failure state still contains runtime metadata).
-    if out:
-        _write_state_json(out=out, state=result.state, pretty=pretty)
+    if resolved_out:
+        _write_state_json(out=resolved_out, state=result.state, pretty=pretty)
 
     if not result.ok:
         if json_out:
@@ -521,14 +562,14 @@ def run_cmd(
                 "ok": False,
                 "error": result.error,
                 "warnings": result.warnings,
-                "state_out": str(out) if out else None,
+                "state_out": str(resolved_out) if resolved_out else None,
             }
             console.print_json(json.dumps(payload))
         else:
             console.print("[red]Run failed[/red]")
             console.print(f"[red]Error:[/red] {result.error}")
-            if out:
-                console.print(f"[bold]State written:[/bold] {out}")
+            if resolved_out:
+                console.print(f"[bold]State written:[/bold] {resolved_out}")
         raise typer.Exit(code=1)
 
     # Stash for --last (only on success, skip if replaying via --last).
@@ -561,11 +602,11 @@ def run_cmd(
             print(val if isinstance(val, str) else json.dumps(val))
     elif not (quiet or json_out):
         console.print("[green]Run succeeded[/green]")
-        if out:
-            console.print(f"[bold]State written:[/bold] {out}")
+        if resolved_out:
+            console.print(f"[bold]State written:[/bold] {resolved_out}")
 
     # Print --print (or default print for --json with no --out)
-    if not tail and (print_state or (not out and json_out)):
+    if not tail and (print_state or (not resolved_out and json_out)):
         if pretty:
             console.print_json(json.dumps(result.state, indent=2, sort_keys=True))
         else:

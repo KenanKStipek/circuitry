@@ -5,13 +5,13 @@
 # Demonstrates:
 #   - loop(while, mode: model) — the LLM judges whether to continue
 #   - use: with ref + outputs (declared-outputs mode → flat dict at .value)
-#   - chained text passing across iterations via the `last_text` sentinel
+#   - a chained body: refine_step reads critique_step's output from the same
+#     pass via the within-iteration form {{prime.<step>.value}}
 #
 # State paths:
 #   draft.value                                                 — initial draft
 #   review.iter_<N>.critique_step.value                         — per-iteration critique
 #   review.iter_<N>.refine_step.value                           — per-iteration refined text
-#   review.iter_<N>.last_text.value                             — text in flight at end of iter N
 #
 # Run:
 #   cof run patterns/critique_refine_loop -e topic="serverless cold-start tradeoffs"
@@ -58,7 +58,10 @@ effects:
         ref: utilities/refine
         inputs:
           content: "{{prime.seed_text.value}}"
-          feedback: "{{prime.review.iter_0.critique_step.value}}"
+          # Within-iteration reference: critique_step ran a moment ago in THIS
+          # pass. prime.review.iter_0.critique_step.value would pin every pass
+          # to the first one's critique.
+          feedback: "{{prime.critique_step.value}}"
         outputs:
           refined: {path: prime.refine.value}
 

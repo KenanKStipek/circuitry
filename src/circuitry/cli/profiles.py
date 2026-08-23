@@ -28,6 +28,8 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
+from .redaction import REDACTED
+
 try:
     import jsonschema as _jsonschema
 except ImportError:
@@ -49,12 +51,24 @@ class ProfileValidationError(ProfileError):
     pass
 
 
+class ProfileReconstructionError(ProfileError):
+    """Raised when a recorded profile cannot be rebuilt into a runnable one.
+
+    The only expected cause today is redaction: a profile carrying a secret
+    is recorded with that value replaced by ``REDACTED`` (see
+    ``circuitry.cli.redaction``), so the record alone cannot reproduce the
+    original run. Reconstruction refuses rather than silently running with
+    the literal sentinel string as the value.
+    """
+
+
 @dataclass(frozen=True)
 class ProfileSettings:
     name: str
     path: Path
     adapter: str | None
     model: str | None
+    out: str | None = None
     inputs: dict[str, Any] = field(default_factory=dict)
     effects: dict[str, dict[str, Any]] = field(default_factory=dict)
     persistence: dict[str, Any] | None = None
@@ -264,6 +278,31 @@ def parse_profile_document(path: Path, *, name: str) -> dict[str, Any]:
     return raw
 
 
+def _settings_from_raw(raw: dict[str, Any], *, name: str, path: Path) -> ProfileSettings:
+    effects_raw = raw.get("effects") or {}
+    adapter = raw.get("adapter")
+    model = raw.get("model")
+    out = raw.get("out")
+    inputs = raw.get("inputs") or {}
+    persistence = raw.get("persistence")
+
+    return ProfileSettings(
+        name=name,
+        path=path,
+        adapter=str(adapter) if adapter is not None else None,
+        model=str(model) if model is not None else None,
+        out=str(out) if out is not None else None,
+        inputs=dict(inputs) if isinstance(inputs, dict) else {},
+        effects=(
+            {str(k): dict(v) for k, v in effects_raw.items() if isinstance(v, dict)}
+            if isinstance(effects_raw, dict)
+            else {}
+        ),
+        persistence=dict(persistence) if isinstance(persistence, dict) else None,
+        raw=raw,
+    )
+
+
 def load_profile(
     *,
     name: str,
@@ -278,22 +317,76 @@ def load_profile(
     effects_raw = raw.get("effects") or {}
     _validate_effect_paths(effects_raw, orch=orch, profile_name=name)
 
-    adapter = raw.get("adapter")
-    model = raw.get("model")
-    inputs = raw.get("inputs") or {}
-    persistence = raw.get("persistence")
+    return _settings_from_raw(raw, name=name, path=path)
 
-    return ProfileSettings(
-        name=name,
-        path=path,
-        adapter=str(adapter) if adapter is not None else None,
-        model=str(model) if model is not None else None,
-        inputs=dict(inputs) if isinstance(inputs, dict) else {},
-        effects=(
-            {str(k): dict(v) for k, v in effects_raw.items() if isinstance(v, dict)}
-            if isinstance(effects_raw, dict)
-            else {}
-        ),
-        persistence=dict(persistence) if isinstance(persistence, dict) else None,
-        raw=raw,
+
+def _find_redacted_paths(value: Any, *, prefix: str = "") -> list[str]:
+    """Dotted paths (in ``value``) whose string carries the redaction sentinel.
+
+    A whole-value redaction (sensitive key like ``api_key``) and a partial
+    one (a URL's ``user:pass@`` stripped in place) both leave the sentinel
+    substring somewhere in the string, so a substring check catches both.
+    """
+    found: list[str] = []
+    if isinstance(value, dict):
+        for key, sub in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if isinstance(sub, str):
+                if REDACTED in sub:
+                    found.append(path)
+            else:
+                found.extend(_find_redacted_paths(sub, prefix=path))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            found.extend(_find_redacted_paths(item, prefix=f"{prefix}[{index}]"))
+    elif isinstance(value, str) and REDACTED in value:
+        found.append(prefix or "<root>")
+    return found
+
+
+def profile_from_record(
+    record: dict[str, Any], *, orch: dict[str, Any]
+) -> ProfileSettings:
+    """Reconstruct a :class:`ProfileSettings` from a recorded profile mapping.
+
+    ``record`` is exactly ``state["runtime"]["effective_settings"]["profile"]``
+    as written by ``runtime_shim.run`` — ``{"name": ..., "content": ...}``,
+    where ``content`` is the profile's parsed YAML, redacted. There is no file
+    on disk to re-read: the record itself is the only input.
+
+    Raises :class:`ProfileReconstructionError` — naming the redacted paths —
+    when ``content`` carries the redaction sentinel anywhere, since a
+    redacted value cannot be replayed faithfully. Weakening redaction to let
+    this succeed is not an option; the caller must supply the missing values
+    (e.g. by running from the original profile file instead).
+    """
+    name = record.get("name")
+    if not isinstance(name, str) or not name:
+        raise ProfileReconstructionError(
+            "Recorded profile is missing a 'name' field; it cannot be reconstructed."
+        )
+    content = record.get("content")
+    if not isinstance(content, dict):
+        raise ProfileReconstructionError(
+            f"Recorded profile {name!r} is missing its 'content' field; "
+            "it cannot be reconstructed."
+        )
+
+    redacted_paths = _find_redacted_paths(content)
+    if redacted_paths:
+        raise ProfileReconstructionError(
+            f"Profile {name!r} cannot be reconstructed: its recorded content "
+            "was redacted, so replaying it would run with the literal "
+            f"'{REDACTED}' sentinel instead of the original value(s). "
+            f"Redacted field(s): {', '.join(sorted(redacted_paths))}. "
+            "Supply the original profile file (profiles/"
+            f"{name}.yml) via --profile instead, or provide these values "
+            "explicitly."
+        )
+
+    effects_raw = content.get("effects") or {}
+    _validate_effect_paths(effects_raw, orch=orch, profile_name=name)
+
+    return _settings_from_raw(
+        content, name=name, path=Path(f"<reconstructed:{name}>")
     )

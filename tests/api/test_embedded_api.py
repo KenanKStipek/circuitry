@@ -84,10 +84,20 @@ effects:
     # Timestamps differ, so compare structure/path shape and key metadata semantics.
     assert _shape_paths(cli_state) == _shape_paths(api_result.state)
     assert "prime.hello" in _shape_paths(api_result.state)
-    assert (
-        cli_state["runtime"]["effective_settings"]
-        == api_result.state["runtime"]["effective_settings"]
-    )
+
+    # ``out`` legitimately differs: the CLI call passes --out (needed to
+    # capture cli_state at all) while the embedded call passes none, so
+    # compare everything else and check ``out`` semantics separately.
+    cli_settings = dict(cli_state["runtime"]["effective_settings"])
+    api_settings = dict(api_result.state["runtime"]["effective_settings"])
+    cli_out_source = cli_settings.pop("sources")
+    api_out_source = api_settings.pop("sources")
+    assert cli_settings.pop("out") == str(cli_out)
+    assert api_settings.pop("out") is None
+    assert cli_settings == api_settings
+    assert cli_out_source.pop("out") == "cli"
+    assert api_out_source.pop("out") == "default"
+    assert cli_out_source == api_out_source
 
 
 def test_embedded_api_raises_actionable_error_with_result_context(

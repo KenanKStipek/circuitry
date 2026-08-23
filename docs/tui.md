@@ -287,6 +287,13 @@ the view never contradicts the router. With no table there is still a number to
 describe, and `circuitry/tui/complexity.py` supplies the default names —
 `low` / `moderate` / `high` / `severe`, quartiles of the 0–100 range.
 
+A `use` effect runs another orchestration, whose shape is nowhere in the file
+being run, so its rows come from state: the runtime mirrors the child's
+effects under the use node as they execute and the tree grows a row per child
+(and per grandchild, for a `use` inside a `use`). In declared-outputs mode the
+child's effects give way to the mapped value once the child lands, so the rows
+collapse back to the single `use` row the parent actually keeps.
+
 Because state is published when an effect *finishes*, the effect currently in
 flight would otherwise look pending. The view infers it from the structure
 instead: under a running chain the next unfinished effect is under way; under
@@ -544,6 +551,11 @@ optional input does not bake its default into the file), and a persistence
 panel whose backend dropdown reveals exactly that backend's keys. Switching
 backends drops the previous one's keys, because backends take disjoint keys and
 a partial overlay would produce a chimera.
+
+A profile's `out:` key (the default `--out` path — see
+[Named Profiles → Precedence](profiles.md#precedence)) has no picker of its
+own yet; `ProfileDraft` still round-trips it, so a profile edited by hand to
+set `out:` keeps it across a save.
 
 | Key | Action |
 | --- | --- |

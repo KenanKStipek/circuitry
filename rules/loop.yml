@@ -49,13 +49,17 @@ fields:
     default: fail
     note: "break exits the loop. continue skips the iteration."
 state_paths:
-  iteration_output: "prime.<loop_name>.iter_N.<body_name>.value"
-  collected_array: "prime.<loop_name>.collected.value"
+  within_iteration: "prime.<body_name>.value — a body step reading another body step in the SAME pass. Legal inside the body and inside the while condition; resolves against the current iteration first, then the enclosing scope, then root state. Works in named and unnamed loops, chain and tree flow. The bare {{<body_name>.value}} form means the same node but can collide with a user-supplied state key, so prefer the prime. prefix."
+  iteration_output: "prime.<loop_name>.iter_N.<body_name>.value — ONE specific pass. Use it only AFTER the loop: N is a constant, so inside the body every pass reads pass N's output (stale data, not an error)."
+  collected_array: "prime.<loop_name>.collected.value — every pass's value, after the loop. Requires collect."
   loop_variable: "{{as_name}}"
 constraints:
   - "Exactly one of each or while is required, never both."
   - "each.in must point to a prompt_type: json effect whose output is a JSON array."
   - "collect requires the loop to have a name."
+  - "Within-iteration, cross-iteration and post-loop references are three different things: prime.<body_name>.value, prime.<loop_name>.iter_N.<body_name>.value, prime.<loop_name>.collected.value. Do not substitute one for another."
+  - "prime.<loop_name>.<body_name>.value never resolves — prime.<loop_name> holds iter_N, collected and meta, never body step names. Write prime.<body_name>.value instead."
+  - "A body step shadows an enclosing effect of the same name, for the length of the body only."
 example: |
   - type: loop
     name: summarize_articles
@@ -66,7 +70,15 @@ example: |
       as: article
     body:
       - type: prompt
+        name: article_notes
+        template: |
+          List the key claims in this article, one per line:
+          {{article}}
+      # Within-iteration reference: article_notes ran a moment ago in THIS
+      # pass. Not prime.summarize_articles.iter_0.article_notes.value, which
+      # would pin every pass to the first article's notes.
+      - type: prompt
         name: article_summary
         template: |
-          Summarize this article in 2-3 sentences:
-          {{article}}
+          Summarize this article in 2-3 sentences, using these notes:
+          {{prime.article_notes.value}}
