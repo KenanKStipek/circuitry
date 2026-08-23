@@ -61,7 +61,7 @@ FULL_SCORE: dict[str, Any] = {
             "note": "~900 tokens of rendered prompt",
         },
         {
-            "name": "schema_shape",
+            "name": "output_schema",
             "raw": 6.0,
             "normalized": 0.45,
             "weight": 0.16,
@@ -113,7 +113,7 @@ def test_a_full_payload_reads_into_a_score_and_a_band() -> None:
     assert score.band == "high"  # 62/100 falls in the third default band
     assert [signal.name for signal in score.signals] == [
         "prompt_size",
-        "schema_shape",
+        "output_schema",
         "keywords",
     ]
 
@@ -228,7 +228,7 @@ def test_the_dominant_signals_are_the_shortest_set_explaining_the_score() -> Non
     assert [signal.name for signal in score.dominant] == ["prompt_size"]
     assert [signal.name for signal in score.ranked] == [
         "prompt_size",
-        "schema_shape",
+        "output_schema",
         "keywords",
     ]
 
@@ -260,7 +260,7 @@ def test_the_breakdown_marks_the_dominant_signals_and_keeps_the_notes() -> None:
     assert score is not None
     lines = score.breakdown_lines()
     assert lines[0].startswith("▸") and "prompt_size" in lines[0]
-    assert lines[1].startswith("  ") and "schema_shape" in lines[1]
+    assert lines[1].startswith("  ") and "output_schema" in lines[1]
     body = "\n".join(lines)
     assert "~900 tokens of rendered prompt" in body
     assert "65%" in body  # 40 of 62 contributed points
@@ -498,7 +498,7 @@ def test_selecting_an_effect_shows_its_signal_breakdown() -> None:
     lines = detail_lines(find_node(nodes, "prime.draft"))
     body = "\n".join(lines)
     assert "complexity signals" in body
-    assert "prompt_size" in body and "schema_shape" in body and "keywords" in body
+    assert "prompt_size" in body and "output_schema" in body and "keywords" in body
     assert "dominated by prompt_size" in body
     # The breakdown sits between the meta panel and the value, not after it.
     assert lines.index("complexity signals") < lines.index("value")

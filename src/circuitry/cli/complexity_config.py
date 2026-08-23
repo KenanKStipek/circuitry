@@ -32,6 +32,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..core.complexity import SIGNAL_NAMES
 from .config import ConfigError
 
 #: Bounded, documented range every complexity score is normalized into.
@@ -40,11 +41,20 @@ from .config import ConfigError
 SCORE_MIN = 0.0
 SCORE_MAX = 100.0
 
-#: Signals the scorer weighs, with their default relative weights. A weight is
-#: a multiplier on that signal's normalized measurement; the scorer owns how
-#: the weighted signals combine into the final score. Unknown signal names are
-#: rejected at config resolution so a typo cannot silently do nothing.
-DEFAULT_WEIGHTS: dict[str, float] = {
+#: Default relative weight per signal. A weight is a multiplier on that
+#: signal's normalized measurement; the scorer owns how the weighted signals
+#: combine into the final score.
+#:
+#: The keys are :data:`circuitry.core.complexity.SIGNAL_NAMES` verbatim — the
+#: config surface and the scorer share one vocabulary, so a configured weight
+#: reaches the signal it names with no translation anywhere. Building the table
+#: by iterating ``SIGNAL_NAMES`` is what enforces that: add a signal to the
+#: scorer without a default here and this module fails to import, rather than
+#: shipping a name the config surface silently rejects.
+#:
+#: Unknown signal names are rejected at config resolution (see
+#: :func:`_parse_scoring`) so a typo cannot silently do nothing.
+_DEFAULT_WEIGHT_VALUES: dict[str, float] = {
     "prompt_size": 1.0,
     "state_references": 1.5,
     "prompt_type": 0.75,
@@ -54,25 +64,8 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "keywords": 1.0,
 }
 
-#: Config signal name -> the name :mod:`circuitry.core.complexity` uses for the
-#: same signal. The two vocabularies were written independently: config names
-#: the *thing being configured* (``prompt_type``, ``output_schema``), the
-#: scorer names the *measurement* (``output_type``, ``schema_shape``). Rather
-#: than rename either surface — the config names are documented and shipped —
-#: the translation lives here, in the module that owns the config vocabulary,
-#: so every consumer of a configured weight table agrees on the mapping.
-#: Both consumers today — the runtime path in :mod:`circuitry.core.prompt` and
-#: the preview in :mod:`circuitry.cli.score` — go through
-#: :meth:`ScoringSettings.scorer_weights`; a per-call-site copy of this table
-#: is the bug #123 exists to prevent.
-SCORER_SIGNAL_NAMES: dict[str, str] = {
-    "prompt_size": "prompt_size",
-    "state_references": "state_references",
-    "prompt_type": "output_type",
-    "output_schema": "schema_shape",
-    "output_size": "output_size",
-    "structural_position": "structure",
-    "keywords": "keywords",
+DEFAULT_WEIGHTS: dict[str, float] = {
+    name: _DEFAULT_WEIGHT_VALUES[name] for name in SIGNAL_NAMES
 }
 
 DEFAULT_THRESHOLD = 80.0
@@ -140,22 +133,6 @@ class ScoringSettings:
             "enabled": self.enabled,
             "weights": dict(self.weights),
             "keywords": dict(self.keywords),
-        }
-
-    def scorer_weights(self) -> dict[str, float]:
-        """The configured weights, keyed by the scorer's signal names.
-
-        :mod:`circuitry.core.complexity` takes its weights as an argument and
-        keys them by :data:`~circuitry.core.complexity.SIGNAL_NAMES`; this is
-        the one place the configured names are translated into those, via
-        :data:`SCORER_SIGNAL_NAMES`. Unknown names cannot occur — config
-        resolution rejects them — but are dropped rather than passed through,
-        since the scorer would only warn about them.
-        """
-        return {
-            SCORER_SIGNAL_NAMES[name]: float(value)
-            for name, value in self.weights.items()
-            if name in SCORER_SIGNAL_NAMES
         }
 
 

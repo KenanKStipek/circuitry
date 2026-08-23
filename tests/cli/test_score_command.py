@@ -11,7 +11,6 @@ pytest.importorskip("typer")
 from typer.testing import CliRunner
 
 from circuitry.cli.app import app
-from circuitry.cli.complexity_config import SCORER_SIGNAL_NAMES, ScoringSettings
 from circuitry.cli.score import ESTIMATE_NOTICE
 from circuitry.core.complexity import SIGNAL_NAMES
 from circuitry.tui.complexity import read as read_complexity
@@ -207,7 +206,7 @@ def test_table_names_dominant_signals(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0, result.stdout
-    assert "output_type" in result.stdout or "state_references" in result.stdout
+    assert "prompt_type" in result.stdout or "state_references" in result.stdout
 
 
 def test_band_column_only_appears_with_a_band_table(tmp_path: Path) -> None:
@@ -347,7 +346,7 @@ def test_loop_body_is_scored_as_being_inside_a_loop(tmp_path: Path) -> None:
 
     row = next(r for r in payload["effects"] if r["path"] == "refine.critique")
     structure = next(
-        s for s in row["breakdown"]["signals"] if s["name"] == "structure"
+        s for s in row["breakdown"]["signals"] if s["name"] == "structural_position"
     )
     assert structure["detail"]["loop_depth"] == 1
     assert structure["detail"]["depth"] == 1
@@ -608,30 +607,22 @@ def test_score_is_deterministic(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# the config -> scorer weight-name translation
+# every configured weight reaches the scorer
 # ---------------------------------------------------------------------------
 
 
-def test_scorer_weights_translate_config_signal_names() -> None:
-    weights = ScoringSettings(weights={"prompt_type": 3.0}).scorer_weights()
-    assert weights == {"output_type": 3.0}
-
-
-def test_every_config_signal_maps_onto_a_scorer_signal() -> None:
-    assert set(SCORER_SIGNAL_NAMES.values()) == set(SIGNAL_NAMES)
-
-
-@pytest.mark.parametrize("weight_name", sorted(SCORER_SIGNAL_NAMES))
+@pytest.mark.parametrize("weight_name", sorted(SIGNAL_NAMES))
 def test_every_config_weight_moves_the_preview_score(
     tmp_path: Path, weight_name: str
 ) -> None:
     """Each documented weight demonstrably reaches the scorer.
 
-    Three of the seven are named differently on the two sides (#123), and the
-    scorer answers an unknown signal name with a warning and its own defaults —
-    so a weight that fails to translate produces no error, just a number that
-    ignores the setting. Parametrizing over the whole table is the only way to
-    catch the next one.
+    The config surface and the scorer share one vocabulary (#124), so a
+    configured weight is passed straight through with no translation — but
+    the scorer answers an unknown signal name with a warning and its own
+    defaults, so a weight that fails to reach it produces no error, just a
+    number that ignores the setting. Parametrizing over the whole table is
+    the only way to catch a name drifting out of sync again.
     """
     orch = _write(tmp_path, "shaped.yml", SIGNAL_RICH_ORCH)
     base = _scoring_config(tmp_path, "base")

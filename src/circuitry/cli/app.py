@@ -15,6 +15,22 @@ from rich.panel import Panel
 from rich.table import Table
 from typer.core import TyperGroup
 
+# The wizard host (chat's transcript, verdict, and save logic) — `cof wizard`
+# drives the exact same functions `circuitry.tui.chat.ChatScreen` does, so the
+# two hosts can never produce different artifacts from the same input.
+from ..tui.wizard_host import CATEGORIES as WIZARD_CATEGORIES
+from ..tui.wizard_host import DEFAULT_CATEGORY as WIZARD_DEFAULT_CATEGORY
+from ..tui.wizard_host import (
+    Conversation,
+    InvalidDraft,
+    Seed,
+    Turn,
+    default_library_dir,
+    drive_conversation,
+    run_turn,
+    save_to_file,
+    save_to_library,
+)
 from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, ConfigError, resolve_config
 from .doctor import register_doctor
 from .last_run import LAST_RUN_PATH
@@ -373,6 +389,16 @@ def run_cmd(
             "wins over project-level). Precedence: CLI > profile > orchestration > config."
         ),
     ),
+    profile_from_state: Path | None = typer.Option(
+        None, "--profile-from-state",
+        help=(
+            "Reconstruct and apply the profile recorded at "
+            "runtime.effective_settings.profile in this state JSON (e.g. a "
+            "prior --out), instead of discovering profiles/<name>.yml by "
+            "name. Fails if that record was redacted. Mutually exclusive "
+            "with --profile."
+        ),
+    ),
     adapter: str | None = typer.Option(
         None, "--adapter",
         help="Adapter to use for this run. Beats CIRCUITRY_ADAPTER, --profile, and the orchestration.",
@@ -445,6 +471,30 @@ def run_cmd(
         console.print("[red]Error:[/red] --tail is mutually exclusive with --print and --json.")
         raise typer.Exit(code=1)
 
+    if profile and profile_from_state:
+        console.print("[red]Error:[/red] --profile and --profile-from-state are mutually exclusive.")
+        raise typer.Exit(code=1)
+
+    profile_record: dict[str, Any] | None = None
+    if profile_from_state:
+        try:
+            recorded_state = json.loads(profile_from_state.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            console.print(f"[red]Error:[/red] Could not read {profile_from_state}: {exc}")
+            raise typer.Exit(code=1) from exc
+        profile_record = (
+            recorded_state.get("runtime", {}).get("effective_settings", {}).get("profile")
+            if isinstance(recorded_state, dict)
+            else None
+        )
+        if not isinstance(profile_record, dict):
+            console.print(
+                f"[red]Error:[/red] {profile_from_state} carries no "
+                "runtime.effective_settings.profile record — that run did "
+                "not use --profile, so there is nothing to reconstruct."
+            )
+            raise typer.Exit(code=1)
+
     cfg = resolve_config(explicit_path=config)
 
     if not (quiet or json_out):
@@ -486,6 +536,7 @@ def run_cmd(
         live_state_path=live_state,
         skip_preflight=skip_preflight,
         profile_name=profile,
+        profile_record=profile_record,
         adapter_override=adapter,
         model_override=model,
     )
@@ -497,9 +548,13 @@ def run_cmd(
     ):
         result = run(req)
 
+    # Resolved --out path: the CLI flag if given, else the profile's `out:`
+    # (precedence cli > profile > default — see cli.effective_settings).
+    resolved_out = result.out_path
+
     # Write --out for both success and failure (failure state still contains runtime metadata).
-    if out:
-        _write_state_json(out=out, state=result.state, pretty=pretty)
+    if resolved_out:
+        _write_state_json(out=resolved_out, state=result.state, pretty=pretty)
 
     if not result.ok:
         if json_out:
@@ -507,14 +562,14 @@ def run_cmd(
                 "ok": False,
                 "error": result.error,
                 "warnings": result.warnings,
-                "state_out": str(out) if out else None,
+                "state_out": str(resolved_out) if resolved_out else None,
             }
             console.print_json(json.dumps(payload))
         else:
             console.print("[red]Run failed[/red]")
             console.print(f"[red]Error:[/red] {result.error}")
-            if out:
-                console.print(f"[bold]State written:[/bold] {out}")
+            if resolved_out:
+                console.print(f"[bold]State written:[/bold] {resolved_out}")
         raise typer.Exit(code=1)
 
     # Stash for --last (only on success, skip if replaying via --last).
@@ -547,11 +602,11 @@ def run_cmd(
             print(val if isinstance(val, str) else json.dumps(val))
     elif not (quiet or json_out):
         console.print("[green]Run succeeded[/green]")
-        if out:
-            console.print(f"[bold]State written:[/bold] {out}")
+        if resolved_out:
+            console.print(f"[bold]State written:[/bold] {resolved_out}")
 
     # Print --print (or default print for --json with no --out)
-    if not tail and (print_state or (not out and json_out)):
+    if not tail and (print_state or (not resolved_out and json_out)):
         if pretty:
             console.print_json(json.dumps(result.state, indent=2, sort_keys=True))
         else:
@@ -1267,7 +1322,14 @@ def inspect_cmd(
     console.print(table)
 
 
-@app.command("gen", help="Generate an orchestration from a natural language prompt.")
+@app.command(
+    "gen",
+    help=(
+        "Generate an orchestration from a natural language prompt, single-shot. "
+        "Drives `agents/meta_orchestrator.yml`. For a multi-turn, clarifying-"
+        "questions build instead, see `cof wizard`."
+    ),
+)
 def gen_cmd(
     name: str = typer.Argument(
         ..., help="Name for the generated orchestration (used as filename)."
@@ -1421,6 +1483,136 @@ def gen_cmd(
     orch_out.parent.mkdir(parents=True, exist_ok=True)
     orch_out.write_text(output_text + "\n", encoding="utf-8")
     console.print(f"[green]Generated:[/green] {orch_out}")
+
+
+WIZARD_EPILOG = """
+[bold]Examples:[/bold]
+  cof wizard --goal "Summarize an article, then translate it"
+  cof wizard --goal "..." --out my_orch.yml
+  cof wizard --goal "..." --reply answers.txt      # scripted, no TTY needed
+  cof wizard --goal "..." --name my_pipeline --library
+
+[bold]Not `cof gen`:[/bold] `gen` drives `agents/meta_orchestrator.yml`, a
+single-shot generator — one prompt in, one document out. `wizard` drives
+`agents/wizard.yml`, a multi-turn conversation that asks clarifying questions
+before drafting — the same orchestration, and the same host code
+(`circuitry.tui.wizard_host`), that the TUI's Chat view (`cof tui`, then `8`)
+drives. The two commands produce different artifacts from different
+orchestrations on purpose; reach for `wizard` when you want the conversation.
+"""
+
+
+@app.command(
+    "wizard",
+    help="Build an orchestration by talking to the wizard, headlessly. (Not `cof gen` — see below.)",
+    epilog=WIZARD_EPILOG,
+)
+def wizard_cmd(
+    goal: str = typer.Option(
+        ..., "--goal", "-g", help="One-line description of what the orchestration should do."
+    ),
+    name: str | None = typer.Option(
+        None,
+        "--name",
+        "-n",
+        help="Name for the result (used for the filename / library slug). "
+        "Derived from --goal if omitted.",
+    ),
+    category: str = typer.Option(
+        WIZARD_DEFAULT_CATEGORY,
+        "--category",
+        help=f"One of: {', '.join(WIZARD_CATEGORIES)}.",
+    ),
+    reply: Path | None = typer.Option(
+        None,
+        "--reply",
+        "-r",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="File of scripted replies, one per line, used instead of stdin.",
+    ),
+    out: Path | None = typer.Option(
+        None, "--out", "-o", help="Write the final YAML here (default: stdout)."
+    ),
+    library: bool = typer.Option(
+        False, "--library", help="Also save into the local library, indexed like a bundled entry."
+    ),
+    max_turns: int = typer.Option(10, "--max-turns", help="Stop after this many turns."),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Path to config JSON."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show orchestration execution logs."),
+) -> None:
+    seed = Seed(
+        name=name or " ".join(goal.split()[:6]),
+        category=category.strip().lower() or WIZARD_DEFAULT_CATEGORY,
+        goal=goal,
+    )
+    problems = seed.problems()
+    if problems:
+        for problem in problems:
+            console.print(f"[red]Error:[/red] {problem}")
+        raise typer.Exit(code=1)
+
+    cfg = resolve_config(explicit_path=config)
+
+    def _runner(state: dict[str, Any]) -> Turn:
+        return run_turn(state, config=cfg, verbose=verbose)
+
+    scripted = iter(reply.read_text(encoding="utf-8").splitlines()) if reply is not None else None
+
+    def _next_reply() -> str | None:
+        if scripted is not None:
+            return next(scripted, None)
+        line = sys.stdin.readline()
+        return line.rstrip("\n") if line else None
+
+    def _respond(turn: Turn, convo: Conversation) -> str | None:
+        console.print(f"[bold]wizard[/bold]  {escape(turn.say)}", soft_wrap=True)
+        if turn.yaml is not None:
+            lines = len(convo.draft.splitlines())
+            console.print(f"[dim]        (draft: {lines} lines)[/dim]")
+        if convo.status is not None and not convo.status.ok and convo.status.errors:
+            console.print(f"[yellow]        unresolved: {escape(convo.status.errors[0])}[/yellow]")
+        if convo.done:
+            console.print("[green]wizard is done.[/green]")
+            return None
+        next_reply = _next_reply()
+        if next_reply is None:
+            return None
+        console.print(f"[bold]you[/bold]     {escape(next_reply)}")
+        return next_reply
+
+    conversation = drive_conversation(seed, runner=_runner, respond=_respond, max_turns=max_turns)
+
+    if not conversation.can_save:
+        if not conversation.draft:
+            console.print("[red]Error:[/red] No orchestration was produced.")
+        else:
+            errors = "; ".join(conversation.status.errors) if conversation.status else "not valid"
+            console.print(f"[red]Error:[/red] The final draft did not pass validation — {errors}")
+        raise typer.Exit(code=1)
+
+    wrote = False
+    if out is not None:
+        try:
+            path = save_to_file(conversation.draft, out)
+        except InvalidDraft as exc:
+            console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(code=1) from exc
+        console.print(f"[green]Wrote:[/green] {path} — check it with: cof check {path}")
+        wrote = True
+
+    if library:
+        try:
+            saved = save_to_library(conversation.draft, seed, library_dir=default_library_dir(cfg))
+        except InvalidDraft as exc:
+            console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(code=1) from exc
+        console.print(f"[green]Saved:[/green] {saved.name} -> {saved.path} — run it with: cof run {saved.name}")
+        wrote = True
+
+    if not wrote:
+        print(conversation.draft)
 
 
 @app.command("init", help="Initialize a new circuitry project in the current directory.")

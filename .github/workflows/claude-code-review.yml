@@ -1,27 +1,27 @@
+# VENDORED from KenanKStipek/agent-loop@v1 (e43133f) claude-review.yml +
+# templates/claude-code-review.yml (public repo cannot call private hub).
+# NO `synchronize` trigger — one review per PR when it leaves draft/WIP;
+# iteration reviews go through @claude comments instead. Guard matches the
+# EXACT WIP marker; the old loose 'WIP' substring produced overlapping runs
+# cancelling each other (how PR #84 got stuck `unstable` with green checks).
 name: Claude Code Review
-
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened, edited]
-
+    types: [opened, ready_for_review, reopened, edited]
 concurrency:
   group: claude-review-${{ github.event.pull_request.number }}
   cancel-in-progress: true
-
 jobs:
   claude-review:
-    # Skip drafts and WIP-marked PRs so agent runs don't burn a review per push;
-    # the final review fires on ready_for_review or the gh pr edit that drops WIP.
     if: |
       github.event.pull_request.draft == false &&
-      !contains(github.event.pull_request.body, 'WIP')
+      !contains(github.event.pull_request.body, '**WIP — run in progress**')
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
       issues: read
       id-token: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

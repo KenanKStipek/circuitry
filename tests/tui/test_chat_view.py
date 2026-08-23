@@ -163,6 +163,73 @@ def test_full_conversation_saves_a_file_that_passes_cof_check(
     assert any("French." in prompt for prompt in adapter.prompts)
 
 
+def test_cli_wizard_matches_the_chat_views_artifact(
+    run_app: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cof wizard` drives the same host functions the chat view does.
+
+    Same seed, same scripted model, same typed reply — the headless CLI path
+    and the TUI path must land on byte-identical YAML. Only the model is
+    scripted; the wizard orchestration, its validator, and the save path all
+    run for real on both sides. This is the epic's parity criterion, asserted
+    rather than eyeballed.
+    """
+    from typer.testing import CliRunner
+
+    from circuitry.cli.app import app as cli_app
+    from circuitry.tui.wizard_host import run_turn as real_run_turn
+
+    turns = (
+        ask("Which language should it translate into?"),
+        draft("Built a two-step pipeline: summarize, then translate.", done=True),
+    )
+
+    # -- the TUI path, exactly as the flagship test above drives it ---------
+    tui_runner, _ = scripted_runner(*turns)
+    tui_target = tmp_path / "tui.yml"
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await idle(pilot)
+        await pilot.press(*"French.")
+        await pilot.press("enter")
+        screen = await idle(pilot)
+        screen.query_one("#chat-save-path", Input).value = str(tui_target)
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+    run_app(scenario, app=chat_app(tui_runner), size=(120, 40))
+    assert tui_target.exists()
+
+    # -- the CLI path, over a fresh adapter scripted identically -------------
+    cli_adapter = ScriptedWizardAdapter(list(turns))
+    monkeypatch.setattr(
+        "circuitry.cli.app.run_turn",
+        lambda state, *, config=None, verbose=False: real_run_turn(state, adapter=cli_adapter),
+    )
+    replies = tmp_path / "replies.txt"
+    replies.write_text("French.\n", encoding="utf-8")
+    cli_target = tmp_path / "cli.yml"
+
+    result = CliRunner().invoke(
+        cli_app,
+        [
+            "wizard",
+            "--goal",
+            SEED.goal,
+            "--name",
+            SEED.name,
+            "--category",
+            SEED.category,
+            "--reply",
+            str(replies),
+            "--out",
+            str(cli_target),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert cli_target.read_text(encoding="utf-8") == tui_target.read_text(encoding="utf-8")
+
+
 def test_the_seed_form_starts_the_conversation(run_app: Any) -> None:
     runner, _ = scripted_runner(draft("Here is a draft.", done=True))
 

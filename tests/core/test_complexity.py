@@ -245,7 +245,7 @@ def test_raw_measurements_are_carried_with_supporting_detail() -> None:
         "prime.extraction_rules.value",
     ]
 
-    schema = result.signal("schema_shape")
+    schema = result.signal("output_schema")
     assert schema is not None
     assert schema.detail["fields"] == 6
     assert schema.detail["depth"] == 4
@@ -384,10 +384,10 @@ def test_messages_stand_in_for_a_missing_template() -> None:
     "cheap,expensive",
     [("boolean", "text"), ("text", "json"), ("json", "array")],
 )
-def test_output_type_orders_from_cheap_to_structured(cheap: str, expensive: str) -> None:
+def test_prompt_type_orders_from_cheap_to_structured(cheap: str, expensive: str) -> None:
     def _score(prompt_type: str) -> float:
         entry = score({"name": "x", "template": "go", "prompt_type": prompt_type}).signal(
-            "output_type"
+            "prompt_type"
         )
         assert entry is not None
         return entry.normalized
@@ -425,15 +425,15 @@ def test_max_tokens_param_counts_as_a_declared_output_limit() -> None:
     assert entry.detail["max_tokens"] == 2000
 
 
-def test_structural_position_raises_the_structure_signal() -> None:
+def test_structural_position_raises_its_signal() -> None:
     plain = score(TRIVIAL_REWRITE)
     nested = score(
         TRIVIAL_REWRITE,
         structure=StructureContext(depth=3, loop_depth=1, reflector_generated=True),
     )
 
-    plain_entry = plain.signal("structure")
-    nested_entry = nested.signal("structure")
+    plain_entry = plain.signal("structural_position")
+    nested_entry = nested.signal("structural_position")
     assert plain_entry is not None and nested_entry is not None
     assert plain_entry.normalized == 0.0
     assert nested_entry.normalized > plain_entry.normalized
@@ -529,10 +529,10 @@ def test_a_partial_weight_table_falls_back_to_the_defaults() -> None:
     result = score(SCHEMA_CONSTRAINED_EXTRACTION, weights={"prompt_size": 0.5})
 
     size = result.signal("prompt_size")
-    schema = result.signal("schema_shape")
+    schema = result.signal("output_schema")
     assert size is not None and schema is not None
     assert size.weight == 0.5
-    assert schema.weight == pytest.approx(DEFAULT_WEIGHTS["schema_shape"])
+    assert schema.weight == pytest.approx(DEFAULT_WEIGHTS["output_schema"])
 
 
 def test_reweighting_shifts_emphasis_without_leaving_the_range() -> None:
@@ -683,8 +683,8 @@ def test_an_unknown_prompt_type_is_scored_as_text() -> None:
     unknown = score({"name": "x", "template": "go", "prompt_type": "hologram"})
     text = score({"name": "x", "template": "go", "prompt_type": "text"})
 
-    unknown_entry = unknown.signal("output_type")
-    text_entry = text.signal("output_type")
+    unknown_entry = unknown.signal("prompt_type")
+    text_entry = text.signal("prompt_type")
     assert unknown_entry is not None and text_entry is not None
     assert unknown_entry.normalized == text_entry.normalized
     assert unknown_entry.detail["prompt_type"] == "hologram"
@@ -693,7 +693,7 @@ def test_an_unknown_prompt_type_is_scored_as_text() -> None:
 def test_junk_weights_warn_and_fall_back() -> None:
     result = score(
         TRIVIAL_REWRITE,
-        weights={"prompt_size": "heavy", "unknown_signal": 1.0, "structure": -3.0},
+        weights={"prompt_size": "heavy", "unknown_signal": 1.0, "structural_position": -3.0},
     )
 
     joined = " ".join(result.warnings)
@@ -702,7 +702,7 @@ def test_junk_weights_warn_and_fall_back() -> None:
     assert "negative" in joined
 
     size = result.signal("prompt_size")
-    structure = result.signal("structure")
+    structure = result.signal("structural_position")
     assert size is not None and structure is not None
     assert size.weight == pytest.approx(DEFAULT_WEIGHTS["prompt_size"])
     assert structure.weight == 0.0
@@ -733,7 +733,7 @@ def test_a_non_mapping_weight_table_falls_back_to_the_defaults(junk: Any) -> Non
 def test_a_malformed_structure_context_degrades_to_top_level(junk: Any) -> None:
     result = score(TRIVIAL_REWRITE, structure=junk)
 
-    entry = result.signal("structure")
+    entry = result.signal("structural_position")
     assert entry is not None
     assert entry.detail["depth"] == 0
     assert MIN_SCORE <= result.score <= MAX_SCORE
@@ -768,7 +768,7 @@ def test_a_malformed_schema_still_scores_the_rest_of_the_signals() -> None:
         }
     )
 
-    schema = result.signal("schema_shape")
+    schema = result.signal("output_schema")
     output = result.signal("output_size")
     assert schema is not None and output is not None
     assert schema.raw == 0

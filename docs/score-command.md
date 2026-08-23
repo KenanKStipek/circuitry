@@ -149,10 +149,10 @@ run would resolve.
 }
 ```
 
-`weights` is keyed by the *scorer's* signal names, not the config's — the two
-vocabularies differ (`prompt_type` → `output_type`, `output_schema` →
-`schema_shape`, `structural_position` → `structure`), and the translation lives
-in `ScoringSettings.scorer_weights()`.
+`weights` is keyed by `runtime.complexity.scoring.weights` as configured — the
+config surface and the scorer share one signal vocabulary
+(`circuitry.core.complexity.SIGNAL_NAMES`), so there is no translation to
+account for.
 
 `breakdown` is the scorer's own serialization, so the contributions still sum
 to the score exactly. A surprising number can be argued with by reading it,

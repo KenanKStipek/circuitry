@@ -19,6 +19,7 @@ from circuitry.cli.complexity_config import (
 )
 from circuitry.cli.config import CircuitryConfig, ConfigError
 from circuitry.cli.effective_settings import resolve_effective_settings
+from circuitry.core.complexity import SIGNAL_NAMES
 
 BANDS = [
     {"name": "cheap", "max": 40, "model": "small"},
@@ -55,6 +56,22 @@ def test_documented_defaults() -> None:
     assert settings.routing.respect_explicit is True
     assert settings.scoring.weights == DEFAULT_WEIGHTS
     assert settings.scoring.keywords == {}
+
+
+def test_configurable_weights_are_exactly_the_scorer_signals() -> None:
+    """One vocabulary, in one order, shared by the config surface and the scorer.
+
+    The whole class of bug this guards against is a weight name that validates
+    here and means nothing to the scorer: it takes a value, changes no
+    behaviour, and reports no error. Equality both ways is the only check that
+    catches it — a missing name silently keeps the scorer's default, an extra
+    one is rejected as a typo the user did not make.
+    """
+    assert tuple(DEFAULT_WEIGHTS) == SIGNAL_NAMES
+    for name in SIGNAL_NAMES:
+        assert parse_complexity_settings(
+            {"scoring": {"weights": {name: 3.0}}}
+        ).scoring.weights[name] == 3.0
 
 
 def test_runtime_without_complexity_key_is_unchanged_from_today() -> None:
@@ -254,7 +271,27 @@ def test_unknown_weight_signal_lists_the_valid_signals() -> None:
 
     message = str(excinfo.value)
     assert "unknown signal 'vibes'" in message
-    assert "prompt_size" in message
+    # Every valid name, so the fix is in the error rather than in the docs.
+    for name in SIGNAL_NAMES:
+        assert name in message
+
+
+@pytest.mark.parametrize(
+    "typo",
+    ["structural-position", "output_type", "schema_shape", "structure", "prompt_sizes"],
+)
+def test_a_stale_or_misspelled_weight_name_is_rejected(typo: str) -> None:
+    """Including the scorer's *former* spellings.
+
+    ``output_type``/``schema_shape``/``structure`` were the scorer's own names
+    for three of these signals before the two vocabularies were merged. A
+    config written against them is stale, not valid-but-inert, and has to say
+    so out loud.
+    """
+    with pytest.raises(ComplexityConfigError) as excinfo:
+        parse_complexity_settings({"scoring": {"weights": {typo: 1.0}}})
+
+    assert f"unknown signal {typo!r}" in str(excinfo.value)
 
 
 def test_non_numeric_weight_is_rejected() -> None:

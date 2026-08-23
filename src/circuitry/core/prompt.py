@@ -500,12 +500,14 @@ class PromptRuntime:
         if not settings.scoring.enabled:
             return None
 
-        # ``runtime.complexity.scoring.weights`` and the scorer name the same
-        # seven signals differently, so the configured table cannot be passed
-        # through as-is — three weights would be discarded as unknown signals.
-        # ``scorer_weights()`` is the single translation every consumer shares
-        # (see :data:`~circuitry.cli.complexity_config.SCORER_SIGNAL_NAMES`).
-        weights = settings.scoring.scorer_weights()
+        # Passed straight through: ``runtime.complexity.scoring.weights`` is
+        # keyed by ``complexity.SIGNAL_NAMES``, validated against that same
+        # tuple at config resolution. No translation here, and none at any
+        # other call site — a second vocabulary is what made a configured
+        # weight silently do nothing.
+        weights = dict(settings.scoring.weights)
+
+
         # An unconfigured keyword table resolves to ``{}``, which the scorer
         # reads as "disable the keyword signal". Only an explicit table should
         # replace the defaults, so empty means "unset" here.

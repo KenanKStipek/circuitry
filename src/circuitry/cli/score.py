@@ -339,7 +339,7 @@ def _score_prompt_row(
     keywords = dict(settings.scoring.keywords) or None
     result = score_prompt(
         node,
-        weights=settings.scoring.scorer_weights(),
+        weights=dict(settings.scoring.weights),
         keyword_weights=keywords,
         structure=StructureContext(depth=depth, loop_depth=loop_depth),
     )
@@ -436,7 +436,7 @@ def _build_payload(
         "estimated": True,
         "notice": ESTIMATE_NOTICE,
         "max_score": MAX_SCORE,
-        "weights": settings.scoring.scorer_weights(),
+        "weights": dict(settings.scoring.weights),
         "bands": [band.as_dict() for band in settings.routing.bands],
         "effects": [row.to_dict() for row in rows],
         "summary": _summary(rows),

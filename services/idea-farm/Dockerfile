@@ -10,7 +10,8 @@ COPY pyproject.toml requirements.txt README.md LICENSE ./
 COPY src ./src
 RUN pip install --no-cache-dir .
 
-COPY services/idea-farm/farm.py services/idea-farm/idea_generator.yml ./
+COPY services/idea-farm/farm.py services/idea-farm/qa_corpus.py \
+     services/idea-farm/idea_generator.yml ./
 
 # State lives here — mount a Northflank volume at /data for durability.
 ENV DATA_DIR=/data
