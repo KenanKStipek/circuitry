@@ -93,25 +93,6 @@ def _render(template: str, ctx: dict[str, Any]) -> str:
 PromptType = Literal["text", "json", "boolean", "tool", "number", "array", "object"]
 
 
-#: ``runtime.complexity.scoring.weights`` and the scorer name the same seven
-#: signals differently — the config surface speaks the user's vocabulary
-#: (``prompt_type``, ``output_schema``, ``structural_position``) while
-#: :mod:`circuitry.core.complexity` names them after what it measures
-#: (``output_type``, ``schema_shape``, ``structure``). Translating here rather
-#: than passing the config table straight through is the difference between a
-#: configured weight taking effect and being silently discarded as an unknown
-#: signal.
-_CONFIG_WEIGHT_TO_SIGNAL: dict[str, str] = {
-    "prompt_size": "prompt_size",
-    "state_references": "state_references",
-    "prompt_type": "output_type",
-    "output_schema": "schema_shape",
-    "output_size": "output_size",
-    "structural_position": "structure",
-    "keywords": "keywords",
-}
-
-
 def _complexity_meta(result: Any) -> dict[str, Any]:
     """Serialize a :class:`~circuitry.core.complexity.ComplexityScore` for state.
 
@@ -519,11 +500,13 @@ class PromptRuntime:
         if not settings.scoring.enabled:
             return None
 
-        weights = {
-            _CONFIG_WEIGHT_TO_SIGNAL[name]: value
-            for name, value in settings.scoring.weights.items()
-            if name in _CONFIG_WEIGHT_TO_SIGNAL
-        }
+        # Passed straight through: ``runtime.complexity.scoring.weights`` is
+        # keyed by ``complexity.SIGNAL_NAMES``, validated against that same
+        # tuple at config resolution. No translation here, and none at any
+        # other call site — a second vocabulary is what made a configured
+        # weight silently do nothing.
+        weights = dict(settings.scoring.weights)
+
         # An unconfigured keyword table resolves to ``{}``, which the scorer
         # reads as "disable the keyword signal". Only an explicit table should
         # replace the defaults, so empty means "unset" here.

@@ -1,11 +1,64 @@
+# VENDORED from KenanKStipek/agent-loop@v1 (e43133f) finalize.yml +
+# templates/finalize.yml (public repo cannot call private hub).
+# workflow_run is the trigger that matters: GitHub does NOT deliver
+# check_suite for suites created by Actions (anti-recursion), so CI
+# completing never fires check_suite. The filter matches this repo's CI
+# workflow `name:` — `quality`, not the template's "CI".
 name: Finalize
-
 on:
+  workflow_run:
+    workflows: ["quality"]
+    types: [completed]
   check_suite:
     types: [completed]
-
 jobs:
   finalize:
-    if: startsWith(github.event.check_suite.head_branch, 'claude/')
-    uses: KenanKStipek/agent-loop/.github/workflows/finalize.yml@v1
-    secrets: inherit
+    if: startsWith(github.event.workflow_run.head_branch || github.event.check_suite.head_branch, 'claude/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Drop WIP on green claude PRs
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/pulls?state=open&per_page=50" \
+            --jq '.[] | select(.head.ref | startswith("claude/")) | .number' |
+          while read -r pr; do
+            body=$(gh api "repos/$REPO/pulls/$pr" --jq '.body // ""')
+            case "$body" in
+              *"WIP — run in progress"*) ;;
+              *) continue ;;
+            esac
+            state="unknown"
+            for attempt in 1 2 3 4 5 6 7 8; do
+              state=$(gh api "repos/$REPO/pulls/$pr" --jq '.mergeable_state // "unknown"')
+              case "$state" in
+                clean) break ;;
+                unknown|unstable|blocked)
+                  echo "PR #$pr: mergeable_state=$state (attempt $attempt/8) — waiting 15s"
+                  sleep 15 ;;
+                *) break ;;
+              esac
+            done
+            if [ "$state" != "clean" ]; then
+              echo "PR #$pr: mergeable_state=$state after retries — skipping"
+              continue
+            fi
+            body=$(gh api "repos/$REPO/pulls/$pr" --jq '.body // ""')
+            case "$body" in
+              *"WIP — run in progress"*) ;;
+              *) echo "PR #$pr: marker already gone — nothing to do"; continue ;;
+            esac
+            printf '%s' "$body" > /tmp/body.txt
+            perl -0pi -e 's/\*\*WIP — run in progress\*\*\s*//' /tmp/body.txt
+            gh api -X PATCH "repos/$REPO/pulls/$pr" \
+              -f body="$(cat /tmp/body.txt)" >/dev/null
+            echo "PR #$pr: WIP marker dropped"
+            issue=$(printf '%s' "$body" | grep -oiE 'closes #[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
+            if [ -n "$issue" ]; then
+              gh api -X POST "repos/$REPO/issues/$issue/labels" \
+                -f 'labels[]=ready-for-review' >/dev/null || true
+              echo "issue #$issue: ready-for-review"
+            fi
+          done

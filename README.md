@@ -185,9 +185,15 @@ cof check recipes/hello.yml --skip-preflight  # structure only; skip env-readine
 # Skip the dependency preflight at run time too (advanced)
 cof run recipes/comic_strip --skip-preflight
 
-# Generate an orchestration from natural language
+# Generate an orchestration from natural language, single-shot (no conversation)
 cof gen blog_pipeline "Build a pipeline that drafts, critiques, and revises a blog post"
 cof gen summarizer "Summarize a PDF" --format toon
+
+# Build an orchestration by talking to the wizard instead — clarifying questions,
+# then a validated draft. Not `cof gen`: different orchestration, different artifact.
+cof wizard --goal "Summarize an article, then translate the summary" --out my_orch.yml
+cof wizard --goal "..." --reply answers.txt   # scripted, no TTY needed
+cof wizard --goal "..." --name my_pipeline --library
 
 # System diagnostics and setup
 cof setup              # Interactive backend detection + config wizard

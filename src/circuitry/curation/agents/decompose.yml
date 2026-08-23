@@ -1,0 +1,797 @@
+# Decomposition Planner — turns one over-complex prompt into a simpler orchestration
+# ─────────────────────────────────────────────────────────────────────────────
+# Given a prompt effect that asks a model to do too much at once, this emits an
+# orchestration that does the same job as a fan-out over the natural units of
+# the work plus a single merge step — and it never hands back YAML it has not
+# validated, nor a plan that busts the chunk budget it was given.
+#
+#     plan → validate → (revise while invalid OR over budget, bounded) → gate
+#
+# Driven by a host, or by the runtime when `runtime.complexity.decomposition`
+# is enabled and a prompt scores over the threshold:
+#
+#     from circuitry.api import run_orchestration
+#     res = run_orchestration(
+#         orchestration_path="src/circuitry/curation/agents/decompose.yml",
+#         state={
+#             "source_template": effect["template"],
+#             "source_interface": yaml.safe_dump(orch["interface"]),
+#             "source_output": yaml.safe_dump(
+#                 {"prompt_type": effect.get("prompt_type"), "schema": effect.get("schema")}
+#             ),
+#             "max_chunks": 5,
+#         },
+#     )
+#
+# ─── INPUT STATE ─────────────────────────────────────────────────────────────
+#
+#   Key               Type    Description
+#   source_template   string  The over-complex prompt template, verbatim.
+#   source_interface  string  The source orchestration's interface block (or a
+#                             plain description of the inputs the template
+#                             reads). Optional but strongly recommended — it is
+#                             what lets the emitted document declare the same
+#                             inputs.
+#   source_output     string  The source effect's prompt_type and schema, so the
+#                             merge step can reproduce the same output shape.
+#                             Optional.
+#   max_chunks        number  Hard ceiling on the fan-out width. REQUIRED.
+#                             Must be >= 2 — a "decomposition" into one chunk is
+#                             not a decomposition, and the gate below refuses it.
+#                             Comes from runtime.complexity.decomposition.max_chunks.
+#
+# ─── OUTPUT STATE PATHS ──────────────────────────────────────────────────────
+#
+#   prime.plan.value.say        → one paragraph for a human: how it was split
+#   prime.plan.value.chunks     → the chunk plan, [{name, job}, ...]
+#   prime.check.value.yaml      → the validated orchestration YAML
+#   prime.check.value.ok        → whether that YAML validated
+#   prime.check.value.errors    → validator errors, if any
+#   prime.result_path.value     → "prime.merge.value" — see below
+#   prime.done.value            → boolean; true ONLY when the emitted document
+#                                 validated AND the chunk count is within budget
+#
+# ─── THE CONTRACT ON THE EMITTED ORCHESTRATION ───────────────────────────────
+#
+# The caller has to map the emitted orchestration's result back onto the state
+# path the original effect wrote, so the merged result lives at ONE known path:
+#
+#     prime.merge.value
+#
+# That is not a convention the model is asked to pick — the planner is required
+# to name its merge step `merge` and to place it at the top level of the emitted
+# document, and to declare `interface.outputs.result` pointing at that path.
+# `prime.result_path.value` restates the path as a plain string so a caller can
+# read it instead of hardcoding it.
+#
+# ─── SWAPPING IN A PURPOSE-BUILT PLANNER MODEL ───────────────────────────────
+#
+# Planning is ONE prompt effect, named `plan`. The revision pass re-runs that
+# same effect inside an UNNAMED loop, so it shares the path — which means a
+# single profile key points both at a different model, with no edit to this
+# file:
+#
+#     # profiles/planner.yml
+#     effects:
+#       plan:
+#         model: my-planner-7b
+#         provider: ollama
+#
+#     cof run agents/decompose --profile planner --state input.json
+#
+# No `model:` or `adapter:` is set here on purpose: absent a profile, the
+# user's config.json supplies them. See docs/profiles.md.
+#
+# ─── MODEL RECOMMENDATION ────────────────────────────────────────────────────
+#
+#   A capable model, until a purpose-built planner exists. The whole job is to
+#   produce a smaller problem than the one it was handed, and a small model
+#   tends to produce a fan-out whose chunks each restate the original — which
+#   validates fine and accomplishes nothing.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+interface:
+  inputs:
+    source_template:
+      type: string
+      required: true
+      description: The over-complex prompt template to decompose, verbatim.
+    source_interface:
+      type: string
+      required: false
+      description: >-
+        The source orchestration's interface block, or a plain description of
+        the inputs its template reads. Used to declare the same inputs on the
+        emitted document.
+    source_output:
+      type: string
+      required: false
+      description: >-
+        The source effect's prompt_type and schema, so the merge step can
+        reproduce the same output shape.
+    max_chunks:
+      type: number
+      required: true
+      description: >-
+        Hard ceiling on the fan-out width, from
+        runtime.complexity.decomposition.max_chunks. Must be at least 2.
+  outputs:
+    say:
+      type: string
+      path: prime.plan.value.say
+      description: One paragraph for a human describing how the work was split.
+    chunks:
+      type: array
+      path: prime.plan.value.chunks
+      description: The chunk plan — one {name, job} object per fanned-out unit.
+    yaml:
+      type: string
+      path: prime.check.value.yaml
+      description: The emitted orchestration YAML, as validated.
+    ok:
+      type: boolean
+      path: prime.check.value.ok
+      description: Whether the emitted orchestration validated.
+    errors:
+      type: array
+      path: prime.check.value.errors
+      description: Validator errors for the emitted orchestration, if any.
+    result_path:
+      type: string
+      path: prime.result_path.value
+      description: >-
+        The state path in the emitted orchestration that holds the merged
+        result. Always "prime.merge.value" — read it rather than hardcoding it.
+    done:
+      type: boolean
+      path: prime.done.value
+      description: >-
+        True only when the emitted orchestration validated AND the chunk count
+        is within budget.
+
+effects:
+  # ─── Step 1: Plan the decomposition ────────────────────────────────────────
+  # The single planning prompt. It emits the chunk plan and the orchestration
+  # in one call, so the plan and the YAML cannot disagree with each other, and
+  # so `chunks` gives the budget gate below something deterministic to count.
+  #
+  # Two primes are injected rather than inlined: their own {{...}} examples
+  # would otherwise be interpolated away when this template renders.
+  - type: prompt
+    name: plan
+    prompt_type: object
+    inputs:
+      wizard_prime: &wizard_prime |
+        You are the Circuitry orchestration wizard. You interview a human about what
+        they want, and you write the orchestration YAML that does it.
+
+        === OUTPUT DISCIPLINE ===
+        The `yaml` field you emit is parsed by a YAML parser and validated against the
+        Circuitry JSON Schema. It must be the orchestration file and nothing else.
+        - NO markdown fences (```), NO prose outside YAML comments, NO '---' separator.
+        - ONE YAML document, a mapping at the top level.
+        - Comments (# ...) are welcome and encouraged — they are part of the file.
+        - Never invent keys. Every key you write appears somewhere below.
+
+        === TOP-LEVEL KEYS ===
+        effects:   REQUIRED. A list of effects, executed in order.
+        flow:      chain (default, sequential — each effect sees prior outputs)
+                   | tree (parallel — all effects see the same input snapshot).
+                   Write `chain` or `tree`. Nothing else.
+        interface: OPTIONAL. Declares typed inputs/outputs (see INTERFACE below).
+        version:   OPTIONAL. A free-form version string for this file, e.g. "1.2.0".
+                   Not a schema version, not a feature gate — the runtime ignores it.
+                   Omit it unless the human is actually versioning the file.
+        adapter:   OPTIONAL. Omit — it comes from the user's config.json.
+        model:     OPTIONAL. Omit — it comes from the user's config.json.
+
+        === NAMING RULES ===
+        - Pattern: ^[A-Za-z_][A-Za-z0-9_]*$ — snake_case. No dots, spaces, or dashes.
+        - Never `iter_<N>` (iter_0, iter_1, ...) — reserved for loop iteration segments.
+        - Names must be unique among siblings in the same list.
+        - A name is a path segment, never a path: use `summarize`, NOT `prime.summarize`.
+        - Never name an effect after an effect TYPE (`use`, `loop`, `if`, `dynamic`,
+          `prompt`, `tool`, `reflector`). Name it after the job: `summarize_article`,
+          `critique_draft`. Type-keyword names are generic, so two of them collide as
+          siblings — and validation warns about them.
+
+        === THE SEVEN PRIMITIVES ===
+
+        1) prompt — one model call. Writes prime.<name>.value.
+           Required: type, name, and exactly one of template | messages.
+           prompt_type: text (default) | json | object | array | number | boolean | tool.
+           schema: REQUIRED whenever prompt_type is json, object, or array.
+           Optional: description, model, provider, provider_fallbacks, params,
+                     timeout_ms, deterministic, inputs, assets, retries, on_error.
+             - type: prompt
+               name: summarize
+               prompt_type: object
+               schema:
+                 type: object
+                 properties:
+                   title: {type: string}
+                 required: [title]
+                 additionalProperties: false
+               template: |
+                 Summarize {{article}} as JSON. Return ONLY the JSON object.
+
+        2) dynamic — a named container. Writes prime.<name>.<child>.value.
+           Required: type, name, effects (non-empty list).
+           Optional: flow, max_concurrency, stop_on_error, on_error, description.
+             - type: dynamic
+               name: pipeline
+               flow: chain
+               effects: [ ... ]
+
+        3) if — evaluates a condition, runs exactly ONE branch. Always `type: if`.
+           Required: type, if, then. Optional: name, else, threshold, on_error.
+           The `if` block is a condition: mode: model needs `template`;
+           mode: cel needs `expr`.
+           Give `then` and `else` the SAME inner effect names so the downstream state
+           path is the same whichever branch runs. An UNNAMED `if` merges its branch
+           effects into the parent scope (prime.<inner>.value); a NAMED one nests them
+           (prime.<if_name>.<inner>.value) and records the decision.
+             - type: if
+               if:
+                 mode: cel
+                 expr: "state.prime.score.value > 7"
+               then:
+                 - type: prompt
+                   name: verdict
+                   template: "Explain why this passed."
+               else:
+                 - type: prompt
+                   name: verdict
+                   template: "Explain why this failed."
+
+        4) loop — repeats a body. Required: type, body (non-empty), plus `each` OR
+           `while`. Optional: name, collect, flow, max_concurrency, max_iterations
+           (default 100), min_iterations, on_error (fail | break | continue).
+           - each.in is a state path resolving to an ARRAY; each.as names the element
+             (default `item`), available in the body as {{item}}.
+           - while is a condition block (mode: cel | model), checked before each pass.
+           - collect: <body effect name> aggregates that effect's .value across
+             iterations into prime.<loop_name>.collected.value. Requires a named loop.
+           - A NAMED loop writes each pass under prime.<loop_name>.iter_<N>.<child>.value.
+             An UNNAMED loop writes body effects straight into the parent scope, so each
+             pass OVERWRITES the previous one at a stable path — that is the idiom for a
+             while-loop whose CEL condition must observe the body's own latest output.
+             - type: loop
+               name: per_topic
+               collect: draft
+               each:
+                 in: prime.plan.value
+                 as: topic
+               body:
+                 - type: prompt
+                   name: draft
+                   template: "Write a paragraph about {{topic}}."
+
+        5) tool — a deterministic, non-LLM side effect via a plugin.
+           Required: type, name, provider. Optional: prompt, model, params, timeout_ms,
+           on_error. String values inside params are Mustache-rendered against state.
+             - type: tool
+               name: check
+               provider: validate_yaml
+               params:
+                 yaml: "{{prime.draft.value}}"
+
+        6) use — runs another orchestration as an isolated sub-step.
+           Required: type, name, and exactly ONE of ref | path | inline.
+           ref points into the curation library ('utilities/critique'); path points at a
+           file; inline is a Mustache template that renders to YAML at runtime.
+           Optional: inputs (become the child's top-level state), outputs (see OUTPUTS
+           below — same shape as interface.outputs), validate, on_error.
+             - type: use
+               name: critique
+               ref: utilities/critique
+               inputs:
+                 text: "{{prime.draft.value}}"
+               outputs:
+                 notes: {path: prime.critique.value}
+
+        7) reflector — plans its own effects, then runs them, for max_iterations cycles.
+           Required: type, name, effects (non-empty). Optional: plan_from_step,
+           max_iterations, generated_key, stop_on_done, max_effects, prime_template.
+           Use it only when the steps genuinely cannot be known up front.
+
+        === STATE PATHS ===
+        Top-level effect output ............ prime.<name>.value
+        Inside a named dynamic ............. prime.<dynamic>.<name>.value
+        Named loop, one iteration .......... prime.<loop>.iter_<N>.<name>.value
+        Named loop, collected .............. prime.<loop>.collected.value
+        Named conditional branch effect .... prime.<cond>.<name>.value
+        Unnamed loop / conditional ......... prime.<name>.value (merged into parent)
+        A field of a JSON/object output .... prime.<name>.value.<field>
+        User-supplied state key ............ {{key}} — no prime. prefix
+
+        In templates:  {{prime.step.value}}          (double braces; triple to skip
+                                                      HTML escaping: {{{prime.step.value}}})
+        In CEL exprs:  state.prime.step.value        (state. prefix, no braces)
+        CEL supports: == != < <= > >= && || ! and size(x). Nothing else.
+
+        An effect may only read paths written by an effect that runs BEFORE it in
+        chain order. In tree flow, siblings CANNOT read each other at all.
+
+        === INTERFACE ===
+        Declare what the orchestration takes and returns so `use` can wire it up:
+          interface:
+            inputs:
+              article: {type: string, required: true, description: Text to summarize.}
+            outputs:
+              summary: {type: string, path: prime.summarize.value, description: Result.}
+        Input types: string, number, boolean, array, object.
+
+        === OUTPUTS ===
+        `interface.outputs` and `use.outputs` take the SAME shape. Write the object
+        form in both — an object per name, `path` required, `type` and `description`
+        optional:
+          outputs:
+            summary: {path: prime.summarize.value, type: string}
+        (A bare string — summary: prime.summarize.value — is also accepted in both
+        places and means the same thing, but write the object form.)
+
+        === HOUSE STYLE ===
+        - Open the file with a # comment block: what it does, its inputs, its primary
+          output path. Comment each effect with why it exists.
+        - One job per prompt. Split anything that classifies AND writes AND reviews.
+        - Prefer deterministic primitives: a CEL condition over a model condition, a
+          tool over a prompt, whenever the task allows it.
+        - End templates that feed other effects with "Return ONLY ..." so the output
+          stays clean.
+        - Do not set adapter: or model: — the user's config supplies them.
+      decompose_prime: &decompose_prime |
+        === YOUR JOB: DECOMPOSE ===
+        You are handed ONE prompt that asks a model to do too much at once, and you
+        return an orchestration that does the same job in smaller pieces.
+
+        The shape is always the same:
+
+          FAN OUT   one effect per natural unit of the work
+          MERGE     exactly one effect that puts the pieces back together
+
+        The "natural units" are whatever the source prompt is really doing in parallel:
+        one per numbered instruction, one per input document, one per output field, one
+        per entity to be processed. Split on the seam that is already in the prompt — do
+        not invent a pipeline the work does not have.
+
+        === THE MERGE CONTRACT (NOT NEGOTIABLE) ===
+        The caller maps your merged result back onto the state path the original effect
+        wrote, so it must live at exactly one known path.
+
+          * The merge effect MUST be named `merge`.
+          * It MUST sit at the TOP level of the emitted document — not inside a
+            dynamic, a loop, or an if — so its output path is exactly:
+
+                prime.merge.value
+
+          * The emitted document MUST declare:
+
+                interface:
+                  outputs:
+                    result:
+                      path: prime.merge.value
+
+          * `merge` MUST produce the SAME output shape as the source prompt: the same
+            prompt_type, and the same schema if one was declared. It is a drop-in
+            replacement for the original effect, so its output has to be substitutable
+            for the original's.
+          * The emitted document MUST declare an `interface.inputs` entry for every
+            input the source template read, under the same names. The chunks read those
+            inputs directly; nothing is renamed.
+
+        === THE CHUNK BUDGET ===
+        You are given a maximum number of chunks. Fewer is better. Two is the minimum —
+        a "decomposition" into one chunk is the original prompt with extra scaffolding,
+        and it will be rejected. If the work seems not to split, split it on the output
+        fields: every prompt that produces several things can produce them separately.
+
+        === SIMPLER IS THE ENTIRE POINT ===
+        Each chunk must be strictly SIMPLER than the prompt it came from. A fan-out
+        whose chunks each restate the whole original problem has accomplished nothing —
+        it validates, it runs, and it has made things worse. Concretely, every chunk
+        should be smaller than the source on every axis you control:
+
+          SHORTER      Its template is a fraction of the source's. Give a chunk only
+                       the instructions that chunk needs.
+          FEWER INPUTS Its template interpolates fewer {{...}} references than the
+                       source. A chunk that still reads every input has not been
+                       narrowed. Aim for one or two.
+          NARROWER     Its prompt_type is as cheap as the answer allows: text, boolean
+                       or number where the source needed object or array.
+          FLATTER      Its schema, if it needs one at all, is a fraction of the
+                       source's — a flat array of strings beats a nested object.
+          CALMER       Its wording asks for one thing. Verbs like "analyze",
+                       "cross-reference", "infer", "justify", "reason step by step" and
+                       "synthesize" describe the whole job, not a piece of it. A chunk
+                       that still needs them is still too big.
+
+        `merge` is the exception that proves the rule: it carries the source's output
+        shape, because that is its contract. Keep its template short and mechanical —
+        it assembles what the chunks already worked out, it does not redo their work.
+
+        === HOUSE STYLE FOR THE EMITTED FILE ===
+        - Open it with a # comment block: what it does, its inputs, and the line
+          "Merged result: prime.merge.value".
+        - Comment each chunk with the unit of work it owns.
+        - Prefer `flow: tree` for the fan-out when the chunks do not read each other —
+          they are independent by construction, and tree says so.
+        - Use a `loop` instead when the units are elements of one list the source
+          already had: put the per-element prompt in the body and `collect:` it.
+        - Do not set adapter: or model: on the emitted effects.
+
+        === WORKED EXAMPLE ===
+        A postmortem prompt that does five jobs at once, split four ways plus a merge.
+
+        --- EXAMPLE SOURCE EFFECT ---
+        type: prompt
+        name: postmortem
+        prompt_type: object
+        schema:
+          type: object
+          properties:
+            timeline:
+              type: array
+              items:
+                type: object
+                properties:
+                  at: {type: string}
+                  event: {type: string}
+                  severity: {type: string}
+                required: [at, event, severity]
+            skipped_runbook_steps:
+              type: array
+              items: {type: string}
+            root_cause: {type: string}
+            justification: {type: string}
+            summary: {type: string}
+          required: [timeline, skipped_runbook_steps, root_cause, justification, summary]
+          additionalProperties: false
+        template: |
+          You are the on-call reviewer for a production incident. Read everything
+          below and produce the complete postmortem in a single pass.
+
+          Incident report:
+          {{report}}
+
+          The runbook that should have been followed:
+          {{runbook}}
+
+          Service dependency map:
+          {{service_map}}
+
+          Prior incidents on this service:
+          {{prior_incidents}}
+
+          Do all of the following, in order:
+          1. Extract every event from the incident report with its timestamp, in
+             chronological order, including events that are only implied by a log
+             line or a graph description.
+          2. Classify each of those events by severity as info, warning, or critical,
+             and explain the classification wherever it is not obvious.
+          3. Cross-reference the sequence of events against the runbook and determine
+             which runbook steps were skipped, performed out of order, or performed
+             incorrectly. Use the service dependency map to decide whether a skipped
+             step could have mattered.
+          4. Infer the root cause. Reason step by step from the timeline and the
+             dependency map to the cause, weigh at least two competing explanations
+             against each other, and justify why you rejected the alternatives.
+          5. Synthesize a summary for the incident review. Compare this incident
+             against the prior incidents and say whether it is a recurrence.
+        --- EXAMPLE EMITTED ORCHESTRATION ---
+        # Postmortem, decomposed: four narrow readings, then one assembly.
+        # Inputs: report, runbook, service_map, prior_incidents.
+        # Merged result: prime.merge.value
+        interface:
+          inputs:
+            report: {type: string, required: true}
+            runbook: {type: string, required: true}
+            service_map: {type: string, required: true}
+            prior_incidents: {type: string, required: false}
+          outputs:
+            result:
+              type: object
+              path: prime.merge.value
+              description: The postmortem, in the shape the original prompt produced.
+
+        effects:
+          # The fan-out. Each chunk answers one question off one or two inputs, so no
+          # chunk reads another's output and all of them can run at once.
+          - type: dynamic
+            name: parts
+            flow: tree
+            effects:
+              # Unit 1 — what happened, and when.
+              - type: prompt
+                name: timeline
+                prompt_type: array
+                schema:
+                  type: array
+                  items: {type: string}
+                template: |
+                  List each event in this incident report as
+                  "<timestamp> - <what happened>", oldest first.
+
+                  {{report}}
+
+                  Return ONLY a JSON array of strings.
+
+              # Unit 2 — how bad each event was.
+              - type: prompt
+                name: severities
+                prompt_type: array
+                schema:
+                  type: array
+                  items: {type: string}
+                template: |
+                  Label each event in this report info, warning, or critical, as
+                  "<timestamp> - <label>".
+
+                  {{report}}
+
+                  Return ONLY a JSON array of strings.
+
+              # Unit 3 — what the runbook said versus what was done.
+              - type: prompt
+                name: skipped_steps
+                prompt_type: array
+                schema:
+                  type: array
+                  items: {type: string}
+                template: |
+                  Which of these runbook steps does the report show no evidence of?
+
+                  Runbook:
+                  {{runbook}}
+
+                  Report:
+                  {{report}}
+
+                  Return ONLY a JSON array of the step names.
+
+              # Unit 4 — the one judgement call, given a prompt of its own.
+              - type: prompt
+                name: root_cause
+                prompt_type: text
+                template: |
+                  Name the single most likely cause of this incident in one sentence,
+                  then give one sentence of supporting evidence.
+
+                  {{report}}
+
+          # The merge. Top level, named `merge`, same output shape as the original —
+          # it assembles the parts above and does not redo their work.
+          - type: prompt
+            name: merge
+            prompt_type: object
+            schema:
+              type: object
+              properties:
+                timeline:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      at: {type: string}
+                      event: {type: string}
+                      severity: {type: string}
+                    required: [at, event, severity]
+                skipped_runbook_steps:
+                  type: array
+                  items: {type: string}
+                root_cause: {type: string}
+                justification: {type: string}
+                summary: {type: string}
+              required: [timeline, skipped_runbook_steps, root_cause, justification, summary]
+              additionalProperties: false
+            template: |
+              Assemble the postmortem from the parts below.
+
+              Events: {{prime.parts.timeline.value}}
+              Severity labels: {{prime.parts.severities.value}}
+              Skipped runbook steps: {{prime.parts.skipped_steps.value}}
+              Cause and evidence: {{prime.parts.root_cause.value}}
+
+              Return ONLY the JSON object.
+        --- END EXAMPLE ---
+    schema:
+      type: object
+      properties:
+        say:
+          type: string
+        chunks:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              job:
+                type: string
+            required: [name, job]
+            additionalProperties: false
+        yaml:
+          type: string
+      required: [say, chunks, yaml]
+      additionalProperties: false
+    template: |
+      {{{wizard_prime}}}
+
+      {{{decompose_prime}}}
+
+      === THIS TASK ===
+      Decompose the prompt below into at most {{max_chunks}} chunks (and at
+      least 2).
+
+      The over-complex prompt:
+      <<< BEGIN SOURCE PROMPT >>>
+      {{{source_template}}}
+      <<< END SOURCE PROMPT >>>
+
+      The inputs it reads (declare these on the emitted document):
+      <<< BEGIN SOURCE INTERFACE >>>
+      {{{source_interface}}}
+      <<< END SOURCE INTERFACE >>>
+
+      The output shape it produces (give `merge` this same shape):
+      <<< BEGIN SOURCE OUTPUT >>>
+      {{{source_output}}}
+      <<< END SOURCE OUTPUT >>>
+
+      Return ONLY a JSON object with exactly these keys:
+        say    — one paragraph for a human: what the natural units of this work
+                 are, why you split on them, and what `merge` puts back
+                 together. Never paste the YAML into `say`.
+        chunks — one {"name": ..., "job": ...} object per fanned-out unit, in
+                 the order they appear in the YAML. `name` is the effect name;
+                 `job` is one sentence. At least 2, at most {{max_chunks}}.
+        yaml   — the complete emitted orchestration as ONE string. No fences.
+
+      No markdown. No text outside the JSON object.
+
+  # ─── Step 2: Validate ──────────────────────────────────────────────────────
+  # Deterministic: YAML parse + JSON Schema + compiler. Triple-stache is
+  # required — a double-stache would HTML-escape the quotes in the YAML and
+  # every plan would fail to parse.
+  - type: tool
+    name: check
+    provider: validate_yaml
+    params:
+      yaml: "{{{prime.plan.value.yaml}}}"
+
+  # ─── Step 3: Revise until valid AND within budget (bounded) ────────────────
+  # The loop is UNNAMED on purpose, twice over. Its body writes `plan` and
+  # `check` straight into the parent scope, overwriting the previous pass at a
+  # stable path — which is what lets the CEL condition observe the body's own
+  # latest result (a named loop would bury each pass under iter_<N>, out of
+  # reach). It is also what makes the repair pass share the `plan` effect path,
+  # so one profile key retargets both at a purpose-built planner model.
+  #
+  # The budget is enforced here, next to validation, by the same mechanism: an
+  # over-wide fan-out is a revisable defect, not something the caller has to
+  # detect afterwards. `size(chunks) < 2` is the floor — a one-chunk plan is
+  # the model declining to decompose.
+  - type: loop
+    max_iterations: 3
+    while:
+      mode: cel
+      expr: "state.prime.check.value.ok == false || size(state.prime.plan.value.chunks) > state.max_chunks || size(state.prime.plan.value.chunks) < 2"
+    body:
+      - type: prompt
+        name: plan
+        prompt_type: object
+        inputs:
+          wizard_prime: *wizard_prime
+          decompose_prime: *decompose_prime
+        schema:
+          type: object
+          properties:
+            say:
+              type: string
+            chunks:
+              type: array
+              items:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  job:
+                    type: string
+                required: [name, job]
+                additionalProperties: false
+            yaml:
+              type: string
+          required: [say, chunks, yaml]
+          additionalProperties: false
+        template: |
+          {{{wizard_prime}}}
+
+          {{{decompose_prime}}}
+
+          === REPAIR TASK ===
+          Your previous decomposition was rejected. Fix it and emit the whole
+          thing again.
+
+          The over-complex prompt you are decomposing:
+          <<< BEGIN SOURCE PROMPT >>>
+          {{{source_template}}}
+          <<< END SOURCE PROMPT >>>
+
+          The inputs it reads:
+          <<< BEGIN SOURCE INTERFACE >>>
+          {{{source_interface}}}
+          <<< END SOURCE INTERFACE >>>
+
+          The output shape it produces:
+          <<< BEGIN SOURCE OUTPUT >>>
+          {{{source_output}}}
+          <<< END SOURCE OUTPUT >>>
+
+          Rejected orchestration:
+          <<< BEGIN YAML >>>
+          {{{prime.check.value.yaml}}}
+          <<< END YAML >>>
+
+          Validator errors (each is `<json path>: <problem>`; an empty list
+          means the YAML was fine and the problem is the budget):
+          {{{prime.check.value.errors}}}
+
+          The chunks you planned:
+          {{{prime.plan.value.chunks}}}
+
+          The budget is at most {{max_chunks}} chunks and at least 2. If the
+          list above is outside that range, re-split the work — merge the
+          narrowest chunks into their neighbours to get under the ceiling, or
+          split further to get off the floor. Do not pad the list with chunks
+          that do no work.
+
+          Fix every validator error. Change as little as possible — preserve
+          the structure, the comments, and the split. Do not delete effects to
+          make errors go away, and do not drop the `merge` step or its
+          `interface.outputs.result` declaration.
+
+          Return ONLY a JSON object with exactly these keys: say, chunks, yaml.
+          No markdown. No text outside the JSON object.
+
+      # Re-validate the repair. Same name as the pre-loop check, so the while
+      # condition above sees this result on the next pass.
+      - type: tool
+        name: check
+        provider: validate_yaml
+        params:
+          yaml: "{{{prime.plan.value.yaml}}}"
+
+  # ─── The output path, restated ─────────────────────────────────────────────
+  # A constant, not a model call. The caller maps the emitted orchestration's
+  # merged result back onto the original effect's state path, and this is the
+  # path it reads from — exposed as an output so it is never hardcoded twice.
+  - type: tool
+    name: result_path
+    provider: json
+    params:
+      mode: parse
+      input: '"prime.merge.value"'
+
+  # ─── The done gate ─────────────────────────────────────────────────────────
+  # Never the model's word. True only when the emitted document validated AND
+  # the fan-out is between 2 and max_chunks wide. Unnamed, so both branches
+  # write prime.done.value.
+  - type: if
+    if:
+      mode: cel
+      expr: "state.prime.check.value.ok == true && size(state.prime.plan.value.chunks) <= state.max_chunks && size(state.prime.plan.value.chunks) >= 2"
+    then:
+      - type: tool
+        name: done
+        provider: json
+        params:
+          mode: parse
+          input: "true"
+    else:
+      - type: tool
+        name: done
+        provider: json
+        params:
+          mode: parse
+          input: "false"

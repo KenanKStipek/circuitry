@@ -306,3 +306,269 @@ places and means the same thing, but write the object form.)
   stays clean.
 - Do not set adapter: or model: — the user's config supplies them.
 """
+
+
+# The decomposition planner's teaching text — the second half of the prompt in
+# curation/agents/decompose.yml, after WIZARD_PRIME_V1 has taught the DSL.
+#
+# WIZARD_PRIME teaches how to write *an* orchestration. This teaches what makes
+# a decomposition a decomposition: fan out, merge at one fixed path, and make
+# each chunk genuinely smaller than the prompt it replaced.
+#
+# It is injected through a prompt-local `inputs:` entry rather than written
+# inline, so the {{...}} in its worked example survive rendering.
+DECOMPOSE_PRIME_V1 = """\
+=== YOUR JOB: DECOMPOSE ===
+You are handed ONE prompt that asks a model to do too much at once, and you
+return an orchestration that does the same job in smaller pieces.
+
+The shape is always the same:
+
+  FAN OUT   one effect per natural unit of the work
+  MERGE     exactly one effect that puts the pieces back together
+
+The "natural units" are whatever the source prompt is really doing in parallel:
+one per numbered instruction, one per input document, one per output field, one
+per entity to be processed. Split on the seam that is already in the prompt — do
+not invent a pipeline the work does not have.
+
+=== THE MERGE CONTRACT (NOT NEGOTIABLE) ===
+The caller maps your merged result back onto the state path the original effect
+wrote, so it must live at exactly one known path.
+
+  * The merge effect MUST be named `merge`.
+  * It MUST sit at the TOP level of the emitted document — not inside a
+    dynamic, a loop, or an if — so its output path is exactly:
+
+        prime.merge.value
+
+  * The emitted document MUST declare:
+
+        interface:
+          outputs:
+            result:
+              path: prime.merge.value
+
+  * `merge` MUST produce the SAME output shape as the source prompt: the same
+    prompt_type, and the same schema if one was declared. It is a drop-in
+    replacement for the original effect, so its output has to be substitutable
+    for the original's.
+  * The emitted document MUST declare an `interface.inputs` entry for every
+    input the source template read, under the same names. The chunks read those
+    inputs directly; nothing is renamed.
+
+=== THE CHUNK BUDGET ===
+You are given a maximum number of chunks. Fewer is better. Two is the minimum —
+a "decomposition" into one chunk is the original prompt with extra scaffolding,
+and it will be rejected. If the work seems not to split, split it on the output
+fields: every prompt that produces several things can produce them separately.
+
+=== SIMPLER IS THE ENTIRE POINT ===
+Each chunk must be strictly SIMPLER than the prompt it came from. A fan-out
+whose chunks each restate the whole original problem has accomplished nothing —
+it validates, it runs, and it has made things worse. Concretely, every chunk
+should be smaller than the source on every axis you control:
+
+  SHORTER      Its template is a fraction of the source's. Give a chunk only
+               the instructions that chunk needs.
+  FEWER INPUTS Its template interpolates fewer {{...}} references than the
+               source. A chunk that still reads every input has not been
+               narrowed. Aim for one or two.
+  NARROWER     Its prompt_type is as cheap as the answer allows: text, boolean
+               or number where the source needed object or array.
+  FLATTER      Its schema, if it needs one at all, is a fraction of the
+               source's — a flat array of strings beats a nested object.
+  CALMER       Its wording asks for one thing. Verbs like "analyze",
+               "cross-reference", "infer", "justify", "reason step by step" and
+               "synthesize" describe the whole job, not a piece of it. A chunk
+               that still needs them is still too big.
+
+`merge` is the exception that proves the rule: it carries the source's output
+shape, because that is its contract. Keep its template short and mechanical —
+it assembles what the chunks already worked out, it does not redo their work.
+
+=== HOUSE STYLE FOR THE EMITTED FILE ===
+- Open it with a # comment block: what it does, its inputs, and the line
+  "Merged result: prime.merge.value".
+- Comment each chunk with the unit of work it owns.
+- Prefer `flow: tree` for the fan-out when the chunks do not read each other —
+  they are independent by construction, and tree says so.
+- Use a `loop` instead when the units are elements of one list the source
+  already had: put the per-element prompt in the body and `collect:` it.
+- Do not set adapter: or model: on the emitted effects.
+
+=== WORKED EXAMPLE ===
+A postmortem prompt that does five jobs at once, split four ways plus a merge.
+
+--- EXAMPLE SOURCE EFFECT ---
+type: prompt
+name: postmortem
+prompt_type: object
+schema:
+  type: object
+  properties:
+    timeline:
+      type: array
+      items:
+        type: object
+        properties:
+          at: {type: string}
+          event: {type: string}
+          severity: {type: string}
+        required: [at, event, severity]
+    skipped_runbook_steps:
+      type: array
+      items: {type: string}
+    root_cause: {type: string}
+    justification: {type: string}
+    summary: {type: string}
+  required: [timeline, skipped_runbook_steps, root_cause, justification, summary]
+  additionalProperties: false
+template: |
+  You are the on-call reviewer for a production incident. Read everything
+  below and produce the complete postmortem in a single pass.
+
+  Incident report:
+  {{report}}
+
+  The runbook that should have been followed:
+  {{runbook}}
+
+  Service dependency map:
+  {{service_map}}
+
+  Prior incidents on this service:
+  {{prior_incidents}}
+
+  Do all of the following, in order:
+  1. Extract every event from the incident report with its timestamp, in
+     chronological order, including events that are only implied by a log
+     line or a graph description.
+  2. Classify each of those events by severity as info, warning, or critical,
+     and explain the classification wherever it is not obvious.
+  3. Cross-reference the sequence of events against the runbook and determine
+     which runbook steps were skipped, performed out of order, or performed
+     incorrectly. Use the service dependency map to decide whether a skipped
+     step could have mattered.
+  4. Infer the root cause. Reason step by step from the timeline and the
+     dependency map to the cause, weigh at least two competing explanations
+     against each other, and justify why you rejected the alternatives.
+  5. Synthesize a summary for the incident review. Compare this incident
+     against the prior incidents and say whether it is a recurrence.
+--- EXAMPLE EMITTED ORCHESTRATION ---
+# Postmortem, decomposed: four narrow readings, then one assembly.
+# Inputs: report, runbook, service_map, prior_incidents.
+# Merged result: prime.merge.value
+interface:
+  inputs:
+    report: {type: string, required: true}
+    runbook: {type: string, required: true}
+    service_map: {type: string, required: true}
+    prior_incidents: {type: string, required: false}
+  outputs:
+    result:
+      type: object
+      path: prime.merge.value
+      description: The postmortem, in the shape the original prompt produced.
+
+effects:
+  # The fan-out. Each chunk answers one question off one or two inputs, so no
+  # chunk reads another's output and all of them can run at once.
+  - type: dynamic
+    name: parts
+    flow: tree
+    effects:
+      # Unit 1 — what happened, and when.
+      - type: prompt
+        name: timeline
+        prompt_type: array
+        schema:
+          type: array
+          items: {type: string}
+        template: |
+          List each event in this incident report as
+          "<timestamp> - <what happened>", oldest first.
+
+          {{report}}
+
+          Return ONLY a JSON array of strings.
+
+      # Unit 2 — how bad each event was.
+      - type: prompt
+        name: severities
+        prompt_type: array
+        schema:
+          type: array
+          items: {type: string}
+        template: |
+          Label each event in this report info, warning, or critical, as
+          "<timestamp> - <label>".
+
+          {{report}}
+
+          Return ONLY a JSON array of strings.
+
+      # Unit 3 — what the runbook said versus what was done.
+      - type: prompt
+        name: skipped_steps
+        prompt_type: array
+        schema:
+          type: array
+          items: {type: string}
+        template: |
+          Which of these runbook steps does the report show no evidence of?
+
+          Runbook:
+          {{runbook}}
+
+          Report:
+          {{report}}
+
+          Return ONLY a JSON array of the step names.
+
+      # Unit 4 — the one judgement call, given a prompt of its own.
+      - type: prompt
+        name: root_cause
+        prompt_type: text
+        template: |
+          Name the single most likely cause of this incident in one sentence,
+          then give one sentence of supporting evidence.
+
+          {{report}}
+
+  # The merge. Top level, named `merge`, same output shape as the original —
+  # it assembles the parts above and does not redo their work.
+  - type: prompt
+    name: merge
+    prompt_type: object
+    schema:
+      type: object
+      properties:
+        timeline:
+          type: array
+          items:
+            type: object
+            properties:
+              at: {type: string}
+              event: {type: string}
+              severity: {type: string}
+            required: [at, event, severity]
+        skipped_runbook_steps:
+          type: array
+          items: {type: string}
+        root_cause: {type: string}
+        justification: {type: string}
+        summary: {type: string}
+      required: [timeline, skipped_runbook_steps, root_cause, justification, summary]
+      additionalProperties: false
+    template: |
+      Assemble the postmortem from the parts below.
+
+      Events: {{prime.parts.timeline.value}}
+      Severity labels: {{prime.parts.severities.value}}
+      Skipped runbook steps: {{prime.parts.skipped_steps.value}}
+      Cause and evidence: {{prime.parts.root_cause.value}}
+
+      Return ONLY the JSON object.
+--- END EXAMPLE ---
+"""
