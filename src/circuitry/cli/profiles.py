@@ -55,6 +55,7 @@ class ProfileSettings:
     path: Path
     adapter: str | None
     model: str | None
+    out: str | None = None
     inputs: dict[str, Any] = field(default_factory=dict)
     effects: dict[str, dict[str, Any]] = field(default_factory=dict)
     persistence: dict[str, Any] | None = None
@@ -280,6 +281,7 @@ def load_profile(
 
     adapter = raw.get("adapter")
     model = raw.get("model")
+    out = raw.get("out")
     inputs = raw.get("inputs") or {}
     persistence = raw.get("persistence")
 
@@ -288,6 +290,7 @@ def load_profile(
         path=path,
         adapter=str(adapter) if adapter is not None else None,
         model=str(model) if model is not None else None,
+        out=str(out) if out is not None else None,
         inputs=dict(inputs) if isinstance(inputs, dict) else {},
         effects=(
             {str(k): dict(v) for k, v in effects_raw.items() if isinstance(v, dict)}

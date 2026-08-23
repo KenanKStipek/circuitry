@@ -1,9 +1,9 @@
 # Named Profiles
 
-A profile is a YAML file that supplies run-level defaults, initial-state
-inputs, per-effect model/provider overrides, and the persistence target for a
-single `cof run --profile <name>` invocation — without editing the
-orchestration itself.
+A profile is a YAML file that supplies run-level defaults (adapter, model,
+`--out` path), initial-state inputs, per-effect model/provider overrides, and
+the persistence backend target for a single `cof run --profile <name>`
+invocation — without editing the orchestration itself.
 
 ## File Layout
 
@@ -25,6 +25,7 @@ project-level ones with the same name.
 # profiles/fast.yml
 adapter: ollama            # optional run-level default adapter
 model: llama3.2             # optional run-level default model
+out: runs/fast.json         # optional default --out path
 inputs:
   topic: "circuit design"   # merged into the initial state (CLI -e wins)
 effects:                    # keyed by dotted effect path, as in state
@@ -72,6 +73,18 @@ unaffected by this feature — profile resolution is skipped entirely.
 
 `inputs` are merged into the initial run state as a base layer; `--state`
 and `-e` values always win over profile inputs.
+
+`out` resolves as:
+
+```
+--out flag > profile > (no file written)
+```
+
+There is no orchestration or config layer for it — `--out` has never had
+one. A profile's `out:` only supplies a default for runs that don't pass
+`--out` explicitly; the flag always wins. See
+[Persistence](#persistence) below for why this is a separate key from
+`persistence:` rather than a fifth backend.
 
 ## Per-Effect Overrides
 
@@ -167,8 +180,15 @@ persistence even when the project config configures a backend. A profile
 with no `persistence:` block changes nothing: the config/orchestration
 backend (or no persistence at all) applies exactly as it does today.
 
-`--out` is orthogonal and combinable — it still writes the final state to the
-given file regardless of which backend persisted the snapshot.
+`--out` is a different kind of thing from the four backends above: a
+one-shot dump of the final state JSON, not a queryable store — it has no
+`load_latest_state` and never feeds `build_persistence_backend`, so it does
+not belong inside this block as a fifth backend. It is still profile-selectable,
+just as a separate top-level `out:` key (see [Precedence](#precedence)) rather
+than a `persistence.backend` value. It is orthogonal and combinable with
+persistence: it writes the final state to the given file regardless of which
+backend (if any) persisted the snapshot, and regardless of whether `out:` came
+from the profile or the flag.
 
 Credential-bearing values (a Mongo URI's `user:pass@`, `password`-style keys)
 are redacted everywhere state is serialized: `runtime.persistence`,
@@ -206,6 +226,8 @@ runtime.effective_settings.profile.name
 runtime.effective_settings.profile.content       # the full parsed profile, redacted
 runtime.effective_settings.sources.model         # "profile" when the profile supplied it
 runtime.effective_settings.sources.adapter       # "profile" when the profile supplied it
+runtime.effective_settings.sources.out           # "cli" | "profile" | "default"
+runtime.effective_settings.out                   # resolved --out path, or null
 runtime.effective_settings.sources.persistence   # "profile" | "orchestration" | "config"
 runtime.persistence.backend                      # selected backend + its describe() fields
 runtime.persistence.loaded_from_persistence      # true when state was rehydrated

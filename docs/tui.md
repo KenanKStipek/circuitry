@@ -545,6 +545,11 @@ panel whose backend dropdown reveals exactly that backend's keys. Switching
 backends drops the previous one's keys, because backends take disjoint keys and
 a partial overlay would produce a chimera.
 
+A profile's `out:` key (the default `--out` path — see
+[Named Profiles → Precedence](profiles.md#precedence)) has no picker of its
+own yet; `ProfileDraft` still round-trips it, so a profile edited by hand to
+set `out:` keeps it across a save.
+
 | Key | Action |
 | --- | --- |
 | `Ctrl-S` | Save to `<orchestration_dir>/profiles/<name>.yml` |

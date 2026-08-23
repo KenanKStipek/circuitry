@@ -511,9 +511,13 @@ def run_cmd(
     ):
         result = run(req)
 
+    # Resolved --out path: the CLI flag if given, else the profile's `out:`
+    # (precedence cli > profile > default — see cli.effective_settings).
+    resolved_out = result.out_path
+
     # Write --out for both success and failure (failure state still contains runtime metadata).
-    if out:
-        _write_state_json(out=out, state=result.state, pretty=pretty)
+    if resolved_out:
+        _write_state_json(out=resolved_out, state=result.state, pretty=pretty)
 
     if not result.ok:
         if json_out:
@@ -521,14 +525,14 @@ def run_cmd(
                 "ok": False,
                 "error": result.error,
                 "warnings": result.warnings,
-                "state_out": str(out) if out else None,
+                "state_out": str(resolved_out) if resolved_out else None,
             }
             console.print_json(json.dumps(payload))
         else:
             console.print("[red]Run failed[/red]")
             console.print(f"[red]Error:[/red] {result.error}")
-            if out:
-                console.print(f"[bold]State written:[/bold] {out}")
+            if resolved_out:
+                console.print(f"[bold]State written:[/bold] {resolved_out}")
         raise typer.Exit(code=1)
 
     # Stash for --last (only on success, skip if replaying via --last).
@@ -561,11 +565,11 @@ def run_cmd(
             print(val if isinstance(val, str) else json.dumps(val))
     elif not (quiet or json_out):
         console.print("[green]Run succeeded[/green]")
-        if out:
-            console.print(f"[bold]State written:[/bold] {out}")
+        if resolved_out:
+            console.print(f"[bold]State written:[/bold] {resolved_out}")
 
     # Print --print (or default print for --json with no --out)
-    if not tail and (print_state or (not out and json_out)):
+    if not tail and (print_state or (not resolved_out and json_out)):
         if pretty:
             console.print_json(json.dumps(result.state, indent=2, sort_keys=True))
         else:
