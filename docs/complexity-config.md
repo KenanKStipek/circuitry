@@ -220,23 +220,34 @@ The router resolves a band to a string and does not interpret it.
 #### Where the router sits: model precedence
 
 ```
-profile effect override  >  per-effect model:  >  --model  >  ROUTER
-                         >  orchestration model:  >  config default_model
+profile effect override (model)  >  per-effect model:  >  --model  >
+profile effect override (routing pin)  >  ROUTER  >
+orchestration model:  >  config default_model
 ```
 
 Everything above the router is a model a human named on purpose, and the router
-never overrules one. Everything below it is a default the router exists to
-replace. Two consequences worth stating out loud:
+never overrules one. A profile's per-effect `routing:` pin (see
+[Per-Effect Routing Control](profiles.md#per-effect-routing-control)) sits
+just above the router itself: it beats the router's own score-based choice,
+but a genuinely explicit model — this effect's own `model:`, `--model`, or a
+profile's run-level `model:` — still beats the pin. Everything below the
+router is a default the router exists to replace. Consequences worth stating
+out loud:
 
 - **A per-effect `model:` beats `--model`.** This predates routing: `--model`
   sets the run *default*, and an effect that names its own model has always
   opted out of the run default whatever supplied it. Use a profile's `effects:`
   block to retarget a specific effect from outside the orchestration.
-- **The band is recorded even when the router defers.** On an effect that pins
-  its own model you still get `meta.complexity.band`, answering "what would
-  routing have picked" — which is the question you ask right before removing
-  the pin. `meta.model_reason` is the field that says whether the band was
-  *applied*; `band` alone never implies it was.
+- **A profile `routing:` pin does not need scoring on.** It names a band's
+  model directly rather than deriving it from a score, so it resolves the
+  same whether or not `scoring`/`routing.enabled` are switched on elsewhere —
+  only the band table (`routing.bands`) has to exist.
+- **The band is recorded even when the router defers, or an effect opts out.**
+  On an effect that pins its own model, or one a profile opted out of routing,
+  you still get `meta.complexity.band`, answering "what would routing have
+  picked" — which is the question you ask right before removing the pin.
+  `meta.model_reason` is the field that says whether the band was *applied*;
+  `band` alone never implies it was.
 
 Turning routing off restores the previous behaviour exactly: with
 `routing.enabled: false` the state tree — model, `model_reason`, and every
@@ -336,6 +347,32 @@ overrode — but nothing routes.
 **Disabled** — drop `--config` and there is no complexity block at all: no
 scores, no bands, no lines, and `meta.model_reason` back to
 `explicit`/`default` on every node.
+
+**Per-effect override, from a profile** — `docs/examples/routing/profiles/
+pin-and-opt-out.yml` pins `summarize` to the top `hard` band and opts
+`classify` out of routing entirely, without touching `triage.yml` or either
+band table (see [Per-Effect Routing Control](profiles.md#per-effect-routing-control)):
+
+```bash
+cof run docs/examples/routing/triage.yml --dry-run --explain-routing \
+    --config docs/examples/routing/bands-frugal.json \
+    --profile pin-and-opt-out \
+    -e ticket=... -e rules=... -e prior_decisions=...
+```
+
+```
+▸ prime.classify score 7.3/100 · band trivial · model llama3.2 · why default
+▸ prime.summarize score 20.6/100 · band hard · model llama3.1:8b · why router
+▸ prime.audit score 42.0/100 · band hard · model llama3.1:70b · why explicit
+```
+
+`classify` still scores into `trivial`, but the opt-out means routing never
+substitutes that band's model — it dispatches on the orchestration's own
+default (`why default`), not `why router`. `summarize` scores into `ordinary`
+on this table (see the plain `bands-frugal.json` run above) but the pin sends
+it to `hard` instead — the band shown is the one that actually applied, not
+the one the score alone would have picked. `audit` is unaffected either way:
+its own `model:` already outranks a pin the same way it outranks the router.
 
 ### `decomposition`
 

@@ -40,6 +40,13 @@
           "enabled": {
             "type": "boolean",
             "description": "false = do not execute this effect for the run; its node is written as {value: null, meta: {disabled: true, ...}}. Disabling a container (dynamic/loop/conditional/reflector) disables its whole subtree."
+          },
+          "routing": {
+            "description": "Per-effect complexity-router control. `false` opts this effect out of the router entirely — it always dispatches on the model it would have with routing switched off (its own `model:` if set, else the run default). A non-empty string pins it to the routing band with that name from `runtime.complexity.routing.bands`, bypassing score-based band selection. Precedence: this effect's `model` (above) always beats a pin; a pin always beats the router's own score-based choice. The named band must exist in the run's resolved routing table, or the run fails before any effect dispatches.",
+            "oneOf": [
+              { "type": "boolean", "enum": [false] },
+              { "type": "string", "minLength": 1 }
+            ]
           }
         }
       }

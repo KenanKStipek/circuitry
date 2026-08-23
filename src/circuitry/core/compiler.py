@@ -180,7 +180,7 @@ def compile_orchestration(
 def apply_effect_overrides(
     root: DynamicDefinition, overrides: dict[str, dict[str, Any]]
 ) -> tuple[DynamicDefinition, set[str]]:
-    """Apply a profile's per-effect model/provider/enabled overlay onto a tree.
+    """Apply a profile's per-effect model/provider/enabled/routing overlay onto a tree.
 
     Rebuilds the immutable ``*Definition`` chain bottom-up via
     ``dataclasses.replace`` so frozen semantics are preserved — this never
@@ -221,13 +221,15 @@ def _overlay_effect(
     disable = False
     if override:
         matched.add(own_path)
-        model_provider: dict[str, Any] = {}
+        field_overrides: dict[str, Any] = {}
         if "model" in override and hasattr(node, "model"):
-            model_provider["model"] = override["model"]
+            field_overrides["model"] = override["model"]
         if "provider" in override and hasattr(node, "provider"):
-            model_provider["provider"] = override["provider"]
-        if model_provider:
-            node = replace(node, **model_provider)
+            field_overrides["provider"] = override["provider"]
+        if "routing" in override and hasattr(node, "routing_override"):
+            field_overrides["routing_override"] = override["routing"]
+        if field_overrides:
+            node = replace(node, **field_overrides)
         disable = override.get("enabled") is False
 
     if isinstance(node, DynamicDefinition):

@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 
 from circuitry.adapters.base import GenerateResult
-from circuitry.core.compiler import compile_orchestration
+from circuitry.core.compiler import apply_effect_overrides, compile_orchestration
 from circuitry.core.dynamic import DynamicRuntime
 from circuitry.core.store import Store
 
@@ -77,10 +77,14 @@ def _run(
     model: str = RUN_DEFAULT,
     model_locked: bool = False,
     state: dict[str, Any] | None = None,
+    effect_overrides: dict[str, dict[str, Any]] | None = None,
 ) -> Store:
     store = Store(dict(state or {}))
+    root = compile_orchestration(orch=orch, root_name="prime")
+    if effect_overrides:
+        root, _ = apply_effect_overrides(root, effect_overrides)
     DynamicRuntime(
-        compile_orchestration(orch=orch, root_name="prime"),
+        root,
         adapter=adapter if adapter is not None else RecordingAdapter(),
         model=model,
         model_locked=model_locked,
@@ -513,3 +517,142 @@ def test_with_routing_disabled_model_selection_is_identical_to_today(
         _strip_timestamps(reference.state), sort_keys=True
     )
     assert "router" not in serialized
+
+
+# --------------------------------------------------------------------------
+# profile per-effect routing control (issue #109)
+# --------------------------------------------------------------------------
+
+
+#: Two named bands split well above ``_prompt_orch()``'s own score, so the
+#: score alone would land it in ``cheap`` — a profile pin can then be shown
+#: to disagree with that and win anyway.
+TWO_BAND_TABLE: dict[str, Any] = _scoring_only(
+    enabled=True,
+    bands=[
+        {"name": "cheap", "max": 50.0, "model": "cheap-model"},
+        {"name": "premium", "model": "premium-model"},
+    ],
+)
+
+
+def test_profile_opt_out_is_honored_even_when_the_router_would_otherwise_fire() -> None:
+    """The band routing would have picked is still recorded — same rule as an
+    explicit ``model:`` — but it is not what dispatches."""
+    adapter = RecordingAdapter()
+    store = _run(
+        _prompt_orch(),
+        adapter=adapter,
+        runtime_config=CATCH_ALL_ONLY,
+        effect_overrides={"task": {"routing": False}},
+    )
+
+    assert store.get("prime.task.meta.model") == RUN_DEFAULT
+    assert store.get("prime.task.meta.model_reason") == "default"
+    assert adapter.calls == [("primary", RUN_DEFAULT)]
+    assert store.get("prime.task.meta.complexity.band") == {
+        "name": "everything",
+        "model": "routed-model",
+    }
+
+
+def test_profile_pinned_band_is_honored_over_the_score() -> None:
+    """The score here lands the effect in ``cheap`` (see ``TWO_BAND_TABLE``);
+    the pin sends it to ``premium`` instead."""
+    orch = _prompt_orch()
+    score = _score_of(orch)
+    assert score <= 50.0, "fixture no longer lands in the 'cheap' band"
+
+    adapter = RecordingAdapter()
+    store = _run(
+        orch,
+        adapter=adapter,
+        runtime_config=TWO_BAND_TABLE,
+        effect_overrides={"task": {"routing": "premium"}},
+    )
+
+    assert store.get("prime.task.meta.model") == "premium-model"
+    assert store.get("prime.task.meta.model_reason") == "router"
+    assert adapter.calls == [("primary", "premium-model")]
+    assert store.get("prime.task.meta.complexity.band") == {
+        "name": "premium",
+        "model": "premium-model",
+    }
+
+
+def test_profile_pinned_band_works_with_scoring_off() -> None:
+    """A pin names its model directly — it never needed the score, so it
+    still resolves with ``scoring.enabled`` false and no ``complexity`` meta
+    on the node at all."""
+    runtime_config = {
+        "complexity": {
+            "scoring": {"enabled": False},
+            "routing": {
+                "enabled": False,
+                "bands": [
+                    {"name": "cheap", "max": 40, "model": "cheap-model"},
+                    {"name": "premium", "model": "premium-model"},
+                ],
+            },
+        }
+    }
+    adapter = RecordingAdapter()
+    store = _run(
+        _prompt_orch(),
+        adapter=adapter,
+        runtime_config=runtime_config,
+        effect_overrides={"task": {"routing": "premium"}},
+    )
+
+    assert store.get("prime.task.meta.model") == "premium-model"
+    assert store.get("prime.task.meta.model_reason") == "router"
+    assert adapter.calls == [("primary", "premium-model")]
+    assert "complexity" not in store.get("prime.task.meta")
+
+
+def test_profile_explicit_model_beats_a_pinned_band() -> None:
+    """Precedence: this effect's own ``model:`` (however it got there) always
+    wins over a ``routing`` pin on the same effect."""
+    adapter = RecordingAdapter()
+    store = _run(
+        _prompt_orch(),
+        adapter=adapter,
+        runtime_config=TWO_BAND_TABLE,
+        effect_overrides={
+            "task": {"model": "pinned-explicit-model", "routing": "premium"}
+        },
+    )
+
+    assert store.get("prime.task.meta.model") == "pinned-explicit-model"
+    assert store.get("prime.task.meta.model_reason") == "explicit"
+    assert adapter.calls == [("primary", "pinned-explicit-model")]
+
+
+def test_a_locked_run_default_beats_a_pinned_band() -> None:
+    """``--model``/a profile's run-level ``model:`` outrank a pin the same
+    way they outrank the score-based router."""
+    adapter = RecordingAdapter()
+    store = _run(
+        _prompt_orch(),
+        adapter=adapter,
+        runtime_config=TWO_BAND_TABLE,
+        model="cli-model",
+        model_locked=True,
+        effect_overrides={"task": {"routing": "premium"}},
+    )
+
+    assert store.get("prime.task.meta.model") == "cli-model"
+    assert store.get("prime.task.meta.model_reason") == "default"
+    assert adapter.calls == [("primary", "cli-model")]
+
+
+def test_pinning_an_unknown_band_raises() -> None:
+    """The normal path (``runtime_shim.run`` via a loaded profile) validates
+    the band name up front and never reaches dispatch; this is the backstop
+    for a ``routing_override`` set some other way."""
+    with pytest.raises(RuntimeError, match="no-such-band"):
+        _run(
+            _prompt_orch(),
+            runtime_config=CATCH_ALL_ONLY,
+            effect_overrides={"task": {"routing": "no-such-band"}},
+        )

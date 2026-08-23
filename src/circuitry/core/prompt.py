@@ -178,6 +178,16 @@ class PromptDefinition:
     provider: str | None = None
     provider_fallbacks: Sequence[str] | None = None
 
+    # Profile-only per-effect routing overlay (see core.compiler._overlay_effect
+    # and cli.profiles) — never set directly from orchestration YAML, only
+    # overlaid by a profile's `effects.<path>.routing` key. ``None``: no
+    # override, this effect follows the run's router normally. ``False``: opt
+    # this effect out of the router — it always dispatches on the model it
+    # would have with routing switched off entirely. A non-empty ``str``: pin
+    # the effect to the routing band with that ``name``, bypassing
+    # score-based band selection.
+    routing_override: bool | str | None = None
+
     # Execution parameters
     params: dict[str, Any] | None = None
     timeout_ms: int | None = None
@@ -577,19 +587,34 @@ class PromptRuntime:
           must not become a reason the effect itself does not run. Scoring is
           otherwise pure and cheap (no model call, no IO), so it is safe to do
           on the dispatch path.
-        * The routed model is ``None`` whenever the router defers — routing
-          off, no band table, or an explicit choice it will not overrule (see
-          :func:`circuitry.core.router.route_model`). A caller that gets
-          ``None`` keeps the model it already resolved.
+        * The routed model is ``None`` whenever nothing overrules the model
+          already resolved — the router defers (routing off, no band table, or
+          an explicit choice it will not overrule; see
+          :func:`circuitry.core.router.route_model`), or a profile opted this
+          effect out. A caller that gets ``None`` keeps the model it already
+          resolved.
 
         Scoring and routing share this one method because they share one
         settings resolution: routing reads the score, and resolving the block
         twice per effect is how the two could ever disagree about what was
         configured.
+
+        A profile's per-effect ``routing_override`` (opt-out or band pin) is
+        settled first, ahead of scoring: an opt-out has nothing to score, and a
+        pin names its model directly rather than deriving it from one, so
+        neither needs the scoring substrate to be on. An explicit model —
+        this effect's own ``model:`` (which is also how a profile ``model:``
+        override arrives — overlaid onto the definition), or a run default
+        locked by ``--model``/a profile's run-level ``model:`` — still
+        outranks both, the same rule the score-based router already follows.
         """
         # Imported lazily: ``core`` reaching into ``cli`` at module scope would
         # invert the dependency the rest of this package maintains.
-        from ..cli.complexity_config import band_for, resolve_complexity_settings
+        from ..cli.complexity_config import (
+            band_for,
+            band_named,
+            resolve_complexity_settings,
+        )
         from .complexity import score as score_complexity
         from .router import route_model
 
@@ -607,11 +632,36 @@ class PromptRuntime:
             )
             return None, None
 
+        explicit = bool(self.defn.model) or self.model_locked
+        override = self.defn.routing_override
+
+        opted_out = False
+        pinned_model: str | None = None
+        pinned_band_name = ""
+        if not explicit and override is not None:
+            if override is False:
+                opted_out = True
+            else:
+                pinned = band_named(override, settings.routing.bands)
+                if pinned is None:
+                    valid = ", ".join(
+                        sorted(b.name for b in settings.routing.bands if b.name)
+                    ) or "(no named bands configured)"
+                    raise ValueError(
+                        f"Prompt '{self.defn.name}' is pinned to routing band "
+                        f"{override!r}, which is not in "
+                        f"runtime.complexity.routing.bands. Valid band names: "
+                        f"{valid}."
+                    )
+                pinned_model = pinned.model
+                pinned_band_name = override
+
         if not settings.scoring.enabled:
-            # Routing requires scoring — config resolution rejects the other
-            # combination — so no score means no route, not a route off a
-            # missing number.
-            return None, None
+            # Score-based routing requires scoring — config resolution rejects
+            # the other combination — so no score means no score-based route.
+            # A profile pin is not score-based and resolves the same either
+            # way; an opt-out has no automatic route to cancel here regardless.
+            return None, pinned_model
 
         # Passed straight through: ``runtime.complexity.scoring.weights`` is
         # keyed by ``complexity.SIGNAL_NAMES``, validated against that same
@@ -644,7 +694,7 @@ class PromptRuntime:
                 self.defn.name,
                 exc_info=True,
             )
-            return None, None
+            return None, pinned_model
 
         meta = _complexity_meta(result)
 
@@ -660,6 +710,17 @@ class PromptRuntime:
             if band is not None:
                 meta["band"] = {"name": band.name or "", "model": band.model or ""}
 
+        if opted_out:
+            return meta, None
+
+        if pinned_model is not None:
+            # Overwrites whatever the score-based lookup above recorded: the
+            # pin is what actually dispatches, so ``band`` has to name the row
+            # that applied, not the one the score would otherwise have landed
+            # in.
+            meta["band"] = {"name": pinned_band_name, "model": pinned_model}
+            return meta, pinned_model
+
         # An effect that names its own ``model:`` — written on the effect or
         # overlaid there by a profile — and a run whose default was pinned with
         # ``--model`` are the same fact to the router: a human already decided.
@@ -668,7 +729,7 @@ class PromptRuntime:
         decision = route_model(
             score=result.score,
             settings=settings.routing,
-            explicit=bool(self.defn.model) or self.model_locked,
+            explicit=explicit,
         )
         return meta, (decision.model if decision is not None else None)
 

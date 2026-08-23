@@ -28,6 +28,7 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
+from .complexity_config import RoutingSettings, band_named
 from .redaction import REDACTED
 
 try:
@@ -257,6 +258,48 @@ def _validate_effect_paths(
     raise ProfileValidationError(
         f"Profile {profile_name!r} references unknown effect path(s): "
         f"{', '.join(unknown)}. Valid effect paths: {valid_list}"
+    )
+
+
+def validate_profile_routing_pins(
+    effects_map: Any, *, routing: RoutingSettings, profile_name: str
+) -> None:
+    """Every profile ``routing: <band-name>`` pin must name a real band.
+
+    Unlike effect-path validation, this can't run at profile-load time: band
+    tables live in the orchestration/config's ``runtime.complexity.routing``,
+    which is only known once the run's full effective settings are resolved
+    (``resolve_effective_settings`` merges config + orchestration). Called
+    from ``runtime_shim.run`` after that resolution and before anything
+    compiles or dispatches, so a bad pin fails the run the same way an
+    unknown effect path does — loudly, up front, not mid-run on the one
+    effect that happens to hit it.
+
+    A ``routing: false`` opt-out never reaches here — there is no name to
+    check.
+    """
+    if not isinstance(effects_map, dict) or not effects_map:
+        return
+
+    unmatched: list[tuple[str, str]] = []
+    for path, override in effects_map.items():
+        if not isinstance(override, dict):
+            continue
+        pin = override.get("routing")
+        if not isinstance(pin, str):
+            continue
+        if band_named(pin, routing.bands) is None:
+            unmatched.append((path, pin))
+
+    if not unmatched:
+        return
+
+    valid = ", ".join(sorted({b.name for b in routing.bands if b.name}))
+    valid_list = valid or "(no named bands configured)"
+    pins = ", ".join(f"{path!r} -> {pin!r}" for path, pin in sorted(unmatched))
+    raise ProfileValidationError(
+        f"Profile {profile_name!r} pins effect(s) to unknown routing band(s): "
+        f"{pins}. Valid band names: {valid_list}"
     )
 
 

@@ -1,0 +1,25 @@
+# Demonstrates the two per-effect routing controls (see docs/profiles.md
+# "Per-Effect Routing Control") over the triage.yml demo:
+#
+#   classify  — the cheapest of the three effects (see triage.yml). Routing
+#               it at all is unnecessary ceremony, so it opts out entirely
+#               and always runs on the orchestration's own default model.
+#   summarize — pinned to the "hard" band regardless of what its own score
+#               would pick — the profile equivalent of "always give this one
+#               the expensive model."
+#
+# `audit` is untouched: its own `model:` in the orchestration already beats
+# both the router and a profile pin, so there is nothing for this profile to
+# add there.
+#
+# Run it with:
+#   cof run docs/examples/routing/triage.yml --dry-run --explain-routing \
+#       --config docs/examples/routing/bands-frugal.json \
+#       --profile pin-and-opt-out \
+#       -e ticket=... -e rules=... -e prior_decisions=...
+
+effects:
+  classify:
+    routing: false
+  summarize:
+    routing: hard

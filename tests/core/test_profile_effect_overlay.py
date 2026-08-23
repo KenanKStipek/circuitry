@@ -71,6 +71,40 @@ def test_apply_effect_overrides_ignores_attrs_the_target_does_not_have() -> None
     assert not hasattr(new_root.effects[0], "model")
 
 
+def test_apply_effect_overrides_ignores_routing_when_target_has_no_field() -> None:
+    """Same no-op rule as model/provider: a 'use' effect has no routing field."""
+    orch = {
+        "effects": [
+            {"type": "use", "name": "child", "path": "does-not-matter.yml"},
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    new_root, matched = apply_effect_overrides(root, {"child": {"routing": False}})
+    assert matched == {"child"}
+    assert not hasattr(new_root.effects[0], "routing_override")
+
+
+def test_apply_effect_overrides_sets_routing_opt_out() -> None:
+    root = compile_orchestration(orch=_prompt_only_orch(), root_name="prime")
+    new_root, matched = apply_effect_overrides(root, {"summarize": {"routing": False}})
+    assert matched == {"summarize"}
+    assert new_root.effects[0].routing_override is False
+
+
+def test_apply_effect_overrides_sets_routing_pin() -> None:
+    root = compile_orchestration(orch=_prompt_only_orch(), root_name="prime")
+    new_root, matched = apply_effect_overrides(
+        root, {"summarize": {"routing": "premium"}}
+    )
+    assert matched == {"summarize"}
+    assert new_root.effects[0].routing_override == "premium"
+
+
+def test_apply_effect_overrides_leaves_routing_unset_by_default() -> None:
+    root = compile_orchestration(orch=_prompt_only_orch(), root_name="prime")
+    assert root.effects[0].routing_override is None
+
+
 @dataclass(frozen=True)
 class RecordingAdapter:
     name: str

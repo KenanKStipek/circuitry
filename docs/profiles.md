@@ -95,6 +95,48 @@ frozen/immutable — a new tree is returned, nothing is mutated in place).
 Overrides targeting an effect type that has no `model`/`provider` field
 (e.g. `use`) are a no-op for that field.
 
+## Per-Effect Routing Control
+
+`effects.<path>.routing` controls how the [complexity router](complexity-config.md)
+treats a single effect, without touching the orchestration or the project/global
+config:
+
+```yaml
+# profiles/mixed-routing.yml
+effects:
+  draft_outline:
+    routing: false      # opt out — always dispatch on the model this effect
+                         # would use with routing switched off entirely
+  final_polish:
+    routing: premium     # pin to the named band in runtime.complexity.routing.bands,
+                          # bypassing score-based band selection
+```
+
+- `false` opts the effect out of the router. It dispatches on its own `model:`
+  if it has one, otherwise the run's default model — exactly as if routing
+  were off for the whole run, just scoped to this one effect.
+- A non-empty string pins the effect to the routing band of that name from
+  `runtime.complexity.routing.bands`. The named band must already exist —
+  a profile pins an *existing* band, it does not define new ones. An unknown
+  name fails the run before anything dispatches, with the list of valid band
+  names.
+- `routing: true` and any other non-boolean, non-string value fail schema
+  validation the same way an unknown key does.
+
+Precedence, most specific first:
+
+```
+this effect's model (or a locked run default) > routing pin > the router's own score-based choice
+```
+
+A `routing` pin is itself overridden by an explicit `model` — this effect's
+own `model:` override (above), or a run-level `model:` pinned by `--model`
+or the profile's own top-level `model:` — the same rule the router already
+follows for an unpinned effect. A pin does not require
+`runtime.complexity.scoring` to be enabled: it names a model directly, so it
+resolves the same whether or not scoring/auto-routing are switched on
+elsewhere.
+
 ## Disabling Effects
 
 `effects.<path>.enabled: false` switches an effect off for the run. It is not
