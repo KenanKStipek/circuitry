@@ -96,6 +96,11 @@ class RunRequest:
     # to reconstruct and apply instead of discovering a profile file by name.
     # Mutually exclusive with `profile_name`; raises if both are set.
     profile_record: dict[str, Any] | None = None
+    # Directory to persist every triggered decomposition's generated plan to,
+    # one file per effect — see `circuitry.cli.decompose_out`. `None` (the
+    # default) writes nothing to disk; the plan still lands in
+    # `meta.decomposition` either way.
+    decompose_out: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -437,6 +442,12 @@ def run(req: RunRequest) -> RunResult:
             start_observers.append(req.effect_start_observer)
         if req.effect_observer is not None:
             effect_observers.append(req.effect_observer)
+        if req.decompose_out is not None:
+            from .decompose_out import make_decompose_out_observer
+
+            effect_observers.append(
+                make_decompose_out_observer(req.decompose_out, run_id)
+            )
 
         store = Store(
             state,

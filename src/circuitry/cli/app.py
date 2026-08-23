@@ -314,6 +314,7 @@ RUN_EPILOG = """
   cof run learn/hello -e name=World --model gpt-oss:20b
   cof run learn/hello -e name=World --adapter ollama --model llama3.1:8b
   cof run ./my-orch.yml --explain-routing
+  cof run ./my-orch.yml --decompose-out ./plans
   cof run --last
 
 [bold]Resolution order:[/bold] local file path > bundled orchestration name.
@@ -417,6 +418,15 @@ def run_cmd(
             "prints nothing if scoring is off. Suppressed by --quiet/--json."
         ),
     ),
+    decompose_out: Path | None = typer.Option(
+        None, "--decompose-out",
+        help=(
+            "Write every triggered decomposition's generated orchestration to "
+            "this directory, one file per effect (failed plans included, "
+            "marked as such). Needs runtime.complexity.decomposition.enabled; "
+            "a run that never decomposes writes nothing."
+        ),
+    ),
 ):
     # --last: replay stashed args
     if last:
@@ -439,6 +449,7 @@ def run_cmd(
         adapter = stashed.get("adapter")
         model = stashed.get("model")
         explain_routing = stashed.get("explain_routing", False)
+        decompose_out = Path(stashed["decompose_out"]) if stashed.get("decompose_out") else None
 
         # Refuse to replay if the previous run stashed redacted secrets — the
         # sentinel string would silently flow into the new run as a literal.
@@ -519,6 +530,8 @@ def run_cmd(
         console.print(f"[bold]State (out):[/bold] {out or '—'}")
         if live_state:
             console.print(f"[bold]Live state:[/bold] {live_state}")
+        if decompose_out:
+            console.print(f"[bold]Decompose out:[/bold] {decompose_out}")
         if adapter:
             console.print(f"[bold]Adapter (override):[/bold] {adapter}")
         if model:
@@ -560,6 +573,7 @@ def run_cmd(
         adapter_override=adapter,
         model_override=model,
         effect_start_observer=effect_start_observer,
+        decompose_out=decompose_out,
     )
 
     with (
@@ -616,6 +630,7 @@ def run_cmd(
             "adapter": adapter,
             "model": model,
             "explain_routing": explain_routing,
+            "decompose_out": str(decompose_out) if decompose_out else None,
         })
 
     if tail:
