@@ -30,6 +30,31 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _scope_ctx(ctx: dict[str, Any], local: dict[str, Any]) -> dict[str, Any]:
+    """Layer one iteration's own writes over the context its body renders against.
+
+    A body step reading the step before it — the chained-body pattern — is a
+    *within-iteration* reference, and it resolves through a scope chain:
+    current iteration first, then the enclosing scope, then root state.  The
+    overlay lands in two places so both taught spellings mean the same node:
+
+    * top level, for the bare ``{{step.value}}`` form
+    * inside ``prime``, for the canonical ``{{prime.step.value}}`` form (and
+      its CEL twin ``state.prime.step.value``)
+
+    Shallow by design. Nested nodes stay shared by reference, so every path
+    that already resolved against the enclosing scope — ``{{prime.<dynamic>.
+    <name>.value}}``, the loop's own ``prime.<loop>.iter_<N>`` subtree, root
+    inputs — keeps resolving. Only the iteration's own names are shadowed.
+    """
+    if not local:
+        return ctx
+    merged = {**ctx, **local}
+    parent = ctx.get("prime")
+    merged["prime"] = {**parent, **local} if isinstance(parent, dict) else dict(local)
+    return merged
+
+
 EffectDef = Union[
     "DynamicDefinition",
     "PromptDefinition",
@@ -162,6 +187,12 @@ class LoopRuntime:
             child_store = store
             iterations_effects = []
 
+        # Keys the loop's store already carried before the first pass. An
+        # unnamed (transparent) loop writes body effects straight into the
+        # enclosing node, so this is what separates "the enclosing scope" from
+        # "what this iteration produced" when the scope overlay is built.
+        baseline = frozenset(child_store.state)
+
         iteration_count = 0
         termination_reason = "max_iterations"
 
@@ -253,6 +284,7 @@ class LoopRuntime:
                                     store=isolated_stores[idx],
                                     ctx=iter_ctx,
                                     iteration=idx,
+                                    baseline=baseline,
                                     parallel=True,
                                     tracker=tree_tracker,
                                     iter_label=f"[{idx}]",
@@ -262,7 +294,7 @@ class LoopRuntime:
                             for future in as_completed(future_to_idx):
                                 i = future_to_idx[future]
                                 try:
-                                    results[i] = future.result()
+                                    results[i] = future.result()[0]
                                 except Exception as exc:
                                     errors[i] = exc
 
@@ -304,10 +336,11 @@ class LoopRuntime:
                         iter_ctx["_loop_index"] = idx
 
                         try:
-                            iter_effects = self._execute_body(
+                            iter_effects, _ = self._execute_body(
                                 store=child_store,
                                 ctx=iter_ctx,
                                 iteration=idx,
+                                baseline=baseline,
                                 iter_label=f"[{idx}]",
                             )
                             iterations_effects.append(iter_effects)
@@ -328,9 +361,19 @@ class LoopRuntime:
                 if meta:
                     meta["mode"] = self.defn.while_def.mode
 
+                # What the pass that just finished wrote. The condition is
+                # checked *between* passes, so it reads the previous
+                # iteration's output under the same within-iteration names the
+                # body itself uses — a grammar a body template can use but a
+                # condition template cannot would send control flow wrong
+                # rather than merely rendering a prompt empty.
+                last_writes: dict[str, Any] = {}
+
                 while iteration_count < self.defn.max_iterations:
                     # Check continuation condition
-                    should_continue = self._evaluate_condition(ctx=ctx)
+                    should_continue = self._evaluate_condition(
+                        ctx=_scope_ctx(ctx, last_writes)
+                    )
 
                     if (
                         not should_continue
@@ -341,10 +384,11 @@ class LoopRuntime:
 
                     ctx["_loop_index"] = iteration_count
                     try:
-                        iter_effects = self._execute_body(
+                        iter_effects, last_writes = self._execute_body(
                             store=child_store,
                             ctx=ctx,
                             iteration=iteration_count,
+                            baseline=baseline,
                             iter_label=f"[{iteration_count}]",
                         )
                         iterations_effects.append(iter_effects)
@@ -514,17 +558,51 @@ Should the loop continue? Answer (yes/no):"""
 
         return evaluate_cel(self.defn.while_def.expr or "", ctx)
 
+    def _body_names(self) -> frozenset[str]:
+        """Names of this loop's own body effects."""
+        return frozenset(
+            name
+            for name in (getattr(e, "name", None) for e in self.defn.body)
+            if isinstance(name, str) and name
+        )
+
+    def _local_writes(
+        self, iter_store: Store, baseline: frozenset[str]
+    ) -> dict[str, Any]:
+        """The nodes the current iteration has written so far.
+
+        For a named loop the iteration store is fresh, so everything in it is
+        local. For an unnamed one the body writes into the enclosing node, so
+        *baseline* (the keys present when the loop started) is subtracted —
+        otherwise the whole parent scope would be re-exported as if this pass
+        had produced it. A body effect that shadows an enclosing name keeps
+        its slot either way: inside the body, that name means the body's own
+        effect.
+        """
+        body_names = self._body_names()
+        return {
+            key: value
+            for key, value in iter_store.state.items()
+            if key not in baseline or key in body_names
+        }
+
     def _execute_body(
         self,
         *,
         store: Store,
         ctx: dict[str, Any],
         iteration: int,
+        baseline: frozenset[str] = frozenset(),
         parallel: bool = False,
         tracker: _LoopIterTracker | None = None,
         iter_label: str | None = None,
-    ) -> dict[str, Any]:
-        """Execute all effects in the loop body for one iteration."""
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Execute all effects in the loop body for one iteration.
+
+        Returns the iteration's effect record and the nodes it wrote, the
+        latter so a while-condition can be evaluated against the pass that
+        just finished.
+        """
         from .conditional import ConditionalDefinition, ConditionalRuntime
         from .dynamic import DynamicDefinition, DynamicRuntime, _effect_type_label
         from .prompt import PromptDefinition, PromptRuntime
@@ -543,6 +621,10 @@ Should the loop continue? Answer (yes/no):"""
 
         body_indent = "  " * (self.depth + 1)
         executed: list[dict[str, Any]] = []
+        # Overlays are always rebuilt from the context the iteration started
+        # with, never from the previous overlay — layering copies on copies
+        # would freeze whatever the enclosing scope looked like one step ago.
+        base_ctx = ctx
         for effect in self.defn.body:
             effect_record = {
                 "type": type(effect).__name__,
@@ -567,8 +649,7 @@ Should the loop continue? Answer (yes/no):"""
                 executed.append(effect_record)
                 # Expose the skip node to later body effects on the same terms
                 # as a produced one (see the sibling merge below).
-                if self.defn.name:
-                    ctx = {**ctx, **iter_store.state}
+                ctx = _scope_ctx(base_ctx, self._local_writes(iter_store, baseline))
                 continue
 
             if self.verbose and not is_prompt and not is_tool:
@@ -717,16 +798,20 @@ Should the loop continue? Answer (yes/no):"""
             executed.append(effect_record)
 
             # Make prior body effects' outputs available to subsequent body
-            # effects via short paths (e.g. {{backdrop.value}}).  This mirrors
-            # how DynamicRuntime chain flow exposes sibling writes through the
-            # shared root context dict.
-            if self.defn.name:
-                ctx = {**ctx, **iter_store.state}
+            # effects under the canonical within-iteration names — both
+            # {{prime.<step>.value}} and the bare {{<step>.value}}.  Named and
+            # unnamed loops go through the same overlay, so adding or removing
+            # a loop's `name:` no longer silently changes which spelling
+            # resolves.
+            ctx = _scope_ctx(base_ctx, self._local_writes(iter_store, baseline))
 
-        return {
-            "executed_effects": executed,
-            "count": len(executed),
-        }
+        return (
+            {
+                "executed_effects": executed,
+                "count": len(executed),
+            },
+            self._local_writes(iter_store, baseline),
+        )
 
 
 class _LoopIterTracker:
