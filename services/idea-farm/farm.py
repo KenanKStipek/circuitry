@@ -55,6 +55,16 @@ Design notes:
   Restarts resume from the file — the count is derived, never trusted.
 - Backoff caps at 120s: failures still bank salvage, so long sleeps only
   idle the fleet (a single bad job used to cost 10 minutes of dead air).
+- SUBMISSION BACKPRESSURE (2026-08-23): theme_rounds fans out to
+  max_concurrency=8 workers in idea_generator.yml, each submitting a job the
+  moment it gets a free worker slot — a burst the fleet may not drain within
+  CyberDiner's ~5 minute claim window, so tail jobs died TimedOut and got
+  retried, inflating load further (circuitry#77 / CyberDiner orders 17542,
+  17675, 17685). MAX_IN_FLIGHT_JOBS caps how many jobs the cyberdiner adapter
+  holds submitted-but-not-terminal at once; a worker past the cap blocks
+  until a job completes rather than adding to the burst. The run summary
+  line also now says whether the gap-fill round ran or was skipped (no
+  content needed), distinguishing that from an actual failure.
 
 Env:
   CYBERDINER_EXPO_URL   expo root URL (project-internal http://expo:3000)
@@ -64,6 +74,11 @@ Env:
   IDEAS_PER_RUN         target_count passed per run    (default: 15)
   SLEEP_BETWEEN_RUNS    seconds between runs           (default: 20)
   JOB_TIMEOUT_SECONDS   per-job adapter timeout        (default: 600)
+  MAX_IN_FLIGHT_JOBS    cap on jobs the adapter holds submitted-but-not-
+                        terminal at once; a queued worker waits for a
+                        completion before submitting the next one instead of
+                        bursting the whole round at the fleet. 0 disables
+                                                       (default: 4)
   FANOUT_EVERY          apply the fan-out shape hint every Nth run;
                         0 disables                     (default: 2)
   CONNECTOR_EVERY       apply the connector/human-in-the-loop shape hint
@@ -572,6 +587,20 @@ def extract_ideas(text: str) -> list[str]:
     return out
 
 
+def gap_ideas_ran(state: dict) -> bool:
+    """True when the gap-fill rescue round actually ran — the model-as-sensor
+    in idea_generator.yml judged the curated list short and the `then`
+    branch executed. False means the round was SKIPPED because the sensor
+    said the list was fine already: a control signal handled locally, not a
+    failure, and callers should log it as such rather than lump a healthy
+    skip in with an empty harvest."""
+    node = (state.get("prime") or {}).get("gap_ideas")
+    if not isinstance(node, dict):
+        return False
+    value = node.get("value")
+    return isinstance(value, str) and bool(value.strip())
+
+
 def harvest_texts(state: dict) -> list[str]:
     """Collect every idea-bearing text from a run's (possibly partial) state:
     final_list, curate, gap_ideas, and each completed theme round."""
@@ -619,6 +648,13 @@ def build_config() -> CircuitryConfig:
                     "default_tier": tier,
                     "poll_interval_ms": 500,
                     "timeout_seconds": int(os.environ.get("JOB_TIMEOUT_SECONDS", "600")),
+                    # Backpressure: theme_rounds fans out to max_concurrency=8
+                    # workers, each holding one job the moment it frees up —
+                    # a burst the fleet may not drain within expo's claim
+                    # window (circuitry#77 / CyberDiner orders 17542, 17675,
+                    # 17685). Capping in-flight jobs below that width makes a
+                    # queued worker wait for a completion before submitting.
+                    "max_in_flight": int(os.environ.get("MAX_IN_FLIGHT_JOBS", "4")),
                 }
             }
         },
@@ -708,6 +744,7 @@ def main() -> int:
         off_focus = 0
         near_dups = 0
         wanted = focus_tokens(focus)
+        gap_status = "ran" if gap_ideas_ran(result.state or {}) else "skipped (no content)"
         with master.open("a", encoding="utf-8") as fh:
             for text in harvest_texts(result.state or {}):
                 for idea in extract_ideas(text):
@@ -744,7 +781,8 @@ def main() -> int:
         if not result.ok:
             print(f"[farm] run {run_no} ({focus}, {shape}) FAILED after {time.time()-started:.0f}s "
                   f"(salvaged +{fresh}, focus_rejects={focus_rejects}, "
-                  f"off_focus={off_focus}, near_dups={near_dups} "
+                  f"off_focus={off_focus}, near_dups={near_dups}, "
+                  f"gap_ideas={gap_status} "
                   f"→ {len(index)}/{target}): "
                   f"{str(result.error)[:160]} — backing off {backoff:.0f}s", flush=True)
             time.sleep(backoff)
@@ -754,7 +792,7 @@ def main() -> int:
         backoff = 30.0
         print(f"[farm] run {run_no} ({focus}, {shape}): +{fresh} new, "
               f"focus_rejects={focus_rejects}, off_focus={off_focus}, "
-              f"near_dups={near_dups}, "
+              f"near_dups={near_dups}, gap_ideas={gap_status}, "
               f"{len(index)}/{target} total, {time.time()-started:.0f}s", flush=True)
         time.sleep(sleep_s)
 
