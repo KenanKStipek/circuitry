@@ -28,7 +28,7 @@ block must restate every value it still wants.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -116,6 +116,22 @@ class ComplexityBand:
 
     def as_dict(self) -> dict[str, Any]:
         return {"name": self.name, "max": self.max, "model": self.model}
+
+
+def band_for(value: float, bands: Sequence[ComplexityBand]) -> ComplexityBand | None:
+    """First band whose inclusive ``max`` covers *value*; the catch-all last.
+
+    Shared by every reader of a band table — the static ``cof score`` preview
+    and the runtime ``--explain-routing`` line both call this rather than
+    re-implementing the walk, so a score is read the same way whether it comes
+    from the frozen tree or a live dispatch. ``None`` only when *bands* is
+    empty; a non-empty table always has a catch-all (enforced at config
+    resolution), so some band always matches.
+    """
+    for band in bands:
+        if band.max is None or value <= band.max:
+            return band
+    return None
 
 
 @dataclass(frozen=True)

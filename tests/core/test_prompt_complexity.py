@@ -337,6 +337,46 @@ def test_a_misspelled_weight_stops_the_run_at_config_resolution(
     assert "prime" not in result.state
 
 
+#: A single catch-all band so every score matches it deterministically,
+#: independent of what the score itself works out to be.
+ROUTING_ON: dict[str, Any] = {
+    "complexity": {
+        "scoring": {"enabled": True},
+        "routing": {"enabled": True, "bands": [{"model": "small-model"}]},
+    }
+}
+
+
+def test_model_and_model_reason_are_recorded_pre_dispatch() -> None:
+    """``meta.model``/``meta.model_reason`` are unconditional — present with
+    scoring off too — and ``model`` is the effect's *actually resolved*
+    model, not just the run default, matching what dispatch itself uses."""
+    explicit_store = _run(_prompt_orch(model="pinned-model"))
+    assert explicit_store.get("prime.task.meta.model") == "pinned-model"
+    assert explicit_store.get("prime.task.meta.model_reason") == "explicit"
+
+    default_store = _run(_prompt_orch())
+    assert default_store.get("prime.task.meta.model") == "primary-model"
+    assert default_store.get("prime.task.meta.model_reason") == "default"
+
+
+def test_band_is_recorded_only_when_routing_is_enabled() -> None:
+    """``meta.complexity.band`` names the routing table's match — purely
+    descriptive, never a dispatch decision (``meta.model`` is untouched by
+    it) — and is absent whenever routing itself is off."""
+    routed = _run(_prompt_orch(), runtime_config=ROUTING_ON)
+    assert routed.get("prime.task.meta.complexity.band") == {
+        "name": "",
+        "model": "small-model",
+    }
+    # The band never overrides the actually-dispatched model.
+    assert routed.get("prime.task.meta.model") == "primary-model"
+    assert routed.get("prime.task.meta.model_reason") == "default"
+
+    scoring_only = _run(_prompt_orch(), runtime_config=SCORING_ON)
+    assert "band" not in scoring_only.get("prime.task.meta.complexity")
+
+
 @pytest.mark.parametrize("runtime_config", [None, {}, SCORING_OFF])
 def test_no_key_is_added_when_scoring_is_disabled(
     runtime_config: dict[str, Any] | None,
