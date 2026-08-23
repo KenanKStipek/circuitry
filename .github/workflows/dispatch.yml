@@ -1,15 +1,93 @@
+# VENDORED from KenanKStipek/agent-loop@v1 (e43133f) dispatch.yml +
+# templates/dispatch.yml (public repo cannot call private hub).
+# Dependency-aware: eligible = open + agent-ready + no state labels + no open
+# "blocked by" deps on the issue OR any same-repo ancestor (task -> product
+# story -> epic). Uses the real-time Issues list API, NOT search (the search
+# index lags label changes by 30+ min). Oldest first, 1 per run.
 name: Dispatch queued agent work
 on:
   schedule:
-    # Circuitry keeps its 3-hourly cadence rather than the hub template's daily
-    # '17 15 * * *'. :17 avoids top-of-hour runner congestion.
-    - cron: '17 */3 * * *'
+    - cron: '17 */3 * * *' # circuitry keeps its 3-hourly cadence; :17 avoids top-of-hour congestion
   workflow_dispatch: {} # manual "Run workflow" button
 permissions:
   issues: read
 jobs:
   dispatch:
-    uses: KenanKStipek/agent-loop/.github/workflows/dispatch.yml@v1
-    secrets: inherit
-    # with:
-    #   limit: 1   # hub default is 1; the old inlined version used 2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find and dispatch eligible issues
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          LIMIT: 1
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          candidates=$(gh api \
+            "repos/$REPO/issues?labels=agent-ready&state=open&sort=created&direction=asc&per_page=50" \
+            --jq '.[]
+              | select(has("pull_request") | not)
+              | select(([.labels[].name]
+                  | map(select(. == "working" or . == "ready-for-review"
+                            or . == "needs-plan" or . == "needs-human"
+                            or . == "blocked" or . == "hold" or . == "in-loop"))
+                  | length) == 0)
+              | .number')
+          if [ -z "$candidates" ]; then
+            echo "Queue empty — nothing to dispatch."
+            exit 0
+          fi
+
+          open_blockers() {
+            gh api "repos/$REPO/issues/$1/dependencies/blocked_by" \
+              --jq '[.[] | select(.state=="open")] | length' 2>/dev/null || echo 0
+          }
+          parent_of() {
+            gh api graphql \
+              -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){parent{number repository{nameWithOwner}}}}}' \
+              -f o="${REPO%%/*}" -f r="${REPO##*/}" -F n="$1" \
+              --jq '.data.repository.issue.parent
+                    | select(. != null)
+                    | select(.repository.nameWithOwner == env.REPO)
+                    | .number' 2>/dev/null || true
+          }
+          ancestors_of() {
+            cur="$1"; hops=0
+            while [ "$hops" -lt 5 ]; do
+              p="$(parent_of "$cur")"
+              [ -z "$p" ] && break
+              echo "$p"
+              cur="$p"; hops=$((hops+1))
+            done
+          }
+
+          dispatched=0
+          for n in $candidates; do
+            [ "$dispatched" -ge "$LIMIT" ] && break
+
+            if [ "$(open_blockers "$n")" != "0" ]; then
+              echo "#$n has open blockers — skipping"
+              continue
+            fi
+
+            blocked_by_ancestor=""
+            for a in $(ancestors_of "$n"); do
+              if [ "$(open_blockers "$a")" != "0" ]; then
+                blocked_by_ancestor="$a"
+                break
+              fi
+            done
+            if [ -n "$blocked_by_ancestor" ]; then
+              echo "#$n ancestor #$blocked_by_ancestor has open blockers — skipping"
+              continue
+            fi
+
+            echo "Dispatching #$n"
+            gh issue comment "$n" --repo "$REPO" --body \
+              "@claude Automated dispatch: this issue is queued with no active or pending state and no open blockers. Read .agent-loop/process/AGENT.md and work it per CLAUDE.md and the issue body. If a previous attempt left a partial branch (claude/issue-${n}-*), resume from it rather than starting over. Open a PR; do not merge."
+            dispatched=$((dispatched+1))
+          done
+
+          if [ "$dispatched" -eq 0 ]; then
+            echo "No eligible (unblocked) issues to dispatch."
+          fi

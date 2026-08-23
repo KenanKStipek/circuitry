@@ -1,11 +1,81 @@
+# VENDORED from KenanKStipek/agent-loop@v1 (e43133f) rollup.yml +
+# templates/rollup.yml (public repo cannot call private hub).
+# On any issue close: record completion on the parent; when the last
+# sub-issue closes, auto-close product stories (mechanical truth) or label
+# other parents ready-for-acceptance. Parents may live in the PRIVATE wishes
+# repo — the cross-repo comment/label steps need DISPATCH_TOKEN to have
+# access there; without it those steps fail (see continue-on-error note in
+# the job — errors are logged, same-repo rollups still work).
 name: Roll-up
 on:
   issues:
     types: [closed]
 jobs:
   rollup:
+    runs-on: ubuntu-latest
     permissions:
       issues: write
       contents: read
-    uses: KenanKStipek/agent-loop/.github/workflows/rollup.yml@v1
-    secrets: inherit
+    steps:
+      - name: Record completion upward
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          REPO: ${{ github.repository }}
+          N: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+
+          data=$(gh api graphql -f query='
+            query($o:String!,$r:String!,$n:Int!){
+              repository(owner:$o,name:$r){
+                issue(number:$n){
+                  title
+                  url
+                  closedByPullRequestsReferences(first:1){nodes{url}}
+                  parent{
+                    number
+                    state
+                    repository{ nameWithOwner }
+                    labels(first:30){ nodes{ name } }
+                    subIssuesSummary{ total completed }
+                  }
+                }
+              }
+            }' -f o="${REPO%%/*}" -f r="${REPO##*/}" -F n="$N")
+
+          parent_repo=$(echo "$data" | jq -r '.data.repository.issue.parent.repository.nameWithOwner // empty')
+          if [ -z "$parent_repo" ]; then
+            echo "No parent — nothing to roll up."
+            exit 0
+          fi
+          parent_num=$(echo "$data"  | jq -r '.data.repository.issue.parent.number')
+          parent_state=$(echo "$data" | jq -r '.data.repository.issue.parent.state')
+          parent_labels=$(echo "$data" | jq -r '[.data.repository.issue.parent.labels.nodes[].name] | join(",")')
+          total=$(echo "$data"     | jq -r '.data.repository.issue.parent.subIssuesSummary.total')
+          completed=$(echo "$data" | jq -r '.data.repository.issue.parent.subIssuesSummary.completed')
+          title=$(echo "$data" | jq -r '.data.repository.issue.title')
+          url=$(echo "$data"   | jq -r '.data.repository.issue.url')
+          pr_url=$(echo "$data" | jq -r '.data.repository.issue.closedByPullRequestsReferences.nodes[0].url // empty')
+
+          demo=$(gh api "repos/$REPO/issues/$N/comments" --paginate --jq '.[].body' \
+            | grep -oE 'https://github.com/[^ ]+/releases/download/demos/[^ )]+' | tail -1 || true)
+
+          line="Completed: [$title]($url)"
+          [ -n "$pr_url" ] && line="$line — PR: $pr_url"
+          [ -n "$demo" ]  && line="$line — demo: $demo"
+          gh issue comment "$parent_num" --repo "$parent_repo" --body "$line"
+          echo "recorded on $parent_repo#$parent_num ($completed/$total complete)"
+
+          if [ "$parent_state" = "OPEN" ] && [ "$total" -gt 0 ] && [ "$completed" -eq "$total" ]; then
+            if echo ",$parent_labels," | grep -q ',product-story,'; then
+              gh issue comment "$parent_num" --repo "$parent_repo" --body \
+                "All $total tasks complete — the product story is true; closing. Acceptance happens at the epic.${demo:+ Latest demo: $demo}"
+              gh issue close "$parent_num" --repo "$parent_repo" --reason completed
+              echo "closed product story $parent_repo#$parent_num — roll-up continues to its epic"
+            else
+              gh issue edit "$parent_num" --repo "$parent_repo" \
+                --add-label ready-for-acceptance 2>/dev/null || true
+              gh issue comment "$parent_num" --repo "$parent_repo" --body \
+                "All $total sub-issues complete — ready for acceptance.${demo:+ Latest demo: $demo}"
+            fi
+          fi
