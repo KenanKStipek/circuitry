@@ -57,6 +57,26 @@ Two checks run on every harvested line, both pure-python (no extra deps):
   Comparisons go through an inverted token index over both windows, so a new
   idea is only scored against ideas sharing a content word.
 
+## No-op jobs and fleet backpressure
+
+Two field bugs (2026-08-16, CyberDiner orders 17542/17675/17685):
+
+- **Degenerate echo jobs.** The rescue round used to run unconditionally,
+  even when the curated list was already fine — a full network job whose
+  entire output was the sentinel "(no additional ideas needed)". A
+  model-as-sensor `if` in `idea_generator.yml` now gates that round: it only
+  runs when the sensor judges the list short, so a healthy run submits no
+  job for it at all. The farm's per-run log line reports `gap_ideas=ran` or
+  `gap_ideas=skipped (no content)` so a skip never reads as a failure.
+- **Burst submission outrunning the claim window.** `theme_rounds` fans out
+  to `max_concurrency: 8` workers, each submitting a job the instant it gets
+  a free worker slot — more concurrent jobs than the fleet may claim within
+  expo's ~5 minute claim window, so tail jobs died `TimedOut` and were
+  retried, inflating load further. `MAX_IN_FLIGHT_JOBS` (default `4`) caps
+  how many jobs the `cyberdiner` adapter holds submitted-but-not-terminal at
+  once; a worker past the cap blocks until a job completes instead of
+  adding to the burst.
+
 ## Corpus QA
 
 `qa_corpus.py` reports total vs effective-unique ideas, per-focus adherence,
@@ -91,6 +111,7 @@ Set `QA_ON_BOOT=1` to print the report at farm startup.
    | `IDEAS_PER_RUN` | `15` |
    | `SLEEP_BETWEEN_RUNS` | `20` |
    | `JOB_TIMEOUT_SECONDS` | `600` |
+   | `MAX_IN_FLIGHT_JOBS` | `4` (jobs the adapter holds in flight at once — backpressure below theme_rounds' `max_concurrency: 8`; `0` disables) |
    | `DUP_THRESHOLD` | `0.7` (Jaccard similarity counting as a duplicate) |
    | `DUP_LEAD_WORDS` | `8` (leading content words of the tail-proof key; `0` disables) |
    | `FOCUS_CHECK` | `template` (`strict` / `off`) |
