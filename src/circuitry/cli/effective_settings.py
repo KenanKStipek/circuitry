@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from .complexity_config import (
     DEFAULT_COMPLEXITY_SETTINGS,
     ComplexitySettings,
+    RoutingSettings,
     resolve_complexity_settings,
 )
 from .config import CircuitryConfig
@@ -33,9 +34,16 @@ class EffectiveSettings:
     runtime: dict[str, Any]
     sources: dict[
         str, str
-    ]  # where each value came from (cli/orchestration/config/default)
+    ]  # where each value came from (cli/router/orchestration/config/default)
     # Typed view of runtime["complexity"], validated at resolution time.
     complexity: ComplexitySettings = DEFAULT_COMPLEXITY_SETTINGS
+    # True when `model` was pinned by a deliberate choice — `--model` or a
+    # profile's run-level `model:` — rather than inherited from the
+    # orchestration or config. Read by the runtime to tell the complexity
+    # router which of the two it is looking at: it outranks the inherited
+    # defaults and defers to the pinned ones. Not derivable from `sources`
+    # once the router itself wins that entry.
+    model_locked: bool = False
 
 
 def _merge_runtime(
@@ -175,6 +183,13 @@ def resolve_effective_settings(
         orch_block=orch_runtime.get("complexity"),
     )
 
+    # Resolved after the complexity block because that is what decides it: the
+    # router sits between the pinned layers and the inherited ones, so it can
+    # only be slotted into the model chain once the routing switch is known.
+    model, model_locked = _apply_router_precedence(
+        sources, model=model, routing=complexity.routing
+    )
+
     return EffectiveSettings(
         model=model,
         adapter=adapter,
@@ -183,7 +198,50 @@ def resolve_effective_settings(
         runtime=runtime,
         sources=sources,
         complexity=complexity,
+        model_locked=model_locked,
     )
+
+
+def _apply_router_precedence(
+    sources: dict[str, str],
+    *,
+    model: str | None,
+    routing: RoutingSettings,
+) -> tuple[str | None, bool]:
+    """Slot the complexity router into the model precedence chain.
+
+    Full order, once routing is in it:
+
+    ``--model`` > per-effect ``model:`` > profile effect override > **router**
+    > orchestration default > config default
+
+    Only the run-level layers are visible here; the two per-effect ones live on
+    the compiled definition and are applied at dispatch. What this function
+    settles is the boundary either side of the router — which is why it returns
+    ``model_locked`` as well as the model: the runtime needs to know whether the
+    string it is handed came from above the router or below it, and once the
+    router wins ``sources["model"]`` that entry no longer says.
+
+    The value in ``model`` stays the *run default* even when the router wins the
+    source entry, because the router's real answer is per-effect: this is what a
+    prompt falls back to when there is no score to route on, and what every
+    non-prompt effect uses. The one exception is a run that configures a band
+    table and no default model at all — a perfectly coherent thing to want,
+    which used to fail with "no model resolved". There the catch-all band, whose
+    whole job is "the model for anything not otherwise matched", *is* the run
+    default.
+    """
+    locked = sources.get("model") in ("cli", "profile")
+    if not routing.enabled or not routing.bands:
+        return model, locked
+    if locked and routing.respect_explicit:
+        return model, locked
+
+    sources["model"] = "router"
+    if model is None:
+        # Validation guarantees a non-empty table ends in the catch-all.
+        model = routing.bands[-1].model
+    return model, locked
 
 
 def _record_complexity_sources(
