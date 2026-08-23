@@ -38,12 +38,16 @@ from circuitry.tui.app import CircuitryApp
 from circuitry.tui.screens import VIEWS
 
 #: Ceiling for building and painting one view, in seconds. A person notices
-#: about 100ms; this leaves an order of magnitude of headroom for a shared
-#: CI runner and still fails loudly if a view starts blocking on the network.
-FRAME_BUDGET = 1.5
+#: about 100ms; this leaves headroom for a shared CI runner and still fails
+#: loudly if a view starts blocking on the network. Measured on an idle box,
+#: Doctor (the heaviest view — it mounts 100 check rows) opens in ~0.5s; CI
+#: has been observed pushing that past 1.8s under matrix contention with no
+#: code change involved, so the budget needs real slack rather than just an
+#: order of magnitude over the human-noticeable threshold.
+FRAME_BUDGET = 3.0
 
 #: Ceiling for a keypress handled while a run is blocked in the adapter.
-BUSY_BUDGET = 1.5
+BUSY_BUDGET = 3.0
 
 
 @dataclass
