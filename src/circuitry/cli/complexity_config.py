@@ -32,6 +32,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..core.complexity import SIGNAL_NAMES
 from .config import ConfigError
 
 #: Bounded, documented range every complexity score is normalized into.
@@ -40,11 +41,20 @@ from .config import ConfigError
 SCORE_MIN = 0.0
 SCORE_MAX = 100.0
 
-#: Signals the scorer weighs, with their default relative weights. A weight is
-#: a multiplier on that signal's normalized measurement; the scorer owns how
-#: the weighted signals combine into the final score. Unknown signal names are
-#: rejected at config resolution so a typo cannot silently do nothing.
-DEFAULT_WEIGHTS: dict[str, float] = {
+#: Default relative weight per signal. A weight is a multiplier on that
+#: signal's normalized measurement; the scorer owns how the weighted signals
+#: combine into the final score.
+#:
+#: The keys are :data:`circuitry.core.complexity.SIGNAL_NAMES` verbatim — the
+#: config surface and the scorer share one vocabulary, so a configured weight
+#: reaches the signal it names with no translation anywhere. Building the table
+#: by iterating ``SIGNAL_NAMES`` is what enforces that: add a signal to the
+#: scorer without a default here and this module fails to import, rather than
+#: shipping a name the config surface silently rejects.
+#:
+#: Unknown signal names are rejected at config resolution (see
+#: :func:`_parse_scoring`) so a typo cannot silently do nothing.
+_DEFAULT_WEIGHT_VALUES: dict[str, float] = {
     "prompt_size": 1.0,
     "state_references": 1.5,
     "prompt_type": 0.75,
@@ -52,6 +62,10 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "output_size": 1.0,
     "structural_position": 0.5,
     "keywords": 1.0,
+}
+
+DEFAULT_WEIGHTS: dict[str, float] = {
+    name: _DEFAULT_WEIGHT_VALUES[name] for name in SIGNAL_NAMES
 }
 
 DEFAULT_THRESHOLD = 80.0
