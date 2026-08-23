@@ -45,6 +45,7 @@ from .orchestration_loader import serialize_orchestration
 from .redaction import REDACTED, redact_env_pairs
 from .registry import eject_destination, resolve_bundled, write_ejected
 from .runtime_shim import RunRequest, inspect_orchestration, run, validate
+from .score import register_score
 from .setup import register_setup
 from .shared_library import (
     apply_service_profile,
@@ -104,6 +105,7 @@ def _root(ctx: typer.Context) -> None:
 
 
 register_doctor(app)
+register_score(app)
 register_setup(app)
 
 #: Aliased from :mod:`circuitry.cli.last_run`, which the TUI's replay reads

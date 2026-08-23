@@ -507,6 +507,7 @@ class PromptRuntime:
         # weight silently do nothing.
         weights = dict(settings.scoring.weights)
 
+
         # An unconfigured keyword table resolves to ``{}``, which the scorer
         # reads as "disable the keyword signal". Only an explicit table should
         # replace the defaults, so empty means "unset" here.
