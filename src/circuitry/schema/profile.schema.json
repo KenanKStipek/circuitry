@@ -13,6 +13,10 @@
       "type": "string",
       "description": "Run-level default model override. Precedence: CLI > profile > orchestration > config."
     },
+    "out": {
+      "type": "string",
+      "description": "Default path to write the run's resulting state JSON to (same file the --out flag writes). Precedence: --out flag > profile > (no file written). Resolved the same way --out resolves today (relative to the working directory). Orthogonal to `persistence`: this is a one-shot snapshot of the final state, not a queryable/resumable backend."
+    },
     "inputs": {
       "type": "object",
       "description": "Merged into the initial state as a base layer. CLI -e values win over profile inputs."
