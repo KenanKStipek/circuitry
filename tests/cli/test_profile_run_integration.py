@@ -3,9 +3,14 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from circuitry.adapters.base import GenerateResult
 from circuitry.cli.config import CircuitryConfig
+from circuitry.cli.profiles import ProfileReconstructionError, profile_from_record
+from circuitry.cli.redaction import REDACTED
 from circuitry.cli.runtime_shim import RunRequest, run
 
 
@@ -294,3 +299,169 @@ def test_run_without_profile_is_unaffected_by_profile_plumbing(tmp_path: Path) -
     assert "profile" not in state_default["runtime"]["effective_settings"]
     assert "profile" not in state_explicit_none["runtime"]["effective_settings"]
     assert _strip_volatile(state_default) == _strip_volatile(state_explicit_none)
+
+
+# -- reconstruction from the recorded profile (epic #11 AC3, issue #132) ----
+
+
+def _scrub_volatile(node: object) -> object:
+    """Replace run id / timestamp fields anywhere in the tree with fixed markers."""
+    if isinstance(node, dict):
+        return {
+            key: "T"
+            if key in {"created_at", "completed_at", "started_at"}
+            else "RID"
+            if key == "run_id"
+            else _scrub_volatile(value)
+            for key, value in node.items()
+        }
+    if isinstance(node, list):
+        return [_scrub_volatile(item) for item in node]
+    return node
+
+
+def _strip_volatile_state(state: dict) -> dict:
+    clone = json.loads(json.dumps(state, default=str))
+    clone.pop("_run_id", None)
+    clone.pop("_timestamp", None)
+    return _scrub_volatile(clone)  # type: ignore[return-value]
+
+
+def test_profile_reconstructed_from_the_record_alone_reproduces_the_run(
+    tmp_path: Path,
+) -> None:
+    """Take only `runtime.effective_settings.profile` from a run, delete the
+    profile file it came from, and re-run from the record alone.
+
+    The profile carries a run-level model override and a disabled effect —
+    the sharpest pair, since both leave traces in state
+    (`sources.model == "profile"`, `meta.disabled is True`) rather than just
+    proving the run completed.
+    """
+    orch_path = tmp_path / "recipe.yml"
+    _write(
+        orch_path,
+        """
+effects:
+  - type: prompt
+    name: summarize
+    template: "summarize {{topic}}"
+  - type: prompt
+    name: extra
+    template: "extra {{topic}}"
+""".strip()
+        + "\n",
+    )
+    profile_path = orch_path.parent / "profiles" / "repro.yml"
+    _write(
+        profile_path,
+        """
+model: reproduced-model
+effects:
+  extra:
+    enabled: false
+""".strip()
+        + "\n",
+    )
+
+    def _run_once(**kwargs: Any) -> dict:
+        req = RunRequest(
+            orchestration_path=orch_path,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            config=CircuitryConfig(),
+            adapter=RecordingAdapter(name="primary"),
+            initial_state={"topic": "widgets"},
+            **kwargs,
+        )
+        result = run(req)
+        assert result.ok is True, result.error
+        return result.state
+
+    first_state = _run_once(profile_name="repro")
+
+    # The profile's behaviour-changing effects actually landed.
+    settings = first_state["runtime"]["effective_settings"]
+    assert settings["sources"]["model"] == "profile"
+    assert settings["model"] == "reproduced-model"
+    assert first_state["prime"]["extra"]["value"] is None
+    assert first_state["prime"]["extra"]["meta"]["disabled"] is True
+
+    record = settings["profile"]
+    assert record == {"name": "repro", "content": {"model": "reproduced-model", "effects": {"extra": {"enabled": False}}}}
+
+    # Prove reconstruction doesn't touch the filesystem: the source file is gone.
+    profile_path.unlink()
+
+    second_state = _run_once(profile_record=record)
+
+    second_settings = second_state["runtime"]["effective_settings"]
+    assert second_settings["sources"]["model"] == "profile"
+    assert second_settings["model"] == "reproduced-model"
+    assert second_state["prime"]["extra"]["meta"]["disabled"] is True
+
+    assert _strip_volatile_state(first_state) == _strip_volatile_state(second_state)
+
+
+def test_reconstructing_a_redacted_profile_record_fails_loudly(tmp_path: Path) -> None:
+    """A profile carrying a secret is recorded redacted, so a faithful
+    reconstruction is impossible by design. Reconstruction must refuse
+    loudly, naming the redacted field, rather than replaying the literal
+    redaction sentinel as if it were the real value."""
+    orch_path = _write_orch(tmp_path)
+    _write(
+        orch_path.parent / "profiles" / "leaky.yml",
+        """
+inputs:
+  topic: "widgets"
+  api_key: "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+""".strip()
+        + "\n",
+    )
+
+    req = RunRequest(
+        orchestration_path=orch_path,
+        state_path=None,
+        out_path=None,
+        dry_run=False,
+        validate_only=False,
+        config=CircuitryConfig(),
+        adapter=RecordingAdapter(name="primary"),
+        profile_name="leaky",
+    )
+    result = run(req)
+    assert result.ok is True, result.error
+
+    record = result.state["runtime"]["effective_settings"]["profile"]
+    assert record["content"]["inputs"]["api_key"] == REDACTED
+
+    with pytest.raises(ProfileReconstructionError) as exc_info:
+        profile_from_record(record, orch={})
+
+    message = str(exc_info.value)
+    assert "leaky" in message
+    assert "inputs.api_key" in message
+
+
+def test_run_with_profile_record_and_profile_name_both_set_is_rejected(
+    tmp_path: Path,
+) -> None:
+    orch_path = _write_orch(tmp_path)
+    _write(orch_path.parent / "profiles" / "fast.yml", "model: cheap\n")
+
+    req = RunRequest(
+        orchestration_path=orch_path,
+        state_path=None,
+        out_path=None,
+        dry_run=True,
+        validate_only=False,
+        config=CircuitryConfig(),
+        profile_name="fast",
+        profile_record={"name": "fast", "content": {"model": "cheap"}},
+    )
+    result = run(req)
+
+    assert result.ok is False
+    assert "mutually exclusive" in (result.error or "")
