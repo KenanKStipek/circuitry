@@ -68,6 +68,7 @@ class ProfileSettings:
     path: Path
     adapter: str | None
     model: str | None
+    out: str | None = None
     inputs: dict[str, Any] = field(default_factory=dict)
     effects: dict[str, dict[str, Any]] = field(default_factory=dict)
     persistence: dict[str, Any] | None = None
@@ -281,6 +282,7 @@ def _settings_from_raw(raw: dict[str, Any], *, name: str, path: Path) -> Profile
     effects_raw = raw.get("effects") or {}
     adapter = raw.get("adapter")
     model = raw.get("model")
+    out = raw.get("out")
     inputs = raw.get("inputs") or {}
     persistence = raw.get("persistence")
 
@@ -289,6 +291,7 @@ def _settings_from_raw(raw: dict[str, Any], *, name: str, path: Path) -> Profile
         path=path,
         adapter=str(adapter) if adapter is not None else None,
         model=str(model) if model is not None else None,
+        out=str(out) if out is not None else None,
         inputs=dict(inputs) if isinstance(inputs, dict) else {},
         effects=(
             {str(k): dict(v) for k, v in effects_raw.items() if isinstance(v, dict)}

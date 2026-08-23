@@ -26,7 +26,7 @@ from __future__ import annotations
 import importlib.util
 import keyword
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from ..preflight import CheckResult
 from .base import ToolResult
@@ -78,9 +78,14 @@ class PythonEvalPlugin:
         code = params.get("code")
         if not isinstance(code, str) or not code.strip():
             raise ValueError("python_eval requires params['code'].")
-        mode = str(params.get("mode") or "eval").lower()
-        if mode not in ("eval", "exec"):
-            raise ValueError(f"python_eval: mode must be eval|exec, got {mode!r}")
+        mode_raw = str(params.get("mode") or "eval").lower()
+        mode: Literal["eval", "exec"]
+        if mode_raw == "eval":
+            mode = "eval"
+        elif mode_raw == "exec":
+            mode = "exec"
+        else:
+            raise ValueError(f"python_eval: mode must be eval|exec, got {mode_raw!r}")
         inputs = params.get("inputs") or {}
         if not isinstance(inputs, dict):
             raise ValueError("python_eval: params['inputs'] must be a dict.")
@@ -108,7 +113,7 @@ class PythonEvalPlugin:
         # Build the evaluation environment. ``safe_globals`` contains
         # RestrictedPython's runtime helpers; we extend it with our
         # curated builtins.
-        env_globals = dict(safe_globals)
+        env_globals: dict[str, Any] = dict(safe_globals)
         env_globals["__builtins__"] = dict(_SAFE_BUILTINS)
         env_globals["_getitem_"] = default_guarded_getitem
         env_globals["_getattr_"] = safer_getattr

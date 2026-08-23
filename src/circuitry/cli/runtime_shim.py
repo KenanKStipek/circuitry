@@ -99,6 +99,9 @@ class RunResult:
     state: dict[str, Any]
     warnings: list[str]
     error: str | None = None
+    # Resolved --out path (cli > profile > default) callers should write the
+    # final state to, instead of re-deriving precedence themselves.
+    out_path: Path | None = None
 
 
 def _now_iso() -> str:
@@ -122,6 +125,10 @@ def run(req: RunRequest) -> RunResult:
     plugins: list[RuntimePlugin] = []
     run_id: str | None = None
     runtime_config: dict[str, Any] = {}
+    # Resolved --out path (cli > profile > default); refined once the
+    # profile, if any, is loaded below. Kept outside the try's happy path so
+    # a failure before that point still reports the caller's own --out.
+    resolved_out: Path | None = req.out_path
 
     try:
         cfg = req.config or CircuitryConfig()
@@ -161,8 +168,10 @@ def run(req: RunRequest) -> RunResult:
             orch=orch,
             cli_model=req.model_override,
             cli_adapter=req.adapter_override,
+            cli_out=req.out_path,
             profile=profile,
         )
+        resolved_out = effective.out
         # One shared dict for the whole run: `use` effects append their library
         # pins to it as they resolve, at any nesting depth.
         runtime_config = effective.runtime if effective.runtime is not None else {}
@@ -218,6 +227,7 @@ def run(req: RunRequest) -> RunResult:
         state["runtime"]["effective_settings"] = {
             "model": effective.model,
             "adapter": effective.adapter,
+            "out": str(effective.out) if effective.out else None,
             "plugins": effective.plugins,
             "runtime": redact(effective.runtime),
             "sources": effective.sources,
@@ -248,7 +258,7 @@ def run(req: RunRequest) -> RunResult:
 
         if req.validate_only:
             state["runtime"]["last_run"]["completed_at"] = _now_iso()
-            return RunResult(ok=True, state=state, warnings=warnings)
+            return RunResult(ok=True, state=state, warnings=warnings, out_path=resolved_out)
 
         start_events = invoke_plugins(
             plugins=plugins,
@@ -462,7 +472,7 @@ def run(req: RunRequest) -> RunResult:
                 state["runtime"]["persistence"]["error"] = str(e)
                 raise RuntimeError(f"Failed to persist runtime state: {e}") from e
 
-        return RunResult(ok=True, state=state, warnings=warnings)
+        return RunResult(ok=True, state=state, warnings=warnings, out_path=resolved_out)
 
     except Exception as e:
         try:
@@ -506,7 +516,7 @@ def run(req: RunRequest) -> RunResult:
                 persistence_node["error"] = str(e)
         except Exception:
             logger.exception("Error during error-handling cleanup")
-        return RunResult(ok=False, state=state, warnings=warnings, error=str(e))
+        return RunResult(ok=False, state=state, warnings=warnings, error=str(e), out_path=resolved_out)
 
 
 def _compose_effect_observers(
