@@ -719,6 +719,7 @@ def test_factory_cyberdiner_config_passthrough() -> None:
                 "valid_tiers": ["cheap", " good-fast ", ""],
                 "poll_interval_ms": 250,
                 "timeout_seconds": 45,
+                "max_in_flight": 6,
             }
         }
     }
@@ -730,6 +731,7 @@ def test_factory_cyberdiner_config_passthrough() -> None:
     assert adapter.valid_tiers == ("cheap", "good-fast")
     assert adapter.poll_interval_ms == 250
     assert adapter.timeout_seconds == 45
+    assert adapter.max_in_flight == 6
 
 
 def test_factory_cyberdiner_defaults_when_config_absent() -> None:
@@ -741,6 +743,92 @@ def test_factory_cyberdiner_defaults_when_config_absent() -> None:
     assert adapter.valid_tiers == ()
     assert adapter.poll_interval_ms == 500
     assert adapter.timeout_seconds == 30
+    assert adapter.max_in_flight == 0
+
+
+# ---------------------------------------------------------------------------
+# In-flight backpressure (circuitry#77)
+# ---------------------------------------------------------------------------
+
+
+def test_max_in_flight_zero_does_not_gate_concurrent_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default (0) is unbounded — no semaphore, no behavior change."""
+    import threading
+    import time as _time
+
+    active = [0]
+    peak = [0]
+    lock = threading.Lock()
+
+    def fake_urlopen(req: Any, timeout: float = 0) -> _FakeResponse:
+        with lock:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        _time.sleep(0.05)
+        with lock:
+            active[0] -= 1
+        job = {"data": {"jobId": "job-1", "status": "complete", "result": "ok"}}
+        return _FakeResponse(status=200, body=_json.dumps(job).encode("utf-8"))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    adapter = _adapter()  # max_in_flight defaults to 0
+    threads = [
+        threading.Thread(
+            target=adapter.generate, kwargs={"model": "cheap", "prompt": "hi", "timeout_seconds": 5}
+        )
+        for _ in range(6)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert peak[0] == 6
+
+
+def test_max_in_flight_caps_concurrent_submissions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller past max_in_flight blocks until a job completes, instead of
+    piling every submission onto the fleet at once (circuitry#77: bursts
+    deeper than the fleet drains within CyberDiner's claim window died
+    TimedOut and were retried)."""
+    import threading
+    import time as _time
+
+    active = [0]
+    peak = [0]
+    lock = threading.Lock()
+
+    def fake_urlopen(req: Any, timeout: float = 0) -> _FakeResponse:
+        with lock:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        _time.sleep(0.05)
+        with lock:
+            active[0] -= 1
+        job = {"data": {"jobId": "job-1", "status": "complete", "result": "ok"}}
+        return _FakeResponse(status=200, body=_json.dumps(job).encode("utf-8"))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    adapter = _adapter(max_in_flight=2)
+    results: list[str] = []
+
+    def _run() -> None:
+        results.append(adapter.generate(model="cheap", prompt="hi", timeout_seconds=5).text)
+
+    threads = [threading.Thread(target=_run) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert peak[0] <= 2
+    assert results == ["ok"] * 6
 
 
 # ---------------------------------------------------------------------------
