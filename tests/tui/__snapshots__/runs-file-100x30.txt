@@ -1,6 +1,6 @@
  ⭘                                       Circuitry — Runs                                           
                                                                                                     
-  Runs — Inspect run state as a tree, open a saved state file, replay the last run                  
+  Runs — Walk a run's state as a tree, open a saved one, replay the last                            
                                                                                                     
   ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎  
   ▊  path to a state JSON (--out / --live-state) — Enter opens it                                ▎  
@@ -27,4 +27,4 @@
   file — yesterday.json                                                                             
   Last run — demo.yml · openai · gpt-4o-mini  (Ctrl-R replays it)                                   
                                                                                                     
- tab Next view  y Copy path  o Open state file  ^r Replay last run  ? Help  q Back / Qui▏^p palette 
+ y Copy path  o Open state file  ^r Replay last run  ^n Next field  ? Help  q Back / Quit           

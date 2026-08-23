@@ -1,7 +1,7 @@
  ⭘                                     Circuitry — Validate                                         
                                                                                                     
   Validate                                                                                          
-  Check an orchestration file for schema, compile, cycle and preflight errors                       
+  Check a file for schema, compile, cycle and preflight errors                                      
                                                                                                     
   ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎  
   ▊  tests/tui/fixtures/broken.yml                                                               ▎  
@@ -27,4 +27,4 @@
                                                                                                     
                                                                                                     
                                                                                                     
- tab Next view  ^r Re-validate  ? Help  q Back / Quit                                   ▏^p palette 
+ ^r Re-validate  ^n Next field  ? Help  q Back / Quit                                               

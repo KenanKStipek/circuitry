@@ -21,4 +21,4 @@
   ╰──────────────╯╰─────────────────────╯╰───────────────────────────────────╯  
   0/0 in all · source hub — Source: hub                                         
                                                                                 
- tab Next view  / Search  ⏎ Run  e Eject  s Source  r Refresh  ? Hel▏^p palette 
+ / Search  ⏎ Run  e Eject  s Source  r Refresh  ^n Next field  ? Help  q Back / 

@@ -1,18 +1,19 @@
  ⭘                             Circuitry — Home                                 
                                                                                 
   Circuitry                                                                     
-  Cybernetic orchestration framework. Pick a view, or press ? for keys.         
+  Nine views, no mouse. Pick one, or press ? and the app will tell you every    
+  key it knows.                                                                 
                                                                                 
   ╭──────────────────────────────────────────────────────────────────────────╮  
   │1  Library — Browse bundled and shared orchestrations                     │  
-  │2  Run — Execute an orchestration and watch effects stream                │  
+  │2  Run — Run an orchestration and watch the effects land                  │  
   │3  Inspect — Orchestration metadata, schema validation, and warnings      │  
-  │4  Runs — Inspect run state as a tree, open a saved state file, replay the│  
+  │4  Runs — Walk a run's state as a tree, open a saved one, replay the last │  
   │5  Doctor — Backend, config, and connectivity diagnostics                 │  
   │6  Settings — Effective configuration and where each value came from      │  
-  │7  Validate — Check an orchestration file for schema, compile, cycle and p│  
-  │8  Chat — Describe a pipeline and let the wizard write the orchestration  │  
-  │9  Profiles — Edit named profiles: per-effect models, toggles, inputs and │  
+  │7  Validate — Check a file for schema, compile, cycle and preflight errors│  
+  │8  Chat — Describe a pipeline; the wizard writes the orchestration        │  
+  │9  Profiles — Per-effect models, toggles and inputs, saved under a name   │  
   ╰──────────────────────────────────────────────────────────────────────────╯  
                                                                                 
                                                                                 
@@ -20,5 +21,4 @@
                                                                                 
                                                                                 
                                                                                 
-                                                                                
- tab Next view  ? Help  q Back / Quit                               ▏^p palette 
+ ^n Next field  ? Help  q Back / Quit                                           

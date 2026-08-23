@@ -1,12 +1,12 @@
  ⭘       Circuitry — Profiles           
  Profiles                               
- Edit named profiles: per-effect        
- models, toggles, inputs and         ▄▄ 
- persistence                            
+ Per-effect models, toggles and         
+ inputs, saved under a name          ▄▄ 
  Orchestration                          
  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎   
  ▊   profile-tree.yml            ▼  ▎   
  ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎   
  Profile                                
  ▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎   
- tab Next view  ^s Save prof▏^p palette 
+ ▊  + new profile                ▼  ▎   
+ ^s Save  ^d Duplicate  ^o Drop orphans 
