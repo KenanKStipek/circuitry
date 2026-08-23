@@ -371,6 +371,47 @@ def test_reopening_a_saved_profile_is_a_fixed_point(orchestration: Path) -> None
     assert reopened.to_yaml() == draft.to_yaml()
 
 
+def test_routing_override_round_trips_through_the_real_loader(orchestration: Path) -> None:
+    """AC: routing overrides (opt-out and pinned band) survive a save."""
+    draft = ProfileDraft(name="routed")
+    draft.set_override("summarize", EffectOverride(routing=False))
+    draft.set_override("planner", EffectOverride(routing="thorough"))
+    draft.save(profile_dir_for(orchestration))
+
+    loaded = load_profile(name="routed", orchestration_path=orchestration, orch=FIXTURE)
+
+    assert loaded.effects == {
+        "summarize": {"routing": False},
+        "planner": {"routing": "thorough"},
+    }
+
+
+def test_reopening_a_saved_profile_with_routing_is_a_fixed_point(
+    orchestration: Path,
+) -> None:
+    draft = ProfileDraft(name="routed-fixed")
+    draft.set_override("summarize", EffectOverride(routing=False))
+    draft.set_override("planner", EffectOverride(model="tier-1", routing="thorough"))
+    draft.save(profile_dir_for(orchestration))
+
+    reopened = load_draft("routed-fixed", orchestration_path=orchestration)
+    assert not reopened.dirty
+    assert reopened.to_yaml() == draft.to_yaml()
+    assert reopened.override("summarize").routing is False
+    assert reopened.override("planner").routing == "thorough"
+
+
+def test_duplicate_preserves_routing_override() -> None:
+    draft = ProfileDraft(name="original")
+    draft.set_override("summarize", EffectOverride(routing=False))
+    draft.set_override("planner", EffectOverride(routing="thorough"))
+
+    copy = draft.duplicate("copy")
+
+    assert copy.override("summarize").routing is False
+    assert copy.override("planner").routing == "thorough"
+
+
 def test_an_unknown_persistence_key_survives_a_round_trip(orchestration: Path) -> None:
     """`db_path` is a legal sqlite alias; the editor must not eat it."""
     directory = profile_dir_for(orchestration)
