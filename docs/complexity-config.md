@@ -186,6 +186,14 @@ already summarizes. Re-score the effect with
 | `bands` | array | — | Ordered band table (below). |
 | `respect_explicit` | boolean | `true` | Keeps explicit model choices (`--model`, a per-effect `model:`, a profile override) winning over the router. |
 
+With `enabled: true`, each prompt effect's score picks a band and that band's
+`model` is what dispatches — recorded on the node as `meta.model` with
+`meta.model_reason: router`, and on the run as `sources["model"] == "router"`.
+The substitution happens at the single place a model is resolved, so the routed
+model behaves in every downstream respect like one the effect had named itself:
+it is the default model for the `provider`/`provider_fallbacks` attempt chain,
+it is what `--verbose` reports, and it is what a retry re-sends.
+
 A band is `{"name": "...", "max": <number>, "model": "..."}`. `name` is an
 optional label. `max` is the band's **inclusive** upper bound: a score matches
 the first band whose `max` is greater than or equal to it, so a score of
@@ -207,6 +215,45 @@ surfaces before you flip the switch.
 
 Model names pass through untouched: for the `cyberdiner` adapter they are tier
 names and expo is the authority; for local adapters they are real model names.
+The router resolves a band to a string and does not interpret it.
+
+#### Where the router sits: model precedence
+
+```
+profile effect override  >  per-effect model:  >  --model  >  ROUTER
+                         >  orchestration model:  >  config default_model
+```
+
+Everything above the router is a model a human named on purpose, and the router
+never overrules one. Everything below it is a default the router exists to
+replace. Two consequences worth stating out loud:
+
+- **A per-effect `model:` beats `--model`.** This predates routing: `--model`
+  sets the run *default*, and an effect that names its own model has always
+  opted out of the run default whatever supplied it. Use a profile's `effects:`
+  block to retarget a specific effect from outside the orchestration.
+- **The band is recorded even when the router defers.** On an effect that pins
+  its own model you still get `meta.complexity.band`, answering "what would
+  routing have picked" — which is the question you ask right before removing
+  the pin. `meta.model_reason` is the field that says whether the band was
+  *applied*; `band` alone never implies it was.
+
+Turning routing off restores the previous behaviour exactly: with
+`routing.enabled: false` the state tree — model, `model_reason`, and every
+other key — is byte-identical to a build without the feature.
+
+`respect_explicit: false` is the opt-out, and it means what it says: the router
+then decides for **every** scored prompt effect, including ones that name their
+own `model:` and runs launched with `--model`. It is the knob for "this run
+routes, full stop" — a cost sweep, a bulk re-run — and it is off by default
+because overruling a deliberate choice is the surprising behaviour.
+
+A band table is by itself a sufficient model configuration. If routing is on
+and no `--model`, orchestration `model:`, or `default_model` is set, the
+catch-all band — whose whole job is "the model for anything not otherwise
+matched" — becomes the run default, so `cof run` no longer refuses with "no
+model resolved". Effects that cannot be scored (and every non-prompt effect)
+run on it.
 
 #### Watching it happen: `cof run --explain-routing`
 
@@ -215,8 +262,9 @@ names and expo is the authority; for local adapters they are real model names.
 
 ```
 $ cof run pipeline.yml --explain-routing
-▸ intro   score 14.4/100 · routing off · model llama3 · why default
-▸ refine.critique  score 42.5/100 · band heavy · model llama3 · why default
+▸ prime.classify score 7.2/100 · band trivial · model llama3.2:1b · why router
+▸ prime.summarize score 20.5/100 · band ordinary · model llama3.2 · why router
+▸ prime.audit score 41.7/100 · band hard · model llama3.1:70b · why explicit
 ```
 
 One line per prompt effect, printed the moment before it dispatches — the
@@ -235,15 +283,59 @@ recomputation:
   in; with routing off the line says `routing off` in its place rather than
   guessing a name for a table that isn't configured.
 - **model** — `meta.model`, the model actually about to be dispatched.
-- **why** — `meta.model_reason`: `explicit` when the effect names its own
-  `model:`, `default` when it inherits the run's. A band naming a different
-  model than `why: default` shows is not a contradiction — the band is a
-  description of where the score sits, not yet a dispatch decision; nothing
-  today substitutes the routed model in for the default one.
+- **why** — `meta.model_reason`: `router` when the band decided, `explicit`
+  when the effect names its own `model:` (or a profile override does),
+  `default` when it inherits the run's. A band naming a different model than
+  the one on the line is not a contradiction — it is the router deferring, and
+  `why` says to whom.
 
 `--quiet` and `--json` both suppress it, same as the rest of a run's prose
 output. It composes with `--verbose`: the two report different things (token
 counts and timing vs. score and model choice), so nothing is printed twice.
+
+#### Try it: one orchestration, three answers
+
+`docs/examples/routing/` has a runnable demo — one orchestration
+(`triage.yml`, three prompts of deliberately different weight, the heaviest
+pinning its own `model:`) and two band tables over it. `--dry-run` is enough:
+routing happens in the pre-dispatch meta block, so no model is ever called.
+
+```bash
+cof run docs/examples/routing/triage.yml --dry-run --explain-routing \
+    --config docs/examples/routing/bands-frugal.json \
+    -e ticket=... -e rules=... -e prior_decisions=...
+```
+
+**Deciding** — the frugal table spreads the three effects across three models:
+
+```
+▸ prime.classify score 7.2/100 · band trivial · model llama3.2:1b · why router
+▸ prime.summarize score 20.5/100 · band ordinary · model llama3.2 · why router
+▸ prime.audit score 41.7/100 · band hard · model llama3.1:70b · why explicit
+```
+
+Swap in `bands-generous.json` and the same three scores land differently —
+`classify` moves up to `ordinary`, `summarize` to `hard`. Same orchestration,
+same scores, different policy: that is the whole point of the table being
+config rather than code.
+
+**Deferring** — `prime.audit` already shows one half of it above: `why
+explicit`, dispatching its own `llama3.1:70b` while still reporting the `hard`
+band it scored into. Add `--model llama3.2` for the other half, and every
+effect that was routing falls back to the flag:
+
+```
+▸ prime.classify score 7.2/100 · band trivial · model llama3.2 · why default
+▸ prime.summarize score 20.5/100 · band ordinary · model llama3.2 · why default
+▸ prime.audit score 41.7/100 · band hard · model llama3.1:70b · why explicit
+```
+
+The bands are still computed and still reported — you can see exactly what you
+overrode — but nothing routes.
+
+**Disabled** — drop `--config` and there is no complexity block at all: no
+scores, no bands, no lines, and `meta.model_reason` back to
+`explicit`/`default` on every node.
 
 ### `decomposition`
 
@@ -274,6 +366,15 @@ not change.
 `sources["complexity"]`, plus `sources["complexity.scoring"]`,
 `sources["complexity.routing"]` and `sources["complexity.decomposition"]` for
 each sub-block (`orchestration`, `config`, or `default`).
+
+The *model* has its own chain, which routing joins — see [Where the router
+sits](#where-the-router-sits-model-precedence). When the router wins it,
+`sources["model"]` reads `router`, while `EffectiveSettings.model` keeps the
+run default the router falls back to (the per-effect answers are on each node's
+`meta.model`). `EffectiveSettings.model_locked` is the companion flag: `true`
+when the model was pinned by `--model` or a profile's run-level `model:`, which
+is what the runtime reads to know an explicit choice from an inherited default
+once `sources["model"]` has been claimed by the router.
 
 ## Reading the resolved settings from code
 

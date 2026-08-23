@@ -1,0 +1,63 @@
+# Demo orchestration for the complexity router — see docs/complexity-config.md.
+#
+# Three prompt effects with deliberately different complexity, so one band
+# table can send them to different models:
+#
+#   classify  — one short line, no schema, one state reference  → cheap
+#   summarize — longer, structured output with a declared schema → middling
+#   audit     — long, many state references, nested schema      → expensive
+#
+# `audit` pins its own `model:`. That is the router deferring, on purpose: it
+# is the effect whose model you would not want an automatic rule to move.
+#
+# Run it with either band table in docs/examples/routing/ and compare:
+#   cof run docs/examples/routing/triage.yml --explain-routing \
+#       --config docs/examples/routing/bands-frugal.json
+#   cof run docs/examples/routing/triage.yml --explain-routing \
+#       --config docs/examples/routing/bands-generous.json
+#   cof run docs/examples/routing/triage.yml --explain-routing \
+#       --config docs/examples/routing/bands-frugal.json --model llama3.2
+
+model: llama3.2
+
+effects:
+  - type: prompt
+    name: classify
+    template: "Label {{ticket}} as bug, question, or request. One word."
+
+  - type: prompt
+    name: summarize
+    prompt_type: object
+    schema:
+      type: object
+      properties:
+        summary: {type: string}
+        severity: {type: string}
+    template: |
+      Summarize {{ticket}} for a triage queue, using the classification in
+      {{prime.classify.value}}. Return a summary and a severity.
+
+  - type: prompt
+    name: audit
+    # Explicit and therefore untouchable: the router records which band this
+    # score falls in but dispatches this model regardless. Drop the line to
+    # hand the choice back to the router.
+    model: llama3.1:70b
+    prompt_type: array
+    schema:
+      type: array
+      maxItems: 20
+      items:
+        type: object
+        properties:
+          claim: {type: string}
+          evidence:
+            type: object
+            properties:
+              source: {type: string}
+              quote: {type: string}
+    template: |
+      Audit the triage decision recorded in {{prime.summarize.value}} against
+      the original {{ticket}} and the escalation rules in {{rules}}. For every
+      claim, cite the evidence and justify the severity. Reconcile anything
+      that disagrees with {{prior_decisions}} and explain each divergence.

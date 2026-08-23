@@ -1,0 +1,16 @@
+{
+  "default_adapter": "ollama",
+  "runtime": {
+    "complexity": {
+      "scoring": {"enabled": true},
+      "routing": {
+        "enabled": true,
+        "bands": [
+          {"name": "trivial", "max": 5, "model": "llama3.2"},
+          {"name": "ordinary", "max": 15, "model": "llama3.1:8b"},
+          {"name": "hard", "model": "llama3.1:70b"}
+        ]
+      }
+    }
+  }
+}
