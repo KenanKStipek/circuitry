@@ -111,6 +111,7 @@ def test_load_profile_happy_path_parses_all_fields(tmp_path: Path) -> None:
         """
 adapter: ollama
 model: llama3.2
+out: runs/fast.json
 inputs:
   topic: "widgets"
 effects:
@@ -143,6 +144,7 @@ persistence:
     assert profile.name == "fast"
     assert profile.adapter == "ollama"
     assert profile.model == "llama3.2"
+    assert profile.out == "runs/fast.json"
     assert profile.inputs == {"topic": "widgets"}
     assert profile.effects["summarize"] == {"model": "cheap", "provider": "cyberdiner"}
     assert profile.effects["sub.deep_analysis"] == {"model": "good-fast"}
@@ -155,6 +157,22 @@ def test_load_profile_rejects_unknown_top_level_key(tmp_path: Path) -> None:
     _write(
         orch_path.parent / "profiles" / "fast.yml",
         "not_a_real_key: true\n",
+    )
+    with pytest.raises(ProfileValidationError) as exc_info:
+        load_profile(
+            name="fast",
+            orchestration_path=orch_path,
+            orch={"effects": []},
+        )
+    assert "schema validation" in str(exc_info.value)
+
+
+def test_load_profile_rejects_out_key_typo(tmp_path: Path) -> None:
+    """A near-miss of the new `out` key must still fail schema validation."""
+    orch_path = _orch(tmp_path)
+    _write(
+        orch_path.parent / "profiles" / "fast.yml",
+        "otu: runs/fast.json\n",
     )
     with pytest.raises(ProfileValidationError) as exc_info:
         load_profile(

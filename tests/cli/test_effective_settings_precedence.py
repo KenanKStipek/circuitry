@@ -118,6 +118,36 @@ def test_effective_settings_precedence_cli_over_profile_over_orch_over_config() 
     assert effective_cfg_fallback.sources["adapter"] == "config"
 
 
+def test_effective_settings_out_precedence_cli_over_profile_over_default() -> None:
+    """`--out` has no orchestration/config layer — only cli > profile > default."""
+    cfg = CircuitryConfig()
+    orch: dict[str, object] = {}
+
+    # neither cli nor profile: no file written
+    assert resolve_effective_settings(cfg=cfg, orch=orch).out is None
+    assert resolve_effective_settings(cfg=cfg, orch=orch).sources["out"] == "default"
+
+    # profile alone supplies it
+    profile = _profile(out="runs/profile-out.json")
+    effective = resolve_effective_settings(cfg=cfg, orch=orch, profile=profile)
+    assert effective.out == Path("runs/profile-out.json")
+    assert effective.sources["out"] == "profile"
+
+    # cli beats profile
+    effective_with_cli = resolve_effective_settings(
+        cfg=cfg, orch=orch, profile=profile, cli_out=Path("runs/cli-out.json")
+    )
+    assert effective_with_cli.out == Path("runs/cli-out.json")
+    assert effective_with_cli.sources["out"] == "cli"
+
+    # profile absent, no cli: still no file written
+    effective_no_profile_out = resolve_effective_settings(
+        cfg=cfg, orch=orch, profile=_profile(out=None)
+    )
+    assert effective_no_profile_out.out is None
+    assert effective_no_profile_out.sources["out"] == "default"
+
+
 def test_no_profile_resolution_is_unaffected_by_the_profile_parameter() -> None:
     """Regression guard: omitting `profile` must behave identically to before."""
     cfg = CircuitryConfig(default_model="cfg-model", default_adapter="openai")
