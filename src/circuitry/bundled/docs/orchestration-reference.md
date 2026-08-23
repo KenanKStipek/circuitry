@@ -223,6 +223,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 **State output paths (named each loop):**
 - Per-iteration: `prime.<name>.iter_0.<body_effect>.value`, `prime.<name>.iter_1.<body_effect>.value`, ...
 - Aggregated (when `collect` is set): `prime.<name>.collected.value` — array of every iteration's collected effect value
+- From *inside* the body: `prime.<body_effect>.value` — the current pass. See [Referencing a sibling within an iteration](#referencing-a-sibling-within-an-iteration).
 
 | Field | Type | Required | Default | Constraints |
 |-------|------|----------|---------|-------------|
@@ -305,13 +306,64 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
   name: refine
   while:
     mode: model
-    template: "Does this draft need more improvement? Reply true or false.\n\n{{prime.draft.value}}"
+    template: "Does this draft need more improvement? Answer yes or no.\n\n{{prime.polish.value}}"
   max_iterations: 5
   body:
     - type: prompt
-      name: draft
+      name: polish
       template: "Improve this text:\n{{prime.draft.value}}"
 ```
+
+The condition is checked between passes and sees the pass that just finished
+under the same within-iteration names the body uses — so `{{prime.polish.value}}`
+above is the latest `polish` output, not the first one. Before the first pass
+there is nothing to see yet and the name falls through to the enclosing scope.
+
+#### Referencing a sibling within an iteration
+
+A body step reading the step before it — compute → classify → score — is the
+most common multi-step loop shape. Three *different* questions get three
+*different* paths, and substituting one for another fails silently:
+
+| You want | Write | Legal where |
+|---|---|---|
+| A step's output in the **current pass** | `{{prime.<step>.value}}` | inside the body, and inside a `while` condition |
+| One **specific past pass** | `{{prime.<loop>.iter_<N>.<step>.value}}` | **after** the loop only |
+| **Every** pass's output | `{{prime.<loop>.collected.value}}` | after the loop (requires `collect`) |
+
+```yaml
+- type: loop
+  name: score_items
+  collect: score
+  each: {in: prime.items.value, as: item}
+  body:
+    - type: prompt
+      name: classify
+      template: "Which category does this fall into? {{item}}"
+    - type: prompt
+      name: score            # reads classify from THIS pass
+      template: "Rate this {{prime.classify.value}} item 1-10: {{item}}"
+```
+
+Rules of the form:
+
+- **Resolution is a scope chain**: the current iteration first, then the
+  enclosing scope, then root state. A name the iteration has not written falls
+  through, so root inputs and effects from before the loop keep resolving.
+- **Shadowing**: a body step named the same as an enclosing effect wins inside
+  the body, and only inside the body.
+- **Named and unnamed loops behave identically**, in `chain` and in `tree` flow.
+  (A `tree` loop parallelises whole iterations, not the steps inside one.)
+- **The bare form `{{<step>.value}}` also works** and means the same node. It is
+  accepted, not preferred: a bare name can collide with a user-supplied state
+  key, and `prime.`-prefixed cannot.
+- **`{{prime.<loop>.<step>.value}}` does not resolve, by design.** `prime.<loop>`
+  is the loop's own node — `iter_<N>`, `collected`, `meta`. `cof validate` warns.
+- **`iter_<N>` inside the body is a trap.** `N` is a constant, so it renders
+  *pass N's* output during every pass — stale data, not an empty string.
+  `cof validate` warns.
+- In CEL the same forms apply with the `state.` prefix and no braces:
+  `state.prime.<step>.value`.
 
 ---
 
@@ -464,6 +516,11 @@ Reference a specific iteration from outside the loop:
 ```yaml
 template: "First result: {{prime.explain.iter_0.summary.value}}"
 ```
+
+**Outside the loop only.** `N` is a constant, so an `iter_<N>` path used inside
+the body reads pass `N` during every pass — stale data rather than an error. To
+read a sibling in the pass you are currently in, write `{{prime.<step>.value}}`;
+see [Referencing a sibling within an iteration](#referencing-a-sibling-within-an-iteration).
 
 ### Iteration Bindings Inside Nested Containers
 
