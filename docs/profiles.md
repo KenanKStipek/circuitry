@@ -137,6 +137,13 @@ follows for an unpinned effect. A pin does not require
 resolves the same whether or not scoring/auto-routing are switched on
 elsewhere.
 
+One exception: `cof run --no-routing` (see [Complexity
+Configuration](complexity-config.md#per-run-flags-cof-run---scoring---routing---decompose))
+beats a pin. Unlike the `routing.enabled` config switch, `--no-routing` is a
+run-level "routing is off for this run, full stop" — a profile pin naming a
+band is dropped before the orchestration compiles, rather than quietly
+reactivating routing for the one effect it targets.
+
 ## Disabling Effects
 
 `effects.<path>.enabled: false` switches an effect off for the run. It is not

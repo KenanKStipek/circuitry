@@ -315,6 +315,8 @@ RUN_EPILOG = """
   cof run learn/hello -e name=World --adapter ollama --model llama3.1:8b
   cof run ./my-orch.yml --explain-routing
   cof run ./my-orch.yml --decompose-out ./plans
+  cof run ./my-orch.yml --scoring --routing --decompose
+  cof run ./my-orch.yml --no-routing
   cof run --last
 
 [bold]Resolution order:[/bold] local file path > bundled orchestration name.
@@ -322,6 +324,14 @@ RUN_EPILOG = """
 [bold]Settings precedence:[/bold] CLI flags (--adapter/--model) > --profile >
 orchestration > environment (CIRCUITRY_ADAPTER/CIRCUITRY_MODEL) > config file
 > defaults. Env vars overlay the config layer, so a flag or profile beats them.
+
+[bold]Complexity switches:[/bold] --scoring/--no-scoring, --routing/--no-routing,
+and --decompose/--no-decompose each override one runtime.complexity.<switch>.enabled
+for this run only, ranking above the orchestration and config the same way
+--adapter/--model do. --routing/--decompose still need scoring on (from
+--scoring or config) — turning either on without it is the same prerequisite
+error the config path raises. --no-routing also overrides any --profile
+per-effect routing pin, since routing is off for the whole run either way.
 Run [bold]cof list[/bold] to see available bundled orchestrations.
 
 [yellow]Note:[/yellow] do not pass secrets via -e KEY=VALUE; use environment
@@ -427,6 +437,32 @@ def run_cmd(
             "a run that never decomposes writes nothing."
         ),
     ),
+    scoring: bool | None = typer.Option(
+        None, "--scoring/--no-scoring",
+        help=(
+            "Force runtime.complexity.scoring on/off for this run. Beats "
+            "--profile and the orchestration/config; omit to leave it resolved "
+            "as configured."
+        ),
+    ),
+    routing: bool | None = typer.Option(
+        None, "--routing/--no-routing",
+        help=(
+            "Force runtime.complexity.routing on/off for this run. Beats "
+            "--profile and the orchestration/config; --no-routing also drops "
+            "any profile per-effect routing pin, since routing is off for the "
+            "whole run either way. Requires scoring (from this flag or "
+            "config) when turned on."
+        ),
+    ),
+    decompose: bool | None = typer.Option(
+        None, "--decompose/--no-decompose",
+        help=(
+            "Force runtime.complexity.decomposition on/off for this run. "
+            "Beats --profile and the orchestration/config. Requires scoring "
+            "(from this flag or config) when turned on."
+        ),
+    ),
 ):
     # --last: replay stashed args
     if last:
@@ -450,6 +486,9 @@ def run_cmd(
         model = stashed.get("model")
         explain_routing = stashed.get("explain_routing", False)
         decompose_out = Path(stashed["decompose_out"]) if stashed.get("decompose_out") else None
+        scoring = stashed.get("scoring")
+        routing = stashed.get("routing")
+        decompose = stashed.get("decompose")
 
         # Refuse to replay if the previous run stashed redacted secrets — the
         # sentinel string would silently flow into the new run as a literal.
@@ -536,6 +575,9 @@ def run_cmd(
             console.print(f"[bold]Adapter (override):[/bold] {adapter}")
         if model:
             console.print(f"[bold]Model (override):[/bold] {model}")
+        for label, value in (("Scoring", scoring), ("Routing", routing), ("Decomposition", decompose)):
+            if value is not None:
+                console.print(f"[bold]{label} (override):[/bold] {'on' if value else 'off'}")
         console.print(f"[bold]Dry run:[/bold] {dry_run}")
 
     # Build initial state from --state file + -e overrides
@@ -572,6 +614,9 @@ def run_cmd(
         profile_record=profile_record,
         adapter_override=adapter,
         model_override=model,
+        scoring_override=scoring,
+        routing_override=routing,
+        decompose_override=decompose,
         effect_start_observer=effect_start_observer,
         decompose_out=decompose_out,
     )
@@ -631,6 +676,9 @@ def run_cmd(
             "model": model,
             "explain_routing": explain_routing,
             "decompose_out": str(decompose_out) if decompose_out else None,
+            "scoring": scoring,
+            "routing": routing,
+            "decompose": decompose,
         })
 
     if tail:

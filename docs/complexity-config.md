@@ -500,13 +500,48 @@ same as any other orchestration file.
 Needs `runtime.complexity.decomposition.enabled: true`; a run that never
 triggers decomposition (or runs without `--decompose-out`) writes nothing.
 
+## Per-run flags: `cof run --scoring/--routing/--decompose`
+
+`--scoring/--no-scoring`, `--routing/--no-routing`, and
+`--decompose/--no-decompose` force one switch's `enabled` field on or off for
+a single run, without touching the orchestration or config file:
+
+```bash
+cof run pipeline.yml --scoring --routing            # turn scoring and routing on
+cof run pipeline.yml --no-routing                    # turn routing off, whatever config says
+cof run pipeline.yml --scoring --decompose --dry-run # try decomposition without editing config
+```
+
+Each flag only flips its own switch — the rest of that sub-block (weights,
+bands, threshold, `respect_explicit`, ...) is whatever the orchestration/config
+already set, so `--routing` alone reuses an existing band table rather than
+needing one restated on the command line. The scoring prerequisite still
+applies: `--routing`/`--decompose` without scoring on (from `--scoring` or the
+config) raise the identical `ComplexityConfigError` the config path raises —
+the flag doesn't invent a way around it.
+
+`--no-routing` also overrides a `--profile` per-effect `routing` pin (see
+[Per-Effect Routing Control](profiles.md#per-effect-routing-control)): a pin
+normally resolves independent of the `routing.enabled` switch, but a run-level
+`--no-routing` is a deliberate "routing is off for this run, full stop" — it
+beats the pin the same way it beats the config switch, rather than letting one
+pinned effect quietly keep routing on. `--routing` (forcing it *on*) does not
+touch pins or opt-outs either way; those still apply exactly as documented.
+
+The TUI's Run view offers the same three switches as tri-state dropdowns
+(default / on / off) in the launch form — picking "on"/"off" there is
+equivalent to the matching flag; left on "— default" a launch resolves
+identically to `cof run` with no flag.
+
 ## Precedence
 
 The block rides the normal `runtime.*` precedence — **orchestration over
-config** — with no separate plumbing:
+config** — with no separate plumbing, except for the per-run flags above,
+which sit at the very top:
 
 ```
-orchestration runtime.complexity  >  config runtime.complexity  >  defaults
+--scoring/--routing/--decompose  >  orchestration runtime.complexity  >
+config runtime.complexity  >  defaults
 ```
 
 The runtime merge is shallow over top-level runtime keys, so an
@@ -518,7 +553,8 @@ not change.
 `resolve_effective_settings` records the winning layer under
 `sources["complexity"]`, plus `sources["complexity.scoring"]`,
 `sources["complexity.routing"]` and `sources["complexity.decomposition"]` for
-each sub-block (`orchestration`, `config`, or `default`).
+each sub-block (`cli`, `orchestration`, `config`, or `default`) — `cli` only
+when the matching flag was passed for that run.
 
 The *model* has its own chain, which routing joins — see [Where the router
 sits](#where-the-router-sits-model-precedence). When the router wins it,

@@ -4,7 +4,10 @@ The picker lists local orchestration files and the bundled curation
 library. Selecting one reads its ``interface.inputs`` and generates a typed
 form — one box per declared input, required ones marked, descriptions used
 as hints. Adapter and model dropdowns override resolution for this run
-only.
+only, as do the three tri-state Scoring/Routing/Decomposition dropdowns —
+the same switches ``cof run --scoring/--routing/--decompose`` flip, left on
+their "— default" sentinel a launch behaves exactly as the resolved config
+says.
 
 Launching hands a :class:`~circuitry.cli.runtime_shim.RunRequest` to a
 :class:`~circuitry.tui.launch.RunSession`, which executes it on a worker
@@ -359,6 +362,12 @@ class RunScreen(ViewScreen):
                 classes="hidden",
             ),
             Static("", id="run-model-note", classes="view-note hidden"),
+            Label("Scoring", classes="form-label"),
+            Select(_switch_options(), value=NO_OVERRIDE, allow_blank=False, id="run-scoring"),
+            Label("Routing", classes="form-label"),
+            Select(_switch_options(), value=NO_OVERRIDE, allow_blank=False, id="run-routing"),
+            Label("Decomposition", classes="form-label"),
+            Select(_switch_options(), value=NO_OVERRIDE, allow_blank=False, id="run-decompose"),
             Horizontal(
                 Button("Launch", variant="primary", id="run-launch"),
                 Button("Cancel run", id="run-cancel", disabled=True),
@@ -419,6 +428,11 @@ class RunScreen(ViewScreen):
         if event.select.id == "run-model":
             event.stop()
             self._set_custom_model(event.value == CUSTOM_MODEL)
+            return
+        if event.select.id in ("run-scoring", "run-routing", "run-decompose"):
+            # Nothing to react to until launch — the chosen value is read
+            # straight off the widget in action_launch, same as adapter/model.
+            event.stop()
             return
         if event.select.id != "run-orchestration":
             return
@@ -608,6 +622,9 @@ class RunScreen(ViewScreen):
             adapter=self._adapter,
             adapter_override=_override_value(self.query_one("#run-adapter", Select)),
             model_override=self._model_override(),
+            scoring_override=_switch_value(self.query_one("#run-scoring", Select)),
+            routing_override=_switch_value(self.query_one("#run-routing", Select)),
+            decompose_override=_switch_value(self.query_one("#run-decompose", Select)),
             skip_preflight=False,
             profile_name=self.profile_name,
         )
@@ -907,6 +924,23 @@ def _override_value(select: Select[str]) -> str | None:
     if value in (NO_OVERRIDE, Select.BLANK) or not isinstance(value, str):
         return None
     return value
+
+
+#: Options for the three complexity-switch dropdowns (Scoring/Routing/
+#: Decomposition): leave the resolved config alone, or force the switch on
+#: or off for this run — the TUI equivalent of --scoring/--routing/--decompose.
+def _switch_options() -> list[tuple[str, str]]:
+    return [(f"{NO_OVERRIDE} default", NO_OVERRIDE), ("on", "on"), ("off", "off")]
+
+
+def _switch_value(select: Select[str]) -> bool | None:
+    """``True``/``False`` when forced, ``None`` on the sentinel."""
+    value = select.value
+    if value == "on":
+        return True
+    if value == "off":
+        return False
+    return None
 
 
 def _ready_message(form: OrchestrationForm, profile: str | None = None) -> str:

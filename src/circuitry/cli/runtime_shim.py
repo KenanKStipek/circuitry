@@ -91,6 +91,16 @@ class RunRequest:
     # that already pins the transport.
     adapter_override: str | None = None
     model_override: str | None = None
+    # Per-run overrides for the three `runtime.complexity` switches — the
+    # `cli` tier of `resolve_effective_settings`, same rank as
+    # `adapter_override`/`model_override`. `None` means "leave the resolved
+    # config alone"; `True`/`False` force the switch on/off for this run.
+    # `routing_override is False` additionally strips any profile per-effect
+    # `routing` pin before the orchestration compiles — a run-level
+    # `--no-routing` beats a finer-grained profile pin, see `run()` below.
+    scoring_override: bool | None = None
+    routing_override: bool | None = None
+    decompose_override: bool | None = None
     profile_name: str | None = None
     # A recorded `runtime.effective_settings.profile` mapping ({name, content})
     # to reconstruct and apply instead of discovering a profile file by name.
@@ -179,6 +189,9 @@ def run(req: RunRequest) -> RunResult:
             cli_model=req.model_override,
             cli_adapter=req.adapter_override,
             cli_out=req.out_path,
+            cli_scoring=req.scoring_override,
+            cli_routing=req.routing_override,
+            cli_decompose=req.decompose_override,
             profile=profile,
         )
         resolved_out = effective.out
@@ -308,6 +321,15 @@ def run(req: RunRequest) -> RunResult:
                 }
                 for path, override in profile.effects.items()
             }
+            if req.routing_override is False:
+                # A run-level `--no-routing` outranks a profile's per-effect
+                # `routing` pin/opt-out: routing is off for this run, full
+                # stop, so a pin naming a band is dropped here rather than
+                # reaching the compiled definition and quietly reactivating
+                # routing for one effect. (An opt-out — `routing: false` — is
+                # already equivalent to "off", so dropping it changes nothing.)
+                for override in effect_overrides.values():
+                    override.pop("routing", None)
             effect_overrides = {
                 path: override for path, override in effect_overrides.items() if override
             }

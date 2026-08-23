@@ -377,6 +377,8 @@ def test_chosen_overrides_ride_along_on_the_request(run_app: Any, tmp_path: Path
         _fill(screen, text="hello", max_words="7")
         screen.query_one("#run-adapter", Select).value = "ollama"
         screen.query_one("#run-model", Select).value = "echo-1"
+        screen.query_one("#run-scoring", Select).value = "on"
+        screen.query_one("#run-routing", Select).value = "off"
         await pilot.pause()
         screen.action_launch()
         await _settle(pilot, lambda: screen.last_result is not None)
@@ -386,6 +388,9 @@ def test_chosen_overrides_ride_along_on_the_request(run_app: Any, tmp_path: Path
     request = captured[0]
     assert request.adapter_override == "ollama"
     assert request.model_override == "echo-1"
+    assert request.scoring_override is True
+    assert request.routing_override is False
+    assert request.decompose_override is None
     assert request.initial_state == {"text": "hello", "max_words": 7}
     assert request.skip_preflight is False
     assert request.state_observer is not None
@@ -410,6 +415,121 @@ def test_leaving_the_dropdowns_alone_overrides_nothing(
     run_app(scenario)
     assert captured[0].adapter_override is None
     assert captured[0].model_override is None
+    assert captured[0].scoring_override is None
+    assert captured[0].routing_override is None
+    assert captured[0].decompose_override is None
+
+
+# -- complexity switches (issue #110) ----------------------------------------
+
+
+def test_complexity_switch_dropdowns_default_to_the_sentinel(
+    run_app: Any, tmp_path: Path
+) -> None:
+    path = _write(tmp_path, TWO_INPUTS)
+
+    async def scenario(pilot: Pilot[Any]) -> tuple[Any, Any, Any]:
+        screen = await _open(pilot, _screen(path))
+        return (
+            screen.query_one("#run-scoring", Select).value,
+            screen.query_one("#run-routing", Select).value,
+            screen.query_one("#run-decompose", Select).value,
+        )
+
+    scoring, routing, decompose = run_app(scenario)
+    assert (scoring, routing, decompose) == (NO_OVERRIDE, NO_OVERRIDE, NO_OVERRIDE)
+
+
+def test_all_three_complexity_switches_ride_along_on_the_request(
+    run_app: Any, tmp_path: Path
+) -> None:
+    path = _write(tmp_path, TWO_INPUTS)
+    captured: list[RunRequest] = []
+
+    def runner(request: RunRequest) -> RunResult:
+        captured.append(request)
+        return RunResult(ok=True, state={}, warnings=[])
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        screen = await _open(pilot, _screen(path, runner=runner))
+        _fill(screen, text="hello")
+        screen.query_one("#run-scoring", Select).value = "on"
+        screen.query_one("#run-routing", Select).value = "on"
+        screen.query_one("#run-decompose", Select).value = "off"
+        await pilot.pause()
+        screen.action_launch()
+        await _settle(pilot, lambda: screen.last_result is not None)
+
+    run_app(scenario)
+    request = captured[0]
+    assert request.scoring_override is True
+    assert request.routing_override is True
+    assert request.decompose_override is False
+
+
+def test_complexity_switch_toggled_back_to_default_stops_overriding(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """Round-trip: on -> back to the sentinel must clear the override, not
+    freeze it at whatever it was last set to."""
+    path = _write(tmp_path, TWO_INPUTS)
+    captured: list[RunRequest] = []
+
+    def runner(request: RunRequest) -> RunResult:
+        captured.append(request)
+        return RunResult(ok=True, state={}, warnings=[])
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        screen = await _open(pilot, _screen(path, runner=runner))
+        _fill(screen, text="hello")
+        select = screen.query_one("#run-routing", Select)
+        select.value = "on"
+        await pilot.pause()
+        select.value = NO_OVERRIDE
+        await pilot.pause()
+        screen.action_launch()
+        await _settle(pilot, lambda: screen.last_result is not None)
+
+    run_app(scenario)
+    assert captured[0].routing_override is None
+
+
+def test_tui_launch_matches_the_equivalent_run_request(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """TUI-to-run parity (the issue's demo): the request the toggle builds
+    is byte-identical to constructing one directly with the same override,
+    the same shape `cof run --routing`/`--no-routing` would thread through."""
+    path = _write(tmp_path, NO_INPUTS)
+    captured: list[RunRequest] = []
+
+    def runner(request: RunRequest) -> RunResult:
+        captured.append(request)
+        return RunResult(ok=True, state={}, warnings=[])
+
+    def launch_with(value: str) -> RunRequest:
+        captured.clear()
+
+        async def scenario(pilot: Pilot[Any]) -> None:
+            screen = await _open(pilot, _screen(path, runner=runner))
+            screen.query_one("#run-routing", Select).value = value
+            await pilot.pause()
+            screen.action_launch()
+            await _settle(pilot, lambda: screen.last_result is not None)
+
+        run_app(scenario)
+        return captured[0]
+
+    on_request = launch_with("on")
+    off_request = launch_with("off")
+
+    assert on_request.routing_override is True
+    assert off_request.routing_override is False
+    # Nothing but the one switch differs between the two launches.
+    assert on_request.adapter_override == off_request.adapter_override
+    assert on_request.model_override == off_request.model_override
+    assert on_request.scoring_override == off_request.scoring_override
+    assert on_request.decompose_override == off_request.decompose_override
 
 
 # -- adapter-reported models -------------------------------------------------
