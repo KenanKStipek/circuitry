@@ -7,3 +7,9 @@ textual>=1.0
 pytest-cov>=5.0
 ruff>=0.16
 mypy>=1.10
+# Implements pymongo's actual API surface (call signatures, document
+# shape, error classes) so tests/core/test_mongodb_persistence_mongomock.py
+# exercises the mongodb backend against real driver semantics instead of a
+# hand-rolled fake. Dev-only: production installs the `mongodb` extra
+# (pymongo) and never mongomock.
+mongomock>=4.3
