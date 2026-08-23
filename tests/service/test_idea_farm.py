@@ -480,11 +480,11 @@ class _Idled(Exception):
 
 # One fabricated run's output: an on-focus idea for FOCI[0] ("small business
 # operations"), an off-focus drifter, and a near-duplicate of the first.
-RUN_OUTPUT = "\n".join([
-    "1. Invoice Chasing Ladder for Small Business Cash Flow — nudges late payers.",
-    "2. Retirement Savings Forecast — projects post-career income.",
-    "3. Invoice chasing ladders for small business cash flow — nudge late payers.",
-])
+RUN_OUTPUT = (
+    "1. Invoice Chasing Ladder for Small Business Cash Flow — nudges late payers.\n"
+    "2. Retirement Savings Forecast — projects post-career income.\n"
+    "3. Invoice chasing ladders for small business cash flow — nudge late payers."
+)
 
 
 def _harvest_one_run(tmp_path: Path, monkeypatch, target: str,
@@ -553,10 +553,10 @@ def test_off_focus_non_template_ideas_are_banked_and_counted(
     adherence stays measurable."""
     banked = _harvest_one_run(
         tmp_path, monkeypatch, target="2",
-        output="\n".join([
-            "1. Invoice Chasing Ladder for Small Business Cash Flow — nudges payers.",
-            "2. Continuity Bible Keeper — keeps a saga's lineages consistent.",
-        ]),
+        output=(
+            "1. Invoice Chasing Ladder for Small Business Cash Flow — nudges payers.\n"
+            "2. Continuity Bible Keeper — keeps a saga's lineages consistent."
+        ),
     )
 
     assert banked[1]["idea"].startswith("Continuity Bible Keeper")
