@@ -15,6 +15,22 @@ from rich.panel import Panel
 from rich.table import Table
 from typer.core import TyperGroup
 
+# The wizard host (chat's transcript, verdict, and save logic) — `cof wizard`
+# drives the exact same functions `circuitry.tui.chat.ChatScreen` does, so the
+# two hosts can never produce different artifacts from the same input.
+from ..tui.wizard_host import CATEGORIES as WIZARD_CATEGORIES
+from ..tui.wizard_host import DEFAULT_CATEGORY as WIZARD_DEFAULT_CATEGORY
+from ..tui.wizard_host import (
+    Conversation,
+    InvalidDraft,
+    Seed,
+    Turn,
+    default_library_dir,
+    drive_conversation,
+    run_turn,
+    save_to_file,
+    save_to_library,
+)
 from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, ConfigError, resolve_config
 from .doctor import register_doctor
 from .last_run import LAST_RUN_PATH
@@ -34,23 +50,6 @@ from .shared_library import (
     apply_service_profile,
     fetch_shared_orchestration,
     resolve_service_profile,
-)
-
-# The wizard host (chat's transcript, verdict, and save logic) — `cof wizard`
-# drives the exact same functions `circuitry.tui.chat.ChatScreen` does, so the
-# two hosts can never produce different artifacts from the same input.
-from ..tui.wizard_host import CATEGORIES as WIZARD_CATEGORIES
-from ..tui.wizard_host import DEFAULT_CATEGORY as WIZARD_DEFAULT_CATEGORY
-from ..tui.wizard_host import (
-    Conversation,
-    InvalidDraft,
-    Seed,
-    Turn,
-    default_library_dir,
-    drive_conversation,
-    run_turn,
-    save_to_file,
-    save_to_library,
 )
 
 console = Console()
@@ -1487,6 +1486,9 @@ def wizard_cmd(
         None,
         "--reply",
         "-r",
+        exists=True,
+        dir_okay=False,
+        readable=True,
         help="File of scripted replies, one per line, used instead of stdin.",
     ),
     out: Path | None = typer.Option(

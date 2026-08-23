@@ -476,8 +476,8 @@ worker thread, and paints what comes back:
 The wizard handles one turn; the host owns the loop. That host —
 `circuitry.tui.wizard_host` — is deliberately free of Textual: the seed, the
 transcript, the draft, the verdict and the two save paths are the same objects
-`scripts/wizard-chat` could drive from a terminal, which is what makes the flow
-testable without a screen.
+[`cof wizard`](./wizard.md#driving-it-headlessly) drives from the command
+line, which is what makes the flow testable without a screen.
 
 **The pane's verdict is the file's verdict.** Every draft is put back through
 `runtime_shim.validate` — the gate `cof check` runs, minus preflight — rather
