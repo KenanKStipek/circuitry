@@ -24,6 +24,10 @@ from typing import Any
 import pytest
 import yaml
 
+from circuitry.adapters.base import GenerateResult
+from circuitry.core.compiler import compile_orchestration
+from circuitry.core.dynamic import DynamicRuntime
+from circuitry.core.store import Store
 from circuitry.tui import execution as ex
 from circuitry.tui.complexity import (
     DEFAULT_BANDS,
@@ -185,6 +189,63 @@ def test_a_junk_signal_entry_is_dropped_not_fatal() -> None:
     )
     assert score is not None
     assert [signal.name for signal in score.signals] == ["keywords"]
+
+
+# -- the seam: a real run's meta, not a hand-built fixture --------------------
+#
+# ``core/prompt.py::_complexity_meta`` writes ``signals`` as a mapping keyed
+# by signal name (so a CEL condition can address one by path); every fixture
+# above hand-builds the *list* shape instead, which is only what
+# ``ComplexityScore.to_dict()`` produces for ``cof score``. That gap is
+# exactly what let the reader ship accepting one producer and not the other
+# (#135), so this test drives the other producer for real: compile an
+# orchestration, run it with scoring on, and feed the meta the runtime
+# actually wrote — not a payload shaped by hand — into ``read``.
+
+
+@dataclass(frozen=True)
+class _EchoAdapter:
+    name: str = "primary"
+
+    def generate(
+        self, *, model: str, prompt: str, timeout_seconds: int = 120
+    ) -> GenerateResult:
+        return GenerateResult(text=f"echo:{prompt}", raw={})
+
+
+def test_a_real_runs_persisted_meta_reads_a_populated_breakdown() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "prompt",
+                "name": "task",
+                "template": "Analyze {{topic}} and cross-reference it against {{source}}.",
+            }
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({})
+    DynamicRuntime(
+        root,
+        adapter=_EchoAdapter(),
+        model="primary-model",
+        runtime_config={"complexity": {"scoring": {"enabled": True}}},
+    ).execute(store=store)
+
+    meta = store.get("prime.task.meta")
+    assert isinstance(meta["complexity"]["signals"], dict), (
+        "fixture drift: this test only proves something if the runtime is "
+        "still writing the mapping shape"
+    )
+
+    score = read_complexity(meta)
+    assert score is not None
+    assert score.signals, "the mapping shape must not read as no signal breakdown"
+    assert score.breakdown_lines() != ["no signal breakdown recorded"]
+    names = {signal.name for signal in score.signals}
+    assert "prompt_size" in names and "keywords" in names
+    total = sum(signal.contribution for signal in score.signals)
+    assert total == pytest.approx(score.score, abs=1e-6)
 
 
 # -- bands --------------------------------------------------------------------

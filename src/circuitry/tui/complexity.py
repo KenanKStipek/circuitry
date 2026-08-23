@@ -3,10 +3,20 @@
 :mod:`circuitry.core.complexity` computes the score and
 :mod:`circuitry.cli.complexity_config` decides what to do with it. Neither
 is imported here. What the TUI gets is whatever the runtime left on an
-effect's node — ``meta["complexity"]``, the mapping
-:meth:`~circuitry.core.complexity.ComplexityScore.to_dict` produces, plus a
-``band`` when routing resolved one — arriving either in an
-``on_effect_start`` payload or in a state snapshot.
+effect's node — ``meta["complexity"]``, plus a ``band`` when routing
+resolved one — arriving either in an ``on_effect_start`` payload or in a
+state snapshot.
+
+``signals`` arrives in either of two legitimate shapes, because it has two
+producers that disagree on purpose:
+:meth:`~circuitry.core.complexity.ComplexityScore.to_dict` (what ``cof
+score`` prints) emits a *list* of ``{"name": ..., ...}`` entries, while
+``circuitry.core.prompt._complexity_meta`` (what a run persists onto a
+state node) emits a *mapping* keyed by signal name, so a CEL condition can
+address ``signals.prompt_size.contribution`` by path instead of by list
+index. Reconciling the two into one shape would break either the list's
+report order or every CEL condition already written against a recorded
+score, so this reader accepts both.
 
 Every function here is therefore *tolerant*, in the specific sense the
 views need:
@@ -257,10 +267,27 @@ def _read_band(payload: Mapping[str, Any]) -> tuple[str, str]:
 
 
 def _read_signals(payload: Mapping[str, Any]) -> tuple[SignalBreakdown, ...]:
+    """Read ``signals`` in whichever of its two legitimate shapes arrived.
+
+    A mapping (keyed by signal name, the form a run persists) has its key
+    folded in as ``name`` before being handed to
+    :meth:`SignalBreakdown.from_mapping`, since that shape's entries carry
+    the name only as the key. A list (:meth:`~circuitry.core.complexity.
+    ComplexityScore.to_dict`'s form, the one ``cof score`` feeds) already
+    names each entry and is read as-is. Anything else — including a string
+    or bytes, which are technically sequences — reads as no signals.
+    """
     raw = payload.get("signals")
-    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+    if isinstance(raw, Mapping):
+        entries: Any = (
+            {**entry, "name": name} if isinstance(entry, Mapping) else entry
+            for name, entry in raw.items()
+        )
+    elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
+        entries = raw
+    else:
         return ()
-    read = (SignalBreakdown.from_mapping(entry) for entry in raw)
+    read = (SignalBreakdown.from_mapping(entry) for entry in entries)
     return tuple(signal for signal in read if signal is not None)
 
 
