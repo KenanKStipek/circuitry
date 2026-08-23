@@ -27,7 +27,12 @@ from .allowlist import check_allowlist, walk_orchestration_refs
 from .config import CircuitryConfig
 from .effective_settings import EffectiveSettings, resolve_effective_settings
 from .orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
-from .profiles import ProfileSettings, load_profile, profile_from_record
+from .profiles import (
+    ProfileSettings,
+    load_profile,
+    profile_from_record,
+    validate_profile_routing_pins,
+)
 from .redaction import redact
 
 logger = logging.getLogger(__name__)
@@ -172,6 +177,18 @@ def run(req: RunRequest) -> RunResult:
             profile=profile,
         )
         resolved_out = effective.out
+        if profile is not None and profile.effects:
+            # A pinned band name can only be checked once the run's actual
+            # routing table is known — the profile alone can't tell, since
+            # bands live in the orchestration/config, not the profile. Same
+            # fail-fast spirit as the allowlist/schema checks above: before
+            # anything compiles or dispatches, not mid-run on the one effect
+            # that hits it.
+            validate_profile_routing_pins(
+                profile.effects,
+                routing=effective.complexity.routing,
+                profile_name=profile.name,
+            )
         # One shared dict for the whole run: `use` effects append their library
         # pins to it as they resolve, at any nesting depth.
         runtime_config = effective.runtime if effective.runtime is not None else {}
@@ -282,7 +299,7 @@ def run(req: RunRequest) -> RunResult:
                 path: {
                     k: v
                     for k, v in override.items()
-                    if k in ("model", "provider", "enabled")
+                    if k in ("model", "provider", "enabled", "routing")
                 }
                 for path, override in profile.effects.items()
             }

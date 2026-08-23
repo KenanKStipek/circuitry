@@ -15,14 +15,21 @@ it is not certain: switch off, no table, or a model a human already named.
 
 Precedence, in the order a run resolves it:
 
-``--model`` > per-effect ``model:`` > profile effect override > **router** >
-orchestration default > config default
+``--model`` > per-effect ``model:`` > profile effect override (``model``) >
+profile effect override (``routing`` pin) > **router** > orchestration
+default > config default
 
 The first three are what *explicit* means below. They are already collapsed
 into one boolean by the time they reach here — the caller knows whether the
 model it holds was pinned by a human — because the router's rule does not
 distinguish between them: all three outrank it, and each stays recorded as
 itself (``meta.model_reason``, ``sources["model"]``) at the layer that set it.
+
+A profile's per-effect ``routing`` key — opt this effect out, or pin it to a
+named band — sits between the explicit layers and this module: it is settled
+in :mod:`circuitry.core.prompt` before ``route_model`` is ever called, so an
+opted-out or pinned effect never reaches this function at all. See
+``PromptDefinition.routing_override`` and ``PromptRuntime._score_and_route``.
 
 Model names pass through untouched. For the ``cyberdiner`` adapter a band's
 ``model`` is a tier name and expo is the authority; for local adapters it is a

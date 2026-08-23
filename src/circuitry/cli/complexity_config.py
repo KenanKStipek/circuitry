@@ -134,6 +134,21 @@ def band_for(value: float, bands: Sequence[ComplexityBand]) -> ComplexityBand | 
     return None
 
 
+def band_named(name: str, bands: Sequence[ComplexityBand]) -> ComplexityBand | None:
+    """The band in *bands* whose ``name`` equals *name*, or ``None``.
+
+    The score-based lookup above (:func:`band_for`) walks the table by
+    boundary; a profile's per-effect ``routing: <band-name>`` pin instead
+    selects a row directly by the identifier it was given, bypassing the score
+    entirely. A band with no ``name`` can never match here — pinning requires
+    the table to name the row you mean.
+    """
+    for band in bands:
+        if band.name == name:
+            return band
+    return None
+
+
 @dataclass(frozen=True)
 class ScoringSettings:
     """``runtime.complexity.scoring`` — the substrate switch."""
