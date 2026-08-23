@@ -17,10 +17,17 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from circuitry.tui import execution, theme
+
+pytest.importorskip("textual")
+
+from textual.pilot import Pilot
+
+from circuitry.tui.app import CircuitryApp
 
 TUI = Path(execution.__file__).parent
 
@@ -100,3 +107,71 @@ def test_a_theme_without_the_variable_loses_the_colour_not_the_row() -> None:
 def test_every_status_the_tree_can_draw_has_a_style() -> None:
     """A status with no entry would render as unstyled text, silently."""
     assert set(theme.STATUS_TOKENS) == set(execution.GLYPHS)
+
+
+# -- the light-terminal sanity check -----------------------------------------
+#
+# Everything above works on fabricated variables, which proves the lookup and
+# not the wiring. These two boot the real app and read the real theme, because
+# "is this legible on a light terminal" is a question about what the running
+# app resolves, not about what a dict says.
+
+
+LIGHT = "solarized-light"
+DARK = "textual-dark"
+
+
+def _styles(app: CircuitryApp) -> list[str]:
+    """The run tree's colours for done/running/failed under the live theme."""
+    variables = app.theme_variables
+    return [
+        theme.status_style(status, variables)
+        for status in (execution.DONE, execution.RUNNING, execution.FAILED)
+    ]
+
+
+def test_the_run_tree_follows_the_theme_onto_a_light_background(run_app: Any) -> None:
+    """Switching to a light theme changes the colours the tree draws with.
+
+    This is the regression the hard-coded table could not have: ``green`` on
+    Solarized Light is the terminal's own bright green on near-white paper.
+    The theme's ``$success`` there is a dark olive, and that is what the tree
+    now asks for.
+    """
+
+    async def scenario(pilot: Pilot[Any]) -> tuple[list[str], list[str]]:
+        app: CircuitryApp = pilot.app  # type: ignore[assignment]
+        app.theme = DARK
+        await pilot.pause()
+        dark = _styles(app)
+        app.theme = LIGHT
+        await pilot.pause()
+        return dark, _styles(app)
+
+    dark, light = run_app(scenario)
+    assert all(dark), "the dark theme resolved no colour at all"
+    assert all(light), "the light theme resolved no colour at all"
+    assert dark != light, "the tree drew the same colours on both backgrounds"
+
+
+@pytest.mark.parametrize("name", [DARK, LIGHT, "textual-light", "gruvbox", "nord"])
+def test_no_theme_leaves_the_tree_asking_for_a_raw_ansi_colour(
+    run_app: Any, name: str
+) -> None:
+    """Whatever the theme, the style is the theme's answer — not ``"green"``.
+
+    ``ansi-dark``/``ansi-light`` are excluded on purpose: those themes exist
+    precisely to hand the terminal's own palette back, so ``ansi_green`` there
+    is the correct answer rather than a hard-coded one.
+    """
+
+    async def scenario(pilot: Pilot[Any]) -> list[str]:
+        app: CircuitryApp = pilot.app  # type: ignore[assignment]
+        app.theme = name
+        await pilot.pause()
+        return _styles(app)
+
+    for style in run_app(scenario):
+        words = style.split()
+        assert words, f"{name} resolved no style"
+        assert not any(word in ANSI_COLOURS for word in words), f"{name} → {style!r}"

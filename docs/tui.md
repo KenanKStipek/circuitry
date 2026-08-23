@@ -92,6 +92,29 @@ Every screen body is a scroll container, which is what keeps a full-size view
 renderable in a 10x4 terminal. The suite renders each screen from 80x24 down
 to 1x1 and asserts the frame stays rectangular.
 
+## One theme
+
+Nothing in the TUI names a colour. CSS rules use Textual's `$` tokens
+(`$success`, `$error`, `$text-muted`), and the handful of places that build a
+Rich `Text` by hand — the run tree, mainly, which cannot write a `$token` —
+resolve one through `circuitry.tui.theme`:
+
+- `status_style(status, app.theme_variables)` → the Rich style for a row
+  describing an effect in that status, coloured by the **running** theme
+- `theme_colour(name, variables)` → one variable, with CSS-only values (`auto
+  60%`) dropped rather than handed to Rich
+- `OK_GLYPH` / `BAD_GLYPH` → the tick and the cross, re-exported from
+  `execution.GLYPHS` so a view reporting a verdict uses the same marks the run
+  tree uses for a finished and a failed effect
+
+That indirection is the whole light-terminal story. A hard-coded `green` is the
+terminal's bright green on any background; `$success` under Solarized Light is a
+dark olive. `tests/tui/test_theme.py` enforces both halves against the source:
+no module may write out an ANSI colour name, and no module may draw a glyph
+that means the same as one already in `GLYPHS`. Both are checked against the
+files rather than against a rendering, because the failure mode is a *new* view
+hard-coding a colour — which a snapshot of today's views would never notice.
+
 ## Logging in TUI mode
 
 A log record written to stdout while Textual owns the screen shreds the frame.
