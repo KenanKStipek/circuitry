@@ -41,6 +41,7 @@ class HtmlExtractPlugin:
         del timeout_seconds
         try:
             from bs4 import BeautifulSoup  # type: ignore[import-not-found]
+            from bs4.element import Tag  # type: ignore[import-not-found]
         except ImportError as exc:
             raise RuntimeError(
                 "html_extract: beautifulsoup4 not installed. "
@@ -68,7 +69,7 @@ class HtmlExtractPlugin:
         # Prefer lxml; fall back to html.parser when lxml isn't available.
         parser = "lxml" if importlib.util.find_spec("lxml") else "html.parser"
         soup = BeautifulSoup(text, parser)
-        nodes = soup.select(selector)
+        nodes: list[Tag] = soup.select(selector)
         if isinstance(limit, int) and limit > 0:
             nodes = nodes[:limit]
 
@@ -79,6 +80,8 @@ class HtmlExtractPlugin:
             elif mode == "html":
                 results.append(node.decode_contents())
             else:
+                # mode == "attr", validated above: attribute is a non-empty str.
+                assert isinstance(attribute, str)
                 v = node.get(attribute)
                 results.append(v if v is not None else "")
 
