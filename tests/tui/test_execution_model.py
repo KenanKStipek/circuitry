@@ -438,3 +438,74 @@ def test_the_tree_is_drawn_with_connectors() -> None:
         "   └─ ✓ iter 0\n"
         "      └─ ✓ handle (1.0s, ↑1 ↓2)"
     )
+
+
+# -- use children -------------------------------------------------------------
+#
+# A `use` runs another orchestration, so its inner shape is not in this
+# file's plan. The runtime mirrors the child's effects under the use node as
+# they run; the tree reads its rows from there.
+
+USE: dict[str, Any] = {
+    "effects": [{"type": "use", "name": "sub", "path": "child.yml"}]
+}
+
+
+def test_a_use_shows_the_child_effects_its_node_carries() -> None:
+    state = {
+        "prime": {
+            "sub": {
+                "meta": {"created_at": T0},
+                "greet": _done(1, 2),
+                "farewell": _running(),
+            }
+        }
+    }
+    (use_node,) = build_tree(plan_from_orchestration(USE), state)
+
+    assert use_node.status == RUNNING
+    assert [child.label for child in use_node.children] == ["greet", "farewell"]
+    assert [child.status for child in use_node.children] == [DONE, RUNNING]
+    assert count_effects((use_node,)) == (1, 3)
+
+
+def test_a_use_with_nothing_mirrored_yet_is_a_single_row() -> None:
+    state = {"prime": {"sub": {"meta": {"created_at": T0}}}}
+    (use_node,) = build_tree(plan_from_orchestration(USE), state)
+
+    assert use_node.children == ()
+    assert use_node.status == RUNNING
+
+
+def test_a_nested_use_nests_its_grandchildren() -> None:
+    state = {
+        "prime": {
+            "sub": {
+                "meta": {"created_at": T0, "completed_at": T2},
+                "inner": {"meta": {"created_at": T0}, "leaf": _done(3, 4)},
+            }
+        }
+    }
+    (use_node,) = build_tree(plan_from_orchestration(USE), state)
+
+    (inner,) = use_node.children
+    (leaf,) = inner.children
+    assert (inner.label, leaf.label) == ("inner", "leaf")
+    assert leaf.status == DONE
+    assert sum_tokens(state) == (3, 4)
+
+
+def test_a_failed_child_effect_surfaces_its_error() -> None:
+    state = {
+        "prime": {
+            "sub": {
+                "meta": {"created_at": T0, "error": "child blew up"},
+                "divide": {"meta": {"created_at": T0, "error": "division by zero"}},
+            }
+        }
+    }
+    (use_node,) = build_tree(plan_from_orchestration(USE), state)
+
+    assert use_node.status == FAILED
+    (child,) = use_node.children
+    assert (child.status, child.error) == (FAILED, "division by zero")

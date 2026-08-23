@@ -273,7 +273,7 @@ class LoopRuntime:
 
                     # Fire on_write once after merge
                     if store.on_write:
-                        store.on_write(store.state)
+                        store.on_write(store.root_state)
 
                     # Assemble results in original order
                     for idx in range(total):
