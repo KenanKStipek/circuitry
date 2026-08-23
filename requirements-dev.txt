@@ -5,7 +5,7 @@ pytest>=8.0
 # skipping. Keep in sync with the `tui` extra in pyproject.toml.
 textual>=1.0
 pytest-cov>=5.0
-ruff>=0.16
+ruff>=0.16,<0.17
 mypy>=1.10
 # Implements pymongo's actual API surface (call signatures, document
 # shape, error classes) so tests/core/test_mongodb_persistence_mongomock.py
