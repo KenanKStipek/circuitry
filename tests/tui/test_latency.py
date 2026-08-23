@@ -32,6 +32,7 @@ import pytest
 pytest.importorskip("textual")
 
 from textual.pilot import Pilot
+from textual.widgets import Select
 
 from circuitry.tui.app import CircuitryApp
 from circuitry.tui.screens import VIEWS
@@ -136,6 +137,13 @@ def test_a_blocked_run_still_answers_the_keyboard(run_app: Any, tmp_path: Any) -
             self.push_screen(build(spec))
 
     async def scenario(pilot: Pilot[Any]) -> tuple[bool, float, str]:
+        await pilot.pause()
+        # Pick the orchestration first: ``action_launch`` refuses to start
+        # without a loaded form, and a Ctrl-R that quietly does nothing would
+        # make every assertion below vacuously true.
+        screen = pilot.app.screen
+        screen.query_one("#run-orchestration", Select).value = str(path)
+        await pilot.pause()
         await pilot.pause()
         # Ctrl-R launches; the adapter then parks the worker thread.
         await pilot.press("ctrl+r")
