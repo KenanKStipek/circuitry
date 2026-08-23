@@ -222,15 +222,28 @@ def condition_refusal(path: str, *, profile_name: str) -> str:
 
 @dataclass(frozen=True)
 class EffectOverride:
-    """What a profile says about one effect. Empty fields are simply absent."""
+    """What a profile says about one effect. Empty fields are simply absent.
+
+    ``routing`` has no picker in the editor yet (see #149); it is carried
+    through untouched so opening and saving a profile does not silently drop
+    a ``routing: false`` opt-out or ``routing: <band>`` pin. Schema allows
+    only ``False`` or a non-empty band name — never ``True`` — so that is
+    all this field ever holds.
+    """
 
     model: str | None = None
     provider: str | None = None
     enabled: bool | None = None
+    routing: bool | str | None = None
 
     @property
     def is_empty(self) -> bool:
-        return self.model is None and self.provider is None and self.enabled is None
+        return (
+            self.model is None
+            and self.provider is None
+            and self.enabled is None
+            and self.routing is None
+        )
 
     def to_mapping(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -240,6 +253,8 @@ class EffectOverride:
             out["provider"] = self.provider
         if self.enabled is not None:
             out["enabled"] = self.enabled
+        if self.routing is not None:
+            out["routing"] = self.routing
         return out
 
     @classmethod
@@ -249,12 +264,20 @@ class EffectOverride:
         model = raw.get("model")
         provider = raw.get("provider")
         enabled = raw.get("enabled")
+        routing = raw.get("routing")
+        if isinstance(routing, bool):
+            routing_value: bool | str | None = False if routing is False else None
+        elif isinstance(routing, str) and routing.strip():
+            routing_value = routing
+        else:
+            routing_value = None
         return cls(
             model=str(model) if isinstance(model, str) and model.strip() else None,
             provider=(
                 str(provider) if isinstance(provider, str) and provider.strip() else None
             ),
             enabled=bool(enabled) if isinstance(enabled, bool) else None,
+            routing=routing_value,
         )
 
 
