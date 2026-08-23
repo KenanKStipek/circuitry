@@ -67,5 +67,5 @@ def write_disabled_node(*, store: Store, name: str) -> dict[str, Any]:
     store.fire_effect_start(name, node)
     store.fire_effect_complete(name, node)
     if store.on_write:
-        store.on_write(store.state)
+        store.on_write(store.root_state)
     return node

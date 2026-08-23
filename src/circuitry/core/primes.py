@@ -197,8 +197,10 @@ model:     OPTIONAL. Omit — it comes from the user's config.json.
      iterations into prime.<loop_name>.collected.value. Requires a named loop.
    - A NAMED loop writes each pass under prime.<loop_name>.iter_<N>.<child>.value.
      An UNNAMED loop writes body effects straight into the parent scope, so each
-     pass OVERWRITES the previous one at a stable path — that is the idiom for a
-     while-loop whose CEL condition must observe the body's own latest output.
+     pass OVERWRITES the previous one at a stable path.
+   - INSIDE the body (and inside a while condition), write prime.<step>.value to
+     read a step from the CURRENT pass — see WITHIN A LOOP BODY below. Never
+     write iter_<N> inside the loop: it pins every pass to pass N.
      - type: loop
        name: per_topic
        collect: draft
@@ -209,6 +211,9 @@ model:     OPTIONAL. Omit — it comes from the user's config.json.
          - type: prompt
            name: draft
            template: "Write a paragraph about {{topic}}."
+         - type: prompt
+           name: polish
+           template: "Tighten this: {{prime.draft.value}}"   # THIS pass's draft
 
 5) tool — a deterministic, non-LLM side effect via a plugin.
    Required: type, name, provider. Optional: prompt, model, params, timeout_ms,
@@ -243,6 +248,7 @@ Top-level effect output ............ prime.<name>.value
 Inside a named dynamic ............. prime.<dynamic>.<name>.value
 Named loop, one iteration .......... prime.<loop>.iter_<N>.<name>.value
 Named loop, collected .............. prime.<loop>.collected.value
+Loop body, a step in THIS pass ..... prime.<name>.value (see WITHIN A LOOP BODY)
 Named conditional branch effect .... prime.<cond>.<name>.value
 Unnamed loop / conditional ......... prime.<name>.value (merged into parent)
 A field of a JSON/object output .... prime.<name>.value.<field>
@@ -253,8 +259,24 @@ In templates:  {{prime.step.value}}          (double braces; triple to skip
 In CEL exprs:  state.prime.step.value        (state. prefix, no braces)
 CEL supports: == != < <= > >= && || ! and size(x). Nothing else.
 
+=== WITHIN A LOOP BODY ===
+Three different questions, three different paths. Do not mix them up.
+  Read a step in the CURRENT pass ... prime.<step>.value        (in the body)
+  Read one SPECIFIC past pass ...... prime.<loop>.iter_<N>.<step>.value (AFTER
+                                     the loop only — inside it, N is fixed and
+                                     every pass reads pass N's stale output)
+  Read ALL passes after the loop ... prime.<loop>.collected.value (needs collect:)
+
+prime.<step>.value inside a body means "the step named <step> in this pass",
+whether the loop is named or not, chain or tree, and in the while condition
+too. It shadows an outer effect of the same name for the length of the body.
+prime.<loop>.<step>.value is NOT a thing — prime.<loop> holds iter_<N>,
+collected and meta, never body step names.
+
 An effect may only read paths written by an effect that runs BEFORE it in
-chain order. In tree flow, siblings CANNOT read each other at all.
+chain order. In a tree-flow dynamic, siblings CANNOT read each other at all.
+(A tree-flow LOOP parallelises whole iterations, not the steps inside one —
+body steps still run in order and still chain.)
 
 === INTERFACE ===
 Declare what the orchestration takes and returns so `use` can wire it up:

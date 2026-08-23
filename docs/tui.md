@@ -329,6 +329,13 @@ the view never contradicts the router. With no table there is still a number to
 describe, and `circuitry/tui/complexity.py` supplies the default names —
 `low` / `moderate` / `high` / `severe`, quartiles of the 0–100 range.
 
+A `use` effect runs another orchestration, whose shape is nowhere in the file
+being run, so its rows come from state: the runtime mirrors the child's
+effects under the use node as they execute and the tree grows a row per child
+(and per grandchild, for a `use` inside a `use`). In declared-outputs mode the
+child's effects give way to the mapped value once the child lands, so the rows
+collapse back to the single `use` row the parent actually keeps.
+
 Because state is published when an effect *finishes*, the effect currently in
 flight would otherwise look pending. The view infers it from the structure
 instead: under a running chain the next unfinished effect is under way; under
