@@ -233,6 +233,17 @@ class PromptRuntime:
     ``tokens_*``, ``completed_at``, ``error``) is written *before* dispatch.
     That is what makes the complexity score readable on an effect that failed,
     which is the case worth diagnosing.
+
+    ``decomposition`` is the other conditional key, and unlike ``complexity``
+    it is written *at* dispatch, because it records a dispatch decision: it
+    appears only when ``runtime.complexity.decomposition`` is enabled and this
+    effect's score strictly exceeded the threshold. It carries the attempt's
+    whole story — ``{decomposed, outcome, reason, score, threshold, depth,
+    max_depth, plan?, chunk_count?, yaml?, result_path?, fallback_model?,
+    error?}`` — whether the effect was actually replaced by the planned
+    fan-out (``value`` then holds the child's merged result), routed up to a
+    more capable model, run as-is, or failed under ``on_failure: fail``. See
+    :mod:`circuitry.core.decompose`.
     """
 
     def __init__(
@@ -362,7 +373,50 @@ class PromptRuntime:
 
         attempts_meta: list[dict[str, Any]] = []
         try:
-            attempts = self._build_attempts(default_model=resolved_model)
+            # Decomposition sits right at the dispatch seam: it either replaces
+            # the model call entirely (the merged child result lands at this
+            # effect's own path and nothing below runs), falls through to a
+            # normal dispatch — possibly on a more capable model (route up) —
+            # or raises under `on_failure: fail`, where the ordinary error
+            # path below records it like any other dispatch failure.
+            dispatch_model = resolved_model
+            decomposition = self._maybe_decompose(
+                store=store,
+                node=node,
+                ctx=effective_ctx,
+                complexity=complexity,
+                prompt_sent=prompt_sent,
+            )
+            if decomposition is not None:
+                meta["decomposition"] = decomposition.meta
+                if decomposition.succeeded:
+                    node["value"] = decomposition.value
+                    meta["completed_at"] = _now_iso()
+                    if self.verbose:
+                        elapsed = time.monotonic() - t0
+                        chunk_count = decomposition.meta.get("chunk_count")
+                        line = (
+                            f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.display_name}"
+                            f" [dim]decomposed · {chunk_count} chunks"
+                            f" | {_elapsed_str(elapsed)}[/dim]"
+                        )
+                        if self.cb_done is not None:
+                            self.cb_done(line)
+                        else:
+                            _console.print(line)
+                    store.fire_effect_complete(self.defn.name, node)
+                    return
+                if decomposition.fail:
+                    from .decompose import DecompositionError
+
+                    raise DecompositionError(
+                        f"decomposition of '{self.defn.name}' failed "
+                        f"({decomposition.failure}): {decomposition.error}"
+                    )
+                if decomposition.fallback_model:
+                    dispatch_model = decomposition.fallback_model
+
+            attempts = self._build_attempts(default_model=dispatch_model)
 
             for _attempt in range(max_attempts):
                 if _attempt > 0:
@@ -566,6 +620,52 @@ class PromptRuntime:
                 meta["band"] = {"name": band.name or "", "model": band.model or ""}
 
         return meta
+
+    def _maybe_decompose(
+        self,
+        *,
+        store: Store,
+        node: dict[str, Any],
+        ctx: dict[str, Any],
+        complexity: dict[str, Any] | None,
+        prompt_sent: str,
+    ) -> Any:
+        """Attempt runtime decomposition, or ``None`` when it does not apply.
+
+        Decomposition reads the score already recorded in the pre-dispatch
+        meta block — no score (scoring off, or scoring failed) means nothing
+        to compare against the threshold, so the effect runs untouched. The
+        heavy lifting, and every failure-semantics decision, lives in
+        :mod:`circuitry.core.decompose`; the returned result only tells this
+        runtime which of its three postures to take (write the merged value,
+        raise, or dispatch — possibly on a fallback model).
+        """
+        if complexity is None:
+            return None
+        score = complexity.get("score")
+        if not isinstance(score, (int, float)):
+            return None
+
+        from .decompose import maybe_decompose
+
+        return maybe_decompose(
+            self.defn,
+            store=store,
+            node=node,
+            ctx=ctx,
+            score=float(score),
+            # The raw template keeps its {{...}} references so the emitted
+            # document can re-declare them as inputs; a messages-based prompt
+            # has no single template, so the materialized (already-rendered,
+            # self-contained) prompt stands in.
+            source_template=self.defn.template or prompt_sent,
+            adapter=self.adapter,
+            model=self.model,
+            runtime_config=self.runtime_config,
+            timeout_seconds=self.timeout_seconds,
+            verbose=self.verbose,
+            display_depth=self.depth,
+        )
 
     def _build_attempts(self, *, default_model: str) -> list[tuple[str, str]]:
         attempts: list[tuple[str, str]] = []
