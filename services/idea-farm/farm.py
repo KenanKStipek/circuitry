@@ -200,7 +200,7 @@ STOPWORDS = frozenset("""
 a an the and or but of for to in on at by with from into over under across
 via per as is are be being been that this these those it its your their our
 using use used automatically automated auto new each any all every some
-""".split())
+""".split())  # noqa: SIM905 - deliberately formatted word block; --fix flattens it unreadably
 
 DEFAULT_DUP_THRESHOLD = 0.7
 
@@ -366,46 +366,46 @@ def matches_focus(idea: str, wanted: frozenset[str]) -> bool:
 # it should. GENERIC_HOME_WORDS below guards that.
 GENERIC_TEMPLATES: tuple[tuple[str, str, str], ...] = (
     ("contract-review",
-     "contract clause redline indemnity liability agreement counterparty nda "
-     "termination renewal obligation",
-     "legal contract clause law procurement vendor compliance insurance real "
-     "estate client onboarding sales"),
+     ("contract clause redline indemnity liability agreement counterparty nda "
+      "termination renewal obligation"),
+     ("legal contract clause law procurement vendor compliance insurance real "
+      "estate client onboarding sales")),
     ("resume-screening",
-     "resume cv applicant candidate screening shortlist recruiter recruiting "
-     "interview hiring",
-     "job hunting career human resource recruiting screening resume portfolio "
-     "candidate applicant interview hiring volunteer"),
+     ("resume cv applicant candidate screening shortlist recruiter recruiting "
+      "interview hiring"),
+     ("job hunting career human resource recruiting screening resume portfolio "
+      "candidate applicant interview hiring volunteer")),
     ("expense-approval",
      "expense reimbursement receipt spend approval policy corporate",
-     "accounting tax bookkeeping expense finance procurement vendor nonprofit "
-     "grant business travel"),
+     ("accounting tax bookkeeping expense finance procurement vendor nonprofit "
+      "grant business travel")),
     ("invoice-chasing",
      "invoice billing overdue payable receivable collections payment dunning",
-     "accounting tax bookkeeping invoice billing finance sales business "
-     "subscription bill customer freelance"),
+     ("accounting tax bookkeeping invoice billing finance sales business "
+      "subscription bill customer freelance")),
     ("loan-underwriting",
-     "loan mortgage underwriting borrower creditworthiness lending application "
-     "approval",
+     ("loan mortgage underwriting borrower creditworthiness lending application "
+      "approval"),
      "finance insurance real estate accounting banking lending mortgage loan"),
     ("retirement-forecast",
-     "retirement savings pension annuity investment contribution forecast "
-     "projection",
-     "finance insurance accounting tax retirement pension elder investment "
-     "savings"),
+     ("retirement savings pension annuity investment contribution forecast "
+      "projection"),
+     ("finance insurance accounting tax retirement pension elder investment "
+      "savings")),
     ("performance-review",
      "performance appraisal employee manager rating promotion competency cycle",
      "human resource employee recruiting coaching teaching curriculum fitness"),
     ("risk-register",
      "risk heatmap register severity likelihood mitigation matrix scoring",
-     "insurance legal compliance risk audit manufacturing logistics safety "
-     "security"),
+     ("insurance legal compliance risk audit manufacturing logistics safety "
+      "security")),
 )
 
 # Words too common across the focus list to identify a template's home domain.
 # A home phrase containing one of these would silently exempt unrelated foci.
 GENERIC_HOME_WORDS = frozenset(
     stem(w) for w in
-    "planning plan work working management managing tracking track operations "
+    "planning plan work working management managing tracking track operations "  # noqa: SIM905 - deliberately formatted word block; --fix flattens it unreadably
     "review reviewing report reporting writing content data personal".split()
 )
 
