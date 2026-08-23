@@ -27,7 +27,7 @@ from .allowlist import check_allowlist, walk_orchestration_refs
 from .config import CircuitryConfig
 from .effective_settings import EffectiveSettings, resolve_effective_settings
 from .orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
-from .profiles import ProfileSettings, load_profile
+from .profiles import ProfileSettings, load_profile, profile_from_record
 from .redaction import redact
 
 logger = logging.getLogger(__name__)
@@ -87,6 +87,10 @@ class RunRequest:
     adapter_override: str | None = None
     model_override: str | None = None
     profile_name: str | None = None
+    # A recorded `runtime.effective_settings.profile` mapping ({name, content})
+    # to reconstruct and apply instead of discovering a profile file by name.
+    # Mutually exclusive with `profile_name`; raises if both are set.
+    profile_record: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -129,20 +133,28 @@ def run(req: RunRequest) -> RunResult:
                 "Allowlist enforcement failed: " + "; ".join(allowlist_errors)
             )
 
+        if req.profile_name and req.profile_record is not None:
+            raise ValueError(
+                "RunRequest.profile_name and RunRequest.profile_record are "
+                "mutually exclusive; pass at most one."
+            )
+
         profile: ProfileSettings | None = None
-        if req.profile_name:
+        if req.profile_record is not None:
+            profile = profile_from_record(req.profile_record, orch=orch)
+        elif req.profile_name:
             profile = load_profile(
                 name=req.profile_name,
                 orchestration_path=req.orchestration_path,
                 orch=orch,
             )
-            if profile.inputs:
-                # Profile inputs are a lower-priority base layer under
-                # whatever the caller already resolved from --state/-e (CLI
-                # values win — see cli.app.run_cmd).
-                merged = dict(profile.inputs)
-                merged.update(state)
-                state = merged
+        if profile is not None and profile.inputs:
+            # Profile inputs are a lower-priority base layer under
+            # whatever the caller already resolved from --state/-e (CLI
+            # values win — see cli.app.run_cmd).
+            merged = dict(profile.inputs)
+            merged.update(state)
+            state = merged
 
         effective = resolve_effective_settings(
             cfg=cfg,

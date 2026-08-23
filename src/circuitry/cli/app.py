@@ -371,6 +371,16 @@ def run_cmd(
             "wins over project-level). Precedence: CLI > profile > orchestration > config."
         ),
     ),
+    profile_from_state: Path | None = typer.Option(
+        None, "--profile-from-state",
+        help=(
+            "Reconstruct and apply the profile recorded at "
+            "runtime.effective_settings.profile in this state JSON (e.g. a "
+            "prior --out), instead of discovering profiles/<name>.yml by "
+            "name. Fails if that record was redacted. Mutually exclusive "
+            "with --profile."
+        ),
+    ),
     adapter: str | None = typer.Option(
         None, "--adapter",
         help="Adapter to use for this run. Beats CIRCUITRY_ADAPTER, --profile, and the orchestration.",
@@ -443,6 +453,30 @@ def run_cmd(
         console.print("[red]Error:[/red] --tail is mutually exclusive with --print and --json.")
         raise typer.Exit(code=1)
 
+    if profile and profile_from_state:
+        console.print("[red]Error:[/red] --profile and --profile-from-state are mutually exclusive.")
+        raise typer.Exit(code=1)
+
+    profile_record: dict[str, Any] | None = None
+    if profile_from_state:
+        try:
+            recorded_state = json.loads(profile_from_state.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            console.print(f"[red]Error:[/red] Could not read {profile_from_state}: {exc}")
+            raise typer.Exit(code=1) from exc
+        profile_record = (
+            recorded_state.get("runtime", {}).get("effective_settings", {}).get("profile")
+            if isinstance(recorded_state, dict)
+            else None
+        )
+        if not isinstance(profile_record, dict):
+            console.print(
+                f"[red]Error:[/red] {profile_from_state} carries no "
+                "runtime.effective_settings.profile record — that run did "
+                "not use --profile, so there is nothing to reconstruct."
+            )
+            raise typer.Exit(code=1)
+
     cfg = resolve_config(explicit_path=config)
 
     if not (quiet or json_out):
@@ -484,6 +518,7 @@ def run_cmd(
         live_state_path=live_state,
         skip_preflight=skip_preflight,
         profile_name=profile,
+        profile_record=profile_record,
         adapter_override=adapter,
         model_override=model,
     )

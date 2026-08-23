@@ -213,3 +213,40 @@ runtime.persistence.loaded_from_persistence      # true when state was rehydrate
 
 Credential-shaped values inside the profile are redacted the same way
 `runtime.effective_settings.runtime` is (see `circuitry.cli.redaction`).
+
+## Reproducing a Run from Its Record
+
+The recorded `runtime.effective_settings.profile` is enough on its own to
+re-run with the same profile — you don't need the original `profiles/<name>.yml`
+file, which is the point: it may have changed or be gone by the time you want
+to reproduce a past run.
+
+```bash
+cof run recipe --profile-from-state ./state.json
+```
+
+`state.json` is any state this project wrote (typically via `--out`) for a
+run that used `--profile`. The command reads
+`runtime.effective_settings.profile` out of it, reconstructs the profile from
+that record alone, and applies it exactly as `--profile <name>` would — model/
+adapter defaults, `inputs`, per-effect overrides, and `persistence`. It is
+mutually exclusive with `--profile`.
+
+**This only reproduces what the record actually kept.** A profile carrying a
+secret is recorded with that value redacted (see above), so reconstruction
+refuses rather than silently replaying the literal `***REDACTED***` sentinel
+as if it were the real value:
+
+```
+Error: Profile 'thorough' cannot be reconstructed: its recorded content was
+redacted, so replaying it would run with the literal '***REDACTED***'
+sentinel instead of the original value(s). Redacted field(s):
+persistence.uri. Supply the original profile file (profiles/thorough.yml)
+via --profile instead, or provide these values explicitly.
+```
+
+When that happens, re-run from the original profile file (`--profile`)
+instead, or supply the missing value another way (e.g. via `-e` or an
+environment-backed config) — reconstruction from the record is a convenience
+for the non-secret case, not a substitute for keeping the profile file
+around when it carries credentials.
