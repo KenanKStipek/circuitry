@@ -4,8 +4,8 @@
 owes it lives here: the seed, the accumulated transcript, the current draft,
 the verdict on that draft, and the two ways a finished draft leaves the app.
 None of it imports Textual, so the loop that drives a chat screen is the same
-loop `scripts/wizard-chat` drives from a terminal — and a test can exercise it
-without booting an app.
+loop `cof wizard` drives from the command line (via :func:`drive_conversation`)
+— and a test can exercise either without booting an app.
 
     Seed + Conversation  →  run_turn (api.run_orchestration)  →  Turn
                          ←  draft + DraftStatus  ←  validate_draft
@@ -51,6 +51,7 @@ __all__ = [
     "default_library_dir",
     "default_runner",
     "dig",
+    "drive_conversation",
     "manifest_entry",
     "run_turn",
     "save_to_file",
@@ -314,6 +315,39 @@ class Conversation:
     def can_save(self) -> bool:
         """A draft may be saved only once the validator has passed it."""
         return bool(self.draft) and self.status is not None and self.status.ok
+
+
+#: Sees the just-recorded turn and the conversation so far; returns the next
+#: user message, or ``None`` to stop (no more input, or nothing left to ask).
+Respond = Callable[[Turn, Conversation], "str | None"]
+
+
+def drive_conversation(
+    seed: Seed,
+    *,
+    runner: TurnRunner,
+    respond: Respond,
+    max_turns: int = 10,
+) -> Conversation:
+    """Run a whole wizard conversation without a screen.
+
+    This is `ChatScreen`'s ``_work``/``_finish`` pair — call the runner, fold
+    the turn in — pulled out into a loop a screen has no room for, so a
+    headless host (``cof wizard``, a test) drives the identical mechanics
+    rather than a second implementation of them. ``respond`` owns all I/O
+    (printing the turn, sourcing the next reply); this function owns the
+    turn-taking and, unconditionally, the stop-on-``done`` rule — a caller's
+    ``respond`` cannot keep the conversation going past a finished draft.
+    """
+    conversation = Conversation(seed)
+    for _ in range(max_turns):
+        turn = runner(conversation.state())
+        conversation.record(turn)
+        reply = respond(turn, conversation)
+        if conversation.done or reply is None:
+            break
+        conversation.add_user(reply)
+    return conversation
 
 
 # ── saving ───────────────────────────────────────────────────────────────────

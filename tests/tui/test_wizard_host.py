@@ -28,6 +28,7 @@ from circuitry.tui.wizard_host import (
     default_library_dir,
     default_runner,
     dig,
+    drive_conversation,
     manifest_entry,
     run_turn,
     save_to_file,
@@ -129,6 +130,76 @@ def test_default_runner_leaves_the_adapter_to_the_config(
 
     assert seen["config"] == "resolved"
     assert seen["adapter"] is None
+
+
+# ── the headless loop ────────────────────────────────────────────────────────
+
+
+def test_drive_conversation_feeds_replies_back_in_until_done() -> None:
+    turns = iter(
+        [
+            Turn(say="Which language?"),
+            Turn(say="Built it.", yaml=VALID_DRAFT, done=True),
+        ]
+    )
+    seen_states: list[dict] = []
+
+    def runner(state: dict) -> Turn:
+        seen_states.append(state)
+        return next(turns)
+
+    replies = iter(["French."])
+    convo = drive_conversation(
+        SEED, runner=runner, respond=lambda _turn, _c: next(replies, None)
+    )
+
+    assert [m.role for m in convo.messages] == ["wizard", "user", "wizard"]
+    assert convo.done and convo.can_save
+    assert seen_states[1]["conversation"] == [
+        {"role": "wizard", "content": "Which language?"},
+        {"role": "user", "content": "French."},
+    ]
+
+
+def test_drive_conversation_stops_when_respond_returns_none_without_done() -> None:
+    """Out of replies (stdin closed, transcript exhausted) stops the loop."""
+    convo = drive_conversation(
+        SEED,
+        runner=lambda _state: Turn(say="Which language?"),
+        respond=lambda _turn, _c: None,
+    )
+    assert not convo.done
+    assert [m.role for m in convo.messages] == ["wizard"]
+
+
+def test_drive_conversation_never_asks_past_max_turns() -> None:
+    calls = 0
+
+    def runner(_state: dict) -> Turn:
+        nonlocal calls
+        calls += 1
+        return Turn(say=f"turn {calls}")
+
+    drive_conversation(
+        SEED, runner=runner, respond=lambda _turn, _c: "keep going", max_turns=3
+    )
+    assert calls == 3
+
+
+def test_drive_conversation_stops_once_done_even_if_respond_answers() -> None:
+    """``done`` is authoritative — a caller's ``respond`` cannot keep it going."""
+    calls = 0
+
+    def runner(_state: dict) -> Turn:
+        nonlocal calls
+        calls += 1
+        return Turn(say="Shipped it.", yaml=VALID_DRAFT, done=True)
+
+    convo = drive_conversation(
+        SEED, runner=runner, respond=lambda _turn, _c: "ignored", max_turns=5
+    )
+    assert convo.done
+    assert calls == 1
 
 
 # ── the seed form ────────────────────────────────────────────────────────────

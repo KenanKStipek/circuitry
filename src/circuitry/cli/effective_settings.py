@@ -10,6 +10,7 @@ fields are intentionally NOT redacted here. The runtime snapshot embedded in
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .complexity_config import (
@@ -27,6 +28,7 @@ if TYPE_CHECKING:
 class EffectiveSettings:
     model: str | None
     adapter: str | None
+    out: Path | None
     plugins: list[str]
     runtime: dict[str, Any]
     sources: dict[
@@ -51,11 +53,13 @@ def resolve_effective_settings(
     cli_model: str | None = None,
     cli_adapter: str | None = None,
     cli_plugins: list[str] | None = None,
+    cli_out: Path | None = None,
     profile: ProfileSettings | None = None,
 ) -> EffectiveSettings:
     sources: dict[str, str] = {}
     model: str | None
     adapter: str | None
+    out: Path | None
     plugins: list[str]
 
     # model precedence: cli > profile > orch > config > default
@@ -93,6 +97,20 @@ def resolve_effective_settings(
     else:
         adapter = None
         sources["adapter"] = "default"
+
+    # out precedence: cli > profile > default (no file written). Unlike
+    # model/adapter there is no orchestration/config layer — `--out` has
+    # never had one, and a profile is orthogonal to the persistence backend
+    # selected via the `persistence` block (see docs/profiles.md).
+    if cli_out is not None:
+        out = cli_out
+        sources["out"] = "cli"
+    elif profile is not None and profile.out is not None:
+        out = Path(profile.out)
+        sources["out"] = "profile"
+    else:
+        out = None
+        sources["out"] = "default"
 
     # plugins: cli replaces if provided; else merge config + orch (dedupe)
     orch_plugins = orch.get("plugins") or []
@@ -160,6 +178,7 @@ def resolve_effective_settings(
     return EffectiveSettings(
         model=model,
         adapter=adapter,
+        out=out,
         plugins=plugins,
         runtime=runtime,
         sources=sources,
