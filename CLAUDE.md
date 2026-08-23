@@ -15,6 +15,11 @@ bash scripts/smoke-curation.sh
 CI is `.github/workflows/quality.yml` (pytest matrix 3.10–3.13, ruff, mypy,
 smoke). A PR is shippable when every check is green.
 
+Install from `requirements-dev.txt` before running any of the above — don't
+trust a `ruff`/`mypy` already on `PATH`. Tool versions are pinned there
+specifically so "green locally" means "green in CI"; a stray unpinned
+install can pass or fail on findings CI won't reproduce.
+
 ## Changelog — write a fragment, never edit `CHANGELOG.md`
 Every change ships its release note as a **new file**, `changelog.d/<issue-or-pr>.<type>.md`
 (`type` ∈ added / changed / deprecated / removed / fixed / security), containing

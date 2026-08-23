@@ -469,6 +469,40 @@
       ],
       "tags": ["wizard", "meta", "conversational", "self-validating", "yaml"],
       "example": "cof run agents/wizard --state turn.json"
+    },
+    {
+      "name": "agents/decompose",
+      "file": "agents/decompose.yml",
+      "category": "agents",
+      "intent": "Decomposition planner — rewrite one over-complex prompt as a simpler fan-out plus a merge.",
+      "description": "Takes a prompt effect that asks a model to do too much at once and emits an orchestration that does the same job as a fan-out over the natural units of the work plus a single merge step. Plans in one prompt effect, validates the emitted YAML with the validate_yaml tool, and revises in a bounded loop until it is both schema-valid and within the chunk budget. The merged result is always at prime.merge.value.",
+      "when_to_use": "When a prompt scores over the decomposition threshold (runtime.complexity.decomposition) and needs to be split, or when a human wants an over-loaded prompt turned into a pipeline.",
+      "primitives": ["prompt", "tool", "loop", "conditional"],
+      "difficulty": "advanced",
+      "backends": ["llm", "tool"],
+      "inputs": {
+        "source_template": {"type": "string", "required": true, "description": "The over-complex prompt template to decompose, verbatim."},
+        "source_interface": {"type": "string", "required": false, "description": "The source orchestration's interface block, or a plain description of the inputs its template reads."},
+        "source_output": {"type": "string", "required": false, "description": "The source effect's prompt_type and schema, so the merge step can reproduce the same output shape."},
+        "max_chunks": {"type": "number", "required": true, "description": "Hard ceiling on the fan-out width, from runtime.complexity.decomposition.max_chunks. Must be at least 2."}
+      },
+      "outputs": {
+        "say": {"type": "string", "path": "prime.plan.value.say", "description": "One paragraph for a human describing how the work was split."},
+        "chunks": {"type": "array", "path": "prime.plan.value.chunks", "description": "The chunk plan — one {name, job} object per fanned-out unit."},
+        "yaml": {"type": "string", "path": "prime.check.value.yaml", "description": "The emitted orchestration YAML, as validated."},
+        "ok": {"type": "boolean", "path": "prime.check.value.ok", "description": "Whether the emitted orchestration validated."},
+        "errors": {"type": "array", "path": "prime.check.value.errors", "description": "Validator errors for the emitted orchestration, if any."},
+        "result_path": {"type": "string", "path": "prime.result_path.value", "description": "The state path in the emitted orchestration holding the merged result. Always \"prime.merge.value\"."},
+        "done": {"type": "boolean", "path": "prime.done.value", "description": "True only when the emitted orchestration validated AND the chunk count is within budget."}
+      },
+      "state_paths": [
+        "prime.plan.value",
+        "prime.check.value",
+        "prime.result_path.value",
+        "prime.done.value"
+      ],
+      "tags": ["decomposition", "complexity", "meta", "self-validating", "yaml", "planner"],
+      "example": "cof run agents/decompose --state source.json"
     }
   ]
 }

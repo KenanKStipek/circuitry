@@ -29,66 +29,56 @@ oldest first, empty on the first turn), and `draft` (the current YAML, or `""`).
 
 ## Driving it headlessly
 
-The whole host is this loop:
-
-```python
-from circuitry import run_orchestration
-from circuitry.cli.config import find_config_path, load_config
-
-WIZARD = "src/circuitry/curation/agents/wizard.yml"
-config = load_config(find_config_path(explicit_path=None, cwd="."))
-
-
-def dig(state, path):
-    cursor = state
-    for segment in path.split("."):
-        if not isinstance(cursor, dict) or segment not in cursor:
-            return None
-        cursor = cursor[segment]
-    return cursor
-
-
-conversation, draft = [], ""
-goal = "Summarize an article, then translate the summary"
-
-while True:
-    result = run_orchestration(
-        orchestration_path=WIZARD,
-        state={"goal": goal, "conversation": conversation, "draft": draft},
-        config=config,
-    )
-    say = dig(result.state, "prime.turn.decide.respond.value.say")
-    yaml_text = dig(result.state, "prime.turn.decide.check.value.yaml")
-    done = bool(dig(result.state, "prime.turn.decide.done.value"))
-
-    print("wizard:", say)
-    if yaml_text:
-        draft = yaml_text          # only ever a validated document
-    conversation.append({"role": "wizard", "content": say})
-    if done:
-        break
-
-    reply = input("you: ")
-    conversation.append({"role": "user", "content": reply})
-
-print(draft)
-```
-
-`scripts/wizard-chat` is that loop, ready to run:
-
 ```sh
-scripts/wizard-chat --goal "Summarize an article, then translate the summary" \
-                    --out my_orch.yml
+cof wizard --goal "Summarize an article, then translate the summary" --out my_orch.yml
 cof check my_orch.yml
 ```
 
-Pass `--reply answers.txt` (one reply per line) to drive it without a terminal —
-that is how the transcript below is reproduced.
+Pass `--reply answers.txt` (one reply per line) instead of a terminal — that is
+how the transcript below is reproduced — or redirect stdin; either way no TTY
+is required. `--name`/`--category` set the filename and, with `--library`,
+the manifest entry; `--goal` is the only thing you must supply. Run it from a
+`pip install circuitry-cof` with no repository checkout anywhere and it works
+the same way: the wizard is resolved from the installed package, the same way
+`cof check` resolves everything else in `curation/`.
+
+`cof wizard` is **not** [`cof gen`](../README.md#cli-reference): `gen` drives
+`agents/meta_orchestrator.yml`, a single-shot generator — one prompt in, one
+document out. `wizard` drives `agents/wizard.yml`, the multi-turn conversation
+this page documents. They produce different artifacts from different
+orchestrations on purpose.
+
+`cof wizard` repeats the turn contract above until `done`.
+`circuitry.tui.wizard_host.drive_conversation` is that loop pulled out into a
+function a headless host (`cof wizard`, a test) can call directly:
+
+```python
+from pathlib import Path
+
+from circuitry.tui.wizard_host import Seed, default_runner, drive_conversation, save_to_file
+
+seed = Seed(name="summarizer", category="recipes", goal="Summarize an article, then translate it")
+
+
+def respond(turn, conversation):
+    print("wizard:", turn.say)
+    if conversation.done:
+        return None
+    return input("you: ")
+
+
+conversation = drive_conversation(seed, runner=default_runner(), respond=respond)
+save_to_file(conversation.draft, Path("my_orch.yml"))  # raises InvalidDraft rather than write a bad one
+```
 
 The TUI's [Chat view](./tui.md#chat-8--build-an-orchestration-by-talking-to-it)
-(`cof tui`, then `8`) is the same loop with a screen around it:
-`circuitry.tui.wizard_host` holds the transcript, re-validates every draft, and
-owns the two save paths. Nothing in the loop is specific to either host.
+(`cof tui`, then `8`) is the same turn-taking with a screen around it instead
+of `drive_conversation`: `circuitry.tui.wizard_host` holds the transcript,
+re-validates every draft, and owns the two save paths (to a file, or into the
+library) for both hosts. Nothing in the loop, the validator, or the save
+paths is specific to either host — a CLI, a TUI, and a test all drive the
+exact same functions, so they cannot produce different artifacts from the
+same input.
 
 ## Inside a turn
 

@@ -355,9 +355,9 @@ the question the pane exists to answer:
   complexity   62.0/100  high  (rendered)
   …
 complexity signals
-  ▸ prompt_size   40.0   65%  ~900 tokens of rendered prompt
-    schema_shape  15.0   24%  schema depth 2, 6 field(s)
-    keywords       7.0   11%  matched analyze, compare
+  ▸ prompt_size     40.0   65%  ~900 tokens of rendered prompt
+    output_schema   15.0   24%  schema depth 2, 6 field(s)
+    keywords         7.0   11%  matched analyze, compare
   dominated by prompt_size
 ```
 
@@ -483,8 +483,8 @@ worker thread, and paints what comes back:
 The wizard handles one turn; the host owns the loop. That host —
 `circuitry.tui.wizard_host` — is deliberately free of Textual: the seed, the
 transcript, the draft, the verdict and the two save paths are the same objects
-`scripts/wizard-chat` could drive from a terminal, which is what makes the flow
-testable without a screen.
+[`cof wizard`](./wizard.md#driving-it-headlessly) drives from the command
+line, which is what makes the flow testable without a screen.
 
 **The pane's verdict is the file's verdict.** Every draft is put back through
 `runtime_shim.validate` — the gate `cof check` runs, minus preflight — rather
@@ -551,6 +551,11 @@ optional input does not bake its default into the file), and a persistence
 panel whose backend dropdown reveals exactly that backend's keys. Switching
 backends drops the previous one's keys, because backends take disjoint keys and
 a partial overlay would produce a chimera.
+
+A profile's `out:` key (the default `--out` path — see
+[Named Profiles → Precedence](profiles.md#precedence)) has no picker of its
+own yet; `ProfileDraft` still round-trips it, so a profile edited by hand to
+set `out:` keeps it across a save.
 
 | Key | Action |
 | --- | --- |

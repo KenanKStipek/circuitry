@@ -1,0 +1,83 @@
+# VENDORED from KenanKStipek/agent-loop@v1 (e43133f) accept.yml +
+# templates/accept.yml (public repo cannot call private hub).
+# Acceptance = the human approval gate: /accept comment (must START the
+# comment) or the `accepted` label. Verifies actor allowlist, PR state,
+# green checks via mergeable_state (polled up to 5 min), then squash-merges.
+# require_demo is off: circuitry has no Vercel preview surface.
+name: Accept PR
+on:
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [labeled]
+jobs:
+  accept:
+    if: |
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/accept')) ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'accepted')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Verify and merge
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          ALLOWED: 'KenanKStipek'
+          MERGE_METHOD: 'squash'
+          REQUIRE_DEMO: 'false'
+          PR: ${{ github.event.issue.number || github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          say() { gh pr comment "$PR" --repo "$REPO" --body "$1"; }
+
+          case ",$ALLOWED," in
+            *",$ACTOR,"*) ;;
+            *) echo "::error::$ACTOR is not in the accept allowlist ($ALLOWED) — ignoring."; exit 1 ;;
+          esac
+
+          info=$(gh pr view "$PR" --repo "$REPO" --json state,isDraft,body)
+          state=$(echo "$info" | jq -r .state)
+          draft=$(echo "$info" | jq -r .isDraft)
+          body=$(echo "$info" | jq -r .body)
+
+          if [ "$state" != "OPEN" ]; then
+            echo "PR #$PR is $state — nothing to accept."; exit 1
+          fi
+          if [ "$draft" = "true" ] || echo "$body" | grep -qF '**WIP — run in progress**'; then
+            say "Not accepted: PR is still draft/WIP."; exit 1
+          fi
+
+          mstate="unknown"
+          for i in $(seq 1 20); do
+            mstate=$(gh api "repos/$REPO/pulls/$PR" --jq '.mergeable_state // "unknown"')
+            if [ "$mstate" = "clean" ]; then
+              break
+            fi
+            case "$mstate" in
+              dirty|behind)
+                break ;;
+            esac
+            echo "mergeable_state=$mstate (attempt $i/20) — waiting 15s"
+            sleep 15
+          done
+          if [ "$mstate" != "clean" ]; then
+            say "Not accepted: mergeable_state=$mstate after a 5-minute wait (need clean: checks green, no conflicts). Re-run /accept when green."
+            exit 1
+          fi
+
+          if [ "$REQUIRE_DEMO" = "true" ]; then
+            if gh api "repos/$REPO/issues/$PR/labels" --jq '.[].name' | grep -qx 'no-demo'; then
+              echo "no-demo label present — demo requirement waived for this PR."
+            elif ! gh api "repos/$REPO/issues/$PR/comments" --paginate \
+                 --jq '.[].body' | grep -q '/releases/download/demos/'; then
+              say "Not accepted: no demo recording found on this PR. (If this change has no visual surface, label the PR no-demo and re-run /accept.)"
+              exit 1
+            fi
+          fi
+
+          gh pr merge "$PR" --repo "$REPO" "--$MERGE_METHOD" --delete-branch
+          say "Accepted by @$ACTOR — merged via $MERGE_METHOD. Task closes via Closes-link."

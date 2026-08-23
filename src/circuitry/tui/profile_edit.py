@@ -396,6 +396,9 @@ class ProfileDraft:
     name: str = DEFAULT_PROFILE_NAME
     adapter: str | None = None
     model: str | None = None
+    #: Default --out path. Not surfaced in a picker (see run defaults panel);
+    #: carried through so a profile written by hand keeps it on save.
+    out: str | None = None
     inputs: dict[str, Any] = field(default_factory=dict)
     effects: dict[str, EffectOverride] = field(default_factory=dict)
     persistence: PersistenceDraft | None = None
@@ -413,6 +416,8 @@ class ProfileDraft:
             out["adapter"] = self.adapter
         if self.model:
             out["model"] = self.model
+        if self.out:
+            out["out"] = self.out
         if self.inputs:
             out["inputs"] = dict(self.inputs)
         effects = {
@@ -532,6 +537,7 @@ class ProfileDraft:
             name=name,
             adapter=self.adapter,
             model=self.model,
+            out=self.out,
             inputs=dict(self.inputs),
             effects=dict(self.effects),
             persistence=self.persistence,
@@ -608,6 +614,7 @@ def load_draft(
         name=name,
         adapter=_optional_text(raw.get("adapter")),
         model=_optional_text(raw.get("model")),
+        out=_optional_text(raw.get("out")),
         inputs=dict(raw["inputs"]) if isinstance(raw.get("inputs"), dict) else {},
         effects={
             str(key): EffectOverride.from_mapping(value)

@@ -92,8 +92,24 @@ Recognised signals and their default weights:
 | `structural_position` | `0.5` | Nesting depth, loop body, reflector-generated. |
 | `keywords` | `1.0` | Contribution of the `keywords` table above. |
 
+**These names are the only names.** They are what you configure here, what the
+scorer reports, what the runtime writes under `meta.complexity.signals`, and
+what the TUI's breakdown pane prints — one vocabulary end to end
+(`circuitry.core.complexity.SIGNAL_NAMES` is the source, and this table is
+validated against it), so a weight you set always reaches the signal it names.
+
 An unrecognised signal name is an error rather than a silent no-op, so a typo
-in `weights` cannot quietly do nothing.
+in `weights` cannot quietly do nothing:
+
+```
+runtime.complexity.scoring.weights: unknown signal 'structural-position'. Valid
+signals: keywords, output_schema, output_size, prompt_size, prompt_type,
+state_references, structural_position.
+```
+
+The error is raised at **config resolution** — before the first effect
+dispatches — so a stale weight name stops the run at startup rather than
+warning into a log mid-run.
 
 #### What scoring writes to state
 
