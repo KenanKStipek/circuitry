@@ -490,6 +490,8 @@ Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously
 
 Runs another orchestration as an isolated sub-step. State is fully isolated: declared `inputs` are passed in as initial state; the parent does not see the child's working state directly. Outputs land at `prime.<name>` according to the namespacing mode (see below).
 
+Isolated state, shared observation: the child's effects are reported to the parent run's observers — `--live-state`, the TUI, and every runtime plugin's `on_effect_start` / `on_effect_complete` — at paths namespaced under the use node (`prime.<name>.<child_effect>`, nesting further for a `use` inside a `use`). Live snapshots mirror the child's in-flight effects under that node for watchers only; what actually lands in parent state is still exactly what the namespacing mode below says.
+
 **State output path:** `prime.<name>.value` (declared-outputs mode) or `prime.<name>.<child_effect>.value` (full-namespace mode)
 
 | Field | Type | Required | Default | Constraints |

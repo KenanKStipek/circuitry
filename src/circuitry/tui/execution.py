@@ -422,7 +422,61 @@ def _children(
         return _loop_children(plan, scope, overlay, path)
     if plan.kind == "conditional":
         return _branch_children(plan, node, scope, overlay, path)
+    if plan.kind == "use":
+        return _use_children(node, overlay, path)
     return _nodes(plan.children, scope, overlay, path)
+
+
+def _use_children(
+    node: Mapping[str, Any] | None,
+    overlay: _Overlay,
+    path: str,
+) -> tuple[ExecNode, ...]:
+    """A `use` child's effects, read off the use node — it has no plan here.
+
+    A `use` names *another* orchestration, so its inner shape is nowhere in
+    this orchestration's file; the rows come from state instead, which the
+    runtime mirrors the child's effects into as they run. Declared-outputs
+    mode replaces that mirror with the mapped value once the child lands, so
+    these rows are read fresh from each snapshot rather than remembered —
+    the tree follows the child while it works and collapses to the outputs
+    the parent actually keeps.
+    """
+    if not isinstance(node, Mapping):
+        return ()
+    return tuple(
+        _state_node(key, value, overlay, f"{path}.{key}")
+        for key, value in node.items()
+        if key not in ("value", "meta") and isinstance(value, Mapping)
+    )
+
+
+def _state_node(
+    name: str, node: Mapping[str, Any], overlay: _Overlay, path: str
+) -> ExecNode:
+    """One row built from an effect's state node alone, with no plan to read.
+
+    The type is not recoverable from state — only whether the node ran
+    children of its own — so these rows claim no kind beyond ``effect``,
+    which keeps them out of the score column's "prompt with no score" dash.
+    """
+    meta = node.get("meta")
+    meta = meta if isinstance(meta, Mapping) else None
+    children = _use_children(node, overlay, path)
+    flow = _flow_of(meta)
+    return ExecNode(
+        label=name,
+        kind="dynamic" if flow else "effect",
+        status=_status(meta, children, done=path in overlay.completed),
+        elapsed=_elapsed(meta),
+        tokens_sent=_tokens(meta, "tokens_sent"),
+        tokens_received=_tokens(meta, "tokens_received"),
+        error=str(meta.get("error")) if meta and meta.get("error") else None,
+        detail=flow,
+        flow=flow,
+        complexity=overlay.complexity(path, meta),
+        children=children,
+    )
 
 
 def _loop_children(

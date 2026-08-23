@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,92 @@ from .outputs import normalize_outputs
 from .store import Store
 
 logger = logging.getLogger(__name__)
+
+#: The key every compiled orchestration — parent or child — is rooted under.
+_CHILD_ROOT = "prime"
+
+#: ``Store.effect_start`` / ``Store.effect_complete``.
+_EffectCallback = Callable[[str, dict[str, Any]], None]
+
+
+def _relative_child_path(child_path: str) -> str | None:
+    """The child effect path with the child's own root key stripped.
+
+    ``None`` means the path *is* the child's root container, which the parent
+    already represents as the ``use`` effect's own node — forwarding it would
+    duplicate that node under itself.
+    """
+    if child_path == _CHILD_ROOT:
+        return None
+    prefix = f"{_CHILD_ROOT}."
+    if child_path.startswith(prefix):
+        return child_path[len(prefix) :]
+    return child_path
+
+
+def _namespaced_effect_cb(
+    callback: _EffectCallback | None, node_path: str
+) -> _EffectCallback | None:
+    """Wrap a lifecycle callback so child effect paths nest under *node_path*.
+
+    The child runs in its own store rooted at ``prime``; left alone its
+    effects would announce themselves at top-level paths that collide with
+    the parent's own. Rewriting ``prime.step`` → ``<use path>.step`` gives
+    observers one coherent tree, and composes to arbitrary depth because a
+    nested ``use`` rewrites against an already-rewritten parent path.
+    """
+    if callback is None:
+        return None
+
+    def _forward(child_path: str, payload: dict[str, Any]) -> None:
+        relative = _relative_child_path(child_path)
+        if relative is None:
+            return
+        callback(f"{node_path}.{relative}", payload)
+
+    return _forward
+
+
+def _replace_node(
+    state: dict[str, Any], parts: list[str], replacement: dict[str, Any]
+) -> dict[str, Any]:
+    """A shallow copy of *state* with the node at *parts* swapped out.
+
+    Only the dicts along the path are copied; everything else stays a live
+    reference, which is all a snapshot consumer (JSON dump, deepcopy) needs.
+    """
+    head, rest = parts[0], parts[1:]
+    if not rest:
+        return {**state, head: replacement}
+    inner = state.get(head)
+    if not isinstance(inner, dict):
+        return state
+    return {**state, head: _replace_node(inner, rest, replacement)}
+
+
+def _grafted_snapshot(
+    root_state: dict[str, Any],
+    node_path: str,
+    node: dict[str, Any],
+    child_snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    """Parent state with the child's in-flight effects mirrored under the node.
+
+    Observation only: the returned dict is a copy, so the child's state stays
+    isolated from the parent's namespace and the output mapping still decides
+    what actually lands in ``node``.
+    """
+    child_effects = child_snapshot.get(_CHILD_ROOT)
+    if not isinstance(child_effects, dict):
+        return root_state
+    mirrored = {
+        key: value
+        for key, value in child_effects.items()
+        if key not in ("value", "meta")
+    }
+    if not mirrored:
+        return root_state
+    return _replace_node(root_state, node_path.split("."), {**node, **mirrored})
 
 
 def _now_iso() -> str:
@@ -327,6 +414,35 @@ class UseRuntime:
         identity = str(resolved_path.resolve())
         return load_orchestration_file(resolved_path), str(resolved_path), identity
 
+    def _child_on_write(
+        self, store: Store, node: dict[str, Any], node_path: str
+    ) -> Callable[[dict[str, Any]], None] | None:
+        """The child's ``on_write``: republish the parent run, child included.
+
+        The child writes into its own state, which no parent observer can
+        see — so every child write republishes the *parent's* whole-run
+        snapshot with the child's effects mirrored under this use effect's
+        node. The mirror is built per call and thrown away; the parent state
+        dict itself is never touched, which is what keeps child state
+        isolated while making it observable.
+
+        The child's snapshot arrives as the callback's argument rather than
+        being read back off the child store, so a nested ``use`` — whose own
+        wrapper has already mirrored *its* child in — composes to any depth.
+        """
+        parent_on_write = store.on_write
+        if parent_on_write is None:
+            return None
+
+        root_state = store.root_state
+
+        def _publish(child_snapshot: dict[str, Any]) -> None:
+            parent_on_write(
+                _grafted_snapshot(root_state, node_path, node, child_snapshot)
+            )
+
+        return _publish
+
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         from .compiler import compile_orchestration
         from .dynamic import DynamicRuntime
@@ -348,10 +464,20 @@ class UseRuntime:
         meta["validation_errors"] = None
         meta["error"] = None
 
+        #: This effect's canonical dotted path — what child effects namespace
+        #: under and where their live state is mirrored for observers.
+        node_path = store.effect_path(self.defn.name)
+
         indent = "  " * self.depth
         t0 = time.monotonic()
         cycle_pushed = False
         call_stack: list[str] = self.runtime_config.setdefault("_use_call_stack", [])
+
+        # The use effect announces itself the way every other effect does, so
+        # the child effects forwarded below have a node to hang under. The
+        # matching complete fires from the `finally` — every exit path,
+        # including a child that blew up, closes the pair.
+        store.fire_effect_start(self.defn.name, node)
 
         try:
             if self.dry_run:
@@ -393,7 +519,20 @@ class UseRuntime:
             # Check interface: validate required inputs, auto-generate output mapping
             auto_outputs = self._check_interface(child_orch, child_state)
 
-            child_store = Store(state=child_state)
+            # Isolated state, shared observation: the child keeps its own
+            # state dict (and its explicit inputs/outputs mapping) but
+            # inherits the parent's callbacks, its lock — so a snapshot is
+            # never composed mid-write — and a path prefix that nests its
+            # effects under this one.
+            child_store = Store(
+                state=child_state,
+                on_write=self._child_on_write(store, node, node_path),
+                effect_complete=_namespaced_effect_cb(
+                    store.effect_complete, node_path
+                ),
+                effect_start=_namespaced_effect_cb(store.effect_start, node_path),
+                _lock=store._lock,
+            )
 
             # Execute child orchestration
             DynamicRuntime(
@@ -470,3 +609,4 @@ class UseRuntime:
                     call_stack.pop()
                 except IndexError:
                     pass
+            store.fire_effect_complete(self.defn.name, node)

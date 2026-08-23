@@ -111,6 +111,9 @@ The error is raised at **config resolution** — before the first effect
 dispatches — so a stale weight name stops the run at startup rather than
 warning into a log mid-run.
 
+To see what these settings produce for a given orchestration before running it,
+use [`cof score`](./score-command.md).
+
 #### What scoring writes to state
 
 With `scoring.enabled: true`, every prompt effect's state node gains a
