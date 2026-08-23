@@ -86,6 +86,7 @@ class ConditionalRuntime:
         *,
         adapter: Adapter,
         model: str,
+        model_locked: bool = False,
         runtime_config: dict[str, Any] | None = None,
         dry_run: bool = False,
         timeout_seconds: int = 120,
@@ -96,6 +97,10 @@ class ConditionalRuntime:
         self.defn = definition
         self.adapter = adapter
         self.model = model
+        # See PromptRuntime: the run default was pinned by ``--model`` or a
+        # profile's run-level ``model:``, so the complexity router defers to
+        # it. Containers only carry the flag down to the prompts they run.
+        self.model_locked = model_locked
         self.runtime_config = runtime_config or {}
         self.dry_run = dry_run
         self.timeout_seconds = timeout_seconds
@@ -203,6 +208,7 @@ class ConditionalRuntime:
                             effect,
                             adapter=self.adapter,
                             model=self.model,
+                            model_locked=self.model_locked,
                             runtime_config=self.runtime_config,
                             dry_run=self.dry_run,
                             timeout_seconds=self.timeout_seconds,
@@ -216,6 +222,7 @@ class ConditionalRuntime:
                             effect,
                             adapter=self.adapter,
                             model=self.model,
+                            model_locked=self.model_locked,
                             runtime_config=self.runtime_config,
                             dry_run=self.dry_run,
                             timeout_seconds=self.timeout_seconds,
@@ -229,6 +236,7 @@ class ConditionalRuntime:
                             effect,
                             adapter=self.adapter,
                             model=self.model,
+                            model_locked=self.model_locked,
                             runtime_config=self.runtime_config,
                             dry_run=self.dry_run,
                             timeout_seconds=self.timeout_seconds,
@@ -242,6 +250,7 @@ class ConditionalRuntime:
                             effect,
                             adapter=self.adapter,
                             model=self.model,
+                            model_locked=self.model_locked,
                             runtime_config=self.runtime_config,
                             dry_run=self.dry_run,
                             timeout_seconds=self.timeout_seconds,
@@ -255,6 +264,7 @@ class ConditionalRuntime:
                             effect,
                             adapter=self.adapter,
                             model=self.model,
+                            model_locked=self.model_locked,
                             runtime_config=self.runtime_config,
                             dry_run=self.dry_run,
                             timeout_seconds=self.timeout_seconds,
@@ -277,6 +287,7 @@ class ConditionalRuntime:
                             effect,
                             adapter=self.adapter,
                             model=self.model,
+                            model_locked=self.model_locked,
                             runtime_config=self.runtime_config,
                             dry_run=self.dry_run,
                             timeout_seconds=self.timeout_seconds,

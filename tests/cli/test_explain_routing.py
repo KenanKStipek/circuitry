@@ -180,6 +180,44 @@ def test_prints_one_line_per_prompt_in_dispatch_order_with_routing_on(
     assert "pinned-model" in lines[1] and "why explicit" in lines[1]
 
 
+def test_a_routed_effect_reads_why_router(tmp_path: Path) -> None:
+    """The reason the ``"router"`` value was reserved in the first place.
+
+    Every other CLI case here passes ``--model``, which pins the run default
+    and makes the router defer — so without this one the flag would never be
+    seen printing the line it was built for.
+    """
+    orch = _write_orch(tmp_path, complexity=SCORING_AND_ROUTING)
+    out = tmp_path / "state.json"
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(orch),
+            "--dry-run",
+            "--tail",
+            "--adapter",
+            "ollama",
+            "--out",
+            str(out),
+            "-e",
+            "name=World",
+            "--explain-routing",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    lines = [line for line in result.stdout.splitlines() if "score" in line]
+    assert len(lines) == 2
+    # "first" inherits the run default, so the router takes it; "second" pins
+    # its own model, so the router defers and says so on the same line as the
+    # band it declined to apply.
+    assert "band any" in lines[0]
+    assert "small-model" in lines[0] and "why router" in lines[0]
+    assert "band any" in lines[1]
+    assert "pinned-model" in lines[1] and "why explicit" in lines[1]
+
+
 def test_states_routing_off_but_still_shows_the_score(tmp_path: Path) -> None:
     orch = _write_orch(tmp_path, complexity=SCORING_ONLY)
     result = _invoke(tmp_path, orch, "--explain-routing")

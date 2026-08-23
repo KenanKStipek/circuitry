@@ -361,17 +361,15 @@ def test_model_and_model_reason_are_recorded_pre_dispatch() -> None:
 
 
 def test_band_is_recorded_only_when_routing_is_enabled() -> None:
-    """``meta.complexity.band`` names the routing table's match — purely
-    descriptive, never a dispatch decision (``meta.model`` is untouched by
-    it) — and is absent whenever routing itself is off."""
+    """``meta.complexity.band`` names the routing table's match, and with the
+    run default un-pinned that match is also what gets dispatched."""
     routed = _run(_prompt_orch(), runtime_config=ROUTING_ON)
     assert routed.get("prime.task.meta.complexity.band") == {
         "name": "",
         "model": "small-model",
     }
-    # The band never overrides the actually-dispatched model.
-    assert routed.get("prime.task.meta.model") == "primary-model"
-    assert routed.get("prime.task.meta.model_reason") == "default"
+    assert routed.get("prime.task.meta.model") == "small-model"
+    assert routed.get("prime.task.meta.model_reason") == "router"
 
     scoring_only = _run(_prompt_orch(), runtime_config=SCORING_ON)
     assert "band" not in scoring_only.get("prime.task.meta.complexity")

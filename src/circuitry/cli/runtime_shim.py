@@ -432,6 +432,11 @@ def run(req: RunRequest) -> RunResult:
             root_def,
             adapter=adapter,
             model=resolved_model,
+            # The one thing the runtime cannot work out for itself: whether
+            # `resolved_model` was pinned with `--model`/a profile or merely
+            # inherited from the orchestration or config. The complexity
+            # router defers to the first and overrides the second.
+            model_locked=effective.model_locked,
             runtime_config=runtime_config,
             dry_run=req.dry_run,
             timeout_seconds=timeout_seconds,

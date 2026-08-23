@@ -210,11 +210,12 @@ class PromptRuntime:
                   error, dry_run, fallback_attempts, fallback_recovered,
                   retries_used?, complexity?}
 
-    ``model`` is the resolved model — a per-effect ``model:`` when the
-    definition names one, the run's default otherwise — and ``model_reason``
-    says which: ``"explicit"`` or ``"default"``. A third value, ``"router"``,
-    is reserved for once a band-based router substitutes the default half of
-    that choice; nothing here does that substitution yet.
+    ``model`` is the resolved model and ``model_reason`` says who chose it:
+    ``"explicit"`` when the definition names its own ``model:`` (which is also
+    how a profile effect override arrives — it is overlaid onto the
+    definition), ``"router"`` when the complexity router substituted a band's
+    model for the run default, and ``"default"`` when the effect simply
+    inherited the run's model.
 
     ``complexity`` is the one conditional key: it is present only when
     ``runtime.complexity.scoring.enabled`` is true, and absent entirely — not
@@ -225,9 +226,12 @@ class PromptRuntime:
     condition can branch on ``state.<path>.meta.complexity.score`` or on any
     single signal's contribution. ``band`` is itself conditional on
     ``runtime.complexity.routing.enabled`` — ``{name, model}`` naming the band
-    the score falls in and the model that band names. It is a description of
-    where the score sits in the table, not a dispatch decision: it never
-    changes ``model``/``model_reason`` above.
+    the score falls in and the model that band names. It is recorded whether or
+    not the router acted on it: with ``respect_explicit`` on (the default) an
+    effect that names its own model keeps ``model_reason == "explicit"`` and a
+    ``band`` that says what routing *would* have picked. ``model_reason`` is
+    the field that says whether the band was applied; ``band`` alone never
+    implies it was.
 
     Every one of these keys except the result-bearing ones (``value``,
     ``tokens_*``, ``completed_at``, ``error``) is written *before* dispatch.
@@ -241,6 +245,7 @@ class PromptRuntime:
         *,
         adapter: Adapter,
         model: str,
+        model_locked: bool = False,
         runtime_config: dict[str, Any] | None = None,
         dry_run: bool = False,
         timeout_seconds: int = 120,
@@ -256,6 +261,13 @@ class PromptRuntime:
         self.defn = definition
         self.adapter = adapter
         self.model = model
+        # True when the run default was pinned by a deliberate choice —
+        # ``--model`` on the CLI or a profile's run-level ``model:`` — rather
+        # than inherited from the orchestration or config. The complexity
+        # router outranks the latter two and defers to the former, and this is
+        # the only thing down here that can tell them apart: by the time a
+        # model reaches this constructor it is just a string.
+        self.model_locked = model_locked
         self.runtime_config = runtime_config or {}
         self.dry_run = dry_run
         self.timeout_seconds = timeout_seconds
@@ -296,10 +308,10 @@ class PromptRuntime:
         meta["completed_at"] = None
         meta["adapter"] = getattr(self.adapter, "name", "unknown")
         meta["model"] = resolved_model
-        # "explicit" when this effect names its own model, "default" when it
-        # inherits the run's. Reserved for a third value, "router", once a
-        # band-based router substitutes the default half of this choice —
-        # this is the field that decision will be recorded in.
+        # "explicit" when this effect names its own model (a per-effect
+        # ``model:`` or a profile override overlaid onto the definition),
+        # "default" when it inherits the run's. Overwritten with "router"
+        # below if the router substitutes a band's model for the default.
         meta["model_reason"] = "explicit" if self.defn.model else "default"
         meta["prompt_type"] = self.defn.prompt_type
         meta["prompt_sent"] = prompt_sent
@@ -313,9 +325,19 @@ class PromptRuntime:
         # Scored here, alongside the rest of the pre-dispatch meta, so the
         # score is on the node before anything can go wrong. A post-success
         # write would omit exactly the effects worth explaining.
-        complexity = self._score_complexity(rendered_prompt=prompt_sent)
+        complexity, routed_model = self._score_and_route(rendered_prompt=prompt_sent)
         if complexity is not None:
             meta["complexity"] = complexity
+
+        # The router's substitution, and its whole footprint: it replaces the
+        # value ``resolved_model`` already holds and nothing else. Everything
+        # downstream — the verbose target line, _build_attempts and therefore
+        # the provider/provider_fallbacks chain — reads that same variable, so
+        # a routed model behaves exactly like one the effect had named itself.
+        if routed_model is not None:
+            resolved_model = routed_model
+            meta["model"] = resolved_model
+            meta["model_reason"] = "router"
 
         # Everything an observer needs to reason about the decision being
         # dispatched — resolved adapter/model, the rendered prompt, and the
@@ -489,19 +511,33 @@ class PromptRuntime:
             if self.defn.on_error == "fail":
                 raise
 
-    def _score_complexity(self, *, rendered_prompt: str) -> dict[str, Any] | None:
-        """Score this prompt, or ``None`` when scoring is off.
+    def _score_and_route(
+        self, *, rendered_prompt: str
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Score this prompt and route it: ``(complexity meta, routed model)``.
 
-        ``None`` is the "add no key" signal, and it is returned for a scoring
-        failure as well as for a disabled switch: a diagnostic that cannot be
-        produced must not become a reason the effect itself does not run.
-        Scoring is otherwise pure and cheap — no model call, no IO — so it is
-        safe to do on the dispatch path.
+        Both halves are optional and independent of each other's presence:
+
+        * The meta is ``None`` — the "add no key" signal — when scoring is off,
+          and also when scoring *fails*: a diagnostic that cannot be produced
+          must not become a reason the effect itself does not run. Scoring is
+          otherwise pure and cheap (no model call, no IO), so it is safe to do
+          on the dispatch path.
+        * The routed model is ``None`` whenever the router defers — routing
+          off, no band table, or an explicit choice it will not overrule (see
+          :func:`circuitry.core.router.route_model`). A caller that gets
+          ``None`` keeps the model it already resolved.
+
+        Scoring and routing share this one method because they share one
+        settings resolution: routing reads the score, and resolving the block
+        twice per effect is how the two could ever disagree about what was
+        configured.
         """
         # Imported lazily: ``core`` reaching into ``cli`` at module scope would
         # invert the dependency the rest of this package maintains.
         from ..cli.complexity_config import band_for, resolve_complexity_settings
         from .complexity import score as score_complexity
+        from .router import route_model
 
         try:
             settings = resolve_complexity_settings(self.runtime_config)
@@ -515,10 +551,13 @@ class PromptRuntime:
                 self.defn.name,
                 exc_info=True,
             )
-            return None
+            return None, None
 
         if not settings.scoring.enabled:
-            return None
+            # Routing requires scoring — config resolution rejects the other
+            # combination — so no score means no route, not a route off a
+            # missing number.
+            return None, None
 
         # Passed straight through: ``runtime.complexity.scoring.weights`` is
         # keyed by ``complexity.SIGNAL_NAMES``, validated against that same
@@ -551,21 +590,33 @@ class PromptRuntime:
                 self.defn.name,
                 exc_info=True,
             )
-            return None
+            return None, None
 
         meta = _complexity_meta(result)
 
-        # The band this score falls in, per the configured routing table —
-        # informational, not a dispatch decision: nothing here substitutes
-        # ``resolved_model`` yet, that is the router's job once it exists. A
-        # non-empty band table always has a catch-all (config resolution
-        # enforces it), so a band is found whenever one is configured.
+        # The band this score falls in, per the configured routing table.
+        # Recorded whenever routing is on, whether or not the router goes on
+        # to act on it: on an effect that pins its own model the band is the
+        # answer to "what would routing have picked", which is exactly the
+        # question you ask before removing the pin. A non-empty band table
+        # always has a catch-all (config resolution enforces it), so a band is
+        # found whenever one is configured.
         if settings.routing.enabled and settings.routing.bands:
             band = band_for(result.score, settings.routing.bands)
             if band is not None:
                 meta["band"] = {"name": band.name or "", "model": band.model or ""}
 
-        return meta
+        # An effect that names its own ``model:`` — written on the effect or
+        # overlaid there by a profile — and a run whose default was pinned with
+        # ``--model`` are the same fact to the router: a human already decided.
+        # It collapses them into one flag rather than ranking them, because all
+        # three outrank it identically.
+        decision = route_model(
+            score=result.score,
+            settings=settings.routing,
+            explicit=bool(self.defn.model) or self.model_locked,
+        )
+        return meta, (decision.model if decision is not None else None)
 
     def _build_attempts(self, *, default_model: str) -> list[tuple[str, str]]:
         attempts: list[tuple[str, str]] = []
