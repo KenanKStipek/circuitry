@@ -40,6 +40,27 @@ Each record includes:
   - Inspect named control-node `value` summary (`branch`, `iterations`, termination reason).
   - Compare with expected execution path in orchestration definition.
 
+## A Template Rendered Empty Inside a Loop
+
+Nothing fails: the effect runs, the adapter returns something, and the run is
+green. The tell is in `meta.prompt_sent` — the rendered prompt the adapter
+actually received. Read it before anything else; a missing substitution is
+visible there and nowhere else.
+
+Run `cof validate <orch.yml>` first. Two spellings are warned about by name:
+
+| Symptom in `meta.prompt_sent` | Cause | Fix |
+|---|---|---|
+| Empty where a sibling step's output should be | `{{prime.<loop>.<step>.value}}` — `prime.<loop>` holds `iter_<N>`, `collected` and `meta`, never body step names | `{{prime.<step>.value}}` |
+| The *same* value in every iteration, and it is iteration 0's | `{{prime.<loop>.iter_0.<step>.value}}` inside the body — `N` is a constant | `{{prime.<step>.value}}` |
+| Empty where a root input or an earlier effect should be | The name is shadowed by a body step with the same name | Rename one of them |
+| Empty where a `collect` array should be | `prime.<loop>.collected.value` read from *inside* the loop; it is written when the loop finishes | Read it after the loop |
+
+`{{prime.<step>.value}}` is the within-iteration form and resolves through a
+scope chain — current iteration, then enclosing scope, then root state — in
+named and unnamed loops, `chain` and `tree` flow, and `while` conditions. See
+[Referencing a sibling within an iteration](orchestration-reference.md#referencing-a-sibling-within-an-iteration).
+
 ## Reproducibility Notes
 
 - Path ordering from `inspect_divergence_paths` is deterministic.
