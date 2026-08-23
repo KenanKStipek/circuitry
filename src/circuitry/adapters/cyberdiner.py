@@ -46,15 +46,27 @@ decides what's valid.
 
 Uses stdlib ``urllib.request`` only (see ``plugins/http.py`` for the
 same idiom) — no new dependency for a single job-broker adapter.
+
+Backpressure: ``max_in_flight`` (0 = unbounded, the default) bounds how many
+``generate()`` calls may hold a submitted-but-not-yet-terminal job at once,
+enforced with a ``threading.Semaphore`` shared across every call on this
+adapter instance. A caller that fans out more concurrent iterations than the
+fleet can actually service within expo's ~5 minute claim window (an
+orchestration ``loop: flow: tree`` submits up to ``max_concurrency`` jobs the
+moment a worker frees up, with no ramp-up) drives the excess straight into
+``timedOut``/``reason=claim_timeout`` — the queued caller waits for a permit
+instead, so the next submission only fires once a job actually completes
+(circuitry#77 / CyberDiner orders 17542, 17675, 17685).
 """
 
 from __future__ import annotations
 
 import json
+import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..preflight import CheckResult
@@ -178,6 +190,19 @@ class CyberdinerAdapter:
     # Per-HTTP-request socket timeout; distinct from generate()'s
     # timeout_seconds, which bounds the whole submit+poll sequence.
     timeout_seconds: int = 30
+    # Max jobs this adapter instance will hold in flight at once. 0 (default)
+    # is unbounded — opt in when a caller's loop concurrency can outpace the
+    # fleet's actual claim rate.
+    max_in_flight: int = 0
+    _in_flight: threading.Semaphore | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        if self.max_in_flight > 0:
+            object.__setattr__(
+                self, "_in_flight", threading.Semaphore(self.max_in_flight)
+            )
 
     def _request(
         self,
@@ -219,6 +244,22 @@ class CyberdinerAdapter:
             ) from exc
 
     def generate(
+        self, *, model: str, prompt: str, timeout_seconds: int = 120
+    ) -> GenerateResult:
+        sem = self._in_flight
+        if sem is None:
+            return self._generate(
+                model=model, prompt=prompt, timeout_seconds=timeout_seconds
+            )
+        sem.acquire()
+        try:
+            return self._generate(
+                model=model, prompt=prompt, timeout_seconds=timeout_seconds
+            )
+        finally:
+            sem.release()
+
+    def _generate(
         self, *, model: str, prompt: str, timeout_seconds: int = 120
     ) -> GenerateResult:
         if not self.expo_url:

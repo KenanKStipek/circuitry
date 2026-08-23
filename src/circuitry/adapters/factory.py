@@ -203,6 +203,7 @@ def _build_cyberdiner(cfg: dict[str, Any]) -> Adapter:
         ),
         poll_interval_ms=int(cfg.get("poll_interval_ms") or 500),
         timeout_seconds=int(cfg.get("timeout_seconds") or 30),
+        max_in_flight=int(cfg.get("max_in_flight") or 0),
     )
 
 

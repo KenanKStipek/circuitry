@@ -65,7 +65,7 @@ from ..core.use import UseDefinition
 # produces — so depending on it here does not drag in the optional extra.
 from ..tui.complexity import EffectComplexity, SignalBreakdown
 from ..tui.complexity import read as read_complexity
-from .complexity_config import ComplexityBand, ComplexitySettings
+from .complexity_config import ComplexityBand, ComplexitySettings, band_for
 from .config import resolve_config
 from .effective_settings import resolve_effective_settings
 from .orchestration_loader import load_orchestration_file
@@ -160,21 +160,6 @@ class ScoredEffect:
             ],
             "breakdown": self.result.to_dict() if self.result is not None else None,
         }
-
-
-def _band_for(
-    value: float, bands: Sequence[ComplexityBand]
-) -> ComplexityBand | None:
-    """First band whose inclusive ``max`` covers *value*; the catch-all last.
-
-    Mirrors the band-table contract validated in
-    :mod:`circuitry.cli.complexity_config`: bands ascend, and the final entry
-    has no ``max``.
-    """
-    for band in bands:
-        if band.max is None or value <= band.max:
-            return band
-    return None
 
 
 def _walk(
@@ -343,7 +328,7 @@ def _score_prompt_row(
         keyword_weights=keywords,
         structure=StructureContext(depth=depth, loop_depth=loop_depth),
     )
-    band = _band_for(result.score, settings.routing.bands)
+    band = band_for(result.score, settings.routing.bands)
     return ScoredEffect(
         path=path,
         type="prompt",
