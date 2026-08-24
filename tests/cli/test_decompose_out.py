@@ -92,7 +92,7 @@ class ScriptedAdapter:
     echoes ``gen[<model>]:<prompt>``."""
 
     name: str = "scripted"
-    plans: dict[str, dict[str, Any]] = field(default_factory=dict)
+    plans: dict[str, Any] = field(default_factory=dict)
     calls: list[tuple[str, str]] = field(default_factory=list)
 
     def generate(
@@ -224,6 +224,81 @@ def test_write_decomposition_plan_marks_a_failed_plan(tmp_path: Path) -> None:
     assert "at least 2" in text
 
 
+def test_write_decomposition_plan_writes_a_rejected_payload_when_one_exists(
+    tmp_path: Path,
+) -> None:
+    """`planner_failed` with a `raw_payload` (the planner returned something,
+    it just failed the envelope schema) is worth reading and gets written."""
+    written = write_decomposition_plan(
+        tmp_path,
+        run_id="run-1",
+        effect_path="prime.task",
+        decomposition={
+            "decomposed": False,
+            "reason": "planner_failed",
+            "error": "Schema validation failed: [...] is not of type 'object'",
+            "raw_payload": json.dumps(
+                [{"name": "chunk_a", "job": "a"}, {"name": "chunk_b", "job": "b"}]
+            ),
+        },
+    )
+    assert written == tmp_path / "run-1__prime.task.rejected.yml"
+    text = written.read_text(encoding="utf-8")
+    assert "# status: failed" in text
+    assert "# reason: planner_failed" in text
+    assert "chunk_a" in text
+
+
+def test_write_decomposition_plan_uses_txt_when_payload_does_not_parse(
+    tmp_path: Path,
+) -> None:
+    written = write_decomposition_plan(
+        tmp_path,
+        run_id="run-1",
+        effect_path="prime.task",
+        decomposition={
+            "decomposed": False,
+            "reason": "planner_failed",
+            "error": "boom",
+            "raw_payload": "{unterminated",
+        },
+    )
+    assert written == tmp_path / "run-1__prime.task.rejected.txt"
+
+
+def test_write_decomposition_plan_skips_a_genuinely_empty_planner_failure(
+    tmp_path: Path,
+) -> None:
+    """No `raw_payload` at all (timeout, adapter error) — nothing to write."""
+    written = write_decomposition_plan(
+        tmp_path,
+        run_id="run-1",
+        effect_path="prime.task",
+        decomposition={
+            "decomposed": False,
+            "reason": "planner_failed",
+            "error": "All adapter attempts failed: [...]",
+        },
+    )
+    assert written is None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_write_decomposition_plan_skips_max_depth(tmp_path: Path) -> None:
+    written = write_decomposition_plan(
+        tmp_path,
+        run_id="run-1",
+        effect_path="prime.task",
+        decomposition={
+            "decomposed": False,
+            "reason": "max_depth",
+            "outcome": "route_up",
+        },
+    )
+    assert written is None
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_observer_ignores_nodes_without_decomposition_meta(tmp_path: Path) -> None:
     observe = make_decompose_out_observer(tmp_path, "run-1")
     observe("prime.other", {"value": "x", "meta": {"model": "m"}})
@@ -326,6 +401,55 @@ def test_a_failed_plan_is_persisted_and_marked(tmp_path: Path) -> None:
     assert "# status: failed" in text
     assert "# reason: invalid_plan" in text
     assert "at least 2" in text
+
+
+def test_a_planner_envelope_failure_is_persisted_as_a_rejected_payload(
+    tmp_path: Path,
+) -> None:
+    """The exact field-evidence shape from issue #160: the planner emits a
+    conceptually-correct plan as a bare JSON array instead of the required
+    ``{say, chunks, yaml}`` envelope. That fails the planner's own schema —
+    ``reason: planner_failed`` — but the array it returned is still worth
+    reading, so it lands on disk instead of being silently dropped."""
+    planner = _write(tmp_path / "planner.yml", STUB_PLANNER)
+    out_dir = tmp_path / "plans"
+    bare_array = [{"name": "chunk_a", "job": "a"}, {"name": "chunk_b", "job": "b"}]
+    adapter = ScriptedAdapter(plans={"TASK": bare_array})
+
+    result = _run_decomposing_task(
+        tmp_path, decompose_out=out_dir, adapter=adapter, planner=planner
+    )
+
+    assert result.ok
+    recorded = result.state["prime"]["task"]["meta"]["decomposition"]
+    assert recorded["reason"] == "planner_failed"
+
+    written = list(out_dir.iterdir())
+    assert len(written) == 1
+    run_id = result.state["runtime"]["last_run"]["run_id"]
+    assert written[0].name == f"{run_id}__prime.task.rejected.yml"
+    text = written[0].read_text(encoding="utf-8")
+    assert "# status: failed" in text
+    assert "# reason: planner_failed" in text
+    assert "chunk_a" in text
+
+
+def test_a_genuinely_empty_planner_failure_writes_nothing(tmp_path: Path) -> None:
+    """No plan scripted for this source — the adapter raises outright, so
+    there is no payload to persist, unlike an envelope-schema rejection."""
+    planner = _write(tmp_path / "planner.yml", STUB_PLANNER)
+    out_dir = tmp_path / "plans"
+    adapter = ScriptedAdapter()  # no plans scripted -> raises for PLANNER prompts
+
+    result = _run_decomposing_task(
+        tmp_path, decompose_out=out_dir, adapter=adapter, planner=planner
+    )
+
+    assert result.ok
+    recorded = result.state["prime"]["task"]["meta"]["decomposition"]
+    assert recorded["reason"] == "planner_failed"
+    assert "raw_payload" not in recorded
+    assert not out_dir.exists() or list(out_dir.iterdir()) == []
 
 
 def test_two_decomposing_effects_in_one_run_do_not_collide(tmp_path: Path) -> None:

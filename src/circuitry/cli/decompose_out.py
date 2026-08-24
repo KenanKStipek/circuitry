@@ -4,14 +4,16 @@
 the whole story of a decomposition attempt, YAML included; this module is
 just the disk-writing side of that record; it introduces no second copy of
 the decision logic. One file per effect whose decomposition attempt actually
-produced an orchestration document — a planner failure or a depth-ceiling
-route-up never reaches the planner, so there is nothing to write for those.
+produced a document worth reading — a depth-ceiling route-up never calls the
+planner at all, so there is nothing to write for that; a planner failure
+still writes the rejected payload when the planner returned one (schema
+violation), and writes nothing when it truly did not (timeout, adapter
+error).
 
-A written file is the planner's emitted YAML verbatim, headed by a comment
-block naming the run, the effect, and the outcome. The YAML the planner
-returns is already just the orchestration document (chunk effects and a
-merge) — it carries no run state or secrets, so nothing here needs to redact
-anything.
+A written file is the planner's output verbatim, headed by a comment block
+naming the run, the effect, and the outcome. That output — either the
+emitted orchestration YAML, or the raw payload a schema rejected — carries no
+run state or secrets, so nothing here needs to redact anything.
 """
 
 from __future__ import annotations
@@ -40,6 +42,29 @@ def plan_filename(run_id: str, effect_path: str) -> str:
     children — so the pair never collides across effects or runs.
     """
     return f"{_sanitize(run_id)}__{_sanitize(effect_path)}.yml"
+
+
+def _rejected_filename(run_id: str, effect_path: str, *, parses_as_data: bool) -> str:
+    """Filename for a planner payload that failed the envelope schema.
+
+    Same ``<run>__<effect>`` stem as :func:`plan_filename`, marked
+    ``.rejected`` so it never collides with a succeeded/invalid-plan write for
+    the same effect, and suffixed ``.yml`` or ``.txt`` by whether the payload
+    happens to parse as YAML/JSON — a readability hint only; the content
+    written is the raw text either way.
+    """
+    suffix = "yml" if parses_as_data else "txt"
+    return f"{_sanitize(run_id)}__{_sanitize(effect_path)}.rejected.{suffix}"
+
+
+def _parses_as_data(text: str) -> bool:
+    import yaml as _yaml
+
+    try:
+        _yaml.safe_load(text)
+    except _yaml.YAMLError:
+        return False
+    return True
 
 
 def _header(*, run_id: str, effect_path: str, decomposition: dict[str, Any]) -> str:
@@ -73,19 +98,34 @@ def write_decomposition_plan(
 ) -> Path | None:
     """Write one effect's generated plan under *out_dir*.
 
-    Returns the written path, or ``None`` when there is nothing to write —
-    the attempt never reached a planner-emitted document (``max_depth`` or
-    ``planner_failed``). A plan that failed validation or child execution
-    still has YAML worth reading and is written, headed ``status: failed``.
+    Returns the written path, or ``None`` when there is nothing to write. A
+    plan that failed validation or child execution still has YAML worth
+    reading and is written, headed ``status: failed``. A planner failure
+    (``planner_failed``) writes the rejected raw payload the same way when
+    the planner returned one — a schema violation, not silence — and writes
+    nothing when it did not (timeout, adapter error) or when the depth
+    ceiling routed up without ever calling the planner (``max_depth``).
     """
     yaml_text = decomposition.get("yaml")
-    if not isinstance(yaml_text, str) or not yaml_text.strip():
+    if isinstance(yaml_text, str) and yaml_text.strip():
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / plan_filename(run_id, effect_path)
+        header = _header(run_id=run_id, effect_path=effect_path, decomposition=decomposition)
+        path.write_text(header + yaml_text.rstrip("\n") + "\n", encoding="utf-8")
+        return path
+
+    if decomposition.get("reason") != "planner_failed":
+        return None
+    raw_payload = decomposition.get("raw_payload")
+    if not isinstance(raw_payload, str) or not raw_payload.strip():
         return None
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / plan_filename(run_id, effect_path)
+    path = out_dir / _rejected_filename(
+        run_id, effect_path, parses_as_data=_parses_as_data(raw_payload)
+    )
     header = _header(run_id=run_id, effect_path=effect_path, decomposition=decomposition)
-    path.write_text(header + yaml_text.rstrip("\n") + "\n", encoding="utf-8")
+    path.write_text(header + raw_payload.rstrip("\n") + "\n", encoding="utf-8")
     return path
 
 
