@@ -224,9 +224,16 @@ class LoopRuntime:
                     meta["each_in_path"] = self.defn.each_def.in_path
                     meta["each_as"] = self.defn.each_def.as_name
 
-                collection = self._resolve_collection(ctx)
+                collection, each_error = self._resolve_collection(ctx)
 
-                if not collection:
+                if each_error is not None:
+                    # An unresolved path is not an exhausted collection: the
+                    # caller pointed at nothing, and silently running zero
+                    # iterations would mask the misspelled path.
+                    termination_reason = "collection_unresolved"
+                    if meta:
+                        meta["each_in_error"] = each_error
+                elif not collection:
                     termination_reason = "collection_exhausted"
                 elif self.defn.flow == "tree":
                     # Parallel iteration: submit all at once, collect results in order.
@@ -477,10 +484,18 @@ class LoopRuntime:
             collected.append(effect_node.get("value"))
         return collected
 
-    def _resolve_collection(self, ctx: dict[str, Any]) -> list[Any]:
-        """Resolve the collection path to an actual list."""
+    def _resolve_collection(
+        self, ctx: dict[str, Any]
+    ) -> tuple[list[Any], str | None]:
+        """Resolve the collection path to an actual list.
+
+        Returns ``(collection, error)``. *error* is ``None`` only when the
+        path resolved to an actual list (possibly empty); otherwise it says
+        why resolution failed, so the loop can terminate with
+        ``collection_unresolved`` instead of masquerading as exhausted.
+        """
         if not self.defn.each_def:
-            return []
+            return [], None
 
         path = self.defn.each_def.in_path
 
@@ -492,25 +507,21 @@ class LoopRuntime:
             if isinstance(current, dict):
                 current = current.get(part)
             else:
-                logger.warning(
-                    "Loop collection path %r hit non-dict at segment %r; returning empty list",
-                    path, part,
-                )
-                return []
+                error = f"path {path!r} hit non-dict at segment {part!r}"
+                logger.warning("Loop collection %s; running zero iterations", error)
+                return [], error
             if current is None:
-                logger.warning(
-                    "Loop collection path %r resolved to None at segment %r; returning empty list",
-                    path, part,
-                )
-                return []
+                error = f"path {path!r} resolved to None at segment {part!r}"
+                logger.warning("Loop collection %s; running zero iterations", error)
+                return [], error
 
         if isinstance(current, list):
-            return current
-        logger.warning(
-            "Loop collection path %r resolved to %s instead of list; returning empty list",
-            path, type(current).__name__,
+            return current, None
+        error = (
+            f"path {path!r} resolved to {type(current).__name__} instead of list"
         )
-        return []
+        logger.warning("Loop collection %s; running zero iterations", error)
+        return [], error
 
     def _evaluate_condition(self, *, ctx: dict[str, Any]) -> bool:
         """Evaluate the while condition and return a boolean result."""

@@ -17,6 +17,11 @@ from .prompt import (
     RetryPolicyDef,
 )
 from .reflector import ReflectorDefinition
+from .state_ns import (
+    validate_bare_input_refs,
+    validate_cel_expr,
+    validate_each_in_path,
+)
 from .tool import ToolDefinition
 from .use import UseDefinition
 
@@ -162,6 +167,9 @@ def compile_orchestration(
 ) -> DynamicDefinition:
     # Support both 'effects' (spec) and 'steps' (legacy)
     effects = orch.get("effects") or orch.get("steps") or []
+    # Bare {{name}} refs to this document's declared interface inputs are a
+    # hard error — caller inputs live under the `input` namespace.
+    validate_bare_input_refs(orch)
     compiled_effects = _compile_effects_in_scope(
         effects=effects,
         scope_path=root_name,
@@ -469,6 +477,8 @@ def _compile_conditional(
         raise ValueError(
             f"Conditional at '{effect_path}': mode 'cel' requires an 'expr' field."
         )
+    if mode == "cel":
+        validate_cel_expr(str(if_def.get("expr") or ""), effect_path=effect_path)
 
     condition = ConditionDef(
         mode=mode,
@@ -556,6 +566,10 @@ def _compile_loop(
                 raise ValueError(
                     f"Loop while at '{effect_path}': mode 'cel' requires an 'expr' field."
                 )
+            if mode == "cel":
+                validate_cel_expr(
+                    str(while_config.get("expr") or ""), effect_path=effect_path
+                )
             while_def = LoopWhileDef(
                 mode=mode,
                 template=while_config.get("template") if mode == "model" else None,
@@ -565,10 +579,11 @@ def _compile_loop(
     if "each" in effect:
         each_config = effect.get("each")
         if isinstance(each_config, dict):
-            in_path = each_config.get("in") or ""
+            in_path = str(each_config.get("in") or "")
             as_name = each_config.get("as") or "item"
+            validate_each_in_path(in_path, effect_path=effect_path)
             each_def = LoopEachDef(
-                in_path=str(in_path),
+                in_path=in_path,
                 as_name=str(as_name),
             )
 

@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from ..cli.config import CircuitryConfig
 from ..cli.runtime_shim import RunRequest, run
+from ..core.state_ns import migrate_legacy_state
 
 
 @dataclass(frozen=True)
@@ -175,7 +176,9 @@ class RestTriggerService:
     def _state_with_trigger_metadata(
         self, *, payload: dict[str, Any], request_id: str, path: str
     ) -> dict[str, Any]:
-        initial_state = deepcopy(payload.get("state", {}))
+        # The caller's `state` payload is caller input: bare root keys are
+        # wrapped under the `input` namespace before the run sees them.
+        initial_state = migrate_legacy_state(deepcopy(payload.get("state", {})))
         runtime = initial_state.setdefault("runtime", {})
         runtime["trigger"] = {
             "interface": "rest",
