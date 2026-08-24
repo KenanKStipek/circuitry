@@ -35,7 +35,7 @@ def _write_orch(tmp_path: Path) -> Path:
 effects:
   - type: prompt
     name: summarize
-    template: "summarize {{topic}}"
+    template: "summarize {{input.topic}}"
 """,
     )
     return orch_path
@@ -178,8 +178,8 @@ persistence:
     second = _run(orch_path, profile="thorough")
     assert second.ok is True, second.error
     assert second.state["runtime"]["persistence"]["loaded_from_persistence"] is True
-    assert second.state["audience"] == "engineers"
-    assert second.state["topic"] == "widgets"
+    assert second.state["input"]["audience"] == "engineers"
+    assert second.state["input"]["topic"] == "widgets"
 
 
 # ----------------------------------------------------------------------

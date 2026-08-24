@@ -40,7 +40,11 @@ TWO_INPUTS: dict[str, Any] = {
         }
     },
     "effects": [
-        {"type": "prompt", "name": "summarize", "template": "{{text}} / {{max_words}}"}
+        {
+            "type": "prompt",
+            "name": "summarize",
+            "template": "{{input.text}} / {{input.max_words}}",
+        }
     ],
 }
 

@@ -135,7 +135,7 @@ def test_sequential_loop(mgr: RunManager, tmp_path: Path) -> None:
           - type: loop
             name: greet_each
             each:
-              in: names
+              in: input.names
               as: who
             body:
               - type: prompt
@@ -174,7 +174,7 @@ def test_tree_flow_two_branches(mgr: RunManager, tmp_path: Path) -> None:
             name: parallel
             flow: tree
             each:
-              in: items
+              in: input.items
               as: it
             body:
               - type: prompt
@@ -216,7 +216,7 @@ def test_parallel_loop_iterations(mgr: RunManager, tmp_path: Path) -> None:
             name: par
             flow: tree
             each:
-              in: items
+              in: input.items
               as: it
             body:
               - type: prompt
@@ -255,7 +255,7 @@ def test_nested_parallel_tree_in_chain(mgr: RunManager, tmp_path: Path) -> None:
             name: middle
             flow: tree
             each:
-              in: items
+              in: input.items
               as: it
             body:
               - type: prompt
@@ -306,7 +306,7 @@ def test_cancel_while_paused(mgr: RunManager, tmp_path: Path) -> None:
             name: par
             flow: tree
             each:
-              in: items
+              in: input.items
               as: it
             body:
               - type: prompt
@@ -368,7 +368,7 @@ def test_concurrent_runs_isolated(mgr: RunManager, tmp_path: Path) -> None:
         effects:
           - type: prompt
             name: x
-            template: "for {{tag}}"
+            template: "for {{input.tag}}"
     """)
     run_a = mgr.start_run(orchestration_path=p, initial_state={"tag": "A"})
     run_b = mgr.start_run(orchestration_path=p, initial_state={"tag": "B"})
@@ -457,7 +457,7 @@ def test_quiescence_returns_after_all_branches_settle(tmp_path: Path) -> None:
             flow: tree
             max_concurrency: 3
             each:
-              in: items
+              in: input.items
               as: it
             body:
               - type: prompt

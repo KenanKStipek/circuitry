@@ -322,7 +322,7 @@ def test_tool_effect_runs_inside_a_loop_body(
                 {
                     "type": "loop",
                     "name": "twice",
-                    "each": {"in": "items", "as": "item"},
+                    "each": {"in": "input.items", "as": "item"},
                     "body": [
                         {"type": "tool", "name": "step", "provider": "json"}
                     ],
@@ -330,7 +330,7 @@ def test_tool_effect_runs_inside_a_loop_body(
             ]
         }
     )
-    store = Store({"items": ["a", "b"]})
+    store = Store({"input": {"items": ["a", "b"]}})
     DynamicRuntime(root, adapter=MagicMock(), model="test").execute(store=store)
 
     loop_node = store.state["prime"]["twice"]

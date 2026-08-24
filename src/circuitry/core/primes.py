@@ -489,7 +489,7 @@ effects:
           List each event in this incident report as
           "<timestamp> - <what happened>", oldest first.
 
-          {{report}}
+          {{input.report}}
 
           Return ONLY a JSON array of strings.
 
@@ -504,7 +504,7 @@ effects:
           Label each event in this report info, warning, or critical, as
           "<timestamp> - <label>".
 
-          {{report}}
+          {{input.report}}
 
           Return ONLY a JSON array of strings.
 
@@ -519,10 +519,10 @@ effects:
           Which of these runbook steps does the report show no evidence of?
 
           Runbook:
-          {{runbook}}
+          {{input.runbook}}
 
           Report:
-          {{report}}
+          {{input.report}}
 
           Return ONLY a JSON array of the step names.
 
@@ -534,7 +534,7 @@ effects:
           Name the single most likely cause of this incident in one sentence,
           then give one sentence of supporting evidence.
 
-          {{report}}
+          {{input.report}}
 
   # The merge. Top level, named `merge`, same output shape as the original —
   # it assembles the parts above and does not redo their work.
