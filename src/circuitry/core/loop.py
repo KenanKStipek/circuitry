@@ -199,6 +199,11 @@ class LoopRuntime:
         baseline = frozenset(child_store.state)
 
         iteration_count = 0
+        # Index of the final pass that ran to completion — what `last` will
+        # alias. Tracked separately from iteration_count because a pass that
+        # errored under on_error: continue/break leaves a partial iter node
+        # (and, in while mode, still advances the count).
+        last_completed: int | None = None
         termination_reason = "max_iterations"
 
         # Build ancestor context for children (this loop is now a parent)
@@ -224,9 +229,16 @@ class LoopRuntime:
                     meta["each_in_path"] = self.defn.each_def.in_path
                     meta["each_as"] = self.defn.each_def.as_name
 
-                collection = self._resolve_collection(ctx)
+                collection, each_error = self._resolve_collection(ctx)
 
-                if not collection:
+                if each_error is not None:
+                    # An unresolved path is not an exhausted collection: the
+                    # caller pointed at nothing, and silently running zero
+                    # iterations would mask the misspelled path.
+                    termination_reason = "collection_unresolved"
+                    if meta:
+                        meta["each_in_error"] = each_error
+                elif not collection:
                     termination_reason = "collection_exhausted"
                 elif self.defn.flow == "tree":
                     # Parallel iteration: submit all at once, collect results in order.
@@ -317,6 +329,7 @@ class LoopRuntime:
                         if idx in results:
                             iterations_effects.append(results[idx])
                             iteration_count += 1
+                            last_completed = idx
 
                     if errors:
                         if self.defn.on_error == "fail":
@@ -350,6 +363,7 @@ class LoopRuntime:
                             )
                             iterations_effects.append(iter_effects)
                             iteration_count += 1
+                            last_completed = idx
                         except Exception:
                             if self.defn.on_error == "fail":
                                 termination_reason = "error"
@@ -397,6 +411,7 @@ class LoopRuntime:
                             iter_label=f"[{iteration_count}]",
                         )
                         iterations_effects.append(iter_effects)
+                        last_completed = iteration_count
                         iteration_count += 1
                     except Exception:
                         if self.defn.on_error == "fail":
@@ -425,6 +440,8 @@ class LoopRuntime:
                         "value": self._collect_values(node, iteration_count)
                     }
 
+                self._link_last(node, last_completed)
+
             if is_named and self.defn.name:
                 store.fire_effect_complete(self.defn.name, node or {})
 
@@ -445,11 +462,31 @@ class LoopRuntime:
                     node["collected"] = {
                         "value": self._collect_values(node, iteration_count)
                     }
+                self._link_last(node, last_completed)
             if is_named and self.defn.name:
                 # Balances the start fired before the first iteration — a
                 # loop that blew up still closes its pair.
                 store.fire_effect_complete(self.defn.name, node or {})
             raise
+
+    def _link_last(
+        self, node: dict[str, Any], last_completed: int | None
+    ) -> None:
+        """Expose the final *completed* pass at ``last``.
+
+        An alias, not a copy: ``last`` and ``iter_<N>`` share the same dict,
+        so ``prime.<loop>.last.<step>.value`` and every deeper field path
+        resolve exactly as the iter node does. A pass that errored under
+        ``on_error: continue``/``break`` is skipped in favor of the last one
+        that finished, and a zero-iteration loop writes no ``last`` key at
+        all — reads fall through/render empty exactly like a missing
+        ``iter_<N>``.
+        """
+        if last_completed is None:
+            return
+        iter_node = node.get(f"iter_{last_completed}")
+        if isinstance(iter_node, dict):
+            node["last"] = iter_node
 
     def _collect_values(
         self, node: dict[str, Any], iteration_count: int
@@ -477,10 +514,18 @@ class LoopRuntime:
             collected.append(effect_node.get("value"))
         return collected
 
-    def _resolve_collection(self, ctx: dict[str, Any]) -> list[Any]:
-        """Resolve the collection path to an actual list."""
+    def _resolve_collection(
+        self, ctx: dict[str, Any]
+    ) -> tuple[list[Any], str | None]:
+        """Resolve the collection path to an actual list.
+
+        Returns ``(collection, error)``. *error* is ``None`` only when the
+        path resolved to an actual list (possibly empty); otherwise it says
+        why resolution failed, so the loop can terminate with
+        ``collection_unresolved`` instead of masquerading as exhausted.
+        """
         if not self.defn.each_def:
-            return []
+            return [], None
 
         path = self.defn.each_def.in_path
 
@@ -492,25 +537,21 @@ class LoopRuntime:
             if isinstance(current, dict):
                 current = current.get(part)
             else:
-                logger.warning(
-                    "Loop collection path %r hit non-dict at segment %r; returning empty list",
-                    path, part,
-                )
-                return []
+                error = f"path {path!r} hit non-dict at segment {part!r}"
+                logger.warning("Loop collection %s; running zero iterations", error)
+                return [], error
             if current is None:
-                logger.warning(
-                    "Loop collection path %r resolved to None at segment %r; returning empty list",
-                    path, part,
-                )
-                return []
+                error = f"path {path!r} resolved to None at segment {part!r}"
+                logger.warning("Loop collection %s; running zero iterations", error)
+                return [], error
 
         if isinstance(current, list):
-            return current
-        logger.warning(
-            "Loop collection path %r resolved to %s instead of list; returning empty list",
-            path, type(current).__name__,
+            return current, None
+        error = (
+            f"path {path!r} resolved to {type(current).__name__} instead of list"
         )
-        return []
+        logger.warning("Loop collection %s; running zero iterations", error)
+        return [], error
 
     def _evaluate_condition(self, *, ctx: dict[str, Any]) -> bool:
         """Evaluate the while condition and return a boolean result."""

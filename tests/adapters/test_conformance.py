@@ -404,6 +404,76 @@ def test_ollama_curl_not_installed_raises_actionable_error(
 
 
 # ---------------------------------------------------------------------------
+# Issue #158: config-driven timeout, and distinct exit-7/exit-28 hints
+# ---------------------------------------------------------------------------
+
+
+def test_ollama_curl_cmd_carries_the_requested_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`generate(timeout_seconds=...)` reaches `curl --max-time` verbatim."""
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], *args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        captured["cmd"] = cmd
+        return FakeProc(returncode=0, stdout=json.dumps({"response": "ok"}))
+
+    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+
+    adapter = OllamaAdapter()
+    adapter.generate(model="qwen3.8:27b", prompt="ping", timeout_seconds=300)
+
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("--max-time") + 1] == "300"
+
+
+def test_ollama_exit_7_hint_says_not_reachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exit 7 (couldn't connect) hints at starting the daemon, not a timeout."""
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=7, stderr="curl: (7) Failed to connect")
+
+    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+
+    adapter = OllamaAdapter()
+    with pytest.raises(RuntimeError) as exc_info:
+        adapter.generate(model="phi3:mini", prompt="ping")
+
+    message = str(exc_info.value)
+    assert "not reachable" in message
+    assert "ollama serve" in message
+    assert "didn't finish" not in message
+
+
+def test_ollama_exit_28_hint_says_timed_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exit 28 (--max-time elapsed) means the server answered but was slow —
+    it must not claim the server is unreachable, and must name the knob to
+    raise."""
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=28, stderr="curl: (28) Operation timed out")
+
+    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+
+    adapter = OllamaAdapter()
+    with pytest.raises(RuntimeError) as exc_info:
+        adapter.generate(model="qwen3.8:27b", prompt="ping", timeout_seconds=45)
+
+    message = str(exc_info.value)
+    assert "didn't finish within 45s" in message
+    assert "runtime.adapters.ollama.timeout_seconds" in message
+    assert "not reachable" not in message
+    assert "ollama serve" not in message
+
+
+# ---------------------------------------------------------------------------
 # Phase 1: Missing API key tests
 # ---------------------------------------------------------------------------
 

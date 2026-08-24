@@ -111,25 +111,25 @@ effects:
       and creative production. And they may COMPOSE: one step of a process
       can be an existing workflow reused from a shared library.
 
-      Focus area (may be blank, meaning "all of human activity"): {{focus}}
-      {{#shape_hint}}
-      Shape bias: {{shape_hint}}
+      Focus area (may be blank, meaning "all of human activity"): {{input.focus}}
+      {{#input.shape_hint}}
+      Shape bias: {{input.shape_hint}}
       Favor domains rich in that shape of work.
-      {{/shape_hint}}
+      {{/input.shape_hint}}
 
-      {{#focus}}
-      Propose 8 to 10 maximally DIFFERENT sub-areas INSIDE "{{focus}}" —
+      {{#input.focus}}
+      Propose 8 to 10 maximally DIFFERENT sub-areas INSIDE "{{input.focus}}" —
       every one must be a slice of that focus, named in its own vocabulary
       (its artifacts, its people, its recurring moments). Do NOT drift to
-      neighbouring or generic business domains: for "{{focus}}", a generic
+      neighbouring or generic business domains: for "{{input.focus}}", a generic
       answer like "contract review", "expense reports" or "hiring" is wrong
       unless it is genuinely part of that focus.
-      {{/focus}}
-      {{^focus}}
+      {{/input.focus}}
+      {{^input.focus}}
       Propose 8 to 10 maximally DIFFERENT domains of human activity to mine
       for orchestration ideas. Mix professional and personal, common and
       overlooked — including everyday work done at a computer.
-      {{/focus}}
+      {{/input.focus}}
 
       Return ONLY a JSON array of short domain names, e.g.
       ["family logistics", "scientific writing", "trail maintenance"].
@@ -149,9 +149,9 @@ effects:
         name: ideas
         template: |
           Domain: {{theme}}
-          {{#focus}}
-          Focus area (NON-NEGOTIABLE): {{focus}}
-          {{/focus}}
+          {{#input.focus}}
+          Focus area (NON-NEGOTIABLE): {{input.focus}}
+          {{/input.focus}}
 
           Brainstorm 2 ideas for agentic orchestrations in this domain —
           each one a real, recurring thing people do that decomposes into a
@@ -171,21 +171,21 @@ effects:
           - Each idea must EARN being an orchestration: it needs steps,
             feedback, branching, or waiting-and-reacting — not a single
             prompt and not a single connector call.
-          {{#focus}}
-          - Every idea must be CONCRETELY about {{focus}}: name that
+          {{#input.focus}}
+          - Every idea must be CONCRETELY about {{input.focus}}: name that
             domain's own artifacts, actors, or documents in the idea
             itself, so a reader could not mistake it for any other field.
           - REJECT generic cross-domain office processes (contract clause
             review, resume screening, expense approval, invoice chasing,
             retirement forecasting, loan review) unless they are genuinely
-            native to {{focus}}. They are the drift that ruins this
+            native to {{input.focus}}. They are the drift that ruins this
             harvest — a wrong-domain idea is worse than one idea fewer.
-          {{/focus}}
-          {{#shape_hint}}
-          - IMPORTANT shape requirement: {{shape_hint}}
-          {{/shape_hint}}
+          {{/input.focus}}
+          {{#input.shape_hint}}
+          - IMPORTANT shape requirement: {{input.shape_hint}}
+          {{/input.shape_hint}}
           - Do NOT repeat anything from this list of existing ideas:
-          {{existing_ideas}}
+          {{input.existing_ideas}}
 
           Output exactly 2 lines, each formatted as:
           - Title — one short sentence on what the process does. Be terse.
@@ -202,14 +202,14 @@ effects:
       {{.}}
       {{/prime.theme_rounds.collected.value}}
 
-      {{#focus}}
-      Every one of these was supposed to be concretely about {{focus}}.
+      {{#input.focus}}
+      Every one of these was supposed to be concretely about {{input.focus}}.
       DROP any that is not — a generic cross-domain office process
       (contract review, resume screening, expense approval and friends)
       that could have come from any other field is off-target and must not
       survive curation, however well written. Returning fewer, on-focus
       ideas is the correct outcome.
-      {{/focus}}
+      {{/input.focus}}
 
       Curate: merge duplicates and near-duplicates — including ones that
       differ only in wording, word order, or a single extra word — drop
@@ -221,11 +221,11 @@ effects:
       (email round-trips with a person, browsing, files) is welcome, and
       composition — reusing a library workflow as a sub-step — is a
       strength, as long as the intelligence is LLM-driven.
-      {{#shape_hint}}
-      Rank ideas matching this shape higher: {{shape_hint}}
-      {{/shape_hint}}
+      {{#input.shape_hint}}
+      Rank ideas matching this shape higher: {{input.shape_hint}}
+      {{/input.shape_hint}}
 
-      Target size: {{target_count}} ideas (if that is blank, aim for 15).
+      Target size: {{input.target_count}} ideas (if that is blank, aim for 15).
 
       Output ONLY a numbered list, each line TERSE:
       N. Title — one short sentence
@@ -238,7 +238,7 @@ effects:
     if:
       mode: model
       template: |
-        Target: {{target_count}} (if blank, 15) strong, clearly distinct
+        Target: {{input.target_count}} (if blank, 15) strong, clearly distinct
         agentic orchestration ideas.
 
         List to judge:
@@ -255,11 +255,11 @@ effects:
           This curated list of agentic orchestration ideas came up short:
           {{prime.curate.value}}
 
-          {{#focus}}
-          Every idea must be concretely about {{focus}} — name that
+          {{#input.focus}}
+          Every idea must be concretely about {{input.focus}} — name that
           domain's own artifacts, actors, or documents. Generic
           cross-domain office processes do not count as gap fillers.
-          {{/focus}}
+          {{/input.focus}}
 
           Identify what KINDS of human activity are underrepresented in the
           list above, then brainstorm 5-8 additional ideas from those gaps.
@@ -270,9 +270,9 @@ effects:
           workflows welcome; pure computer-work processes welcome
           (research, writing, data cleanup, computation, creative
           production).
-          {{#shape_hint}}
-          Shape requirement: {{shape_hint}}
-          {{/shape_hint}}
+          {{#input.shape_hint}}
+          Shape requirement: {{input.shape_hint}}
+          {{/input.shape_hint}}
 
           Output exactly one line per idea:
           - Title — one short sentence. Be terse.
@@ -292,9 +292,9 @@ effects:
       in wording, casing, or one word — keep the ranking sensible, and
       output ONLY the final numbered list — no preamble, no commentary:
       N. Title — one short sentence
-      {{#focus}}
+      {{#input.focus}}
 
-      Every line must be concretely about {{focus}}, naming that domain's
+      Every line must be concretely about {{input.focus}}, naming that domain's
       artifacts or actors. Drop anything generic enough to belong to any
       other domain.
-      {{/focus}}
+      {{/input.focus}}

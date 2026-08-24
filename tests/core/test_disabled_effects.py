@@ -193,7 +193,7 @@ def test_disabled_loop_never_iterates() -> None:
             {
                 "type": "loop",
                 "name": "each_item",
-                "each": {"in": "items", "as": "item"},
+                "each": {"in": "input.items", "as": "item"},
                 "body": [{"type": "prompt", "name": "step", "template": "{{item}}"}],
             }
         ]
@@ -201,7 +201,7 @@ def test_disabled_loop_never_iterates() -> None:
     root = compile_orchestration(orch=orch, root_name="prime")
     root, _ = apply_effect_overrides(root, {"each_item": {"enabled": False}})
     adapter = RecordingAdapter()
-    store = Store({"items": ["x", "y", "z"]})
+    store = Store({"input": {"items": ["x", "y", "z"]}})
     DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
 
     _assert_disabled_node(store.state["prime"]["each_item"])
@@ -215,7 +215,7 @@ def test_disabled_body_effect_skips_in_every_iteration() -> None:
             {
                 "type": "loop",
                 "name": "each_item",
-                "each": {"in": "items", "as": "item"},
+                "each": {"in": "input.items", "as": "item"},
                 "body": [
                     {"type": "prompt", "name": "kept", "template": "keep {{item}}"},
                     {"type": "prompt", "name": "dropped", "template": "drop {{item}}"},
@@ -226,7 +226,7 @@ def test_disabled_body_effect_skips_in_every_iteration() -> None:
     root = compile_orchestration(orch=orch, root_name="prime")
     root, _ = apply_effect_overrides(root, {"each_item.dropped": {"enabled": False}})
     adapter = RecordingAdapter()
-    store = Store({"items": ["x", "y"]})
+    store = Store({"input": {"items": ["x", "y"]}})
     DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
 
     loop_node = store.state["prime"]["each_item"]
@@ -242,7 +242,7 @@ def test_later_body_effect_sees_a_disabled_sibling_as_empty() -> None:
             {
                 "type": "loop",
                 "name": "each_item",
-                "each": {"in": "items", "as": "item"},
+                "each": {"in": "input.items", "as": "item"},
                 "body": [
                     {"type": "prompt", "name": "first", "template": "f"},
                     {"type": "prompt", "name": "second", "template": "saw <{{first.value}}>"},
@@ -253,7 +253,7 @@ def test_later_body_effect_sees_a_disabled_sibling_as_empty() -> None:
     root = compile_orchestration(orch=orch, root_name="prime")
     root, _ = apply_effect_overrides(root, {"each_item.first": {"enabled": False}})
     adapter = RecordingAdapter()
-    store = Store({"items": ["x"]})
+    store = Store({"input": {"items": ["x"]}})
     DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
 
     second = store.state["prime"]["each_item"]["iter_0"]["second"]
@@ -266,7 +266,7 @@ def test_disabled_collect_target_yields_empty_collected() -> None:
             {
                 "type": "loop",
                 "name": "each_item",
-                "each": {"in": "items", "as": "item"},
+                "each": {"in": "input.items", "as": "item"},
                 "collect": "step",
                 "body": [{"type": "prompt", "name": "step", "template": "{{item}}"}],
             }
@@ -274,7 +274,7 @@ def test_disabled_collect_target_yields_empty_collected() -> None:
     }
     root = compile_orchestration(orch=orch, root_name="prime")
     root, _ = apply_effect_overrides(root, {"each_item.step": {"enabled": False}})
-    store = Store({"items": ["x", "y"]})
+    store = Store({"input": {"items": ["x", "y"]}})
     DynamicRuntime(root, adapter=RecordingAdapter(), model="m").execute(store=store)
 
     loop_node = store.state["prime"]["each_item"]
@@ -290,14 +290,14 @@ def test_collect_is_unaffected_when_target_stays_enabled() -> None:
             {
                 "type": "loop",
                 "name": "each_item",
-                "each": {"in": "items", "as": "item"},
+                "each": {"in": "input.items", "as": "item"},
                 "collect": "step",
                 "body": [{"type": "prompt", "name": "step", "template": "{{item}}"}],
             }
         ]
     }
     root = compile_orchestration(orch=orch, root_name="prime")
-    store = Store({"items": ["x", "y"]})
+    store = Store({"input": {"items": ["x", "y"]}})
     DynamicRuntime(root, adapter=RecordingAdapter(), model="m").execute(store=store)
 
     assert store.state["prime"]["each_item"]["collected"]["value"] == ["OUT", "OUT"]

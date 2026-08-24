@@ -27,7 +27,7 @@ adapter: ollama            # optional run-level default adapter
 model: llama3.2             # optional run-level default model
 out: runs/fast.json         # optional default --out path
 inputs:
-  topic: "circuit design"   # merged into the initial state (CLI -e wins)
+  topic: "circuit design"   # merged into state["input"] (CLI -e wins)
 effects:                    # keyed by dotted effect path, as in state
   summarize:
     model: cheap
@@ -71,8 +71,10 @@ flag beats both.
 `resolve_config` in `circuitry.cli.config`.) A run with no `--profile` is
 unaffected by this feature — profile resolution is skipped entirely.
 
-`inputs` are merged into the initial run state as a base layer; `--state`
-and `-e` values always win over profile inputs.
+`inputs` are merged into `state["input"]` as a base layer; `--state`
+and `-e` values always win over profile inputs. A resume that has already
+hydrated `input` from persistence keeps the hydrated values — profile inputs
+only fill in keys that are still unset (`setdefault`, not overwrite).
 
 `out` resolves as:
 
@@ -252,8 +254,8 @@ state load failed for orchestration ...`), and records
 `runtime.persistence.status = "load_failed"` / `"save_failed"`.
 
 When persistence hydrates state from a previous run, profile `inputs` remain
-the lowest layer: they fill keys the persisted snapshot doesn't carry rather
-than overwriting resumed values.
+the lowest layer: they fill keys the persisted `state["input"]` snapshot
+doesn't carry rather than overwriting resumed values.
 
 ## Usage
 

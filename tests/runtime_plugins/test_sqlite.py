@@ -12,6 +12,7 @@ import pytest
 from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.runtime_shim import RunRequest, run
 from circuitry.core.runtime_plugins import load_plugins
+from circuitry.runtime_plugins._sql_persistence import extract_inputs
 from circuitry.runtime_plugins._sql_schema import (
     SQLITE,
     default_store_raw,
@@ -73,6 +74,38 @@ def test_default_store_raw_dev_vs_prod() -> None:
     assert default_store_raw("dev") is True
     assert default_store_raw("prod") is False
     assert default_store_raw("test") is False
+
+
+# ---------- extract_inputs (#86 stage 1: input namespace) ----------
+
+
+def test_extract_inputs_reads_the_input_namespace_when_present() -> None:
+    """New-shape state: the `input` dict is the row's `inputs` verbatim,
+    even if legacy skip-set keys happen to also sit at the root."""
+    state = {
+        "input": {"topic": "widgets"},
+        "prime": {"summarize": {"value": "x"}},
+        "runtime": {"last_run": {}},
+    }
+    assert extract_inputs(state) == {"topic": "widgets"}
+
+
+def test_extract_inputs_falls_back_to_legacy_skip_set_without_input_key() -> None:
+    """Pre-namespace snapshots (no `input` key) keep the old behavior: every
+    root key except the reserved framework ones is treated as an input."""
+    state = {
+        "topic": "widgets",
+        "count": 3,
+        "prime": {"summarize": {"value": "x"}},
+        "runtime": {"last_run": {}},
+        "_run_id": "abc",
+        "_timestamp": "20260101_000000",
+    }
+    assert extract_inputs(state) == {"topic": "widgets", "count": 3}
+
+
+def test_extract_inputs_empty_input_namespace_yields_no_inputs() -> None:
+    assert extract_inputs({"input": {}, "prime": {}, "runtime": {}}) == {}
 
 
 # ---------- plugin loading ----------

@@ -365,7 +365,7 @@ The atomic unit. One model invocation, one typed result, written to state at a d
 ```yaml
 - type: prompt
   name: greet_user
-  template: "Say hello to {{user_name}} in one sentence."
+  template: "Say hello to {{input.user_name}} in one sentence."
 ```
 
 State path: `prime.greet_user.value`
@@ -463,7 +463,7 @@ Loops support `collect` to aggregate body outputs across iterations:
 - type: loop
   name: process_items
   each:
-    in: state.input.items
+    in: input.items
     as: item
   collect: process
   body:
@@ -510,7 +510,7 @@ Plus:
 # LLM-generated orchestration execution
 - type: prompt
   name: generate_plan
-  template: "Generate a Circuitry orchestration YAML for: {{goal}}"
+  template: "Generate a Circuitry orchestration YAML for: {{input.goal}}"
 
 - type: use
   name: execute_plan
@@ -594,7 +594,7 @@ interface:
 effects:
   - type: prompt
     name: summarize
-    template: "Summarize in {{max_words}} words: {{article_text}}"
+    template: "Summarize in {{input.max_words}} words: {{input.article_text}}"
 ```
 
 When used:
@@ -615,7 +615,10 @@ When used:
 
 Every effect writes to a deterministic path derived from its name. This is what makes interpolation — and therefore cybernetic feedback — reliable.
 
+State has exactly three root namespaces: `input` (caller-supplied — CLI `-e`/`--state`, profile inputs, `use.inputs`, REST/scheduler `state` payloads), `prime` (effect outputs), and `runtime` (framework metadata). Every path outside CEL is root-relative, starting with one of the three; inside a CEL expression, `state` binds to the root (`state.input.<name>`, `state.prime.<effect>.value`). There is no sugar layer — a bare key or a `state.`-prefixed spelling outside CEL is a hard error from `cof check`, not a deprecation warning.
+
 ```
+input.<name>                                      # caller-supplied input
 prime.<effect>.value                              # top-level prompt
 prime.<dynamic>.<effect>.value                    # inside a dynamic
 prime.<loop>.iter_<n>.<effect>.value              # inside a loop iteration
@@ -624,7 +627,8 @@ prime.<loop>.collected.value                      # loop collect aggregation
 
 Available inside loop body templates:
 - `{{_loop_index}}` — zero-based iteration index (both `each` and `while` loops)
-- `{{<each.as>}}` — current collection element (`each` loops only)
+- `{{<each.as>}}` — current collection element (`each` loops only), a bare
+  loop-scope binding, not part of any namespace
 
 ## Bundled Orchestrations
 

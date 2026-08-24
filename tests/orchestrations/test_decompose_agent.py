@@ -100,19 +100,19 @@ You are the strategy desk. Read every document below and produce the whole
 market brief in a single pass.
 
 Competitor filings:
-{{filings}}
+{{input.filings}}
 
 Our current price sheet:
-{{price_sheet}}
+{{input.price_sheet}}
 
 Their published price sheets:
-{{rival_prices}}
+{{input.rival_prices}}
 
 Support tickets from the last quarter:
-{{tickets}}
+{{input.tickets}}
 
 Analyst commentary:
-{{commentary}}
+{{input.commentary}}
 
 Last quarter's brief:
 {{prior_brief}}
@@ -193,7 +193,7 @@ effects:
         template: |
           Name each company mentioned in these filings.
 
-          {{filings}}
+          {{input.filings}}
 
           Return ONLY a JSON array of strings.
 
@@ -208,10 +208,10 @@ effects:
           Which lines are priced higher here than there?
 
           Ours:
-          {{price_sheet}}
+          {{input.price_sheet}}
 
           Theirs:
-          {{rival_prices}}
+          {{input.rival_prices}}
 
           Return ONLY a JSON array of line names.
 
@@ -222,7 +222,7 @@ effects:
         template: |
           Sum up the mood of these support tickets in two sentences.
 
-          {{tickets}}
+          {{input.tickets}}
 
       # Unit 4 — what the analysts said.
       - type: prompt
@@ -231,7 +231,7 @@ effects:
         template: |
           Sum up this analyst commentary in two sentences.
 
-          {{commentary}}
+          {{input.commentary}}
 
   # The merge. Top level, named `merge`, same output shape as the original.
   - type: prompt
@@ -297,7 +297,7 @@ def _wide_decomposition(count: int) -> tuple[str, list[dict[str, str]]]:
         template: |
           Summarize section {i}.
 
-          {{{{filings}}}}
+          {{{{input.filings}}}}
 """
         for i in range(count)
     ]
@@ -848,7 +848,7 @@ def test_the_revision_condition_covers_validity_and_budget() -> None:
     asking the model whether it did well."""
     expr = _loop()["while"]["expr"]
     assert "state.prime.check.value.ok == false" in expr
-    assert "size(state.prime.plan.value.chunks) > state.max_chunks" in expr
+    assert "size(state.prime.plan.value.chunks) > state.input.max_chunks" in expr
     assert "size(state.prime.plan.value.chunks) < 2" in expr
 
 
@@ -863,7 +863,7 @@ def test_done_gate_is_deterministic() -> None:
     assert gate["if"]["mode"] == "cel"
     expr = gate["if"]["expr"]
     assert "state.prime.check.value.ok == true" in expr
-    assert "size(state.prime.plan.value.chunks) <= state.max_chunks" in expr
+    assert "size(state.prime.plan.value.chunks) <= state.input.max_chunks" in expr
     assert "size(state.prime.plan.value.chunks) >= 2" in expr
     for branch in ("then", "else"):
         (effect,) = gate[branch]

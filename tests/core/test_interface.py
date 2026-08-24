@@ -41,7 +41,7 @@ def test_interface_validates_required_inputs(tmp_path: Path) -> None:
                 "article_text": {"type": "string", "required": True},
             }
         },
-        "effects": [{"type": "prompt", "name": "step", "template": "Summarize: {{article_text}}"}],
+        "effects": [{"type": "prompt", "name": "step", "template": "Summarize: {{input.article_text}}"}],
     }
     child_path = _write_orch(tmp_path, "child.yml", child_orch)
 
@@ -67,7 +67,7 @@ def test_interface_passes_when_required_inputs_provided(tmp_path: Path) -> None:
                 "article_text": {"type": "string", "required": True},
             }
         },
-        "effects": [{"type": "prompt", "name": "step", "template": "Summarize: {{article_text}}"}],
+        "effects": [{"type": "prompt", "name": "step", "template": "Summarize: {{input.article_text}}"}],
     }
     child_path = _write_orch(tmp_path, "child.yml", child_orch)
 
@@ -94,7 +94,7 @@ def test_interface_optional_inputs_not_required(tmp_path: Path) -> None:
                 "max_words": {"type": "number", "required": False},
             }
         },
-        "effects": [{"type": "prompt", "name": "step", "template": "Do: {{text}}"}],
+        "effects": [{"type": "prompt", "name": "step", "template": "Do: {{input.text}}"}],
     }
     child_path = _write_orch(tmp_path, "child.yml", child_orch)
 
@@ -203,7 +203,7 @@ def test_schema_validates_interface_declaration() -> None:
                 "result": {"type": "string", "path": "prime.step.value"},
             },
         },
-        "effects": [{"type": "prompt", "name": "step", "template": "Do: {{text}}"}],
+        "effects": [{"type": "prompt", "name": "step", "template": "Do: {{input.text}}"}],
     }
 
     with tempfile.NamedTemporaryFile(suffix=".yml", mode="w", delete=False) as f:

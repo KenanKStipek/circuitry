@@ -45,7 +45,7 @@ interface:
 effects:
   - type: prompt
     name: summarise
-    template: "Summarise this: {{document}}"
+    template: "Summarise this: {{input.document}}"
 """
 
 NO_COMMENT_YML = """\

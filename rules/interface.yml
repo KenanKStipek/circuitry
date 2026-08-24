@@ -12,6 +12,7 @@ constraints:
   - "interface.outputs and use.outputs take the same shape — object with path (canonical), bare path string (shorthand). There is no interface-only spelling."
   - "Every interface.outputs path must reference an effect defined in this document."
   - "Declare an interface whenever the orchestration is reusable-shaped — it is what makes composition (use) validated and self-documenting."
+  - "A declared input <name> is referenced as {{input.<name>}} in templates and state.input.<name> in CEL — never bare. A bare {{<name>}} matching a name declared in this document's own interface.inputs is a hard error from cof check, naming {{input.<name>}} as the fix."
 example: |
   interface:
     inputs:
@@ -29,4 +30,4 @@ example: |
   effects:
     - type: prompt
       name: summarize
-      template: "Summarize in {{max_words}} words: {{article_text}}"
+      template: "Summarize in {{input.max_words}} words: {{input.article_text}}"

@@ -113,7 +113,7 @@ def test_run_orchestration_returns_paused_with_one_prompt(tmp_path: Path) -> Non
         effects:
           - type: prompt
             name: greet
-            template: "hi {{who}}"
+            template: "hi {{input.who}}"
     """)
     resp = srv._run_orchestration_impl(orchestration=str(p), initial_state={"who": "Ada"})
     assert resp["status"] == "paused"
@@ -161,7 +161,7 @@ def test_run_orchestration_returns_paused_with_multiple_prompts(tmp_path: Path) 
             name: par
             flow: tree
             each:
-              in: items
+              in: input.items
               as: it
             body:
               - type: prompt
@@ -188,7 +188,7 @@ def test_submit_responses_in_arbitrary_order(tmp_path: Path) -> None:
             name: par
             flow: tree
             each:
-              in: items
+              in: input.items
               as: it
             body:
               - type: prompt

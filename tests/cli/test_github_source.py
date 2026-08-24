@@ -49,7 +49,7 @@ interface:
 effects:
   - type: prompt
     name: summarise
-    template: "Summarise this: {{document}}"
+    template: "Summarise this: {{input.document}}"
 """
 
 NESTED_YML = """\

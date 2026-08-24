@@ -225,6 +225,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 
 **State output paths (named each loop):**
 - Per-iteration: `prime.<name>.iter_0.<body_effect>.value`, `prime.<name>.iter_1.<body_effect>.value`, ...
+- Final pass (after the loop completes): `prime.<name>.last.<body_effect>.value` — the last *completed* iteration's node, same shape as `iter_<N>`. A pass that errored under `on_error: continue`/`break` is skipped in favor of the last one that finished; a zero-iteration loop writes no `last` key.
 - Aggregated (when `collect` is set): `prime.<name>.collected.value` — array of every iteration's collected effect value
 - From *inside* the body: `prime.<body_effect>.value` — the current pass. See [Referencing a sibling within an iteration](#referencing-a-sibling-within-an-iteration).
 
@@ -237,7 +238,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `max_concurrency` | integer | no | unbounded | Max parallel workers when `flow: tree`. |
 | `body` | array | yes | — | Non-empty list of effects to execute per iteration |
 | `each` | object | one-of | — | Collection iteration; mutually exclusive with `while` |
-| `each.in` | string | yes (each) | — | State path to a JSON array (must be `prompt_type: json` output) |
+| `each.in` | string | yes (each) | — | Root-relative state path to a JSON array — `input.`/`prime.`/`runtime.`-rooted. `input.*` is a first-class source; the array need not come from a `prompt_type: json` effect. `state.`-prefixed and bare-key spellings are hard errors here (`state.` is a CEL-only binding). |
 | `each.as` | string | no | `item` | Variable name for current element in body templates |
 | `while` | object | one-of | — | Continuation condition; mutually exclusive with `each` |
 | `while.mode` | string | no | `model` | `model` or `cel` |
@@ -257,7 +258,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
     type: array
     items:
       type: string
-  template: "List 3 topics about {{subject}} as a JSON array."
+  template: "List 3 topics about {{input.subject}} as a JSON array."
 
 - type: loop
   name: explain
@@ -325,13 +326,14 @@ there is nothing to see yet and the name falls through to the enclosing scope.
 #### Referencing a sibling within an iteration
 
 A body step reading the step before it — compute → classify → score — is the
-most common multi-step loop shape. Three *different* questions get three
+most common multi-step loop shape. Four *different* questions get four
 *different* paths, and substituting one for another fails silently:
 
 | You want | Write | Legal where |
 |---|---|---|
 | A step's output in the **current pass** | `{{prime.<step>.value}}` | inside the body, and inside a `while` condition |
 | One **specific past pass** | `{{prime.<loop>.iter_<N>.<step>.value}}` | **after** the loop only |
+| The **final pass** | `{{prime.<loop>.last.<step>.value}}` | **after** the loop only |
 | **Every** pass's output | `{{prime.<loop>.collected.value}}` | after the loop (requires `collect`) |
 
 ```yaml
@@ -364,11 +366,15 @@ Rules of the form:
   accepted, not preferred: a bare name can collide with a user-supplied state
   key, and `prime.`-prefixed cannot.
 - **`{{prime.<loop>.<step>.value}}` does not resolve, by design.** `prime.<loop>`
-  is the loop's own node — it holds `iter_<N>`, `collected` and `meta`, never
-  body step names. `cof validate` warns on it.
+  is the loop's own node — it holds `iter_<N>`, `last`, `collected` and `meta`,
+  never body step names. `cof validate` warns on it.
 - **`iter_<N>` inside the body is a trap.** `N` is a constant, so it does not
   render empty — it renders *pass N's* output during every pass, which is
   plausible-looking stale data. `cof validate` warns on this too.
+- **`last` is post-loop only, like `iter_<N>`.** It is written when the loop
+  completes, so inside the body (or the `while` condition) it resolves to the
+  previous pass at best — write `{{prime.<step>.value}}` for the current pass.
+  `cof validate` warns on in-body use.
 - In CEL the same forms apply with the `state.` prefix and no braces:
   `state.prime.<step>.value`.
 
@@ -770,6 +776,19 @@ the body reads pass `N` during every pass — stale data rather than an error. T
 read a sibling in the pass you are currently in, write `{{prime.<step>.value}}`;
 see [Referencing a sibling within an iteration](#referencing-a-sibling-within-an-iteration).
 
+When you mean "the final pass" — the usual case after a `while` loop or a
+data-dependent `each` loop, where `N` is unknowable — don't guess `N`:
+
+```yaml
+template: "Final result: {{prime.explain.last.summary.value}}"
+```
+
+`last` is the last *completed* iteration's node, same shape as `iter_<N>` (deep
+field paths work). A pass that errored under `on_error: continue`/`break` is
+skipped in favor of the last one that finished; a loop that ran zero iterations
+writes no `last` key, so the read renders empty exactly like a missing
+`iter_<N>`.
+
 ### Iteration Bindings Inside Nested Containers
 
 `{{<each.as>}}` and `{{_loop_index}}` reach every effect in the body, however
@@ -854,11 +873,21 @@ else:
   template: "{{prime.check_role.response.value}}"   # always resolves
 ```
 
-### Loop `each.in` Must Point to a JSON Array
+### Loop `each.in` Must Be Root-Relative and Resolve to a JSON Array
 
-The state path in `each.in` must resolve to an array at runtime. This means it must point to a `prompt_type: json` effect whose output is a JSON array:
+`each.in` must be rooted at one of the three state namespaces —
+`input.`/`prime.`/`runtime.` — and must resolve to an array at runtime.
+`input.*` is a first-class source, so the array does not have to come from a
+`prompt_type: json` effect; a caller-supplied array works directly:
 
 ```yaml
+# Good: caller-supplied array, no prompt needed
+- type: loop
+  each:
+    in: input.topics   # caller passed an array under this input
+    as: topic
+  body: [...]
+
 # Good: source is prompt_type: json producing an array
 - type: prompt
   name: topics
@@ -880,6 +909,17 @@ The state path in `each.in` must resolve to an array at runtime. This means it m
 - type: loop
   each:
     in: prime.topics.value   # not an array
+  body: [...]
+
+# Bad: not root-relative — both are hard errors from `cof check`
+- type: loop
+  each:
+    in: topics               # bare key — write input.topics or prime.topics.value
+  body: [...]
+
+- type: loop
+  each:
+    in: state.prime.topics.value   # state. is a CEL-only binding, not legal here
   body: [...]
 ```
 
@@ -912,7 +952,7 @@ The following rules are sufficient for generating structurally correct Circuitry
 **State path addressing:**
 14. In templates (Mustache): use `{{key}}` for initial state keys; use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
 15. In CEL expressions (`if.expr`, `while.expr`): always use the full prefix `state.prime.<name>.value`. Never omit `state.`.
-16. Loop `each.in` must point to a `prompt_type: json` effect whose output is a JSON array (e.g. `prime.my_prompt.value`).
+16. Loop `each.in` must be a root-relative path to a JSON array — `input.<name>`, `prime.<name>.value`, or a `runtime.` path. `input.*` is a first-class source; it need not point to a `prompt_type: json` effect. Bare keys and `state.`-prefixed spellings are hard errors here.
 
 **If/else branches:**
 17. Use the same inner effect `name` in both `then` and `else` branches of any `if` effect, so downstream state path references resolve regardless of which branch executed.

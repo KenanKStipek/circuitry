@@ -516,13 +516,15 @@ class UseRuntime:
 
             child_root = compile_orchestration(orch=child_orch, root_name="prime")
 
-            # Build isolated child state from inputs
-            child_state: dict[str, Any] = {}
+            # Build isolated child state: rendered inputs land in the
+            # child's `input` namespace, same contract as a top-level run.
+            child_inputs: dict[str, Any] = {}
             if self.defn.inputs:
-                child_state = _render_inputs(self.defn.inputs, ctx)
+                child_inputs = _render_inputs(self.defn.inputs, ctx)
+            child_state: dict[str, Any] = {"input": child_inputs}
 
             # Check interface: validate required inputs, auto-generate output mapping
-            auto_outputs = self._check_interface(child_orch, child_state)
+            auto_outputs = self._check_interface(child_orch, child_inputs)
 
             # Isolated state, shared observation: the child keeps its own
             # state dict (and its explicit inputs/outputs mapping) but

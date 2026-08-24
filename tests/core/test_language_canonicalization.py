@@ -214,7 +214,7 @@ def test_type_alias_still_compiles() -> None:
             "effects": [
                 {
                     "type": "conditional",
-                    "if": {"mode": "cel", "expr": "state.x == 1"},
+                    "if": {"mode": "cel", "expr": "state.input.x == 1"},
                     "then": [{"type": "prompt", "name": "yes", "template": "y"}],
                 }
             ]
@@ -250,7 +250,7 @@ def test_lint_names_the_deprecated_effect_type_alias() -> None:
             "effects": [
                 {
                     "type": "conditional",
-                    "if": {"mode": "cel", "expr": "state.x == 1"},
+                    "if": {"mode": "cel", "expr": "state.input.x == 1"},
                     "then": [{"type": "prompt", "name": "yes", "template": "y"}],
                 }
             ]
@@ -301,7 +301,7 @@ def test_canonical_document_lints_clean() -> None:
                     {
                         "type": "if",
                         "name": "route",
-                        "if": {"mode": "cel", "expr": "state.x == 1"},
+                        "if": {"mode": "cel", "expr": "state.input.x == 1"},
                         "then": [
                             {"type": "prompt", "name": "explain", "template": "y"}
                         ],
@@ -328,7 +328,7 @@ def test_lint_reaches_effects_nested_in_every_container_key() -> None:
             "effects": [
                 {
                     "type": "if",
-                    "if": {"mode": "cel", "expr": "state.x == 1"},
+                    "if": {"mode": "cel", "expr": "state.input.x == 1"},
                     "then": [{"type": "prompt", "name": "loop", "template": "a"}],
                     "else": [
                         {
@@ -336,7 +336,7 @@ def test_lint_reaches_effects_nested_in_every_container_key() -> None:
                             "body": [
                                 {"type": "prompt", "name": "use", "template": "b"}
                             ],
-                            "while": {"mode": "cel", "expr": "state.x == 1"},
+                            "while": {"mode": "cel", "expr": "state.input.x == 1"},
                         }
                     ],
                 }
@@ -369,7 +369,7 @@ def test_a_deprecated_but_correct_file_validates_ok_with_warnings(
             "effects": [
                 {
                     "type": "conditional",
-                    "if": {"mode": "cel", "expr": "state.x == 1"},
+                    "if": {"mode": "cel", "expr": "state.input.x == 1"},
                     "then": [{"type": "prompt", "name": "loop", "template": "y"}],
                 }
             ],

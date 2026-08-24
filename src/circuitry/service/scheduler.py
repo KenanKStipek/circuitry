@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from ..cli.config import CircuitryConfig
 from ..cli.runtime_shim import RunRequest, run
+from ..core.state_ns import migrate_legacy_state
 
 
 @dataclass(frozen=True)
@@ -101,7 +102,9 @@ class RecurringScheduler:
     ) -> ScheduledDispatchRecord:
         planned_at = planned.isoformat()
         triggered_at = triggered.isoformat()
-        state = deepcopy(job.state or {})
+        # The job's `state` seed is caller input: bare root keys are wrapped
+        # under the `input` namespace before the run sees them.
+        state = migrate_legacy_state(deepcopy(job.state or {}))
         runtime = state.setdefault("runtime", {})
         runtime["schedule"] = {
             "job_name": job.name,

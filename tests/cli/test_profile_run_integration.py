@@ -27,13 +27,13 @@ def _write_orch(tmp_path: Path) -> Path:
 effects:
   - type: prompt
     name: summarize
-    template: "summarize {{topic}}"
+    template: "summarize {{input.topic}}"
   - type: dynamic
     name: sub
     effects:
       - type: prompt
         name: deep_analysis
-        template: "analyze {{topic}}"
+        template: "analyze {{input.topic}}"
 """.strip()
         + "\n",
     )
@@ -158,7 +158,7 @@ effects:
     effects:
       - type: prompt
         name: propose_steps
-        template: "plan {{topic}}"
+        template: "plan {{input.topic}}"
   - type: prompt
     name: report
     template: "report on <{{planner.value}}>"
@@ -345,10 +345,10 @@ def test_profile_reconstructed_from_the_record_alone_reproduces_the_run(
 effects:
   - type: prompt
     name: summarize
-    template: "summarize {{topic}}"
+    template: "summarize {{input.topic}}"
   - type: prompt
     name: extra
-    template: "extra {{topic}}"
+    template: "extra {{input.topic}}"
 """.strip()
         + "\n",
     )

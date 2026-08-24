@@ -34,9 +34,9 @@ effects:
       For any field not present in the text, set its value to null. Do not invent values.
 
       Fields to extract:
-      {{#fields}}
+      {{#input.fields}}
       - {{.}}
-      {{/fields}}
+      {{/input.fields}}
 
       Text:
-      {{text}}
+      {{input.text}}

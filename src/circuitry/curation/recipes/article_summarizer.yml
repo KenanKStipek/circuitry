@@ -32,8 +32,8 @@ effects:
     name: distill
     ref: utilities/summarize
     inputs:
-      text: "{{article_text}}"
-      max_words: "{{max_words}}"
+      text: "{{input.article_text}}"
+      max_words: "{{input.max_words}}"
     outputs:
       summary: {path: prime.summarize.value}
 
@@ -42,7 +42,7 @@ effects:
   - type: prompt
     name: trim
     template: |
-      Trim the sentence below to {{max_words}} words or fewer. Preserve the central claim.
+      Trim the sentence below to {{input.max_words}} words or fewer. Preserve the central claim.
       Output ONLY the trimmed sentence — no quotes, no preamble, no markdown.
 
       Sentence:

@@ -9,7 +9,7 @@ fields:
     note: "snake_case, unique among siblings. iter_N is reserved."
   template:
     type: string
-    note: "Mustache template. {{key}} for input state, {{prime.<name>.value}} for effect outputs."
+    note: "Mustache template. {{input.<name>}} for caller-supplied input, {{prime.<name>.value}} for effect outputs."
     conflicts_with: messages
   messages:
     type: array
@@ -80,5 +80,5 @@ example: |
       required: [category, confidence]
     template: |
       Classify this text into a category.
-      Text: "{{user_input}}"
+      Text: "{{input.user_input}}"
       Return ONLY a JSON object with "category" and "confidence".
