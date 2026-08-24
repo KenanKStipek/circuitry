@@ -156,7 +156,7 @@ model:     OPTIONAL. Omit — it comes from the user's config.json.
          required: [title]
          additionalProperties: false
        template: |
-         Summarize {{article}} as JSON. Return ONLY the JSON object.
+         Summarize {{input.article}} as JSON. Return ONLY the JSON object.
 
 2) dynamic — a named container. Writes prime.<name>.<child>.value.
    Required: type, name, effects (non-empty list).
@@ -244,6 +244,11 @@ model:     OPTIONAL. Omit — it comes from the user's config.json.
    Use it only when the steps genuinely cannot be known up front.
 
 === STATE PATHS ===
+State has exactly three root namespaces: input (caller-supplied), prime
+(effect outputs), runtime (framework metadata). Every path is root-relative —
+never write a leading `state.` outside a CEL expression.
+
+Caller-supplied input, declared or not . input.<name>
 Top-level effect output ............ prime.<name>.value
 Inside a named dynamic ............. prime.<dynamic>.<name>.value
 Named loop, one iteration .......... prime.<loop>.iter_<N>.<name>.value
@@ -252,11 +257,14 @@ Loop body, a step in THIS pass ..... prime.<name>.value (see WITHIN A LOOP BODY)
 Named conditional branch effect .... prime.<cond>.<name>.value
 Unnamed loop / conditional ......... prime.<name>.value (merged into parent)
 A field of a JSON/object output .... prime.<name>.value.<field>
-User-supplied state key ............ {{key}} — no prime. prefix
+Loop `as` variable (not a namespace) {{<as_name>}} — bare, current pass only
 
-In templates:  {{prime.step.value}}          (double braces; triple to skip
-                                              HTML escaping: {{{prime.step.value}}})
-In CEL exprs:  state.prime.step.value        (state. prefix, no braces)
+In templates:  {{input.<name>}} for caller input, {{prime.step.value}} for an
+               effect output (double braces; triple to skip HTML escaping:
+               {{{prime.step.value}}})
+In CEL exprs:  state.input.<name>, state.prime.step.value — state binds to
+               the state root; state.<key> is an error unless <key> is one of
+               input, prime, runtime.
 CEL supports: == != < <= > >= && || ! and size(x). Nothing else.
 
 === WITHIN A LOOP BODY ===
@@ -286,6 +294,7 @@ Declare what the orchestration takes and returns so `use` can wire it up:
     outputs:
       summary: {type: string, path: prime.summarize.value, description: Result.}
 Input types: string, number, boolean, array, object.
+Reference a declared input in a template as {{input.article}} — see STATE PATHS.
 
 === OUTPUTS ===
 `interface.outputs` and `use.outputs` take the SAME shape. Write the object
