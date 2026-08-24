@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from circuitry.cli.complexity_config import ComplexityConfigError
 from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.effective_settings import resolve_effective_settings
 from circuitry.cli.profiles import ProfileSettings
@@ -253,3 +256,106 @@ effects:
     assert isinstance(result.error, str)
     assert "Duplicate effect name 'dup'" in result.error
     assert "No adapter resolved for orchestration" not in result.error
+
+
+# -- cli_scoring/cli_routing/cli_decompose (issue #110) ----------------------
+
+_BANDS = [{"name": "cheap", "max": 40, "model": "small"}, {"model": "large"}]
+
+
+def test_cli_complexity_flags_override_config_in_both_directions() -> None:
+    cfg = CircuitryConfig(
+        runtime={"complexity": {"scoring": {"enabled": True}}}
+    )
+
+    # Config says scoring on; --no-scoring forces it off for this run.
+    off = resolve_effective_settings(cfg=cfg, orch={}, cli_scoring=False)
+    assert off.complexity.scoring.enabled is False
+    assert off.sources["complexity.scoring"] == "cli"
+
+    # Config says nothing about routing (off by default); --routing forces it
+    # on, reusing the bands the config already declared.
+    cfg_with_bands = CircuitryConfig(
+        runtime={
+            "complexity": {
+                "scoring": {"enabled": True},
+                "routing": {"enabled": False, "bands": _BANDS},
+            }
+        }
+    )
+    on = resolve_effective_settings(cfg=cfg_with_bands, orch={}, cli_routing=True)
+    assert on.complexity.routing.enabled is True
+    assert on.complexity.routing.bands[0].model == "small"
+    assert on.sources["complexity.routing"] == "cli"
+
+
+def test_cli_complexity_flags_beat_orchestration_and_profile() -> None:
+    cfg = CircuitryConfig()
+    orch = {"runtime": {"complexity": {"scoring": {"enabled": True}}}}
+    profile = _profile()
+
+    effective = resolve_effective_settings(
+        cfg=cfg, orch=orch, profile=profile, cli_scoring=False
+    )
+    assert effective.complexity.scoring.enabled is False
+    assert effective.sources["complexity.scoring"] == "cli"
+
+
+def test_cli_complexity_flag_untouched_switches_keep_their_own_layer() -> None:
+    """A flag on one switch must not disturb the sources of the other two."""
+    cfg = CircuitryConfig(
+        runtime={"complexity": {"scoring": {"enabled": True}}}
+    )
+    orch = {
+        "runtime": {
+            "complexity": {
+                "scoring": {"enabled": True},
+                "routing": {"enabled": True, "bands": _BANDS},
+            }
+        }
+    }
+
+    # Turning routing off by flag leaves scoring's provenance untouched — it
+    # is still satisfied by the orchestration layer, which the flag never
+    # reached.
+    effective = resolve_effective_settings(cfg=cfg, orch=orch, cli_routing=False)
+    assert effective.complexity.routing.enabled is False
+    assert effective.sources["complexity.routing"] == "cli"
+    assert effective.complexity.scoring.enabled is True
+    assert effective.sources["complexity.scoring"] == "orchestration"
+
+
+def test_cli_routing_flag_without_scoring_raises_same_prerequisite_error() -> None:
+    cfg = CircuitryConfig(
+        runtime={"complexity": {"routing": {"enabled": False, "bands": _BANDS}}}
+    )
+
+    with pytest.raises(ComplexityConfigError) as excinfo:
+        resolve_effective_settings(cfg=cfg, orch={}, cli_routing=True)
+
+    message = str(excinfo.value)
+    assert "runtime.complexity.routing.enabled is true" in message
+    assert "runtime.complexity.scoring.enabled" in message
+
+
+def test_cli_decompose_flag_without_scoring_raises_same_prerequisite_error() -> None:
+    cfg = CircuitryConfig()
+
+    with pytest.raises(ComplexityConfigError) as excinfo:
+        resolve_effective_settings(cfg=cfg, orch={}, cli_decompose=True)
+
+    message = str(excinfo.value)
+    assert "runtime.complexity.decomposition.enabled is true" in message
+    assert "runtime.complexity.scoring.enabled" in message
+
+
+def test_no_complexity_flags_preserves_existing_precedence() -> None:
+    """Regression guard: omitting the three flags must behave identically."""
+    cfg = CircuitryConfig(runtime={"complexity": {"scoring": {"enabled": True}}})
+    orch: dict[str, object] = {}
+
+    without_kwargs = resolve_effective_settings(cfg=cfg, orch=orch)
+    with_none = resolve_effective_settings(
+        cfg=cfg, orch=orch, cli_scoring=None, cli_routing=None, cli_decompose=None
+    )
+    assert without_kwargs == with_none

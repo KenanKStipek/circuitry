@@ -62,6 +62,9 @@ def resolve_effective_settings(
     cli_adapter: str | None = None,
     cli_plugins: list[str] | None = None,
     cli_out: Path | None = None,
+    cli_scoring: bool | None = None,
+    cli_routing: bool | None = None,
+    cli_decompose: bool | None = None,
     profile: ProfileSettings | None = None,
 ) -> EffectiveSettings:
     sources: dict[str, str] = {}
@@ -176,11 +179,27 @@ def resolve_effective_settings(
     # config-level one wholesale. Resolving it here means a malformed block
     # fails at config resolution rather than mid-run, and records provenance
     # alongside model/adapter/persistence.
+    #
+    # `--scoring`/`--routing`/`--decompose` are layered onto the merged block
+    # *before* it validates, each flipping only its own switch's `enabled`
+    # field — so a flag combination that violates the scoring prerequisite
+    # raises the identical `ComplexityConfigError` the config path raises,
+    # and a flag never has to restate bands/weights/thresholds it isn't
+    # touching.
+    runtime = _apply_cli_complexity_overrides(
+        runtime,
+        cli_scoring=cli_scoring,
+        cli_routing=cli_routing,
+        cli_decompose=cli_decompose,
+    )
     complexity = resolve_complexity_settings(runtime)
     _record_complexity_sources(
         sources,
         config_block=(cfg.runtime or {}).get("complexity"),
         orch_block=orch_runtime.get("complexity"),
+        cli_scoring=cli_scoring,
+        cli_routing=cli_routing,
+        cli_decompose=cli_decompose,
     )
 
     # Resolved after the complexity block because that is what decides it: the
@@ -244,18 +263,69 @@ def _apply_router_precedence(
     return model, locked
 
 
+def _apply_cli_complexity_overrides(
+    runtime: dict[str, Any],
+    *,
+    cli_scoring: bool | None,
+    cli_routing: bool | None,
+    cli_decompose: bool | None,
+) -> dict[str, Any]:
+    """Layer `--scoring`/`--routing`/`--decompose` onto the merged runtime.
+
+    Each flag flips only its switch's `enabled` field, leaving the rest of
+    that sub-block (weights, bands, threshold, ...) exactly as the
+    orchestration/config left it — a flag never has to restate a band table
+    just to force routing on for one run.
+
+    A malformed `complexity` (or sub-)block is left untouched rather than
+    coerced into a dict here: `resolve_complexity_settings` raises its own
+    named-path "must be an object" error for it, and that error is more
+    useful than one about an override this function invented.
+    """
+    if cli_scoring is None and cli_routing is None and cli_decompose is None:
+        return runtime
+
+    complexity_raw = runtime.get("complexity")
+    if complexity_raw is not None and not isinstance(complexity_raw, dict):
+        return runtime
+    complexity: dict[str, Any] = dict(complexity_raw) if complexity_raw else {}
+
+    def _set_enabled(key: str, value: bool | None) -> None:
+        if value is None:
+            return
+        sub_raw = complexity.get(key)
+        if sub_raw is not None and not isinstance(sub_raw, dict):
+            return
+        sub: dict[str, Any] = dict(sub_raw) if sub_raw else {}
+        sub["enabled"] = value
+        complexity[key] = sub
+
+    _set_enabled("scoring", cli_scoring)
+    _set_enabled("routing", cli_routing)
+    _set_enabled("decomposition", cli_decompose)
+
+    runtime = dict(runtime)
+    runtime["complexity"] = complexity
+    return runtime
+
+
 def _record_complexity_sources(
     sources: dict[str, str],
     *,
     config_block: Any,
     orch_block: Any,
+    cli_scoring: bool | None = None,
+    cli_routing: bool | None = None,
+    cli_decompose: bool | None = None,
 ) -> None:
     """Record which layer supplied the complexity block and each sub-block.
 
     Sub-block provenance is not redundant with the block-level entry: the
     runtime merge replaces the whole `complexity` key, so an orchestration
     block that only defines `routing` leaves `scoring` on its defaults even
-    when the config file defined one.
+    when the config file defined one. A CLI flag outranks both layers for its
+    own switch only — the block-level entry still names whichever of
+    orchestration/config/default supplied everything the flags didn't touch.
     """
     orch_is_block = isinstance(orch_block, dict)
     config_is_block = isinstance(config_block, dict)
@@ -270,7 +340,15 @@ def _record_complexity_sources(
         winner = {}
         sources["complexity"] = "default"
 
+    cli_flags = {
+        "scoring": cli_scoring,
+        "routing": cli_routing,
+        "decomposition": cli_decompose,
+    }
     for key in ("scoring", "routing", "decomposition"):
-        sources[f"complexity.{key}"] = (
-            sources["complexity"] if key in winner else "default"
-        )
+        if cli_flags[key] is not None:
+            sources[f"complexity.{key}"] = "cli"
+        else:
+            sources[f"complexity.{key}"] = (
+                sources["complexity"] if key in winner else "default"
+            )
