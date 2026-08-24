@@ -157,6 +157,27 @@ def resolve_effective_settings(
         "orchestration" if orch_runtime else ("config" if cfg.runtime else "default")
     )
 
+    # adapter timeout: `runtime.adapters.<adapter>.timeout_seconds` (see
+    # cli.runtime_shim, which resolves it generically for whichever adapter
+    # the run selected — ollama and every curl-based adapter share the same
+    # `generate(timeout_seconds=...)` knob). `runtime` only merges shallowly
+    # (see above), so the per-adapter block comes wholesale from whichever
+    # layer supplied `runtime` itself — there is no finer-grained merge to
+    # track. "default" means the key was absent and the 120s fallback in
+    # runtime_shim applies.
+    if adapter:
+        adapters_cfg = runtime.get("adapters")
+        this_adapter_cfg = (
+            adapters_cfg.get(adapter) if isinstance(adapters_cfg, dict) else None
+        )
+        if (
+            isinstance(this_adapter_cfg, dict)
+            and this_adapter_cfg.get("timeout_seconds") is not None
+        ):
+            sources[f"adapters.{adapter}.timeout_seconds"] = sources["runtime"]
+        else:
+            sources[f"adapters.{adapter}.timeout_seconds"] = "default"
+
     # persistence: a profile's `persistence:` block replaces (never merges
     # with) whatever the orchestration/config supplied — backends take
     # disjoint config keys, so a partial overlay would produce a chimera.
