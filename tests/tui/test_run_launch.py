@@ -411,6 +411,26 @@ def test_observed_state_is_reported_and_the_result_handed_back(
     assert finished[0].state["prime"]["summarize"]["value"] == "hello / 5"
 
 
+def test_build_initial_state_output_lands_under_input_and_nowhere_else(
+    orchestration: Path,
+) -> None:
+    """`build_initial_state` hands the launch flow a bare dict (see
+    run_view.action_launch); the run's own choke point (_load_state ->
+    migrate_legacy_state) is what wraps it under `input` — this pins that
+    the two compose correctly end to end."""
+    finished: list[RunResult] = []
+
+    session = RunSession(_request(orchestration), on_finish=finished.append)
+    session.start()
+    session.join(timeout=30)
+
+    assert len(finished) == 1
+    assert finished[0].ok, finished[0].error
+    assert finished[0].state["input"] == {"text": "hello", "max_words": 5}
+    assert "text" not in finished[0].state
+    assert "max_words" not in finished[0].state
+
+
 def test_the_observer_is_pure(orchestration: Path) -> None:
     """A TUI-driven run must end where a plain ``cof run`` ends.
 

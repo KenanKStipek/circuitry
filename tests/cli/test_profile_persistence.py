@@ -116,6 +116,48 @@ persistence:
     )
 
 
+def test_legacy_jsonl_snapshot_lifts_bare_keys_under_input_on_resume(
+    tmp_path: Path,
+) -> None:
+    """A snapshot persisted before the #86 namespace contract (bare root
+    keys, no `input`) still resumes: migrate_legacy_state lifts it on load."""
+    orch_path = _write_orch(tmp_path)
+    log_path = tmp_path / "state" / "runs.jsonl"
+    _write(
+        orch_path.parent / "profiles" / "thorough.yml",
+        f"""
+persistence:
+  backend: jsonl-file
+  path: {log_path}
+""",
+    )
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_record = {
+        "run_id": "legacy-run-1",
+        "orchestration_path": str(orch_path),
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "ok": True,
+        "error": None,
+        "state": {
+            "topic": "widgets",
+            "prime": {"summarize": {"value": "summary of summarize widgets"}},
+            "runtime": {},
+        },
+    }
+    log_path.write_text(json.dumps(legacy_record) + "\n", encoding="utf-8")
+
+    resumed = _run(orch_path, profile="thorough")
+
+    assert resumed.ok is True, resumed.error
+    assert resumed.state["runtime"]["persistence"]["loaded_from_persistence"] is True
+    assert resumed.state["input"] == {"topic": "widgets"}
+    assert "topic" not in resumed.state
+    # The prior run's own effect output survived the lift untouched.
+    assert resumed.state["prime"]["summarize"]["value"] == (
+        "summary of summarize widgets"
+    )
+
+
 def test_profile_sqlite_round_trip(tmp_path: Path) -> None:
     orch_path = _write_orch(tmp_path)
     db_path = tmp_path / "state" / "runs.db"
