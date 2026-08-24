@@ -4,7 +4,7 @@
 # Circuitry Example (Simple, Relatable): Page → Characters → Per-Character Beats → New Stories
 # -----------------------------------------------------------------------------
 # Goal:
-# 1) Loop each page from initial state (state.input.book.pages)
+# 1) Loop each page from initial state (input.book.pages)
 #    - extract characters on that page
 #    - store per-page character lists to state
 # 2) After all pages:
@@ -47,7 +47,7 @@ prime:
       name: per_page
       mode: each
       each:
-        in: state.input.book.pages
+        in: input.book.pages
         as: page
       body:
         - type: prompt
@@ -150,7 +150,7 @@ prime:
       name: per_character
       mode: each
       each:
-        in: state.runtime.book_character_stories.normalize_characters.value.characters
+        in: prime.book_character_stories.normalize_characters.value.characters
         as: character
       body:
         # 3a) Gather that character's pages into one bundle (and compute target length)
@@ -180,7 +180,7 @@ prime:
             {{character}}
 
             The full book pages (0-based index):
-            {{state.input.book.pages}}
+            {{input.book.pages}}
 
             Task:
             1) Select ONLY the pages whose index appears in character.page_indexes.
@@ -239,7 +239,7 @@ prime:
           each:
             # We iterate over a synthetic range by asking the model to materialize an array of page numbers.
             # Keep it simple: we first create that array with a prompt.
-            in: state.runtime.book_character_stories.per_character.write_story_pages_plan.value.page_numbers
+            in: prime.book_character_stories.per_character.write_story_pages_plan.value.page_numbers
             as: page_num
           body:
             - type: prompt

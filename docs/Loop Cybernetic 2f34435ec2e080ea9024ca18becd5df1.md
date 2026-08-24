@@ -223,7 +223,7 @@ while:
 
 ```
 each:
-  in: state.documents
+  in: input.documents
   as: doc
 ```
 
@@ -231,7 +231,10 @@ each:
 
 - **each.in**
     
-    A dot-delimited path reference into the effective context.
+    A dot-delimited path reference into the effective context, rooted at one
+    of the three state namespaces — `input.`, `prime.`, or `runtime.`. A bare
+    key or a `state.`-prefixed spelling (`state.` is a CEL-only binding) is a
+    hard error.
     
     Must resolve to an array.
     
@@ -323,7 +326,7 @@ body:
 type: loop
 mode: each
 each:
-  in: state.users
+  in: input.users
 body:
   - type: prompt
     name: notify

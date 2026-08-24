@@ -14,10 +14,10 @@ fields:
   each:
     type: object
     properties:
-      in: "Dot-delimited state path to a JSON array (e.g. prime.my_list.value)"
+      in: "Dot-delimited state path to a JSON array, rooted at input., prime., or runtime. (e.g. input.items, prime.my_list.value)."
       as: "Variable name for current element (default: item). Accessible as {{as_name}}."
     required: [in]
-    note: "each.in must point to a prompt_type: json effect that outputs an array."
+    note: "each.in must be root-relative — input./prime./runtime.-rooted. A bare key or a state.-prefixed spelling (state. is a CEL-only binding, not legal here) is a hard error from cof check, naming the canonical spelling. input.<name> is a first-class source: each.in does not have to point at a prompt_type: json effect."
   while:
     type: object
     properties:
@@ -55,7 +55,7 @@ state_paths:
   loop_variable: "{{as_name}}"
 constraints:
   - "Exactly one of each or while is required, never both."
-  - "each.in must point to a prompt_type: json effect whose output is a JSON array."
+  - "each.in must be a JSON array at a root-relative path (input.<name>, prime.<effect_name>.value, or a runtime. path). input.* is a first-class source — the array does not have to come from a prompt_type: json effect."
   - "collect requires the loop to have a name."
   - "Within-iteration, cross-iteration and post-loop references are three different things: prime.<body_name>.value, prime.<loop_name>.iter_N.<body_name>.value, prime.<loop_name>.collected.value. Do not substitute one for another."
   - "prime.<loop_name>.<body_name>.value never resolves — prime.<loop_name> holds iter_N, collected and meta, never body step names. Write prime.<body_name>.value instead."

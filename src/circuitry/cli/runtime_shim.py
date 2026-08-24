@@ -20,6 +20,7 @@ from ..core.runtime_plugins import (
     invoke_plugins,
     load_plugins,
 )
+from ..core.state_ns import migrate_legacy_state
 from ..core.store import Store, build_persistence_backend
 from ..plugins.factory import build_plugin
 from ..preflight import CheckResult, call_check
@@ -131,12 +132,15 @@ def _now_iso() -> str:
 def _load_state(
     path: Path | None, initial_state: dict[str, Any] | None = None
 ) -> dict[str, Any]:
+    # The single choke point where caller state enters a run: whatever the
+    # source (--state file, -e inline values, REST/TUI/MCP initial_state),
+    # legacy bare root keys are lifted under the `input` namespace here.
     if initial_state is not None:
         # Isolate runtime mutations from caller-owned dictionaries.
-        return deepcopy(initial_state)
+        return migrate_legacy_state(deepcopy(initial_state))
     if not path or not path.exists():
-        return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+        return migrate_legacy_state({})
+    return migrate_legacy_state(json.loads(path.read_text(encoding="utf-8")))
 
 
 def run(req: RunRequest) -> RunResult:
@@ -178,10 +182,13 @@ def run(req: RunRequest) -> RunResult:
         if profile is not None and profile.inputs:
             # Profile inputs are a lower-priority base layer under
             # whatever the caller already resolved from --state/-e (CLI
-            # values win — see cli.app.run_cmd).
+            # values win — see cli.app.run_cmd). Both layers live in the
+            # `input` namespace.
+            input_ns = state.get("input")
             merged = dict(profile.inputs)
-            merged.update(state)
-            state = merged
+            if isinstance(input_ns, dict):
+                merged.update(input_ns)
+            state["input"] = merged
 
         effective = resolve_effective_settings(
             cfg=cfg,
@@ -226,13 +233,17 @@ def run(req: RunRequest) -> RunResult:
                     orchestration_path=str(req.orchestration_path)
                 )
                 if isinstance(persisted, dict):
-                    hydrated = deepcopy(persisted)
+                    # Lift-on-hydrate: pre-namespace snapshots get their
+                    # bare root keys moved under `input` (logged once).
+                    hydrated = migrate_legacy_state(deepcopy(persisted))
                     if profile is not None and profile.inputs:
                         # Profile inputs stay the lowest layer: they fill
                         # keys the persisted snapshot doesn't carry rather
                         # than overwriting resumed values.
-                        for key, value in profile.inputs.items():
-                            hydrated.setdefault(key, value)
+                        input_ns = hydrated.setdefault("input", {})
+                        if isinstance(input_ns, dict):
+                            for key, value in profile.inputs.items():
+                                input_ns.setdefault(key, value)
                     state = hydrated
                     loaded_from_persistence = True
             except Exception as e:

@@ -48,7 +48,7 @@ effects:
       - "candidate": its full text verbatim
       - "reason": one sentence comparing it favorably to the runners-up
 
-      Objective: {{objective}}
+      Objective: {{input.objective}}
 
       Candidates:
-      {{candidates}}
+      {{input.candidates}}

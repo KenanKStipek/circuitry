@@ -29,7 +29,7 @@ effects:
       Match the original's voice, tone, and length. Do not add headings, preamble, or commentary — output only the revised content.
 
       Feedback:
-      {{feedback}}
+      {{input.feedback}}
 
       Original content:
-      {{content}}
+      {{input.content}}

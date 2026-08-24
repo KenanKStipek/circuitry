@@ -189,7 +189,7 @@ if:
 ```
 if:
   mode: cel
-  expr: "state.score.value >= 0.9 && state.attempts < 3"
+  expr: "state.prime.score.value >= 0.9 && state.prime.attempts.value < 3"
 ```
 
 - Expression is evaluated using a CEL engine
@@ -210,7 +210,7 @@ All state access must be explicit:
 
 ```
 state.input.user_role == "admin"
-state.score.value >= 0.9
+state.prime.score.value >= 0.9
 ```
 
 ### **CEL Constraints**

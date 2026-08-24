@@ -68,7 +68,14 @@ def resolve_environment() -> str:
 
 
 def extract_inputs(state: dict[str, Any]) -> dict[str, Any]:
-    """Skip framework namespaces, return user-supplied seed values."""
+    """User-supplied seed values: the ``input`` namespace when present.
+
+    Pre-namespace snapshots (no ``input`` key) fall back to the legacy
+    skip-set filter over root keys.
+    """
+    input_ns = state.get("input")
+    if isinstance(input_ns, dict):
+        return dict(input_ns)
     skip = {"prime", "runtime", "_run_id", "_timestamp"}
     return {k: v for k, v in state.items() if k not in skip}
 

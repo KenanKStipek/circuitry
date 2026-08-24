@@ -2,6 +2,22 @@
 
 This guide provides a reproducible workflow to isolate orchestration divergence using deterministic state paths and runtime metadata.
 
+## State Namespaces
+
+State has exactly three root namespaces. Outside CEL every path is
+root-relative; inside a CEL expression, `state` binds to the root.
+
+| Namespace | Holds | Outside CEL | Inside CEL |
+|---|---|---|---|
+| `input` | Caller-supplied values — CLI `-e`/`--state`, profile inputs, `use.inputs`, REST/scheduler `state` payloads | `input.<name>` | `state.input.<name>` |
+| `prime` | Effect outputs, rooted at the compiled orchestration root | `prime.<name>.value` | `state.prime.<name>.value` |
+| `runtime` | Framework metadata (`last_run`, plugins, persistence, ...) | `runtime.<key>` | `state.runtime.<key>` |
+
+There is no sugar layer — a bare key or a `state.`-prefixed path outside CEL
+is a hard error from `cof check`/`validate()`, not a deprecation warning. If
+you're diagnosing a path that used to resolve and no longer does, start here
+before the patterns below.
+
 ## Workflow
 
 1. Capture run state with CLI:

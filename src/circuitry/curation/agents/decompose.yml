@@ -214,7 +214,7 @@ effects:
                  required: [title]
                  additionalProperties: false
                template: |
-                 Summarize {{article}} as JSON. Return ONLY the JSON object.
+                 Summarize {{input.article}} as JSON. Return ONLY the JSON object.
 
         2) dynamic — a named container. Writes prime.<name>.<child>.value.
            Required: type, name, effects (non-empty list).
@@ -302,6 +302,11 @@ effects:
            Use it only when the steps genuinely cannot be known up front.
 
         === STATE PATHS ===
+        State has exactly three root namespaces: input (caller-supplied), prime
+        (effect outputs), runtime (framework metadata). Every path is root-relative —
+        never write a leading `state.` outside a CEL expression.
+
+        Caller-supplied input, declared or not . input.<name>
         Top-level effect output ............ prime.<name>.value
         Inside a named dynamic ............. prime.<dynamic>.<name>.value
         Named loop, one iteration .......... prime.<loop>.iter_<N>.<name>.value
@@ -310,11 +315,14 @@ effects:
         Named conditional branch effect .... prime.<cond>.<name>.value
         Unnamed loop / conditional ......... prime.<name>.value (merged into parent)
         A field of a JSON/object output .... prime.<name>.value.<field>
-        User-supplied state key ............ {{key}} — no prime. prefix
+        Loop `as` variable (not a namespace) {{<as_name>}} — bare, current pass only
 
-        In templates:  {{prime.step.value}}          (double braces; triple to skip
-                                                      HTML escaping: {{{prime.step.value}}})
-        In CEL exprs:  state.prime.step.value        (state. prefix, no braces)
+        In templates:  {{input.<name>}} for caller input, {{prime.step.value}} for an
+                       effect output (double braces; triple to skip HTML escaping:
+                       {{{prime.step.value}}})
+        In CEL exprs:  state.input.<name>, state.prime.step.value — state binds to
+                       the state root; state.<key> is an error unless <key> is one of
+                       input, prime, runtime.
         CEL supports: == != < <= > >= && || ! and size(x). Nothing else.
 
         === WITHIN A LOOP BODY ===
@@ -344,6 +352,7 @@ effects:
             outputs:
               summary: {type: string, path: prime.summarize.value, description: Result.}
         Input types: string, number, boolean, array, object.
+        Reference a declared input in a template as {{input.article}} — see STATE PATHS.
 
         === OUTPUTS ===
         `interface.outputs` and `use.outputs` take the SAME shape. Write the object
@@ -535,7 +544,7 @@ effects:
                   List each event in this incident report as
                   "<timestamp> - <what happened>", oldest first.
 
-                  {{report}}
+                  {{input.report}}
 
                   Return ONLY a JSON array of strings.
 
@@ -550,7 +559,7 @@ effects:
                   Label each event in this report info, warning, or critical, as
                   "<timestamp> - <label>".
 
-                  {{report}}
+                  {{input.report}}
 
                   Return ONLY a JSON array of strings.
 
@@ -565,10 +574,10 @@ effects:
                   Which of these runbook steps does the report show no evidence of?
 
                   Runbook:
-                  {{runbook}}
+                  {{input.runbook}}
 
                   Report:
-                  {{report}}
+                  {{input.report}}
 
                   Return ONLY a JSON array of the step names.
 
@@ -580,7 +589,7 @@ effects:
                   Name the single most likely cause of this incident in one sentence,
                   then give one sentence of supporting evidence.
 
-                  {{report}}
+                  {{input.report}}
 
           # The merge. Top level, named `merge`, same output shape as the original —
           # it assembles the parts above and does not redo their work.
@@ -643,22 +652,22 @@ effects:
       {{{decompose_prime}}}
 
       === THIS TASK ===
-      Decompose the prompt below into at most {{max_chunks}} chunks (and at
+      Decompose the prompt below into at most {{input.max_chunks}} chunks (and at
       least 2).
 
       The over-complex prompt:
       <<< BEGIN SOURCE PROMPT >>>
-      {{{source_template}}}
+      {{{input.source_template}}}
       <<< END SOURCE PROMPT >>>
 
       The inputs it reads (declare these on the emitted document):
       <<< BEGIN SOURCE INTERFACE >>>
-      {{{source_interface}}}
+      {{{input.source_interface}}}
       <<< END SOURCE INTERFACE >>>
 
       The output shape it produces (give `merge` this same shape):
       <<< BEGIN SOURCE OUTPUT >>>
-      {{{source_output}}}
+      {{{input.source_output}}}
       <<< END SOURCE OUTPUT >>>
 
       Return ONLY a JSON object with exactly these keys:
@@ -667,7 +676,7 @@ effects:
                  together. Never paste the YAML into `say`.
         chunks — one {"name": ..., "job": ...} object per fanned-out unit, in
                  the order they appear in the YAML. `name` is the effect name;
-                 `job` is one sentence. At least 2, at most {{max_chunks}}.
+                 `job` is one sentence. At least 2, at most {{input.max_chunks}}.
         yaml   — the complete emitted orchestration as ONE string. No fences.
 
       No markdown. No text outside the JSON object.
@@ -698,7 +707,7 @@ effects:
     max_iterations: 3
     while:
       mode: cel
-      expr: "state.prime.check.value.ok == false || size(state.prime.plan.value.chunks) > state.max_chunks || size(state.prime.plan.value.chunks) < 2"
+      expr: "state.prime.check.value.ok == false || size(state.prime.plan.value.chunks) > state.input.max_chunks || size(state.prime.plan.value.chunks) < 2"
     body:
       - type: prompt
         name: plan
@@ -737,17 +746,17 @@ effects:
 
           The over-complex prompt you are decomposing:
           <<< BEGIN SOURCE PROMPT >>>
-          {{{source_template}}}
+          {{{input.source_template}}}
           <<< END SOURCE PROMPT >>>
 
           The inputs it reads:
           <<< BEGIN SOURCE INTERFACE >>>
-          {{{source_interface}}}
+          {{{input.source_interface}}}
           <<< END SOURCE INTERFACE >>>
 
           The output shape it produces:
           <<< BEGIN SOURCE OUTPUT >>>
-          {{{source_output}}}
+          {{{input.source_output}}}
           <<< END SOURCE OUTPUT >>>
 
           Rejected orchestration:
@@ -762,7 +771,7 @@ effects:
           The chunks you planned:
           {{{prime.plan.value.chunks}}}
 
-          The budget is at most {{max_chunks}} chunks and at least 2. If the
+          The budget is at most {{input.max_chunks}} chunks and at least 2. If the
           list above is outside that range, re-split the work — merge the
           narrowest chunks into their neighbours to get under the ceiling, or
           split further to get off the floor. Do not pad the list with chunks
@@ -802,7 +811,7 @@ effects:
   - type: if
     if:
       mode: cel
-      expr: "state.prime.check.value.ok == true && size(state.prime.plan.value.chunks) <= state.max_chunks && size(state.prime.plan.value.chunks) >= 2"
+      expr: "state.prime.check.value.ok == true && size(state.prime.plan.value.chunks) <= state.input.max_chunks && size(state.prime.plan.value.chunks) >= 2"
     then:
       - type: tool
         name: done

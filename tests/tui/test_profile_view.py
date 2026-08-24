@@ -53,11 +53,13 @@ FIXTURE: dict[str, Any] = {
         }
     },
     "effects": [
-        {"type": "prompt", "name": "summarize", "template": "{{topic}}"},
+        {"type": "prompt", "name": "summarize", "template": "{{input.topic}}"},
         {
             "type": "reflector",
             "name": "planner",
-            "effects": [{"type": "prompt", "name": "draft", "template": "{{topic}}"}],
+            "effects": [
+                {"type": "prompt", "name": "draft", "template": "{{input.topic}}"}
+            ],
         },
         {
             "type": "conditional",

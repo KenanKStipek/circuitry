@@ -47,7 +47,7 @@ def test_loop_var_reaches_prompts_through_every_nested_container() -> None:
             {
                 "type": "loop",
                 "name": "outer",
-                "each": {"in": "items", "as": "item"},
+                "each": {"in": "input.items", "as": "item"},
                 "body": [
                     {
                         "type": "prompt",
@@ -83,7 +83,7 @@ def test_loop_var_reaches_prompts_through_every_nested_container() -> None:
         ]
     }
 
-    adapter = _run(orch, {"items": [{"name": "alpha"}]})
+    adapter = _run(orch, {"input": {"items": [{"name": "alpha"}]}})
 
     assert adapter.prompts == [
         "DIRECT sees: alpha",
@@ -99,7 +99,7 @@ def test_loop_var_survives_if_wrapping_a_dynamic() -> None:
             {
                 "type": "loop",
                 "name": "outer",
-                "each": {"in": "items", "as": "item"},
+                "each": {"in": "input.items", "as": "item"},
                 "body": [
                     {
                         "type": "if",
@@ -124,7 +124,7 @@ def test_loop_var_survives_if_wrapping_a_dynamic() -> None:
         ]
     }
 
-    adapter = _run(orch, {"items": [{"name": "alpha"}, {"name": "beta"}]})
+    adapter = _run(orch, {"input": {"items": [{"name": "alpha"}, {"name": "beta"}]}})
 
     assert adapter.prompts == ["DEEP sees: alpha #0", "DEEP sees: beta #1"]
 
@@ -137,7 +137,7 @@ def test_loop_var_survives_tree_flow_dynamic_in_loop_body() -> None:
                 "type": "loop",
                 "name": "outer",
                 "flow": "tree",
-                "each": {"in": "items", "as": "item"},
+                "each": {"in": "input.items", "as": "item"},
                 "body": [
                     {
                         "type": "dynamic",
@@ -155,7 +155,7 @@ def test_loop_var_survives_tree_flow_dynamic_in_loop_body() -> None:
         ]
     }
 
-    adapter = _run(orch, {"items": [{"name": "alpha"}, {"name": "beta"}]})
+    adapter = _run(orch, {"input": {"items": [{"name": "alpha"}, {"name": "beta"}]}})
 
     assert sorted(adapter.prompts) == ["sees: alpha", "sees: beta"]
 
@@ -163,7 +163,7 @@ def test_loop_var_survives_tree_flow_dynamic_in_loop_body() -> None:
 def test_nested_dynamic_in_loop_still_sees_root_inputs_and_siblings() -> None:
     """Widening the context must not drop the paths that already resolved.
 
-    ``{{topic}}`` is a root input, ``{{prime.outer.iter_0.first.value}}`` is the
+    ``{{input.topic}}`` is a root input, ``{{prime.outer.iter_0.first.value}}`` is the
     absolute path of a sibling body effect, and ``{{wrap.inner_first.value}}``
     is a sibling *inside* the dynamic — all three worked (or should have) before
     and must keep working.
@@ -173,7 +173,7 @@ def test_nested_dynamic_in_loop_still_sees_root_inputs_and_siblings() -> None:
             {
                 "type": "loop",
                 "name": "outer",
-                "each": {"in": "items", "as": "item"},
+                "each": {"in": "input.items", "as": "item"},
                 "body": [
                     {"type": "prompt", "name": "first", "template": "FIRST"},
                     {
@@ -189,7 +189,7 @@ def test_nested_dynamic_in_loop_still_sees_root_inputs_and_siblings() -> None:
                                 "type": "prompt",
                                 "name": "inner_second",
                                 "template": (
-                                    "{{topic}}|{{item.name}}"
+                                    "{{input.topic}}|{{item.name}}"
                                     "|{{prime.outer.iter_0.first.value}}"
                                     "|{{wrap.inner_first.value}}"
                                 ),
@@ -201,7 +201,9 @@ def test_nested_dynamic_in_loop_still_sees_root_inputs_and_siblings() -> None:
         ]
     }
 
-    adapter = _run(orch, {"items": [{"name": "alpha"}], "topic": "cybernetics"})
+    adapter = _run(
+        orch, {"input": {"items": [{"name": "alpha"}], "topic": "cybernetics"}}
+    )
 
     assert adapter.prompts[-1] == "cybernetics|alpha|FIRST|INNER"
 
@@ -222,7 +224,7 @@ def test_conditional_nested_dynamic_sees_root_context() -> None:
                             {
                                 "type": "prompt",
                                 "name": "deep",
-                                "template": "topic: {{topic}}",
+                                "template": "topic: {{input.topic}}",
                             }
                         ],
                     }
@@ -231,6 +233,6 @@ def test_conditional_nested_dynamic_sees_root_context() -> None:
         ]
     }
 
-    adapter = _run(orch, {"topic": "cybernetics"})
+    adapter = _run(orch, {"input": {"topic": "cybernetics"}})
 
     assert adapter.prompts == ["topic: cybernetics"]
