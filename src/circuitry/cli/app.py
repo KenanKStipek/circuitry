@@ -31,8 +31,10 @@ from ..tui.wizard_host import (
     save_to_file,
     save_to_library,
 )
+from .complexity_config import ComplexitySettings
 from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, ConfigError, resolve_config
 from .doctor import register_doctor
+from .effective_settings import resolve_effective_settings
 from .explain_routing import make_explain_routing_observer
 from .last_run import LAST_RUN_PATH
 from .library_sources import (
@@ -42,7 +44,8 @@ from .library_sources import (
     LibrarySourceError,
     build_registry,
 )
-from .orchestration_loader import serialize_orchestration
+from .orchestration_loader import load_orchestration_file, serialize_orchestration
+from .profiles import ProfileError, ProfileSettings, load_profile
 from .redaction import REDACTED, redact_env_pairs
 from .registry import eject_destination, resolve_bundled, write_ejected
 from .runtime_shim import RunRequest, inspect_orchestration, run, validate
@@ -1179,12 +1182,145 @@ def _detect_backends(cfg: CircuitryConfig) -> set[str]:
     return available
 
 
+def _complexity_field(value: Any, source: str) -> dict[str, Any]:
+    return {"value": value, "source": source}
+
+
+def _complexity_info_dict(
+    complexity: ComplexitySettings, sources: dict[str, str]
+) -> dict[str, Any]:
+    """Machine-readable resolved complexity block, each value annotated with
+    the layer (config/orchestration/profile/cli/default) that supplied it —
+    see `cli.effective_settings.resolve_effective_settings`."""
+    bands = [
+        {**band.as_dict(), "catch_all": band.is_catch_all}
+        for band in complexity.routing.bands
+    ]
+    return {
+        "scoring": {
+            "enabled": _complexity_field(
+                complexity.scoring.enabled,
+                sources.get("complexity.scoring", "default"),
+            ),
+        },
+        "routing": {
+            "enabled": _complexity_field(
+                complexity.routing.enabled,
+                sources.get("complexity.routing", "default"),
+            ),
+            "bands": _complexity_field(
+                bands, sources.get("complexity.routing.bands", "default")
+            ),
+        },
+        "decomposition": {
+            "enabled": _complexity_field(
+                complexity.decomposition.enabled,
+                sources.get("complexity.decomposition", "default"),
+            ),
+            "threshold": _complexity_field(
+                complexity.decomposition.threshold,
+                sources.get("complexity.decomposition.threshold", "default"),
+            ),
+            "max_depth": _complexity_field(
+                complexity.decomposition.max_depth,
+                sources.get("complexity.decomposition.max_depth", "default"),
+            ),
+            "on_failure": _complexity_field(
+                complexity.decomposition.on_failure,
+                sources.get("complexity.decomposition.on_failure", "default"),
+            ),
+        },
+    }
+
+
+def _render_complexity_info(
+    complexity: ComplexitySettings, sources: dict[str, str]
+) -> None:
+    """Human-readable counterpart to `_complexity_info_dict` — the three
+    switches, the routing band table (ordered, catch-all marked), and the
+    decomposition scalars, each with its winning source."""
+    console.print()
+    switch_table = Table(title="Complexity", show_header=True, header_style="bold cyan")
+    switch_table.add_column("Switch", style="bold")
+    switch_table.add_column("State", justify="center")
+    switch_table.add_column("Source")
+    for label, key, enabled in (
+        ("Scoring", "complexity.scoring", complexity.scoring.enabled),
+        ("Routing", "complexity.routing", complexity.routing.enabled),
+        ("Decomposition", "complexity.decomposition", complexity.decomposition.enabled),
+    ):
+        state = "[green]on[/green]" if enabled else "[dim]off[/dim]"
+        switch_table.add_row(label, state, sources.get(key, "default"))
+    console.print(switch_table)
+
+    if complexity.routing.bands:
+        console.print()
+        bands_source = sources.get("complexity.routing.bands", "default")
+        band_table = Table(
+            title=f"Routing bands (source: {bands_source})",
+            show_header=True,
+            header_style="bold cyan",
+        )
+        band_table.add_column("#", justify="right")
+        band_table.add_column("Name")
+        band_table.add_column("Max", justify="right")
+        band_table.add_column("Model")
+        for index, band in enumerate(complexity.routing.bands, start=1):
+            upper = "[bold]— (catch-all)[/bold]" if band.is_catch_all else f"{band.max:g}"
+            band_table.add_row(str(index), band.name or "—", upper, band.model)
+        console.print(band_table)
+
+    console.print()
+    decomp_table = Table(title="Decomposition", show_header=True, header_style="bold cyan")
+    decomp_table.add_column("Setting", style="bold")
+    decomp_table.add_column("Value")
+    decomp_table.add_column("Source")
+    for label, key, value in (
+        (
+            "Threshold",
+            "complexity.decomposition.threshold",
+            f"{complexity.decomposition.threshold:g}",
+        ),
+        (
+            "Max depth",
+            "complexity.decomposition.max_depth",
+            str(complexity.decomposition.max_depth),
+        ),
+        (
+            "On failure",
+            "complexity.decomposition.on_failure",
+            complexity.decomposition.on_failure,
+        ),
+    ):
+        decomp_table.add_row(label, value, sources.get(key, "default"))
+    console.print(decomp_table)
+
+
 @app.command("info", help="Show details for a bundled orchestration.")
 def info_cmd(
     name: str = typer.Argument(..., help="Name of the orchestration."),
     json_out: bool = typer.Option(False, "--json", help="Output machine-readable JSON only."),
     config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config JSON (or use CIRCUITRY_CONFIG)."
+    ),
+    profile: str | None = typer.Option(
+        None, "--profile",
+        help=(
+            "Named profile to layer in when resolving the complexity block, "
+            "as `cof run --profile` would (see `cof run --help`)."
+        ),
+    ),
+    scoring: bool | None = typer.Option(
+        None, "--scoring/--no-scoring",
+        help="Preview runtime.complexity.scoring forced on/off, as `cof run --scoring` would resolve it.",
+    ),
+    routing: bool | None = typer.Option(
+        None, "--routing/--no-routing",
+        help="Preview runtime.complexity.routing forced on/off, as `cof run --routing` would resolve it.",
+    ),
+    decompose: bool | None = typer.Option(
+        None, "--decompose/--no-decompose",
+        help="Preview runtime.complexity.decomposition forced on/off, as `cof run --decompose` would resolve it.",
     ),
 ):
     registry = _library_registry(config)
@@ -1198,7 +1334,34 @@ def info_cmd(
     show_source = registry.is_multi_source
     entry = found.as_dict(include_source=show_source)
 
+    bundled_path = found.path
+    orch: dict[str, Any] = {}
+    if bundled_path and bundled_path.exists():
+        orch = load_orchestration_file(bundled_path)
+
+    cfg = resolve_config(explicit_path=config)
+    try:
+        profile_settings: ProfileSettings | None = None
+        if profile:
+            profile_settings = load_profile(
+                name=profile,
+                orchestration_path=bundled_path or Path.cwd(),
+                orch=orch,
+            )
+        effective = resolve_effective_settings(
+            cfg=cfg,
+            orch=orch,
+            cli_scoring=scoring,
+            cli_routing=routing,
+            cli_decompose=decompose,
+            profile=profile_settings,
+        )
+    except (ProfileError, ValueError) as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
     if json_out:
+        entry["complexity"] = _complexity_info_dict(effective.complexity, effective.sources)
         console.print_json(json.dumps(entry, ensure_ascii=False))
         return
 
@@ -1229,8 +1392,9 @@ def info_cmd(
         console.print("[bold]Example:[/bold]")
         console.print(f"  [cyan]{example}[/cyan]")
 
+    _render_complexity_info(effective.complexity, effective.sources)
+
     # Show the actual orchestration YAML source
-    bundled_path = found.path
     if bundled_path and bundled_path.exists():
         console.print()
         source = bundled_path.read_text(encoding="utf-8").strip()

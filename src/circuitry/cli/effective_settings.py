@@ -352,3 +352,25 @@ def _record_complexity_sources(
             sources[f"complexity.{key}"] = (
                 sources["complexity"] if key in winner else "default"
             )
+
+    # Fine-grained provenance for the values that have no CLI override of
+    # their own — the band table and the three decomposition scalars. Each is
+    # sourced from whichever layer's sub-block actually defines that key: the
+    # block winner can define `routing.enabled` without `routing.bands` (or
+    # vice versa), so this can't just reuse `sources["complexity.routing"]`.
+    def _field_source(sub_key: str, field_key: str) -> str:
+        sub = winner.get(sub_key)
+        if isinstance(sub, dict) and sub.get(field_key) is not None:
+            return sources["complexity"]
+        return "default"
+
+    sources["complexity.routing.bands"] = _field_source("routing", "bands")
+    sources["complexity.decomposition.threshold"] = _field_source(
+        "decomposition", "threshold"
+    )
+    sources["complexity.decomposition.max_depth"] = _field_source(
+        "decomposition", "max_depth"
+    )
+    sources["complexity.decomposition.on_failure"] = _field_source(
+        "decomposition", "on_failure"
+    )
