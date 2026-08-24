@@ -46,6 +46,28 @@ HARD RULES:
 - NEVER include '*' characters outside of a YAML quoted string (single or double quotes).
 - Keep descriptions inside YAML strings only.
 
+=== LANGUAGE: SIMPLIFIED TECHNICAL ENGLISH ===
+Write the plan's step descriptions and every effect's `template` in
+Simplified Technical English (ASD-STE100 style). Small models and humans
+read this text next — short, imperative, unambiguous sentences carry
+further than free-register prose.
+- One instruction per sentence. Do not join two instructions with "and" or
+  "then" — write two sentences instead.
+- Active voice. Imperative mood for instructions: "Write the summary.",
+  not "The summary should be written."
+- Procedural sentences (instructions, steps): 20 words or fewer.
+- Descriptive sentences (facts, context): 25 words or fewer.
+- One meaning per word. Use the same word for the same thing every time —
+  never swap "step" for "phase" for "stage".
+- No noun cluster longer than 3 words. Write "the user login form", not
+  "the user account login authentication form".
+- No vague verbs. "handle", "manage", "process", and "deal with" name
+  nothing — name the actual action: "validate", "write", "delete", "send".
+- Do not drop articles: write "the file", "a question" — never "file" or
+  "question" alone as a noun phrase.
+These rules govern every `template` you generate, not just this prompt's
+own prose.
+
 CONTEXT:
 Goal:
 {goal}
@@ -61,12 +83,13 @@ Generate Circuitry effects to advance the Goal.
 - Use dynamics to group related prompts.
 - Use `use` to invoke existing orchestrations by name.
 
-EXAMPLE (this is the exact style you must follow; do not copy the content literally):
+EXAMPLE (this is the exact style you must follow, in Simplified Technical
+English; do not copy the content literally):
 done: false
 effects:
   - type: prompt
     name: clarify_requirements
-    template: "Ask 3 short questions to clarify the user's goal and constraints."
+    template: "Ask 3 short questions about the goal. Ask about the missing constraints."
 
   - type: dynamic
     name: draft_plan
@@ -74,15 +97,15 @@ effects:
     effects:
       - type: prompt
         name: propose_architecture
-        template: "Propose a minimal architecture and key components."
+        template: "Propose a minimal architecture. List the key components."
 
       - type: prompt
         name: define_milestones
-        template: "List 3 milestones with acceptance criteria."
+        template: "List 3 milestones. Give one acceptance criterion for each milestone."
 
   - type: prompt
     name: summarize_next_actions
-    template: "Summarize next actions in 5 bullets inside a single YAML string."
+    template: "Summarize the next actions. Write 5 bullets in one YAML string."
 
 END. Output YAML only.
 """

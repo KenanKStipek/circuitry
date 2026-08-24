@@ -371,6 +371,8 @@ Rules of the form:
 
 A planning-time effect. Instead of executing a fixed set of effects, the reflector reads state, generates a Dynamic plan, and executes it. It can run multiple planning cycles (`max_iterations`). Used for adaptive, open-ended tasks where the number of steps is not known ahead of time.
 
+The built-in prime constrains the plan's step descriptions and every generated effect's `template` to ASD-STE100 Simplified Technical English — short, imperative, unambiguous sentences — so generated steps read consistently for the small models and humans that consume them next. A custom `prime_template` opts out of this constraint; it is the author's choice to keep it or not.
+
 **State output path:** `prime.<name>.plan.*` (runtime-generated keys)
 
 | Field | Type | Required | Default | Constraints |
@@ -385,7 +387,7 @@ A planning-time effect. Instead of executing a fixed set of effects, the reflect
 | `stop_on_done` | boolean | no | `true` | Stop when plan signals completion |
 | `max_effects` | integer | no | `8` | Max effects per planning cycle |
 | `max_steps` | integer | no | `8` | Alias for `max_effects` |
-| `prime_template` | string | no | built-in | Custom prime template for planning |
+| `prime_template` | string | no | built-in | Custom prime template for planning. The built-in prime enforces ASD-STE100 Simplified Technical English on generated plan text; supplying your own opts out |
 
 **Example:**
 ```yaml
