@@ -120,16 +120,16 @@ effects:
           You are interpreting a design conversation about a Circuitry
           orchestration that is being built one turn at a time.
 
-          Seed goal: "{{goal}}"
+          Seed goal: "{{input.goal}}"
 
           Conversation so far (oldest first; empty on the first turn):
-          {{#conversation}}
+          {{#input.conversation}}
           [{{role}}] {{{content}}}
-          {{/conversation}}
+          {{/input.conversation}}
 
           Current draft (empty if none exists yet):
           <<< BEGIN DRAFT >>>
-          {{{draft}}}
+          {{{input.draft}}}
           <<< END DRAFT >>>
 
           Decide what is known and what is missing:
@@ -155,12 +155,12 @@ effects:
           template: |
             A wizard is helping a human build a Circuitry orchestration.
 
-            Goal: "{{goal}}"
+            Goal: "{{input.goal}}"
             Interpreted intent: {{prime.turn.interpret.value.intent}}
             Ready to draft: {{prime.turn.interpret.value.ready_to_draft}}
             Reason: {{prime.turn.interpret.value.reason}}
             Open unknowns: {{prime.turn.interpret.value.unknowns}}
-            Turns so far: {{#conversation}}1 {{/conversation}}
+            Turns so far: {{#input.conversation}}1 {{/input.conversation}}
 
             Should the wizard ask ONE clarifying question instead of producing a
             draft this turn?
@@ -192,14 +192,14 @@ effects:
               You are the Circuitry orchestration wizard, mid-conversation with
               a human. You have decided to ask ONE clarifying question.
 
-              Goal: "{{goal}}"
+              Goal: "{{input.goal}}"
               Intent: {{prime.turn.interpret.value.intent}}
               Open unknowns: {{prime.turn.interpret.value.unknowns}}
 
               Conversation so far:
-              {{#conversation}}
+              {{#input.conversation}}
               [{{role}}] {{{content}}}
-              {{/conversation}}
+              {{/input.conversation}}
 
               Ask the single highest-leverage question — the one whose answer
               unblocks the most design decisions. Be brief and concrete, offer a
@@ -443,19 +443,19 @@ effects:
               === THIS TURN ===
               You are mid-conversation with a human. Produce the orchestration.
 
-              Goal: "{{goal}}"
+              Goal: "{{input.goal}}"
               Intent: {{prime.turn.interpret.value.intent}}
               Open unknowns (assume a sensible default for each, and say which
               defaults you assumed): {{prime.turn.interpret.value.unknowns}}
 
               Conversation so far:
-              {{#conversation}}
+              {{#input.conversation}}
               [{{role}}] {{{content}}}
-              {{/conversation}}
+              {{/input.conversation}}
 
               Current draft to revise (empty means write it from scratch):
               <<< BEGIN DRAFT >>>
-              {{{draft}}}
+              {{{input.draft}}}
               <<< END DRAFT >>>
 
               Return ONLY a JSON object with exactly these keys:
@@ -515,7 +515,7 @@ effects:
                   === REPAIR TASK ===
                   The orchestration below was rejected by the validator. Fix it.
 
-                  Goal: "{{goal}}"
+                  Goal: "{{input.goal}}"
                   Intent: {{prime.turn.interpret.value.intent}}
 
                   Rejected YAML:

@@ -26,7 +26,7 @@ effects:
     name: summarize
     template: |
       Write a single declarative sentence that captures the central claim of the text below.
-      Aim for {{max_words}} words or fewer. Output only the sentence — no preamble, no quotes, no markdown.
+      Aim for {{input.max_words}} words or fewer. Output only the sentence — no preamble, no quotes, no markdown.
 
       Text:
-      {{text}}
+      {{input.text}}

@@ -29,4 +29,4 @@ example: |
   effects:
     - type: prompt
       name: summarize
-      template: "Summarize in {{max_words}} words: {{article_text}}"
+      template: "Summarize in {{input.max_words}} words: {{input.article_text}}"

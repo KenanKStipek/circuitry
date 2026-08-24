@@ -43,7 +43,7 @@ effects:
         name: summary_step
         ref: utilities/summarize
         inputs:
-          text: "{{transcript}}"
+          text: "{{input.transcript}}"
           max_words: 25
         outputs:
           summary: {path: prime.summarize.value}
@@ -52,7 +52,7 @@ effects:
         name: attendees_step
         ref: utilities/extract
         inputs:
-          text: "{{transcript}}"
+          text: "{{input.transcript}}"
           fields: [attendees]
         outputs:
           extracted: {path: prime.extract.value}
@@ -122,4 +122,4 @@ effects:
       If neither array has any entries, return both as empty arrays.
 
       Transcript:
-      {{transcript}}
+      {{input.transcript}}

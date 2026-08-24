@@ -29,9 +29,9 @@ effects:
       The output MUST be one of the keys below verbatim.
 
       Routes:
-      {{#routes}}
+      {{#input.routes}}
       - {{key}}: {{description}}
-      {{/routes}}
+      {{/input.routes}}
 
       Content:
-      {{content}}
+      {{input.content}}

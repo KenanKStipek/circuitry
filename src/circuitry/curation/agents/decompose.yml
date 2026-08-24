@@ -643,22 +643,22 @@ effects:
       {{{decompose_prime}}}
 
       === THIS TASK ===
-      Decompose the prompt below into at most {{max_chunks}} chunks (and at
+      Decompose the prompt below into at most {{input.max_chunks}} chunks (and at
       least 2).
 
       The over-complex prompt:
       <<< BEGIN SOURCE PROMPT >>>
-      {{{source_template}}}
+      {{{input.source_template}}}
       <<< END SOURCE PROMPT >>>
 
       The inputs it reads (declare these on the emitted document):
       <<< BEGIN SOURCE INTERFACE >>>
-      {{{source_interface}}}
+      {{{input.source_interface}}}
       <<< END SOURCE INTERFACE >>>
 
       The output shape it produces (give `merge` this same shape):
       <<< BEGIN SOURCE OUTPUT >>>
-      {{{source_output}}}
+      {{{input.source_output}}}
       <<< END SOURCE OUTPUT >>>
 
       Return ONLY a JSON object with exactly these keys:
@@ -667,7 +667,7 @@ effects:
                  together. Never paste the YAML into `say`.
         chunks — one {"name": ..., "job": ...} object per fanned-out unit, in
                  the order they appear in the YAML. `name` is the effect name;
-                 `job` is one sentence. At least 2, at most {{max_chunks}}.
+                 `job` is one sentence. At least 2, at most {{input.max_chunks}}.
         yaml   — the complete emitted orchestration as ONE string. No fences.
 
       No markdown. No text outside the JSON object.
@@ -698,7 +698,7 @@ effects:
     max_iterations: 3
     while:
       mode: cel
-      expr: "state.prime.check.value.ok == false || size(state.prime.plan.value.chunks) > state.max_chunks || size(state.prime.plan.value.chunks) < 2"
+      expr: "state.prime.check.value.ok == false || size(state.prime.plan.value.chunks) > state.input.max_chunks || size(state.prime.plan.value.chunks) < 2"
     body:
       - type: prompt
         name: plan
@@ -737,17 +737,17 @@ effects:
 
           The over-complex prompt you are decomposing:
           <<< BEGIN SOURCE PROMPT >>>
-          {{{source_template}}}
+          {{{input.source_template}}}
           <<< END SOURCE PROMPT >>>
 
           The inputs it reads:
           <<< BEGIN SOURCE INTERFACE >>>
-          {{{source_interface}}}
+          {{{input.source_interface}}}
           <<< END SOURCE INTERFACE >>>
 
           The output shape it produces:
           <<< BEGIN SOURCE OUTPUT >>>
-          {{{source_output}}}
+          {{{input.source_output}}}
           <<< END SOURCE OUTPUT >>>
 
           Rejected orchestration:
@@ -762,7 +762,7 @@ effects:
           The chunks you planned:
           {{{prime.plan.value.chunks}}}
 
-          The budget is at most {{max_chunks}} chunks and at least 2. If the
+          The budget is at most {{input.max_chunks}} chunks and at least 2. If the
           list above is outside that range, re-split the work — merge the
           narrowest chunks into their neighbours to get under the ceiling, or
           split further to get off the floor. Do not pad the list with chunks
@@ -802,7 +802,7 @@ effects:
   - type: if
     if:
       mode: cel
-      expr: "state.prime.check.value.ok == true && size(state.prime.plan.value.chunks) <= state.max_chunks && size(state.prime.plan.value.chunks) >= 2"
+      expr: "state.prime.check.value.ok == true && size(state.prime.plan.value.chunks) <= state.input.max_chunks && size(state.prime.plan.value.chunks) >= 2"
     then:
       - type: tool
         name: done
