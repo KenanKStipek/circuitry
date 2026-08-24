@@ -21,9 +21,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from circuitry.adapters.base import GenerateResult
 from circuitry.core.compiler import compile_orchestration
@@ -316,6 +318,19 @@ def test_last_after_the_loop_does_not_warn() -> None:
         _lint_loop(tail_template="{{prime.review.last.refine.value.refined}}")
         == []
     )
+
+
+def test_critique_refine_loop_final_reads_the_last_refinement() -> None:
+    """The #128 workaround is gone: `final` consumes the LAST pass's
+    refinement via `last`, not the first via a pinned `iter_0`."""
+    pattern = Path("src/circuitry/curation/patterns/critique_refine_loop.yml")
+    text = pattern.read_text(encoding="utf-8")
+    doc = yaml.safe_load(text)
+    final = next(e for e in doc["effects"] if e.get("name") == "final")
+    assert "{{prime.review.last.refine_step.value.refined}}" in final["template"]
+    assert "iter_0" not in final["template"]
+    # And the spelling is legal where it sits — post-loop use lints clean.
+    assert lint_orchestration(doc) == []
 
 
 def test_last_of_some_other_finished_loop_does_not_warn() -> None:
