@@ -43,7 +43,7 @@ effects:
           items: { type: string }
           description: What is already working — preserve these in any revision.
     template: |
-      Critique the content below against these criteria: {{criteria}}.
+      Critique the content below against these criteria: {{input.criteria}}.
 
       Output JSON with this exact shape (no extra keys, no markdown):
       {
@@ -56,4 +56,4 @@ effects:
       Strengths are what a reviser must preserve.
 
       Content:
-      {{content}}
+      {{input.content}}

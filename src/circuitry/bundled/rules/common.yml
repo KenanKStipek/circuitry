@@ -53,11 +53,22 @@ outputs:
   also_accepted: "The bare string form (summary: prime.summarize.value) is sugar for {path: ...} and works in both contexts. Write the object form."
 
 state_paths:
+  namespaces:
+    input: "Caller-supplied values — CLI -e/--state, profile inputs, use.inputs, REST/scheduler state payloads. input.<name> is the correct spelling whether or not the name is declared in interface.inputs."
+    prime: "Effect outputs, rooted at the compiled orchestration root."
+    runtime: "Framework metadata (last_run, plugins, persistence, ...)."
+  root_rule: "State has exactly three root namespaces: input, prime, runtime. Every path outside CEL is root-relative — it starts with input., prime., or runtime. There is no sugar layer: a bare key (key_name) or a state.-prefixed spelling (state.key_name) is a hard error from cof check / validate(), not a deprecation warning."
+  cel_binding: "Inside a CEL expression, state binds to the state root: state.input.<name>, state.prime.<effect_name>.value, state.runtime.<key>. state.<key> where <key> is not one of the three namespaces is a hard error."
+  hard_errors:
+    - "each.in not rooted at input./prime./runtime. — bare keys and state.-prefixed spellings both fail cof check, with the canonical spelling named in the error."
+    - "CEL state.<key> where <key> is not input, prime, or runtime — fails cof check."
+    - "A bare {{name}} template ref that matches a name declared in the document's own interface.inputs — fails cof check, naming {{input.<name>}} as the fix. Undeclared bare keys (loop as vars, _loop_index, sibling shorthand inside a loop body) are unaffected and stay legal."
   in_templates:
-    input_key: "{{key_name}}"
+    caller_input: "{{input.<name>}}"
     top_level_output: "{{prime.<effect_name>.value}}"
     inside_dynamic: "{{prime.<dynamic_name>.<child_name>.value}}"
     loop_iteration: "{{prime.<loop_name>.iter_N.<body_name>.value}}"
+    loop_last: "{{prime.<loop_name>.last.<body_name>.value}} — the final completed pass, after the loop"
     loop_collected: "{{prime.<loop_name>.collected.value}}"
   in_cel_expressions:
     prefix: "state."

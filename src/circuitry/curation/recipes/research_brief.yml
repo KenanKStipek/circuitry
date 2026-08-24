@@ -41,7 +41,7 @@ effects:
     name: plan
     ref: utilities/decompose
     inputs:
-      task: "{{topic}}"
+      task: "{{input.topic}}"
       max_steps: 4
     outputs:
       steps: {path: prime.decompose.value}
@@ -68,11 +68,11 @@ effects:
   - type: prompt
     name: brief
     template: |
-      Synthesise the answers below into a single paragraph (4–6 sentences) addressed to: {{audience}}.
+      Synthesise the answers below into a single paragraph (4–6 sentences) addressed to: {{input.audience}}.
       Order ideas logically, not in the order the answers were given. Resolve any contradictions explicitly.
       Do not output headings, lists, or "In summary"-style throat-clearing.
 
-      Topic: {{topic}}
+      Topic: {{input.topic}}
 
       Sub-question answers:
       {{prime.gather.collected.value}}

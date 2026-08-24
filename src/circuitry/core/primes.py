@@ -156,7 +156,7 @@ model:     OPTIONAL. Omit — it comes from the user's config.json.
          required: [title]
          additionalProperties: false
        template: |
-         Summarize {{article}} as JSON. Return ONLY the JSON object.
+         Summarize {{input.article}} as JSON. Return ONLY the JSON object.
 
 2) dynamic — a named container. Writes prime.<name>.<child>.value.
    Required: type, name, effects (non-empty list).
@@ -195,7 +195,9 @@ model:     OPTIONAL. Omit — it comes from the user's config.json.
    - while is a condition block (mode: cel | model), checked before each pass.
    - collect: <body effect name> aggregates that effect's .value across
      iterations into prime.<loop_name>.collected.value. Requires a named loop.
-   - A NAMED loop writes each pass under prime.<loop_name>.iter_<N>.<child>.value.
+   - A NAMED loop writes each pass under prime.<loop_name>.iter_<N>.<child>.value,
+     and, once it completes, the final completed pass at
+     prime.<loop_name>.last.<child>.value — use `last` instead of guessing N.
      An UNNAMED loop writes body effects straight into the parent scope, so each
      pass OVERWRITES the previous one at a stable path.
    - INSIDE the body (and inside a while condition), write prime.<step>.value to
@@ -244,34 +246,46 @@ model:     OPTIONAL. Omit — it comes from the user's config.json.
    Use it only when the steps genuinely cannot be known up front.
 
 === STATE PATHS ===
+State has exactly three root namespaces: input (caller-supplied), prime
+(effect outputs), runtime (framework metadata). Every path is root-relative —
+never write a leading `state.` outside a CEL expression.
+
+Caller-supplied input, declared or not . input.<name>
 Top-level effect output ............ prime.<name>.value
 Inside a named dynamic ............. prime.<dynamic>.<name>.value
 Named loop, one iteration .......... prime.<loop>.iter_<N>.<name>.value
+Named loop, final pass ............. prime.<loop>.last.<name>.value
 Named loop, collected .............. prime.<loop>.collected.value
 Loop body, a step in THIS pass ..... prime.<name>.value (see WITHIN A LOOP BODY)
 Named conditional branch effect .... prime.<cond>.<name>.value
 Unnamed loop / conditional ......... prime.<name>.value (merged into parent)
 A field of a JSON/object output .... prime.<name>.value.<field>
-User-supplied state key ............ {{key}} — no prime. prefix
+Loop `as` variable (not a namespace) {{<as_name>}} — bare, current pass only
 
-In templates:  {{prime.step.value}}          (double braces; triple to skip
-                                              HTML escaping: {{{prime.step.value}}})
-In CEL exprs:  state.prime.step.value        (state. prefix, no braces)
+In templates:  {{input.<name>}} for caller input, {{prime.step.value}} for an
+               effect output (double braces; triple to skip HTML escaping:
+               {{{prime.step.value}}})
+In CEL exprs:  state.input.<name>, state.prime.step.value — state binds to
+               the state root; state.<key> is an error unless <key> is one of
+               input, prime, runtime.
 CEL supports: == != < <= > >= && || ! and size(x). Nothing else.
 
 === WITHIN A LOOP BODY ===
-Three different questions, three different paths. Do not mix them up.
+Four different questions, four different paths. Do not mix them up.
   Read a step in the CURRENT pass ... prime.<step>.value        (in the body)
   Read one SPECIFIC past pass ...... prime.<loop>.iter_<N>.<step>.value (AFTER
                                      the loop only — inside it, N is fixed and
                                      every pass reads pass N's stale output)
+  Read the FINAL pass .............. prime.<loop>.last.<step>.value (AFTER the
+                                     loop only — the last pass that completed;
+                                     works for while loops where N is unknowable)
   Read ALL passes after the loop ... prime.<loop>.collected.value (needs collect:)
 
 prime.<step>.value inside a body means "the step named <step> in this pass",
 whether the loop is named or not, chain or tree, and in the while condition
 too. It shadows an outer effect of the same name for the length of the body.
 prime.<loop>.<step>.value is NOT a thing — prime.<loop> holds iter_<N>,
-collected and meta, never body step names.
+last, collected and meta, never body step names.
 
 An effect may only read paths written by an effect that runs BEFORE it in
 chain order. In a tree-flow dynamic, siblings CANNOT read each other at all.
@@ -286,6 +300,7 @@ Declare what the orchestration takes and returns so `use` can wire it up:
     outputs:
       summary: {type: string, path: prime.summarize.value, description: Result.}
 Input types: string, number, boolean, array, object.
+Reference a declared input in a template as {{input.article}} — see STATE PATHS.
 
 === OUTPUTS ===
 `interface.outputs` and `use.outputs` take the SAME shape. Write the object
@@ -489,7 +504,7 @@ effects:
           List each event in this incident report as
           "<timestamp> - <what happened>", oldest first.
 
-          {{report}}
+          {{input.report}}
 
           Return ONLY a JSON array of strings.
 
@@ -504,7 +519,7 @@ effects:
           Label each event in this report info, warning, or critical, as
           "<timestamp> - <label>".
 
-          {{report}}
+          {{input.report}}
 
           Return ONLY a JSON array of strings.
 
@@ -519,10 +534,10 @@ effects:
           Which of these runbook steps does the report show no evidence of?
 
           Runbook:
-          {{runbook}}
+          {{input.runbook}}
 
           Report:
-          {{report}}
+          {{input.report}}
 
           Return ONLY a JSON array of the step names.
 
@@ -534,7 +549,7 @@ effects:
           Name the single most likely cause of this incident in one sentence,
           then give one sentence of supporting evidence.
 
-          {{report}}
+          {{input.report}}
 
   # The merge. Top level, named `merge`, same output shape as the original —
   # it assembles the parts above and does not redo their work.

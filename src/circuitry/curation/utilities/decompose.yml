@@ -36,6 +36,6 @@ effects:
       - can be executed independently of subsequent subtasks
       - depends only on subtasks that come before it
 
-      Output a JSON array of strings only. No preamble. No more than {{max_steps}} subtasks.
+      Output a JSON array of strings only. No preamble. No more than {{input.max_steps}} subtasks.
 
-      Task: {{task}}
+      Task: {{input.task}}

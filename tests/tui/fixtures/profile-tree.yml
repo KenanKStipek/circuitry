@@ -12,13 +12,13 @@ interface:
 effects:
   - type: prompt
     name: summarize
-    template: "{{topic}}"
+    template: "{{input.topic}}"
   - type: reflector
     name: planner
     effects:
       - type: prompt
         name: draft
-        template: "{{topic}}"
+        template: "{{input.topic}}"
   - type: conditional
     name: gate
     if:
@@ -27,4 +27,4 @@ effects:
     then:
       - type: prompt
         name: deep
-        template: "go deeper on {{topic}}"
+        template: "go deeper on {{input.topic}}"

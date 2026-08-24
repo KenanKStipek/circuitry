@@ -227,7 +227,7 @@ def test_use_runtime_state_isolation(tmp_path: Path) -> None:
 
 def test_use_runtime_input_mapping(tmp_path: Path) -> None:
     """Input values with Mustache templates are rendered against parent context."""
-    child_orch = {"effects": [{"type": "prompt", "name": "greet", "template": "Hello {{who}}"}]}
+    child_orch = {"effects": [{"type": "prompt", "name": "greet", "template": "Hello {{input.who}}"}]}
     child_path = _write_orch(tmp_path, "child.yml", child_orch)
 
     defn = UseDefinition(

@@ -154,7 +154,7 @@ effects:
     name: critique
     ref: utilities/critique
     inputs:
-      content: "{{document}}"
+      content: "{{input.document}}"
       criteria: "clarity"
     outputs:
       critique: prime.critique.value
@@ -185,7 +185,7 @@ def _chain_root(tmp_path: Path) -> Path:
                     "type": "use",
                     "name": "hub_step",
                     "ref": "hub:pipeline",
-                    "inputs": {"document": "{{document}}"},
+                    "inputs": {"document": "{{input.document}}"},
                     "outputs": {"critique": "prime.critique.value.critique"},
                 }
             ]

@@ -46,9 +46,9 @@ effects:
       The label MUST appear in the allowed list verbatim — do not invent new labels.
 
       Allowed labels:
-      {{#labels}}
+      {{#input.labels}}
       - {{.}}
-      {{/labels}}
+      {{/input.labels}}
 
       Content:
-      {{content}}
+      {{input.content}}

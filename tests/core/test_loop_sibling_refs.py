@@ -78,7 +78,7 @@ def _chained_loop(
     loop: dict[str, Any] = {
         "type": "loop",
         "flow": flow,
-        "each": {"in": "items", "as": "item"},
+        "each": {"in": "input.items", "as": "item"},
         "body": [
             {"type": "prompt", "name": "first", "template": "FIRST {{item}}"},
             {"type": "prompt", "name": "second", "template": template},
@@ -110,7 +110,7 @@ def test_body_step_reads_its_sibling_in_the_same_pass(
     """
     adapter, _ = _run(
         _chained_loop(name=loop_name, flow=flow),
-        {"items": ["alpha", "beta"]},
+        {"input": {"items": ["alpha", "beta"]}},
     )
 
     rendered = sorted(_probes(adapter))
@@ -124,7 +124,7 @@ def test_each_pass_reads_its_own_output_not_the_first_ones() -> None:
     """Iteration N reads iteration N — the whole point of the scope chain."""
     adapter, _ = _run(
         _chained_loop(name="outer"),
-        {"items": ["alpha", "beta", "gamma"]},
+        {"input": {"items": ["alpha", "beta", "gamma"]}},
     )
 
     assert [p.split("]")[0] for p in _probes(adapter)] == [
@@ -142,7 +142,7 @@ def test_loop_qualified_sibling_path_still_does_not_resolve() -> None:
     ``iter_<N>`` namespace and make one path mean two things. Authors get a
     validation warning pointing at the canonical form instead.
     """
-    adapter, _ = _run(_chained_loop(name="outer"), {"items": ["alpha"]})
+    adapter, _ = _run(_chained_loop(name="outer"), {"input": {"items": ["alpha"]}})
 
     assert "loopname=[]" in _probes(adapter)[0]
 
@@ -154,7 +154,9 @@ def test_fixed_iteration_path_inside_a_body_is_stale_not_empty() -> None:
     visible; plausible-but-wrong is not — which is why the warning matters
     more than the grammar change.
     """
-    adapter, _ = _run(_chained_loop(name="outer"), {"items": ["alpha", "beta"]})
+    adapter, _ = _run(
+        _chained_loop(name="outer"), {"input": {"items": ["alpha", "beta"]}}
+    )
 
     first, second = _probes(adapter)
     assert "iter0=[FIRST alpha]" in first
@@ -174,13 +176,13 @@ def test_scope_chain_falls_through_to_enclosing_scope_and_root() -> None:
             {
                 "type": "loop",
                 "name": "outer",
-                "each": {"in": "items", "as": "item"},
+                "each": {"in": "input.items", "as": "item"},
                 "body": [
                     {
                         "type": "prompt",
                         "name": "probe",
                         "template": (
-                            "root=[{{topic}}] "
+                            "root=[{{input.topic}}] "
                             "outer=[{{prime.before.value}}] "
                             "item=[{{item}}] "
                             "idx=[{{_loop_index}}]"
@@ -191,7 +193,7 @@ def test_scope_chain_falls_through_to_enclosing_scope_and_root() -> None:
         ]
     }
 
-    adapter, _ = _run(orch, {"items": ["alpha"], "topic": "cybernetics"})
+    adapter, _ = _run(orch, {"input": {"items": ["alpha"], "topic": "cybernetics"}})
 
     assert adapter.prompts[-1] == (
         "root=[cybernetics] outer=[BEFORE] item=[alpha] idx=[0]"
@@ -206,7 +208,7 @@ def test_body_step_shadows_an_enclosing_effect_of_the_same_name() -> None:
             {
                 "type": "loop",
                 "name": "outer",
-                "each": {"in": "items", "as": "item"},
+                "each": {"in": "input.items", "as": "item"},
                 "body": [
                     {"type": "prompt", "name": "note", "template": "INNER"},
                     {
@@ -220,7 +222,7 @@ def test_body_step_shadows_an_enclosing_effect_of_the_same_name() -> None:
         ]
     }
 
-    adapter, _ = _run(orch, {"items": ["alpha"]})
+    adapter, _ = _run(orch, {"input": {"items": ["alpha"]}})
 
     assert "sees=[INNER]" in adapter.prompts[-2]
     assert adapter.prompts[-1] == "after=[OUTER]"
@@ -231,7 +233,7 @@ def test_collect_still_aggregates_a_chained_body() -> None:
     orch = _chained_loop(name="outer")
     orch["effects"][0]["collect"] = "second"
 
-    _, state = _run(orch, {"items": ["alpha", "beta"]})
+    _, state = _run(orch, {"input": {"items": ["alpha", "beta"]}})
 
     collected = state["prime"]["outer"]["collected"]["value"]
     assert len(collected) == 2
@@ -246,7 +248,7 @@ def test_disabled_body_step_is_visible_to_later_siblings() -> None:
             {
                 "type": "loop",
                 "name": "outer",
-                "each": {"in": "items", "as": "item"},
+                "each": {"in": "input.items", "as": "item"},
                 "body": [
                     {"type": "prompt", "name": "skipped", "template": "NEVER"},
                     {
@@ -261,7 +263,7 @@ def test_disabled_body_step_is_visible_to_later_siblings() -> None:
 
     adapter, state = _run(
         orch,
-        {"items": ["alpha"]},
+        {"input": {"items": ["alpha"]}},
         overrides={"outer.skipped": {"enabled": False}},
     )
 
@@ -296,7 +298,7 @@ def test_disabled_body_step_is_visible_to_later_siblings() -> None:
             lambda inner: {
                 "type": "loop",
                 "name": "inner_loop",
-                "each": {"in": "one", "as": "sub"},
+                "each": {"in": "input.one", "as": "sub"},
                 "body": [inner],
             },
             id="nested-loop",
@@ -310,7 +312,7 @@ def test_sibling_reference_reaches_nested_containers(wrapper) -> None:
             {
                 "type": "loop",
                 "name": "outer",
-                "each": {"in": "items", "as": "item"},
+                "each": {"in": "input.items", "as": "item"},
                 "body": [
                     {"type": "prompt", "name": "first", "template": "FIRST {{item}}"},
                     wrapper(
@@ -325,7 +327,7 @@ def test_sibling_reference_reaches_nested_containers(wrapper) -> None:
         ]
     }
 
-    adapter, _ = _run(orch, {"items": ["alpha"], "one": [1]})
+    adapter, _ = _run(orch, {"input": {"items": ["alpha"], "one": [1]}})
 
     assert adapter.prompts[-1] == "deep=[FIRST alpha] item=[alpha]"
 
@@ -337,7 +339,7 @@ def test_body_cel_predicate_sees_the_current_pass() -> None:
             {
                 "type": "loop",
                 "name": "outer",
-                "each": {"in": "items", "as": "item"},
+                "each": {"in": "input.items", "as": "item"},
                 "body": [
                     {"type": "prompt", "name": "verdict", "template": "V {{item}}"},
                     {
@@ -359,7 +361,7 @@ def test_body_cel_predicate_sees_the_current_pass() -> None:
         ]
     }
 
-    adapter, _ = _run(orch, {"items": ["alpha", "beta"]})
+    adapter, _ = _run(orch, {"input": {"items": ["alpha", "beta"]}})
 
     assert [p for p in adapter.prompts if "TAKEN" in p] == ["TAKEN", "NOT-TAKEN"]
 
@@ -481,7 +483,7 @@ def test_validate_is_quiet_on_references_outside_the_loop() -> None:
                 "type": "loop",
                 "name": "outer",
                 "collect": "first",
-                "each": {"in": "items", "as": "item"},
+                "each": {"in": "input.items", "as": "item"},
                 "body": [{"type": "prompt", "name": "first", "template": "F"}],
             },
             {
@@ -505,13 +507,13 @@ def test_validate_does_not_warn_on_another_loops_fixed_iteration() -> None:
             {
                 "type": "loop",
                 "name": "earlier",
-                "each": {"in": "items", "as": "item"},
+                "each": {"in": "input.items", "as": "item"},
                 "body": [{"type": "prompt", "name": "seed", "template": "S"}],
             },
             {
                 "type": "loop",
                 "name": "later",
-                "each": {"in": "items", "as": "item"},
+                "each": {"in": "input.items", "as": "item"},
                 "body": [
                     {
                         "type": "prompt",
