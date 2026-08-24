@@ -52,15 +52,25 @@ class OllamaAdapter:
         if proc.returncode != 0:
             cmd_str = " ".join(shlex.quote(c) for c in cmd)
             err = (proc.stderr or proc.stdout or "").strip()
-            # curl exit 7 = couldn't connect; 28 = timeout. Surface a hint that
-            # names the next step instead of forcing the user to decode curl.
+            # curl exit 7 = couldn't connect (daemon down / wrong base_url);
+            # 28 = --max-time elapsed (daemon reached, still generating).
+            # These are opposite problems — surface a hint that names the
+            # actual next step instead of forcing the user to decode curl,
+            # and don't tell someone whose server answered that it isn't
+            # reachable.
             hint = ""
-            if proc.returncode in (7, 28):
+            if proc.returncode == 7:
                 hint = (
                     f" Ollama at {self.base_url} is not reachable. "
                     "Start it (`ollama serve`), or set "
                     "`runtime.adapters.ollama.base_url` in your config. "
                     "Run `cof doctor` to verify connectivity."
+                )
+            elif proc.returncode == 28:
+                hint = (
+                    f" The model didn't finish within {int(timeout_seconds)}s. "
+                    "Raise `runtime.adapters.ollama.timeout_seconds` in your "
+                    "config, or use a smaller/faster model."
                 )
             raise RuntimeError(
                 f"Ollama request failed (curl exit {proc.returncode}): {err}.{hint}"
