@@ -12,9 +12,11 @@ authored orchestrations) converge on one spelling per construct:
   — generic names read as structure rather than intent, and duplicates of them
   collide in sibling scope
 * loop-body references that do not mean what they look like: a fixed
-  ``iter_<N>`` path (stale data, not an error) and ``prime.<loop>.<step>``
-  (never resolves), both of which have the same fix — the canonical
-  within-iteration form ``{{prime.<step>.value}}``
+  ``iter_<N>`` path (stale data, not an error), ``prime.<loop>.last`` (written
+  only when the loop completes, so inside the body it is the previous full
+  run's data at best) and ``prime.<loop>.<step>`` (never resolves), all of
+  which have the same fix — the canonical within-iteration form
+  ``{{prime.<step>.value}}``
 
 Warnings surface through ``cof validate`` / ``cof check`` and the MCP
 ``validate_orchestration`` tool. Exit codes are unaffected.
@@ -165,7 +167,7 @@ def _check_loop_references(
     warnings: list[str],
     loops: tuple[_LoopScope, ...],
 ) -> None:
-    """Flag the two loop-body reference forms that silently do the wrong thing.
+    """Flag the loop-body reference forms that silently do the wrong thing.
 
     ``iter_<N>`` is the dangerous one: inside the body of the very loop it
     names it does not fail, it resolves to whichever pass ``N`` names —
@@ -173,9 +175,13 @@ def _check_loop_references(
     visible; plausible stale data is not. Only *enclosing* loops are flagged;
     a fixed pass of some other, already-finished loop is a real reference.
 
+    ``last`` is its cross-iteration sibling: written only when the loop
+    completes, so inside the body (or the ``while`` condition) it resolves to
+    the previous pass at best — usually nothing at all.
+
     ``prime.<loop>.<step>`` is the merely-empty one: ``prime.<loop>`` is the
-    loop's own node, holding ``iter_<N>``, ``collected`` and ``meta``, so a
-    body step's name is never a key there.
+    loop's own node, holding ``iter_<N>``, ``last``, ``collected`` and
+    ``meta``, so a body step's name is never a key there.
     """
     named = [scope for scope in loops if scope.name is not None]
     if not named:
@@ -202,12 +208,22 @@ def _check_loop_references(
                         f"current pass; iter_<N> is only meaningful outside the "
                         f"loop."
                     )
+                elif segment == "last":
+                    seen.add(key)
+                    warnings.append(
+                        f"{where}: 'prime.{scope.name}.last' inside the loop it "
+                        f"names resolves to the previous pass at best — 'last' "
+                        f"is written when the loop completes. Use "
+                        f"'{{{{prime.<step>.value}}}}' for the current pass; "
+                        f"'prime.{scope.name}.last.<step>.value' is only "
+                        f"meaningful after the loop."
+                    )
                 elif segment in scope.body_names:
                     seen.add(key)
                     warnings.append(
                         f"{where}: 'prime.{scope.name}.{segment}' never resolves "
                         f"— 'prime.{scope.name}' is the loop's own node (iter_<N>, "
-                        f"collected, meta), not a scope its body steps live in. "
+                        f"last, collected, meta), not a scope its body steps live in. "
                         f"Use '{{{{prime.{segment}.value}}}}' for the current "
                         f"pass, or 'prime.{scope.name}.collected.value' after the "
                         f"loop."

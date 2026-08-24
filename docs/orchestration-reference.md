@@ -225,6 +225,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 
 **State output paths (named each loop):**
 - Per-iteration: `prime.<name>.iter_0.<body_effect>.value`, `prime.<name>.iter_1.<body_effect>.value`, ...
+- Final pass (after the loop completes): `prime.<name>.last.<body_effect>.value` — the last *completed* iteration's node, same shape as `iter_<N>`. A pass that errored under `on_error: continue`/`break` is skipped in favor of the last one that finished; a zero-iteration loop writes no `last` key.
 - Aggregated (when `collect` is set): `prime.<name>.collected.value` — array of every iteration's collected effect value
 - From *inside* the body: `prime.<body_effect>.value` — the current pass. See [Referencing a sibling within an iteration](#referencing-a-sibling-within-an-iteration).
 
@@ -325,13 +326,14 @@ there is nothing to see yet and the name falls through to the enclosing scope.
 #### Referencing a sibling within an iteration
 
 A body step reading the step before it — compute → classify → score — is the
-most common multi-step loop shape. Three *different* questions get three
+most common multi-step loop shape. Four *different* questions get four
 *different* paths, and substituting one for another fails silently:
 
 | You want | Write | Legal where |
 |---|---|---|
 | A step's output in the **current pass** | `{{prime.<step>.value}}` | inside the body, and inside a `while` condition |
 | One **specific past pass** | `{{prime.<loop>.iter_<N>.<step>.value}}` | **after** the loop only |
+| The **final pass** | `{{prime.<loop>.last.<step>.value}}` | **after** the loop only |
 | **Every** pass's output | `{{prime.<loop>.collected.value}}` | after the loop (requires `collect`) |
 
 ```yaml
@@ -364,11 +366,15 @@ Rules of the form:
   accepted, not preferred: a bare name can collide with a user-supplied state
   key, and `prime.`-prefixed cannot.
 - **`{{prime.<loop>.<step>.value}}` does not resolve, by design.** `prime.<loop>`
-  is the loop's own node — it holds `iter_<N>`, `collected` and `meta`, never
-  body step names. `cof validate` warns on it.
+  is the loop's own node — it holds `iter_<N>`, `last`, `collected` and `meta`,
+  never body step names. `cof validate` warns on it.
 - **`iter_<N>` inside the body is a trap.** `N` is a constant, so it does not
   render empty — it renders *pass N's* output during every pass, which is
   plausible-looking stale data. `cof validate` warns on this too.
+- **`last` is post-loop only, like `iter_<N>`.** It is written when the loop
+  completes, so inside the body (or the `while` condition) it resolves to the
+  previous pass at best — write `{{prime.<step>.value}}` for the current pass.
+  `cof validate` warns on in-body use.
 - In CEL the same forms apply with the `state.` prefix and no braces:
   `state.prime.<step>.value`.
 
@@ -769,6 +775,19 @@ template: "First result: {{prime.explain.iter_0.summary.value}}"
 the body reads pass `N` during every pass — stale data rather than an error. To
 read a sibling in the pass you are currently in, write `{{prime.<step>.value}}`;
 see [Referencing a sibling within an iteration](#referencing-a-sibling-within-an-iteration).
+
+When you mean "the final pass" — the usual case after a `while` loop or a
+data-dependent `each` loop, where `N` is unknowable — don't guess `N`:
+
+```yaml
+template: "Final result: {{prime.explain.last.summary.value}}"
+```
+
+`last` is the last *completed* iteration's node, same shape as `iter_<N>` (deep
+field paths work). A pass that errored under `on_error: continue`/`break` is
+skipped in favor of the last one that finished; a loop that ran zero iterations
+writes no `last` key, so the read renders empty exactly like a missing
+`iter_<N>`.
 
 ### Iteration Bindings Inside Nested Containers
 
