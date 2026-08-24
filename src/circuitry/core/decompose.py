@@ -348,17 +348,36 @@ def _planner_runtime_config(runtime_config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _describe_inputs(ctx: Mapping[str, Any]) -> str:
-    """A plain listing of the context keys the source template could read.
+    """A plain listing of the caller inputs the source template could read.
 
-    The planner's ``source_interface`` input is free-form; the top-level keys
-    (minus the effect namespace and runtime-internal keys) are what the
-    emitted document should re-declare as its inputs.
+    The planner's ``source_interface`` input is free-form; these are what the
+    emitted document should re-declare as its own ``interface.inputs``.
+
+    Prefers the namespaced ``input`` root (the state contract in
+    :mod:`circuitry.core.state_ns`) when present, since only that namespace
+    ever holds genuine caller-supplied values — ``prime`` (other effects'
+    outputs) and ``runtime`` (framework metadata: settings, persistence,
+    plugins, ...) sit at the same top level and are never real inputs a
+    human would supply when re-running an emitted plan standalone. Falls
+    back to the legacy exclude-known-namespaces listing for a context built
+    without the ``input`` wrapper (e.g. a ``Store`` constructed directly in
+    a test), the same fallback :func:`extract_inputs
+    <circuitry.runtime_plugins._sql_persistence.extract_inputs>` uses for a
+    pre-namespace state snapshot.
     """
-    keys = sorted(
-        key
-        for key in ctx
-        if isinstance(key, str) and key != "prime" and not key.startswith("_")
-    )
+    from .state_ns import INPUT_NS, NAMESPACES
+
+    input_ns = ctx.get(INPUT_NS)
+    if isinstance(input_ns, Mapping):
+        keys = sorted(key for key in input_ns if isinstance(key, str))
+    else:
+        keys = sorted(
+            key
+            for key in ctx
+            if isinstance(key, str)
+            and key not in NAMESPACES
+            and not key.startswith("_")
+        )
     if not keys:
         return "(no declared inputs)"
     import yaml as _yaml
