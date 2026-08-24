@@ -68,6 +68,7 @@ state_paths:
     top_level_output: "{{prime.<effect_name>.value}}"
     inside_dynamic: "{{prime.<dynamic_name>.<child_name>.value}}"
     loop_iteration: "{{prime.<loop_name>.iter_N.<body_name>.value}}"
+    loop_last: "{{prime.<loop_name>.last.<body_name>.value}} — the final completed pass, after the loop"
     loop_collected: "{{prime.<loop_name>.collected.value}}"
   in_cel_expressions:
     prefix: "state."
