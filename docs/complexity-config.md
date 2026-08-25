@@ -443,7 +443,8 @@ keeps it when route-up would otherwise substitute one.
 `meta.decomposition.yaml` already carries the generated orchestration, but a
 run that finishes and is never looked at again makes that plan effectively
 unreadable. `--decompose-out <dir>` writes it out — one file per effect whose
-decomposition attempt reached a planner-emitted document:
+decomposition attempt produced a document worth reading, whether that's a
+planner-emitted orchestration or (see below) a rejected planner payload:
 
 ```bash
 cof run pipeline.yml --decompose-out ./plans
@@ -488,9 +489,15 @@ plan doesn't pin its own, same as any other bare orchestration file).
 (`invalid_plan`) or whose child execution failed (`execution_failed`) still
 produced YAML — that is the one worth reading to see what went wrong — so it
 is written with `# status: failed` and an `# error:` line carrying the
-recorded `meta.decomposition.error`. The two failure paths that never reach a
-planner-emitted document (`planner_failed`, and `max_depth` — which never
-calls the planner at all) have no YAML to write and are skipped.
+recorded `meta.decomposition.error`. A planner failure (`planner_failed`)
+writes too when the planner actually returned a payload that failed its own
+envelope schema (e.g. a bare JSON array instead of `{say, chunks, yaml}`) —
+that raw payload is the one worth reading — as
+`<run_id>__<effect_path>.rejected.yml` (or `.rejected.txt` when the payload
+doesn't parse as YAML/JSON), same header, `# status: failed`. Only a
+genuinely empty planner failure (timeout, adapter error — nothing was ever
+returned) and `max_depth` (which never calls the planner at all) have nothing
+to write and are skipped.
 
 Nothing beyond the plan itself is written: the file is the orchestration
 structure the planner returned, not run state, so it carries no secrets or

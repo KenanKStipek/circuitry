@@ -652,12 +652,20 @@ def sum_tokens(state: Mapping[str, Any] | None) -> tuple[int, int]:
     Walks the state itself rather than the rendered tree, so the footer
     counts effects the tree cannot show (a sub-orchestration's internals,
     reflector-generated work) exactly as a final-state audit would.
+
+    Alias-aware: a named loop exposes its final completed pass at both
+    ``iter_<N>`` and ``last`` — the same dict, reachable twice — so each
+    node is counted once, not once per path to it.
     """
     sent = received = 0
+    seen: set[int] = set()
     stack: list[Any] = [state or {}]
     while stack:
         current = stack.pop()
         if isinstance(current, Mapping):
+            if id(current) in seen:
+                continue
+            seen.add(id(current))
             meta = current.get("meta")
             if isinstance(meta, Mapping):
                 sent += _tokens(meta, "tokens_sent")

@@ -213,7 +213,14 @@ def maybe_decompose(
         logger.warning(
             "Decomposition planner failed for prompt %r", defn.name, exc_info=True
         )
-        return _failure(base, dset, "planner_failed", str(exc), fallback)
+        return _failure(
+            base,
+            dset,
+            "planner_failed",
+            str(exc),
+            fallback,
+            raw_payload=_rejected_payload_text(exc),
+        )
 
     base["plan"] = {"say": plan.say, "chunks": plan.chunks}
     base["chunk_count"] = len(plan.chunks) if isinstance(plan.chunks, list) else None
@@ -291,25 +298,52 @@ def _failure(
     reason: str,
     error: str,
     fallback: str | None,
+    *,
+    raw_payload: str | None = None,
 ) -> DecompositionResult:
     fail = dset.on_failure == "fail"
     if fail:
         outcome, fallback = "failed", None
     else:
         outcome = "route_up" if fallback else "run_as_is"
+    meta = {
+        **base,
+        "outcome": outcome,
+        "reason": reason,
+        "error": error,
+        "fallback_model": fallback,
+    }
+    if raw_payload:
+        meta["raw_payload"] = raw_payload
     return DecompositionResult(
-        meta={
-            **base,
-            "outcome": outcome,
-            "reason": reason,
-            "error": error,
-            "fallback_model": fallback,
-        },
+        meta=meta,
         failure=reason,
         error=error,
         fail=fail,
         fallback_model=fallback,
     )
+
+
+def _rejected_payload_text(exc: BaseException) -> str | None:
+    """The planner's raw response text, if *exc* traces back to a schema
+    rejection rather than a truly empty failure (timeout, adapter error).
+
+    A planner failure crosses one ``RuntimeError(f"{effect_path}: {e}") from e``
+    wrapper per container it exits through on its way out of the isolated
+    planner run (see :class:`~.dynamic.DynamicRuntime`); each wrapper keeps the
+    original on ``__cause__``, so the chain always bottoms out at whatever
+    :class:`~.prompt.PromptRuntime` actually raised.
+    """
+    from .prompt import SchemaValidationError
+
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, SchemaValidationError) and current.raw_response_text:
+            return current.raw_response_text
+        current = current.__cause__
+    return None
 
 
 # --------------------------------------------------------------------------

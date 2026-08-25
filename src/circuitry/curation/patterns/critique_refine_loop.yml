@@ -12,6 +12,7 @@
 #   draft.value                                                 — initial draft
 #   review.iter_<N>.critique_step.value                         — per-iteration critique
 #   review.iter_<N>.refine_step.value                           — per-iteration refined text
+#   review.last.refine_step.value                               — the final pass's refinement
 #
 # Run:
 #   cof run patterns/critique_refine_loop -e topic="serverless cold-start tradeoffs"
@@ -65,10 +66,12 @@ effects:
         outputs:
           refined: {path: prime.refine.value}
 
-  # After the loop, expose the latest refinement as the orchestration's final answer.
+  # After the loop, expose the latest refinement as the orchestration's final
+  # answer. `last` is the final completed pass — the loop's iteration count is
+  # data-dependent, so no fixed iter_<N> can name it.
   - type: prompt
     name: final
     template: |
       Output the refined paragraph unchanged. No commentary, no markdown.
 
-      {{prime.review.iter_0.refine_step.value.refined}}
+      {{prime.review.last.refine_step.value.refined}}
