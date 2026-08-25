@@ -17,6 +17,20 @@ from .store import Store
 logger = logging.getLogger(__name__)
 
 
+class SchemaValidationError(ValueError):
+    """A prompt's decoded output failed its declared JSON schema.
+
+    Carries the model's raw, unparsed response text so a caller several
+    layers up an exception chain (see ``core.decompose``'s planner-failure
+    handling) can recover exactly what was rejected, without re-deriving it
+    from the error message.
+    """
+
+    def __init__(self, message: str, *, raw_response_text: str | None = None) -> None:
+        super().__init__(message)
+        self.raw_response_text = raw_response_text
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -500,7 +514,7 @@ class PromptRuntime:
                         "object",
                         "array",
                     ):
-                        self._validate_schema(decoded_value)
+                        self._validate_schema(decoded_value, raw_response_text=res.text)
 
                     # Success
                     node["value"] = decoded_value
@@ -942,14 +956,21 @@ class PromptRuntime:
 
         return None
 
-    def _validate_schema(self, value: Any) -> None:
-        """Validate value against JSON schema if provided."""
+    def _validate_schema(self, value: Any, *, raw_response_text: str | None = None) -> None:
+        """Validate value against JSON schema if provided.
+
+        ``raw_response_text`` — the model's unparsed response — rides along on
+        any raised :class:`SchemaValidationError` so a caller several layers up
+        (decomposition's planner-failure handling, in particular) can recover
+        what was actually returned without re-deriving it from the message.
+        """
         if not self.defn.schema:
             return
         if value is None:
-            raise ValueError(
+            raise SchemaValidationError(
                 "JSON schema validation failed: model returned None (JSON could not be parsed). "
-                "Check the model's response format."
+                "Check the model's response format.",
+                raw_response_text=raw_response_text,
             )
 
         try:
@@ -960,5 +981,7 @@ class PromptRuntime:
             # jsonschema not installed, skip validation
             pass
         except jsonschema.ValidationError as e:
-            raise ValueError(f"Schema validation failed: {e.message}") from e
+            raise SchemaValidationError(
+                f"Schema validation failed: {e.message}", raw_response_text=raw_response_text
+            ) from e
 
