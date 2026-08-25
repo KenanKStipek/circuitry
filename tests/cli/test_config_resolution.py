@@ -13,6 +13,11 @@ from circuitry.cli.config import (
     resolve_config,
 )
 
+# This whole file exercises config discovery tiers directly (each test
+# patches GLOBAL_CONFIG_PATH to its own controlled location), so it opts out
+# of the autouse hermetic-config fixture in tests/conftest.py.
+pytestmark = pytest.mark.real_config_discovery
+
 # ---------------------------------------------------------------------------
 # _deep_merge
 # ---------------------------------------------------------------------------
