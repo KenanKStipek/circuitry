@@ -20,6 +20,14 @@ trust a `ruff`/`mypy` already on `PATH`. Tool versions are pinned there
 specifically so "green locally" means "green in CI"; a stray unpinned
 install can pass or fail on findings CI won't reproduce.
 
+The suite is hermetic to your machine's `~/.config/circuitry/config.json` —
+an autouse fixture in `tests/conftest.py` redirects global-config discovery
+to a per-test temp dir, so a real global config (e.g. a restrictive
+`enabled_adapters` allowlist) can't change test outcomes. A test that
+intentionally exercises config discovery tiers opts out with
+`@pytest.mark.real_config_discovery` and constructs its own layering
+explicitly.
+
 ## Changelog — write a fragment, never edit `CHANGELOG.md`
 Every change ships its release note as a **new file**, `changelog.d/<issue-or-pr>.<type>.md`
 (`type` ∈ added / changed / deprecated / removed / fixed / security), containing
