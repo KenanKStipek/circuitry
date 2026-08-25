@@ -222,10 +222,19 @@ def _labels(screen: RunScreen) -> list[str]:
     return [node.label for node in _flatten(screen.execution_nodes)]
 
 
-def _token_totals(state: Any) -> tuple[int, int]:
-    """Independent walk of a final state, for checking the footer's sums."""
+def _token_totals(state: Any, _seen: set[int] | None = None) -> tuple[int, int]:
+    """Independent walk of a final state, for checking the footer's sums.
+
+    Alias-aware, like the footer itself: a named loop exposes its final
+    completed pass at both ``iter_<N>`` and ``last`` (the same dict), and a
+    node reachable twice still ran once.
+    """
+    seen = _seen if _seen is not None else set()
     sent = received = 0
     if isinstance(state, dict):
+        if id(state) in seen:
+            return 0, 0
+        seen.add(id(state))
         meta = state.get("meta")
         if isinstance(meta, dict):
             for key, add in (("tokens_sent", 0), ("tokens_received", 1)):
@@ -237,12 +246,12 @@ def _token_totals(state: Any) -> tuple[int, int]:
                         received += value
         for key, value in state.items():
             if key != "meta":
-                child_sent, child_received = _token_totals(value)
+                child_sent, child_received = _token_totals(value, seen)
                 sent += child_sent
                 received += child_received
     elif isinstance(state, list):
         for item in state:
-            child_sent, child_received = _token_totals(item)
+            child_sent, child_received = _token_totals(item, seen)
             sent += child_sent
             received += child_received
     return sent, received

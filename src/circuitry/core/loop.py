@@ -199,6 +199,11 @@ class LoopRuntime:
         baseline = frozenset(child_store.state)
 
         iteration_count = 0
+        # Index of the final pass that ran to completion — what `last` will
+        # alias. Tracked separately from iteration_count because a pass that
+        # errored under on_error: continue/break leaves a partial iter node
+        # (and, in while mode, still advances the count).
+        last_completed: int | None = None
         termination_reason = "max_iterations"
 
         # Build ancestor context for children (this loop is now a parent)
@@ -324,6 +329,7 @@ class LoopRuntime:
                         if idx in results:
                             iterations_effects.append(results[idx])
                             iteration_count += 1
+                            last_completed = idx
 
                     if errors:
                         if self.defn.on_error == "fail":
@@ -357,6 +363,7 @@ class LoopRuntime:
                             )
                             iterations_effects.append(iter_effects)
                             iteration_count += 1
+                            last_completed = idx
                         except Exception:
                             if self.defn.on_error == "fail":
                                 termination_reason = "error"
@@ -404,6 +411,7 @@ class LoopRuntime:
                             iter_label=f"[{iteration_count}]",
                         )
                         iterations_effects.append(iter_effects)
+                        last_completed = iteration_count
                         iteration_count += 1
                     except Exception:
                         if self.defn.on_error == "fail":
@@ -432,6 +440,8 @@ class LoopRuntime:
                         "value": self._collect_values(node, iteration_count)
                     }
 
+                self._link_last(node, last_completed)
+
             if is_named and self.defn.name:
                 store.fire_effect_complete(self.defn.name, node or {})
 
@@ -452,11 +462,31 @@ class LoopRuntime:
                     node["collected"] = {
                         "value": self._collect_values(node, iteration_count)
                     }
+                self._link_last(node, last_completed)
             if is_named and self.defn.name:
                 # Balances the start fired before the first iteration — a
                 # loop that blew up still closes its pair.
                 store.fire_effect_complete(self.defn.name, node or {})
             raise
+
+    def _link_last(
+        self, node: dict[str, Any], last_completed: int | None
+    ) -> None:
+        """Expose the final *completed* pass at ``last``.
+
+        An alias, not a copy: ``last`` and ``iter_<N>`` share the same dict,
+        so ``prime.<loop>.last.<step>.value`` and every deeper field path
+        resolve exactly as the iter node does. A pass that errored under
+        ``on_error: continue``/``break`` is skipped in favor of the last one
+        that finished, and a zero-iteration loop writes no ``last`` key at
+        all — reads fall through/render empty exactly like a missing
+        ``iter_<N>``.
+        """
+        if last_completed is None:
+            return
+        iter_node = node.get(f"iter_{last_completed}")
+        if isinstance(iter_node, dict):
+            node["last"] = iter_node
 
     def _collect_values(
         self, node: dict[str, Any], iteration_count: int
