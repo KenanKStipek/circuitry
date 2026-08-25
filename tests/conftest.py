@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 TESTS = ROOT / "tests"
@@ -36,6 +38,12 @@ def pytest_configure(config: Any) -> None:
     config.addinivalue_line(
         "markers",
         "integration: marks tests that require local runtime dependencies (opt-in)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "real_config_discovery: opt out of the autouse hermetic-config fixture "
+        "(see _hermetic_global_config below) so a test can exercise genuine "
+        "config discovery tiers, constructing its own layering explicitly",
     )
 
     if not config.getoption("--trace-state"):
@@ -79,3 +87,43 @@ def _emit_state_trace(action: str, path: str, state: dict[str, Any]) -> None:
         f"[trace-state] test={_CURRENT_TEST_ID} action={action} path={path}\n{payload}",
         flush=True,
     )
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_global_config(
+    request: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Isolate every test from the developer's real ``~/.config/circuitry/``.
+
+    ``circuitry.cli.config`` binds ``GLOBAL_CONFIG_DIR``/``GLOBAL_CONFIG_PATH``
+    at import time from ``Path.home()``, and several modules (``last_run``,
+    ``app``, ``setup``) each bind their own copy of those paths on import too.
+    Without this fixture, a real global ``config.json`` on the machine running
+    the suite (e.g. a restrictive ``enabled_adapters`` allowlist) silently
+    changes test behavior — tests were green in CI only because CI runners
+    happen to have no global config. See issue #156.
+
+    Tests that intentionally exercise config discovery tiers opt out with
+    ``@pytest.mark.real_config_discovery`` and construct their own layering
+    explicitly (patching ``GLOBAL_CONFIG_PATH`` to a controlled location, as
+    ``tests/cli/test_config_resolution.py`` already does).
+    """
+    if request.node.get_closest_marker("real_config_discovery"):
+        return
+
+    from circuitry.cli import app as app_module
+    from circuitry.cli import config as config_module
+    from circuitry.cli import last_run as last_run_module
+    from circuitry.cli import setup as setup_module
+
+    fake_dir = tmp_path / "hermetic-global-config"
+    fake_config_path = fake_dir / "config.json"
+    fake_last_run_path = fake_dir / "last-run.json"
+
+    monkeypatch.setattr(config_module, "GLOBAL_CONFIG_DIR", fake_dir)
+    monkeypatch.setattr(config_module, "GLOBAL_CONFIG_PATH", fake_config_path)
+    monkeypatch.setattr(last_run_module, "LAST_RUN_PATH", fake_last_run_path)
+    monkeypatch.setattr(app_module, "GLOBAL_CONFIG_DIR", fake_dir)
+    monkeypatch.setattr(app_module, "_LAST_RUN_PATH", fake_last_run_path)
+    monkeypatch.setattr(setup_module, "GLOBAL_CONFIG_DIR", fake_dir)
+    monkeypatch.setattr(setup_module, "GLOBAL_CONFIG_PATH", fake_config_path)

@@ -664,6 +664,96 @@ def test_route_up_respects_an_explicit_model(planner: Path) -> None:
 
 
 # --------------------------------------------------------------------------
+# input inference
+# --------------------------------------------------------------------------
+
+
+def test_describe_inputs_prefers_the_namespaced_input_root() -> None:
+    """When ``ctx`` carries the post-#86 ``input`` namespace, only its keys
+    are declared — ``prime``/``runtime`` siblings and ``_``-prefixed
+    builtins at the same top level are never genuine caller inputs.
+
+    Regression test for #161: run c69cfb8d's emitted plan declared
+    ``runtime`` as a required input because the framework namespace sits at
+    the same top level as ``input`` in the render context and leaked into
+    `_describe_inputs`'s enumeration.
+    """
+    from circuitry.core.decompose import _describe_inputs
+
+    ctx = {
+        "input": {"topic": "volcanoes", "source": "the archive"},
+        "prime": {"task": {"value": "..."}},
+        "runtime": {"effective_settings": {}},
+        "_loop_index": 0,
+    }
+
+    description = _describe_inputs(ctx)
+
+    assert "topic" in description
+    assert "source" in description
+    assert "runtime" not in description
+    assert "prime" not in description
+    assert "_loop_index" not in description
+
+
+def test_describe_inputs_falls_back_to_excluding_known_namespaces() -> None:
+    """A context built without the ``input`` wrapper (e.g. a ``Store``
+    constructed directly, as the rest of this test file does) still
+    excludes ``prime``/``runtime``/``_``-prefixed keys from the inferred
+    inputs list — the same fallback ``_sql_persistence.extract_inputs``
+    uses for a pre-namespace state snapshot.
+    """
+    from circuitry.core.decompose import _describe_inputs
+
+    ctx = {
+        "topic": "volcanoes",
+        "source": "the archive",
+        "runtime": {"effective_settings": {}},
+        "prime": {"task": {"value": "..."}},
+        "_loop_index": 0,
+    }
+
+    description = _describe_inputs(ctx)
+
+    assert "topic" in description
+    assert "source" in description
+    assert "runtime" not in description
+    assert "prime" not in description
+    assert "_loop_index" not in description
+
+
+def test_decomposition_planner_prompt_never_declares_runtime_as_an_input(
+    tmp_path: Path,
+) -> None:
+    """End to end: a `runtime` state key sits alongside `topic`/`source` in
+    the effect's render context, but the planner prompt's source_interface
+    must only ever mention genuine caller inputs.
+    """
+    planner_path = tmp_path / "stub_planner_with_interface.yml"
+    planner_path.write_text(
+        STUB_PLANNER.replace(
+            'template: "PLANNER {{source_template}}"',
+            'template: "PLANNER {{source_template}} :: {{source_interface}}"',
+        ),
+        encoding="utf-8",
+    )
+
+    adapter = ScriptedAdapter(plans={"TASK": _plan_payload(EMITTED_YAML)})
+    state = {**STATE, "runtime": {"effective_settings": {"adapter": "ollama"}}}
+    store = _run(
+        _orch(),
+        adapter=adapter,
+        runtime_config=_config(planner_path),
+        store=Store(state),
+    )
+
+    assert store.get("prime.task.meta.decomposition.outcome") == "decomposed"
+    [planner_prompt] = adapter.planner_calls()
+    assert "topic" in planner_prompt
+    assert "runtime" not in planner_prompt
+
+
+# --------------------------------------------------------------------------
 # housekeeping
 # --------------------------------------------------------------------------
 
