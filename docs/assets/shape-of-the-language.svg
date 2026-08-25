@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-20 -66 1548 729" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif">
+<rect x="-20" y="-66" width="1548" height="729" fill="#121212" rx="12"/>
+<rect x="20" y="232" width="540" height="210" rx="10" fill="#17191c" stroke="#495057" stroke-width="1" stroke-dasharray="8 6"/>
+<rect x="590" y="232" width="290" height="210" rx="10" fill="#17191c" stroke="#495057" stroke-width="1" stroke-dasharray="8 6"/>
+<rect x="910" y="232" width="540" height="210" rx="10" fill="#17191c" stroke="#495057" stroke-width="1" stroke-dasharray="8 6"/>
+<rect x="555" y="24" width="360" height="66" rx="10" fill="#31294a" stroke="#b197fc" stroke-width="2"/>
+<rect x="585" y="124" width="300" height="62" rx="10" fill="#4a2333" stroke="#f783ac" stroke-width="2"/>
+<rect x="175" y="278" width="230" height="64" rx="10" fill="#1f4a3f" stroke="#96f2d7" stroke-width="3"/>
+<rect x="280" y="360" width="230" height="64" rx="10" fill="#1b3a33" stroke="#63e6be" stroke-width="2"/>
+<rect x="50" y="360" width="230" height="64" rx="10" fill="#1b3a33" stroke="#63e6be" stroke-width="2"/>
+<rect x="620" y="305" width="230" height="64" rx="10" fill="#1f4a3f" stroke="#96f2d7" stroke-width="3"/>
+<rect x="940" y="278" width="230" height="64" rx="10" fill="#1b3a33" stroke="#63e6be" stroke-width="2"/>
+<rect x="1170" y="278" width="230" height="64" rx="10" fill="#1b3a33" stroke="#63e6be" stroke-width="2"/>
+<rect x="1055" y="360" width="230" height="64" rx="10" fill="#1b3a33" stroke="#63e6be" stroke-width="2"/>
+<rect x="20" y="496" width="860" height="64" rx="10" fill="#46301c" stroke="#ffa94d" stroke-width="2"/>
+<rect x="920" y="496" width="530" height="64" rx="10" fill="#46301c" stroke="#ffa94d" stroke-width="2"/>
+<polyline points="735.0,92.0 735.0,120.0" fill="none" stroke="#adb5bd" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="735.0,120.0 729.5,107.0 740.5,107.0" fill="#adb5bd"/>
+<polyline points="735.0,188.0 735.0,210.0" fill="none" stroke="#adb5bd" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="290.0,210.0 1180.0,210.0" fill="none" stroke="#adb5bd" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="290.0,210.0 290.0,232.0" fill="none" stroke="#adb5bd" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="290.0,232.0 284.5,219.0 295.5,219.0" fill="#adb5bd"/>
+<polyline points="735.0,210.0 735.0,232.0" fill="none" stroke="#adb5bd" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="735.0,232.0 729.5,219.0 740.5,219.0" fill="#adb5bd"/>
+<polyline points="1180.0,210.0 1180.0,232.0" fill="none" stroke="#adb5bd" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1180.0,232.0 1174.5,219.0 1185.5,219.0" fill="#adb5bd"/>
+<polyline points="1450.0,300.0 1478.0,300.0 1478.0,158.0 888.0,158.0" fill="none" stroke="#69db7c" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="888.0,158.0 901.0,152.5 901.0,163.5" fill="#69db7c"/>
+<polyline points="618.0,337.0 562.0,337.0" fill="none" stroke="#69db7c" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="562.0,337.0 575.0,331.5 575.0,342.5" fill="#69db7c"/>
+<polyline points="852.0,337.0 908.0,337.0" fill="none" stroke="#69db7c" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="908.0,337.0 895.0,342.5 895.0,331.5" fill="#69db7c"/>
+<polyline points="100.0,424.0 100.0,462.0 8.0,462.0 8.0,58.0 552.0,58.0" fill="none" stroke="#b197fc" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="552.0,58.0 539.0,63.5 539.0,52.5" fill="#b197fc"/>
+<polyline points="200.0,444.0 200.0,494.0" fill="none" stroke="#ffa94d" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="200.0,494.0 194.5,481.0 205.5,481.0" fill="#ffa94d"/>
+<polyline points="380.0,494.0 380.0,444.0" fill="none" stroke="#ffa94d" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="380.0,444.0 385.5,457.0 374.5,457.0" fill="#ffa94d"/>
+<polyline points="882.0,528.0 918.0,528.0" fill="none" stroke="#ffa94d" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="918.0,528.0 905.0,533.5 905.0,522.5" fill="#ffa94d"/>
+<polyline points="1450.0,528.0 1500.0,528.0 1500.0,44.0 918.0,44.0" fill="none" stroke="#ffa94d" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="918.0,44.0 931.0,38.5 931.0,49.5" fill="#ffa94d"/>
+<text x="830.0" y="-14.2" font-size="28" fill="#e9ecef" text-anchor="middle">Circuitry — the shape of the language</text>
+<text x="793.6" y="107.0" font-size="13" fill="#adb5bd" text-anchor="middle">effects+</text>
+<text x="201.6" y="197.1" font-size="13" fill="#adb5bd" text-anchor="middle">is one of</text>
+<text x="1072.2" y="143.1" font-size="13" fill="#69db7c" text-anchor="middle">contain effects ⟳</text>
+<text x="262.9" y="45.0" font-size="13" fill="#b197fc" text-anchor="middle">use runs a child document ⟳</text>
+<text x="248.4" y="469.1" font-size="13" fill="#ffa94d" text-anchor="middle">writes</text>
+<text x="423.4" y="469.1" font-size="13" fill="#ffa94d" text-anchor="middle">reads</text>
+<text x="1102.6" y="31.0" font-size="13" fill="#ffa94d" text-anchor="middle">emits child documents ⟳</text>
+<text x="134.0" y="255.1" font-size="13" fill="#9aa1a8" text-anchor="middle">leaf — no children</text>
+<text x="659.0" y="255.1" font-size="13" fill="#9aa1a8" text-anchor="middle">structure</text>
+<text x="1059.0" y="255.1" font-size="13" fill="#69db7c" text-anchor="middle">cybernetic — state steers</text>
+<text x="735.0" y="50.7" font-size="22" fill="#b197fc" text-anchor="middle">Orchestration</text>
+<text x="735.0" y="77.0" font-size="13" fill="#9aa1a8" text-anchor="middle">one YAML document</text>
+<text x="735.0" y="150.7" font-size="22" fill="#f783ac" text-anchor="middle">Effect</text>
+<text x="735.0" y="173.1" font-size="13" fill="#9aa1a8" text-anchor="middle">the unit of execution</text>
+<text x="290.0" y="303.0" font-size="20" fill="#96f2d7" text-anchor="middle">prompt</text>
+<text x="290.0" y="329.1" font-size="13" fill="#9aa1a8" text-anchor="middle">monad — one model call</text>
+<text x="395.0" y="385.0" font-size="20" fill="#63e6be" text-anchor="middle">tool</text>
+<text x="395.0" y="411.1" font-size="13" fill="#9aa1a8" text-anchor="middle">deterministic plugin</text>
+<text x="165.0" y="385.0" font-size="20" fill="#63e6be" text-anchor="middle">use</text>
+<text x="165.0" y="411.1" font-size="13" fill="#9aa1a8" text-anchor="middle">runs another document</text>
+<text x="735.0" y="330.0" font-size="20" fill="#96f2d7" text-anchor="middle">dynamic</text>
+<text x="735.0" y="356.1" font-size="13" fill="#9aa1a8" text-anchor="middle">monad — chain | tree</text>
+<text x="1055.0" y="303.0" font-size="20" fill="#63e6be" text-anchor="middle">if</text>
+<text x="1055.0" y="329.1" font-size="13" fill="#9aa1a8" text-anchor="middle">picks one branch</text>
+<text x="1285.0" y="303.0" font-size="20" fill="#63e6be" text-anchor="middle">loop</text>
+<text x="1285.0" y="329.1" font-size="13" fill="#9aa1a8" text-anchor="middle">repeats a body</text>
+<text x="1170.0" y="385.0" font-size="20" fill="#63e6be" text-anchor="middle">reflector</text>
+<text x="1170.0" y="411.1" font-size="13" fill="#9aa1a8" text-anchor="middle">plans its own effects</text>
+<text x="450.0" y="521.0" font-size="20" fill="#ffa94d" text-anchor="middle">STATE</text>
+<text x="450.0" y="547.0" font-size="13" fill="#9aa1a8" text-anchor="middle">input. · prime. · runtime.</text>
+<text x="1185.0" y="521.0" font-size="20" fill="#ffa94d" text-anchor="middle">complexity (optional)</text>
+<text x="1185.0" y="547.0" font-size="13" fill="#9aa1a8" text-anchor="middle">score → route → decompose</text>
+<text x="604.0" y="603.0" font-size="13" fill="#adb5bd" text-anchor="middle">bright = the two base monads · leaves act · structure arranges both neighbors · cybernetics steer by reading STATE</text>
+<text x="614.1" y="629.0" font-size="13" fill="#adb5bd" text-anchor="middle">green ⟳ holds effects again · purple = composition · coral = the runtime loop · every cycle bounded by max_iterations / max_depth</text>
+</svg>
