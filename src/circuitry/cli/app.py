@@ -150,6 +150,26 @@ def _parse_env_vars(env_vars: list[str] | None) -> dict[str, Any]:
     return result
 
 
+def _apply_inline_overrides(
+    loaded_state: dict[str, Any], inline: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge -e overrides into a loaded --state file, `-e` wins.
+
+    `-e` values are caller inputs by definition. If the loaded file is
+    already namespaced (e.g. a prior --out snapshot), `migrate_legacy_state`
+    short-circuits on its existing `input` key and never looks at the root
+    again, so the overrides must land under `input` here rather than at the
+    root or they'd be unreachable via `{{input.<key>}}`. A file that isn't
+    namespaced yet is left to the usual root-level lift.
+    """
+    existing_input = loaded_state.get("input")
+    if isinstance(existing_input, dict):
+        existing_input.update(inline)
+    else:
+        loaded_state.update(inline)
+    return loaded_state
+
+
 def _find_last_effect_value(state: dict[str, Any]) -> Any:
     """Walk prime to find the last completed effect's value, recursing into dynamics."""
     prime = state.get("prime")
@@ -589,7 +609,7 @@ def run_cmd(
     if inline:
         if state:
             initial_state = json.loads(state.read_text(encoding="utf-8"))
-            initial_state.update(inline)
+            initial_state = _apply_inline_overrides(initial_state, inline)
         else:
             initial_state = inline
 
@@ -872,7 +892,7 @@ def run_library_cmd(
     if inline:
         if state:
             initial_state = json.loads(state.read_text(encoding="utf-8"))
-            initial_state.update(inline)
+            initial_state = _apply_inline_overrides(initial_state, inline)
         else:
             initial_state = inline
 
