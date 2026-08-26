@@ -80,7 +80,7 @@ Circuitry is a single-package Python orchestration runtime for deterministic exe
 
 ## Source Tree Reference
 
-See `docs/source-tree-analysis.md` for annotated folder and file layout.
+See the [Repository layout](../README.md#repository-layout) section of the README for the annotated folder layout.
 
 ## API Reference
 
@@ -88,7 +88,7 @@ See `docs/api-reference.md` for stable integration surface, exported symbols, an
 
 ## Development Workflow
 
-See `docs/development-guide.md` for setup, commands, and local verification steps.
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for setup, commands, and local verification steps.
 
 ## Deployment and Operations
 
@@ -101,4 +101,4 @@ No dedicated deployment manifests (Docker/K8s/Terraform/CI pipelines) are curren
   - `pytest`
   - `ruff check .`
   - `mypy src`
-- Practical runtime validation via example orchestrations in `orchestrations/` and CLI commands.
+- Practical runtime validation via the curation library (`bash scripts/smoke-curation.sh`) and CLI commands.
