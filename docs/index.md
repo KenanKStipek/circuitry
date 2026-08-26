@@ -1,69 +1,43 @@
-# Project Documentation Index
+# Documentation map
 
-Last Updated: 2026-05-08
+Start with the [README](../README.md) for install, first run, and the mental model. Then:
 
-## Public Debut Docs
+## The language
 
-- [Product Requirements (v0.1.0)](./prd.md) — original product brief and MVP scope
-- [Stability & Versioning Policy](./stability.md) — what counts as public API and the deprecation/semver rules
-- [Threat Model](./threat-model.md) — attack surfaces, mitigations, and known limitations
+- [**The Guidebook**](./guidebook/README.md) — the long-form tour, fourteen chapters in three acts, one running example. Also built as [PDF](./guidebook/circuitry-guidebook.pdf) and [EPUB](./guidebook/circuitry-guidebook.epub).
+  - Part I — Basics: [Prompt](./guidebook/01-prompt.md) · [Dynamic](./guidebook/02-dynamic.md) · [State](./guidebook/03-state.md) · [Configuration](./guidebook/04-configuration.md) · [Errors](./guidebook/05-errors.md)
+  - Part II — Cybernetics: [If](./guidebook/06-if.md) · [Loop](./guidebook/07-loop.md) · [Reflector](./guidebook/08-reflector.md)
+  - Part III — The machine in the world: [Composition](./guidebook/09-composition.md) · [Complexity](./guidebook/10-complexity.md) · [Decomposition](./guidebook/11-decomposition.md) · [Surfaces](./guidebook/12-surfaces.md) · [Tools and persistence](./guidebook/13-tools-and-persistence.md) · [The whole meal](./guidebook/14-the-whole-meal.md)
+- [Orchestration Reference](./orchestration-reference.md) — every field of every effect, state path addressing, patterns and antipatterns, and the LLM authoring rules.
+- [Grammar](./guidebook/grammar.md) — the formal grammar, derived from `orchestration.schema.json`.
+- [Troubleshooting State Paths](./troubleshooting-state-paths.md) — the workflow for a run that diverged, and the symptom table for loop paths.
 
-## Project Overview
+## Running orchestrations
 
-- **Type:** monolith (single-part)
-- **Primary Language:** Python
-- **Architecture:** layered runtime library (CLI + core runtime + adapter boundary)
+- [Named Profiles](./profiles.md) — per-run overlays: defaults, inputs, per-effect model/provider/enabled/routing, persistence.
+- [Complexity Configuration](./complexity-config.md) — `runtime.complexity`: the scoring, routing, and decomposition switches, their defaults, precedence, and errors.
+- [Routing](./routing.md) — signals, band tables, the full model precedence ladder, a worked example, and what the scorer cannot see.
+- [`cof score`](./score-command.md) — the static per-effect complexity preview.
+- [Terminal UI](./tui.md) — `cof tui`: keymap and every view.
+- [The Wizard](./wizard.md) — building orchestrations by talking; the turn contract and headless driving.
+- [Library Sources](./library-sources.md) — `runtime.library.sources`: curation, folder, and GitHub sources behind `cof list/info/run/eject`.
+- [Shared Library](./shared-library.md) · [Contributions](./shared-library-contributions.md) · [Growth](./shared-library-growth.md) — the publish-by-PR shared library and `cof fetch` / `cof run-library`.
+- [CyberDiner Demo Runbook](./cyberdiner-demo-runbook.md) — a job-queue broker adapter, end to end.
 
-## Quick Reference
+## Extending
 
-- **Tech Stack:** Python, Typer, Rich, PyYAML, Chevron, Ollama/OpenAI/Anthropic/LiteLLM/CyberDiner adapters
-- **Entry Point:** `scripts/circuitry` and `python -m circuitry.cli.app`
-- **Architecture Pattern:** deterministic orchestration runtime with explicit effect control flow
+- [API Reference](./api-reference.md) — the public Python surface.
+- [Plugin Extension Guide](./plugins.md) — runtime plugin hooks and registration; [ffmpeg](./plugins/ffmpeg.md) and [ComfyUI](./plugins/comfyui.md) tool plugin parameters.
+- [Adapter Conformance](./adapter-conformance.md) — the adapter contract and how to validate a new provider.
+- [Postgres Persistence](./postgres-persistence.md) — the persistence backends in production.
+- [Editor Highlighting](./editor-highlighting.md) — the VS Code grammar under `editor/`.
 
-## Generated Documentation
+## Project
 
-- [Project Overview](./project-overview.md)
-- [Architecture](./architecture.md)
-- [API Reference](./api-reference.md)
-- [Source Tree Analysis](./source-tree-analysis.md)
-- [Development Guide](./development-guide.md)
-- [Testing Policy](./testing-policy.md)
-- [Test Matrix](./test-matrix.md)
-- [Adapter Conformance](./adapter-conformance.md)
-- [CyberDiner Demo Runbook](./cyberdiner-demo-runbook.md)
-- [Postgres Persistence](./postgres-persistence.md)
-- [Plugin Extensions](./plugins.md)
-- [The Wizard](./wizard.md) — building orchestrations by talking; the turn contract and how to drive it headlessly
-- [Library Sources](./library-sources.md) — `runtime.library.sources`: curation + folder sources behind `cof list/info/run/eject`
-- [Named Profiles](./profiles.md)
-- [Shared Library Retrieval](./shared-library.md)
-- [Shared Library Contributions](./shared-library-contributions.md)
-- [Shared Library Growth](./shared-library-growth.md)
-- [Terminal UI](./tui.md) — app chrome (keymap, help overlay, resize breakpoints, TUI-mode logging) and the Library, Run, Runs, Doctor, Settings, Validate and Chat views
-- [Editor Highlighting](./editor-highlighting.md)
-- [Perceptron Boundary](./perceptron-boundary.md)
-- [Troubleshooting State Paths](./troubleshooting-state-paths.md)
-- [Project Scan Sections](./project-scan-sections.md)
-- [Complexity Configuration](./complexity-config.md) — `runtime.complexity`: the scoring/routing/decomposition switches, their defaults, and precedence
-- [`cof score`](./score-command.md) — the static per-effect complexity preview: dotted paths, unscoreable effects, and the `--json` payload
-- [Routing](./routing.md) — signals, band tables, the full model precedence ladder, a worked example, and what the scorer honestly cannot see
+- [Architecture](./architecture.md) — runtime flow and the code paths behind it.
+- [Stability & Versioning Policy](./stability.md) — what counts as public API and the semver rules for `0.x`.
+- [Threat Model](./threat-model.md) — attack surfaces, mitigations, allowlists, and known limitations.
+- [Testing Policy](./testing-policy.md) · [Test Matrix](./test-matrix.md) — what every change must cover.
+- [Contributing](../CONTRIBUTING.md) · [Releasing](../RELEASING.md) · [Security](../SECURITY.md) · [Changelog](../CHANGELOG.md)
 
-## Existing Domain Documentation
-
-- [Circuitry](./Circuitry 2c34435ec2e080c89fc0f253880c2612.md)
-- [Circuitry Terminology](./Circuitry Terminology 2c94435ec2e0808daeeff76f7ed1ed25.md)
-- [Circuitry Type System](./Circuitry Type System 2f34435ec2e0808394e7ddbb86d14a89.md)
-- [Conditional Cybernetic](./Conditional Cybernetic 2f34435ec2e08022864fd77c7f2d5b20.md)
-- [Dynamic](./Dynamic 2c94435ec2e0809d87eff08463c9ca97.md)
-- [Loop Cybernetic](./Loop Cybernetic 2f34435ec2e080ea9024ca18becd5df1.md)
-- [Prompt](./Prompt 2c94435ec2e080feb508d739b3272408.md)
-- [Reflector](./Reflector 2c94435ec2e080468aa4ebb005c4c635.md)
-- [Example Orchestration](./Example Orchestration 2f34435ec2e080ba995dcc11dd09047c.md)
-
-## Getting Started
-
-1. Read `project-overview.md` for scope and boundaries.
-2. Read `architecture.md` for runtime/component flow.
-3. Use `source-tree-analysis.md` to navigate implementation paths.
-4. Use `development-guide.md` for setup and local verification commands.
-5. For planning or brownfield PRD work, use this index as the primary input document.
+When adding a link here, append it at the end of its section rather than mid-list — parallel PRs then merge without conflicts (see [Contributing](../CONTRIBUTING.md#changelog-fragments)).
