@@ -1,7 +1,7 @@
-"""Coverage guard: every schema property is documented in the rules/ ruleset.
+"""Coverage guard: every schema property is documented in the bundled/rules/ ruleset.
 
-`orchestration.schema.json` is the validation authority; `rules/*.yml` is the
-authoring guide handed to models (via `load_all_rules`). When the schema grows
+`orchestration.schema.json` is the validation authority; `bundled/rules/*.yml` is
+the authoring guide handed to models (via `load_all_rules`). When the schema grows
 a field the rules never mention, models cannot discover it — and, worse, invent
 their own spelling for it. This test fails CI in that case.
 
@@ -21,7 +21,7 @@ import pytest
 from circuitry.rules import load_all_rules
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-RULES_DIR = PROJECT_ROOT / "rules"
+RULES_DIR = PROJECT_ROOT / "src" / "circuitry" / "bundled" / "rules"
 SCHEMA_PATH = PROJECT_ROOT / "src" / "circuitry" / "schema" / "orchestration.schema.json"
 
 # JSON Schema keywords whose values are property-name -> subschema maps.
@@ -131,30 +131,6 @@ def test_rule_example_is_a_valid_orchestration(rule_name: str, tmp_path: Path):
 
     result = validate_orchestration(orchestration_path=doc_path)
     assert result["ok"], f"{rule_name}.yml example failed validation: {result['errors']}"
-
-
-def test_bundled_rules_match_repo_rules():
-    """src/circuitry/bundled/rules/ is the packaged mirror of rules/ — keep it in sync.
-
-    `cof gen` reads the bundled copy, so a rules/ edit that never reaches
-    bundled/ ships an authoring guide nobody sees.
-    """
-    bundled_dir = PROJECT_ROOT / "src" / "circuitry" / "bundled" / "rules"
-    repo_names = {p.name for p in RULES_DIR.glob("*.yml")}
-    bundled_names = {p.name for p in bundled_dir.glob("*.yml")}
-
-    assert repo_names == bundled_names, (
-        f"rules/ and bundled/rules/ file sets differ: "
-        f"only in rules/={repo_names - bundled_names}, "
-        f"only in bundled/={bundled_names - repo_names}"
-    )
-
-    for name in sorted(repo_names):
-        repo_text = (RULES_DIR / name).read_text(encoding="utf-8")
-        bundled_text = (bundled_dir / name).read_text(encoding="utf-8")
-        assert repo_text == bundled_text, (
-            f"rules/{name} and bundled/rules/{name} differ — copy the updated file across."
-        )
 
 
 def test_use_and_interface_are_loaded():

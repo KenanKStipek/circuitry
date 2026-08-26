@@ -6,7 +6,7 @@ WORKDIR /app
 
 # Install circuitry from the repo at the built SHA — CD on main keeps the
 # farm's runtime in lockstep with the library.
-COPY pyproject.toml requirements.txt README.md LICENSE ./
+COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 RUN pip install --no-cache-dir .
 

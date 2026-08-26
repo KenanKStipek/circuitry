@@ -14,8 +14,7 @@
 #   1. Run a single improvement pass directly:
 #
 #        echo '{"input_yaml": "...", "original_prompt": "..."}' > input.json
-#        ./scripts/circuitry run orchestrations/orchestration_improver.yml \
-#          --state input.json --out improved.json
+#        cof run agents/improver --state input.json --out improved.json
 #
 #   2. Extract the improved YAML from state:
 #
@@ -24,18 +23,16 @@
 #          print(json.load(sys.stdin)['prime']['generate']['final_yaml']['value'])
 #        "
 #
-#   3. Use the improve-orchestration script for iterative refinement:
-#
-#        ./scripts/improve-orchestration \
-#          --orchestration path/to/orch.yml \
-#          --prompt "original intent"
+#   3. For iterative refinement, drive `cof run agents/improver` in a loop,
+#      feeding each pass's `final_yaml` back in as the next `input_yaml`
+#      until the output stops changing (convergence).
 #
 # ─── INPUT STATE ─────────────────────────────────────────────────────────────
 #
 #   Key              Type     Description
 #   input_yaml       string   The current orchestration YAML to improve
 #   original_prompt  string   The original intent/goal the orchestration was built for
-#   rules            string   LLM authoring rules injected from docs/orchestration-reference.md
+#   rules            string   LLM authoring rules injected from src/circuitry/bundled/rules/
 #
 # ─── OUTPUT STATE PATHS ──────────────────────────────────────────────────────
 #
@@ -168,7 +165,7 @@ effects:
       # Note: this is not a structural guarantee — the same model that wrote
       # the draft is reviewing it. The improve-orchestration script additionally
       # strips markdown fences and the caller should validate the output via
-      # `./scripts/circuitry validate` before relying on it in production.
+      # `cof validate` before relying on it in production.
       # PRIMARY OUTPUT: prime.generate.final_yaml.value
       - type: prompt
         name: final_yaml

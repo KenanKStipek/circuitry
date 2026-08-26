@@ -1,4 +1,4 @@
-"""Tests that rule files in rules/ stay in sync with orchestration.schema.json.
+"""Tests that rule files in bundled/rules/ stay in sync with orchestration.schema.json.
 
 Verifies field coverage, enum consistency, required fields, and loader output.
 """
@@ -12,7 +12,7 @@ import pytest
 import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-RULES_DIR = PROJECT_ROOT / "rules"
+RULES_DIR = PROJECT_ROOT / "src" / "circuitry" / "bundled" / "rules"
 SCHEMA_PATH = PROJECT_ROOT / "src" / "circuitry" / "schema" / "orchestration.schema.json"
 
 # Map rule file names to JSON schema $defs keys.
