@@ -50,9 +50,11 @@ def _load_sdk() -> Any:
     try:
         from surrealdb import Surreal  # type: ignore[import-not-found]
     except ImportError as exc:
+        # Rich renders `[...]` as console markup, so the extras form is
+        # spelled out rather than written as circuitry-cof[surrealdb].
         raise RuntimeError(
             "surrealdb: surrealdb SDK not installed. "
-            "Install with: pip install circuitry-cof[surrealdb]"
+            "Install with: pip install surrealdb"
         ) from exc
     return Surreal
 
@@ -333,8 +335,8 @@ class SurrealDBPlugin:
                 ok=False,
                 missing=missing,
                 message=(
-                    "pip install circuitry-cof[surrealdb]; export SURREAL_USER / "
-                    "SURREAL_PASS (or SURREAL_TOKEN); surreal start --user root --pass root"
+                    "pip install surrealdb; export SURREAL_USER / SURREAL_PASS "
+                    "(or SURREAL_TOKEN); surreal start --user root --pass root"
                 ),
             )
         return CheckResult(ok=True, missing=[])

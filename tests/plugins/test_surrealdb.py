@@ -184,6 +184,9 @@ def test_check_reports_missing_library_and_host(monkeypatch: pytest.MonkeyPatch)
         return real_find_spec(name, *args, **kwargs)
 
     monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
+    # The real SDK may be installed locally; check() short-circuits on an
+    # already-imported module, so drop it for the duration of this test.
+    monkeypatch.delitem(sys.modules, "surrealdb", raising=False)
     monkeypatch.delenv("SURREAL_USER", raising=False)
     monkeypatch.delenv("SURREAL_PASS", raising=False)
     monkeypatch.delenv("SURREAL_TOKEN", raising=False)
@@ -362,8 +365,14 @@ def test_missing_sdk_is_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SURREAL_USER", "root")
     monkeypatch.setenv("SURREAL_PASS", "root")
 
-    with pytest.raises(RuntimeError, match=r"pip install circuitry-cof\[surrealdb\]"):
+    with pytest.raises(RuntimeError, match="pip install surrealdb"):
         _plugin().execute(params={"mode": "select", "target": "person"})
+
+
+def test_readiness_message_avoids_rich_markup_brackets() -> None:
+    """`[surrealdb]` in a message is eaten by Rich's console markup."""
+    message = SurrealDBPlugin(url="ws://127.0.0.1:1/rpc").check().message or ""
+    assert "[" not in message
 
 
 # ---------------------------------------------------------------------------
