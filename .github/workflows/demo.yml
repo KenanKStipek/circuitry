@@ -1,0 +1,19 @@
+name: Demo Recording
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened, edited]
+concurrency:
+  group: demo-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  demo:
+    if: |
+      github.event.pull_request.draft == false &&
+      !contains(github.event.pull_request.body, '**WIP — run in progress**')
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      deployments: read
+    uses: KenanKStipek/agent-loop/.github/workflows/demo.yml@v1
+    secrets: inherit

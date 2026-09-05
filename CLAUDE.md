@@ -76,3 +76,5 @@ Runs can die at any moment; a pushed branch with no PR is invisible work.
 4. If a previous run already opened a PR for this issue, resume that branch —
    never open a duplicate.
 Never merge a PR. Never force-push. Branch naming: `issue-<number>-<short-slug>`.
+
+Before starting any task, read .agent-loop/process/AGENT.md — it is the execution contract for the agent loop.
