@@ -19,8 +19,7 @@
 #        echo '{"user_request": "Build an orchestration that summarizes articles"}' > input.json
 #
 #   2. Run the orchestration:
-#        ./scripts/circuitry run orchestrations/meta_orchestrator.yml \
-#          --state input.json --out out.json
+#        cof run agents/meta_orchestrator --state input.json --out out.json
 #
 #   3. Extract the generated YAML:
 #        cat out.json | python3 -c "

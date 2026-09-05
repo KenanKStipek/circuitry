@@ -1,5 +1,3 @@
--r requirements.txt
-
 pytest>=8.0
 # The `tui` extra, so tests/tui can drive the real Textual app instead of
 # skipping. Keep in sync with the `tui` extra in pyproject.toml.

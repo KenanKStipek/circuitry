@@ -17,16 +17,13 @@ Last Updated: 2026-05-08
 ## Quick Reference
 
 - **Tech Stack:** Python, Typer, Rich, PyYAML, Chevron, Ollama/OpenAI/Anthropic/LiteLLM/CyberDiner adapters
-- **Entry Point:** `scripts/circuitry` and `python -m circuitry.cli.app`
+- **Entry Point:** `cof` and `python -m circuitry.cli.app`
 - **Architecture Pattern:** deterministic orchestration runtime with explicit effect control flow
 
 ## Generated Documentation
 
-- [Project Overview](./project-overview.md)
 - [Architecture](./architecture.md)
 - [API Reference](./api-reference.md)
-- [Source Tree Analysis](./source-tree-analysis.md)
-- [Development Guide](./development-guide.md)
 - [Testing Policy](./testing-policy.md)
 - [Test Matrix](./test-matrix.md)
 - [Adapter Conformance](./adapter-conformance.md)
@@ -41,29 +38,12 @@ Last Updated: 2026-05-08
 - [Shared Library Growth](./shared-library-growth.md)
 - [Terminal UI](./tui.md) — app chrome (keymap, help overlay, resize breakpoints, TUI-mode logging) and the Library, Run, Runs, Doctor, Settings, Validate and Chat views
 - [Editor Highlighting](./editor-highlighting.md)
-- [Perceptron Boundary](./perceptron-boundary.md)
 - [Troubleshooting State Paths](./troubleshooting-state-paths.md)
-- [Project Scan Sections](./project-scan-sections.md)
 - [Complexity Configuration](./complexity-config.md) — `runtime.complexity`: the scoring/routing/decomposition switches, their defaults, and precedence
 - [`cof score`](./score-command.md) — the static per-effect complexity preview: dotted paths, unscoreable effects, and the `--json` payload
 - [Routing](./routing.md) — signals, band tables, the full model precedence ladder, a worked example, and what the scorer honestly cannot see
 
-## Existing Domain Documentation
-
-- [Circuitry](./Circuitry 2c34435ec2e080c89fc0f253880c2612.md)
-- [Circuitry Terminology](./Circuitry Terminology 2c94435ec2e0808daeeff76f7ed1ed25.md)
-- [Circuitry Type System](./Circuitry Type System 2f34435ec2e0808394e7ddbb86d14a89.md)
-- [Conditional Cybernetic](./Conditional Cybernetic 2f34435ec2e08022864fd77c7f2d5b20.md)
-- [Dynamic](./Dynamic 2c94435ec2e0809d87eff08463c9ca97.md)
-- [Loop Cybernetic](./Loop Cybernetic 2f34435ec2e080ea9024ca18becd5df1.md)
-- [Prompt](./Prompt 2c94435ec2e080feb508d739b3272408.md)
-- [Reflector](./Reflector 2c94435ec2e080468aa4ebb005c4c635.md)
-- [Example Orchestration](./Example Orchestration 2f34435ec2e080ba995dcc11dd09047c.md)
-
 ## Getting Started
 
-1. Read `project-overview.md` for scope and boundaries.
-2. Read `architecture.md` for runtime/component flow.
-3. Use `source-tree-analysis.md` to navigate implementation paths.
-4. Use `development-guide.md` for setup and local verification commands.
-5. For planning or brownfield PRD work, use this index as the primary input document.
+1. Read `architecture.md` for runtime/component flow.
+2. For planning or brownfield PRD work, use this index as the primary input document.
