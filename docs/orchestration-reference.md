@@ -718,12 +718,13 @@ the node, so observability sees the skip rather than a gap.
 
 - Mustache templates referencing it render empty:
   `"report on <{{prime.goal.value}}>"` → `"report on <>"`
-- CEL conditions that test for a value evaluate `False` — both by comparison
-  (`state.prime.goal.value == "yes"`) and via the existing error→`False`
-  behavior (`size(state.prime.goal.value) > 0`).
-- Negative tests are the exception worth knowing: `state.prime.goal.value != ""`
-  is `True` against `null`, exactly as it would be for any unset value. Prefer
-  positive tests in conditions that may read a disableable effect.
+- CEL conditions that read it evaluate `False` — a `state.` path that is unset
+  (missing, or resolving through `null`) makes the whole expression `False` by
+  rule, before evaluation, and logs a warning naming the path. That covers
+  comparisons (`state.prime.goal.value == "yes"`), sizes
+  (`size(state.prime.goal.value) > 0`) and negative tests
+  (`state.prime.goal.value != ""`) alike: nothing there is never a satisfied
+  condition.
 
 A run with no `--profile` is unaffected: `enabled` is never set from
 orchestration YAML, so every effect compiles as enabled.
@@ -758,6 +759,34 @@ CEL expressions (in `if.expr` and `while.expr`) evaluate against a root object n
 | `state.prime.pipeline.step.value != ""` | `my_effect.value != ""` |
 
 **Always use the full `state.prime.<name>.value` prefix in CEL expressions.**
+
+#### Supported subset, and what fails where
+
+`cof check` parses every `mode: cel` expression at compile time and rejects
+what this evaluator cannot run, naming the effect and the expression:
+
+```
+CEL expression at 'prime.effects[0]' (effect 'gate'): CEL negation '!' is not
+supported yet; write '== false' instead. Expression: '!state.prime.x.value'
+```
+
+| Supported | Not supported yet |
+|-----------|-------------------|
+| `==`, `!=`, `<`, `<=`, `>`, `>=` | `!` negation — write `== false` |
+| `&&`, `\|\|` | `has(...)` |
+| `true` / `false` literals, numbers, quoted strings | `.filter()`, `.map()`, `.all()`, `.exists()`, `.exists_one()` |
+| `size(...)`, `int(...)`, `string(...)` | comprehensions, the ternary `? :` |
+| `state.` dotted reads | anything over 4096 characters |
+
+At run time an expression that cannot be evaluated — a bad `size()` argument,
+an unknown function — **errors the effect** (`meta.error`) and fails the run,
+the same as a failing tool effect. It never quietly takes the `else` branch.
+Set `on_error: continue` on the conditional to opt into the else-branch
+fallback explicitly; the error is still recorded on `meta.error`.
+
+Reading *unset* state is not an error: see
+[Disabling Effects](#disabling-effects) — an unset path makes
+the expression `False` and logs a warning naming the path.
 
 ### Loop Iteration Paths
 

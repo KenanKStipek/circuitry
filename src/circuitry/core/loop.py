@@ -389,10 +389,32 @@ class LoopRuntime:
                 last_writes: dict[str, Any] = {}
 
                 while iteration_count < self.defn.max_iterations:
-                    # Check continuation condition
-                    should_continue = self._evaluate_condition(
-                        ctx=_scope_ctx(ctx, last_writes)
-                    )
+                    # Check continuation condition. A CEL expression that
+                    # cannot be evaluated raises (see ``cel_eval``) rather
+                    # than answering False — a broken condition used to be
+                    # indistinguishable from an exhausted loop.
+                    try:
+                        should_continue = self._evaluate_condition(
+                            ctx=_scope_ctx(ctx, last_writes)
+                        )
+                    except Exception as exc:
+                        if self.defn.on_error == "fail":
+                            termination_reason = "error"
+                            raise
+                        # break/continue: a condition we cannot evaluate can
+                        # never become false, so continuing would spin to
+                        # max_iterations. Both stop the loop, loudly.
+                        logger.warning(
+                            "Loop %r: while-condition failed (%s); on_error=%s, "
+                            "stopping the loop",
+                            self.defn.name or "<unnamed>",
+                            exc,
+                            self.defn.on_error,
+                        )
+                        termination_reason = "condition_error"
+                        if meta:
+                            meta["error"] = str(exc)
+                        break
 
                     if (
                         not should_continue

@@ -4,6 +4,7 @@ import re
 from dataclasses import replace
 from typing import Any, Literal, cast
 
+from .cel_eval import validate_cel_syntax
 from .conditional import ConditionalDefinition, ConditionDef
 from .dynamic import DynamicDefinition
 from .loop import LoopDefinition, LoopEachDef, LoopWhileDef
@@ -478,7 +479,11 @@ def _compile_conditional(
             f"Conditional at '{effect_path}': mode 'cel' requires an 'expr' field."
         )
     if mode == "cel":
-        validate_cel_expr(str(if_def.get("expr") or ""), effect_path=effect_path)
+        expr = str(if_def.get("expr") or "")
+        validate_cel_expr(expr, effect_path=effect_path)
+        validate_cel_syntax(
+            expr, effect_path=effect_path, effect_name=validated_name
+        )
 
     condition = ConditionDef(
         mode=mode,
@@ -567,8 +572,13 @@ def _compile_loop(
                     f"Loop while at '{effect_path}': mode 'cel' requires an 'expr' field."
                 )
             if mode == "cel":
-                validate_cel_expr(
-                    str(while_config.get("expr") or ""), effect_path=effect_path
+                while_expr = str(while_config.get("expr") or "")
+                validate_cel_expr(while_expr, effect_path=effect_path)
+                validate_cel_syntax(
+                    while_expr,
+                    effect_path=effect_path,
+                    effect_name=validated_name,
+                    label="Loop while CEL expression",
                 )
             while_def = LoopWhileDef(
                 mode=mode,
