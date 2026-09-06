@@ -8,5 +8,5 @@
  learn/hello                            
                                         
  Say hello in a creative way — the      
- 30/30 in all                           
+ 31/31 in all                           
  ⏎ Run  / Search  e Eject  s Source  r R

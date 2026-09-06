@@ -8,6 +8,8 @@ framework contracts layered on top of it (absent state reads false,
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 
 from circuitry.core.cel_eval import (
@@ -279,7 +281,7 @@ class TestValidator:
 
 
 class TestMacros:
-    CTX = {"input": {"items": [1, 2, 3], "empty": []}}
+    CTX: ClassVar[dict] = {"input": {"items": [1, 2, 3], "empty": []}}
 
     def test_all(self):
         assert evaluate_cel("state.input.items.all(i, i > 0)", self.CTX) is True
@@ -540,3 +542,37 @@ class TestCache:
         expr = "state.input.n > 1"
         assert evaluate_cel(expr, {"input": {"n": 2}}) is True
         assert evaluate_cel(expr, {"input": {"n": 0}}) is False
+
+
+# ---------------------------------------------------------------------------
+# Context projection — only what the expression reads is converted
+# ---------------------------------------------------------------------------
+
+
+class TestProjection:
+    def test_unread_state_does_not_have_to_be_convertible(self):
+        # A store holds every effect's output; a condition reads two paths
+        # out of it. Nothing outside those paths is touched.
+        class Unconvertible:
+            def __iter__(self):
+                raise AssertionError("state outside the expression was read")
+
+        ctx = {"input": {"n": 2}, "prime": {"big": {"value": Unconvertible()}}}
+        assert evaluate_cel("state.input.n > 1", ctx) is True
+
+    def test_projection_does_not_mutate_the_caller_state(self):
+        ctx = {"input": {"a": {"b": 1}}}
+        before = {"input": {"a": {"b": 1}}}
+        assert evaluate_cel("state.input.a.b == 1 && has(state.input.a.c)", ctx) is False
+        assert ctx == before
+
+    def test_overlapping_paths_keep_the_whole_subtree(self):
+        # `state.input.a` is read whole *and* through a longer path; the
+        # shorter read must still see every sibling key.
+        ctx = {"input": {"a": {"b": 1, "c": 2}}}
+        expr = "size(state.input.a) == 2 && state.input.a.b == 1"
+        assert evaluate_cel(expr, ctx) is True
+
+    def test_state_used_as_a_value_still_sees_everything(self):
+        ctx = {"input": {"n": 1}, "prime": {"x": {"value": 2}}}
+        assert evaluate_cel("size(state) == 2", ctx) is True

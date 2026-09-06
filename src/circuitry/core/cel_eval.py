@@ -148,7 +148,7 @@ def evaluate_cel(expr: str, ctx: dict[str, Any], *, strict: bool = False) -> boo
         return False
 
     try:
-        result = compiled.runner.evaluate({"state": _to_cel(ctx)})
+        result = compiled.runner.evaluate({"state": compiled.context(ctx)})
         if isinstance(result, CELEvalError):
             raise result
     except Exception as exc:
@@ -241,6 +241,9 @@ class _Compiled:
     runner: celpy.Runner
     #: ``(dotted path, guarded by has())`` for every ``state.`` read.
     paths: tuple[tuple[str, bool], ...]
+    #: True when the expression names ``state`` other than as the root of a
+    #: dotted read (``size(state)``), so :func:`_project` cannot narrow it.
+    reads_whole_state: bool
 
     @property
     def read_paths(self) -> tuple[str, ...]:
@@ -251,6 +254,52 @@ class _Compiled:
             for path, is_guard in self.paths
             if not is_guard and path not in guarded
         )
+
+    def context(self, ctx: Mapping[str, Any]) -> Any:
+        """*ctx* as CEL values, narrowed to what this expression reads.
+
+        Converting a whole run's state costs time proportional to the state,
+        not to the expression, and a condition typically reads two or three
+        paths out of a store holding every effect's output.
+        """
+        if self.reads_whole_state:
+            return _to_cel(ctx)
+        return _to_cel(_project(ctx, [path for path, _ in self.paths]))
+
+
+def _project(ctx: Mapping[str, Any], paths: Sequence[str]) -> dict[str, Any]:
+    """A minimal mapping carrying just *paths* out of *ctx*.
+
+    Interior mappings are rebuilt rather than shared, so nothing here can
+    write back into the caller's state; leaf values are referenced as-is.
+    Shortest paths are placed first, so a whole subtree taken by
+    ``state.a`` is never re-entered and partially overwritten by
+    ``state.a.b``.
+    """
+    root: dict[str, Any] = {}
+    for path in sorted(set(paths), key=lambda p: (p.count("."), p)):
+        source: Any = ctx
+        target = root
+        segments = path.split(".")[1:]
+        for index, part in enumerate(segments):
+            if not isinstance(source, Mapping) or part not in source:
+                break
+            value = source[part]
+            placed = target.get(part, _ABSENT)
+            if placed is value:
+                break  # a shorter path already took this subtree whole
+            if index == len(segments) - 1:
+                target[part] = value
+                break
+            if not isinstance(placed, dict):
+                target[part] = {}
+            target = target[part]
+            source = value
+    return root
+
+
+#: Sentinel for "no value placed yet" — ``None`` is a legitimate value.
+_ABSENT = object()
 
 
 #: CEL's numeric family. ``BoolType`` subclasses ``int`` in celpy, so it
@@ -315,9 +364,11 @@ def _compile(expr: str) -> _Compiled:
             tree = _ENV.compile(expr)
         except Exception as exc:
             raise CelValidationError(str(exc).strip(), expression=expr) from exc
+        paths = tuple(_collect_state_paths(tree))
         compiled = _Compiled(
             runner=_ENV.program(tree, functions=_FUNCTIONS),
-            paths=tuple(_collect_state_paths(tree)),
+            paths=paths,
+            reads_whole_state=_count_state_idents(tree) != len(paths),
         )
         if len(_CACHE) >= _CACHE_MAX_ENTRIES:
             _CACHE.clear()
@@ -394,6 +445,19 @@ def _collect_state_paths(
         for child in node.children
         for path in _collect_state_paths(child, guarded=guarded)
     ]
+
+
+def _count_state_idents(node: Any) -> int:
+    """How many times ``state`` is named anywhere under *node*.
+
+    Compared against the number of collected paths to tell a plain dotted
+    read from a use of ``state`` as a value in its own right.
+    """
+    if not isinstance(node, lark.Tree):
+        return 0
+    if str(node.data) == "ident" and node.children:
+        return 1 if str(node.children[0]) == "state" else 0
+    return sum(_count_state_idents(child) for child in node.children)
 
 
 def _first_unresolved(
