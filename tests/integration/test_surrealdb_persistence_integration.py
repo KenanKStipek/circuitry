@@ -110,5 +110,10 @@ def test_surrealdb_run_persists_one_run_and_n_effect_rows(tmp_path: Path) -> Non
 
     assert len(run_rows) == 1
     assert run_rows[0]["status"] == "success"
-    assert len(effect_rows) >= 1
-    assert effect_rows[0]["state_path"] == "prime.greet"
+    # One row for the leaf ``greet`` prompt plus one for the implicit root
+    # dynamic itself (state_path "prime") — same shape the sqlite/clickhouse
+    # persistence tests assert on. SurrealDB doesn't guarantee row order for
+    # an unordered SELECT, so check membership rather than index 0.
+    state_paths = {row["state_path"] for row in effect_rows}
+    assert "prime.greet" in state_paths
+    assert "prime" in state_paths
