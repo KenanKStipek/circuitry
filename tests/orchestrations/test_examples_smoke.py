@@ -23,6 +23,13 @@ def _curated_files() -> list[Path]:
 
 CURATED_EXAMPLES = [str(p.relative_to(EXAMPLES_DIR)) for p in _curated_files()]
 
+# cel_showcase.yml demonstrates `strict: true`, which raises on an unset state
+# path by design — the dry-run smoke test needs `input.role` set so that gate
+# evaluates instead of exercising the strict-failure path it's meant to show off.
+_STATE_OVERRIDES: dict[str, dict] = {
+    "learn/cel_showcase.yml": {"input": {"role": "guest"}},
+}
+
 
 def test_example_manifest_covers_curated_set() -> None:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
@@ -53,7 +60,7 @@ def test_examples_inspect(rel: str) -> None:
 def test_examples_dry_run_smoke(rel: str) -> None:
     result = run_orchestration(
         orchestration_path=EXAMPLES_DIR / rel,
-        state={},
+        state=_STATE_OVERRIDES.get(rel, {}),
         dry_run=True,
         config=CircuitryConfig(default_adapter="ollama", default_model="phi3:mini"),
     )

@@ -24,7 +24,7 @@ def test_named_conditional_writes_under_wrapper_path() -> None:
             {
                 "type": "if",
                 "name": "gate",
-                "if": {"mode": "cel", "expr": "state.input.ok == True"},
+                "if": {"mode": "cel", "expr": "state.input.ok == true"},
                 "then": [{"type": "prompt", "name": "show_admin", "template": "ok"}],
                 "else": [{"type": "prompt", "name": "show_user", "template": "no"}],
             }
@@ -43,7 +43,7 @@ def test_transparent_conditional_does_not_create_wrapper_segment() -> None:
         "effects": [
             {
                 "type": "if",
-                "if": {"mode": "cel", "expr": "state.input.ok == True"},
+                "if": {"mode": "cel", "expr": "state.input.ok == true"},
                 "then": [{"type": "prompt", "name": "show_admin", "template": "ok"}],
                 "else": [{"type": "prompt", "name": "show_user", "template": "no"}],
             }
