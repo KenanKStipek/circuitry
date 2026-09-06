@@ -137,7 +137,12 @@ class ConditionalRuntime:
             meta = None
             child_store = store
 
-        # Evaluate condition
+        # Evaluate condition. A CEL expression that cannot be evaluated
+        # raises (see ``cel_eval``); the failure is recorded on the effect
+        # and, under the default ``on_error: fail``, propagates so the run
+        # ends ``ok=False`` — the same shape a failing tool effect has.
+        # Falling to the else branch is only ever an explicit opt-in via
+        # ``on_error: continue``.
         try:
             result = self._evaluate_condition(ctx=ctx)
         except Exception as e:
@@ -151,6 +156,12 @@ class ConditionalRuntime:
                     node["value"] = {"result": None, "branch": None, "effects": {}}
                 return
             # continue - default to else branch
+            logger.warning(
+                "Conditional %r: condition failed (%s); on_error=continue, "
+                "taking the else branch",
+                self.defn.name or "<unnamed>",
+                e,
+            )
             result = False
 
         branch = "then" if result else "else"
@@ -386,7 +397,12 @@ Answer (yes/no):"""
         return answer in ("yes", "true", "1", "y")
 
     def _evaluate_cel(self, *, ctx: dict[str, Any]) -> bool:
-        """Deterministic evaluation: evaluate CEL expression against state."""
+        """Deterministic evaluation: evaluate CEL expression against state.
+
+        Propagates ``CelEvaluationError`` — a broken expression is a
+        defect, not a false condition. ``execute`` records it on the
+        effect's ``meta.error`` and then honours ``on_error``.
+        """
         from .cel_eval import evaluate_cel
 
         return evaluate_cel(self.defn.condition.expr or "", ctx)
