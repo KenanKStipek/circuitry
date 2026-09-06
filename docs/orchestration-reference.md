@@ -175,6 +175,7 @@ Evaluates a condition against state and executes exactly one branch (`then` or `
 | `if.mode` | string | no | `model` | `model` or `cel` |
 | `if.template` | string | model only | — | LLM evaluates and returns boolean. The runtime wraps it and appends `Answer (yes/no):`, so phrase the ask as yes/no — `yes`, `true`, `1` and `y` all parse as true |
 | `if.expr` | string | cel only | — | CEL expression; must use `state.prime.<name>.value` prefix |
+| `if.strict` | bool | no | `false` | cel only. When true, an unset `state.` path raises instead of making the expression `False` |
 | `then` | array | yes | — | Effects when condition is true |
 | `else` | array | no | `[]` | Effects when condition is false |
 | `threshold` | number | no | `0.5` | Confidence threshold for model mode |
@@ -244,6 +245,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `while.mode` | string | no | `model` | `model` or `cel` |
 | `while.template` | string | model only | — | LLM returns boolean for continuation decision. The runtime wraps it and appends `Should the loop continue? Answer (yes/no):`, so phrase the ask as yes/no — `yes`, `true`, `1` and `y` all parse as true |
 | `while.expr` | string | cel only | — | CEL expression against state |
+| `while.strict` | bool | no | `false` | cel only. When true, an unset `state.` path raises instead of making the expression `False` |
 | `max_iterations` | integer | no | `100` | Hard cap on iterations |
 | `min_iterations` | integer | no | `0` | Minimum iterations before condition is checked |
 | `on_error` | string | no | `fail` | `fail`, `break`, `continue` |
@@ -760,23 +762,47 @@ CEL expressions (in `if.expr` and `while.expr`) evaluate against a root object n
 
 **Always use the full `state.prime.<name>.value` prefix in CEL expressions.**
 
-#### Supported subset, and what fails where
+#### The language
+
+Expressions are evaluated by [cel-python](https://pypi.org/project/cel-python/),
+a real [CEL](https://github.com/google/cel-spec) implementation, so the whole
+language is available — not a subset:
+
+| Construct | Example |
+|-----------|---------|
+| Comparison | `state.prime.score.value >= 0.8` |
+| Boolean logic, negation | `state.input.a && !state.input.b`, `state.input.a \|\| state.input.b` |
+| Ternary | `state.input.tier == 'pro' ? 10 : 1` |
+| Field presence | `has(state.prime.summary.value)` |
+| Comprehension macros | `state.input.items.all(i, i.score > 0)`, `.exists(...)`, `.exists_one(...)`, `.map(...)`, `.filter(...)` |
+| Standard functions | `size(...)`, `int(...)`, `string(...)`, `double(...)`, `matches(...)` |
+| String methods | `state.input.url.startsWith('https://')`, `.contains(...)`, `.endsWith(...)` |
+| Membership | `'admin' in state.input.roles` |
+| List / map literals | `state.input.role in ['admin', 'owner']` |
+
+Two CEL rules that surprise people coming from Python:
+
+- **Equality is typed.** `1 == true` is `false`, and `'1' == 1` is `false`. Only
+  `int`/`uint`/`double` compare across types (`1 == 1.0` is `true`).
+- **`&&` / `||` / `!`, not `and` / `or` / `not`.** Python spellings do not parse.
+
+Expressions are capped at 4096 characters and parsed once, then cached — a
+loop's `while` expression pays the parser cost on its first iteration only.
+
+Only `state` is in scope. Values are converted into CEL's type system on the
+way in, so an expression cannot reach a Python object's attributes, methods or
+class; anything with no CEL counterpart reads as `null`.
+
+#### What fails where
 
 `cof check` parses every `mode: cel` expression at compile time and rejects
-what this evaluator cannot run, naming the effect and the expression:
+what is not CEL, naming the effect and the expression:
 
 ```
-CEL expression at 'prime.effects[0]' (effect 'gate'): CEL negation '!' is not
-supported yet; write '== false' instead. Expression: '!state.prime.x.value'
+CEL expression at 'prime.effects[0]' (effect 'gate'): expression does not parse
+(not state.prime.x.value
+ ^). Expression: 'not state.prime.x.value'
 ```
-
-| Supported | Not supported yet |
-|-----------|-------------------|
-| `==`, `!=`, `<`, `<=`, `>`, `>=` | `!` negation — write `== false` |
-| `&&`, `\|\|` | `has(...)` |
-| `true` / `false` literals, numbers, quoted strings | `.filter()`, `.map()`, `.all()`, `.exists()`, `.exists_one()` |
-| `size(...)`, `int(...)`, `string(...)` | comprehensions, the ternary `? :` |
-| `state.` dotted reads | anything over 4096 characters |
 
 At run time an expression that cannot be evaluated — a bad `size()` argument,
 an unknown function — **errors the effect** (`meta.error`) and fails the run,
@@ -787,6 +813,40 @@ fallback explicitly; the error is still recorded on `meta.error`.
 Reading *unset* state is not an error: see
 [Disabling Effects](#disabling-effects) — an unset path makes
 the expression `False` and logs a warning naming the path.
+
+#### `strict: true` — when absent state must not pick a branch
+
+The default is deliberate: a disabled node or an effect that has not run yet
+reads as `False`, matching the way a template referencing one renders empty.
+For a condition where a missing field silently choosing a branch would be
+unsafe — an order-exit rule, a safety gate — set `strict: true` and an
+unresolved path raises instead:
+
+```yaml
+- type: if
+  name: exit_gate
+  if:
+    mode: cel
+    strict: true
+    expr: "state.prime.tick.value.price <= state.input.stop_price"
+  then:
+    - type: tool
+      name: close_position
+      tool: webhook
+```
+
+Without `strict`, a `tick` that failed to produce a `price` would evaluate the
+whole condition to `False` and take the *no-exit* branch. With it, the effect
+errors and `on_error` decides what happens next.
+
+`strict` applies to `mode: cel` only, on both `if:` and a loop's `while:`.
+
+A path passed to `has()` is exempt from the absent-state rule anywhere in the
+expression — that is what `has()` is for:
+
+```yaml
+expr: "has(state.prime.score.value) && state.prime.score.value > 0.8"
+```
 
 ### Loop Iteration Paths
 

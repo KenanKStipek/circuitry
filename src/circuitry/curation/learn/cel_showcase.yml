@@ -1,0 +1,207 @@
+# CEL showcase — every construct the `mode: cel` evaluator supports.
+#
+# Expressions are evaluated by cel-python, a real CEL implementation, so
+# this is the full language: macros, has(), '!', the '?:' ternary, the
+# standard function library and CEL's own type rules.
+#
+# Everything below branches on `input.*`, so the whole file is
+# deterministic: run it twice with the same -e flags and you get the same
+# branches. The prompt effects are only there to make each branch visible.
+interface:
+  inputs:
+    role:
+      type: string
+      required: false
+      description: "Role to gate on. Try 'admin'."
+    scores:
+      type: array
+      required: false
+      description: "Numbers to run the comprehension macros over."
+    tier:
+      type: string
+      required: false
+      description: "Tier for the ternary. Try 'pro'."
+
+effects:
+  # ── `!` negation and `&&` ────────────────────────────────────────────
+  # The translator this evaluator replaced could not run '!' at all.
+  - type: if
+    name: not_admin
+    if:
+      mode: cel
+      expr: "!(state.input.role == 'admin')"
+    then:
+      - type: prompt
+        name: say
+        template: "Say: standard access."
+    else:
+      - type: prompt
+        name: say
+        template: "Say: administrator access."
+
+  # ── has() — field presence, and the guard that makes an absent read
+  # safe. Without the has(), an unset `bonus` would make the whole
+  # expression false by rule; with it, the expression handles absence.
+  - type: if
+    name: bonus_declared
+    if:
+      mode: cel
+      expr: "has(state.input.bonus) && state.input.bonus > 0"
+    then:
+      - type: prompt
+        name: say
+        template: "Say: bonus applied."
+    else:
+      - type: prompt
+        name: say
+        template: "Say: no bonus."
+
+  # ── Comprehension macros: all / exists / exists_one / map / filter ───
+  - type: if
+    name: every_score_passes
+    if:
+      mode: cel
+      expr: "state.input.scores.all(s, s >= 0)"
+    then:
+      - type: prompt
+        name: say
+        template: "Say: all scores are non-negative."
+    else:
+      - type: prompt
+        name: say
+        template: "Say: at least one score is negative."
+
+  - type: if
+    name: any_high_score
+    if:
+      mode: cel
+      expr: "state.input.scores.exists(s, s > 90)"
+    then:
+      - type: prompt
+        name: say
+        template: "Say: there is a high score."
+    else:
+      - type: prompt
+        name: say
+        template: "Say: no high score."
+
+  - type: if
+    name: exactly_one_zero
+    if:
+      mode: cel
+      expr: "state.input.scores.exists_one(s, s == 0)"
+    then:
+      - type: prompt
+        name: say
+        template: "Say: exactly one zero."
+    else:
+      - type: prompt
+        name: say
+        template: "Say: not exactly one zero."
+
+  - type: if
+    name: most_scores_pass
+    if:
+      mode: cel
+      expr: "size(state.input.scores.filter(s, s >= 50)) * 2 > size(state.input.scores)"
+    then:
+      - type: prompt
+        name: say
+        template: "Say: most scores pass."
+    else:
+      - type: prompt
+        name: say
+        template: "Say: most scores fail."
+
+  - type: if
+    name: doubling_keeps_the_count
+    if:
+      mode: cel
+      expr: "size(state.input.scores.map(s, s * 2)) == size(state.input.scores)"
+    then:
+      - type: prompt
+        name: say
+        template: "Say: map preserved the list length."
+    else:
+      - type: prompt
+        name: say
+        template: "Say: unreachable."
+
+  # ── The '?:' ternary, and list-literal membership ────────────────────
+  - type: if
+    name: tiered_quota
+    if:
+      mode: cel
+      expr: "(state.input.tier == 'pro' ? 100 : 10) > size(state.input.scores)"
+    then:
+      - type: prompt
+        name: say
+        template: "Say: within quota."
+    else:
+      - type: prompt
+        name: say
+        template: "Say: over quota."
+
+  - type: if
+    name: privileged_role
+    if:
+      mode: cel
+      expr: "state.input.role in ['admin', 'owner']"
+    then:
+      - type: prompt
+        name: say
+        template: "Say: privileged."
+    else:
+      - type: prompt
+        name: say
+        template: "Say: unprivileged."
+
+  # ── CEL equality is typed: 1 == true is FALSE, unlike Python. This
+  # branch is the proof — it always takes `else`.
+  - type: if
+    name: spec_equality
+    if:
+      mode: cel
+      expr: "1 == true"
+    then:
+      - type: prompt
+        name: say
+        template: "Say: unreachable — CEL never equates an int with a bool."
+    else:
+      - type: prompt
+        name: say
+        template: "Say: 1 == true is false in CEL."
+
+  # ── String functions from the standard library ───────────────────────
+  - type: if
+    name: role_shape
+    if:
+      mode: cel
+      expr: "size(state.input.role) > 0 && state.input.role.matches('^[a-z]+$')"
+    then:
+      - type: prompt
+        name: say
+        template: "Say: role is lowercase letters."
+    else:
+      - type: prompt
+        name: say
+        template: "Say: role is not lowercase letters."
+
+  # ── strict: true — an unset path must NOT quietly pick a branch.
+  # `input.role` is supplied, so this evaluates normally. Drop `-e role=`
+  # and the effect errors instead of silently taking `else`, which is the
+  # whole point: a safety gate must never fail open.
+  - type: if
+    name: strict_gate
+    if:
+      mode: cel
+      strict: true
+      expr: "state.input.role != ''"
+    then:
+      - type: prompt
+        name: say
+        template: "Say: role was supplied."
+    else:
+      - type: prompt
+        name: say
+        template: "Say: role was empty."

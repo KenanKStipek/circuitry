@@ -503,6 +503,23 @@
       ],
       "tags": ["decomposition", "complexity", "meta", "self-validating", "yaml", "planner"],
       "example": "cof run agents/decompose --state source.json"
+    },
+    {
+      "name": "learn/cel_showcase",
+      "file": "learn/cel_showcase.yml",
+      "category": "learn",
+      "intent": "CEL expressions \u2014 macros, has(), '!', ternary, typed equality, strict",
+      "description": "Template: every construct the mode: cel evaluator supports, one branch each.",
+      "when_to_use": "Reach for it when writing a mode: cel condition and you want to watch the construct work before you rely on it.",
+      "primitives": ["if", "prompt"],
+      "difficulty": "intermediate",
+      "backends": ["llm"],
+      "inputs": {
+        "role": {"type": "string", "required": false, "description": "Role to gate on. Try 'admin'."},
+        "scores": {"type": "array", "required": false, "description": "Numbers for the comprehension macros to run over."},
+        "tier": {"type": "string", "required": false, "description": "Tier for the ternary. Try 'pro'."}
+      },
+      "example": "cof run learn/cel_showcase -e role=admin -e scores='[10, 0, 95]' -e tier=pro"
     }
   ]
 }
