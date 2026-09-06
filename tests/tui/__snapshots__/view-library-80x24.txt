@@ -13,11 +13,11 @@
   │└── agents (5)││learn/loop         ▄▄││ Category    learn                 │  
   │              ││learn/reflector      ││ File        learn/hello.yml    ▁▁ │  
   │              ││learn/cyberdiner_h…  ││ Difficulty  beginner              │  
-  │              ││utilities/summarize  ││ Primitives  prompt                │  
-  │              ││utilities/critique   ││ Backends    llm                   │  
-  │              ││utilities/refine     ││ Tags        —                     │  
-  │              ││utilities/judge      ││                                   │  
-  │           ▋  ││utilities/classify   ││ Inputs                            │  
+  │              ││learn/surrealdb_ro…  ││ Primitives  prompt                │  
+  │              ││utilities/summarize  ││ Backends    llm                   │  
+  │              ││utilities/critique   ││ Tags        —                     │  
+  │              ││utilities/refine     ││                                   │  
+  │           ▋  ││utilities/judge      ││ Inputs                            │  
   ╰──────────────╯╰─────────────────────╯╰───────────────────────────────────╯  
   31/31 in all                                                                  
                                                                                 

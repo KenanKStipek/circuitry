@@ -611,7 +611,7 @@ Tool effects reach outward: a computation whose result isn't a token stream — 
 | Browser automation | `playwright`, `screenshot` |
 | Communication | `email_smtp`, `slack`, `discord` |
 | Productivity SaaS | `github`, `jira`, `linear`, `notion`, `gcalendar`, `gdrive` |
-| Storage / cloud | `s3` (tool variant), `surrealdb` |
+| Storage / cloud | `s3` (tool variant), `surrealdb` ([docs](docs/plugins/surrealdb.md)) |
 | Audio / image / video | `ffmpeg`, `comfyui`, `imagemagick`, `exiftool`, `ocr`, `yt_dlp` |
 | PDF / docs | `pdf_extract`, `pdf_render`, `pandoc`, `mediainfo` |
 | Embeddings / RAG | `embed`, `rerank`, `vector_search` |
