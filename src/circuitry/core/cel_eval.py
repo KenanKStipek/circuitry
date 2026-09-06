@@ -238,13 +238,17 @@ _UNSUPPORTED: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     (
         re.compile(r"\bhas\s*\("),
-        "the CEL 'has()' macro is not supported yet; compare the field "
-        "directly instead.",
+        (
+            "the CEL 'has()' macro is not supported yet; compare the field "
+            "directly instead."
+        ),
     ),
     (
         re.compile(r"\.\s*(?:filter|map|all|exists_one|exists)\s*\("),
-        "CEL comprehension macros (.filter/.map/.all/.exists/.exists_one) "
-        "are not supported yet; use 'size(...)' or a loop effect instead.",
+        (
+            "CEL comprehension macros (.filter/.map/.all/.exists/.exists_one) "
+            "are not supported yet; use 'size(...)' or a loop effect instead."
+        ),
     ),
     (
         re.compile(r"\bfor\b"),
@@ -252,8 +256,10 @@ _UNSUPPORTED: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     (
         re.compile(r"\?"),
-        "the conditional/ternary operator ('?:', '?.') is not supported "
-        "yet; use a conditional effect instead.",
+        (
+            "the conditional/ternary operator ('?:', '?.') is not supported "
+            "yet; use a conditional effect instead."
+        ),
     ),
 )
 

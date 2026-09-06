@@ -509,7 +509,7 @@ export type LoopEffect = EffectRecord<LoopValue, LoopMeta>;
 export type LoopValue = {
   iterations: number;
   termination: {
-    reason: "condition_false" | "max_iterations" | "collection_exhausted" | "collection_unresolved" | "error";
+    reason: "condition_false" | "condition_error" | "max_iterations" | "collection_exhausted" | "collection_unresolved" | "error";
     detail?: string;
   };
 
