@@ -47,6 +47,7 @@ Last Updated: 2026-05-08
 - [Complexity Configuration](./complexity-config.md) — `runtime.complexity`: the scoring/routing/decomposition switches, their defaults, and precedence
 - [`cof score`](./score-command.md) — the static per-effect complexity preview: dotted paths, unscoreable effects, and the `--json` payload
 - [Routing](./routing.md) — signals, band tables, the full model precedence ladder, a worked example, and what the scorer honestly cannot see
+- [`surrealdb` tool plugin](./plugins/surrealdb.md) — SurrealQL + record operations, env-only credentials, readiness and error mapping
 
 ## Existing Domain Documentation
 
