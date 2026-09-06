@@ -87,6 +87,8 @@ linear = ["requests>=2.28"]
 gcalendar = ["google-api-python-client>=2.100", "google-auth>=2.20"]
 gdrive = ["google-api-python-client>=2.100", "google-auth>=2.20"]
 "s3-tool" = ["boto3>=1.28"]
+# Shared by the `surrealdb` tool plugin and the `surrealdb` B-prime
+# persistence runtime plugin — one extra, one SDK, both surfaces.
 surrealdb = ["surrealdb>=1.0"]
 
 # Browser automation.
@@ -109,6 +111,11 @@ mysql = ["mysql-connector-python>=8.0"]
 duckdb = ["duckdb>=0.9"]
 mssql = ["pyodbc>=5.0"]
 clickhouse = ["clickhouse-connect>=0.7"]
+
+# SurrealDB B-prime persistence runtime plugin uses SurrealQL, not SQL,
+# but the same runs+effects shape as the dialects above. It shares the
+# `surrealdb` extra (defined above, alongside the `s3-tool` extra) with
+# the `surrealdb` tool plugin.
 
 # Document / KV / object / append-log persistence runtime plugins.
 # jsonl-file uses stdlib only (no extra required).
