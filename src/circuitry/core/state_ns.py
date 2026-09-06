@@ -33,9 +33,6 @@ NAMESPACES: tuple[str, ...] = ("input", "prime", "runtime")
 #: The namespace caller-supplied values live under.
 INPUT_NS = "input"
 
-#: ``state.<key>`` references inside a CEL expression.
-_CEL_STATE_KEY = re.compile(r"\bstate\.([A-Za-z_][A-Za-z0-9_]*)")
-
 #: Mustache tag keys: ``{{name}}``, ``{{{name}}}``, ``{{&name}}``, and the
 #: section forms ``{{#name}}``/``{{^name}}``/``{{/name}}``. Comments and
 #: partials never match because ``!``/``>`` are in neither character class.
@@ -108,9 +105,21 @@ def validate_each_in_path(path: str, *, effect_path: str) -> None:
 
 
 def validate_cel_expr(expr: str, *, effect_path: str) -> None:
-    """Hard-error on ``state.<key>`` where ``<key>`` is not a namespace."""
-    for match in _CEL_STATE_KEY.finditer(expr or ""):
-        key = match.group(1)
+    """Hard-error on ``state.<key>`` where ``<key>`` is not a namespace.
+
+    The paths come off the CEL parse tree, so a quoted ``'state.topic'``
+    is a string literal and not a violation. An expression that does not
+    parse is left alone here — ``cel_eval.validate_cel_syntax`` reports
+    that with the parser's own message.
+    """
+    from .cel_eval import CelError, state_paths
+
+    try:
+        paths = state_paths(expr or "")
+    except CelError:
+        return
+    for path in paths:
+        key = path.split(".")[1]
         if key not in NAMESPACES:
             raise ValueError(
                 f"CEL expression at '{effect_path}': 'state.{key}' does not "

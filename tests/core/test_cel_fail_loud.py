@@ -2,9 +2,9 @@
 
 Two halves, matching the two ways a bad expression used to disappear:
 
-* **Compile time.** ``cof check`` parses every ``mode: cel`` expression and
-  names unsupported CEL, so ``!state.prime.x.value`` is rejected before a
-  run dispatches instead of quietly meaning "false" forever.
+* **Compile time.** ``cof check`` parses every ``mode: cel`` expression
+  with the real CEL parser, so an expression that is not CEL is rejected
+  before a run dispatches instead of quietly meaning "false" forever.
 * **Run time.** An expression that cannot be evaluated errors the effect
   (``meta.error``) and ends the run ``ok=False``, the same shape a failing
   tool effect has — never a silent ``else`` branch.
@@ -12,6 +12,11 @@ Two halves, matching the two ways a bad expression used to disappear:
 The line is drawn at the *expression*: an unset ``state.`` path is data,
 not a defect, and still reads false (``tests/core/test_disabled_effects``
 pins that contract). See ``core.cel_eval``'s module docstring.
+
+Since #185 the evaluator is ``cel-python``, so the constructs #184 had to
+reject by name — ``!``, ``has()``, the comprehension macros, ``?:`` — are
+supported and must now *pass* ``cof check``. That reversal is asserted
+here on purpose.
 """
 
 from __future__ import annotations
@@ -77,16 +82,54 @@ def _conditional_orch(expr: str, *, on_error: str | None = None) -> dict:
 # ── compile time: cof check ──────────────────────────────────────────────────
 
 
-UNSUPPORTED_CEL = [
+#: Real CEL that #184 had to reject by name and #185 makes work.
+ONCE_UNSUPPORTED_CEL = [
     "!state.prime.x.value",
     "has(state.input.name)",
     "size(state.input.items.filter(i, i > 1)) > 0",
     "state.input.ok ? true : false",
+    "state.input.items.all(i, i > 0)",
+    "state.input.items.exists_one(i, i == 1)",
 ]
 
 
-@pytest.mark.parametrize("expr", UNSUPPORTED_CEL)
-def test_check_rejects_unsupported_cel_naming_effect_and_expression(
+@pytest.mark.parametrize("expr", ONCE_UNSUPPORTED_CEL)
+def test_check_accepts_the_cel_the_translator_could_not_run(
+    tmp_path: Path, expr: str
+) -> None:
+    orch = _write(
+        tmp_path,
+        "orch.yml",
+        f"""
+adapter: ollama
+model: phi3:mini
+effects:
+  - type: conditional
+    name: gate
+    if:
+      mode: cel
+      expr: "{expr}"
+    then:
+      - type: prompt
+        name: taken
+        template: "t"
+""",
+    )
+
+    result = runner.invoke(app, ["check", str(orch), "--skip-preflight"])
+
+    assert result.exit_code == 0, result.stdout
+
+
+#: Not CEL at all — a Python comprehension and a bare Python `not`.
+NOT_CEL = [
+    "[x for x in state.input.items]",
+    "not state.input.ok",
+]
+
+
+@pytest.mark.parametrize("expr", NOT_CEL)
+def test_check_rejects_non_cel_naming_effect_and_expression(
     tmp_path: Path, expr: str
 ) -> None:
     orch = _write(
@@ -112,9 +155,8 @@ effects:
 
     assert result.exit_code == 1
     output = _flat(result.stdout)
-    assert "not supported yet" in output
+    assert "does not parse" in output
     assert "(effect 'gate')" in output
-    assert expr in output
 
 
 def test_check_rejects_unparseable_cel(tmp_path: Path) -> None:
@@ -143,7 +185,37 @@ effects:
     assert "does not parse" in _flat(result.stdout)
 
 
-def test_check_rejects_unsupported_cel_in_a_loop_while(tmp_path: Path) -> None:
+def test_check_rejects_non_cel_in_a_loop_while(tmp_path: Path) -> None:
+    orch = _write(
+        tmp_path,
+        "orch.yml",
+        """
+adapter: ollama
+model: phi3:mini
+effects:
+  - type: loop
+    name: spin
+    max_iterations: 2
+    while:
+      mode: cel
+      expr: "not state.prime.step.value"
+    body:
+      - type: prompt
+        name: step
+        template: "s"
+""",
+    )
+
+    result = runner.invoke(app, ["check", str(orch), "--skip-preflight"])
+
+    assert result.exit_code == 1
+    output = _flat(result.stdout)
+    assert "Loop while CEL expression" in output
+    assert "does not parse" in output
+    assert "(effect 'spin')" in output
+
+
+def test_check_accepts_negation_in_a_loop_while(tmp_path: Path) -> None:
     orch = _write(
         tmp_path,
         "orch.yml",
@@ -166,11 +238,7 @@ effects:
 
     result = runner.invoke(app, ["check", str(orch), "--skip-preflight"])
 
-    assert result.exit_code == 1
-    output = _flat(result.stdout)
-    assert "Loop while CEL expression" in output
-    assert "not supported yet" in output
-    assert "(effect 'spin')" in output
+    assert result.exit_code == 0, result.stdout
 
 
 def test_check_accepts_supported_cel(tmp_path: Path) -> None:

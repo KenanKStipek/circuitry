@@ -41,6 +41,10 @@ class ConditionDef:
     mode: Literal["model", "cel"] = "model"
     template: str | None = None  # for mode: model
     expr: str | None = None  # for mode: cel
+    #: mode: cel — raise instead of reading an unset ``state.`` path as
+    #: false. For conditions where a missing field must not silently pick
+    #: a branch (an order-exit rule, a safety gate).
+    strict: bool = False
 
 
 @dataclass(frozen=True)
@@ -401,8 +405,13 @@ Answer (yes/no):"""
 
         Propagates ``CelEvaluationError`` — a broken expression is a
         defect, not a false condition. ``execute`` records it on the
-        effect's ``meta.error`` and then honours ``on_error``.
+        effect's ``meta.error`` and then honours ``on_error``. Under
+        ``strict: true`` an unset ``state.`` path is such a defect too.
         """
         from .cel_eval import evaluate_cel
 
-        return evaluate_cel(self.defn.condition.expr or "", ctx)
+        return evaluate_cel(
+            self.defn.condition.expr or "",
+            ctx,
+            strict=self.defn.condition.strict,
+        )

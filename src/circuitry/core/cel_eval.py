@@ -1,54 +1,78 @@
-"""Safe CEL expression evaluator using simpleeval (no eval()).
+"""CEL expression evaluator backed by `cel-python <https://pypi.org/project/cel-python/>`_.
 
-Replaces the previous eval()-based approach which was trivially
-bypassable via __class__.__bases__ chains.
+CEL is a core language of the DOL — a ``mode: cel`` conditional is the
+only way to branch a run deterministically — so this module runs a real
+CEL implementation (the ``celpy`` package) rather than a translation into
+some other expression language. Everything the CEL spec defines is
+available: the comprehension macros (``all``, ``exists``, ``exists_one``,
+``map``, ``filter``), ``has()``, ``!``, the ternary ``?:``, the standard
+function library (``size``, ``int``, ``string``, ``matches``, …) and CEL's
+own type rules — so ``1 == true`` is ``false``, not ``true`` the way
+Python's ``1 == True`` would have it.
+
+Expressions are parsed once and cached by source string; a hot loop
+condition pays the parser cost on its first iteration only.
 
 The evaluator is **fail-loud about the expression**: a malformed
-expression, an unsupported construct, an unknown function or a blocked
-attribute chain raises :class:`CelEvaluationError` rather than silently
-answering ``False``. A silent ``false`` is indistinguishable from a
-legitimately false condition, so a typo in an expression used to quietly
-route every run down the ``else`` branch.
+expression, an unknown function, or a type error raises
+:class:`CelEvaluationError` rather than silently answering ``False``. A
+silent ``false`` is indistinguishable from a legitimately false
+condition, so a typo in an expression used to quietly route every run
+down the ``else`` branch.
 
 **Absent state is not an expression error.** An unset ``state.`` path —
 a disabled node, an effect that has not run yet, a dry run with no
 outputs — makes the whole expression ``False`` by rule, matching the
 framework's absent-reads-empty convention (a template referencing a
 disabled node renders empty; a CEL condition on one is false). That is
-decided structurally, by resolving the paths before evaluating, and it
-is logged at warning level naming the path — not swallowed from an
-exception, which is what used to hide the real defects too.
+decided structurally, by resolving the paths the parse tree actually
+reads before evaluating, and it is logged at warning level naming the
+path — not swallowed from an exception, which is what hides real defects.
 
-The same translate-then-parse pipeline backs :func:`validate_cel_syntax`,
-which the compiler calls for every ``mode: cel`` expression so ``cof
-check`` rejects a bad expression before a run ever dispatches. Validator
-and evaluator share ``_cel_to_python`` deliberately: whatever the
-translator cannot express, compile time reports and runtime never sees.
+Two escape hatches from that rule:
 
-This whole module is a stopgap — a regex→simpleeval translator standing
-in for a real CEL implementation (see #185, which swaps it for
-cel-python). Keep the public surface (``evaluate_cel``,
-``validate_cel_syntax``, the two error types) stable so the swap is a
-single-file replacement.
+* A path that appears as an argument to ``has()`` anywhere in the
+  expression is **guarded** and exempt — that is what ``has()`` is for.
+  ``has(state.prime.x.value) && state.prime.x.value > 1`` evaluates
+  properly instead of collapsing to ``False``.
+* ``strict: true`` on the conditional (or the loop's ``while``) turns an
+  unresolved path back into a :class:`CelEvaluationError`. An order-exit
+  rule like ``state.prime.tick.value.price <= state.input.stop_price``
+  must never take the no-exit branch because a field went missing.
+
+The same parser backs :func:`validate_cel_syntax`, which the compiler
+calls for every ``mode: cel`` expression so ``cof check`` rejects a bad
+expression before a run ever dispatches, and :func:`state_paths`, which
+``core.state_ns`` uses to police the ``state.<namespace>`` grammar
+against the parse tree rather than against a regex over the source.
 """
 
 from __future__ import annotations
 
-import ast
+import datetime
 import logging
-import re
-from collections.abc import Mapping
+import threading
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
-from simpleeval import SimpleEval
+import celpy
+import lark
+from celpy import celtypes
+from celpy.evaluation import CELEvalError, base_functions
 
 logger = logging.getLogger(__name__)
 
 _MAX_EXPR_LENGTH = 4096
 
+#: How many compiled expressions to keep. An orchestration has a bounded
+#: number of distinct CEL expressions; the cap only matters for a
+#: long-lived process compiling many different documents.
+_CACHE_MAX_ENTRIES = 512
+
 
 class CelError(Exception):
-    """Base class for CEL translation, validation and evaluation errors."""
+    """Base class for CEL parse, validation and evaluation errors."""
 
     def __init__(self, message: str, *, expression: str) -> None:
         super().__init__(message)
@@ -64,26 +88,30 @@ class CelValidationError(CelError, ValueError):
 
 
 class CelEvaluationError(CelError, RuntimeError):
-    """A CEL expression failed to translate, parse or evaluate at runtime.
+    """A CEL expression failed to parse or evaluate at runtime.
 
     Carries the offending ``expression``; the underlying failure is
     chained as ``__cause__``.
     """
 
 
-def evaluate_cel(expr: str, ctx: dict[str, Any]) -> bool:
-    """Evaluate a CEL-subset expression against *ctx* and return a bool.
+def evaluate_cel(expr: str, ctx: dict[str, Any], *, strict: bool = False) -> bool:
+    """Evaluate a CEL expression against *ctx* and return a bool.
 
-    *ctx* is exposed as ``state`` inside the expression.
+    *ctx* is exposed as ``state`` inside the expression, converted to CEL
+    types. Nothing else is in scope: there is no way to reach a Python
+    object's attributes, module or class from an expression.
 
     Raises :class:`CelEvaluationError` on an empty, over-long,
-    untranslatable, unparseable or failing expression. Callers that want
-    a branch instead of a failure must catch it explicitly; see the
-    ``on_error`` handling in ``core.conditional`` / ``core.loop``.
+    unparseable or failing expression. Callers that want a branch instead
+    of a failure must catch it explicitly; see the ``on_error`` handling
+    in ``core.conditional`` / ``core.loop``.
 
-    Returns ``False`` — with a warning naming the path — when a
-    ``state.`` path the expression reads is unset. See the module
-    docstring: absent state is data, not a defect.
+    Returns ``False`` — with a warning naming the path — when an
+    unguarded ``state.`` path the expression reads is unset. Pass
+    ``strict=True`` to raise :class:`CelEvaluationError` for that case
+    instead. See the module docstring: absent state is data, not a defect,
+    unless the author says otherwise.
     """
     if not expr or not expr.strip():
         raise CelEvaluationError(
@@ -97,8 +125,21 @@ def evaluate_cel(expr: str, ctx: dict[str, Any]) -> bool:
             expression=expr,
         )
 
-    unresolved = unresolved_state_path(expr, ctx)
+    try:
+        compiled = _compile(expr)
+    except CelError as exc:
+        raise CelEvaluationError(
+            f"CEL evaluation failed for {expr!r}: {exc}", expression=expr
+        ) from exc
+
+    unresolved = _first_unresolved(compiled.read_paths, ctx)
     if unresolved is not None:
+        if strict:
+            raise CelEvaluationError(
+                f"CEL expression {expr!r} reads unset state path "
+                f"{unresolved!r} and is marked strict.",
+                expression=expr,
+            )
         logger.warning(
             "CEL expression %r reads unset state path %r; condition is false",
             expr,
@@ -107,18 +148,13 @@ def evaluate_cel(expr: str, ctx: dict[str, Any]) -> bool:
         return False
 
     try:
-        py_expr = _cel_to_python(expr)
-
-        evaluator = SimpleEval()
-        evaluator.names = {"state": ctx, "true": True, "false": False}
-        evaluator.functions = {"size": len, "int": int, "string": str}
-
-        result = evaluator.eval(py_expr)
+        result = compiled.runner.evaluate({"state": _to_cel(ctx)})
+        if isinstance(result, CELEvalError):
+            raise result
     except Exception as exc:
         logger.error("CEL evaluation failed for expr %r: %s", expr, exc)
         raise CelEvaluationError(
-            f"CEL evaluation failed for {expr!r}: {_describe(expr, exc)}",
-            expression=expr,
+            f"CEL evaluation failed for {expr!r}: {exc}", expression=expr
         ) from exc
 
     return bool(result)
@@ -133,11 +169,9 @@ def validate_cel_syntax(
 ) -> None:
     """Compile-time check for a single ``mode: cel`` expression.
 
-    "Parses" means: the translator accepts the expression *and* the
-    Python it produces is parseable (the same parse ``simpleeval``
-    performs before evaluating). Known-unsupported CEL syntax is named
-    explicitly rather than passing silently or hiding behind a generic
-    syntax error.
+    "Parses" means the CEL parser accepts it — the same parse the
+    evaluator performs, so whatever compile time accepts, runtime can
+    read.
 
     Raises :class:`CelValidationError` naming the effect and the
     expression. Never evaluates anything — no state is available at
@@ -158,136 +192,262 @@ def validate_cel_syntax(
             expression=expr,
         )
 
-    unsupported = _unsupported_reason(expr)
-    if unsupported is not None:
-        raise CelValidationError(
-            f"{where}: {unsupported} Expression: {expr!r}", expression=expr
-        )
-
     try:
-        py_expr = _cel_to_python(expr)
-        ast.parse(py_expr, mode="eval")
-    except Exception as exc:
+        _compile(expr)
+    except CelError as exc:
         raise CelValidationError(
             f"{where}: expression does not parse ({exc}). Expression: {expr!r}",
             expression=expr,
         ) from exc
 
 
-#: A dotted read rooted at ``state`` — the only state grammar the
-#: translator understands, and so the only one worth resolving up front.
-_STATE_PATH = re.compile(r"\bstate(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+")
+def state_paths(expr: str) -> tuple[str, ...]:
+    """Every dotted ``state.`` path *expr* reads, taken from the parse tree.
+
+    Includes paths that appear as ``has()`` arguments — a guard is still a
+    reference, and the ``state.<namespace>`` grammar applies to it. A
+    quoted ``'state.x.y'`` is a string literal, not a path, and does not
+    appear here.
+
+    Raises :class:`CelValidationError` if *expr* does not parse.
+    """
+    return tuple(path for path, _guarded in _compile(expr).paths)
 
 
 def unresolved_state_path(expr: str, ctx: Mapping[str, Any]) -> str | None:
-    """The first ``state.`` path in *expr* that *ctx* does not supply.
+    """The first unguarded ``state.`` path in *expr* that *ctx* does not supply.
 
     A path is unresolved when a segment is missing, when traversal hits
     something that is not a mapping, or when it lands on ``None`` — a
     disabled node writes ``{"value": None}``, and reading through it is
     the same "nothing there" as a key that was never written.
 
-    Returns ``None`` when every path resolves. String literals are masked
-    first so ``'state.x'`` inside a quoted value is not treated as a read.
+    Returns ``None`` when every path resolves. Paths guarded by ``has()``
+    are skipped; the expression is expected to handle their absence
+    itself.
     """
-    for match in _STATE_PATH.finditer(_mask_string_literals(expr)):
+    return _first_unresolved(_compile(expr).read_paths, ctx)
+
+
+# ---------------------------------------------------------------------------
+# Compilation and caching
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Compiled:
+    """A parsed expression plus the state paths its parse tree reads."""
+
+    runner: celpy.Runner
+    #: ``(dotted path, guarded by has())`` for every ``state.`` read.
+    paths: tuple[tuple[str, bool], ...]
+
+    @property
+    def read_paths(self) -> tuple[str, ...]:
+        """Paths subject to the absent-state rule — the unguarded ones."""
+        guarded = {path for path, is_guard in self.paths if is_guard}
+        return tuple(
+            path
+            for path, is_guard in self.paths
+            if not is_guard and path not in guarded
+        )
+
+
+#: CEL's numeric family. ``BoolType`` subclasses ``int`` in celpy, so it
+#: has to be excluded explicitly — ``1 == true`` is precisely the case
+#: heterogeneous equality has to get right.
+_NUMERIC = (celtypes.IntType, celtypes.UintType, celtypes.DoubleType)
+
+
+def _numeric(value: Any) -> bool:
+    return isinstance(value, _NUMERIC) and not isinstance(value, celtypes.BoolType)
+
+
+def _spec_eq(left: Any, right: Any) -> Any:
+    """``==`` per the CEL spec: cross-numeric compares, other cross-type is false."""
+    if isinstance(left, CELEvalError) or isinstance(right, CELEvalError):
+        return _BASE_EQ(left, right)
+    try:
+        return _BASE_EQ(left, right)
+    except TypeError:
+        if _numeric(left) and _numeric(right):
+            return celtypes.BoolType(float(left) == float(right))
+        return celtypes.BoolType(False)
+
+
+def _spec_ne(left: Any, right: Any) -> Any:
+    """``!=`` per the CEL spec — the negation of :func:`_spec_eq`."""
+    if isinstance(left, CELEvalError) or isinstance(right, CELEvalError):
+        return _BASE_NE(left, right)
+    try:
+        return _BASE_NE(left, right)
+    except TypeError:
+        if _numeric(left) and _numeric(right):
+            return celtypes.BoolType(float(left) != float(right))
+        return celtypes.BoolType(True)
+
+
+_BASE_EQ = base_functions["_==_"]
+_BASE_NE = base_functions["_!=_"]
+
+#: CEL's heterogeneous equality (cel-spec #103): comparing values of
+#: different runtime types yields false rather than an error, while
+#: int/uint/double are one numeric family and do compare. celpy raises a
+#: no-such-overload error for both cases, so the two operators are
+#: overridden here rather than left to surface as evaluation failures.
+_FUNCTIONS: dict[str, Any] = {"_==_": _spec_eq, "_!=_": _spec_ne}
+
+_ENV = celpy.Environment()
+
+#: ``celpy.Environment`` wraps a lark parser; parsing is not documented as
+#: thread-safe and the cache is shared, so both live under one lock.
+_LOCK = threading.Lock()
+_CACHE: dict[str, _Compiled] = {}
+
+
+def _compile(expr: str) -> _Compiled:
+    """Parse *expr* once and memoise the runner and its state paths."""
+    with _LOCK:
+        cached = _CACHE.get(expr)
+        if cached is not None:
+            return cached
+        try:
+            tree = _ENV.compile(expr)
+        except Exception as exc:
+            raise CelValidationError(str(exc).strip(), expression=expr) from exc
+        compiled = _Compiled(
+            runner=_ENV.program(tree, functions=_FUNCTIONS),
+            paths=tuple(_collect_state_paths(tree)),
+        )
+        if len(_CACHE) >= _CACHE_MAX_ENTRIES:
+            _CACHE.clear()
+        _CACHE[expr] = compiled
+        return compiled
+
+
+def clear_expression_cache() -> None:
+    """Drop every compiled expression. For tests and benchmarks."""
+    with _LOCK:
+        _CACHE.clear()
+
+
+# ---------------------------------------------------------------------------
+# Parse-tree inspection
+# ---------------------------------------------------------------------------
+
+#: Single-child wrapper nodes a dotted chain passes through on its way to
+#: the root ``ident``.
+_PASSTHROUGH = frozenset({"member", "primary"})
+
+
+def _dotted_chain(node: Any) -> list[str] | None:
+    """The segments of *node* if it is a pure ``a.b.c`` chain, else ``None``.
+
+    Anything else in the chain — an index, a call, an arithmetic term —
+    disqualifies it, because the result would no longer be a path that
+    can be resolved structurally against a state mapping.
+    """
+    if not isinstance(node, lark.Tree):
+        return None
+    data = str(node.data)
+    if data == "member_dot":
+        base, name = node.children[0], node.children[1]
+        prefix = _dotted_chain(base)
+        if prefix is None:
+            return None
+        return [*prefix, str(name)]
+    if data == "ident" and node.children:
+        return [str(node.children[0])]
+    if data in _PASSTHROUGH and len(node.children) == 1:
+        return _dotted_chain(node.children[0])
+    return None
+
+
+def _collect_state_paths(
+    node: Any, *, guarded: bool = False
+) -> list[tuple[str, bool]]:
+    """Every ``state.`` path under *node*, flagged when it guards a ``has()``.
+
+    Walks top-down and stops at the longest dotted chain, so
+    ``state.a.b.c`` is reported once rather than once per prefix.
+    """
+    if not isinstance(node, lark.Tree):
+        return []
+    data = str(node.data)
+
+    if data == "member_dot":
+        segments = _dotted_chain(node)
+        if segments is not None:
+            return (
+                [(".".join(segments), guarded)] if segments[0] == "state" else []
+            )
+
+    if data == "ident_arg" and node.children and str(node.children[0]) == "has":
+        return [
+            path
+            for child in node.children[1:]
+            for path in _collect_state_paths(child, guarded=True)
+        ]
+
+    return [
+        path
+        for child in node.children
+        for path in _collect_state_paths(child, guarded=guarded)
+    ]
+
+
+def _first_unresolved(
+    paths: Sequence[str], ctx: Mapping[str, Any]
+) -> str | None:
+    """The first path in *paths* that *ctx* does not supply."""
+    for path in paths:
         current: Any = ctx
-        for part in match.group(0).split(".")[1:]:
+        for part in path.split(".")[1:]:
             if isinstance(current, Mapping) and part in current:
                 current = current[part]
             else:
-                return match.group(0)
+                return path
         if current is None:
-            return match.group(0)
+            return path
     return None
 
 
-def _cel_to_python(expr: str) -> str:
-    """Pre-process CEL syntax into Python that simpleeval can parse."""
-
-    # state.foo.bar  ->  state["foo"]["bar"]
-    def _replace_dots(match: re.Match) -> str:
-        parts = match.group(0).split(".")
-        result = parts[0]
-        for part in parts[1:]:
-            result += f'["{part}"]'
-        return result
-
-    converted = _STATE_PATH.sub(_replace_dots, expr)
-
-    # Normalise comparison operators (add spacing)
-    converted = converted.replace("==", " == ").replace("!=", " != ")
-
-    # CEL boolean operators -> Python
-    return converted.replace("&&", " and ").replace("||", " or ")
+# ---------------------------------------------------------------------------
+# Python -> CEL value conversion
+# ---------------------------------------------------------------------------
 
 
-# --------------------------------------------------------------------------
-# Unsupported-construct detection
-#
-# The translator covers a small slice of CEL. Everything below is real CEL
-# that this evaluator cannot run; each entry is reported by name so an
-# author is not left reading a Python SyntaxError about their CEL. Drop
-# entries here as #185 (cel-python) makes them work.
-# --------------------------------------------------------------------------
+def _to_cel(value: Any) -> Any:
+    """Convert a Python value into the CEL type system.
 
-_UNSUPPORTED: tuple[tuple[re.Pattern[str], str], ...] = (
-    (
-        re.compile(r"!(?!=)"),
-        "CEL negation '!' is not supported yet; write '== false' instead.",
-    ),
-    (
-        re.compile(r"\bhas\s*\("),
-        (
-            "the CEL 'has()' macro is not supported yet; compare the field "
-            "directly instead."
-        ),
-    ),
-    (
-        re.compile(r"\.\s*(?:filter|map|all|exists_one|exists)\s*\("),
-        (
-            "CEL comprehension macros (.filter/.map/.all/.exists/.exists_one) "
-            "are not supported yet; use 'size(...)' or a loop effect instead."
-        ),
-    ),
-    (
-        re.compile(r"\bfor\b"),
-        "comprehensions are not supported yet; use a loop effect instead.",
-    ),
-    (
-        re.compile(r"\?"),
-        (
-            "the conditional/ternary operator ('?:', '?.') is not supported "
-            "yet; use a conditional effect instead."
-        ),
-    ),
-)
-
-
-def _unsupported_reason(expr: str) -> str | None:
-    """Name the first known-unsupported construct in *expr*, if any.
-
-    String literals are masked first so a ``'!'`` or ``'?'`` inside a
-    quoted value is not mistaken for an operator.
+    This is also the sandbox boundary: a value with no CEL counterpart
+    becomes CEL ``null`` rather than being handed to the evaluator as a
+    live Python object, so no expression can reach an attribute, a method
+    or a class through state.
     """
-    masked = _mask_string_literals(expr)
-    for pattern, reason in _UNSUPPORTED:
-        if pattern.search(masked):
-            return reason
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return celtypes.BoolType(value)
+    if isinstance(value, int):
+        return celtypes.IntType(value)
+    if isinstance(value, float):
+        return celtypes.DoubleType(value)
+    if isinstance(value, str):
+        return celtypes.StringType(value)
+    if isinstance(value, bytes):
+        return celtypes.BytesType(value)
+    if isinstance(value, Mapping):
+        return celtypes.MapType(
+            {_to_cel(key): _to_cel(item) for key, item in value.items()}
+        )
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return celtypes.ListType([_to_cel(item) for item in value])
+    if isinstance(value, datetime.datetime):
+        return celtypes.TimestampType(value)
+    if isinstance(value, datetime.timedelta):
+        return celtypes.DurationType(value)
+    logger.debug(
+        "CEL: %s has no CEL counterpart; exposing it as null", type(value).__name__
+    )
     return None
-
-
-_STRING_LITERAL = re.compile(r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"")
-
-
-def _mask_string_literals(expr: str) -> str:
-    """Blank out the *contents* of quoted literals, preserving length."""
-    return _STRING_LITERAL.sub(lambda m: m.group(0)[0] * len(m.group(0)), expr)
-
-
-def _describe(expr: str, exc: Exception) -> str:
-    """Runtime failure message, enriched when the cause is a known gap."""
-    unsupported = _unsupported_reason(expr)
-    if unsupported is not None:
-        return f"{unsupported} ({exc})"
-    return str(exc)

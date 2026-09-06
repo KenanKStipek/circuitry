@@ -14,5 +14,5 @@ python-dotenv>=1.0
 
 ollama>=0.1.8
 
-# Safe expression evaluation (replaces eval())
-simpleeval>=0.9.13
+# CEL — `mode: cel` conditionals and loop `while` expressions
+cel-python>=0.3

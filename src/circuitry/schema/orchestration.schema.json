@@ -120,7 +120,12 @@
         },
         "expr": {
           "type": "string",
-          "description": "CEL expression for deterministic evaluation. Must use state.prime.<name>.value prefix. Enforced as required when mode is cel."
+          "description": "CEL expression (evaluated by cel-python) for deterministic evaluation. State binds to 'state', so paths read state.input.<name>, state.prime.<name>.value or state.runtime.<name>. Full CEL is available: macros (all/exists/exists_one/map/filter), has(), '!', the '?:' ternary and the standard functions (size/int/string/matches/...). Enforced as required when mode is cel."
+        },
+        "strict": {
+          "type": "boolean",
+          "default": false,
+          "description": "mode: cel only. By default an unset 'state.' path makes the whole expression false and logs a WARNING. With strict: true an unresolved path raises instead, so a missing field cannot silently pick a branch."
         }
       },
       "allOf": [

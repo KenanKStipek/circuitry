@@ -489,6 +489,7 @@ def _compile_conditional(
         mode=mode,
         template=if_def.get("template") if mode == "model" else None,
         expr=if_def.get("expr") if mode == "cel" else None,
+        strict=bool(if_def.get("strict")) if mode == "cel" else False,
     )
 
     # Parse 'then' branch (required)
@@ -584,6 +585,7 @@ def _compile_loop(
                 mode=mode,
                 template=while_config.get("template") if mode == "model" else None,
                 expr=while_config.get("expr") if mode == "cel" else None,
+                strict=bool(while_config.get("strict")) if mode == "cel" else False,
             )
 
     if "each" in effect:

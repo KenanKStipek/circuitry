@@ -48,7 +48,9 @@ dependencies = [
     "chevron>=0.14",
     "python-dotenv>=1.0",
     "ollama>=0.1.8",
-    "simpleeval>=0.9.13",
+    # CEL is a core language of the DOL (`mode: cel` conditionals and loop
+    # `while`s), so the real evaluator is a core dependency, not an extra.
+    "cel-python>=0.3",
     # 2.0 renamed FastMCP -> MCPServer and moved it to mcp.server.mcpserver;
     # src/circuitry/mcp/server.py targets that API, so 1.x will not import.
     "mcp>=2.0,<3",
