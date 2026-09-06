@@ -107,6 +107,27 @@
       "example": "cof run learn/cyberdiner_hello -e question=\"What is cybernetics?\""
     },
     {
+      "name": "learn/surrealdb_roundtrip",
+      "file": "learn/surrealdb_roundtrip.yml",
+      "category": "learn",
+      "intent": "surrealdb tool plugin — create a record, select it back, assert equality via json + if/CEL.",
+      "description": "Template: create a record with the surrealdb tool, select it back by the id create() returned, reduce both raw responses to a comparable {name, score} view with the json tool, and assert equality deterministically with if/CEL. No LLM involved.",
+      "when_to_use": "When you want to see how the surrealdb tool plugin's create/select operations round-trip data, or as the starting point for a persistence-backed orchestration. Requires runtime.plugins.surrealdb (url, namespace, database) in config and SURREAL_USER/SURREAL_PASS (or SURREAL_TOKEN) in the environment — see docs/plugins/surrealdb.md.",
+      "primitives": ["tool", "if"],
+      "difficulty": "intermediate",
+      "backends": ["tool"],
+      "inputs": {
+        "name": {"type": "string", "required": true, "description": "Value stored in the record's name field."},
+        "score": {"type": "string", "required": true, "description": "Value stored in the record's score field."}
+      },
+      "outputs": {
+        "roundtrip_ok": {"type": "boolean", "path": "prime.result.value", "description": "True when the selected record matches what was created."}
+      },
+      "state_paths": ["prime.create_record.value", "prime.select_record.value", "prime.result.value"],
+      "tags": ["tool", "surrealdb", "json", "persistence", "roundtrip"],
+      "example": "cof run learn/surrealdb_roundtrip -e name=Ada -e score=10"
+    },
+    {
       "name": "utilities/summarize",
       "file": "utilities/summarize.yml",
       "category": "utilities",

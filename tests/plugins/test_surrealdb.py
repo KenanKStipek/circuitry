@@ -375,6 +375,40 @@ def test_readiness_message_avoids_rich_markup_brackets() -> None:
     assert "[" not in message
 
 
+def test_doctor_message_installs_the_right_sdk_when_rendered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`cof doctor`'s missing-deps message must actually install the SDK.
+
+    `runtime.plugins.surrealdb.url` (bracketed) is deliberately not used in
+    the message — see `test_readiness_message_avoids_rich_markup_brackets` —
+    but the plain `pip install surrealdb` fallback must still name a real,
+    installable package so a human copy-pasting it from `cof doctor`'s Rich
+    table ends up with the same SDK `circuitry-cof[surrealdb]` would give
+    them.
+    """
+    monkeypatch.setitem(sys.modules, "surrealdb", None)
+    monkeypatch.delenv("SURREAL_USER", raising=False)
+    monkeypatch.delenv("SURREAL_PASS", raising=False)
+    monkeypatch.delenv("SURREAL_TOKEN", raising=False)
+
+    result = SurrealDBPlugin(url="ws://127.0.0.1:1/rpc").check()
+    assert result.ok is False
+
+    from rich.console import Console
+    from rich.table import Table
+
+    table = Table()
+    table.add_column("Missing / message")
+    table.add_row(f"{result.missing} — {result.message}")
+    console = Console(record=True, width=120)
+    console.print(table)
+    rendered = console.export_text()
+
+    assert "pip install surrealdb" in rendered
+    assert "circuitry-cof" not in rendered  # would need escaping to render safely
+
+
 # ---------------------------------------------------------------------------
 # Error mapping
 # ---------------------------------------------------------------------------

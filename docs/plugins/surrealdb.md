@@ -68,6 +68,10 @@ so results survive serialization into run state.
 
 ## Examples
 
+Runnable end-to-end: `cof run learn/surrealdb_roundtrip -e name=Ada -e score=10`
+creates a record, selects it back, and asserts the two agree (see
+`src/circuitry/curation/learn/surrealdb_roundtrip.yml`).
+
 ```yaml
 - type: tool
   name: save_person
