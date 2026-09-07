@@ -72,6 +72,9 @@ class LoopWhileDef:
     mode: Literal["model", "cel"] = "model"
     template: str | None = None  # for mode: model
     expr: str | None = None  # for mode: cel
+    #: mode: cel — raise instead of reading an unset ``state.`` path as
+    #: false, so a missing field cannot quietly end (or extend) the loop.
+    strict: bool = False
 
 
 @dataclass(frozen=True)
@@ -624,7 +627,11 @@ Should the loop continue? Answer (yes/no):"""
         if not self.defn.while_def:
             return False
 
-        return evaluate_cel(self.defn.while_def.expr or "", ctx)
+        return evaluate_cel(
+            self.defn.while_def.expr or "",
+            ctx,
+            strict=self.defn.while_def.strict,
+        )
 
     def _body_names(self) -> frozenset[str]:
         """Names of this loop's own body effects."""

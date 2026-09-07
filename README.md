@@ -194,7 +194,7 @@ prime.<loop>.collected.value                      # loop collect aggregation
 Two reading languages, one namespace:
 
 - **Mustache templates** — `{{input.occasion}}`, `{{prime.suggest_dish.value}}` inside any `template:` string (triple-stache `{{{…}}}` to skip HTML escaping).
-- **CEL expressions** — `state.input.guests`, `state.prime.suggest_dish.value` inside any `expr:`; operators are `== != < <= > >= && || !` and `size()`.
+- **CEL expressions** — `state.input.guests`, `state.prime.suggest_dish.value` inside any `expr:`. Real [CEL](https://github.com/google/cel-spec), evaluated by [cel-python](https://pypi.org/project/cel-python/): comparisons, `&& || !`, the `?:` ternary, `has()`, the comprehension macros (`all` / `exists` / `exists_one` / `map` / `filter`) and the standard functions (`size()`, `int()`, `string()`, `matches()`, …). Equality is typed the way CEL specifies it, so `1 == true` is `false`. Run `cof run learn/cel_showcase` to see each construct branch.
 
 Inside loop bodies, two bare loop-scope bindings are also available: `{{_loop_index}}` (zero-based iteration index) and `{{<each.as>}}` (current collection element, `each` loops only). See [docs/troubleshooting-state-paths.md](docs/troubleshooting-state-paths.md).
 
@@ -288,6 +288,11 @@ The system inspects its own state and selects a path.
 Evaluation modes:
 - **model** — the LLM reads state and decides the branch (cybernetic evaluation; `threshold:` tunes the confidence cut, default 0.5)
 - **cel** — deterministic evaluation using CEL expressions
+
+An unset `state.` path makes a CEL condition `false` by rule, matching the way a
+template referencing a disabled node renders empty. Where that would be unsafe —
+a safety gate, an order-exit rule — add `strict: true` beside `mode: cel` and an
+unresolved path errors the effect instead of quietly picking a branch.
 
 A named `if` nests its branch outputs (`prime.check_diet.main_course.value`) and records the decision; an unnamed one merges branch effects into the parent scope. Both branches use the same inner name — `main_course` — so downstream effects read one path whichever way dinner went.
 
