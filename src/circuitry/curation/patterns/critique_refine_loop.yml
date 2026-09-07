@@ -17,11 +17,18 @@
 # Run:
 #   cof run patterns/critique_refine_loop -e topic="serverless cold-start tradeoffs"
 
+interface:
+  inputs:
+    topic:
+      type: string
+      required: true
+      description: The topic to write about.
+
 effects:
   - type: prompt
     name: draft
     template: |
-      Write a single paragraph (4–6 sentences) on: {{topic}}. Plain prose. No bullets. No headings.
+      Write a single paragraph (4–6 sentences) on: {{input.topic}}. Plain prose. No bullets. No headings.
 
   # Seed the loop's "current text" sentinel with the initial draft so the first
   # iteration has something to critique.

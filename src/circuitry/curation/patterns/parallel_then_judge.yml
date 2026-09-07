@@ -14,6 +14,13 @@
 # Run:
 #   cof run patterns/parallel_then_judge -e topic="why we still need REST in 2026"
 
+interface:
+  inputs:
+    topic:
+      type: string
+      required: true
+      description: The topic to generate candidate openings for.
+
 effects:
   - type: prompt
     name: styles
@@ -22,7 +29,7 @@ effects:
       type: array
       items: { type: string }
     template: |
-      Output a JSON array of three different stylistic angles for an opinion piece on "{{topic}}".
+      Output a JSON array of three different stylistic angles for an opinion piece on "{{input.topic}}".
       Examples: "skeptical insider", "enthusiastic newcomer", "weary practitioner".
       Output only the JSON array.
 
@@ -38,7 +45,7 @@ effects:
         name: candidate
         template: |
           Write a 3–4 sentence opening from this angle: {{angle}}.
-          Topic: {{topic}}.
+          Topic: {{input.topic}}.
           Plain prose. No headings. No quotes around the output.
 
   - type: use
