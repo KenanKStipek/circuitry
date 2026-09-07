@@ -12,6 +12,7 @@ import importlib.util
 import json
 import sys
 import types
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -21,7 +22,7 @@ from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.redaction import REDACTED
 from circuitry.cli.runtime_shim import RunRequest, run
 from circuitry.plugins import build_plugin
-from circuitry.plugins.surrealdb import DEFAULT_URL, SurrealDBPlugin
+from circuitry.plugins.surrealdb import DEFAULT_URL, SurrealDBPlugin, _authenticate
 
 
 class FakeSurreal:
@@ -32,6 +33,10 @@ class FakeSurreal:
     #: Overridable per-test hooks.
     connect_error: BaseException | None = None
     signin_error: BaseException | None = None
+    #: When set, a signin call is accepted only if this returns True for the
+    #: attempted payload — lets tests simulate a user defined at one auth
+    #: level (e.g. ROOT-only) rejecting more specific scoped attempts.
+    signin_accepts: ClassVar[Callable[[dict[str, str]], bool] | None] = None
     op_error: BaseException | None = None
     op_result: Any = None
 
@@ -48,6 +53,9 @@ class FakeSurreal:
         self.calls.append(("signin", (creds,)))
         if type(self).signin_error is not None:
             raise type(self).signin_error
+        accepts = type(self).signin_accepts
+        if accepts is not None and not accepts(creds):
+            raise Exception("There was a problem with authentication")
 
     def authenticate(self, token: str) -> None:
         self.calls.append(("authenticate", (token,)))
@@ -89,6 +97,7 @@ def fake_sdk(monkeypatch: pytest.MonkeyPatch) -> type[FakeSurreal]:
     FakeSurreal.instances = []
     FakeSurreal.connect_error = None
     FakeSurreal.signin_error = None
+    FakeSurreal.signin_accepts = None
     FakeSurreal.op_error = None
     FakeSurreal.op_result = [{"id": "person:1", "name": "ada"}]
 
@@ -278,12 +287,113 @@ def test_params_override_namespace_and_database(fake_sdk: type[FakeSurreal]) -> 
     assert ("use", ("other_ns", "other_db")) in fake_sdk.instances[-1].calls
 
 
-def test_signin_uses_env_user_and_pass(fake_sdk: type[FakeSurreal]) -> None:
+def test_signin_uses_env_user_and_pass_with_configured_namespace_database(
+    fake_sdk: type[FakeSurreal],
+) -> None:
     _plugin().execute(params={"mode": "select", "target": "person"})
     assert (
         "signin",
-        ({"username": "root", "password": "root-secret-value"},),
+        (
+            {
+                "username": "root",
+                "password": "root-secret-value",
+                "namespace": "test_ns",
+                "database": "test_db",
+            },
+        ),
     ) in fake_sdk.instances[-1].calls
+
+
+def test_signin_falls_back_to_namespace_only_when_database_scope_rejected(
+    fake_sdk: type[FakeSurreal],
+) -> None:
+    """A NAMESPACE-scoped user (ns set, db omitted) rejects the full-scope
+    attempt but accepts the namespace-only one."""
+    fake_sdk.signin_accepts = lambda creds: "database" not in creds
+
+    _plugin().execute(params={"mode": "select", "target": "person"})
+
+    signins = [c[1][0] for c in fake_sdk.instances[-1].calls if c[0] == "signin"]
+    assert signins == [
+        {
+            "username": "root",
+            "password": "root-secret-value",
+            "namespace": "test_ns",
+            "database": "test_db",
+        },
+        {"username": "root", "password": "root-secret-value", "namespace": "test_ns"},
+    ]
+
+
+def test_signin_falls_back_to_root_when_scoped_signin_rejected(
+    fake_sdk: type[FakeSurreal],
+) -> None:
+    """A ROOT-only user rejects every scoped attempt but accepts the bare one."""
+    fake_sdk.signin_accepts = lambda creds: "namespace" not in creds
+
+    _plugin().execute(params={"mode": "select", "target": "person"})
+
+    signins = [c[1][0] for c in fake_sdk.instances[-1].calls if c[0] == "signin"]
+    assert signins == [
+        {
+            "username": "root",
+            "password": "root-secret-value",
+            "namespace": "test_ns",
+            "database": "test_db",
+        },
+        {"username": "root", "password": "root-secret-value", "namespace": "test_ns"},
+        {"username": "root", "password": "root-secret-value"},
+    ]
+
+
+def test_authenticate_signin_payload_shape_root_vs_scoped(
+    fake_sdk: type[FakeSurreal],
+) -> None:
+    """Direct unit coverage of ``_authenticate``'s payload shape per config,
+    independent of ``execute()``'s mandatory namespace/database validation."""
+    root_db = fake_sdk(DEFAULT_URL)
+    _authenticate(
+        root_db,
+        {"username": "root", "password": "root"},
+        url=DEFAULT_URL,
+        namespace="",
+        database="",
+    )
+    assert root_db.calls == [("signin", ({"username": "root", "password": "root"},))]
+
+    ns_only_db = fake_sdk(DEFAULT_URL)
+    _authenticate(
+        ns_only_db,
+        {"username": "ns_user", "password": "p"},
+        url=DEFAULT_URL,
+        namespace="trading",
+        database="",
+    )
+    assert ns_only_db.calls == [
+        ("signin", ({"username": "ns_user", "password": "p", "namespace": "trading"},))
+    ]
+
+    scoped_db = fake_sdk(DEFAULT_URL)
+    _authenticate(
+        scoped_db,
+        {"username": "runner", "password": "p"},
+        url=DEFAULT_URL,
+        namespace="trading",
+        database="trading",
+    )
+    assert scoped_db.calls == [
+        (
+            "signin",
+            (
+                {
+                    "username": "runner",
+                    "password": "p",
+                    "namespace": "trading",
+                    "database": "trading",
+                },
+            ),
+        )
+    ]
 
 
 def test_token_auth_prefers_authenticate(

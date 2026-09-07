@@ -198,12 +198,50 @@ def _build_call(mode: str, params: dict[str, Any]) -> Callable[[Any], Any]:
     return lambda db: db.delete(record)
 
 
-def _authenticate(db: Any, creds: dict[str, str], *, url: str) -> None:
+def _signin_scopes(namespace: str, database: str) -> list[dict[str, str]]:
+    """Namespace/database pairs to try in a signin payload, most specific first.
+
+    SurrealDB's signin has no cross-level fallback server-side: a payload
+    carrying both fields only matches a DATABASE-scoped user, one with just
+    ``namespace`` only matches a NAMESPACE-scoped user, and a bare payload
+    only matches a ROOT user. This plugin's ``namespace``/``database`` are
+    mandatory config (needed for ``USE`` regardless of auth level), so there
+    is no way to tell from config alone which kind of user is configured —
+    trying all three levels client-side covers ROOT, NAMESPACE-scoped, and
+    DATABASE-scoped deployments with a single credential.
+    """
+    scopes: list[dict[str, str]] = []
+    if namespace and database:
+        scopes.append({"namespace": namespace, "database": database})
+    if namespace:
+        scopes.append({"namespace": namespace})
+    scopes.append({})
+    return scopes
+
+
+def _authenticate(
+    db: Any,
+    creds: dict[str, str],
+    *,
+    url: str,
+    namespace: str = "",
+    database: str = "",
+) -> None:
     try:
         if "token" in creds:
             db.authenticate(creds["token"])
         else:
-            db.signin({"username": creds["username"], "password": creds["password"]})
+            last_exc: Exception = RuntimeError("surrealdb: no signin scope attempted")
+            for scope in _signin_scopes(namespace, database):
+                try:
+                    db.signin({**creds, **scope})
+                    break
+                except Exception as exc:
+                    if _is_connection_error(exc):
+                        raise
+                    last_exc = exc
+            else:
+                raise last_exc
     except Exception as exc:
         if _is_connection_error(exc):
             raise RuntimeError(_unreachable(url, exc)) from exc
@@ -278,7 +316,7 @@ class SurrealDBPlugin:
             raise RuntimeError(f"surrealdb: could not open {self.url} ({exc}).") from exc
 
         try:
-            _authenticate(db, creds, url=self.url)
+            _authenticate(db, creds, url=self.url, namespace=namespace, database=database)
             try:
                 db.use(namespace, database)
             except Exception as exc:

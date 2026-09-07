@@ -43,14 +43,29 @@ config file:
 
 `namespace` and `database` can be overridden per effect via params.
 
+For a NAMESPACE- or DATABASE-scoped user, `namespace` (and `database`, for a
+DATABASE-scoped user) **must** match the scope the user was defined with —
+see [Credentials](#credentials).
+
 ## Credentials
 
 Credentials are read from the **environment only** — never from config, so they
 cannot reach `runtime.effective_settings`, `--out` state, `last-run.json`, or a
 persistence backend:
 
-- `SURREAL_USER` + `SURREAL_PASS` — signin as a system/namespace/database user, or
+- `SURREAL_USER` + `SURREAL_PASS` — signin as a ROOT, NAMESPACE-scoped, or
+  DATABASE-scoped user, or
 - `SURREAL_TOKEN` — a pre-issued JWT (takes precedence when set).
+
+Scoped users (`DEFINE USER ... ON NAMESPACE` / `ON DATABASE`) are fully
+supported — least-privilege scoped users are the recommended setup, not just
+ROOT. SurrealDB's `signin()` has no fallback across auth levels server-side,
+so this plugin tries the most specific scope first: `namespace` + `database`,
+then `namespace` alone, then a bare payload, stopping at the first one the
+server accepts. This means a DATABASE-scoped user authenticates correctly as
+long as the configured `namespace`/`database` (below) match the user's scope,
+a NAMESPACE-scoped user works the same way, and ROOT users keep working via
+the bare-payload fallback.
 
 ## Params
 

@@ -35,7 +35,11 @@ is unset:
   4. Env var ``SURREAL_TOKEN`` / config ``token`` — when set, authenticates
      via ``authenticate(token)`` and takes priority over user/pass.
   5. Env var ``SURREAL_USER`` + ``SURREAL_PASS`` / config ``user`` +
-     ``password`` — root/namespace/database signin via ``signin(...)``.
+     ``password`` — root/namespace/database signin via ``signin(...)``. The
+     signin payload tries the most specific scope first (namespace +
+     database, then namespace only, then bare) since SurrealDB does not
+     fall back across auth levels server-side and the resolved
+     namespace/database don't reveal which level the user is defined at.
 
 ``environment: prod`` (``CIRCUITRY_ENV=prod``) omits the ``raw`` field on
 ``effects`` — same ``store_raw`` cascade as the SQL plugins:
@@ -192,7 +196,13 @@ class SurrealdbPlugin:
         if cfg["token"]:
             client.authenticate(cfg["token"])
         elif cfg["user"] and cfg["password"]:
-            client.signin({"username": cfg["user"], "password": cfg["password"]})
+            _signin_with_fallback(
+                client,
+                username=cfg["user"],
+                password=cfg["password"],
+                namespace=cfg["namespace"] or "",
+                database=cfg["database"] or "",
+            )
         client.use(cfg["namespace"], cfg["database"])
         return client
 
@@ -241,6 +251,39 @@ class SurrealdbPlugin:
                     pass
                 self._client = None
                 self._run_id = None
+
+
+def _signin_scopes(namespace: str, database: str) -> list[dict[str, str]]:
+    """Namespace/database pairs to try in a signin payload, most specific first.
+
+    Mirrors ``circuitry.plugins.surrealdb._signin_scopes``: SurrealDB's signin
+    has no cross-level fallback server-side, and ``namespace``/``database``
+    here always resolve to a default rather than being genuinely unset, so
+    the auth level can't be inferred from config alone. Trying full scope,
+    then namespace-only, then bare covers ROOT, NAMESPACE-scoped, and
+    DATABASE-scoped users with a single credential.
+    """
+    scopes: list[dict[str, str]] = []
+    if namespace and database:
+        scopes.append({"namespace": namespace, "database": database})
+    if namespace:
+        scopes.append({"namespace": namespace})
+    scopes.append({})
+    return scopes
+
+
+def _signin_with_fallback(
+    client: Any, *, username: str, password: str, namespace: str, database: str
+) -> None:
+    creds = {"username": username, "password": password}
+    last_exc: Exception = RuntimeError("surrealdb: no signin scope attempted")
+    for scope in _signin_scopes(namespace, database):
+        try:
+            client.signin({**creds, **scope})
+            return
+        except Exception as exc:
+            last_exc = exc
+    raise last_exc
 
 
 def plugin() -> SurrealdbPlugin:
