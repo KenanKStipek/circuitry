@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 import types
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -25,9 +26,13 @@ class _FakeSurrealClient:
         self.url = url
         self.queries: list[tuple[str, dict[str, Any] | None]] = []
         self.used: tuple[str, str] | None = None
+        self.signin_attempts: list[dict[str, Any]] = []
         self.signed_in: dict[str, Any] | None = None
         self.authenticated: str | None = None
         self.closed = False
+        #: When set, a signin call is only accepted if this returns True —
+        #: lets tests simulate a user defined at one specific auth level.
+        self.signin_accepts: Callable[[dict[str, Any]], bool] | None = None
 
     def query(self, sql: str, variables: dict[str, Any] | None = None) -> None:
         self.queries.append((sql, variables))
@@ -36,6 +41,9 @@ class _FakeSurrealClient:
         self.used = (namespace, database)
 
     def signin(self, credentials: dict[str, Any]) -> None:
+        self.signin_attempts.append(dict(credentials))
+        if self.signin_accepts is not None and not self.signin_accepts(credentials):
+            raise Exception("There was a problem with authentication")
         self.signed_in = dict(credentials)
 
     def authenticate(self, token: str) -> None:
@@ -45,13 +53,19 @@ class _FakeSurrealClient:
         self.closed = True
 
 
-def _install_fake_surrealdb(monkeypatch: pytest.MonkeyPatch) -> dict[str, _FakeSurrealClient]:
+def _install_fake_surrealdb(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    signin_accepts: Callable[[dict[str, Any]], bool] | None = None,
+) -> dict[str, _FakeSurrealClient]:
     fake_mod = types.ModuleType("surrealdb")
     holder: dict[str, _FakeSurrealClient] = {}
 
     def make_client(url: str) -> _FakeSurrealClient:
-        holder["c"] = _FakeSurrealClient(url)
-        return holder["c"]
+        client = _FakeSurrealClient(url)
+        client.signin_accepts = signin_accepts
+        holder["c"] = client
+        return client
 
     fake_mod.Surreal = make_client  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "surrealdb", fake_mod)
@@ -302,8 +316,62 @@ def test_signin_with_user_and_password(
     plugin.on_run_start(state={}, context=ctx)
 
     client = holder["c"]
-    assert client.signed_in == {"username": "root", "password": "secret"}
+    assert client.signed_in == {
+        "username": "root",
+        "password": "secret",
+        "namespace": "circuitry",
+        "database": "circuitry",
+    }
     assert client.authenticated is None
+
+
+def test_signin_includes_namespace_and_database_for_scoped_user(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    holder = _install_fake_surrealdb(monkeypatch)
+    monkeypatch.setenv("SURREAL_USER", "runner")
+    monkeypatch.setenv("SURREAL_PASS", "secret")
+    monkeypatch.delenv("SURREAL_TOKEN", raising=False)
+    plugin = surrealdb_mod.plugin()
+    ctx = _make_context(tmp_path, cfg={"namespace": "prod", "database": "trading"})
+    plugin.on_run_start(state={}, context=ctx)
+
+    client = holder["c"]
+    assert client.signin_attempts[0] == {
+        "username": "runner",
+        "password": "secret",
+        "namespace": "prod",
+        "database": "trading",
+    }
+    assert client.signed_in == client.signin_attempts[0]
+
+
+def test_signin_falls_back_to_root_when_scoped_signin_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A ROOT-only user rejects the (default) scoped attempts but accepts bare."""
+    holder = _install_fake_surrealdb(
+        monkeypatch, signin_accepts=lambda creds: "namespace" not in creds
+    )
+    monkeypatch.setenv("SURREAL_USER", "root")
+    monkeypatch.setenv("SURREAL_PASS", "root")
+    monkeypatch.delenv("SURREAL_TOKEN", raising=False)
+    plugin = surrealdb_mod.plugin()
+    ctx = _make_context(tmp_path)
+    plugin.on_run_start(state={}, context=ctx)
+
+    client = holder["c"]
+    assert client.signin_attempts == [
+        {
+            "username": "root",
+            "password": "root",
+            "namespace": "circuitry",
+            "database": "circuitry",
+        },
+        {"username": "root", "password": "root", "namespace": "circuitry"},
+        {"username": "root", "password": "root"},
+    ]
+    assert client.signed_in == {"username": "root", "password": "root"}
 
 
 def test_token_auth_takes_priority_over_user_password(

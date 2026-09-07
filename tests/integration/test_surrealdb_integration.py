@@ -52,6 +52,43 @@ def table() -> str:
     return f"person_{uuid.uuid4().hex[:8]}"
 
 
+@pytest.fixture(scope="module")
+def scoped_users(plugin: SurrealDBPlugin) -> dict[str, str]:
+    """Define a DATABASE-scoped EDITOR and VIEWER user for auth tests.
+
+    Connects as the root user (default dev credentials) to run the
+    ``DEFINE USER`` statements, then hands back generated passwords for the
+    two scoped users. ``plugin`` is depended on only to reuse its readiness
+    skip if the server isn't up.
+    """
+    from surrealdb import Surreal  # type: ignore[import-not-found]
+
+    editor_password = f"editor-{uuid.uuid4().hex}"
+    viewer_password = f"viewer-{uuid.uuid4().hex}"
+
+    root_user = os.getenv("SURREAL_USER", "root")
+    root_password = os.getenv("SURREAL_PASS", "root")
+
+    client = Surreal(_URL)
+    try:
+        client.signin({"username": root_user, "password": root_password})
+        client.use(_NAMESPACE, _DATABASE)
+        # Passwords are hex-only (uuid4().hex), so string interpolation into
+        # SurrealQL here can't break out of the quoted literal.
+        client.query(
+            f"DEFINE USER editor_user ON DATABASE PASSWORD '{editor_password}' "
+            "ROLES EDITOR"
+        )
+        client.query(
+            f"DEFINE USER viewer_user ON DATABASE PASSWORD '{viewer_password}' "
+            "ROLES VIEWER"
+        )
+    finally:
+        client.close()
+
+    return {"editor_password": editor_password, "viewer_password": viewer_password}
+
+
 def _first_record(value: Any) -> dict[str, Any]:
     if isinstance(value, list):
         assert value, f"expected at least one record, got {value!r}"
@@ -130,3 +167,57 @@ def test_connection_refused_is_actionable() -> None:
     )
     with pytest.raises(RuntimeError, match="cannot connect to"):
         unreachable.execute(params={"mode": "select", "target": "person"})
+
+
+def test_database_scoped_editor_and_viewer_authenticate_with_correct_grants(
+    plugin: SurrealDBPlugin,
+    scoped_users: dict[str, str],
+    table: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A DATABASE-scoped EDITOR/VIEWER pair authenticates via the fixed
+    ``_authenticate()`` (namespace+database now reach the signin payload).
+
+    The built-in EDITOR/VIEWER roles only gate DDL-ish actions server-side
+    (``DEFINE``, ``OPTION``, ...); plain table CRUD is governed entirely by
+    ``DEFINE TABLE ... PERMISSIONS``, which defaults to FULL access for every
+    authenticated user regardless of role. So this defines the table with an
+    explicit ``create``/``update``/``delete`` denial as the root user before
+    touching the scoped credentials, then asserts EDITOR (who bypasses
+    PERMISSIONS clauses entirely at the DATABASE level) can still create,
+    while VIEWER's create is silently dropped -- SurrealDB treats a denied
+    PERMISSIONS clause as a filtered-out write (empty result), not a raised
+    error -- and VIEWER's select still works.
+    """
+    plugin.execute(
+        params={
+            "mode": "query",
+            "query": (
+                f"DEFINE TABLE {table} SCHEMALESS "
+                "PERMISSIONS FOR select FULL FOR create, update, delete NONE"
+            ),
+        }
+    )
+
+    monkeypatch.delenv("SURREAL_TOKEN", raising=False)
+    monkeypatch.setenv("SURREAL_USER", "editor_user")
+    monkeypatch.setenv("SURREAL_PASS", scoped_users["editor_password"])
+
+    editor = SurrealDBPlugin(url=_URL, namespace=_NAMESPACE, database=_DATABASE)
+    created = editor.execute(
+        params={"mode": "create", "table": table, "data": {"name": "ada"}}
+    )
+    assert created.raw["mode"] == "create"
+    assert _first_record(created.value)["name"] == "ada"
+
+    monkeypatch.setenv("SURREAL_USER", "viewer_user")
+    monkeypatch.setenv("SURREAL_PASS", scoped_users["viewer_password"])
+
+    viewer = SurrealDBPlugin(url=_URL, namespace=_NAMESPACE, database=_DATABASE)
+    denied = viewer.execute(
+        params={"mode": "create", "table": table, "data": {"name": "grace"}}
+    )
+    assert denied.value in ([], None)
+
+    selected = viewer.execute(params={"mode": "select", "target": table})
+    assert _first_record(selected.value)["name"] == "ada"
