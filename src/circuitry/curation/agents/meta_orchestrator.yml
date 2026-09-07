@@ -3,12 +3,12 @@
 # Uses Circuitry to build Circuitry. Given a natural language description of
 # what you want an orchestration to do, this workflow runs 8 atomic steps:
 #   1. classify_request    — classify goal, complexity, tool needs (JSON)
-#   2. plan_tooling        — pick relevant plugins from {{plugins}} (JSON)
+#   2. plan_tooling        — pick relevant plugins from {{input.plugins}} (JSON)
 #   3. plan_decomposition  — break goal into 2–8 atomic steps (JSON array)
 #   4. plan_state_flow     — map data dependencies + schema needs per effect
 #   5. draft_effects       — one effect block per step (loop+collect+tree)
 #   6. assemble            — mechanical assembly of collected blocks
-#   7. review_structure    — structural correctness check against {{rules}}
+#   7. review_structure    — structural correctness check against {{input.rules}}
 #   8. review_semantics    — semantic check: does it solve the problem atomically?
 #
 # Primary output: prime.generate.review_semantics.value
@@ -69,6 +69,21 @@
 #
 # ─────────────────────────────────────────────────────────────────────────────
 
+interface:
+  inputs:
+    user_request:
+      type: string
+      required: true
+      description: Natural language description of the orchestration to build.
+    rules:
+      type: string
+      required: true
+      description: Full ruleset from rules/*.yml (all effect types + patterns).
+    plugins:
+      type: string
+      required: false
+      description: Plugin descriptions from docs/plugins/*.md.
+
 effects:
   - type: dynamic
     name: generate
@@ -109,7 +124,7 @@ effects:
 
           You are a Circuitry orchestration designer. Classify the following user request.
 
-          User request: "{{user_request}}"
+          User request: "{{input.user_request}}"
 
           Available effect types: prompt (LLM call), dynamic (container), loop (iterate), if (branch), tool (non-LLM side-effect for image/video/audio processing), reflector (self-improving loop)
 
@@ -172,9 +187,9 @@ effects:
           Do NOT add plugins when requires_tools is false. Stop here and return the empty version.
 
           Only if requires_tools is true, select from these plugins:
-          {{plugins}}
+          {{input.plugins}}
 
-          User request: "{{user_request}}"
+          User request: "{{input.user_request}}"
           Goal: {{prime.generate.classify_request.value.goal}}
 
           Return: {"relevant_plugins": [{"name": "...", "reason": "...", "use_case": "..."}], "tool_guidance": "..."}
@@ -213,7 +228,7 @@ effects:
 
           You are planning the atomic steps for a Circuitry orchestration.
 
-          User request: "{{user_request}}"
+          User request: "{{input.user_request}}"
           Goal: {{prime.generate.classify_request.value.goal}}
           Complexity: {{prime.generate.classify_request.value.complexity}}
           Input keys: {{prime.generate.classify_request.value.input_schema}}
@@ -237,7 +252,7 @@ effects:
           - End with a review step when generating structured output like YAML or code
           - Only use tool effects when selected_plugins is non-empty. If relevant_plugins is [], use ONLY prompt/dynamic/loop/if effects.
 
-          {{rules}}
+          {{input.rules}}
 
           Return a JSON array:
           [
@@ -263,7 +278,7 @@ effects:
         template: |
           You are mapping the data flow for a Circuitry orchestration.
 
-          User request: "{{user_request}}"
+          User request: "{{input.user_request}}"
           Goal: {{prime.generate.classify_request.value.goal}}
           Input keys: {{prime.generate.classify_request.value.input_schema}}
           Output path: {{prime.generate.classify_request.value.output_path}}
@@ -275,7 +290,7 @@ effects:
             Inside a named dynamic container: prime.<dynamic_name>.<effect_name>.value
             Loop body effect output:          prime.<loop_name>.iter_N.<body_name>.value
             Loop collected array:             prime.<loop_name>.collected.value
-            User-provided state key:          accessed directly as {{key_name}} (no prime. prefix)
+            Caller-supplied input key:        accessed as input.key_name (never bare)
 
           Produce a precise data flow map:
           1. For each planned step, list:
@@ -314,7 +329,7 @@ effects:
               {{prime.generate.plan_state_flow.value}}
 
               === Rules for type "{{step.type}}" ===
-              {{rules}}
+              {{input.rules}}
 
               HARD RULES:
               - name: use exactly "{{step.name}}" — a simple snake_case identifier. NO dots. NO "prime." prefix.
@@ -330,7 +345,7 @@ effects:
         template: |
           You are assembling a complete Circuitry orchestration YAML file from pre-written effect blocks.
 
-          User request: "{{user_request}}"
+          User request: "{{input.user_request}}"
           Goal: {{prime.generate.classify_request.value.goal}}
           Input keys: {{prime.generate.classify_request.value.input_schema}}
           Output path: {{prime.generate.classify_request.value.output_path}}
@@ -361,7 +376,7 @@ effects:
           You are doing a structural review of a Circuitry orchestration YAML.
           Silently fix any issues found, then output the complete corrected YAML.
 
-          {{rules}}
+          {{input.rules}}
 
           Draft YAML to review:
           <<< BEGIN DRAFT YAML >>>
@@ -396,7 +411,7 @@ effects:
           You are doing a semantic review of a Circuitry orchestration YAML.
           Silently fix any issues found, then output the complete corrected YAML.
 
-          Original user request: "{{user_request}}"
+          Original user request: "{{input.user_request}}"
           Goal: {{prime.generate.classify_request.value.goal}}
           Selected plugins: {{prime.generate.plan_tooling.value.relevant_plugins}}
 

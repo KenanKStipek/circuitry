@@ -63,6 +63,21 @@
 #
 # ─────────────────────────────────────────────────────────────────────────────
 
+interface:
+  inputs:
+    input_yaml:
+      type: string
+      required: true
+      description: The current orchestration YAML to improve.
+    original_prompt:
+      type: string
+      required: true
+      description: The original intent/goal the orchestration was built for.
+    rules:
+      type: string
+      required: true
+      description: LLM authoring rules injected from docs/orchestration-reference.md.
+
 effects:
   - type: dynamic
     name: generate
@@ -103,11 +118,11 @@ effects:
         template: |
           You are a Circuitry orchestration quality reviewer.
 
-          Original intent: "{{original_prompt}}"
+          Original intent: "{{input.original_prompt}}"
 
           Current orchestration YAML:
           <<< BEGIN YAML >>>
-          {{input_yaml}}
+          {{input.input_yaml}}
           <<< END YAML >>>
 
           Analyze this orchestration's quality against the original intent. Consider:
@@ -135,7 +150,7 @@ effects:
         template: |
           You are a Circuitry YAML expert improving an existing orchestration.
 
-          Original intent: "{{original_prompt}}"
+          Original intent: "{{input.original_prompt}}"
 
           Quality analysis of the current version:
           - Issues to fix: {{prime.generate.analyze_quality.value.issues}}
@@ -145,7 +160,7 @@ effects:
 
           Current orchestration YAML to improve:
           <<< BEGIN CURRENT YAML >>>
-          {{input_yaml}}
+          {{input.input_yaml}}
           <<< END CURRENT YAML >>>
 
           Produce an improved version that:
@@ -155,7 +170,7 @@ effects:
           4. More fully and richly achieves the original intent
           5. If the orchestration includes complex effect trees, split them into staged prompts (e.g., list running effect trees → build each tree → combine) rather than a single-shot generation, when this improves clarity or quality.
 
-          {{rules}}
+          {{input.rules}}
 
           Write the complete improved YAML. Add # comments explaining each section and include additional comments where relevant to clarify intent or behavior. Include a header comment block describing what the orchestration does, its inputs, and its primary output path.
 
@@ -175,7 +190,7 @@ effects:
         template: |
           You are reviewing improved Circuitry orchestration YAML for correctness. Work through each check below in order, fix any errors found, then output the complete final YAML.
 
-          Original intent: "{{original_prompt}}"
+          Original intent: "{{input.original_prompt}}"
 
           Draft YAML to review:
           <<< BEGIN DRAFT YAML >>>
@@ -184,7 +199,7 @@ effects:
 
           Use the rules below as an internal checklist only. Do NOT write out your review or explain your reasoning. Silently fix any violations and preserve all relevant comments, then output the corrected YAML.
 
-          {{rules}}
+          {{input.rules}}
 
           Return ONLY the final YAML. No markdown fences. No explanations. No preamble. Start with `adapter:`.
 
@@ -201,7 +216,7 @@ effects:
         name: judge_convergence
         ref: agents/improver_judge
         inputs:
-          yaml_a: "{{input_yaml}}"
+          yaml_a: "{{input.input_yaml}}"
           yaml_b: "{{prime.generate.final_yaml.value}}"
         outputs:
           converged: {path: prime.judge.value}
