@@ -100,6 +100,7 @@ def _compile_effects_in_scope(
     effects: Any,
     scope_path: str,
     container_path: str,
+    loop_names: frozenset[str] = frozenset(),
 ) -> list[EffectDef]:
     if not isinstance(effects, list):
         raise ValueError(f"{container_path} must be a list of effects.")
@@ -141,6 +142,7 @@ def _compile_effects_in_scope(
                 effect,
                 scope_path=scope_path,
                 effect_path=effect_path,
+                loop_names=loop_names,
             )
         )
 
@@ -310,7 +312,11 @@ def _disable_subtree(node: EffectDef) -> EffectDef:
 
 
 def _compile_effect(
-    effect: dict[str, Any], *, scope_path: str, effect_path: str
+    effect: dict[str, Any],
+    *,
+    scope_path: str,
+    effect_path: str,
+    loop_names: frozenset[str] = frozenset(),
 ) -> EffectDef:
     effect_type = (effect.get("type") or "").strip().lower()
     name = effect.get("name")
@@ -349,6 +355,7 @@ def _compile_effect(
             effects=child_effects,
             scope_path=child_scope,
             container_path=f"{effect_path}.effects",
+            loop_names=loop_names,
         )
 
         return DynamicDefinition(
@@ -359,11 +366,13 @@ def _compile_effect(
 
     if effect_type in ("conditional", "if"):
         return _compile_conditional(
-            effect, scope_path=scope_path, effect_path=effect_path
+            effect, scope_path=scope_path, effect_path=effect_path, loop_names=loop_names
         )
 
     if effect_type == "loop":
-        return _compile_loop(effect, scope_path=scope_path, effect_path=effect_path)
+        return _compile_loop(
+            effect, scope_path=scope_path, effect_path=effect_path, loop_names=loop_names
+        )
 
     if effect_type == "tool":
         if name is None:
@@ -412,6 +421,7 @@ def _compile_effect(
             effects=inner_effects,
             scope_path=inner_scope,
             container_path=f"{effect_path}.effects",
+            loop_names=loop_names,
         )
 
         inner_dynamic = DynamicDefinition(
@@ -446,7 +456,11 @@ def _compile_effect(
 
 
 def _compile_conditional(
-    effect: dict[str, Any], *, scope_path: str, effect_path: str
+    effect: dict[str, Any],
+    *,
+    scope_path: str,
+    effect_path: str,
+    loop_names: frozenset[str] = frozenset(),
 ) -> ConditionalDefinition:
     """Compile a conditional (if/then/else) effect."""
     name = effect.get("name")  # Optional for conditionals
@@ -480,7 +494,7 @@ def _compile_conditional(
         )
     if mode == "cel":
         expr = str(if_def.get("expr") or "")
-        validate_cel_expr(expr, effect_path=effect_path)
+        validate_cel_expr(expr, effect_path=effect_path, extra_names=loop_names)
         validate_cel_syntax(
             expr, effect_path=effect_path, effect_name=validated_name
         )
@@ -501,6 +515,7 @@ def _compile_conditional(
         effects=then_effects,
         scope_path=branch_scope,
         container_path=f"{effect_path}.then",
+        loop_names=loop_names,
     )
 
     # Parse 'else' branch (optional)
@@ -509,6 +524,7 @@ def _compile_conditional(
         effects=else_effects,
         scope_path=branch_scope,
         container_path=f"{effect_path}.else",
+        loop_names=loop_names,
     )
 
     # Additional options
@@ -531,7 +547,11 @@ def _compile_conditional(
 
 
 def _compile_loop(
-    effect: dict[str, Any], *, scope_path: str, effect_path: str
+    effect: dict[str, Any],
+    *,
+    scope_path: str,
+    effect_path: str,
+    loop_names: frozenset[str] = frozenset(),
 ) -> LoopDefinition:
     """Compile a loop (while/each) effect."""
     name = effect.get("name")  # Optional for loops
@@ -544,6 +564,20 @@ def _compile_loop(
             effect_path=effect_path,
         )
 
+    # This loop's own CEL-visible bindings, added to whatever an enclosing
+    # loop already contributed, so a nested loop's body sees both — the
+    # inner loop's `iter`/`as` shadow the outer's at runtime (see loop.py),
+    # and both are legal `state.<key>` names for CEL at this nesting depth.
+    body_loop_names = loop_names
+    if "while" in effect or "each" in effect:
+        body_loop_names = body_loop_names | {"iter"}
+    each_as_name: str | None = None
+    if "each" in effect:
+        each_config = effect.get("each")
+        if isinstance(each_config, dict):
+            each_as_name = str(each_config.get("as") or "item")
+            body_loop_names = body_loop_names | {each_as_name}
+
     # Parse body (required)
     body_effects = effect.get("body") or []
     body_scope = (
@@ -553,6 +587,7 @@ def _compile_loop(
         effects=body_effects,
         scope_path=body_scope,
         container_path=f"{effect_path}.body",
+        loop_names=body_loop_names,
     )
 
     # Determine loop mode: while or each
@@ -574,7 +609,9 @@ def _compile_loop(
                 )
             if mode == "cel":
                 while_expr = str(while_config.get("expr") or "")
-                validate_cel_expr(while_expr, effect_path=effect_path)
+                validate_cel_expr(
+                    while_expr, effect_path=effect_path, extra_names=body_loop_names
+                )
                 validate_cel_syntax(
                     while_expr,
                     effect_path=effect_path,
@@ -592,11 +629,10 @@ def _compile_loop(
         each_config = effect.get("each")
         if isinstance(each_config, dict):
             in_path = str(each_config.get("in") or "")
-            as_name = each_config.get("as") or "item"
             validate_each_in_path(in_path, effect_path=effect_path)
             each_def = LoopEachDef(
                 in_path=in_path,
-                as_name=str(as_name),
+                as_name=each_as_name or "item",
             )
 
     # Iteration bounds
