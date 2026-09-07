@@ -255,6 +255,7 @@ class LoopRuntime:
                         iter_ctx = deepcopy(ctx)
                         iter_ctx[self.defn.each_def.as_name] = item
                         iter_ctx["_loop_index"] = idx
+                        iter_ctx["iter"] = {"index": idx}
                         iter_ctxs.append((idx, iter_ctx))
 
                     # Per-thread isolated stores: each thread writes into its own
@@ -355,6 +356,7 @@ class LoopRuntime:
                         iter_ctx = dict(ctx)
                         iter_ctx[self.defn.each_def.as_name] = item
                         iter_ctx["_loop_index"] = idx
+                        iter_ctx["iter"] = {"index": idx}
 
                         try:
                             iter_effects, _ = self._execute_body(
@@ -427,6 +429,7 @@ class LoopRuntime:
                         break
 
                     ctx["_loop_index"] = iteration_count
+                    ctx["iter"] = {"index": iteration_count}
                     try:
                         iter_effects, last_writes = self._execute_body(
                             store=child_store,

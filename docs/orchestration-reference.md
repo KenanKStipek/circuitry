@@ -240,7 +240,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `body` | array | yes | — | Non-empty list of effects to execute per iteration |
 | `each` | object | one-of | — | Collection iteration; mutually exclusive with `while` |
 | `each.in` | string | yes (each) | — | Root-relative state path to a JSON array — `input.`/`prime.`/`runtime.`-rooted. `input.*` is a first-class source; the array need not come from a `prompt_type: json` effect. `state.`-prefixed and bare-key spellings are hard errors here (`state.` is a CEL-only binding). |
-| `each.as` | string | no | `item` | Variable name for current element in body templates |
+| `each.as` | string | no | `item` | Variable name for current element in body templates *and* in `mode: cel` expressions inside this loop's own body — see [CEL Expressions](#cel-expressions) |
 | `while` | object | one-of | — | Continuation condition; mutually exclusive with `each` |
 | `while.mode` | string | no | `model` | `model` or `cel` |
 | `while.template` | string | model only | — | LLM returns boolean for continuation decision. The runtime wraps it and appends `Should the loop continue? Answer (yes/no):`, so phrase the ask as yes/no — `yes`, `true`, `1` and `y` all parse as true |
@@ -379,6 +379,9 @@ Rules of the form:
   `cof validate` warns on in-body use.
 - In CEL the same forms apply with the `state.` prefix and no braces:
   `state.prime.<step>.value`.
+- **A loop's `each.as` binding and its iteration index are also legal
+  `state.<name>` reads in CEL, but only inside that loop's own body** — see
+  [CEL Expressions](#cel-expressions).
 
 ---
 
@@ -792,6 +795,64 @@ loop's `while` expression pays the parser cost on its first iteration only.
 Only `state` is in scope. Values are converted into CEL's type system on the
 way in, so an expression cannot reach a Python object's attributes, methods or
 class; anything with no CEL counterpart reads as `null`.
+
+#### CEL scoping: what `state.<key>` may name, at each nesting level
+
+`state.<key>` is a hard error at compile time (`cof check`) unless `<key>`
+resolves to something actually in scope for the expression's exact position
+in the effect tree:
+
+| Nesting level | Legal `state.<key>` roots |
+|---|---|
+| Anywhere | `input`, `prime`, `runtime` |
+| Inside a loop's own `body` (`each` or `while`) | + `iter` — loop metadata, currently just `iter.index` (0-based) |
+| Inside an `each` loop's own `body` | + the loop's `each.as` name, bound to the current element |
+
+These loop-scoped names stack with nesting and are visible to *every*
+`mode: cel` expression inside that body — a body `if`, a nested loop's
+`while`, a conditional several containers deep — the same way Mustache's
+`{{<as_name>}}` already resolves through nested `if`/`dynamic` wrappers.
+They go out of scope the moment the loop returns: an expression after the
+loop, or in a sibling loop, gets the same "not a state namespace" error as
+any other undeclared key.
+
+```yaml
+- type: loop
+  name: filter_scores
+  collect: verdict
+  each: {in: input.scores, as: score}
+  body:
+    - type: if
+      if:
+        mode: cel
+        expr: "state.score >= 50"          # the loop's own `as` binding
+      then:
+        - type: prompt
+          name: verdict
+          template: "{{score}} at index {{_loop_index}} passes."
+      else:
+        - type: prompt
+          name: verdict
+          template: "{{score}} at index {{_loop_index}} fails."
+```
+
+**Nested loops shadow by depth, same as templates.** If an inner loop reuses
+an outer loop's `as` name, `state.<name>` inside the inner body reads the
+inner binding; back in the outer body, after the inner loop returns, the
+same spelling reads the outer binding again. `iter.index` shadows the same
+way — it always means *this* loop's own counter, never an ancestor's.
+
+A name no enclosing loop declared is still a hard error, and the message
+names what actually is in scope:
+
+```
+CEL expression at 'prime.effects[0].body[0]': 'state.other' does not name a
+state namespace ('state' binds to the state root). Write
+'state.input.other' for caller-supplied values or 'state.prime.other' for
+effect outputs. Names bound by an enclosing loop here: iter, score.
+```
+
+See `learn/cel_showcase.yml`'s `filter_scores` loop for a runnable example.
 
 #### What fails where
 

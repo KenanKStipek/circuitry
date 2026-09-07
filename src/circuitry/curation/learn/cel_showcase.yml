@@ -205,3 +205,30 @@ effects:
       - type: prompt
         name: say
         template: "Say: role was empty."
+
+  # ── Loop-scoped names: a loop's `each.as` binding and its `iter.index`
+  # are legal `state.<name>` reads for CEL inside THAT loop's own body —
+  # nowhere else. See docs/orchestration-reference.md, "CEL Expressions
+  # inside a loop body". Here the condition filters on the bound `score`
+  # itself, no `state.prime.*`/`state.input.*` involved.
+  - type: loop
+    name: filter_scores
+    collect: verdict
+    each:
+      in: input.scores
+      as: score
+    body:
+      - type: if
+        if:
+          mode: cel
+          expr: "state.score >= 50"
+        then:
+          - type: prompt
+            name: verdict
+            template: "Say: score {{score}} at index {{_loop_index}} passes."
+        else:
+          - type: prompt
+            name: verdict
+            template: "Say: score {{score}} at index {{_loop_index}} fails."
+
+# prime.filter_scores.collected.value → one verdict per score, in order.

@@ -15,8 +15,21 @@ run ever dispatches.
 
 Framework builtins injected at the root (``_run_id``, ``_timestamp``) and
 loop-scope bindings (``as`` names, ``_loop_index``, sibling shorthand
-inside a loop body) are not namespaces and are left alone by both the
-migration helper and the validators.
+inside a loop body) are not namespaces and are left alone by the
+migration helper — a bare ``{{as_name}}``/``{{_loop_index}}`` template ref
+is always legal, no ``interface.inputs`` declaration required.
+
+CEL sees the same loop-scope bindings, but only where they are actually in
+lexical scope. ``validate_cel_expr``'s ``extra_names`` parameter is the
+compile-time allow-list an enclosing loop pushes onto ``state.<key>`` for
+CEL expressions inside its own body: the loop's ``each.as`` name (if it
+is an ``each`` loop) and ``iter`` — the loop-metadata namespace holding
+``iter.index``, the current 0-based iteration count, for both ``each``
+and ``while`` loops. Nested loops accumulate: an expression two loops
+deep sees both loops' bindings, with a repeated ``as`` name resolving to
+the innermost (shadowing) binding at runtime. Outside any loop, or
+referencing a name no enclosing loop declared, ``state.<key>`` is a hard
+error — same as any other undeclared namespace.
 """
 
 from __future__ import annotations
@@ -104,13 +117,20 @@ def validate_each_in_path(path: str, *, effect_path: str) -> None:
     )
 
 
-def validate_cel_expr(expr: str, *, effect_path: str) -> None:
+def validate_cel_expr(
+    expr: str, *, effect_path: str, extra_names: frozenset[str] = frozenset()
+) -> None:
     """Hard-error on ``state.<key>`` where ``<key>`` is not a namespace.
 
     The paths come off the CEL parse tree, so a quoted ``'state.topic'``
     is a string literal and not a violation. An expression that does not
     parse is left alone here — ``cel_eval.validate_cel_syntax`` reports
     that with the parser's own message.
+
+    ``extra_names`` is the compile-time allow-list an enclosing loop
+    contributes for its own body: its ``each.as`` name and/or ``iter``
+    (see the module docstring). It has no effect outside a loop body,
+    where the caller passes the empty default.
     """
     from .cel_eval import CelError, state_paths
 
@@ -120,12 +140,18 @@ def validate_cel_expr(expr: str, *, effect_path: str) -> None:
         return
     for path in paths:
         key = path.split(".")[1]
-        if key not in NAMESPACES:
+        if key not in NAMESPACES and key not in extra_names:
             raise ValueError(
                 f"CEL expression at '{effect_path}': 'state.{key}' does not "
                 f"name a state namespace ('state' binds to the state root). "
                 f"Write 'state.input.{key}' for caller-supplied values or "
                 f"'state.prime.{key}' for effect outputs."
+                + (
+                    f" Names bound by an enclosing loop here: "
+                    f"{', '.join(sorted(extra_names))}."
+                    if extra_names
+                    else ""
+                )
             )
 
 

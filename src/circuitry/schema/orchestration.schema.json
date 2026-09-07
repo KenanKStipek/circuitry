@@ -120,7 +120,7 @@
         },
         "expr": {
           "type": "string",
-          "description": "CEL expression (evaluated by cel-python) for deterministic evaluation. State binds to 'state', so paths read state.input.<name>, state.prime.<name>.value or state.runtime.<name>. Full CEL is available: macros (all/exists/exists_one/map/filter), has(), '!', the '?:' ternary and the standard functions (size/int/string/matches/...). Enforced as required when mode is cel."
+          "description": "CEL expression (evaluated by cel-python) for deterministic evaluation. State binds to 'state', so paths read state.input.<name>, state.prime.<name>.value or state.runtime.<name>. Inside a loop's own body, its each.as name and iter.index are also legal state.<key> roots. Full CEL is available: macros (all/exists/exists_one/map/filter), has(), '!', the '?:' ternary and the standard functions (size/int/string/matches/...). Enforced as required when mode is cel."
         },
         "strict": {
           "type": "boolean",
@@ -369,7 +369,7 @@
             },
             "as": {
               "type": "string",
-              "description": "Variable name for the current element. Defaults to 'item'. Accessible in body as {{as_name}}."
+              "description": "Variable name for the current element. Defaults to 'item'. Accessible in body templates as {{as_name}} and, inside this loop's own body, in mode: cel expressions as state.<as_name>."
             }
           }
         },
