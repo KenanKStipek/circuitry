@@ -170,14 +170,35 @@ def test_connection_refused_is_actionable() -> None:
 
 
 def test_database_scoped_editor_and_viewer_authenticate_with_correct_grants(
+    plugin: SurrealDBPlugin,
     scoped_users: dict[str, str],
     table: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A DATABASE-scoped EDITOR/VIEWER pair authenticates via the fixed
-    ``_authenticate()`` (namespace+database now reach the signin payload),
-    and each user's grants are enforced by the server: EDITOR can create,
-    VIEWER's create is denied but its select still works."""
+    ``_authenticate()`` (namespace+database now reach the signin payload).
+
+    The built-in EDITOR/VIEWER roles only gate DDL-ish actions server-side
+    (``DEFINE``, ``OPTION``, ...); plain table CRUD is governed entirely by
+    ``DEFINE TABLE ... PERMISSIONS``, which defaults to FULL access for every
+    authenticated user regardless of role. So this defines the table with an
+    explicit ``create``/``update``/``delete`` denial as the root user before
+    touching the scoped credentials, then asserts EDITOR (who bypasses
+    PERMISSIONS clauses entirely at the DATABASE level) can still create,
+    while VIEWER's create is silently dropped -- SurrealDB treats a denied
+    PERMISSIONS clause as a filtered-out write (empty result), not a raised
+    error -- and VIEWER's select still works.
+    """
+    plugin.execute(
+        params={
+            "mode": "query",
+            "query": (
+                f"DEFINE TABLE {table} SCHEMALESS "
+                "PERMISSIONS FOR select FULL FOR create, update, delete NONE"
+            ),
+        }
+    )
+
     monkeypatch.delenv("SURREAL_TOKEN", raising=False)
     monkeypatch.setenv("SURREAL_USER", "editor_user")
     monkeypatch.setenv("SURREAL_PASS", scoped_users["editor_password"])
@@ -193,10 +214,10 @@ def test_database_scoped_editor_and_viewer_authenticate_with_correct_grants(
     monkeypatch.setenv("SURREAL_PASS", scoped_users["viewer_password"])
 
     viewer = SurrealDBPlugin(url=_URL, namespace=_NAMESPACE, database=_DATABASE)
-    with pytest.raises(RuntimeError):
-        viewer.execute(
-            params={"mode": "create", "table": table, "data": {"name": "grace"}}
-        )
+    denied = viewer.execute(
+        params={"mode": "create", "table": table, "data": {"name": "grace"}}
+    )
+    assert denied.value in ([], None)
 
     selected = viewer.execute(params={"mode": "select", "target": table})
     assert _first_record(selected.value)["name"] == "ada"
