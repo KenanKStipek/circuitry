@@ -10,6 +10,10 @@ import typer.testing
 from circuitry.cli.allowlist import (
     _provider_token_to_adapter,
     check_allowlist,
+    collect_adapter_usages,
+    hard_effect_names,
+    is_hard_adapter_dependency,
+    skippable_effect_names,
     walk_orchestration_refs,
 )
 from circuitry.cli.app import app
@@ -112,6 +116,119 @@ def test_provider_token_handles_edge_cases() -> None:
     assert _provider_token_to_adapter("openai") == "openai"
     assert _provider_token_to_adapter("openai:gpt-4o") == "openai"
     assert _provider_token_to_adapter(":model") is None  # head empty
+
+
+# ---------- collect_adapter_usages / hard-vs-soft classifier ----------
+
+
+def test_collect_usages_default_on_error_is_fail() -> None:
+    orch = {
+        "adapter": "cyberdiner",
+        "effects": [{"type": "prompt", "name": "annotate", "template": "x"}],
+    }
+    usages = collect_adapter_usages(orch)
+    assert [(u.effect_name, u.on_error) for u in usages["cyberdiner"]] == [
+        ("annotate", "fail")
+    ]
+    assert is_hard_adapter_dependency("cyberdiner", usages) is True
+
+
+def test_collect_usages_skip_is_soft() -> None:
+    orch = {
+        "adapter": "cyberdiner",
+        "effects": [
+            {"type": "prompt", "name": "annotate", "template": "x", "on_error": "skip"}
+        ],
+    }
+    usages = collect_adapter_usages(orch)
+    assert is_hard_adapter_dependency("cyberdiner", usages) is False
+    assert skippable_effect_names("cyberdiner", usages) == ["annotate"]
+    assert hard_effect_names("cyberdiner", usages) == []
+
+
+def test_collect_usages_continue_is_soft() -> None:
+    orch = {
+        "adapter": "cyberdiner",
+        "effects": [
+            {
+                "type": "prompt",
+                "name": "annotate",
+                "template": "x",
+                "on_error": "continue",
+            }
+        ],
+    }
+    usages = collect_adapter_usages(orch)
+    assert is_hard_adapter_dependency("cyberdiner", usages) is False
+
+
+def test_collect_usages_mixed_effects_is_hard() -> None:
+    """One skippable + one non-skippable effect on the same adapter → hard,
+    and the non-skippable effect is identifiable via hard_effect_names."""
+    orch = {
+        "adapter": "cyberdiner",
+        "effects": [
+            {
+                "type": "prompt",
+                "name": "annotate",
+                "template": "x",
+                "on_error": "skip",
+            },
+            {"type": "prompt", "name": "decide", "template": "y"},
+        ],
+    }
+    usages = collect_adapter_usages(orch)
+    assert is_hard_adapter_dependency("cyberdiner", usages) is True
+    assert skippable_effect_names("cyberdiner", usages) == ["annotate"]
+    assert hard_effect_names("cyberdiner", usages) == ["decide"]
+
+
+def test_collect_usages_unreferenced_top_level_adapter_has_no_usages() -> None:
+    """A declared-but-unused default adapter has no usage entries — callers
+    treat that as hard (conservative: nothing proves it's safe to skip)."""
+    orch = {
+        "adapter": "cyberdiner",
+        "effects": [{"type": "tool", "name": "t", "provider": "ffmpeg"}],
+    }
+    usages = collect_adapter_usages(orch)
+    assert usages.get("cyberdiner") is None
+    assert is_hard_adapter_dependency("cyberdiner", usages) is True
+
+
+def test_collect_usages_explicit_provider_overrides_default() -> None:
+    orch = {
+        "adapter": "cyberdiner",
+        "effects": [
+            {
+                "type": "prompt",
+                "name": "g",
+                "template": "x",
+                "provider": "openai",
+                "on_error": "skip",
+            }
+        ],
+    }
+    usages = collect_adapter_usages(orch)
+    assert "cyberdiner" not in usages
+    assert is_hard_adapter_dependency("openai", usages) is False
+
+
+def test_collect_usages_fallbacks_share_effect_on_error() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "prompt",
+                "name": "g",
+                "template": "x",
+                "provider": "openai",
+                "provider_fallbacks": ["anthropic"],
+                "on_error": "continue",
+            }
+        ]
+    }
+    usages = collect_adapter_usages(orch)
+    assert is_hard_adapter_dependency("openai", usages) is False
+    assert is_hard_adapter_dependency("anthropic", usages) is False
 
 
 # ---------- check_allowlist ----------

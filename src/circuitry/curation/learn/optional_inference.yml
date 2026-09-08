@@ -1,0 +1,32 @@
+# Optional inference step — degrades gracefully without adapter credentials.
+#
+# `annotate` is the only prompt effect and it's marked `on_error: skip`.
+# Preflight classifies its adapter (cyberdiner) as a *soft* dependency: if
+# `runtime.adapters.cyberdiner.token`/`expo_url` (or CYBERDINER_* env vars)
+# aren't configured, `cof check` passes with a WARNING instead of failing,
+# and `cof run` completes `ok=true` with `annotate.value` left `null`.
+# Drop `on_error: skip` and the same missing credentials become a hard
+# preflight failure — see docs/orchestration-reference.md's `prompt`
+# section ("on_error and preflight").
+#
+# Usage:
+#   cof check learn/optional_inference
+#   cof run learn/optional_inference -e topic="graceful degradation"
+#
+# State path: prime.annotate.value (null when skipped)
+
+adapter: cyberdiner
+model: cheap
+
+interface:
+  inputs:
+    topic:
+      type: string
+      required: true
+      description: Topic to (optionally) annotate with a one-line summary.
+
+effects:
+  - type: prompt
+    name: annotate
+    on_error: skip
+    template: "Summarize in one plain sentence: {{input.topic}}"

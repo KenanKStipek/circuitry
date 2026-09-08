@@ -5,8 +5,8 @@
   ▊  hello                                                                   ▎  
   ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎  
   ╭──────────────╮╭─────────────────────╮╭───────────────────────────────────╮  
-  │▼ All (32)    ││learn/hello          ││ learn/hello                       │  
-  │├── learn (10)││learn/cyberdiner_hel…││                                   │  
+  │▼ All (33)    ││learn/hello          ││ learn/hello                       │  
+  │├── learn (11)││learn/cyberdiner_hel…││                                   │  
   │├── utilities ││agents/meta_orchestr…││ Say hello in a creative way —     │  
   │├── patterns (││agents/wizard        ││ the simplest orchestration.       │  
   │├── recipes (5││learn/dynamic_chain  ││                                   │  
@@ -19,6 +19,6 @@
   │              ││                     ││                                   │  
   │           ▋  ││                     ││ Inputs                            │  
   ╰──────────────╯╰─────────────────────╯╰───────────────────────────────────╯  
-  6/32 in all · "hello"                                                         
+  6/33 in all · "hello"                                                         
                                                                                 
  ⏎ Run  / Search  ^n Next field                                                 
