@@ -163,6 +163,33 @@ def test_call_tool_prefers_structured_content_in_auto(
     assert result.raw["transport"] == "http"
 
 
+def test_auto_parses_json_text_when_structured_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real servers often omit structuredContent and return JSON as a single
+    text block (e.g. Robinhood MCP) — auto must still parse it to a dict,
+    not hand back a raw string that breaks state.value.data.x reads."""
+    session = _FakeSession(call_result=_call_result(text='{"a": 1}'))
+    _install_fake_session(monkeypatch, session)
+
+    result = McpPlugin(servers=_SERVERS).execute(
+        params={"server": "local", "tool": "t"}
+    )
+    assert result.value == {"a": 1}
+
+
+def test_auto_falls_back_to_text_when_not_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeSession(call_result=_call_result(text="plain text"))
+    _install_fake_session(monkeypatch, session)
+
+    result = McpPlugin(servers=_SERVERS).execute(
+        params={"server": "local", "tool": "t"}
+    )
+    assert result.value == "plain text"
+
+
 def test_parse_text_keeps_text_even_with_structured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -197,6 +224,41 @@ def test_parse_json_with_invalid_body_raises(
         McpPlugin(servers=_SERVERS).execute(
             params={"server": "local", "tool": "t", "parse": "json"}
         )
+
+
+def test_parse_json_on_is_error_with_non_json_text_does_not_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """isError text is conventionally a plain error message, not JSON —
+    parse='json' must honor the error contract (value None, stderr set,
+    exit_code 1) instead of crashing the effect."""
+    session = _FakeSession(
+        call_result=_call_result(text="rate limited", is_error=True)
+    )
+    _install_fake_session(monkeypatch, session)
+
+    result = McpPlugin(servers=_SERVERS).execute(
+        params={"server": "local", "tool": "t", "parse": "json"}
+    )
+    assert result.value is None
+    assert result.stderr == "rate limited"
+    assert result.exit_code == 1
+    assert validate_tool_result(result, plugin_name="mcp") == []
+
+
+def test_parse_json_on_is_error_with_json_text_still_parses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeSession(
+        call_result=_call_result(text='{"code": 429}', is_error=True)
+    )
+    _install_fake_session(monkeypatch, session)
+
+    result = McpPlugin(servers=_SERVERS).execute(
+        params={"server": "local", "tool": "t", "parse": "json"}
+    )
+    assert result.value == {"code": 429}
+    assert result.exit_code == 1
 
 
 def test_is_error_surfaces_in_stderr_and_exit_code(
