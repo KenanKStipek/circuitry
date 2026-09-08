@@ -105,6 +105,31 @@ def _grafted_snapshot(
     return _replace_node(root_state, node_path.split("."), {**node, **mirrored})
 
 
+def _collect_child_errors(node: Any, prefix: str = "") -> list[dict[str, Any]]:
+    """Gather ``{path, error}`` for every effect under *node* whose meta carries an error.
+
+    A child effect's own ``on_error: skip``/``continue`` swallows its
+    exception at that effect's level, leaving the ``use`` node's own
+    ``meta.error`` (and thus the parent's view of the run) untouched — the
+    composed failure is otherwise only visible by walking the child's full
+    state tree. Recurses into every nested container (dynamic/conditional/
+    loop bodies, nested ``use`` effects) so a swallowed error at any depth
+    surfaces here.
+    """
+    errors: list[dict[str, Any]] = []
+    if not isinstance(node, dict):
+        return errors
+    meta = node.get("meta")
+    if isinstance(meta, dict) and meta.get("error"):
+        errors.append({"path": prefix or _CHILD_ROOT, "error": meta["error"]})
+    for key, value in node.items():
+        if key in ("value", "meta") or not isinstance(value, dict):
+            continue
+        child_path = f"{prefix}.{key}" if prefix else key
+        errors.extend(_collect_child_errors(value, child_path))
+    return errors
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -468,6 +493,7 @@ class UseRuntime:
         meta["resolved_path"] = None
         meta["validation_errors"] = None
         meta["error"] = None
+        meta["child_errors"] = None
 
         #: This effect's canonical dotted path — what child effects namespace
         #: under and where their live state is mirrored for observers.
@@ -477,6 +503,10 @@ class UseRuntime:
         t0 = time.monotonic()
         cycle_pushed = False
         call_stack: list[str] = self.runtime_config.setdefault("_use_call_stack", [])
+        # Set once the child store exists, so the `except` branch below can
+        # still recover any errors a tree-flow sibling recorded before the
+        # effect that actually raised — see `_collect_child_errors`.
+        child_store: Store | None = None
 
         # The use effect announces itself the way every other effect does, so
         # the child effects forwarded below have a node to hang under. The
@@ -555,6 +585,13 @@ class UseRuntime:
                 ancestors=self._ancestors,
             ).execute(store=child_store)
 
+            # Surface errors an on_error: skip/continue swallowed inside the
+            # child — without this, a composed failure is indistinguishable
+            # from a healthy result once only the mapped `value` is visible.
+            child_errors = _collect_child_errors(child_store.state.get(_CHILD_ROOT))
+            if child_errors:
+                meta["child_errors"] = child_errors
+
             # Extract outputs (explicit > auto-generated from interface > full child state).
             # The compiler already normalized `outputs`, but a UseDefinition can
             # also be built directly (embedded API, tests) — normalize again so
@@ -595,6 +632,14 @@ class UseRuntime:
             # Capture validation errors separately for introspection
             if "validation failed" in error_msg.lower():
                 meta["validation_errors"] = error_msg
+
+            # A tree-flow sibling may have recorded its own swallowed error
+            # before the effect that actually raised propagated — recover
+            # whatever the child state tree holds, best-effort.
+            if child_store is not None:
+                child_errors = _collect_child_errors(child_store.state.get(_CHILD_ROOT))
+                if child_errors:
+                    meta["child_errors"] = child_errors
 
             if self.verbose:
                 elapsed = time.monotonic() - t0
