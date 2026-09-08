@@ -864,6 +864,87 @@ def test_start_and_complete_stay_bracketed_when_the_child_fails(
     assert "start:prime.sub.divide" in events
 
 
+def test_use_surfaces_a_swallowed_child_error_on_its_own_meta(tmp_path: Path) -> None:
+    """A child effect's `on_error: continue` hides its failure from the child's
+    own downstream logic, but the parent `use` node's meta.child_errors should
+    still show it — otherwise a composed failure is indistinguishable from a
+    healthy result once only the mapped `value` is visible (issue #199)."""
+    child = _write_orch(
+        tmp_path,
+        "child.yml",
+        {
+            "effects": [
+                {
+                    "type": "tool",
+                    "name": "divide",
+                    "provider": "math",
+                    "params": {"expression": "1/0"},
+                    "on_error": "continue",
+                }
+            ]
+        },
+    )
+    store = Store(state={})
+
+    _run_orch(
+        {"effects": [{"type": "use", "name": "sub", "path": str(child)}]}, store
+    )
+
+    assert store.state["prime"]["sub"]["meta"]["error"] is None
+    child_errors = store.state["prime"]["sub"]["meta"]["child_errors"]
+    assert child_errors is not None
+    assert len(child_errors) == 1
+    assert child_errors[0]["path"] == "divide"
+    assert "division" in child_errors[0]["error"].lower() or "zero" in child_errors[0]["error"].lower()
+
+
+def test_use_child_errors_is_none_when_the_child_is_healthy(tmp_path: Path) -> None:
+    """No swallowed failures → no noise on meta.child_errors."""
+    child = _write_orch(tmp_path, "child.yml", _child_orch("greet"))
+    store = Store(state={})
+
+    _run_orch(
+        {"effects": [{"type": "use", "name": "sub", "path": str(child)}]}, store
+    )
+
+    assert store.state["prime"]["sub"]["meta"]["child_errors"] is None
+
+
+def test_use_child_errors_collects_from_nested_use_at_any_depth(
+    tmp_path: Path,
+) -> None:
+    """A swallowed error several `use` levels deep still surfaces at the top."""
+    grandchild = _write_orch(
+        tmp_path,
+        "grandchild.yml",
+        {
+            "effects": [
+                {
+                    "type": "tool",
+                    "name": "divide",
+                    "provider": "math",
+                    "params": {"expression": "1/0"},
+                    "on_error": "continue",
+                }
+            ]
+        },
+    )
+    child = _write_orch(
+        tmp_path,
+        "child.yml",
+        {"effects": [{"type": "use", "name": "inner", "path": str(grandchild)}]},
+    )
+    store = Store(state={})
+
+    _run_orch(
+        {"effects": [{"type": "use", "name": "sub", "path": str(child)}]}, store
+    )
+
+    child_errors = store.state["prime"]["sub"]["meta"]["child_errors"]
+    assert child_errors is not None
+    assert child_errors[0]["path"] == "inner.divide"
+
+
 def test_dry_run_use_still_brackets_its_own_node(tmp_path: Path) -> None:
     """The dry-run short-circuit closes the start it fired."""
     child = _write_orch(tmp_path, "child.yml", _child_orch("greet"))
