@@ -12,7 +12,9 @@ from circuitry.cli.app import app
 from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.runtime_shim import (
     RunRequest,
+    classify_preflight_results,
     format_preflight_errors,
+    format_preflight_warnings,
     preflight,
     run,
     validate,
@@ -304,6 +306,138 @@ def test_run_dry_run_skips_preflight(tmp_path: Path, monkeypatch: pytest.MonkeyP
         )
     )
     assert result.ok is True
+
+
+# ---------- soft (on_error: skip/continue) adapter dependencies ----------
+
+
+def test_classify_preflight_downgrades_skippable_adapter_to_warning(
+    tmp_path: Path,
+) -> None:
+    """AC: single skippable prompt effect, adapter unavailable → soft warning,
+    not a hard error."""
+    p = _write(
+        tmp_path,
+        "orch.yml",
+        "adapter: cyberdiner\nmodel: cheap\n"
+        "effects:\n"
+        "  - {type: prompt, name: annotate, template: x, on_error: skip}\n",
+    )
+    cfg = CircuitryConfig()
+    results = preflight(p, cfg)
+    hard, soft = classify_preflight_results(p, results)
+    assert format_preflight_errors(hard) == []
+    warnings = format_preflight_warnings(soft)
+    assert len(warnings) == 1
+    assert "cyberdiner" in warnings[0]
+    assert "annotate" in warnings[0]
+    assert "will skip" in warnings[0]
+
+
+def test_validate_passes_with_warning_for_skippable_adapter(tmp_path: Path) -> None:
+    """AC: preflight passes with a WARNING when the only user of the adapter
+    tolerates failure."""
+    p = _write(
+        tmp_path,
+        "orch.yml",
+        "adapter: cyberdiner\nmodel: cheap\n"
+        "effects:\n"
+        "  - {type: prompt, name: annotate, template: x, on_error: skip}\n",
+    )
+    result = validate(p, config=CircuitryConfig())
+    assert result["ok"] is True
+    assert result["errors"] == []
+    assert any("cyberdiner" in w and "annotate" in w for w in result["warnings"])
+
+
+def test_validate_fails_without_on_error_same_orchestration(tmp_path: Path) -> None:
+    """AC: same orchestration minus on_error: skip → preflight fails as today."""
+    p = _write(
+        tmp_path,
+        "orch.yml",
+        "adapter: cyberdiner\nmodel: cheap\n"
+        "effects:\n"
+        "  - {type: prompt, name: annotate, template: x}\n",
+    )
+    result = validate(p, config=CircuitryConfig())
+    assert result["ok"] is False
+    assert any("cyberdiner" in e for e in result["errors"])
+
+
+def test_validate_mixed_effects_hard_failure_names_effect(tmp_path: Path) -> None:
+    """AC: two effects on the same unavailable adapter, one skippable and one
+    not → hard failure naming the non-skippable effect."""
+    p = _write(
+        tmp_path,
+        "orch.yml",
+        "adapter: cyberdiner\nmodel: cheap\n"
+        "effects:\n"
+        "  - {type: prompt, name: annotate, template: x, on_error: skip}\n"
+        "  - {type: prompt, name: decide, template: y}\n",
+    )
+    result = validate(p, config=CircuitryConfig())
+    assert result["ok"] is False
+    assert any("decide" in e for e in result["errors"])
+    # The skippable effect must not be blamed for the hard failure.
+    assert not any(
+        "required by effects" in e and "annotate" in e and "decide" not in e
+        for e in result["errors"]
+    )
+
+
+def test_run_completes_ok_when_skippable_adapter_unavailable(
+    tmp_path: Path,
+) -> None:
+    """AC: run completes ok=true with the effect skipped."""
+    p = _write(
+        tmp_path,
+        "orch.yml",
+        "adapter: cyberdiner\nmodel: cheap\n"
+        "effects:\n"
+        "  - {type: prompt, name: annotate, template: x, on_error: skip}\n",
+    )
+    cfg = CircuitryConfig()
+    result = run(
+        RunRequest(
+            orchestration_path=p,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            initial_state={},
+            config=cfg,
+        )
+    )
+    assert result.ok is True
+    assert result.state["prime"]["annotate"]["value"] is None
+    assert any("cyberdiner" in w for w in result.warnings)
+
+
+def test_run_aborts_when_mixed_hard_effect_present(tmp_path: Path) -> None:
+    """The non-skippable effect in a mixed pair still hard-fails the run."""
+    p = _write(
+        tmp_path,
+        "orch.yml",
+        "adapter: cyberdiner\nmodel: cheap\n"
+        "effects:\n"
+        "  - {type: prompt, name: annotate, template: x, on_error: skip}\n"
+        "  - {type: prompt, name: decide, template: y}\n",
+    )
+    cfg = CircuitryConfig()
+    result = run(
+        RunRequest(
+            orchestration_path=p,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            initial_state={},
+            config=cfg,
+        )
+    )
+    assert result.ok is False
+    assert "Preflight failed" in (result.error or "")
+    assert "decide" in (result.error or "")
 
 
 # ---------- doctor exit codes ----------

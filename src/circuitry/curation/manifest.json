@@ -541,6 +541,21 @@
         "tier": {"type": "string", "required": false, "description": "Tier for the ternary. Try 'pro'."}
       },
       "example": "cof run learn/cel_showcase -e role=admin -e scores='[10, 0, 95]' -e tier=pro"
+    },
+    {
+      "name": "learn/optional_inference",
+      "file": "learn/optional_inference.yml",
+      "category": "learn",
+      "intent": "on_error: skip — an adapter dependency that preflight treats as optional",
+      "description": "Template: a prompt effect marked on_error: skip so preflight classifies its adapter as a soft dependency — a missing credential warns instead of hard-failing, and the run still completes ok=true with the effect skipped.",
+      "when_to_use": "Reach for it when one effect's inference is genuinely optional (annotation, best-effort enrichment) and the orchestration should still run cleanly without that adapter's credentials — CI, fake-MCP tests, offline dev.",
+      "primitives": ["prompt"],
+      "difficulty": "beginner",
+      "backends": ["llm"],
+      "inputs": {
+        "topic": {"type": "string", "required": true, "description": "Topic to (optionally) annotate with a one-line summary."}
+      },
+      "example": "cof run learn/optional_inference -e topic='graceful degradation'"
     }
   ]
 }

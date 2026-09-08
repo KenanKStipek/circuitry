@@ -460,6 +460,9 @@ def validate_report(
         except Exception as exc:
             issues.append(ValidationIssue("preflight", str(exc)))
         else:
+            hard_results, soft_results = runtime_shim.classify_preflight_results(
+                path, results
+            )
             issues += [
                 ValidationIssue(
                     "preflight",
@@ -467,9 +470,12 @@ def validate_report(
                     label,
                     tuple(next_step(item) for item in result.missing or ()),
                 )
-                for label, result in results
+                for label, result in hard_results
                 if not result.ok
             ]
+            warnings = warnings + tuple(
+                _preflight_message(result) for _label, result in soft_results
+            )
 
     return ValidationReport(path, tuple(issues), tuple(skipped), warnings)
 
