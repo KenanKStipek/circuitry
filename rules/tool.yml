@@ -17,6 +17,9 @@ fields:
   params:
     type: object
     note: "Plugin-specific parameters. All string values support Mustache rendering."
+  params_json:
+    type: string
+    note: "A Mustache template rendered to text and parsed as JSON, deep-merged over params (params_json wins on conflicts). Use it to send a runtime-built array/object (e.g. a list from a prior step) instead of a Mustache-rendered string — e.g. '{\"arguments\": {\"symbols\": {{{prime.symbol_list.value}}} }}'. A bad template or non-JSON result is a hard failure."
   timeout_ms:
     type: integer
   on_error:

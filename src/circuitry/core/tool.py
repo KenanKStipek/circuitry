@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -90,6 +91,41 @@ def _render_params(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any
         return params
 
 
+def _render_params_json(template: str, ctx: dict[str, Any]) -> dict[str, Any]:
+    """Mustache-render params_json, then parse the result as a JSON object.
+
+    Unlike _render_params, this does not soft-fail: params_json exists so a
+    runtime-built array/object (e.g. a list of symbols from a prior step) can
+    reach a tool call. Silently ignoring a bad template or malformed JSON
+    would run the tool with a different params object than the author wrote,
+    which is worse than surfacing the error.
+    """
+    import chevron  # type: ignore
+
+    rendered_text = chevron.render(template, ctx)
+    try:
+        parsed = json.loads(rendered_text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"params_json did not render to valid JSON: {e}") from e
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            "params_json must render to a JSON object (dict), got "
+            f"{type(parsed).__name__}"
+        )
+    return parsed
+
+
+def _deep_merge_params(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Deep-merge *overlay* onto *base*; overlay keys win, nested dicts recurse."""
+    merged = dict(base)
+    for key, value in overlay.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _deep_merge_params(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 class _ToolSpinner:
     """Animated single-line spinner for a tool effect running in sequential mode."""
 
@@ -131,6 +167,7 @@ class ToolDefinition:
     name: str
     provider: str
     params: dict[str, Any]
+    params_json: str | None = None
     prompt: str | None = None
     model: str | None = None
     timeout_ms: int | None = None
@@ -225,24 +262,28 @@ class ToolRuntime:
         # complete — start mirrors that exactly so the pair stays balanced.
         store.fire_effect_start(self.defn.name, node)
 
-        # Render top-level prompt/model, then merge with params (params take precedence)
-        top_level: dict[str, Any] = {}
-        if self.defn.prompt is not None:
-            try:
-                import chevron  # type: ignore
-                top_level["prompt"] = chevron.render(self.defn.prompt, ctx)
-            except Exception:
-                logger.warning("Tool prompt template rendering failed; using raw prompt", exc_info=True)
-                top_level["prompt"] = self.defn.prompt
-        if self.defn.model is not None:
-            top_level["model"] = self.defn.model
-
-        rendered = {**top_level, **_render_params(self.defn.params, ctx)}
-        meta["params_rendered"] = rendered
-        mtag = _model_tag(rendered)
-
         target = self.defn.provider  # fallback if build_plugin fails before we can compute it
         try:
+            # Render top-level prompt/model, then merge with params (params take precedence)
+            top_level: dict[str, Any] = {}
+            if self.defn.prompt is not None:
+                try:
+                    import chevron  # type: ignore
+                    top_level["prompt"] = chevron.render(self.defn.prompt, ctx)
+                except Exception:
+                    logger.warning("Tool prompt template rendering failed; using raw prompt", exc_info=True)
+                    top_level["prompt"] = self.defn.prompt
+            if self.defn.model is not None:
+                top_level["model"] = self.defn.model
+
+            params = _render_params(self.defn.params, ctx)
+            if self.defn.params_json is not None:
+                params = _deep_merge_params(params, _render_params_json(self.defn.params_json, ctx))
+
+            rendered = {**top_level, **params}
+            meta["params_rendered"] = rendered
+            mtag = _model_tag(rendered)
+
             # Build plugin early so we can use its target string in the spinner
             plugin = build_plugin(
                 plugin_name=self.defn.provider,

@@ -62,6 +62,41 @@ def test_compile_tool_effect_on_error_skip() -> None:
     assert defn.on_error == "skip"
 
 
+def test_compile_tool_effect_params_json_field() -> None:
+    effect = {
+        "type": "tool",
+        "name": "get_equity_quotes",
+        "provider": "mcp",
+        "params": {"server": "robinhood"},
+        "params_json": '{"arguments": {"symbols": {{{prime.symbol_list.value}}} }}',
+    }
+    defn = _compile_effect(effect, scope_path="prime", effect_path="prime.effects[0]")
+    assert isinstance(defn, ToolDefinition)
+    assert defn.params == {"server": "robinhood"}
+    assert (
+        defn.params_json
+        == '{"arguments": {"symbols": {{{prime.symbol_list.value}}} }}'
+    )
+
+
+def test_compile_tool_effect_params_json_defaults_to_none() -> None:
+    effect = {"type": "tool", "name": "x", "provider": "ffmpeg"}
+    defn = _compile_effect(effect, scope_path="prime", effect_path="prime.effects[0]")
+    assert isinstance(defn, ToolDefinition)
+    assert defn.params_json is None
+
+
+def test_compile_tool_effect_params_json_wrong_type_raises() -> None:
+    effect = {
+        "type": "tool",
+        "name": "x",
+        "provider": "mcp",
+        "params_json": {"not": "a string"},
+    }
+    with pytest.raises(ValueError, match="params_json"):
+        _compile_effect(effect, scope_path="prime", effect_path="prime.effects[0]")
+
+
 def test_compile_prompt_type_image_raises_migration_error() -> None:
     effect = {
         "type": "prompt",
@@ -189,6 +224,126 @@ def test_tool_runtime_mustache_renders_params(monkeypatch: pytest.MonkeyPatch) -
     assert captured_params["output"] == "/out/b.mp4"
 
 
+def _capturing_plugin(captured_params: dict[str, Any]) -> Any:
+    def fake_build_plugin(**kw: Any) -> Any:
+        m = MagicMock()
+
+        def execute(*, params: dict[str, Any], timeout_seconds: int) -> ToolResult:
+            captured_params.update(params)
+            return ToolResult(value="ok", raw={})
+
+        m.execute.side_effect = execute
+        return m
+
+    return fake_build_plugin
+
+
+def test_tool_runtime_params_json_builds_array_from_prior_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """mcp's arguments.symbols as a real array built at runtime, not one call per symbol."""
+    captured_params: dict[str, Any] = {}
+    monkeypatch.setattr(
+        "circuitry.plugins.factory.build_plugin", _capturing_plugin(captured_params)
+    )
+
+    defn = ToolDefinition(
+        name="get_equity_quotes",
+        provider="mcp",
+        params={"server": "robinhood", "tool": "get_equity_quotes"},
+        params_json='{"arguments": {"symbols": {{{prime.symbol_list.value}}} }}',
+    )
+    store = _make_store()
+    ctx = {"prime": {"symbol_list": {"value": '["AAPL", "MSFT", "TSLA"]'}}}
+
+    ToolRuntime(defn).execute(store=store, ctx=ctx)
+
+    assert captured_params["server"] == "robinhood"
+    assert captured_params["tool"] == "get_equity_quotes"
+    assert captured_params["arguments"] == {"symbols": ["AAPL", "MSFT", "TSLA"]}
+    assert store.state["get_equity_quotes"]["meta"]["params_rendered"] == captured_params
+
+
+def test_tool_runtime_params_json_builds_nested_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """surrealdb create/upsert receiving a nested object built at runtime."""
+    captured_params: dict[str, Any] = {}
+    monkeypatch.setattr(
+        "circuitry.plugins.factory.build_plugin", _capturing_plugin(captured_params)
+    )
+
+    defn = ToolDefinition(
+        name="save_person",
+        provider="surrealdb",
+        params={"mode": "create", "table": "person"},
+        params_json='{"data": {{{prime.person_json.value}}} }',
+    )
+    store = _make_store()
+    ctx = {"prime": {"person_json": {"value": '{"name": "Ada", "score": 42}'}}}
+
+    ToolRuntime(defn).execute(store=store, ctx=ctx)
+
+    assert captured_params["mode"] == "create"
+    assert captured_params["table"] == "person"
+    assert captured_params["data"] == {"name": "Ada", "score": 42}
+
+
+def test_tool_runtime_params_json_wins_on_key_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_params: dict[str, Any] = {}
+    monkeypatch.setattr(
+        "circuitry.plugins.factory.build_plugin", _capturing_plugin(captured_params)
+    )
+
+    defn = ToolDefinition(
+        name="x",
+        provider="mcp",
+        params={"arguments": {"symbols": ["placeholder"], "keep": "me"}},
+        params_json='{"arguments": {"symbols": ["AAPL"]}}',
+    )
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    # params_json wins on the conflicting key, but a deep merge keeps
+    # sibling keys from params that params_json didn't mention.
+    assert captured_params["arguments"] == {"symbols": ["AAPL"], "keep": "me"}
+
+
+def test_tool_runtime_params_json_invalid_json_fail_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: MagicMock())
+
+    defn = ToolDefinition(
+        name="x", provider="mcp", params={}, params_json="{not valid json", on_error="fail"
+    )
+    store = _make_store()
+
+    with pytest.raises(ValueError, match="params_json"):
+        ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert "params_json" in store.state["x"]["meta"]["error"]
+
+
+def test_tool_runtime_params_json_invalid_json_skip_does_not_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: MagicMock())
+
+    defn = ToolDefinition(
+        name="x", provider="mcp", params={}, params_json="[1, 2, 3]", on_error="skip"
+    )
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={})  # should not raise
+
+    assert store.state["x"]["value"] is None
+    assert "JSON object" in store.state["x"]["meta"]["error"]
+
+
 # ---------------------------------------------------------------------------
 # Schema validation tests (via circuitry validate)
 # ---------------------------------------------------------------------------
@@ -207,6 +362,28 @@ effects:
     params:
       input: a.mp4
       output: b.mp4
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    result = validate(path)
+    assert result["ok"] is True, result["errors"]
+
+
+def test_validate_accepts_tool_effect_with_params_json(tmp_path: Path) -> None:
+    from circuitry.cli.runtime_shim import validate
+
+    path = tmp_path / "tool.yml"
+    path.write_text(
+        """
+effects:
+  - type: tool
+    name: get_equity_quotes
+    provider: mcp
+    params:
+      server: robinhood
+      tool: get_equity_quotes
+    params_json: '{"arguments": {"symbols": {{{prime.symbol_list.value}}} }}'
 """.strip()
         + "\n",
         encoding="utf-8",
