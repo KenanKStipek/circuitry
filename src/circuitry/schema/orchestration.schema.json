@@ -465,6 +465,10 @@
           "type": "object",
           "description": "Plugin-specific parameters. All string values support Mustache rendering against current state. Takes precedence over top-level prompt/model."
         },
+        "params_json": {
+          "type": "string",
+          "description": "A Mustache template rendered to text and then parsed as JSON, producing a real object/array (not just strings). The parsed object is deep-merged over 'params' (params_json wins on overlapping keys). Use this to pass a runtime-built array or nested object to a tool whose schema requires one, e.g. '{\"arguments\": {\"symbols\": {{{prime.symbol_list.value}}} }}'."
+        },
         "timeout_ms": { "type": "integer", "minimum": 0 },
         "on_error": { "$ref": "#/$defs/OnErrorDefault" }
       }
