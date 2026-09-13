@@ -501,8 +501,6 @@ class UseRuntime:
 
         indent = "  " * self.depth
         t0 = time.monotonic()
-        cycle_pushed = False
-        call_stack: list[str] = self.runtime_config.setdefault("_use_call_stack", [])
         # Set once the child store exists, so the `except` branch below can
         # still recover any errors a tree-flow sibling recorded before the
         # effect that actually raised — see `_collect_child_errors`.
@@ -536,13 +534,21 @@ class UseRuntime:
                 meta["library_ref"] = self._pin
 
             # Cycle detection — runtime call-stack tracking by resolved identity.
-            if identity in call_stack:
-                cycle_path = " → ".join([*call_stack, identity])
+            # The stack is derived per call-path rather than mutated in place:
+            # `runtime_config` is one dict shared by every runtime in the run,
+            # and tree-flow iterations execute concurrently on a
+            # ThreadPoolExecutor, so a shared, mutated list would let sibling
+            # iterations see each other as ancestors (false-positive cycles).
+            parent_stack: list[str] = list(
+                self.runtime_config.get("_use_call_stack", [])
+            )
+            if identity in parent_stack:
+                cycle_path = " → ".join([*parent_stack, identity])
                 raise RecursionError(
                     f"use '{self.defn.name}': cycle detected — {cycle_path}"
                 )
-            call_stack.append(identity)
-            cycle_pushed = True
+            child_runtime_config = dict(self.runtime_config)
+            child_runtime_config["_use_call_stack"] = [*parent_stack, identity]
 
             child_root = compile_orchestration(orch=child_orch, root_name="prime")
 
@@ -577,7 +583,7 @@ class UseRuntime:
                 adapter=self.adapter,
                 model=self.model,
                 model_locked=self.model_locked,
-                runtime_config=self.runtime_config,
+                runtime_config=child_runtime_config,
                 dry_run=self.dry_run,
                 timeout_seconds=self.timeout_seconds,
                 verbose=self.verbose,
@@ -656,10 +662,4 @@ class UseRuntime:
                 node["value"] = None
             # continue: keep going with None value
         finally:
-            if cycle_pushed and call_stack:
-                # Pop only if we pushed and the top still matches.
-                try:
-                    call_stack.pop()
-                except IndexError:
-                    pass
             store.fire_effect_complete(self.defn.name, node)
