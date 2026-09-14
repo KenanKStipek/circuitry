@@ -105,6 +105,7 @@ class DynamicRuntime:
         verbose: bool = False,
         depth: int = 0,
         ancestors: list[AncestorContext] | None = None,
+        label_prefix: str | None = None,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -119,6 +120,11 @@ class DynamicRuntime:
         self.verbose = verbose
         self.depth = depth
         self._ancestors = ancestors or []
+        # Set by an enclosing ``use`` effect so this dynamic's own leaf
+        # effects (prompt/tool/use) can be traced back to the invocation
+        # that spawned them — see ``_child_display_name`` and
+        # ``UseRuntime.execute``.
+        self._label_prefix = label_prefix
 
     def execute(
         self, *, store: Store, ctx_override: dict[str, Any] | None = None
@@ -303,6 +309,7 @@ class DynamicRuntime:
         name = getattr(effect, "name", None) or "?"
         is_prompt = isinstance(effect, PromptDefinition)
         is_tool = isinstance(effect, ToolDefinition)
+        is_use = isinstance(effect, UseDefinition)
 
         # If a tracker is provided, derive all callbacks from it
         _cb_running: Callable[[str, int], None] | None = None
@@ -329,7 +336,7 @@ class DynamicRuntime:
             )
             return
 
-        if self.verbose and not is_prompt and not is_tool:
+        if self.verbose and not is_prompt and not is_tool and not is_use:
             if cb_start is not None:
                 cb_start()
             else:
@@ -354,6 +361,7 @@ class DynamicRuntime:
                     cb_done=cb_done,
                     cb_error=cb_error,
                     cb_running=_cb_running,
+                    display_name=_child_display_name(name, label_prefix=self._label_prefix),
                     ancestors=self._child_ancestors if tracker is None else None,
                 ).execute(store=store, ctx=ctx)
 
@@ -369,6 +377,7 @@ class DynamicRuntime:
                     verbose=self.verbose,
                     depth=self.depth + 1,
                     ancestors=self._child_ancestors,
+                    label_prefix=self._label_prefix,
                 ).execute(store=store, ctx_override=ctx)
 
             elif isinstance(effect, ReflectorDefinition):
@@ -409,6 +418,7 @@ class DynamicRuntime:
                     verbose=self.verbose,
                     depth=self.depth,
                     ancestors=self._child_ancestors,
+                    label_prefix=self._label_prefix,
                 ).execute(store=store, ctx=ctx)
 
             elif isinstance(effect, ToolDefinition):
@@ -423,6 +433,7 @@ class DynamicRuntime:
                     cb_done=cb_done,
                     cb_error=cb_error,
                     cb_running=_cb_running,
+                    display_name=_child_display_name(name, label_prefix=self._label_prefix),
                     ancestors=self._child_ancestors if tracker is None else None,
                 ).execute(store=store, ctx=ctx)
 
@@ -437,13 +448,17 @@ class DynamicRuntime:
                     timeout_seconds=self.timeout_seconds,
                     verbose=self.verbose,
                     depth=self.depth + 1,
-                    ancestors=self._child_ancestors,
+                    cb_start=cb_start,
+                    cb_done=cb_done,
+                    cb_error=cb_error,
+                    display_name=_child_display_name(name, label_prefix=self._label_prefix),
+                    ancestors=self._child_ancestors if tracker is None else None,
                 ).execute(store=store, ctx=ctx)
 
             else:
                 raise TypeError(f"Unsupported effect type: {type(effect)}")
 
-            if self.verbose and not is_prompt and not is_tool:
+            if self.verbose and not is_prompt and not is_tool and not is_use:
                 elapsed = time.monotonic() - t0
                 suffix = _elapsed_str(elapsed)
                 if isinstance(effect, DynamicDefinition):
@@ -460,7 +475,7 @@ class DynamicRuntime:
                     _console.print(line)
 
         except Exception:
-            if self.verbose and not is_prompt and not is_tool:
+            if self.verbose and not is_prompt and not is_tool and not is_use:
                 elapsed = time.monotonic() - t0
                 suffix = _elapsed_str(elapsed)
                 if isinstance(effect, DynamicDefinition):
@@ -579,6 +594,29 @@ def _elapsed_str(seconds: float) -> str:
     if seconds >= 1:
         return f"{seconds:.2f}s"
     return f"{seconds * 1000:.0f}ms"
+
+
+def _child_display_name(
+    name: str, *, label_prefix: str | None = None, iter_label: str | None = None
+) -> str | None:
+    """Combine an effect's own name with an inherited ``use`` prefix and/or loop tag.
+
+    ``label_prefix`` traces a line back to the ``use`` invocation that spawned
+    it (see ``UseRuntime.execute``); ``iter_label`` is the ``[N]`` a loop body
+    adds for its own iteration. Returns ``None`` when neither applies, so
+    callers can pass the result straight through to ``display_name=`` and
+    keep each runtime's own "no override" default of the bare effect name —
+    this is what keeps unaffected call sites (no loop, no enclosing ``use``)
+    byte-identical to before.
+    """
+    parts = [name]
+    if label_prefix:
+        parts.append(label_prefix)
+    if iter_label:
+        parts.append(iter_label)
+    if len(parts) == 1:
+        return None
+    return " ".join(parts)
 
 
 def _fmt_tokens(n: int) -> str:

@@ -228,6 +228,92 @@ def test_done_message_includes_tokens_when_live() -> None:
     assert "s" in done or "ms" in done, done
 
 
+# ---------------------------------------------------------------------------
+# use primitive
+# ---------------------------------------------------------------------------
+
+
+_INLINE_CHILD = "effects:\n  - type: prompt\n    name: inner\n    template: hi\n"
+
+
+def test_use_emits_single_done_line() -> None:
+    orch = {
+        "effects": [
+            {"type": "use", "name": "sub", "inline": _INLINE_CHILD},
+        ]
+    }
+    msgs = _run(orch, verbose=True)
+    done_lines = [m for m in msgs if "⊕" in m and "sub" in m]
+    assert len(done_lines) == 1, msgs
+    assert "|" in done_lines[0], done_lines[0]
+
+
+def test_use_outside_loop_child_effects_have_no_prefix() -> None:
+    orch = {
+        "effects": [
+            {"type": "use", "name": "sub", "inline": _INLINE_CHILD},
+        ]
+    }
+    msgs = _run(orch, verbose=True, dry_run=False)
+    assert any("✓" in m and "inner" in m for m in msgs), msgs
+    assert not any("inner sub" in m for m in msgs), msgs
+
+
+def test_use_in_loop_each_carries_iteration_tag_and_no_duplicate() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "prompt",
+                "name": "items",
+                "template": '["a","b"]',
+                "prompt_type": "json",
+                "schema": {"type": "array", "items": {"type": "string"}},
+            },
+            {
+                "type": "loop",
+                "name": "process",
+                "each": {"in": "prime.items.value", "as": "item"},
+                "body": [
+                    {"type": "use", "name": "sub", "inline": _INLINE_CHILD},
+                ],
+            },
+        ]
+    }
+    msgs = _run(orch, verbose=True, dry_run=False)
+    assert any("✓" in m and "sub [0]" in m for m in msgs), msgs
+    assert any("✓" in m and "sub [1]" in m for m in msgs), msgs
+    # exactly one result line per iteration — no untagged dispatcher duplicate
+    sub_lines = [m for m in msgs if "⊕" in m and "sub" in m]
+    assert len(sub_lines) == 2, msgs
+
+
+def test_use_child_effects_attributed_to_parent_iteration() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "prompt",
+                "name": "items",
+                "template": '["a","b"]',
+                "prompt_type": "json",
+                "schema": {"type": "array", "items": {"type": "string"}},
+            },
+            {
+                "type": "loop",
+                "name": "process",
+                "each": {"in": "prime.items.value", "as": "item"},
+                "body": [
+                    {"type": "use", "name": "sub", "inline": _INLINE_CHILD},
+                ],
+            },
+        ]
+    }
+    msgs = _run(orch, verbose=True, dry_run=False)
+    # the child prompt's done line carries the parent use's own
+    # iteration-qualified display name as a trailing tag
+    assert any("✓" in m and "inner sub [0]" in m for m in msgs), msgs
+    assert any("✓" in m and "inner sub [1]" in m for m in msgs), msgs
+
+
 def test_done_message_includes_icon_and_color_markup() -> None:
     orch = {
         "effects": [

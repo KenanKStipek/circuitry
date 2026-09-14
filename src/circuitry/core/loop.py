@@ -153,6 +153,7 @@ class LoopRuntime:
         verbose: bool = False,
         depth: int = 0,
         ancestors: list | None = None,
+        label_prefix: str | None = None,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -167,6 +168,8 @@ class LoopRuntime:
         self.verbose = verbose
         self.depth = depth
         self._ancestors = ancestors or []
+        # Set by an enclosing ``use`` effect — see ``_child_display_name``.
+        self._label_prefix = label_prefix
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         # Named loop: create a node for this loop
@@ -695,7 +698,12 @@ Should the loop continue? Answer (yes/no):"""
         else:
             iter_store = store
 
-        from .dynamic import _EFFECT_STYLE, _elapsed_str, _skip_disabled_effect
+        from .dynamic import (
+            _EFFECT_STYLE,
+            _child_display_name,
+            _elapsed_str,
+            _skip_disabled_effect,
+        )
 
         body_indent = "  " * (self.depth + 1)
         executed: list[dict[str, Any]] = []
@@ -713,6 +721,7 @@ Should the loop continue? Answer (yes/no):"""
             name = getattr(effect, "name", None) or "?"
             is_prompt = isinstance(effect, PromptDefinition)
             is_tool = isinstance(effect, ToolDefinition)
+            is_use = isinstance(effect, UseDefinition)
 
             if not is_enabled(effect):
                 _skip_disabled_effect(
@@ -730,7 +739,7 @@ Should the loop continue? Answer (yes/no):"""
                 ctx = _scope_ctx(base_ctx, self._local_writes(iter_store, baseline))
                 continue
 
-            if self.verbose and not is_prompt and not is_tool:
+            if self.verbose and not is_prompt and not is_tool and not is_use:
                 _console.print(
                     f"{body_indent}[info]→[/info] [{color}]{icon}[/{color}]"
                     f" {name}"
@@ -776,7 +785,9 @@ Should the loop continue? Answer (yes/no):"""
                         cb_done=_cb_done,
                         cb_error=_cb_error,
                         cb_running=_cb_running,
-                        display_name=f"{name} {iter_label}" if iter_label else None,
+                        display_name=_child_display_name(
+                            name, label_prefix=self._label_prefix, iter_label=iter_label
+                        ),
                         ancestors=self._child_ancestors if tracker is None else None,
                     ).execute(store=iter_store, ctx=ctx)
 
@@ -792,6 +803,7 @@ Should the loop continue? Answer (yes/no):"""
                         verbose=self.verbose,
                         depth=self.depth + 2,
                         ancestors=self._child_ancestors,
+                        label_prefix=self._label_prefix,
                     ).execute(store=iter_store, ctx_override=ctx)
 
                 elif isinstance(effect, ConditionalDefinition):
@@ -820,6 +832,7 @@ Should the loop continue? Answer (yes/no):"""
                         verbose=self.verbose,
                         depth=self.depth + 1,
                         ancestors=self._child_ancestors,
+                        label_prefix=self._label_prefix,
                     ).execute(store=iter_store, ctx=ctx)
 
                 elif isinstance(effect, ReflectorDefinition):
@@ -842,7 +855,9 @@ Should the loop continue? Answer (yes/no):"""
                         timeout_seconds=self.timeout_seconds,
                         verbose=self.verbose,
                         depth=self.depth + 1,
-                        display_name=f"{name} {iter_label}" if iter_label else None,
+                        display_name=_child_display_name(
+                            name, label_prefix=self._label_prefix, iter_label=iter_label
+                        ),
                         ancestors=self._child_ancestors if tracker is None else None,
                     ).execute(store=iter_store, ctx=ctx)
 
@@ -857,13 +872,16 @@ Should the loop continue? Answer (yes/no):"""
                         timeout_seconds=self.timeout_seconds,
                         verbose=self.verbose,
                         depth=self.depth + 1,
-                        ancestors=self._child_ancestors,
+                        display_name=_child_display_name(
+                            name, label_prefix=self._label_prefix, iter_label=iter_label
+                        ),
+                        ancestors=self._child_ancestors if tracker is None else None,
                     ).execute(store=iter_store, ctx=ctx)
 
                 else:
                     raise TypeError(f"Unsupported effect type: {type(effect)}")
 
-                if self.verbose and not is_prompt and not is_tool:
+                if self.verbose and not is_prompt and not is_tool and not is_use:
                     elapsed = time.monotonic() - t0
                     _console.print(
                         f"{body_indent}[ok]✓[/ok] [{color}]{icon}[/{color}]"
@@ -871,7 +889,7 @@ Should the loop continue? Answer (yes/no):"""
                     )
 
             except Exception:
-                if self.verbose and not is_prompt and not is_tool:
+                if self.verbose and not is_prompt and not is_tool and not is_use:
                     elapsed = time.monotonic() - t0
                     _console.print(
                         f"{body_indent}[err]✗[/err] [{color}]{icon}[/{color}]"
