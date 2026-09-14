@@ -317,7 +317,9 @@ Loop modes:
 - **while** — continue while the condition holds (model or CEL evaluated); always sequential.
 - **each** — iterate over a collection, optionally in parallel (`flow: tree`, bounded by `max_concurrency`).
 
-`max_iterations` (default 100) is the deliberate floor against runaway feedback. An `each.in` path that doesn't resolve to an array terminates the loop as `collection_unresolved` — never silent success.
+`max_iterations` (default 100) is the deliberate floor against runaway feedback — appropriate for `while`, where there's no other bound. An `each` loop's bound is the collection itself: its length is known before the first pass, so `each` requires `max_iterations` ≥ `len(collection)` and **fails the loop at start**, naming both numbers, when it isn't. Set `each.truncate: true` to opt back into processing only the first `max_iterations` elements; the loop node then records `termination: max_iterations_reached` plus the `unvisited` count instead of erroring. `while` hitting the cap completes (it's the safety floor doing its job) but likewise records `termination: max_iterations_reached`, distinguishable from a converged run, and a `--verbose` run prints a warning line.
+
+Every completed named loop node carries a `termination.reason` — `condition_false`, `collection_exhausted`, `max_iterations_reached`, `collection_unresolved`, `condition_error`, or `error` — so a run that stopped because of the cap is never confused with one that converged or exhausted its input. An `each.in` path that doesn't resolve to an array terminates the loop as `collection_unresolved` — never silent success.
 
 Loops support `collect` to aggregate one body step's output across iterations:
 

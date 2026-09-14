@@ -229,6 +229,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 - Final pass (after the loop completes): `prime.<name>.last.<body_effect>.value` — the last *completed* iteration's node, same shape as `iter_<N>`. A pass that errored under `on_error: continue`/`break` is skipped in favor of the last one that finished; a zero-iteration loop writes no `last` key.
 - Aggregated (when `collect` is set): `prime.<name>.collected.value` — array of every iteration's collected effect value
 - From *inside* the body: `prime.<body_effect>.value` — the current pass. See [Referencing a sibling within an iteration](#referencing-a-sibling-within-an-iteration).
+- Termination: `prime.<name>.value.termination.reason` — see [Loop termination](#loop-termination) below.
 
 | Field | Type | Required | Default | Constraints |
 |-------|------|----------|---------|-------------|
@@ -241,12 +242,13 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `each` | object | one-of | — | Collection iteration; mutually exclusive with `while` |
 | `each.in` | string | yes (each) | — | Root-relative state path to a JSON array — `input.`/`prime.`/`runtime.`-rooted. `input.*` is a first-class source; the array need not come from a `prompt_type: json` effect. `state.`-prefixed and bare-key spellings are hard errors here (`state.` is a CEL-only binding). |
 | `each.as` | string | no | `item` | Variable name for current element in body templates *and* in `mode: cel` expressions inside this loop's own body — see [CEL Expressions](#cel-expressions) |
+| `each.truncate` | bool | no | `false` | `false`: a collection longer than `max_iterations` fails the loop at start (see [Loop termination](#loop-termination)). `true`: process only the first `max_iterations` elements and record `termination: max_iterations_reached` plus `unvisited` instead. |
 | `while` | object | one-of | — | Continuation condition; mutually exclusive with `each` |
 | `while.mode` | string | no | `model` | `model` or `cel` |
 | `while.template` | string | model only | — | LLM returns boolean for continuation decision. The runtime wraps it and appends `Should the loop continue? Answer (yes/no):`, so phrase the ask as yes/no — `yes`, `true`, `1` and `y` all parse as true |
 | `while.expr` | string | cel only | — | CEL expression against state |
 | `while.strict` | bool | no | `false` | cel only. When true, an unset `state.` path raises instead of making the expression `False` |
-| `max_iterations` | integer | no | `100` | Hard cap on iterations |
+| `max_iterations` | integer | no | `100` | Hard cap on iterations. For `each`, must be ≥ the collection length unless `each.truncate: true` is set — see [Loop termination](#loop-termination). |
 | `min_iterations` | integer | no | `0` | Minimum iterations before condition is checked |
 | `on_error` | string | no | `fail` | `fail`, `break`, `continue` |
 | `labels` | object | no | — | |
@@ -324,6 +326,31 @@ The condition is checked between passes and sees the pass that just finished
 under the same within-iteration names the body uses — so `{{prime.polish.value}}`
 above is the latest `polish` output, not the first one. Before the first pass
 there is nothing to see yet and the name falls through to the enclosing scope.
+
+#### Loop termination
+
+Every completed named loop node writes `prime.<name>.value.termination.reason`,
+one of:
+
+| Reason | Modes | Meaning |
+|---|---|---|
+| `condition_false` | `while` | The condition evaluated false (after `min_iterations`) — the loop converged. |
+| `collection_exhausted` | `each` | Every element was visited; nothing was cut short. |
+| `max_iterations_reached` | `while`, `each` (with `each.truncate: true`) | The cap ended the loop, not the condition or the collection. `while` prints a `--verbose` warning line when this happens. An `each` loop also writes `termination.unvisited` — the count of elements it never got to. |
+| `collection_unresolved` | `each` | `each.in` didn't resolve to an array (missing path, wrong type). See `meta.each_in_error`. |
+| `condition_error` | `while` | The condition raised under `on_error: break`/`continue` — a broken condition can never become false, so the loop stops rather than spinning to `max_iterations`. |
+| `error` | both | The loop (or a body effect under `on_error: fail`) raised. See `termination.detail` and `meta.error`. |
+
+**`each` and `max_iterations` don't mix the way `while` does.** A `while` loop
+has no other bound, so `max_iterations` is the deliberate floor against
+runaway feedback — hitting it is expected and the run stays green. An `each`
+loop's bound *is* the collection: its length is known before the first pass
+runs, so a collection longer than `max_iterations` is never a runaway, it's
+under-provisioning. By default this **fails the loop at start** — before any
+iteration executes — with a message naming both numbers (`collection has 144
+items but max_iterations is 100`). Set `each.truncate: true` to opt back into
+processing just the first `max_iterations` elements; the node then records
+`termination: max_iterations_reached` and `unvisited` instead of erroring.
 
 #### Referencing a sibling within an iteration
 
