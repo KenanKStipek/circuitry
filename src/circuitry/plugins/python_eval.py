@@ -10,11 +10,28 @@ no access to file/network/process APIs.
 Params:
   - ``code`` (required): Python source to execute.
   - ``inputs`` (optional, dict): variables made available to the code.
-    Names must be valid identifiers and not start with ``_``.
+    Names must be valid identifiers and not start with ``_``. Mirrored
+    into both globals and locals, so they're visible inside comprehension
+    bodies too (see note below).
   - ``mode`` (optional, default ``"eval"``):
     * ``"eval"`` — evaluates a single expression; ``value`` = its result.
     * ``"exec"`` — executes a statement block; ``value`` = the
       ``result`` variable from the local namespace, or None if absent.
+
+Subscript assignment (``x[k] = v``), attribute assignment (``x.attr = v``)
+and augmented assignment of names (``n += 1``) are supported: RestrictedPython
+rewrites these to calls against ``_write_``/``_inplacevar_`` guards, which
+this plugin wires up. ``_write_`` (``full_write_guard``) permits item/attr
+assignment on plain ``list``/``dict`` and rejects writes to other object
+types; augmented assignment of subscripts/attributes (``x[k] += v``) is
+rejected at compile time by RestrictedPython itself, not just Names.
+
+Note: ``eval``/``exec`` with separate globals/locals dicts make comprehension
+bodies a nested scope that only sees globals, not the enclosing locals — a
+plain CPython quirk, not specific to RestrictedPython. Without mirroring
+``inputs`` into globals, ``[x for x in range(int(w))]`` would raise
+``NameError: name 'w' is not defined`` even though ``w`` is a top-level
+input.
 
 AC C.5: payloads outside the sandbox (``import os``, ``__import__``,
 attribute access starting with ``_``) are rejected at compile time
@@ -25,11 +42,42 @@ from __future__ import annotations
 
 import importlib.util
 import keyword
+import operator
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from ..preflight import CheckResult
 from .base import ToolResult
+
+# RestrictedPython rewrites `x += y` (etc.) to `x = _inplacevar_('+=', x, y)`
+# for Name targets — augmented assignment of attributes/subscripts is
+# rejected at compile time instead, so this only needs to cover Name
+# rebinding. Keys match the operator strings RestrictedPython's transformer
+# emits (`IOPERATOR_TO_STR`).
+_INPLACE_OPS: dict[str, Any] = {
+    "+=": operator.iadd,
+    "-=": operator.isub,
+    "*=": operator.imul,
+    "/=": operator.itruediv,
+    "//=": operator.ifloordiv,
+    "%=": operator.imod,
+    "**=": operator.ipow,
+    "<<=": operator.ilshift,
+    ">>=": operator.irshift,
+    "|=": operator.ior,
+    "^=": operator.ixor,
+    "&=": operator.iand,
+    "@=": operator.imatmul,
+}
+
+
+def _inplacevar(op: str, x: Any, y: Any) -> Any:
+    try:
+        func = _INPLACE_OPS[op]
+    except KeyError:
+        raise TypeError(f"python_eval: unsupported augmented assignment {op!r}") from None
+    return func(x, y)
+
 
 # Tiny safe-builtins set — math + string handling only.
 _SAFE_BUILTINS = {
@@ -100,6 +148,7 @@ class PythonEvalPlugin:
                 default_guarded_getitem,
             )
             from RestrictedPython.Guards import (  # type: ignore[import-not-found]
+                full_write_guard,
                 guarded_iter_unpack_sequence,
                 guarded_unpack_sequence,
                 safer_getattr,
@@ -120,6 +169,13 @@ class PythonEvalPlugin:
         env_globals["_getiter_"] = iter
         env_globals["_iter_unpack_sequence_"] = guarded_iter_unpack_sequence
         env_globals["_unpack_sequence_"] = guarded_unpack_sequence
+        env_globals["_write_"] = full_write_guard
+        env_globals["_inplacevar_"] = _inplacevar
+        # `eval`/`exec` with separate globals/locals make comprehension
+        # bodies a nested scope that only sees globals — mirror inputs into
+        # both so names from `inputs` resolve the same way whether they're
+        # used at the top level or inside a comprehension.
+        env_globals.update(inputs)
         env_locals = dict(inputs)
 
         try:
