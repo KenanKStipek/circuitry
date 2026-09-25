@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -151,20 +152,95 @@ def _resolve_dot_path(state: dict[str, Any], dot_path: str) -> Any:
     return current
 
 
+#: The one key of a by-reference input: ``name: {from: <path>}``.
+REFERENCE_KEY = "from"
+
+
+def reference_path(value: Any) -> str | None:
+    """The path of a by-reference input (``{from: <path>}``), or None for any other value.
+
+    Only a mapping with exactly the one key ``from`` and a string value is a
+    reference; every other mapping stays a literal, as before.
+    """
+    if isinstance(value, dict) and len(value) == 1 and REFERENCE_KEY in value:
+        path = value[REFERENCE_KEY]
+        if isinstance(path, str):
+            return path.strip()
+    return None
+
+
+def _resolve_reference(ctx: Mapping[str, Any], path: str) -> Any:
+    """Walk *path* through mappings (by key) and lists (by integer index).
+
+    Returns None when any segment is missing, like an unset template path.
+    """
+    current: Any = ctx
+    for part in path.split("."):
+        if isinstance(current, Mapping):
+            if part not in current:
+                return None
+            current = current[part]
+        elif isinstance(current, (list, tuple)):
+            try:
+                current = current[int(part)]
+            except (ValueError, IndexError):
+                return None
+        else:
+            return None
+    return current
+
+
 def _render_inputs(inputs: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
-    """Render input values: Mustache-render strings, pass others through."""
+    """Render input values for a child run.
+
+    A by-reference input (``{from: <path>}``) passes the resolved value itself,
+    deep-copied so the child can never alias parent state. Strings are
+    Mustache-rendered; anything else passes through unchanged.
+    """
     try:
         import chevron  # type: ignore
-    except ImportError:
-        return dict(inputs)
+    except ImportError:  # pragma: no cover - chevron is a core dependency
+        chevron = None
 
     rendered: dict[str, Any] = {}
     for key, value in inputs.items():
-        if isinstance(value, str):
+        path = reference_path(value)
+        if path is not None:
+            rendered[key] = copy.deepcopy(_resolve_reference(ctx, path))
+        elif isinstance(value, str) and chevron is not None:
             rendered[key] = chevron.render(value, ctx)
         else:
             rendered[key] = value
     return rendered
+
+
+def _unresolved_references(
+    inputs: dict[str, Any], rendered: dict[str, Any]
+) -> dict[str, str]:
+    """``{input_name: path}`` for every by-reference input that resolved to nothing."""
+    unresolved: dict[str, str] = {}
+    for key, value in inputs.items():
+        path = reference_path(value)
+        if path is not None and rendered.get(key) is None:
+            unresolved[key] = path
+    return unresolved
+
+
+def _record_children_enabled(runtime_config: Mapping[str, Any]) -> bool:
+    """True when ``runtime.state.record_children`` asks for complete child records."""
+    state_cfg = runtime_config.get("state")
+    return isinstance(state_cfg, Mapping) and bool(state_cfg.get("record_children"))
+
+
+def _graft_child_record(node: dict[str, Any], child_state: Mapping[str, Any]) -> None:
+    """Keep the child's effects under the use node, in the shape live state shows them."""
+    child_prime = child_state.get(_CHILD_ROOT)
+    if not isinstance(child_prime, dict):
+        return
+    for key, val in child_prime.items():
+        if key in ("value", "meta"):
+            continue
+        node[key] = val
 
 
 def _validate_inline_yaml(yaml_text: str) -> tuple[bool, list[str]]:
@@ -371,7 +447,10 @@ class UseRuntime:
         return ", ".join(build_registry(self.runtime_config).source_names) or "none"
 
     def _check_interface(
-        self, orch: dict[str, Any], rendered_inputs: dict[str, Any]
+        self,
+        orch: dict[str, Any],
+        rendered_inputs: dict[str, Any],
+        unresolved: dict[str, str] | None = None,
     ) -> dict[str, str] | None:
         """Validate inputs and auto-generate output mapping from interface declaration.
 
@@ -393,6 +472,11 @@ class UseRuntime:
                         f"Use effect '{self.defn.name}': missing required input '{key}' "
                         f"declared in orchestration interface."
                     )
+                if spec.get("required") and unresolved and key in unresolved:
+                    raise ValueError(
+                        f"Use effect '{self.defn.name}': required input '{key}' "
+                        f"resolved to nothing from '{unresolved[key]}'."
+                    )
 
         # Auto-generate output mapping if not explicitly provided
         if self.defn.outputs is not None:
@@ -406,12 +490,15 @@ class UseRuntime:
         )
         return iface_outputs or None
 
-    def _load_child_orch(self, ctx: dict[str, Any]) -> tuple[dict[str, Any], str, str]:
-        """Load the child orchestration dict, a display label, and a cycle-identity string.
+    def _load_child_orch(
+        self, ctx: dict[str, Any]
+    ) -> tuple[dict[str, Any], str, str, str]:
+        """Load the child orchestration dict, a display label, a cycle-identity
+        string, and the SHA-256 of the YAML text it came from.
 
-        Returns (orch_dict, label, identity).
-        For file-based: identity is the absolute resolved path.
-        For inline: identity is 'inline:<sha256-of-cleaned-yaml>'.
+        Returns (orch_dict, label, identity, sha256).
+        For file-based: identity is the absolute resolved path; the digest is of the file's bytes.
+        For inline: identity is 'inline:<sha256-of-cleaned-yaml>'; the digest is of that YAML.
         """
         import yaml as _yaml  # type: ignore[import-untyped]
 
@@ -434,15 +521,16 @@ class UseRuntime:
             parsed = _yaml.safe_load(cleaned)
             if not isinstance(parsed, dict):
                 raise ValueError("Inline orchestration must be a YAML mapping with an 'effects' key.")
-            content_hash = hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:16]
-            return parsed, "inline", f"inline:{content_hash}"
+            digest = hashlib.sha256(cleaned.encode("utf-8")).hexdigest()
+            return parsed, "inline", f"inline:{digest[:16]}", digest
 
         # File-based resolution
         from ..cli.orchestration_loader import load_orchestration_file
 
         resolved_path = self._resolve_orchestration()
         identity = str(resolved_path.resolve())
-        return load_orchestration_file(resolved_path), str(resolved_path), identity
+        digest = hashlib.sha256(resolved_path.read_bytes()).hexdigest()
+        return load_orchestration_file(resolved_path), str(resolved_path), identity, digest
 
     def _child_on_write(
         self, store: Store, node: dict[str, Any], node_path: str
@@ -494,6 +582,12 @@ class UseRuntime:
         meta["validation_errors"] = None
         meta["error"] = None
         meta["child_errors"] = None
+        #: What the child received, and a digest of the YAML it ran: together
+        #: with the child's record they are what a later reader needs to check
+        #: or reproduce this step.
+        meta["inputs"] = None
+        meta["orchestration_sha256"] = None
+        record_children = _record_children_enabled(self.runtime_config)
 
         #: This effect's canonical dotted path — what child effects namespace
         #: under and where their live state is mirrored for observers.
@@ -526,7 +620,8 @@ class UseRuntime:
                 return
 
             # Load (file or inline) and compile
-            child_orch, resolved_label, identity = self._load_child_orch(ctx)
+            child_orch, resolved_label, identity, digest = self._load_child_orch(ctx)
+            meta["orchestration_sha256"] = digest
             label = resolved_label
             if not meta["inline"]:
                 meta["resolved_path"] = resolved_label
@@ -562,12 +657,15 @@ class UseRuntime:
             # Build isolated child state: rendered inputs land in the
             # child's `input` namespace, same contract as a top-level run.
             child_inputs: dict[str, Any] = {}
+            unresolved: dict[str, str] = {}
             if self.defn.inputs:
                 child_inputs = _render_inputs(self.defn.inputs, ctx)
+                unresolved = _unresolved_references(self.defn.inputs, child_inputs)
+            meta["inputs"] = copy.deepcopy(child_inputs)
             child_state: dict[str, Any] = {"input": child_inputs}
 
             # Check interface: validate required inputs, auto-generate output mapping
-            auto_outputs = self._check_interface(child_orch, child_inputs)
+            auto_outputs = self._check_interface(child_orch, child_inputs, unresolved)
 
             # Isolated state, shared observation: the child keeps its own
             # state dict (and its explicit inputs/outputs mapping) but
@@ -618,6 +716,10 @@ class UseRuntime:
                 for output_key, child_path in effective_outputs.items():
                     result[output_key] = _resolve_dot_path(child_store.state, child_path)
                 node["value"] = result
+                # Complete record (opt-in): the child's own effects stay under
+                # this node in the final state, as --live-state showed them.
+                if record_children:
+                    _graft_child_record(node, child_store.state)
             else:
                 # Full-namespace mode: expose child's prime subtree at
                 # prime.<use_name>.<child_effect>.value (matches dynamic namespacing).
@@ -653,6 +755,9 @@ class UseRuntime:
                 child_errors = _collect_child_errors(child_store.state.get(_CHILD_ROOT))
                 if child_errors:
                     meta["child_errors"] = child_errors
+                # A failed child's record matters most: keep what it did get to.
+                if record_children:
+                    _graft_child_record(node, child_store.state)
 
             if self.verbose:
                 elapsed = time.monotonic() - t0
