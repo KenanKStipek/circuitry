@@ -217,6 +217,12 @@ def run(req: RunRequest) -> RunResult:
         # One shared dict for the whole run: `use` effects append their library
         # pins to it as they resolve, at any nesting depth.
         runtime_config = effective.runtime if effective.runtime is not None else {}
+        # Root directory a `path:`-resolving `use` effect falls back to when
+        # its target isn't absolute or cwd-relative — see `UseRuntime`, which
+        # rewrites this per-child as composition descends into subdirectories.
+        runtime_config["_orchestration_dir"] = str(
+            req.orchestration_path.resolve().parent
+        )
         persistence = build_persistence_backend(effective.runtime)
         plugins, plugin_events = _initialize_plugins(
             effective.plugins, allowed=cfg.enabled_plugins
