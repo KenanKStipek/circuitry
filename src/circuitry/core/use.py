@@ -549,6 +549,13 @@ class UseRuntime:
                 )
             child_runtime_config = dict(self.runtime_config)
             child_runtime_config["_use_call_stack"] = [*parent_stack, identity]
+            # A nested `use: {path: ...}` inside this child resolves relative
+            # to *this* child's own directory, not the root orchestration's —
+            # composition chains through each file's own location. Inline
+            # children have no file/directory of their own, so they inherit
+            # whatever directory was already in effect.
+            if not meta["inline"]:
+                child_runtime_config["_orchestration_dir"] = str(Path(identity).parent)
 
             child_root = compile_orchestration(orch=child_orch, root_name="prime")
 
