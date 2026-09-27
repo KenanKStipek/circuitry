@@ -44,6 +44,89 @@ class EffectiveSettings:
     # defaults and defers to the pinned ones. Not derivable from `sources`
     # once the router itself wins that entry.
     model_locked: bool = False
+    # Settings the orchestration tried to supply but may not: host `runtime:`
+    # keys and unlisted `plugins:` entries. One line each, for the run's own
+    # warning channel (RunResult.warnings / the validate report).
+    warnings: tuple[str, ...] = ()
+
+
+#: The `runtime:` keys an orchestration document may set. Everything else in a
+#: document's `runtime:` block (adapters, plugins, persistence, library, ...)
+#: is host configuration and only comes from config: a document can be someone
+#: else's (`cof fetch`, `run-library`, `use: ref:`, a github source), so it
+#: must not be able to repoint an adapter or launch a binary. A host opts out
+#: with `trust_orchestration_runtime`.
+ORCHESTRATION_RUNTIME_KEYS: frozenset[str] = frozenset({"complexity", "state"})
+
+
+def _split_orchestration_runtime(
+    orch_runtime: dict[str, Any], *, trusted: bool
+) -> tuple[dict[str, Any], list[str]]:
+    """Keep the author-level keys of a document's `runtime:` block.
+
+    Returns the accepted block and one warning per dropped key. A trusted
+    document keeps its whole block.
+    """
+    if trusted:
+        return dict(orch_runtime), []
+    allowed = ", ".join(f"runtime.{k}" for k in sorted(ORCHESTRATION_RUNTIME_KEYS))
+    accepted: dict[str, Any] = {}
+    warnings: list[str] = []
+    for key, value in orch_runtime.items():
+        if key in ORCHESTRATION_RUNTIME_KEYS:
+            accepted[key] = value
+            continue
+        warnings.append(
+            f"Ignored runtime.{key} from the orchestration: it is a host "
+            f"setting and must go in config.json (an orchestration may only "
+            f"set {allowed})."
+        )
+    return accepted, warnings
+
+
+def _split_orchestration_plugins(
+    orch_plugins: list[Any], *, cfg: CircuitryConfig, trusted: bool
+) -> tuple[list[Any], list[str]]:
+    """Keep the document `plugins:` entries the host config already lists.
+
+    A runtime plugin is an imported module, so a document may only name one
+    that config's `plugins` or `enabled_plugins` already carries. A trusted
+    document keeps its whole list.
+    """
+    if trusted:
+        return list(orch_plugins), []
+    host_listed = {*cfg.plugins, *(cfg.enabled_plugins or [])}
+    accepted: list[Any] = []
+    warnings: list[str] = []
+    for plugin_id in orch_plugins:
+        # Non-strings pass through to the "Plugins must be strings" error.
+        if not isinstance(plugin_id, str) or plugin_id in host_listed:
+            accepted.append(plugin_id)
+            continue
+        warnings.append(
+            f"Skipped plugin '{plugin_id}' from the orchestration: it is not "
+            f"listed in config.json 'plugins' or 'enabled_plugins'."
+        )
+    return accepted, warnings
+
+
+def orchestration_host_setting_warnings(
+    orch: dict[str, Any], cfg: CircuitryConfig
+) -> list[str]:
+    """The warnings `resolve_effective_settings` would record for *orch*.
+
+    For `cof check`, which reports them without resolving a whole run (and
+    without failing on a malformed block — schema validation owns that).
+    """
+    trusted = cfg.trust_orchestration_runtime
+    warnings: list[str] = []
+    orch_plugins = orch.get("plugins")
+    if isinstance(orch_plugins, list):
+        warnings += _split_orchestration_plugins(orch_plugins, cfg=cfg, trusted=trusted)[1]
+    orch_runtime = orch.get("runtime")
+    if isinstance(orch_runtime, dict):
+        warnings += _split_orchestration_runtime(orch_runtime, trusted=trusted)[1]
+    return warnings
 
 
 def _merge_runtime(
@@ -68,6 +151,7 @@ def resolve_effective_settings(
     profile: ProfileSettings | None = None,
 ) -> EffectiveSettings:
     sources: dict[str, str] = {}
+    warnings: list[str] = []
     model: str | None
     adapter: str | None
     out: Path | None
@@ -123,7 +207,8 @@ def resolve_effective_settings(
         out = None
         sources["out"] = "default"
 
-    # plugins: cli replaces if provided; else merge config + orch (dedupe)
+    # plugins: cli replaces if provided; else merge config + the orch entries
+    # config already lists (dedupe)
     orch_plugins = orch.get("plugins") or []
     if orch_plugins and not isinstance(orch_plugins, list):
         raise ValueError("Orchestration 'plugins' must be a list if provided.")
@@ -132,6 +217,10 @@ def resolve_effective_settings(
         plugins = list(cli_plugins)
         sources["plugins"] = "cli"
     else:
+        orch_plugins, plugin_warnings = _split_orchestration_plugins(
+            orch_plugins, cfg=cfg, trusted=cfg.trust_orchestration_runtime
+        )
+        warnings.extend(plugin_warnings)
         combined = [*cfg.plugins, *orch_plugins]
         seen: set[str] = set()
         plugins = []
@@ -147,10 +236,15 @@ def resolve_effective_settings(
             else ("config" if cfg.plugins else "default")
         )
 
-    # runtime: shallow merge, orch overrides config
+    # runtime: shallow merge, orch overrides config — for the author-level
+    # keys only (see ORCHESTRATION_RUNTIME_KEYS)
     orch_runtime = orch.get("runtime") or {}
     if orch_runtime and not isinstance(orch_runtime, dict):
         raise ValueError("Orchestration 'runtime' must be an object if provided.")
+    orch_runtime, runtime_warnings = _split_orchestration_runtime(
+        orch_runtime, trusted=cfg.trust_orchestration_runtime
+    )
+    warnings.extend(runtime_warnings)
 
     runtime = _merge_runtime(cfg.runtime, orch_runtime)
     sources["runtime"] = (
@@ -161,9 +255,9 @@ def resolve_effective_settings(
     # cli.runtime_shim, which resolves it generically for whichever adapter
     # the run selected — ollama and every curl-based adapter share the same
     # `generate(timeout_seconds=...)` knob). `runtime` only merges shallowly
-    # (see above), so the per-adapter block comes wholesale from whichever
-    # layer supplied `runtime` itself — there is no finer-grained merge to
-    # track. "default" means the key was absent and the 120s fallback in
+    # (see above), so the `adapters` block comes wholesale from whichever
+    # layer supplied it — there is no finer-grained merge to track.
+    # "default" means the key was absent and the 120s fallback in
     # runtime_shim applies.
     if adapter:
         adapters_cfg = runtime.get("adapters")
@@ -174,7 +268,9 @@ def resolve_effective_settings(
             isinstance(this_adapter_cfg, dict)
             and this_adapter_cfg.get("timeout_seconds") is not None
         ):
-            sources[f"adapters.{adapter}.timeout_seconds"] = sources["runtime"]
+            sources[f"adapters.{adapter}.timeout_seconds"] = (
+                "orchestration" if "adapters" in orch_runtime else "config"
+            )
         else:
             sources[f"adapters.{adapter}.timeout_seconds"] = "default"
 
@@ -239,6 +335,7 @@ def resolve_effective_settings(
         sources=sources,
         complexity=complexity,
         model_locked=model_locked,
+        warnings=tuple(warnings),
     )
 
 

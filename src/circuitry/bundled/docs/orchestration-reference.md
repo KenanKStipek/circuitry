@@ -29,7 +29,12 @@ Top-level fields of an orchestration YAML file:
 | `flow` | string | no | `chain` | Top-level flow for the implicit root dynamic |
 | `version` | string | no | — | Free-form version string for **this document**, e.g. `"1.2.0"`. Not a schema version and not a feature gate — the runtime reads it and ignores it. Omit unless you are versioning the file |
 
-Additional top-level keys (e.g. `runtime`, `plugins`) are allowed and used by the runtime configuration layer.
+Additional top-level keys are allowed. Two of them feed the run's configuration, and both are limited to what an author may decide:
+
+- **`runtime:`** — a document may set only `runtime.complexity` and `runtime.state` (e.g. `record_children`). Every other key — `adapters`, `plugins`, `persistence`, `library`, `mcp`, anything else — is a host setting: it comes only from config.json, and a document that sets one has it ignored, with a warning from `cof run` and `cof check` naming the key.
+- **`plugins:`** — runtime-plugin modules to load. An entry loads only if config.json already lists it in `plugins` or `enabled_plugins`; any other is skipped with a warning.
+
+A host that only ever runs its own documents can switch this check off with `trust_orchestration_runtime: true` in config.json (or `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME=1`).
 
 **Minimal valid file:**
 ```yaml
@@ -704,7 +709,7 @@ The state path in `each.in` must resolve to an array at runtime. This means it m
 The following rules are sufficient for generating structurally correct Circuitry orchestration YAML. Apply all of them exactly.
 
 **File structure:**
-1. Top-level fields: `adapter` (string), `model` (string), `effects` (array). Only `effects` is required. Additional top-level keys are allowed.
+1. Top-level fields: `adapter` (string), `model` (string), `effects` (array). Only `effects` is required. Additional top-level keys are allowed. A top-level `runtime:` block may set only `complexity` and `state`; never put `adapters`, `plugins`, `persistence`, `library` or credentials in it — those are host settings that belong in config.json, and a document's copy is ignored with a warning.
 2. `adapter` and `model` are only required when the orchestration contains `prompt` or `reflector` effects. Tool-only orchestrations (`type: tool` effects only) do not need `adapter` or `model`.
 3. Valid `adapter` values: `ollama`, `openai`, `anthropic`, `litellm`.
 4. Valid `flow` values: `chain` (sequential) and `tree` (parallel). Write nothing else — `chain_of_thought`/`cot` and `tree_of_thought`/`tot` still parse but are deprecated and warned about.

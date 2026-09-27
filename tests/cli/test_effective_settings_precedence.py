@@ -43,7 +43,7 @@ def test_effective_settings_precedence_cli_over_orch_over_config() -> None:
         "model": "orch-model",
         "adapter": "anthropic",
         "plugins": ["orch.plugin"],
-        "runtime": {"adapters": {"anthropic": {"max_tokens": 1024}}},
+        "runtime": {"state": {"record_children": True}},
     }
 
     effective = resolve_effective_settings(
@@ -61,7 +61,8 @@ def test_effective_settings_precedence_cli_over_orch_over_config() -> None:
     assert effective.sources["adapter"] == "cli"
     assert effective.sources["plugins"] == "cli"
     assert effective.sources["runtime"] == "orchestration"
-    assert effective.runtime["adapters"]["anthropic"]["max_tokens"] == 1024
+    assert effective.runtime["state"] == {"record_children": True}
+    assert effective.runtime["adapters"]["openai"]["base_url"] == "https://cfg.example"
 
 
 def test_effective_settings_falls_back_to_orchestration_then_config() -> None:
