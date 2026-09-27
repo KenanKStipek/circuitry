@@ -227,7 +227,9 @@ def maybe_decompose(
     base["result_path"] = plan.result_path
     base["yaml"] = plan.yaml
 
-    problems = _validate_plan(plan, max_chunks=dset.max_chunks)
+    problems = _validate_plan(
+        plan, max_chunks=dset.max_chunks, runtime_config=runtime_config
+    )
     if problems:
         return _failure(base, dset, "invalid_plan", "; ".join(problems), fallback)
 
@@ -517,7 +519,9 @@ def _run_planner(
 # --------------------------------------------------------------------------
 
 
-def _validate_plan(plan: _Plan, *, max_chunks: int) -> list[str]:
+def _validate_plan(
+    plan: _Plan, *, max_chunks: int, runtime_config: Mapping[str, Any]
+) -> list[str]:
     """Everything wrong with the plan; an empty list is the licence to run it."""
     problems: list[str] = []
     if not isinstance(plan.yaml, str) or not plan.yaml.strip():
@@ -544,7 +548,28 @@ def _validate_plan(plan: _Plan, *, max_chunks: int) -> list[str]:
         problems.extend(errors)
         return problems
     problems.extend(_check_merge_contract(plan))
+    problems.extend(_check_allowlists(plan, runtime_config))
     return problems
+
+
+def _check_allowlists(plan: _Plan, runtime_config: Mapping[str, Any]) -> list[str]:
+    """A generated plan runs under the same allowlists as the document it serves."""
+    import yaml as _yaml
+
+    from ..allowlist_gate import allowed_adapters, allowed_tools
+    from ..cli.allowlist import orchestration_denials
+
+    try:
+        parsed = _yaml.safe_load(plan.yaml or "")
+    except _yaml.YAMLError:
+        return []  # already reported by the schema check
+    if not isinstance(parsed, dict):
+        return []
+    return orchestration_denials(
+        parsed,
+        enabled_adapters=allowed_adapters(runtime_config),
+        enabled_tools=allowed_tools(runtime_config),
+    )
 
 
 def _check_merge_contract(plan: _Plan) -> list[str]:

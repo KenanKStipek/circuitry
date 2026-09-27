@@ -540,6 +540,27 @@ class UseRuntime:
         digest = hashlib.sha256(resolved_path.read_bytes()).hexdigest()
         return load_orchestration_file(resolved_path), str(resolved_path), identity, digest
 
+    def _check_allowlists(self, child_orch: dict[str, Any], label: str) -> None:
+        """Refuse a child that references an adapter or tool the run disallows.
+
+        Checked as the child loads, before any of it runs — inline and
+        generated children only exist from here on, so no earlier check can
+        see them. The factories still gate every build as a backstop.
+        """
+        from ..allowlist_gate import AllowlistError, allowed_adapters, allowed_tools
+        from ..cli.allowlist import orchestration_denials
+
+        denials = orchestration_denials(
+            child_orch,
+            enabled_adapters=allowed_adapters(self.runtime_config),
+            enabled_tools=allowed_tools(self.runtime_config),
+        )
+        if denials:
+            raise AllowlistError(
+                f"use '{self.defn.name}': child {label} failed allowlist "
+                "enforcement: " + "; ".join(denials)
+            )
+
     def _child_on_write(
         self, store: Store, node: dict[str, Any], node_path: str
     ) -> Callable[[dict[str, Any]], None] | None:
@@ -647,6 +668,7 @@ class UseRuntime:
                 meta["resolved_path"] = resolved_label
             if self._pin is not None:
                 meta["library_ref"] = self._pin
+            self._check_allowlists(child_orch, label)
 
             # Cycle detection — runtime call-stack tracking by resolved identity.
             # The stack is derived per call-path rather than mutated in place:

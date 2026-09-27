@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from ..adapters import Adapter, build_adapter
 from ..adapters.base import GenerateResult
+from ..allowlist_gate import allowed_adapters, require_adapter
 from ..output import console as _console
 from .store import Store
 
@@ -871,6 +872,7 @@ class PromptRuntime:
         default_name = getattr(self.adapter, "name", "")
         if adapter_name == default_name:
             return self.adapter
+        require_adapter(adapter_name, allowed_adapters(self.runtime_config))
         return build_adapter(adapter_name=adapter_name, runtime=self.runtime_config)
 
     def _pre_dispatch_target(self, model: str) -> str:

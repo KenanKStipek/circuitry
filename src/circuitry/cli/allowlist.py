@@ -4,6 +4,11 @@ Walks an orchestration YAML dict to collect adapter and tool-plugin
 references, then compares against the per-category allowlist on
 :class:`CircuitryConfig`. Returns a list of human-readable error strings.
 
+This is the static half. The run-time half —
+:mod:`circuitry.allowlist_gate` — guards what a run actually builds, which
+covers templated ``inline:`` children, generated plans, ``--adapter``, the
+config's ``default_adapter`` and profile provider overrides.
+
 Runtime plugins are not referenced by the orchestration YAML — their
 allowlist is enforced at plugin load time in
 :func:`circuitry.cli.runtime_shim._initialize_plugins` via
@@ -13,8 +18,11 @@ allowlist is enforced at plugin load time in
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
+from ..allowlist_gate import adapter_denial, tool_denial
+from ..core.cycle_check import iter_use_children
 from .config import CircuitryConfig
 
 
@@ -30,8 +38,9 @@ def walk_orchestration_refs(orch: dict[str, Any]) -> tuple[set[str], set[str]]:
     Tool references come from each ``type: tool`` effect's ``provider:``.
 
     Walks recursively into dynamic, conditional (if/conditional), loop, and
-    reflector effects. Does NOT cross ``use:`` boundaries — sub-orchestrations
-    are validated independently.
+    reflector effects. Does NOT cross ``use:`` boundaries — each child is
+    walked on its own (:func:`check_allowlist` statically, ``UseRuntime`` as
+    it loads).
     """
     adapters: set[str] = set()
     tools: set[str] = set()
@@ -79,8 +88,8 @@ def _walk_effects(
             _walk_effects(effect.get("body"), adapters, tools)
         elif etype == "reflector":
             _walk_effects(effect.get("effects"), adapters, tools)
-        # `use` effects expand at compile time; their refs are validated
-        # when the referenced orchestration is loaded.
+        # `use` children are walked as documents of their own — see
+        # check_allowlist and UseRuntime.
 
 
 @dataclass(frozen=True)
@@ -215,33 +224,78 @@ def _provider_token_to_adapter(token: str) -> str | None:
     return parsed
 
 
+def orchestration_denials(
+    orch: dict[str, Any],
+    *,
+    enabled_adapters: list[str] | None,
+    enabled_tools: list[str] | None,
+) -> list[str]:
+    """Denial messages for one document's own adapter and tool references.
+
+    ``None`` is default-open; a list (including ``[]``) is strict. Does not
+    follow ``use:`` — see :func:`check_allowlist` for the static walk and
+    ``UseRuntime`` for the run-time check of each child as it loads.
+    """
+    adapter_refs, tool_refs = walk_orchestration_refs(orch)
+    errors = [
+        denial
+        for name in sorted(adapter_refs)
+        if (denial := adapter_denial(name, enabled_adapters)) is not None
+    ]
+    errors.extend(
+        denial
+        for name in sorted(tool_refs)
+        if (denial := tool_denial(name, enabled_tools)) is not None
+    )
+    return errors
+
+
+def profile_provider_denials(
+    effects: dict[str, dict[str, Any]], *, enabled_adapters: list[str] | None
+) -> list[str]:
+    """Denial messages for a profile's per-effect ``provider`` overrides.
+
+    A profile swaps an effect's adapter after the document was checked, so its
+    overrides are checked on their own before the run starts.
+    """
+    errors: list[str] = []
+    for path in sorted(effects):
+        token = effects[path].get("provider")
+        name = _provider_token_to_adapter(token) if isinstance(token, str) else None
+        denial = adapter_denial(name, enabled_adapters) if name else None
+        if denial is not None:
+            errors.append(f"profile override for '{path}': {denial}")
+    return errors
+
+
 def check_allowlist(
-    *, orch: dict[str, Any], config: CircuitryConfig
+    *,
+    orch: dict[str, Any],
+    config: CircuitryConfig,
+    root_path: Path | None = None,
 ) -> list[str]:
     """Return per-violation error strings; empty list if all allowed.
 
     An ``enabled_*`` value of ``None`` is default-open (no enforcement).
     A list (including ``[]``) is strict — only listed names are allowed.
+
+    Covers *orch* and every ``use`` child reachable from it statically
+    (``path:``/``ref:``, resolved relative to *root_path*, and plain
+    ``inline:`` text); a child's violations are prefixed with its label.
     """
-    errors: list[str] = []
-    adapter_refs, tool_refs = walk_orchestration_refs(orch)
+    allowlists = {
+        "enabled_adapters": config.enabled_adapters,
+        "enabled_tools": config.enabled_tools,
+    }
+    errors = orchestration_denials(orch, **allowlists)
+    if config.enabled_adapters is None and config.enabled_tools is None:
+        return errors
 
-    if config.enabled_adapters is not None:
-        allowed = config.enabled_adapters
+    for label, child in iter_use_children(
+        orch, root_path=root_path, runtime=config.runtime
+    ):
         errors.extend(
-            f"adapter '{name}' not in enabled_adapters allowlist "
-            f"(enabled: {allowed})"
-            for name in sorted(adapter_refs)
-            if name not in allowed
+            f"use child {label}: {denial}"
+            for denial in orchestration_denials(child, **allowlists)
         )
-
-    if config.enabled_tools is not None:
-        allowed = config.enabled_tools
-        errors.extend(
-            f"tool '{name}' not in enabled_tools allowlist "
-            f"(enabled: {allowed})"
-            for name in sorted(tool_refs)
-            if name not in allowed
-        )
-
     return errors
