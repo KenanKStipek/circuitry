@@ -7,6 +7,7 @@ assignment (issue #208), and the comprehension-scope fix for ``inputs``.
 
 from __future__ import annotations
 
+import types
 from dataclasses import dataclass
 
 import pytest
@@ -63,6 +64,38 @@ class TestWriteGuard:
 
         with pytest.raises(TypeError):
             _run("p.x = 5\nresult = p", mode="exec", inputs={"p": Point(1)})
+
+    def test_write_to_plain_object_attribute_rejected(self):
+        # Unlike a `str`, this is a genuinely mutable object — asserting
+        # on the wrapper's own error text (not just "some TypeError")
+        # tells apart the guard actually running from a do-nothing guard
+        # that would let Python's normal attribute assignment through.
+        ns = types.SimpleNamespace()
+        with pytest.raises(TypeError, match="attribute-less object"):
+            _run("ns.x = 1\nresult = ns", mode="exec", inputs={"ns": ns})
+
+    def test_write_to_plain_object_subscript_rejected(self):
+        ns = types.SimpleNamespace()
+        with pytest.raises(TypeError, match="item or slice assignment"):
+            _run("ns[0] = 1\nresult = ns", mode="exec", inputs={"ns": ns})
+
+    def test_augmented_assignment_does_not_bypass_write_guard(self):
+        # `a += 99` must not fall back to `a.__iadd__(99)`: that would
+        # mutate `a` in place through a dunder RestrictedPython's
+        # attribute guard would otherwise keep out of reach, bypassing
+        # `_write_` entirely (issue #208 follow-up).
+        class Accumulator:
+            def __init__(self) -> None:
+                self.total = 0
+
+            def __iadd__(self, other):
+                self.total += other
+                return self
+
+        acc = Accumulator()
+        with pytest.raises(TypeError):
+            _run("a += 99", mode="exec", inputs={"a": acc})
+        assert acc.total == 0
 
     def test_subscript_augmented_assignment_rejected_at_compile_time(self):
         # RestrictedPython forbids augmented assignment of subscripts

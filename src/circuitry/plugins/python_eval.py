@@ -18,24 +18,37 @@ Params:
     * ``"exec"`` — executes a statement block; ``value`` = the
       ``result`` variable from the local namespace, or None if absent.
 
-Subscript assignment (``x[k] = v``), attribute assignment (``x.attr = v``)
-and augmented assignment of names (``n += 1``) are supported: RestrictedPython
-rewrites these to calls against ``_write_``/``_inplacevar_`` guards, which
-this plugin wires up. ``_write_`` (``full_write_guard``) permits item/attr
-assignment on plain ``list``/``dict`` and rejects writes to other object
-types; augmented assignment of subscripts/attributes (``x[k] += v``) is
-rejected at compile time by RestrictedPython itself, not just Names.
+Subscript assignment (``x[k] = v``) and augmented assignment of names
+(``n += 1``) are supported: RestrictedPython rewrites these to calls
+against ``_write_``/``_inplacevar_`` guards, which this plugin wires up.
+``_write_`` (``full_write_guard``) permits item assignment/deletion on
+plain ``list``/``dict`` and wraps everything else, so ``x.attr = v``
+virtually always raises ``TypeError`` — ``list``/``dict`` have no
+settable attributes either, so attribute assignment isn't really usable
+from sandboxed code. Augmented assignment of subscripts/attributes
+(``x[k] += v``) is rejected at compile time by RestrictedPython itself,
+not just Names. ``_inplacevar_`` only uses a real in-place operator
+(mutating the target) for ``list``/``dict`` — the same types
+``full_write_guard`` treats as safe; for every other type it falls back
+to the plain binary operator, so ``x += y`` can't call a target's
+``__iadd__``/``__ior__``/etc. to mutate it in place and bypass
+``_write_``.
 
 Note: ``eval``/``exec`` with separate globals/locals dicts make comprehension
-bodies a nested scope that only sees globals, not the enclosing locals — a
-plain CPython quirk, not specific to RestrictedPython. Without mirroring
-``inputs`` into globals, ``[x for x in range(int(w))]`` would raise
-``NameError: name 'w' is not defined`` even though ``w`` is a top-level
-input.
+and generator-expression bodies a nested scope that only sees globals, not
+the enclosing locals — a plain CPython quirk, not specific to
+RestrictedPython. Without mirroring ``inputs`` into globals,
+``[x for x in range(int(w))]`` would raise ``NameError: name 'w' is not
+defined`` even though ``w`` is a top-level input. Only ``inputs`` are
+mirrored this way — names defined by the code itself (e.g. ``n = 3``) are
+still invisible inside a comprehension/generator-expression body, same as
+plain CPython.
 
-AC C.5: payloads outside the sandbox (``import os``, ``__import__``,
-attribute access starting with ``_``) are rejected at compile time
-before any side effect.
+AC C.5: payloads outside the sandbox (``__import__``, attribute access
+starting with ``_``) are rejected at compile time before any side effect.
+Plain ``import`` statements compile (the syntax itself isn't sandboxed)
+but fail at runtime with ``ImportError`` because ``__import__`` isn't in
+the sandboxed builtins.
 """
 
 from __future__ import annotations
@@ -53,29 +66,38 @@ from .base import ToolResult
 # for Name targets — augmented assignment of attributes/subscripts is
 # rejected at compile time instead, so this only needs to cover Name
 # rebinding. Keys match the operator strings RestrictedPython's transformer
-# emits (`IOPERATOR_TO_STR`).
-_INPLACE_OPS: dict[str, Any] = {
-    "+=": operator.iadd,
-    "-=": operator.isub,
-    "*=": operator.imul,
-    "/=": operator.itruediv,
-    "//=": operator.ifloordiv,
-    "%=": operator.imod,
-    "**=": operator.ipow,
-    "<<=": operator.ilshift,
-    ">>=": operator.irshift,
-    "|=": operator.ior,
-    "^=": operator.ixor,
-    "&=": operator.iand,
-    "@=": operator.imatmul,
+# emits (`IOPERATOR_TO_STR`). Each entry is (in-place fn, plain binary fn):
+# the in-place fn is only used for types `full_write_guard` treats as safe
+# (`list`/`dict`) — anything else falls back to the plain operator so
+# `x += y` can't reach a target's `__iadd__`/`__ior__`/etc. to mutate it
+# in place and bypass `_write_` (mirrors Zope's `protected_inplacevar`).
+_INPLACE_OPS: dict[str, tuple[Any, Any]] = {
+    "+=": (operator.iadd, operator.add),
+    "-=": (operator.isub, operator.sub),
+    "*=": (operator.imul, operator.mul),
+    "/=": (operator.itruediv, operator.truediv),
+    "//=": (operator.ifloordiv, operator.floordiv),
+    "%=": (operator.imod, operator.mod),
+    "**=": (operator.ipow, operator.pow),
+    "<<=": (operator.ilshift, operator.lshift),
+    ">>=": (operator.irshift, operator.rshift),
+    "|=": (operator.ior, operator.or_),
+    "^=": (operator.ixor, operator.xor),
+    "&=": (operator.iand, operator.and_),
+    "@=": (operator.imatmul, operator.matmul),
 }
+
+# Types `full_write_guard` treats as safe to mutate directly (see
+# RestrictedPython.Guards._full_write_guard's `safetypes`).
+_INPLACE_SAFE_TYPES = (list, dict)
 
 
 def _inplacevar(op: str, x: Any, y: Any) -> Any:
     try:
-        func = _INPLACE_OPS[op]
+        inplace_fn, binary_fn = _INPLACE_OPS[op]
     except KeyError:
         raise TypeError(f"python_eval: unsupported augmented assignment {op!r}") from None
+    func = inplace_fn if type(x) in _INPLACE_SAFE_TYPES else binary_fn
     return func(x, y)
 
 
