@@ -10,26 +10,96 @@ no access to file/network/process APIs.
 Params:
   - ``code`` (required): Python source to execute.
   - ``inputs`` (optional, dict): variables made available to the code.
-    Names must be valid identifiers and not start with ``_``.
+    Names must be valid identifiers and not start with ``_``. Mirrored
+    into both globals and locals, so they're visible inside comprehension
+    bodies too (see note below).
   - ``mode`` (optional, default ``"eval"``):
     * ``"eval"`` — evaluates a single expression; ``value`` = its result.
     * ``"exec"`` — executes a statement block; ``value`` = the
       ``result`` variable from the local namespace, or None if absent.
 
-AC C.5: payloads outside the sandbox (``import os``, ``__import__``,
-attribute access starting with ``_``) are rejected at compile time
-before any side effect.
+Subscript assignment (``x[k] = v``) and augmented assignment of names
+(``n += 1``) are supported: RestrictedPython rewrites these to calls
+against ``_write_``/``_inplacevar_`` guards, which this plugin wires up.
+``_write_`` (``full_write_guard``) permits item assignment/deletion on
+plain ``list``/``dict`` and wraps everything else, so ``x.attr = v``
+virtually always raises ``TypeError`` — ``list``/``dict`` have no
+settable attributes either, so attribute assignment isn't really usable
+from sandboxed code. Augmented assignment of subscripts/attributes
+(``x[k] += v``) is rejected at compile time by RestrictedPython itself,
+not just Names. ``_inplacevar_`` only uses a real in-place operator
+(mutating the target) for ``list``/``dict`` — the same types
+``full_write_guard`` treats as safe; for every other type it falls back
+to the plain binary operator, so ``x += y`` can't call a target's
+``__iadd__``/``__ior__``/etc. to mutate it in place and bypass
+``_write_``.
+
+Note: ``eval``/``exec`` with separate globals/locals dicts make comprehension
+and generator-expression bodies a nested scope that only sees globals, not
+the enclosing locals — a plain CPython quirk, not specific to
+RestrictedPython. Without mirroring ``inputs`` into globals,
+``[x for x in range(int(w))]`` would raise ``NameError: name 'w' is not
+defined`` even though ``w`` is a top-level input. Only ``inputs`` are
+mirrored this way — names defined by the code itself (e.g. ``n = 3``) are
+still invisible inside a comprehension/generator-expression body, same as
+plain CPython.
+
+AC C.5: payloads outside the sandbox (``__import__``, attribute access
+starting with ``_``) are rejected at compile time before any side effect.
+Plain ``import`` statements compile (the syntax itself isn't sandboxed)
+but fail at runtime with ``ImportError`` because ``__import__`` isn't in
+the sandboxed builtins.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import keyword
+import operator
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from ..preflight import CheckResult
 from .base import ToolResult
+
+# RestrictedPython rewrites `x += y` (etc.) to `x = _inplacevar_('+=', x, y)`
+# for Name targets — augmented assignment of attributes/subscripts is
+# rejected at compile time instead, so this only needs to cover Name
+# rebinding. Keys match the operator strings RestrictedPython's transformer
+# emits (`IOPERATOR_TO_STR`). Each entry is (in-place fn, plain binary fn):
+# the in-place fn is only used for types `full_write_guard` treats as safe
+# (`list`/`dict`) — anything else falls back to the plain operator so
+# `x += y` can't reach a target's `__iadd__`/`__ior__`/etc. to mutate it
+# in place and bypass `_write_` (mirrors Zope's `protected_inplacevar`).
+_INPLACE_OPS: dict[str, tuple[Any, Any]] = {
+    "+=": (operator.iadd, operator.add),
+    "-=": (operator.isub, operator.sub),
+    "*=": (operator.imul, operator.mul),
+    "/=": (operator.itruediv, operator.truediv),
+    "//=": (operator.ifloordiv, operator.floordiv),
+    "%=": (operator.imod, operator.mod),
+    "**=": (operator.ipow, operator.pow),
+    "<<=": (operator.ilshift, operator.lshift),
+    ">>=": (operator.irshift, operator.rshift),
+    "|=": (operator.ior, operator.or_),
+    "^=": (operator.ixor, operator.xor),
+    "&=": (operator.iand, operator.and_),
+    "@=": (operator.imatmul, operator.matmul),
+}
+
+# Types `full_write_guard` treats as safe to mutate directly (see
+# RestrictedPython.Guards._full_write_guard's `safetypes`).
+_INPLACE_SAFE_TYPES = (list, dict)
+
+
+def _inplacevar(op: str, x: Any, y: Any) -> Any:
+    try:
+        inplace_fn, binary_fn = _INPLACE_OPS[op]
+    except KeyError:
+        raise TypeError(f"python_eval: unsupported augmented assignment {op!r}") from None
+    func = inplace_fn if type(x) in _INPLACE_SAFE_TYPES else binary_fn
+    return func(x, y)
+
 
 # Tiny safe-builtins set — math + string handling only.
 _SAFE_BUILTINS = {
@@ -100,6 +170,7 @@ class PythonEvalPlugin:
                 default_guarded_getitem,
             )
             from RestrictedPython.Guards import (  # type: ignore[import-not-found]
+                full_write_guard,
                 guarded_iter_unpack_sequence,
                 guarded_unpack_sequence,
                 safer_getattr,
@@ -120,6 +191,13 @@ class PythonEvalPlugin:
         env_globals["_getiter_"] = iter
         env_globals["_iter_unpack_sequence_"] = guarded_iter_unpack_sequence
         env_globals["_unpack_sequence_"] = guarded_unpack_sequence
+        env_globals["_write_"] = full_write_guard
+        env_globals["_inplacevar_"] = _inplacevar
+        # `eval`/`exec` with separate globals/locals make comprehension
+        # bodies a nested scope that only sees globals — mirror inputs into
+        # both so names from `inputs` resolve the same way whether they're
+        # used at the top level or inside a comprehension.
+        env_globals.update(inputs)
         env_locals = dict(inputs)
 
         try:
