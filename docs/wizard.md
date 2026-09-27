@@ -42,7 +42,7 @@ the manifest entry; `--goal` is the only thing you must supply. Run it from a
 the same way: the wizard is resolved from the installed package, the same way
 `cof check` resolves everything else in `curation/`.
 
-`cof wizard` is **not** [`cof gen`](../README.md#cli-reference): `gen` drives
+`cof wizard` is **not** [`cof gen`](guidebook/12-surfaces.md#cof-gen-and-cof-wizard): `gen` drives
 `agents/meta_orchestrator.yml`, a single-shot generator — one prompt in, one
 document out. `wizard` drives `agents/wizard.yml`, the multi-turn conversation
 this page documents. They produce different artifacts from different

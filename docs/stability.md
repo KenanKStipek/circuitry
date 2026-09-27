@@ -63,8 +63,8 @@ From [`src/circuitry/plugins/__init__.py`](../src/circuitry/plugins/__init__.py)
 
 ### 2. The `cof` CLI
 
-Every subcommand and every flag that appears in the [`README.md` "CLI
-Reference"](../README.md#cli-reference) section is covered. The contract
+Every subcommand and every flag documented in the Guidebook's [CLI
+chapter](guidebook/12-surfaces.md#the-cli-cof) is covered. The contract
 covers:
 
 - The subcommand name (`run`, `check`, `validate`, `inspect`, `list`,
