@@ -564,3 +564,32 @@ def test_default_strict_rejects_non_claude_pin(mgr: RunManager, tmp_path: Path) 
     assert _wait_until(lambda: run.status.is_terminal, timeout=2.0)
     assert run.status == RunStatus.FAILED
     assert "Claude-family" in (run.error or "")
+
+
+# ---------------------------------------------------------------------------
+# 14. An untrusted project config in cwd surfaces its skip warning (#278)
+# ---------------------------------------------------------------------------
+
+
+def test_untrusted_project_config_warning_reaches_the_run(
+    mgr: RunManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "circuitry.config.json").write_text(
+        '{"default_model": "project-model"}', encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    p = _write_yml(tmp_path, "hello.yml", """
+        model: claude-sonnet-4
+        adapter: host_claude
+        effects:
+          - type: prompt
+            name: greet
+            template: "Say hi"
+    """)
+    run = mgr.start_run(orchestration_path=p)
+
+    pid = _single_pending_id(run)
+    mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text="the answer")
+
+    assert _wait_until(lambda: run.status == RunStatus.COMPLETED)
+    assert any("Skipped project config" in w for w in run.warnings)

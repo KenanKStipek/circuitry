@@ -95,9 +95,9 @@ def _choice(path: Path) -> OrchestrationChoice:
 
 def _screen(path: Path, **kwargs: Any) -> RunScreen:
     kwargs.setdefault("adapter", EchoAdapter())
+    kwargs.setdefault("config", CircuitryConfig())
     return RunScreen(
         RUN_SPEC,
-        config=CircuitryConfig(),
         choices=[_choice(path)],
         **kwargs,
     )
@@ -222,6 +222,29 @@ def test_a_mistyped_input_blocks_the_launch(run_app: Any, tmp_path: Path) -> Non
 
 
 # -- launching ---------------------------------------------------------------
+
+
+def test_a_skipped_project_config_warning_reaches_the_status_line(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """A run that completes with an untrusted-project-config warning must say
+    so, not report a silent success (#278)."""
+    from circuitry.cli.config_trust import ProjectConfigStatus
+
+    path = _write(tmp_path, NO_INPUTS)
+    cfg = CircuitryConfig(
+        project_config=ProjectConfigStatus(tmp_path / "circuitry.config.json", "untrusted")
+    )
+
+    async def scenario(pilot: Pilot[Any]) -> str:
+        screen = await _open(pilot, _screen(path, config=cfg))
+        screen.query_one("#run-launch", Button).press()
+        await _settle(pilot, lambda: screen.last_result is not None)
+        return screen.status_text
+
+    status = run_app(scenario)
+    assert status.startswith(DONE)
+    assert "warning" in status
 
 
 def test_form_fill_then_launch_reaches_completion(run_app: Any, tmp_path: Path) -> None:

@@ -259,3 +259,20 @@ def test_fetch_reports_unauthorized_and_missing_assets(tmp_path: Path) -> None:
     )
     assert missing.exit_code == 1
     assert "Shared library asset not found" in missing.stdout
+
+
+def test_run_library_failure_surfaces_an_untrusted_project_config_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An untrusted cwd config that would have set runtime.library is skipped,
+    so the asset lookup fails — and the failure still names the skip (#278)."""
+    lib_root = tmp_path / "library"
+    _write_library_asset(lib_root, "welcome", "1.0.0", "hello")
+    _write_config(tmp_path / "circuitry.config.json", lib_root)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["run-library", "welcome", "--version", "1.0.0"])
+
+    assert result.exit_code == 1
+    assert "Shared library is not configured" in result.stdout
+    assert "Skipped project config" in result.stderr

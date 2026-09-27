@@ -21,6 +21,7 @@ from typer.testing import CliRunner
 from circuitry.cli import config as config_module
 from circuitry.cli.app import app
 from circuitry.cli.config import (
+    ConfigError,
     find_config_path,
     resolve_config,
     trust_store_path,
@@ -352,6 +353,24 @@ def test_find_config_path_skips_an_untrusted_project_config(tmp_path: Path) -> N
     assert find_config_path(explicit_path=None, cwd=path.parent) == path
 
 
+def test_find_config_path_falls_through_on_an_unreadable_project_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A discovered project config that can't even be read must not be
+    handed back as-is — doctor/TUI would then crash trying to load it (#278)."""
+    path = _project(tmp_path, {"default_model": "project-model"})
+    global_config = tmp_path / "global.json"
+    global_config.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(config_module, "GLOBAL_CONFIG_PATH", global_config)
+
+    def _unreadable(*_a: object, **_kw: object) -> Any:
+        raise ConfigError("boom")
+
+    monkeypatch.setattr(config_module, "project_config_status", _unreadable)
+
+    assert find_config_path(explicit_path=None, cwd=path.parent) == global_config
+
+
 def test_check_reports_the_skip_warning_once(tmp_path: Path) -> None:
     path = _project(tmp_path, {"default_model": "project-model"})
 
@@ -381,6 +400,36 @@ def test_cof_run_warns_once_on_stderr(
     # Piped stdout stays pure JSON, and the run used the defaults.
     state = json.loads(result.stdout)
     assert state["runtime"]["effective_settings"]["model"] == "llama3.1:8b"
+
+
+def test_cof_run_not_found_names_a_skipped_library_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An untrusted project config that would have added a library source is
+    skipped, so a bare-name lookup misses — and the not-found error still
+    names the skip (#278)."""
+    lib_dir = tmp_path / "orchestrations"
+    lib_dir.mkdir()
+    (lib_dir / "greet.yml").write_text(
+        "effects:\n  - type: prompt\n    name: greet\n    template: hi\n", encoding="utf-8"
+    )
+    path = _project(
+        tmp_path,
+        {
+            "runtime": {
+                "library": {
+                    "sources": [{"type": "folder", "name": "local", "path": str(lib_dir)}]
+                }
+            }
+        },
+    )
+    monkeypatch.chdir(path.parent)
+
+    result = runner.invoke(app, ["run", "greet", "--dry-run", "--skip-preflight"])
+
+    assert result.exit_code == 1
+    assert "Orchestration not found: greet" in result.output
+    assert f"Skipped project config {path}" in result.stderr
 
 
 def test_cof_run_applies_a_trusted_project_config_silently(
@@ -597,6 +646,27 @@ def test_cof_init_trusts_the_file_it_writes(
     cfg = resolve_config()
     assert cfg.default_model == "my-model"
     assert cfg.resolution_warnings() == []
+
+
+def test_cof_init_survives_a_broken_trust_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A trust store `record_trust` can't write must not abort init midway —
+    both files still land, with a warning instead of a traceback (#278)."""
+    from circuitry.cli import app as app_module
+
+    def _broken(*_a: object, **_kw: object) -> None:
+        raise TrustStoreError("boom")
+
+    monkeypatch.setattr(app_module, "record_trust", _broken)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init"], input="ollama\nhttp://localhost:11434\nmy-model\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Could not record trust" in result.output
+    assert (tmp_path / "circuitry.config.json").exists()
+    assert (tmp_path / "hello.yml").exists()
 
 
 # ---------------------------------------------------------------------------

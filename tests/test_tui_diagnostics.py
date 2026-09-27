@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from circuitry.cli.config import CircuitryConfig
+from circuitry.cli.config_trust import ProjectConfigStatus
 from circuitry.cli.effective_settings import (
     EffectiveSettings,
     resolve_effective_settings,
@@ -202,6 +203,15 @@ def test_a_clean_file_reports_nothing() -> None:
     report = validate_report(FIXTURES / "valid.yml", skip_preflight=True)
     assert report.ok
     assert report.kinds() == ()
+
+
+def test_a_skipped_project_config_warning_reaches_the_report(tmp_path: Path) -> None:
+    project_config = ProjectConfigStatus(tmp_path / "circuitry.config.json", "untrusted")
+    config = CircuitryConfig(project_config=project_config)
+
+    report = validate_report(FIXTURES / "valid.yml", config=config, skip_preflight=True)
+
+    assert any("Skipped project config" in w for w in report.warnings)
 
 
 def test_gates_that_could_not_run_are_named_rather_than_assumed_green() -> None:
