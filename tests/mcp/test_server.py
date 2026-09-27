@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import textwrap
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -49,18 +51,27 @@ def _wait_until(predicate, timeout: float = 2.0, interval: float = 0.01) -> bool
     return predicate()
 
 
-def _settled(run_id: str, *, timeout: float = 2.0, interval: float = 0.01) -> dict:
-    """get_run_state, polled past a transient 'running' status.
+def _settled(
+    run_id: str,
+    *,
+    until: Callable[[dict[str, Any]], bool] | None = None,
+    timeout: float = 2.0,
+    interval: float = 0.01,
+) -> dict[str, Any]:
+    """get_run_state, polled until `until` (default: status != 'running').
 
     _run_orchestration_impl/_submit_response_impl return whatever the
     RunManager's internal quiesce wait considered settled, but a stable
-    *empty* pending_prompts set (worker thread not yet scheduled) looks
-    identical to a genuinely settled one to that wait — same race as
-    issue #191, reachable here since this layer wraps the same calls.
+    keyset (worker thread not yet scheduled, or an answered prompt not yet
+    popped) looks identical to a genuinely settled one to that wait — same
+    race as issue #191, reachable here since this layer wraps the same
+    calls. Callers asserting on pending_prompts contents/count, or on a
+    specific terminal status, must pass a matching `until` predicate.
     """
+    predicate = until or (lambda resp: resp["status"] != "running")
     resp = srv._get_run_state_impl(run_id=run_id)
     deadline = time.monotonic() + timeout
-    while resp["status"] == "running" and time.monotonic() < deadline:
+    while not predicate(resp) and time.monotonic() < deadline:
         time.sleep(interval)
         resp = srv._get_run_state_impl(run_id=run_id)
     return resp
@@ -190,7 +201,10 @@ def test_run_orchestration_returns_paused_with_multiple_prompts(tmp_path: Path) 
     resp = srv._run_orchestration_impl(
         orchestration=str(p), initial_state={"items": ["a", "b"]}
     )
-    resp = _settled(resp["run_id"])
+    resp = _settled(
+        resp["run_id"],
+        until=lambda r: r["status"] == "paused" and len(r["pending_prompts"]) == 2,
+    )
     assert resp["status"] == "paused"
     assert len(resp["pending_prompts"]) == 2
     pids = {pp["prompt_id"] for pp in resp["pending_prompts"]}
@@ -219,7 +233,10 @@ def test_submit_responses_in_arbitrary_order(tmp_path: Path) -> None:
         orchestration=str(p), initial_state={"items": ["a", "b", "c"]}
     )
     rid = resp["run_id"]
-    resp = _settled(rid)
+    resp = _settled(
+        rid,
+        until=lambda r: r["status"] == "paused" and len(r["pending_prompts"]) == 3,
+    )
     assert len(resp["pending_prompts"]) == 3
     pids = [pp["prompt_id"] for pp in resp["pending_prompts"]]
 
@@ -228,7 +245,7 @@ def test_submit_responses_in_arbitrary_order(tmp_path: Path) -> None:
         srv._submit_response_impl(
             run_id=rid, prompt_id=pid, response=f"r-{pid[:4]}"
         )
-    last = _settled(rid)
+    last = _settled(rid, until=lambda r: r["status"] == "completed")
     assert last["status"] == "completed"
 
     state = last["state"]
@@ -259,8 +276,17 @@ def test_get_run_state_during_pause_includes_partial_state(tmp_path: Path) -> No
 
     after_a = srv._submit_response_impl(run_id=rid, prompt_id=pid_a, response="A-out")
     # Run is paused on prompt 'b' now; the wire protocol returns state=None
-    # for non-terminal statuses on submit/run, so we use get_run_state.
-    assert _settled(rid)["status"] == "paused"
+    # for non-terminal statuses on submit/run, so we use get_run_state. Wait
+    # for a pending prompt distinct from pid_a, not just "not running" -
+    # pid_a can still be the (stale) sole pending entry for a beat after
+    # submit_response returns (issue #191's race, same window).
+    settled_after_a = _settled(
+        rid,
+        until=lambda r: r["status"] == "paused"
+        and len(r["pending_prompts"]) == 1
+        and r["pending_prompts"][0]["prompt_id"] != pid_a,
+    )
+    assert settled_after_a["status"] == "paused"
     assert after_a["state"] is None
 
     snap = srv._get_run_state_impl(run_id=rid)
@@ -329,7 +355,7 @@ def test_unknown_prompt_id_returns_error_response(tmp_path: Path) -> None:
     # Run still alive: real prompt_id still works.
     real_pid = _settled(rid)["pending_prompts"][0]["prompt_id"]
     srv._submit_response_impl(run_id=rid, prompt_id=real_pid, response="ok")
-    assert _settled(rid)["status"] == "completed"
+    assert _settled(rid, until=lambda r: r["status"] == "completed")["status"] == "completed"
 
 
 # ---------------------------------------------------------------------------
@@ -394,7 +420,7 @@ def test_run_orchestration_with_override_model(tmp_path: Path) -> None:
     assert settled["status"] == "paused"
     pid = settled["pending_prompts"][0]["prompt_id"]
     srv._submit_response_impl(run_id=rid, prompt_id=pid, response="ok")
-    final = _settled(rid)
+    final = _settled(rid, until=lambda r: r["status"] == "completed")
     assert final["status"] == "completed"
     assert final["state"]["prime"]["x"]["value"] == "ok"
 

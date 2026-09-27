@@ -52,8 +52,17 @@ def _wait_until(predicate, timeout: float = 2.0, interval: float = 0.01) -> bool
     return predicate()
 
 
-def _single_pending_id(run) -> str:
-    assert _wait_until(lambda: len(run.pending_prompts) == 1), list(run.pending_prompts)
+def _single_pending_id(run, exclude: frozenset[str] = frozenset()) -> str:
+    # After a submit, pending_prompts can be stably {answered_id} for a beat
+    # before the worker pops it (runs.py's finally-block race, same family
+    # as issue #191) — exclude lets callers wait past their own prior id.
+    def _ready() -> bool:
+        return (
+            len(run.pending_prompts) == 1
+            and next(iter(run.pending_prompts)) not in exclude
+        )
+
+    assert _wait_until(_ready), list(run.pending_prompts)
     return next(iter(run.pending_prompts))
 
 
@@ -110,11 +119,11 @@ def test_three_prompt_chain(mgr: RunManager, tmp_path: Path) -> None:
     mgr.submit_response(run_id=run.run_id, prompt_id=pid_a, response_text="A-out")
 
     assert _wait_until(lambda: run.status == RunStatus.PAUSED)
-    pid_b = _single_pending_id(run)
+    pid_b = _single_pending_id(run, exclude=frozenset({pid_a}))
     assert run.pending_prompts[pid_b].prompt == "saw a=A-out"
     mgr.submit_response(run_id=run.run_id, prompt_id=pid_b, response_text="B-out")
 
-    pid_c = _single_pending_id(run)
+    pid_c = _single_pending_id(run, exclude=frozenset({pid_b}))
     assert run.pending_prompts[pid_c].prompt == "saw b=B-out"
     mgr.submit_response(run_id=run.run_id, prompt_id=pid_c, response_text="C-out")
 
@@ -147,12 +156,15 @@ def test_sequential_loop(mgr: RunManager, tmp_path: Path) -> None:
     )
 
     responses = []
+    prev_pid: str | None = None
     for i in range(3):
         assert _wait_until(lambda: run.status == RunStatus.PAUSED), f"iter {i}: {run.status}"
-        pid = _single_pending_id(run)
+        exclude = frozenset({prev_pid}) if prev_pid is not None else frozenset()
+        pid = _single_pending_id(run, exclude=exclude)
         text = f"hi-{i}"
         responses.append(text)
         mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text=text)
+        prev_pid = pid
 
     assert _wait_until(lambda: run.status == RunStatus.COMPLETED)
     loop_state = run.state["prime"]["greet_each"]
@@ -280,7 +292,7 @@ def test_nested_parallel_tree_in_chain(mgr: RunManager, tmp_path: Path) -> None:
 
     # Stage 3: single post prompt
     assert _wait_until(lambda: run.status == RunStatus.PAUSED and len(run.pending_prompts) == 1, timeout=2.0)
-    post_pid = _single_pending_id(run)
+    post_pid = _single_pending_id(run, exclude=frozenset(branch_pids))
     assert run.pending_prompts[post_pid].prompt == "post"
     mgr.submit_response(run_id=run.run_id, prompt_id=post_pid, response_text="post-out")
 
@@ -417,7 +429,7 @@ def test_get_state_during_pause(mgr: RunManager, tmp_path: Path) -> None:
     # next prompt (a stable-but-empty pending_prompts set right after the
     # thread pops 'a' looks the same as settled) — poll rather than assert.
     assert _wait_until(lambda: run.status == RunStatus.PAUSED)
-    pid_b = _single_pending_id(run)
+    pid_b = _single_pending_id(run, exclude=frozenset({pid_a}))
     assert pid_b != pid_a
     assert run.pending_prompts[pid_b].prompt == "second"
 
@@ -467,6 +479,10 @@ def test_quiescence_returns_after_all_branches_settle(tmp_path: Path) -> None:
     run = big_quiesce_mgr.start_run(
         orchestration_path=p, initial_state={"items": ["a", "b", "c"]},
     )
+    # Intentionally asserted immediately (not polled): this test exists to
+    # prove start_run's internal quiesce wait already blocked long enough,
+    # so polling here would defeat the point. It can still fail if the
+    # worker takes longer than the 200ms window under heavy load.
     assert len(run.pending_prompts) == 3, (
         f"quiescence did not wait long enough; saw {len(run.pending_prompts)} branches"
     )
