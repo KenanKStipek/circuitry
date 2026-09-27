@@ -12,7 +12,7 @@ Resolution is layered, each layer deep-merged over the last:
 2. **Global config** — `~/.config/circuitry/config.json`.
 3. **Project config** — `circuitry.config.json` or `config.json` in the working directory.
 4. **An explicit file** — `--config <path>` or `CIRCUITRY_CONFIG`, which *replaces* 2 and 3 rather than layering over them.
-5. **Environment variables** — `CIRCUITRY_ADAPTER`, `CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER_URL`, `CIRCUITRY_COMFYUI_URL`, and the allowlists `CIRCUITRY_ENABLED_ADAPTERS` / `CIRCUITRY_ENABLED_TOOLS` / `CIRCUITRY_ENABLED_PLUGINS`.
+5. **Environment variables** — `CIRCUITRY_ADAPTER`, `CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER_URL`, `CIRCUITRY_COMFYUI_URL`, the allowlists `CIRCUITRY_ENABLED_ADAPTERS` / `CIRCUITRY_ENABLED_TOOLS` / `CIRCUITRY_ENABLED_PLUGINS`, and `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME` (below).
 
 `cof setup` walks you through creating the global file — it detects local backends and writes a working config. `cof init` writes a project config and a `hello.yml` beside it. `cof doctor` tells you what the resolved config can actually reach.
 
@@ -45,6 +45,20 @@ A local-first project config:
 `default_adapter` and `default_model` are the run defaults. `runtime.adapters.<name>` carries each adapter's own settings — base URL, socket timeout, a per-adapter default model, token limits. API keys are *not* in this file: hosted adapters read them from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and so on — a `.env` file works), and `cof doctor` names the missing one. Nothing credential-shaped is ever written into serialized state; the redaction layer scrubs it from `runtime.effective_settings` before it lands.
 
 Other top-level keys you will meet later: `runtime.complexity` ([Complexity](10-complexity.md)), `runtime.persistence` and `runtime.plugins.<name>` — per-plugin settings such as MCP servers and a tool's `binary` ([Tools and persistence](13-tools-and-persistence.md)), `runtime.library.sources` and `runtime.state.record_children` ([Composition](09-composition.md)), `plugins` (runtime plugin identifiers), and the three allowlists.
+
+## What a document can set
+
+A document may carry a `runtime:` block of its own, but only for the two settings that belong to its author: `runtime.complexity` and `runtime.state`. Each replaces the config block of the same name for that run. Everything else under `runtime` — `adapters`, `plugins`, `persistence`, `library`, `mcp` — is a host setting and comes only from config. A document that sets one has it ignored, and `cof run` (on stderr) and `cof check` print one warning per key saying it must go in config.json. A document's top-level `plugins:` list is held to the same line: an entry loads only if config already lists it in `plugins` or `enabled_plugins`.
+
+That boundary is what makes it reasonable to run a document you did not write — one fetched with `cof fetch`, run with `cof run-library`, or pulled in by `use: ref:` from a github source. The document chooses what the run does; config alone chooses where each adapter sends your prompts and API keys, which binaries and environment a tool gets, which MCP servers start, and where state is written. A composed `use:` child is held tighter still: it runs on the parent's resolved runtime and its own `runtime:` and `plugins:` keys are never read.
+
+```json
+{
+  "trust_orchestration_runtime": true
+}
+```
+
+`trust_orchestration_runtime: true` (or `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME=1`) switches the boundary off and restores the old behaviour: a document's whole `runtime:` block is merged over config and every module in its `plugins:` list is imported. Only set it on a host that runs nothing but documents you wrote or have read. With it on, any document the host runs can point an adapter at its own server — which then receives your prompts and the adapter's credentials — change a tool's `binary` or `env`, add an MCP server command, redirect persistence, or import arbitrary Python, and `use: ref:` means that includes every document your library sources can reach.
 
 ## Which model actually runs
 
