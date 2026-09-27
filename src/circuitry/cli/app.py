@@ -396,7 +396,8 @@ def run_cmd(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed progress."),
     live_state: Path | None = typer.Option(
         None, "--live-state",
-        help="Write state atomically to this file after each effect. For live monitoring.",
+        help="Mirror state atomically to this file while the run goes (at most every "
+        "0.5 s, and once more when it ends). For live monitoring.",
     ),
     env_vars: list[str] | None = typer.Option(
         None, "-e",
@@ -812,7 +813,8 @@ def run_library_cmd(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed progress."),
     live_state: Path | None = typer.Option(
         None, "--live-state",
-        help="Write state atomically to this file after each effect. For live monitoring.",
+        help="Mirror state atomically to this file while the run goes (at most every "
+        "0.5 s, and once more when it ends). For live monitoring.",
     ),
     env_vars: list[str] | None = typer.Option(
         None, "-e",

@@ -59,7 +59,9 @@ def run_orchestration(
     equivalent across interfaces.
 
     Set *live_state_path* to enable atomic incremental state file writes
-    after each effect completes, suitable for external tools (e.g. Perceptron).
+    while the run goes (at most one per
+    :data:`~circuitry.cli.live_state.LIVE_STATE_INTERVAL_SECONDS`, plus a final
+    write when it ends), suitable for external tools (e.g. Perceptron).
 
     Pass *adapter* to run against an already-constructed adapter instead of the
     one the config resolves — the seam a host uses to drive an orchestration

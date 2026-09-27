@@ -1055,6 +1055,7 @@ def test_mirroring_does_not_leak_child_state_into_the_parent(tmp_path: Path) -> 
 def test_child_effects_reach_the_live_state_file_mid_run(tmp_path: Path) -> None:
     """End to end: a watcher tailing --live-state sees the child working."""
     import json
+    import time
     from dataclasses import dataclass, field
 
     from circuitry.adapters.base import GenerateResult
@@ -1063,18 +1064,43 @@ def test_child_effects_reach_the_live_state_file_mid_run(tmp_path: Path) -> None
 
     live_path = tmp_path / "live.json"
 
+    def _read_live() -> dict | None:
+        if not live_path.exists():
+            return None
+        return json.loads(live_path.read_text(encoding="utf-8"))
+
+    def _child_greet_landed(snapshot: dict | None) -> bool:
+        greet = (snapshot or {}).get("prime", {}).get("sub", {}).get("greet", {})
+        return greet.get("value") == "response"
+
     @dataclass
     class _WatchingAdapter:
-        """Reads the live-state file every time it is asked to generate."""
+        """Reads the live-state file every time it is asked to generate.
+
+        The mirror coalesces writes (at most one per interval), so a watcher
+        sees a landed effect within that interval, not instantly: after the
+        first child prompt, poll until the file carries it.
+        """
 
         name: str = "mock"
         seen: list[dict] = field(default_factory=list)
+        calls: int = 0
 
         def generate(
             self, *, model: str, prompt: str, timeout_seconds: int = 120
         ) -> GenerateResult:
-            if live_path.exists():
-                self.seen.append(json.loads(live_path.read_text(encoding="utf-8")))
+            self.calls += 1
+            snapshot = _read_live()
+            deadline = time.monotonic() + 5
+            while (
+                self.calls > 1
+                and not _child_greet_landed(snapshot)
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.01)
+                snapshot = _read_live()
+            if snapshot is not None:
+                self.seen.append(snapshot)
             return GenerateResult(
                 text="response", raw={}, tokens_sent=1, tokens_received=1
             )

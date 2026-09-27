@@ -196,8 +196,8 @@ Other ways to watch the same run:
 
 - `--tail` — stream effects as they finish, instead of one dump at the end.
 - `--out state.json` — write the final state to a file.
-- `--live-state live.json` — atomic incremental writes after every effect, for
-  external watchers.
+- `--live-state live.json` — atomic incremental writes while the run goes (at
+  most every 0.5 s, and a final one when it ends), for external watchers.
 - `cof run --last` — re-run the previous invocation; the previous run's state is
   kept at `~/.config/circuitry/last-run.json`.
 

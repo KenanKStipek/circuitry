@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from ..preflight import CheckResult, call_check
 from .allowlist import check_allowlist, walk_orchestration_refs
 from .config import CircuitryConfig
 from .effective_settings import EffectiveSettings, resolve_effective_settings
+from .live_state import LiveStateMirror
 from .orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
 from .profiles import (
     ProfileSettings,
@@ -157,6 +159,10 @@ def run(req: RunRequest) -> RunResult:
     # profile, if any, is loaded below. Kept outside the try's happy path so
     # a failure before that point still reports the caller's own --out.
     resolved_out: Path | None = req.out_path
+    # Every store of this run shares one lock; the --live-state mirror
+    # serialises under it and writes the file after releasing it.
+    store_lock = threading.RLock()
+    live_mirror: LiveStateMirror | None = None
 
     try:
         cfg = req.config or CircuitryConfig()
@@ -419,9 +425,8 @@ def run(req: RunRequest) -> RunResult:
         # Execute using core runtime against Store
         callbacks: list[Callable[[dict[str, Any]], None]] = []
         if req.live_state_path is not None:
-            from .live_state import make_live_state_callback
-
-            callbacks.append(make_live_state_callback(req.live_state_path))
+            live_mirror = LiveStateMirror(req.live_state_path, store_lock=store_lock)
+            callbacks.append(live_mirror)
         if req.state_observer is not None:
             callbacks.append(req.state_observer)
 
@@ -499,6 +504,7 @@ def run(req: RunRequest) -> RunResult:
             on_write=on_write,
             effect_complete=_compose_effect_observers(effect_observers),
             effect_start=_compose_effect_observers(start_observers),
+            _lock=store_lock,
         )
 
         runtime = DynamicRuntime(
@@ -595,6 +601,11 @@ def run(req: RunRequest) -> RunResult:
         except Exception:
             logger.exception("Error during error-handling cleanup")
         return RunResult(ok=False, state=state, warnings=warnings, error=str(e), out_path=resolved_out)
+    finally:
+        # The final flush, success or failure: everything recorded after the
+        # last effect included, so the mirror ends equal to --out.
+        if live_mirror is not None:
+            live_mirror.close(state)
 
 
 def _compose_effect_observers(
