@@ -15,6 +15,7 @@ weather) get focused per-plugin tests covering their unique semantics.
 from __future__ import annotations
 
 import json as _json
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -206,6 +207,162 @@ def test_each_subprocess_plugin_factory_wires_correct_binary(
     assert plugin.name == name
     # GenericSubprocessTool exposes binary_candidates.
     assert tuple(plugin.binary_candidates) == candidates
+    # Unset settings change nothing (issue #222 acceptance criterion).
+    assert plugin.binary is None
+    assert plugin.env is None
+
+
+@pytest.mark.parametrize("name,candidates", SUBPROCESS_CATALOG)
+def test_each_subprocess_plugin_factory_wires_binary_and_env_from_config(
+    name: str, candidates: tuple[str, ...]
+) -> None:
+    """runtime.plugins.<name>.binary / .env reach every GenericSubprocessTool
+    plugin's factory wiring, not just imagemagick (issue #222)."""
+    del candidates
+    runtime = {
+        "plugins": {
+            name: {
+                "binary": "/opt/custom/bin/tool",
+                "env": {"SOME_VAR": "1"},
+            }
+        }
+    }
+    plugin = build_plugin(plugin_name=name, runtime=runtime)
+    assert plugin.binary == "/opt/custom/bin/tool"
+    assert plugin.env == {"SOME_VAR": "1"}
+
+
+# ---------------------------------------------------------------------------
+# GenericSubprocessTool — configured binary / env (issue #222)
+# ---------------------------------------------------------------------------
+
+
+def test_generic_tool_configured_binary_bypasses_path_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No candidate is resolvable on PATH — configured binary must still win.
+    monkeypatch.setattr(shutil, "which", lambda n: None)
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env")
+        return FakeProc(returncode=0, stdout="ok")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(Path, "is_file", lambda self: True)
+    monkeypatch.setattr(os, "access", lambda path, mode: True)
+
+    plugin = GenericSubprocessTool(
+        name="imagemagick",
+        binary_candidates=("magick", "convert"),
+        binary="~/opt/imagemagick-omp/bin/magick",
+    )
+    r = plugin.execute(params={"args": ["in.png", "out.png"]})
+    assert captured["cmd"][0] == str(Path("~/opt/imagemagick-omp/bin/magick").expanduser())
+    assert r.raw["binary"] == captured["cmd"][0]
+
+
+def test_generic_tool_configured_binary_missing_fails_naming_setting_and_path() -> None:
+    plugin = GenericSubprocessTool(
+        name="imagemagick",
+        binary_candidates=("magick", "convert"),
+        binary="/definitely/not/a/real/path/magick",
+    )
+    with pytest.raises(
+        RuntimeError,
+        match=r"runtime\.plugins\.imagemagick\.binary=.*not/a/real/path/magick.*not exist",
+    ):
+        plugin.execute(params={"args": []})
+
+
+def test_generic_tool_check_reports_configured_binary_missing() -> None:
+    plugin = GenericSubprocessTool(
+        name="imagemagick",
+        binary_candidates=("magick", "convert"),
+        binary="/definitely/not/a/real/path/magick",
+    )
+    r = plugin.check()
+    assert r.ok is False
+    assert "binary:imagemagick" in r.missing
+    assert "runtime.plugins.imagemagick.binary" in (r.message or "")
+
+
+def test_generic_tool_not_found_message_names_the_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_binary's FileNotFoundError message used to say 'override the
+    plugin's binary path' — no such override existed. It must now name the
+    real setting."""
+
+    monkeypatch.setattr(shutil, "which", lambda n: "/usr/bin/magick" if n == "magick" else None)
+
+    def raise_not_found(*a: Any, **k: Any) -> Any:
+        raise FileNotFoundError("no such file")
+
+    monkeypatch.setattr(subprocess, "run", raise_not_found)
+
+    plugin = GenericSubprocessTool(name="imagemagick", binary_candidates=("magick",))
+    with pytest.raises(RuntimeError, match=r"runtime\.plugins\.imagemagick\.binary"):
+        plugin.execute(params={"args": ["in.png"]})
+
+
+def test_generic_tool_real_script_proves_binary_and_env_reach_the_process(
+    tmp_path: Path,
+) -> None:
+    """No mocked subprocess.run here — a real tiny executable proves both
+    the configured binary and env actually reach the child process,
+    without depending on any real CLI tool being installed."""
+    script = tmp_path / "fake-magick"
+    script.write_text(
+        "#!/bin/sh\n"
+        'echo "me: $0"\n'
+        'echo "threads: $MAGICK_THREAD_LIMIT"\n'
+        'echo "args: $@"\n'
+    )
+    script.chmod(0o755)
+
+    plugin = GenericSubprocessTool(
+        name="imagemagick",
+        binary_candidates=("magick", "convert"),
+        binary=str(script),
+        env={"MAGICK_THREAD_LIMIT": "4"},
+    )
+    r = plugin.execute(params={"args": ["in.png", "-resize", "50%", "out.png"]})
+
+    assert r.exit_code == 0
+    assert str(script) in r.stdout
+    assert "threads: 4" in r.stdout
+    assert "in.png -resize 50% out.png" in r.stdout
+    assert r.raw["binary"] == str(script)
+
+
+def test_generic_tool_env_merges_over_inherited_environment(tmp_path: Path) -> None:
+    """env entries are merged over the inherited environment, not a
+    replacement for it — an unrelated inherited var must still be visible."""
+    script = tmp_path / "fake-tool"
+    script.write_text(
+        "#!/bin/sh\n"
+        'echo "OVERRIDE=$OVERRIDE_VAR"\n'
+        'echo "INHERITED=$CIRCUITRY_TEST_INHERITED"\n'
+    )
+    script.chmod(0o755)
+
+    os.environ["CIRCUITRY_TEST_INHERITED"] = "still-here"
+    try:
+        plugin = GenericSubprocessTool(
+            name="imagemagick",
+            binary_candidates=("magick",),
+            binary=str(script),
+            env={"OVERRIDE_VAR": "set-by-config"},
+        )
+        r = plugin.execute(params={"args": []})
+    finally:
+        del os.environ["CIRCUITRY_TEST_INHERITED"]
+
+    assert "OVERRIDE=set-by-config" in r.stdout
+    assert "INHERITED=still-here" in r.stdout
 
 
 # ---------------------------------------------------------------------------

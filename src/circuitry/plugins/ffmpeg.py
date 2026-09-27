@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import re
 import shlex
-import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
+from ._subprocess import check_binary, merged_env, resolve_plugin_binary
 from .base import ToolResult
 
 _SHELL_METACHARACTERS = ("&&", "||", "|", ";", ">", "<", "`", "$(", "\n")
@@ -88,6 +88,8 @@ def _build_drawtext_filter(cfg: dict[str, Any]) -> str:
 @dataclass(frozen=True)
 class FfmpegPlugin:
     name: str = "ffmpeg"
+    binary: str | None = None
+    env: dict[str, str] | None = None
 
     def execute(
         self,
@@ -138,6 +140,11 @@ class FfmpegPlugin:
 
         cmd.append(output_path)
 
+        binary = resolve_plugin_binary(
+            plugin_name="ffmpeg", candidates=("ffmpeg",), configured=self.binary
+        )
+        cmd[0] = binary
+
         try:
             proc = subprocess.run(
                 cmd,
@@ -145,6 +152,7 @@ class FfmpegPlugin:
                 text=True,
                 check=False,
                 timeout=timeout_seconds,
+                env=merged_env(self.env),
             )
         except FileNotFoundError as e:
             raise RuntimeError(
@@ -166,14 +174,11 @@ class FfmpegPlugin:
 
         return ToolResult(
             value=output_path,
-            raw={},
+            raw={"binary": binary},
             stdout=proc.stdout,
             stderr=proc.stderr,
             exit_code=proc.returncode,
         )
 
     def check(self) -> CheckResult:
-        missing: list[str] = []
-        if shutil.which("ffmpeg") is None:
-            missing.append("binary:ffmpeg")
-        return CheckResult(ok=not missing, missing=missing)
+        return check_binary(("ffmpeg",), label="ffmpeg", configured=self.binary)

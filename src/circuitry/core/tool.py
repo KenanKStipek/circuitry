@@ -147,6 +147,10 @@ class ToolRuntime:
     Writes:
       <name>.value
       <name>.meta{created_at, completed_at, provider, params_rendered, stdout, stderr, exit_code, error}
+
+      ``meta.binary`` is also set for binary-wrapping tool plugins
+      (the resolved absolute executable path), when the plugin's result
+      carries one.
     """
 
     def __init__(
@@ -278,6 +282,8 @@ class ToolRuntime:
             meta["stdout"] = result.stdout
             meta["stderr"] = result.stderr
             meta["exit_code"] = result.exit_code
+            if "binary" in result.raw:
+                meta["binary"] = result.raw["binary"]
             meta["completed_at"] = _now_iso()
 
             if self.verbose:
