@@ -190,6 +190,24 @@ def test_auto_falls_back_to_text_when_not_json(
     assert result.value == "plain text"
 
 
+@pytest.mark.parametrize("text", ["42", "true", "null", '"abc"'])
+def test_auto_keeps_bare_json_scalars_as_text(
+    text: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A text-only reply that happens to be a bare JSON scalar (not an
+    object/array) stays a string — otherwise 'null' would be
+    indistinguishable from no value, and a guard like value == "42" would
+    silently break."""
+    session = _FakeSession(call_result=_call_result(text=text))
+    _install_fake_session(monkeypatch, session)
+
+    result = McpPlugin(servers=_SERVERS).execute(
+        params={"server": "local", "tool": "t"}
+    )
+    assert result.value == text
+
+
 def test_parse_text_keeps_text_even_with_structured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -258,6 +276,24 @@ def test_parse_json_on_is_error_with_json_text_still_parses(
         params={"server": "local", "tool": "t", "parse": "json"}
     )
     assert result.value == {"code": 429}
+    assert result.exit_code == 1
+
+
+def test_auto_parses_json_text_on_is_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """auto's JSON-in-text fallback applies to isError responses too — the
+    parsed value and the raw error text/exit_code are independent."""
+    session = _FakeSession(
+        call_result=_call_result(text='{"code": 429}', is_error=True)
+    )
+    _install_fake_session(monkeypatch, session)
+
+    result = McpPlugin(servers=_SERVERS).execute(
+        params={"server": "local", "tool": "t"}
+    )
+    assert result.value == {"code": 429}
+    assert result.stderr == '{"code": 429}'
     assert result.exit_code == 1
 
 

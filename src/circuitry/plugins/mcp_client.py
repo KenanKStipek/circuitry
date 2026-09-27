@@ -44,8 +44,11 @@ Params:
     discover capabilities at runtime (e.g. feed them to a reflector).
   - ``parse`` (optional, ``auto`` | ``json`` | ``text``, default ``auto``):
     ``auto`` prefers the server's ``structuredContent`` when present, else
-    tries to parse the joined text content as JSON, else falls back to the
-    raw text — structured → JSON-in-text → text. ``json`` force-parses the
+    tries to parse the joined text content as a JSON object or array, else
+    falls back to the raw text — structured → JSON-in-text → text. Bare
+    JSON scalars (numbers, booleans, ``null``, quoted strings) in text are
+    left as text, since a text-only reply is otherwise indistinguishable
+    from a plain string. ``json`` force-parses the
     text content; on an ``isError`` response it returns ``value: None``
     instead of raising when the text isn't JSON (the error is still
     surfaced via ``stderr``/``exit_code``). ``text`` always returns the raw
@@ -287,9 +290,10 @@ class McpPlugin:
                 value = structured
             else:
                 try:
-                    value = _json.loads(text)
+                    parsed = _json.loads(text)
                 except _json.JSONDecodeError:
-                    value = text
+                    parsed = None
+                value = parsed if isinstance(parsed, (dict, list)) else text
 
         return ToolResult(
             value=value,
