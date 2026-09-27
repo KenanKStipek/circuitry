@@ -42,7 +42,7 @@ TrustState = Literal["trusted", "env", "untrusted", "changed"]
 
 TRUST_STATE_LABELS: dict[str, str] = {
     "trusted": "trusted",
-    "env": f"trusted via {TRUST_PROJECT_CONFIG_ENV}",
+    "env": f"trusted by {TRUST_PROJECT_CONFIG_ENV}",
     "untrusted": "not trusted — skipped",
     "changed": "changed since trusted — skipped",
 }

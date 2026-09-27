@@ -687,14 +687,15 @@ def test_doctor_shows_the_project_config_trust_state(
     monkeypatch.chdir(path.parent)
 
     untrusted = runner.invoke(app, ["doctor"])
-    assert "Project config" in untrusted.output
+    assert "Config sources" in untrusted.output
     assert "not trusted — skipped" in untrusted.output
-    assert "cof trust" in untrusted.output
     assert "project-model" not in untrusted.output
+    # Folded into the one "Config sources" row (#248) — no separate row.
+    assert "Project config" not in untrusted.output
 
     _trust(path)
     trusted = runner.invoke(app, ["doctor"])
-    assert "(trusted)" in trusted.output
+    assert "project, trusted" in trusted.output
     assert "project-model" in trusted.output
 
 

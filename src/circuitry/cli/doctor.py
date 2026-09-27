@@ -4,7 +4,6 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.table import Table
 
 from ..adapters import build_adapter
@@ -59,10 +58,10 @@ def register_doctor(app: typer.Typer) -> None:
 
         # Config
         table.add_row("Config path", str(cfg_path) if cfg_path else "— (defaults)")
+        # A discovered project source is listed here even when skipped for
+        # lack of trust, with its trust state as part of the entry — see
+        # ConfigSource.note — so there is one row for this, not two.
         table.add_row("Config sources", describe_config_sources(resolved_cfg.sources))
-        project_config = resolved_cfg.project_config
-        if project_config is not None:
-            table.add_row("Project config", escape(project_config.report()))
         table.add_row(
             "Effective adapter",
             f"{effective.adapter} (source: {effective.sources.get('adapter')})",

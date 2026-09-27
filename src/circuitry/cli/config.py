@@ -8,7 +8,12 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from .config_trust import TRUST_STORE_FILENAME, ProjectConfigStatus, check_trust
+from .config_trust import (
+    TRUST_STATE_LABELS,
+    TRUST_STORE_FILENAME,
+    ProjectConfigStatus,
+    check_trust,
+)
 
 Environment = Literal["dev", "prod", "test"]
 _VALID_ENVIRONMENTS: tuple[str, ...] = ("dev", "prod", "test")
@@ -80,18 +85,28 @@ ConfigSourceKind = Literal["global", "project", "CIRCUITRY_CONFIG", "--config", 
 
 @dataclass(frozen=True)
 class ConfigSource:
-    """One layer :func:`resolve_config` applied: a config file or an env var."""
+    """One layer :func:`resolve_config` considered: a config file or an env var.
+
+    A discovered project source is listed even when it was skipped for lack
+    of trust — ``note`` then says why, so the ``Config:`` line explains a
+    setting's *absence* as well as its presence.
+    """
 
     kind: ConfigSourceKind
     #: The file path, or the environment variable's name for ``kind == "env"``.
     location: str
+    #: Extra context after the kind — a project source's trust state
+    #: (``"trusted"``, ``"not trusted — skipped"``, ...). None elsewhere.
+    note: str | None = None
 
     def describe(self) -> str:
-        return f"{self.location} ({self.kind})"
+        kind = f"{self.kind}, {self.note}" if self.note else self.kind
+        return f"{self.location} ({kind})"
 
 
 def describe_config_sources(sources: tuple[ConfigSource, ...]) -> str:
-    """One line naming every layer a config came from, for run/check headers."""
+    """One line naming every layer a config came from — or was skipped for —
+    for run/check headers."""
     if not sources:
         return "— (built-in defaults)"
     return ", ".join(source.describe() for source in sources)
@@ -455,7 +470,10 @@ def resolve_config(
     config set (see :func:`_narrow_allowlists`). A file the caller named —
     ``--config`` or ``CIRCUITRY_CONFIG`` — is trusted as given.
 
-    The layers actually applied are recorded on the result's ``sources``.
+    Every layer the resolution considered is recorded on the result's
+    ``sources`` — including a discovered project file that was skipped,
+    whose entry's ``note`` says why (see :class:`ConfigSource`), so the
+    ``Config:`` line explains an absence as well as a presence.
     """
     merged = copy.deepcopy(SANE_DEFAULTS)
     sources: list[ConfigSource] = []
@@ -491,12 +509,16 @@ def resolve_config(
         if local_path and local_path.exists():
             try:
                 data = read_config_bytes(local_path)
+                note: str | None = None
+                applied = True
                 if discovered:
                     project_config = ProjectConfigStatus(
                         local_path,
                         check_trust(local_path, data, store_path=trust_store_path()),
                     )
-                if project_config is None or project_config.applied:
+                    applied = project_config.applied
+                    note = TRUST_STATE_LABELS[project_config.trust]
+                if applied:
                     local_config = parse_config_bytes(local_path, data)
                     merged = _deep_merge(merged, local_config)
                     if local_kind == "project":
@@ -506,7 +528,9 @@ def resolve_config(
                             project_config=local_config,
                             project_path=local_path,
                         )
-                    sources.append(ConfigSource(local_kind, str(local_path)))
+                # Listed even when skipped: a discovered-but-untrusted file
+                # explains its own absence on the `Config:` line.
+                sources.append(ConfigSource(local_kind, str(local_path), note))
             except (json.JSONDecodeError, ValueError, OSError) as exc:
                 logger.warning("Skipping malformed project config %s: %s", local_path, exc)
 
