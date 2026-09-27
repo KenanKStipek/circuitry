@@ -34,6 +34,7 @@ from ..adapters.factory import ADAPTER_REGISTRY
 from ..cli import runtime_shim
 from ..cli.allowlist import check_allowlist
 from ..cli.config import CircuitryConfig, find_config_path, load_config, resolve_config
+from ..cli.config_trust import TRUST_PROJECT_CONFIG_ENV
 from ..cli.effective_settings import EffectiveSettings, resolve_effective_settings
 from ..cli.orchestration_loader import load_orchestration_file
 from ..cli.redaction import redact
@@ -55,6 +56,7 @@ __all__ = [
     "ValidationIssue",
     "ValidationReport",
     "check_targets",
+    "config_file_rows",
     "load_diagnostics",
     "next_step",
     "run_check",
@@ -310,6 +312,19 @@ def settings_rows(effective: EffectiveSettings) -> tuple[SettingRow, ...]:
     return tuple(rows)
 
 
+def config_file_rows(config: CircuitryConfig) -> tuple[SettingRow, ...]:
+    """The project config discovered in cwd and its trust state, if there was one.
+
+    A skipped file names the command that applies it, so the Doctor and
+    Settings views explain why none of its values show up below.
+    """
+    project_config = config.project_config
+    if project_config is None:
+        return ()
+    source = TRUST_PROJECT_CONFIG_ENV if project_config.trust == "env" else "trust store"
+    return (SettingRow("project config", project_config.report(), source),)
+
+
 #: Validation gates, in the order they run. ``load`` is a hard stop: nothing
 #: else can be evaluated when the file will not parse.
 ISSUE_KINDS: tuple[str, ...] = ("load", "schema", "allowlist", "compile", "cycle", "preflight")
@@ -515,7 +530,7 @@ class Diagnostics:
         return run_check(target, self.config)
 
     def rows(self) -> tuple[SettingRow, ...]:
-        return settings_rows(self.settings)
+        return config_file_rows(self.config) + settings_rows(self.settings)
 
 
 def load_diagnostics(

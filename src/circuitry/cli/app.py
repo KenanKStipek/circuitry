@@ -34,7 +34,14 @@ from ..tui.wizard_host import (
     save_to_library,
 )
 from .complexity_config import ComplexitySettings
-from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, ConfigError, resolve_config
+from .config import (
+    GLOBAL_CONFIG_DIR,
+    CircuitryConfig,
+    ConfigError,
+    resolve_config,
+    trust_store_path,
+)
+from .config_trust import record_trust
 from .doctor import register_doctor
 from .effective_settings import resolve_effective_settings
 from .explain_routing import make_explain_routing_observer
@@ -58,6 +65,7 @@ from .shared_library import (
     fetch_shared_orchestration,
     resolve_service_profile,
 )
+from .trust import register_trust
 
 console = Console()
 err_console = Console(stderr=True)
@@ -113,6 +121,7 @@ def _root(ctx: typer.Context) -> None:
 register_doctor(app)
 register_score(app)
 register_setup(app)
+register_trust(app)
 
 #: Aliased from :mod:`circuitry.cli.last_run`, which the TUI's replay reads
 #: too — one location, so the two can never disagree about where the stash is.
@@ -1900,9 +1909,11 @@ def init_cmd():
             },
         },
     }
-    config_path.write_text(
-        json.dumps(config_data, indent=2) + "\n", encoding="utf-8"
-    )
+    config_bytes = (json.dumps(config_data, indent=2) + "\n").encode("utf-8")
+    config_path.write_bytes(config_bytes)
+    # The user just chose every value in it, so it is theirs: trust it, or
+    # the first run here would skip it (see cli.config_trust).
+    record_trust(config_path, config_bytes, store_path=trust_store_path())
 
     hello_yaml = """effects:
   - type: prompt
@@ -1912,7 +1923,7 @@ def init_cmd():
 """
     hello_path.write_text(hello_yaml, encoding="utf-8")
 
-    console.print(f"[green]Created:[/green] {config_path.name}")
+    console.print(f"[green]Created:[/green] {config_path.name} (trusted)")
     console.print(f"[green]Created:[/green] {hello_path.name}")
     console.print()
     console.print("Try: [bold]cof run hello.yml -e name=World[/bold]")

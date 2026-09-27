@@ -4,6 +4,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from ..adapters import build_adapter
@@ -49,10 +50,13 @@ def register_doctor(app: typer.Typer) -> None:
 
         table = Table(title="Circuitry · Doctor", show_lines=True)
         table.add_column("Check")
-        table.add_column("Result")
+        table.add_column("Result", overflow="fold")
 
         # Config
         table.add_row("Config path", str(cfg_path) if cfg_path else "— (defaults)")
+        project_config = resolved_cfg.project_config
+        if project_config is not None:
+            table.add_row("Project config", escape(project_config.report()))
         table.add_row(
             "Effective adapter",
             f"{effective.adapter} (source: {effective.sources.get('adapter')})",

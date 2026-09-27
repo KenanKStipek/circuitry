@@ -4,9 +4,11 @@ import copy
 import json
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
+
+from .config_trust import TRUST_STORE_FILENAME, ProjectConfigStatus, check_trust
 
 Environment = Literal["dev", "prod", "test"]
 _VALID_ENVIRONMENTS: tuple[str, ...] = ("dev", "prod", "test")
@@ -31,6 +33,11 @@ class ConfigError(ValueError):
 
 GLOBAL_CONFIG_DIR = Path.home() / ".config" / "circuitry"
 GLOBAL_CONFIG_PATH = GLOBAL_CONFIG_DIR / "config.json"
+
+
+def trust_store_path() -> Path:
+    """``trusted.json`` beside the global config (see :mod:`.config_trust`)."""
+    return GLOBAL_CONFIG_PATH.parent / TRUST_STORE_FILENAME
 
 SANE_DEFAULTS: dict[str, Any] = {
     "default_model": "llama3.1:8b",
@@ -79,6 +86,16 @@ class CircuitryConfig:
 
     # Any additional runtime config to pass through untouched
     runtime: dict[str, Any] = field(default_factory=dict)
+
+    # The project config resolve_config discovered in cwd and its trust
+    # state; None when there was none or a file was named explicitly.
+    # Reporting only — excluded from equality.
+    project_config: ProjectConfigStatus | None = field(default=None, compare=False)
+
+    def resolution_warnings(self) -> list[str]:
+        """Warnings from resolving this config, for a run's warnings channel."""
+        warning = self.project_config.skip_warning() if self.project_config else None
+        return [warning] if warning else []
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> CircuitryConfig:
@@ -147,10 +164,10 @@ _JSON_ROOT_NAMES = {
 }
 
 
-def _load_json_file(path: Path) -> dict[str, Any]:
-    """Read *path* as a JSON object, raising :class:`ConfigError` on any problem."""
+def read_config_bytes(path: Path) -> bytes:
+    """Read *path*, raising :class:`ConfigError` on any problem."""
     try:
-        text = path.read_text(encoding="utf-8")
+        return path.read_bytes()
     except FileNotFoundError as exc:
         raise ConfigError(f"Config file not found: {path}") from exc
     except IsADirectoryError as exc:
@@ -158,6 +175,12 @@ def _load_json_file(path: Path) -> dict[str, Any]:
     except OSError as exc:
         detail = exc.strerror or str(exc)
         raise ConfigError(f"Config file could not be read: {path} ({detail})") from exc
+
+
+def parse_config_bytes(path: Path, data: bytes) -> dict[str, Any]:
+    """Parse *data*, read from *path*, as a JSON object; :class:`ConfigError` if not."""
+    try:
+        text = data.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ConfigError(f"Config file is not valid UTF-8 text: {path}") from exc
 
@@ -177,6 +200,24 @@ def _load_json_file(path: Path) -> dict[str, Any]:
     return raw
 
 
+def _load_json_file(path: Path) -> dict[str, Any]:
+    """Read *path* as a JSON object, raising :class:`ConfigError` on any problem."""
+    return parse_config_bytes(path, read_config_bytes(path))
+
+
+def discover_project_config(cwd: Path | None = None) -> Path | None:
+    """The project config file in *cwd* (default: the working directory), if any."""
+    base = cwd or Path.cwd()
+    return _first_existing([base / name for name in DEFAULT_CONFIG_FILENAMES])
+
+
+def project_config_status(path: Path) -> ProjectConfigStatus:
+    """Whether a discovered project config at *path* may be applied."""
+    return ProjectConfigStatus(
+        path, check_trust(path, read_config_bytes(path), store_path=trust_store_path())
+    )
+
+
 def find_config_path(
     *,
     explicit_path: Path | None,
@@ -186,7 +227,7 @@ def find_config_path(
     Resolution order:
       1) explicit_path (if provided)
       2) env var CIRCUITRY_CONFIG (if set)
-      3) cwd / default filenames
+      3) cwd / default filenames, if trusted (see :mod:`.config_trust`)
       4) global ~/.config/circuitry/config.json
     """
     if explicit_path:
@@ -196,11 +237,13 @@ def find_config_path(
     if env:
         return Path(env)
 
-    base = cwd or Path.cwd()
-    candidates = [base / name for name in DEFAULT_CONFIG_FILENAMES]
-    found = _first_existing(candidates)
+    found = discover_project_config(cwd)
     if found:
-        return found
+        try:
+            if project_config_status(found).applied:
+                return found
+        except ConfigError:
+            return found
 
     if GLOBAL_CONFIG_PATH.exists() and GLOBAL_CONFIG_PATH.is_file():
         return GLOBAL_CONFIG_PATH
@@ -282,9 +325,14 @@ def resolve_config(
     4. Explicit --config path (if provided — replaces #2 and #3)
     5. Environment variables (CIRCUITRY_MODEL, CIRCUITRY_ADAPTER, CIRCUITRY_ADAPTER_URL, CIRCUITRY_COMFYUI_URL)
 
-    Each layer deep-merges onto the previous.
+    Each layer deep-merges onto the previous. A project config *discovered*
+    in cwd applies only if the user trusted it (``cof trust``) or
+    ``CIRCUITRY_TRUST_PROJECT_CONFIG`` is set; otherwise it is skipped and
+    the result's ``project_config`` says why. A file named by
+    ``CIRCUITRY_CONFIG`` or ``--config`` is trusted as given.
     """
     merged = copy.deepcopy(SANE_DEFAULTS)
+    project_config: ProjectConfigStatus | None = None
 
     if explicit_path:
         # Explicit path skips global/project discovery — use only that file
@@ -301,21 +349,24 @@ def resolve_config(
 
         # Layer project-local config
         env = os.getenv("CIRCUITRY_CONFIG")
-        if env:
-            local_path: Path | None = Path(env)
-        else:
-            base = cwd or Path.cwd()
-            candidates = [base / name for name in DEFAULT_CONFIG_FILENAMES]
-            local_path = _first_existing(candidates)
+        discovered = not env
+        local_path: Path | None = Path(env) if env else discover_project_config(cwd)
 
         if local_path and local_path.exists():
             try:
-                local_config = _load_json_file(local_path)
-                merged = _deep_merge(merged, local_config)
+                data = read_config_bytes(local_path)
+                if discovered:
+                    project_config = ProjectConfigStatus(
+                        local_path,
+                        check_trust(local_path, data, store_path=trust_store_path()),
+                    )
+                if project_config is None or project_config.applied:
+                    local_config = parse_config_bytes(local_path, data)
+                    merged = _deep_merge(merged, local_config)
             except (json.JSONDecodeError, ValueError, OSError) as exc:
                 logger.warning("Skipping malformed project config %s: %s", local_path, exc)
 
     # Environment variables always overlay on top
     merged = _apply_env_vars(merged)
 
-    return CircuitryConfig.from_dict(merged)
+    return replace(CircuitryConfig.from_dict(merged), project_config=project_config)
