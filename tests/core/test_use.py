@@ -864,6 +864,87 @@ def test_start_and_complete_stay_bracketed_when_the_child_fails(
     assert "start:prime.sub.divide" in events
 
 
+def test_use_surfaces_a_swallowed_child_error_on_its_own_meta(tmp_path: Path) -> None:
+    """A child effect's `on_error: continue` hides its failure from the child's
+    own downstream logic, but the parent `use` node's meta.child_errors should
+    still show it — otherwise a composed failure is indistinguishable from a
+    healthy result once only the mapped `value` is visible (issue #199)."""
+    child = _write_orch(
+        tmp_path,
+        "child.yml",
+        {
+            "effects": [
+                {
+                    "type": "tool",
+                    "name": "divide",
+                    "provider": "math",
+                    "params": {"expression": "1/0"},
+                    "on_error": "continue",
+                }
+            ]
+        },
+    )
+    store = Store(state={})
+
+    _run_orch(
+        {"effects": [{"type": "use", "name": "sub", "path": str(child)}]}, store
+    )
+
+    assert store.state["prime"]["sub"]["meta"]["error"] is None
+    child_errors = store.state["prime"]["sub"]["meta"]["child_errors"]
+    assert child_errors is not None
+    assert len(child_errors) == 1
+    assert child_errors[0]["path"] == "divide"
+    assert "division" in child_errors[0]["error"].lower() or "zero" in child_errors[0]["error"].lower()
+
+
+def test_use_child_errors_is_none_when_the_child_is_healthy(tmp_path: Path) -> None:
+    """No swallowed failures → no noise on meta.child_errors."""
+    child = _write_orch(tmp_path, "child.yml", _child_orch("greet"))
+    store = Store(state={})
+
+    _run_orch(
+        {"effects": [{"type": "use", "name": "sub", "path": str(child)}]}, store
+    )
+
+    assert store.state["prime"]["sub"]["meta"]["child_errors"] is None
+
+
+def test_use_child_errors_collects_from_nested_use_at_any_depth(
+    tmp_path: Path,
+) -> None:
+    """A swallowed error several `use` levels deep still surfaces at the top."""
+    grandchild = _write_orch(
+        tmp_path,
+        "grandchild.yml",
+        {
+            "effects": [
+                {
+                    "type": "tool",
+                    "name": "divide",
+                    "provider": "math",
+                    "params": {"expression": "1/0"},
+                    "on_error": "continue",
+                }
+            ]
+        },
+    )
+    child = _write_orch(
+        tmp_path,
+        "child.yml",
+        {"effects": [{"type": "use", "name": "inner", "path": str(grandchild)}]},
+    )
+    store = Store(state={})
+
+    _run_orch(
+        {"effects": [{"type": "use", "name": "sub", "path": str(child)}]}, store
+    )
+
+    child_errors = store.state["prime"]["sub"]["meta"]["child_errors"]
+    assert child_errors is not None
+    assert child_errors[0]["path"] == "inner.divide"
+
+
 def test_dry_run_use_still_brackets_its_own_node(tmp_path: Path) -> None:
     """The dry-run short-circuit closes the start it fired."""
     child = _write_orch(tmp_path, "child.yml", _child_orch("greet"))
@@ -1036,3 +1117,180 @@ def test_child_effects_reach_the_live_state_file_mid_run(tmp_path: Path) -> None
     # The second child prompt ran once the first had landed, so the file it
     # read already carried that child effect — under the use effect's path.
     assert adapter.seen[-1]["prime"]["sub"]["greet"]["value"] == "response"
+
+
+# ── `_orchestration_dir`-relative `path:` resolution (#201) ──────────────────
+
+
+def test_use_runtime_resolves_path_relative_to_orchestration_dir(tmp_path: Path) -> None:
+    """A relative `path:` falls back to resolving against `_orchestration_dir`.
+
+    Regression for #201: `_resolve_orchestration`'s parent-orchestration-relative
+    fallback read `runtime_config["_orchestration_dir"]`, but nothing in the
+    codebase ever set that key — dead code. A `path:` sitting next to the
+    *referencing* file (not the process's cwd) used to fail to resolve.
+    """
+    child_dir = tmp_path / "sub"
+    child_dir.mkdir()
+    _write_orch(child_dir, "child.yml", {"effects": [{"type": "prompt", "name": "greet", "template": "Hello {{name}}"}]})
+
+    defn = UseDefinition(
+        name="sub",
+        path="child.yml",  # relative; resolvable only via _orchestration_dir
+        inputs={"name": "World"},
+        outputs={"greeting": "prime.greet.value"},
+    )
+    adapter = _mock_adapter("Hello World!")
+    store = Store(state={})
+    runtime = UseRuntime(
+        defn,
+        adapter=adapter,
+        model="test-model",
+        runtime_config={"_orchestration_dir": str(child_dir)},
+    )
+    runtime.execute(store=store, ctx=store.state)
+
+    assert store.state["sub"]["meta"]["error"] is None
+    assert store.state["sub"]["value"]["greeting"] == "Hello World!"
+
+
+def test_deprecated_orchestration_field_resolves_relative_to_orchestration_dir(
+    tmp_path: Path,
+) -> None:
+    """Same fallback chain applies to the deprecated `orchestration:` field."""
+    child_dir = tmp_path / "sub"
+    child_dir.mkdir()
+    _write_orch(child_dir, "child.yml", {"effects": [{"type": "prompt", "name": "greet", "template": "Hello {{name}}"}]})
+
+    defn = UseDefinition(
+        name="sub",
+        orchestration="child.yml",
+        inputs={"name": "World"},
+        outputs={"greeting": "prime.greet.value"},
+    )
+    adapter = _mock_adapter("Hello World!")
+    store = Store(state={})
+    runtime = UseRuntime(
+        defn,
+        adapter=adapter,
+        model="test-model",
+        runtime_config={"_orchestration_dir": str(child_dir)},
+    )
+    runtime.execute(store=store, ctx=store.state)
+
+    assert store.state["sub"]["meta"]["error"] is None
+    assert store.state["sub"]["value"]["greeting"] == "Hello World!"
+
+
+def test_nested_use_path_resolves_relative_to_its_own_file_not_root_or_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each `use: {path: ...}` resolves relative to *its own* file's directory.
+
+    End-to-end repro of the real-world report on #201: `circuits/evaluate.yml`
+    -> `use: {path: parts/candidate.yml}` -> `use: {path: helper.yml}`, where
+    `helper.yml` sits next to `candidate.yml` (not next to the root, and not
+    the process's cwd). `_orchestration_dir` must be re-derived at each `use`
+    boundary to the *child's own* directory as composition descends.
+    """
+    circuits_dir = tmp_path / "circuits"
+    parts_dir = circuits_dir / "parts"
+    parts_dir.mkdir(parents=True)
+
+    _write_orch(parts_dir, "helper.yml", _child_orch("step"))
+    _write_orch(
+        parts_dir,
+        "candidate.yml",
+        {"effects": [{"type": "use", "name": "helper", "path": "helper.yml"}]},
+    )
+    root_path = _write_orch(
+        circuits_dir,
+        "evaluate.yml",
+        {"effects": [{"type": "use", "name": "candidates", "path": "parts/candidate.yml"}]},
+    )
+
+    # Neutral cwd: neither the root's nor any child's directory, so a
+    # cwd-relative resolution can't accidentally paper over the bug.
+    neutral = tmp_path / "elsewhere"
+    neutral.mkdir()
+    monkeypatch.chdir(neutral)
+
+    root_orch = yaml.safe_load(root_path.read_text())
+    store, _, _ = _recording_store()
+    _run_orch(root_orch, store, runtime_config={"_orchestration_dir": str(circuits_dir)})
+
+    node = store.state["prime"]["candidates"]["helper"]["step"]
+    assert node["meta"]["error"] is None
+    assert store.state["prime"]["candidates"]["meta"]["error"] is None
+
+
+def test_inline_use_child_inherits_the_surrounding_orchestration_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An inline `use` has no file of its own — its own nested `use: {path:}`
+    still resolves against whichever directory was already in effect, not
+    whatever cwd happens to be.
+    """
+    circuits_dir = tmp_path / "circuits"
+    circuits_dir.mkdir()
+    _write_orch(circuits_dir, "sibling.yml", _child_orch("leaf"))
+
+    inline_yaml = yaml.dump(
+        {"effects": [{"type": "use", "name": "call_sibling", "path": "sibling.yml"}]}
+    )
+    root_orch = {"effects": [{"type": "use", "name": "outer", "inline": inline_yaml}]}
+
+    neutral = tmp_path / "elsewhere"
+    neutral.mkdir()
+    monkeypatch.chdir(neutral)
+
+    store, _, _ = _recording_store()
+    _run_orch(
+        root_orch, store, runtime_config={"_orchestration_dir": str(circuits_dir)}
+    )
+
+    node = store.state["prime"]["outer"]["call_sibling"]["leaf"]
+    assert node["meta"]["error"] is None
+
+
+def test_run_seeds_orchestration_dir_from_the_root_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`runtime_shim.run` seeds `_orchestration_dir` from the root file's own
+    directory, so a composed child resolves even when cwd is the project root
+    rather than the directory the orchestrations live in — matching the
+    `cof run circuits/evaluate.yml` real-world report on #201.
+    """
+    from circuitry.cli.config import CircuitryConfig
+    from circuitry.cli.runtime_shim import RunRequest, run
+
+    project_root = tmp_path
+    circuits_dir = project_root / "circuits"
+    parts_dir = circuits_dir / "parts"
+    parts_dir.mkdir(parents=True)
+
+    _write_orch(parts_dir, "candidate.yml", _child_orch("leaf"))
+    root_path = _write_orch(
+        circuits_dir,
+        "evaluate.yml",
+        {"effects": [{"type": "use", "name": "candidates", "path": "parts/candidate.yml"}]},
+    )
+
+    monkeypatch.chdir(project_root)
+
+    result = run(
+        RunRequest(
+            orchestration_path=root_path,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            initial_state={},
+            adapter=_mock_adapter(),
+            config=CircuitryConfig(),
+            skip_preflight=True,
+        )
+    )
+
+    assert result.ok, result.error
+    assert result.state["prime"]["candidates"]["meta"]["error"] is None

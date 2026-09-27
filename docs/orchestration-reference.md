@@ -509,7 +509,11 @@ Runs another orchestration as an isolated sub-step. State is fully isolated: dec
 
 Isolated state, shared observation: the child's effects are reported to the parent run's observers — `--live-state`, the TUI, and every runtime plugin's `on_effect_start` / `on_effect_complete` — at paths namespaced under the use node (`prime.<name>.<child_effect>`, nesting further for a `use` inside a `use`). Live snapshots mirror the child's in-flight effects under that node for watchers only; what actually lands in parent state is still exactly what the namespacing mode below says.
 
+Config inheritance: the child executes with the exact same resolved `runtime.*` config as the parent run — adapters, tool plugins (including MCP servers), complexity settings — never re-resolved from disk. See point 30 under "Composition via `use`" below for the one case (a parent-level `runtime:` block of its own) where that can still surprise you.
+
 **State output path:** `prime.<name>.value` (declared-outputs mode) or `prime.<name>.<child_effect>.value` (full-namespace mode)
+
+**`meta.child_errors`:** `null` when nothing was swallowed, otherwise a list of `{path, error}` for every effect anywhere in the child's tree whose own `on_error: skip`/`continue` absorbed a failure — see point 31 below.
 
 | Field | Type | Required | Default | Constraints |
 |-------|------|----------|---------|-------------|
@@ -520,7 +524,7 @@ Isolated state, shared observation: the child's effects are reported to the pare
 | `inline` | string | * | — | Mustache template that renders to orchestration YAML at runtime |
 | `orchestration` | string | * | — | **DEPRECATED** — use `ref` or `path` instead. Still accepted; emits `DeprecationWarning` |
 | `validate` | bool | no | `true` | Schema-validate inline YAML before execution |
-| `inputs` | object | no | `{}` | Map of name → value passed to child as initial state. String values are Mustache-rendered |
+| `inputs` | object | no | `{}` | Map of name → value passed to child as initial state. String values are Mustache-rendered; `{from: <path>}` passes the value at that path unchanged (see [Inputs by reference](#inputs-by-reference)) |
 | `outputs` | object | no | — | Declared outputs — see [Outputs](#outputs). When present, switches to declared-outputs mode |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `description` | string | no | — | |
@@ -571,6 +575,58 @@ resolved: Library source 'hub' (owner/name@main) has not been fetched yet — ru
 ```
 
 The check follows the static `use` graph, so a ref reached transitively through other orchestrations is caught just as early. Genuinely unknown refs (a typo, an entry that no source carries) are not a preflight failure — they surface as the `use` effect's own error at run time.
+
+#### Inputs by reference
+
+A string input is Mustache-rendered, so it always reaches the child as text. To hand the
+child a value as it is (an array, an object, a number, a boolean) write `{from: <path>}`:
+
+```yaml
+- type: loop
+  name: ladder
+  each: {in: input.rungs, as: r}
+  body:
+    - type: use
+      name: rung
+      path: parts/rung.yml
+      inputs:
+        rung: {from: r}                              # the loop item, as an object
+        methods: {from: prime.render.value.methods}  # an array
+        base: "{{input.base}}"                       # a string, rendered as before
+```
+
+- The path is rooted at `input.`, `prime.` or `runtime.` (like `each.in` and `outputs.path`), or at
+  a binding of an enclosing loop (`each.as`, `iter`), with dotted keys and integer list indices
+  after it (`input.rungs.1.name`). Any other root is an error at `cof check` time.
+- The child gets a deep copy: nothing it does can reach the parent's state.
+- A path that resolves to nothing passes `null`; if the child's interface marks that input
+  `required`, the `use` fails with the path in the message.
+- Only a mapping with the single key `from` is a reference. Any other mapping is a literal value.
+
+#### Complete record (opt-in)
+
+In declared-outputs mode only the declared values land at `prime.<name>.value`; what the
+child did (its commands, answers, decisions) is visible in `--live-state` while it runs and
+then dropped. Set `runtime.state.record_children: true` (in config, or in the orchestration's
+own `runtime:` block) to keep it: each `use` node keeps its child's effects beside its
+`value` and `meta`, in the same shape live state shows them, at every depth of `use`, and a
+failed child keeps whatever it got to. The run's `--out` file then holds the whole run.
+
+```yaml
+runtime:
+  state:
+    record_children: true
+```
+
+The record is for reading after the run, not for wiring: downstream effects still read a
+`use`'s declared outputs.
+
+Every `use` node also records, whether or not the setting is on:
+
+| Field | Meaning |
+|-------|---------|
+| `meta.inputs` | What the child received: rendered strings, referenced values, literals |
+| `meta.orchestration_sha256` | SHA-256 of the child's YAML text (the file's bytes, or the rendered inline YAML) |
 
 **Cycle detection:**
 
@@ -1131,3 +1187,5 @@ The following rules are sufficient for generating structurally correct Circuitry
 27a. **Write outputs as objects** — `summary: {path: prime.summarize.value, type: string}`, in `use.outputs` and `interface.outputs` alike. The bare-string form (`summary: prime.summarize.value`) is accepted in both places and means the same thing, but the object form is the one to write.
 28. **Declare an `interface:` block on reusable utilities** — typed `inputs` (with `required: true`) get validated automatically; typed `outputs` with `path:` auto-generate the caller's output mapping so callers don't have to repeat dot-paths. The curation library at `src/circuitry/curation/utilities/` is the canonical exemplar.
 29. **Don't form `use:` cycles.** A→B→A is detected at validate time and at runtime. If two utilities legitimately need to call each other, factor out the shared logic into a third utility they both call.
+30. **A `use:` child always executes with the exact same resolved runtime config as the parent run** — the merged `runtime.*` block (adapters, tool plugins, MCP servers, complexity settings, ...) is never re-resolved from disk for a composed child, at any nesting depth. A server or plugin declared in the user-level `~/.config/circuitry/config.json` is just as visible to a `use:`-composed child as it is to the same orchestration run standalone. The one place this can still surprise you: if the *top-level* orchestration itself declares its own `runtime:` block, that block replaces matching top-level keys from config wholesale (see [Complexity Configuration](./complexity-config.md) for the same rule applied to `runtime.complexity`) — so a parent-level `runtime.plugins` block that's only there to configure one plugin will also drop any *other* plugin's config (e.g. `runtime.plugins.mcp.servers`) that would otherwise have come from the config file. Omit `runtime.plugins` entirely (or repeat the sibling plugin blocks you still need) rather than partially restating it.
+31. **A child effect's own `on_error: skip`/`continue` doesn't hide the failure from the parent.** The `use` node's `meta.child_errors` (`null` when the child was fully healthy) lists every effect anywhere in the child's tree — at any nesting depth, including through further `use:` effects — whose own `meta.error` was swallowed by its `on_error`, as `{path, error}` pairs relative to the child's root. Check it after a composed run whenever the mapped output alone ("ok: false") isn't enough to tell a real failure apart from an intentionally degraded result.
