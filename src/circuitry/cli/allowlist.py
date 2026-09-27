@@ -308,11 +308,11 @@ def check_allowlist(
     (``path:``/``ref:``, resolved relative to *root_path*, and plain
     ``inline:`` text); a child's violations are prefixed with its label.
     """
-    allowlists = {
-        "enabled_adapters": config.enabled_adapters,
-        "enabled_tools": config.enabled_tools,
-    }
-    errors = orchestration_denials(orch, **allowlists)
+    errors = orchestration_denials(
+        orch,
+        enabled_adapters=config.enabled_adapters,
+        enabled_tools=config.enabled_tools,
+    )
     if config.enabled_adapters is None and config.enabled_tools is None:
         return errors
 
@@ -322,7 +322,11 @@ def check_allowlist(
         errors.extend(
             f"use child {label}: {denial}"
             for denial in orchestration_denials(
-                child, **allowlists, skip_templated=True, include_document_adapter=False
+                child,
+                enabled_adapters=config.enabled_adapters,
+                enabled_tools=config.enabled_tools,
+                skip_templated=True,
+                include_document_adapter=False,
             )
         )
     return errors
