@@ -83,6 +83,23 @@ class LoopEachDef:
 
     in_path: str  # dot-delimited path into effective context
     as_name: str = "item"  # binding name for current element
+    #: An each-loop's collection length is known before the first pass runs,
+    #: so by default a collection larger than max_iterations fails the loop
+    #: at start rather than silently running a truncated subset (see
+    #: LoopBoundsError). Setting this opts into the old truncate-and-continue
+    #: behavior, recording max_iterations_reached + unvisited on the node.
+    truncate: bool = False
+
+
+class LoopBoundsError(ValueError):
+    """Raised when an ``each`` loop's collection outgrows ``max_iterations``.
+
+    Unlike ``while``, an each-loop's bound is known up front — hitting the
+    cap here is never a runaway, it is a caller error. Raise
+    ``max_iterations``, bound the collection, or opt into
+    ``each.truncate: true`` to process the first N and record the rest as
+    unvisited.
+    """
 
 
 @dataclass(frozen=True)
@@ -210,7 +227,10 @@ class LoopRuntime:
         # errored under on_error: continue/break leaves a partial iter node
         # (and, in while mode, still advances the count).
         last_completed: int | None = None
-        termination_reason = "max_iterations"
+        termination_reason = "max_iterations_reached"
+        # Set only when an each-loop's `truncate: true` actually cut the
+        # collection short — the count of elements the loop never visited.
+        unvisited: int | None = None
 
         # Build ancestor context for children (this loop is now a parent)
         from .dynamic import _EFFECT_STYLE as _ES
@@ -246,6 +266,19 @@ class LoopRuntime:
                         meta["each_in_error"] = each_error
                 elif not collection:
                     termination_reason = "collection_exhausted"
+                elif (
+                    len(collection) > self.defn.max_iterations
+                    and not self.defn.each_def.truncate
+                ):
+                    raise LoopBoundsError(
+                        f"each loop {self.defn.name or '<unnamed>'!r} "
+                        f"({self.defn.each_def.in_path}): collection "
+                        f"has {len(collection)} items but max_iterations is "
+                        f"{self.defn.max_iterations} — raise max_iterations, bound "
+                        f"the collection, or set each.truncate: true to process "
+                        f"the first {self.defn.max_iterations} and record the "
+                        f"rest as unvisited"
+                    )
                 elif self.defn.flow == "tree":
                     # Parallel iteration: submit all at once, collect results in order.
                     # Each thread gets a deepcopy of ctx to prevent nested mutation
@@ -338,21 +371,35 @@ class LoopRuntime:
                             iteration_count += 1
                             last_completed = idx
 
+                    # Truncation status is independent of whether any
+                    # iteration errored — an on_error: continue run with
+                    # failures is still exhausted (or still truncated) on its
+                    # own terms, not silently relabeled by the errors.
+                    if total < len(collection):
+                        # each.truncate: true cut the collection short.
+                        termination_reason = "max_iterations_reached"
+                        unvisited = len(collection) - total
+                    else:
+                        termination_reason = "collection_exhausted"
+
                     if errors:
                         if self.defn.on_error == "fail":
                             termination_reason = "error"
                             raise next(iter(errors.values()))
                         if self.defn.on_error == "break":
                             termination_reason = "error"
-                        # continue: already skipped failed iterations above
-                    else:
-                        termination_reason = "collection_exhausted"
+                        # continue: keep the truncation/exhaustion reason
+                        # computed above — errors don't change it.
                 else:
                     # Sequential iteration (default)
                     total = len(collection)
                     for idx, item in enumerate(collection):
                         if idx >= self.defn.max_iterations:
-                            termination_reason = "max_iterations"
+                            # Only reachable under each.truncate: true — the
+                            # fail-fast check above already stopped the
+                            # untruncated case before the first pass.
+                            termination_reason = "max_iterations_reached"
+                            unvisited = total - idx
                             break
 
                         # Bind current item to context
@@ -454,12 +501,35 @@ class LoopRuntime:
                         # continue: skip this iteration
                         iteration_count += 1
 
+                if termination_reason == "max_iterations_reached":
+                    # The while python-loop above exited on its own condition
+                    # (iteration_count reached the cap) without any break
+                    # setting a different reason — the cap stopped the loop,
+                    # not the while-condition converging. Distinguishable from
+                    # a converged run only here, so surface it loudly.
+                    logger.warning(
+                        "Loop %r: stopped after %d iterations because "
+                        "max_iterations (%d) was reached, not because the "
+                        "while-condition became false",
+                        self.defn.name or "<unnamed>",
+                        iteration_count,
+                        self.defn.max_iterations,
+                    )
+                    if self.verbose:
+                        _console.print(
+                            f"[warn]⚠[/warn] Loop {self.defn.name or '<unnamed>'!r} "
+                            f"stopped after {iteration_count} iterations: "
+                            f"max_iterations ({self.defn.max_iterations}) reached "
+                            f"without the while-condition becoming false"
+                        )
+
             if node:
+                termination: dict[str, Any] = {"reason": termination_reason}
+                if unvisited is not None:
+                    termination["unvisited"] = unvisited
                 node["value"] = {
                     "iterations": iteration_count,
-                    "termination": {
-                        "reason": termination_reason,
-                    },
+                    "termination": termination,
                     "effects_by_iteration": iterations_effects,
                 }
                 if meta:

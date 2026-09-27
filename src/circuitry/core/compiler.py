@@ -641,6 +641,7 @@ def _compile_loop(
             each_def = LoopEachDef(
                 in_path=in_path,
                 as_name=each_as_name or "item",
+                truncate=bool(each_config.get("truncate")),
             )
 
     # Iteration bounds
