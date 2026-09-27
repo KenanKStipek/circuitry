@@ -478,6 +478,29 @@ def test_plan_missing_the_merge_effect_is_invalid(planner: Path) -> None:
     assert "merge" in recorded["error"]
 
 
+def test_plan_outside_the_run_allowlists_is_invalid(planner: Path) -> None:
+    """A generated plan runs under the document's allowlists (#245): one that
+    reaches for a tool the deployment disabled never runs."""
+    from circuitry.allowlist_gate import install_allowlists
+
+    with_tool = EMITTED_YAML + (
+        "  - type: tool\n"
+        "    name: stamp\n"
+        "    provider: uuid\n"
+        "    params: {}\n"
+    )
+    adapter = ScriptedAdapter(plans={"TASK": _plan_payload(with_tool)})
+    runtime_config = _config(planner)
+    install_allowlists(runtime_config, enabled_adapters=None, enabled_tools=["json"])
+    store = _run(_orch(), adapter=adapter, runtime_config=runtime_config)
+
+    recorded = store.get("prime.task.meta.decomposition")
+    assert recorded["reason"] == "invalid_plan"
+    assert "tool 'uuid' not in enabled_tools allowlist" in recorded["error"]
+    non_planner = [p for _, p in adapter.calls if not p.startswith("PLANNER")]
+    assert len(non_planner) == 1 and non_planner[0].startswith("TASK")
+
+
 def test_child_execution_failure_routes_up_with_no_partial_state(
     planner: Path,
 ) -> None:

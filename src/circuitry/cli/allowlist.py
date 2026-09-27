@@ -235,17 +235,23 @@ def orchestration_denials(
     ``None`` is default-open; a list (including ``[]``) is strict. Does not
     follow ``use:`` — see :func:`check_allowlist` for the static walk and
     ``UseRuntime`` for the run-time check of each child as it loads.
+
+    A name with a Mustache tag in it (an unrendered ``inline:`` child's
+    ``provider: "{{input.tool}}"``) is not judged here: it only becomes a
+    name once rendered, and the run-time gate checks it then.
     """
     adapter_refs, tool_refs = walk_orchestration_refs(orch)
     errors = [
         denial
         for name in sorted(adapter_refs)
-        if (denial := adapter_denial(name, enabled_adapters)) is not None
+        if "{{" not in name
+        and (denial := adapter_denial(name, enabled_adapters)) is not None
     ]
     errors.extend(
         denial
         for name in sorted(tool_refs)
-        if (denial := tool_denial(name, enabled_tools)) is not None
+        if "{{" not in name
+        and (denial := tool_denial(name, enabled_tools)) is not None
     )
     return errors
 

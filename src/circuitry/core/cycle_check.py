@@ -132,8 +132,9 @@ def iter_use_children(
     Returns ``(label, orch)`` pairs, the root excluded, each file once.
     `ref:` / `path:` children resolve exactly as :func:`detect_cycles` resolves
     them; an unresolvable reference is skipped (the run reports it). An
-    `inline:` child is included when its text parses as written — a templated
-    one only takes shape at run time, where `UseRuntime` checks it instead.
+    `inline:` child is included when its unrendered text parses as YAML; what
+    its Mustache tags render to only exists at run time, where `UseRuntime`
+    checks the rendered document again.
     """
     from .library_ref import build_registry
 

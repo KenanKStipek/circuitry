@@ -34,7 +34,13 @@ from ..tui.wizard_host import (
     save_to_library,
 )
 from .complexity_config import ComplexitySettings
-from .config import GLOBAL_CONFIG_DIR, CircuitryConfig, ConfigError, resolve_config
+from .config import (
+    GLOBAL_CONFIG_DIR,
+    CircuitryConfig,
+    ConfigError,
+    describe_config_sources,
+    resolve_config,
+)
 from .doctor import register_doctor
 from .effective_settings import resolve_effective_settings
 from .explain_routing import make_explain_routing_observer
@@ -234,6 +240,7 @@ def _do_validate(
     cfg = resolve_config(explicit_path=config)
     if not json_out:
         _print_header("Circuitry · Validate")
+        console.print(f"[bold]Config:[/bold] {describe_config_sources(cfg.sources)}")
     with console.status("[cyan]Validating…[/cyan]") if not json_out else nullcontext():
         result = validate(orchestration, config=cfg, skip_preflight=skip_preflight)
 
@@ -580,9 +587,7 @@ def run_cmd(
 
     if not (quiet or json_out):
         _print_header("Circuitry · Run")
-        console.print(
-            f"[bold]Config:[/bold] {config or '— (resolved)'}"
-        )
+        console.print(f"[bold]Config:[/bold] {describe_config_sources(cfg.sources)}")
         orch_label = orchestration if str(orch_path) == orchestration else f"{orchestration} ({orch_path})"
         console.print(f"[bold]Orchestration:[/bold] {orch_label}")
         console.print(f"[bold]State (in):[/bold] {state or '—'}")
@@ -868,6 +873,7 @@ def run_library_cmd(
         console.print(f"[bold]Asset:[/bold] {asset.asset_id}@{asset.version}")
         console.print(f"[bold]Source:[/bold] {asset.source}")
         console.print(f"[bold]Resolved path:[/bold] {asset.file_path}")
+        console.print(f"[bold]Config:[/bold] {describe_config_sources(cfg.sources)}")
         console.print(
             f"[bold]Service profile:[/bold] {service_profile or '—'}"
         )
