@@ -447,7 +447,7 @@ class DynamicRuntime:
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
                     verbose=self.verbose,
-                    depth=self.depth + 1,
+                    depth=self.depth,
                     cb_start=cb_start,
                     cb_done=cb_done,
                     cb_error=cb_error,

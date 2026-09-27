@@ -862,6 +862,28 @@ Should the loop continue? Answer (yes/no):"""
                     ).execute(store=iter_store, ctx=ctx)
 
                 elif isinstance(effect, UseDefinition):
+                    use_display_name = _child_display_name(
+                        name, label_prefix=self._label_prefix, iter_label=iter_label
+                    )
+                    if tracker is not None:
+                        def _cb_start(_i=iteration):
+                            return (tracker.on_start(_i))
+                        def _cb_done(line, _i=iteration):
+                            return (tracker.on_done(_i, line))
+                        def _cb_error(line, _i=iteration):
+                            return (tracker.on_error(_i, line))
+                    elif parallel:
+                        def _cb_start(_n=use_display_name or name, _ind=body_indent):
+                            return (_console.print(
+                                                        f"{_ind}[info]→[/info] [green]⊕[/green] {_n}"
+                                                    ))
+                        _cb_done = _console.print
+                        _cb_error = _console.print
+                    else:
+                        _cb_start = None
+                        _cb_done = None
+                        _cb_error = None
+
                     UseRuntime(
                         effect,
                         adapter=self.adapter,
@@ -872,9 +894,10 @@ Should the loop continue? Answer (yes/no):"""
                         timeout_seconds=self.timeout_seconds,
                         verbose=self.verbose,
                         depth=self.depth + 1,
-                        display_name=_child_display_name(
-                            name, label_prefix=self._label_prefix, iter_label=iter_label
-                        ),
+                        cb_start=_cb_start,
+                        cb_done=_cb_done,
+                        cb_error=_cb_error,
+                        display_name=use_display_name,
                         ancestors=self._child_ancestors if tracker is None else None,
                     ).execute(store=iter_store, ctx=ctx)
 

@@ -236,16 +236,72 @@ def test_done_message_includes_tokens_when_live() -> None:
 _INLINE_CHILD = "effects:\n  - type: prompt\n    name: inner\n    template: hi\n"
 
 
-def test_use_emits_single_done_line() -> None:
+def test_use_emits_single_start_and_single_done_line() -> None:
     orch = {
         "effects": [
             {"type": "use", "name": "sub", "inline": _INLINE_CHILD},
         ]
     }
     msgs = _run(orch, verbose=True)
-    done_lines = [m for m in msgs if "⊕" in m and "sub" in m]
+    start_lines = [m for m in msgs if "⊕" in m and "sub" in m and "→" in m]
+    done_lines = [m for m in msgs if "⊕" in m and "sub" in m and "✓" in m]
+    assert len(start_lines) == 1, msgs
     assert len(done_lines) == 1, msgs
     assert "|" in done_lines[0], done_lines[0]
+
+
+def test_use_dry_run_emits_single_start_and_dry_done_line() -> None:
+    orch = {
+        "effects": [
+            {"type": "use", "name": "sub", "inline": _INLINE_CHILD},
+        ]
+    }
+    msgs = _run(orch, verbose=True, dry_run=True)
+    start_lines = [m for m in msgs if "⊕" in m and "sub" in m and "→" in m]
+    done_lines = [m for m in msgs if "⊕" in m and "sub" in m and "✓" in m]
+    assert len(start_lines) == 1, msgs
+    assert len(done_lines) == 1, msgs
+    assert "(dry)" in done_lines[0], done_lines[0]
+
+
+def test_use_error_emits_single_start_and_single_error_line() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "use",
+                "name": "sub",
+                "path": "/nonexistent/orchestration.yml",
+                "on_error": "skip",
+            },
+        ]
+    }
+    msgs = _run(orch, verbose=True, dry_run=False)
+    start_lines = [m for m in msgs if "⊕" in m and "sub" in m and "→" in m]
+    error_lines = [m for m in msgs if "⊕" in m and "sub" in m and "✗" in m]
+    assert len(start_lines) == 1, msgs
+    assert len(error_lines) == 1, msgs
+
+
+def test_use_result_line_matches_dispatcher_indent() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "dynamic",
+                "name": "outer",
+                "flow": "chain",
+                "effects": [
+                    {"type": "prompt", "name": "sibling", "template": "hi"},
+                    {"type": "use", "name": "sub", "inline": _INLINE_CHILD},
+                ],
+            }
+        ]
+    }
+    msgs = _run(orch, verbose=True)
+    sibling_done = next(m for m in msgs if "✓" in m and "sibling" in m)
+    sub_done = next(m for m in msgs if "✓" in m and "⊕" in m and "sub" in m)
+    sibling_indent = len(sibling_done) - len(sibling_done.lstrip())
+    sub_indent = len(sub_done) - len(sub_done.lstrip())
+    assert sub_indent == sibling_indent, (sibling_done, sub_done)
 
 
 def test_use_outside_loop_child_effects_have_no_prefix() -> None:
@@ -280,11 +336,91 @@ def test_use_in_loop_each_carries_iteration_tag_and_no_duplicate() -> None:
         ]
     }
     msgs = _run(orch, verbose=True, dry_run=False)
-    assert any("✓" in m and "sub [0]" in m for m in msgs), msgs
-    assert any("✓" in m and "sub [1]" in m for m in msgs), msgs
-    # exactly one result line per iteration — no untagged dispatcher duplicate
-    sub_lines = [m for m in msgs if "⊕" in m and "sub" in m]
-    assert len(sub_lines) == 2, msgs
+    # one start and one result line per iteration — no untagged dispatcher duplicate
+    start_lines = [m for m in msgs if "⊕" in m and "sub" in m and "→" in m]
+    done_lines = [m for m in msgs if "⊕" in m and "sub" in m and "✓" in m]
+    assert any("sub [0]" in m for m in start_lines), msgs
+    assert any("sub [1]" in m for m in start_lines), msgs
+    assert any("sub [0]" in m for m in done_lines), msgs
+    assert any("sub [1]" in m for m in done_lines), msgs
+    assert len(start_lines) == 2, msgs
+    assert len(done_lines) == 2, msgs
+
+
+def test_use_in_tree_loop_wires_tracker_callbacks(monkeypatch: Any) -> None:
+    """A tree-flow loop's per-iteration tracker rows must actually transition
+    from pending to running to done — which only happens if the loop threads
+    its cb_start/cb_done into UseRuntime, the same as it does for prompt.
+    """
+    from circuitry.core import loop as loop_mod
+
+    start_calls: list[int] = []
+    done_calls: list[int] = []
+    orig_start = loop_mod._LoopIterTracker.on_start
+    orig_done = loop_mod._LoopIterTracker.on_done
+
+    def spy_start(self: Any, idx: int) -> None:
+        start_calls.append(idx)
+        orig_start(self, idx)
+
+    def spy_done(self: Any, idx: int, line: str) -> None:
+        done_calls.append(idx)
+        orig_done(self, idx, line)
+
+    monkeypatch.setattr(loop_mod._LoopIterTracker, "on_start", spy_start)
+    monkeypatch.setattr(loop_mod._LoopIterTracker, "on_done", spy_done)
+
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "outer",
+                "flow": "tree",
+                "each": {"in": "input.items", "as": "item"},
+                "body": [
+                    {"type": "use", "name": "sub", "inline": _INLINE_CHILD},
+                ],
+            }
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({"input": {"items": ["a", "b"]}})
+    DynamicRuntime(
+        root, adapter=EchoAdapter(), model="unit-test", dry_run=False, verbose=True
+    ).execute(store=store)
+
+    assert sorted(start_calls) == [0, 1], start_calls
+    assert sorted(done_calls) == [0, 1], done_calls
+
+
+def test_use_in_use_prefix_composes_two_levels_deep() -> None:
+    inline_mid = (
+        "effects:\n  - type: use\n    name: inner_use\n    inline: |\n"
+        "      effects:\n        - type: prompt\n          name: leaf\n          template: hi\n"
+    )
+    orch = {
+        "effects": [
+            {
+                "type": "prompt",
+                "name": "items",
+                "template": '["a"]',
+                "prompt_type": "json",
+                "schema": {"type": "array", "items": {"type": "string"}},
+            },
+            {
+                "type": "loop",
+                "name": "process",
+                "each": {"in": "prime.items.value", "as": "item"},
+                "body": [
+                    {"type": "use", "name": "sub", "inline": inline_mid},
+                ],
+            },
+        ]
+    }
+    msgs = _run(orch, verbose=True, dry_run=False)
+    # the innermost leaf's done line carries both use invocations' display
+    # names plus the parent loop's iteration tag, composed in call order
+    assert any("✓" in m and "leaf inner_use sub [0]" in m for m in msgs), msgs
 
 
 def test_use_child_effects_attributed_to_parent_iteration() -> None:

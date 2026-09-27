@@ -614,8 +614,13 @@ class UseRuntime:
         # including a child that blew up, closes the pair.
         store.fire_effect_start(self.defn.name, node)
 
-        if self.verbose and self.cb_start is not None:
-            self.cb_start()
+        if self.verbose:
+            if self.cb_start is not None:
+                self.cb_start()
+            else:
+                _console.print(
+                    f"{indent}[info]→[/info] [green]⊕[/green] {self.display_name}"
+                )
 
         try:
             if self.dry_run:
