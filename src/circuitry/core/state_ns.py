@@ -82,6 +82,41 @@ def migrate_legacy_state(state: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
+def validate_reference_path(
+    path: str,
+    *,
+    use_name: str,
+    input_name: str,
+    effect_path: str,
+    loop_names: frozenset[str] = frozenset(),
+) -> None:
+    """Hard-error unless a by-reference ``use`` input path has a legal root.
+
+    ``{from: <path>}`` resolves against the same scope templates see: a path
+    rooted at ``input.``/``prime.``/``runtime.``, or a binding of an enclosing
+    loop (``each.as``, ``iter``). ``state.``-prefixed spellings and bare keys
+    raise, with the canonical spelling named in the message.
+    """
+    where = f"Use effect '{use_name}' input '{input_name}' at '{effect_path}'"
+    if not path:
+        raise ValueError(f"{where}: '{{from: ...}}' needs a non-empty path.")
+    root, _, rest = path.partition(".")
+    if root in NAMESPACES or root in loop_names:
+        return
+    if root == "state" and rest.partition(".")[0] in NAMESPACES:
+        raise ValueError(
+            f"{where}: 'state.' is a CEL-only binding; outside CEL, paths are "
+            f"root-relative. Write '{rest}' instead of '{path}'."
+        )
+    bindings = ", ".join(sorted(loop_names)) if loop_names else "none here"
+    raise ValueError(
+        f"{where}: '{path}' is not rooted at a state namespace or an enclosing "
+        f"loop binding (loop bindings in scope: {bindings}). Write "
+        f"'input.{path}' for caller-supplied values or 'prime.<effect>.value' "
+        f"for effect outputs."
+    )
+
+
 def validate_each_in_path(path: str, *, effect_path: str) -> None:
     """Hard-error unless a loop ``each.in`` path is rooted at a namespace.
 
