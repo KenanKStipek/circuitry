@@ -2,7 +2,7 @@
 
 The loop body executes, writes state, and the continuation condition evaluates against that new state — each iteration's output is the next iteration's input. This is feedback in the literal cybernetic sense: the output of the system is fed back as input, and the system decides from what it observes whether to go around again.
 
-Two kinds of loop answer two kinds of question. `each` asks "for every one of these?" and walks a collection. `while` asks "again?" and consults a condition — a CEL expression, or the model tasting the dish. Neither is capped unless you say so: an `each` loop ends when its collection does, a `while` loop when its condition says stop, and `max_iterations` is the floor you set under runaway feedback.
+Two kinds of loop answer two kinds of question. `each` asks "for every one of these?" and walks a collection. `while` asks "again?" and consults a condition — a CEL expression, or the model tasting the dish. Neither is capped unless you say so. An `each` loop walks a collection resolved before its first pass, so it can run long but never forever. A `while` loop runs until its condition says stop, and one whose condition never does runs indefinitely. `max_iterations` is the floor you set under that runaway feedback. It is opt-in, and when you set it, it must be at least 1: `cof check` rejects `max_iterations: 0`.
 
 ## The shape
 
@@ -58,7 +58,7 @@ The path is checked statically for its root — a bare key or a `state.` spellin
 
 The fix is upstream: `prompt_type: array` with a schema, so the producing prompt is held to the shape the loop needs.
 
-**The collection is the bound.** An `each` loop knows its length before the first pass, so hitting `max_iterations` is never a runaway; it means the list is longer than you said it could be. Without `max_iterations`, the loop runs every element. With it, a collection with more elements than the cap fails the loop at start, with no pass run. The error names both numbers and the `each.in` path: *each loop 'courses' (prime.menu.plan_courses.value): collection has 12 items but max_iterations is 8 — …*. Raise the cap, bound the collection upstream, or say that the first *N* are enough:
+**The collection is the bound.** An `each` loop knows its length before the first pass, so hitting `max_iterations` is never a runaway; it means the list is longer than you said it could be. Without `max_iterations`, the loop runs every element, and nothing below applies. With it, a collection with more elements than the cap fails the loop at start, with no pass run. The error names both numbers and the `each.in` path: *each loop 'courses' (prime.menu.plan_courses.value): collection has 12 items but max_iterations is 8 — …*. Raise the cap, bound the collection upstream, or say that the first *N* are enough:
 
 ```yaml
 - type: loop
