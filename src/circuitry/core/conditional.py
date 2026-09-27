@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal, Union
 
 from ..adapters import Adapter
 from ..output import console as _console
+from .answers import parse_boolean_answer
 from .disabled import is_enabled
 from .scope import local_writes, scope_ctx
 from .store import Store
@@ -112,6 +113,10 @@ class ConditionalRuntime:
         self.verbose = verbose
         self.depth = depth
         self._ancestors = ancestors or []
+        # Raw reply from the last `mode: model` evaluation, success or
+        # failure — set inside _evaluate_model and read back in execute()
+        # to record meta["answer"] alongside the parsed result.
+        self._model_answer: str | None = None
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         from .dynamic import DynamicDefinition, DynamicRuntime
@@ -160,6 +165,10 @@ class ConditionalRuntime:
             if meta:
                 meta["error"] = str(e)
                 meta["completed_at"] = _now_iso()
+                if self.defn.condition.mode == "model":
+                    meta["answer"] = self._model_answer
+                    meta["adapter"] = getattr(self.adapter, "name", "unknown")
+                    meta["model"] = self.model
             if self.defn.on_error == "fail":
                 raise
             if self.defn.on_error == "skip":
@@ -186,6 +195,10 @@ class ConditionalRuntime:
         if meta:
             meta["condition_result"] = result
             meta["branch"] = branch
+            if self.defn.condition.mode == "model":
+                meta["answer"] = self._model_answer
+                meta["adapter"] = getattr(self.adapter, "name", "unknown")
+                meta["model"] = self.model
 
         branch_indent = "  " * (self.depth + 1)
         if self.verbose:
@@ -425,10 +438,11 @@ Answer (yes/no):"""
             prompt=prompt,
             timeout_seconds=self.timeout_seconds,
         )
+        self._model_answer = res.text
 
-        # Parse response as boolean
-        answer = (res.text or "").strip().lower()
-        return answer in ("yes", "true", "1", "y")
+        # Parse response as a lenient yes/no; raises on an answer that
+        # doesn't unambiguously read as one (see core.answers).
+        return parse_boolean_answer(res.text or "")
 
     def _evaluate_cel(self, *, ctx: dict[str, Any]) -> bool:
         """Deterministic evaluation: evaluate CEL expression against state.
