@@ -46,24 +46,20 @@ just the entry's markdown bullet. New file per PR = parallel PRs never conflict.
 See `changelog.d/README.md`.
 
 ## Agent workflow
-Work is managed via GitHub issues; labels drive state and autonomy
-(same scheme as CyberDiner).
+Work is managed via GitHub issues and done in local agent sessions (Pi).
+The GitHub-hosted agent loop is off: the `dispatch`, `claude`, `finalize` and
+`claude-code-review` workflows (vendored from agent-loop) are disabled in
+Actions, so nothing on GitHub picks up issues, answers `@claude`, or reviews
+PRs. `gh workflow enable <file>` turns one back on. `accept.yml` (a `/accept`
+comment or the `accepted` label merges a green PR) and `rollup.yml` still run.
 
-State labels:
-- `agent-ready` — spec complete, queued for autonomous pickup (dispatcher runs every 3h)
-- `working` — a workflow run is executing right now. Harness-managed ONLY — never set or clear it manually
-- `ready-for-review` — agent finished its part; human's turn
-- `needs-human` — escalated; stop and wait
-- `blocked` / `hold` — do not work the issue at all (also workflow-gated)
+Labels:
+- `ready-for-review` — the issue's PR is done; the owner's turn
+- `needs-human` — blocked on a decision; stop and ask
+- `blocked` / `hold` — do not work the issue at all
 
-Autonomy labels:
-- *(none)* — Direct to PR (default): state the plan in-session, implement, verify, open a PR
-- `needs-plan` — post an implementation plan as an issue comment, add
-  `ready-for-review`, and STOP. Resume only on a human @claude approval comment.
-
-Label lifecycle: the moment the deliverable exists, swap `agent-ready` →
-`ready-for-review` in one `gh issue edit`. Strip lifecycle labels when issues
-close. Stale labels are bugs.
+Strip these when an issue closes. `agent-ready`, `working`, `needs-plan` and
+`in-loop` belonged to the GitHub loop and no longer trigger anything.
 
 ## Pull request protocol — open the PR FIRST, not last
 Runs can die at any moment; a pushed branch with no PR is invisible work.
@@ -76,6 +72,4 @@ Runs can die at any moment; a pushed branch with no PR is invisible work.
    Comment on the issue and swap its labels in the same breath.
 4. If a previous run already opened a PR for this issue, resume that branch —
    never open a duplicate.
-Never merge a PR. Never force-push. Branch naming: `issue-<number>-<short-slug>`.
-
-Before starting any task, read .agent-loop/process/AGENT.md — it is the execution contract for the agent loop.
+Never merge a PR unless the owner has said to. Never force-push. Branch naming: `issue-<number>-<short-slug>`.
