@@ -250,3 +250,18 @@ def test_preflight_issues_carry_their_next_steps(tmp_path: Path) -> None:
     preflight = report.of_kind("preflight")
     assert preflight
     assert any("Start the service at" in hint for hint in preflight[0].hints)
+
+
+def test_soft_adapter_dependency_lands_in_warnings_not_issues(tmp_path: Path) -> None:
+    """A skippable effect's unavailable adapter is a warning, not an issue —
+    the file is still valid."""
+    path = tmp_path / "soft.yml"
+    path.write_text(
+        "adapter: cyberdiner\nmodel: cheap\neffects:\n"
+        "  - {type: prompt, name: annotate, template: x, on_error: skip}\n",
+        encoding="utf-8",
+    )
+    report = validate_report(path, config=CircuitryConfig())
+    assert report.ok
+    assert "preflight" not in report.kinds()
+    assert any("cyberdiner" in w and "annotate" in w for w in report.warnings)

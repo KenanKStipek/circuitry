@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..adapters import Adapter, build_adapter
+from ..adapters.factory import ADAPTER_REGISTRY
 from ..core.compiler import apply_effect_overrides, compile_orchestration
 from ..core.dynamic import DynamicRuntime
 from ..core.runtime_plugins import (
@@ -838,8 +839,10 @@ def classify_preflight_results(
     when every effect referencing that adapter tolerates failure
     (``on_error: skip``/``continue``): the run degrades gracefully without
     it, so it shouldn't hard-fail the whole orchestration. Everything else
-    (already-ok results, tool/runtime_plugin/library_ref results, and
-    adapters with at least one non-tolerant usage) stays hard.
+    (already-ok results, tool/runtime_plugin/library_ref results, an unknown
+    adapter name, and adapters with at least one non-tolerant usage) stays
+    hard: an adapter that doesn't exist is a configuration mistake, not a
+    missing credential the run can degrade past.
     """
     orch = load_orchestration_file(orchestration_path)
     usages = collect_adapter_usages(orch)
@@ -850,7 +853,10 @@ def classify_preflight_results(
             hard.append((label, result))
             continue
         adapter_name = label.split(":", 1)[1]
-        if is_hard_adapter_dependency(adapter_name, usages):
+        if (
+            adapter_name.strip().lower() not in ADAPTER_REGISTRY
+            or is_hard_adapter_dependency(adapter_name, usages)
+        ):
             # Name the non-skippable effect(s) when we have that detail —
             # the mixed case (one skippable, one not) otherwise reads as an
             # unqualified adapter failure with no clue which effect forces it.
@@ -883,7 +889,13 @@ def format_preflight_warnings(
     results: list[tuple[str, CheckResult]],
 ) -> list[str]:
     """Render soft (skippable) preflight dependencies as one-line warnings."""
-    return [r.message or f"{label}: not ready" for label, r in results]
+    warnings: list[str] = []
+    for label, r in results:
+        message = r.message or f"{label}: not ready"
+        if r.missing:
+            message += f" (missing {r.missing})"
+        warnings.append(message)
+    return warnings
 
 
 def inspect_orchestration(orchestration_path: Path) -> dict[str, Any]:

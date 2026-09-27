@@ -106,7 +106,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
       content: "Is this text positive? {{text}}"
 ```
 
-**`on_error` and preflight — optional adapters:** `cof check`/`cof run` walk every `adapter`/`provider` an orchestration references and probe its credentials before anything runs (`check()`, see the plugins pages). By default that's a **hard** dependency: a missing credential fails preflight for the whole file, even if only one effect needs it. Set `on_error: skip` (or `continue`) on every `prompt`/`tool` effect that uses a given adapter and preflight reclassifies it as **soft** — a missing credential downgrades to a warning naming the effects that will skip, and the run proceeds, leaving those effects' `value` as `null`. An adapter is soft only when *every* effect referencing it tolerates failure; one effect without `on_error` handling makes the whole adapter a hard dependency again, and preflight's error names that effect specifically. `cof run --skip-preflight` bypasses preflight entirely (hard and soft alike) — unrelated to this classification.
+**`on_error` and preflight — optional adapters:** `cof check`/`cof run` walk every `adapter`/`provider` an orchestration references and probe its credentials before anything runs (`check()`, see the plugins pages). By default that's a **hard** dependency: a missing credential fails preflight for the whole file, even if only one effect needs it. Set `on_error: skip` (or `continue`) on every `prompt` effect that uses a given adapter and preflight reclassifies it as **soft** — a missing credential downgrades to a warning naming the effects that will skip, and the run proceeds, leaving those effects' `value` as `null`. An adapter is soft only when *every* effect referencing it tolerates failure; one effect without `on_error` handling makes the whole adapter a hard dependency again, and preflight's error names that effect specifically. This looks at each `prompt` effect's own `on_error`, not an enclosing `dynamic`/`loop`/`if` container's — a `prompt` effect nested in a container that tolerates failure still needs its own `on_error: skip`/`continue` to be classified as soft. `cof run --skip-preflight` bypasses preflight entirely (hard and soft alike) — unrelated to this classification.
 
 ---
 
@@ -448,7 +448,7 @@ Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `description` | string | no | — | |
 
-Tool providers reference a *tool plugin*, not an *adapter* — preflight's hard/soft `on_error` reclassification (see the `prompt` section above) applies the same way here, but only to `adapter`/`provider` references on `prompt` effects. A missing tool-plugin dependency (e.g. `ffmpeg` not on `PATH`) always hard-fails preflight regardless of this effect's `on_error`.
+Tool providers reference a *tool plugin*, not an *adapter*, so the `prompt`-effect `on_error` reclassification above does not apply here: a missing tool-plugin dependency (e.g. `ffmpeg` not on `PATH`) always hard-fails preflight regardless of this effect's `on_error`.
 
 **Supported providers:**
 

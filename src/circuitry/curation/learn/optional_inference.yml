@@ -2,9 +2,10 @@
 #
 # `annotate` is the only prompt effect and it's marked `on_error: skip`.
 # Preflight classifies its adapter (cyberdiner) as a *soft* dependency: if
-# `runtime.adapters.cyberdiner.token`/`expo_url` (or CYBERDINER_* env vars)
-# aren't configured, `cof check` passes with a WARNING instead of failing,
-# and `cof run` completes `ok=true` with `annotate.value` left `null`.
+# config.json's runtime.adapters.cyberdiner.token/expo_url block (see
+# learn/cyberdiner_hello.yml) isn't configured, `cof check` passes with a
+# WARNING instead of failing, and `cof run` completes `ok=true` with
+# `annotate.value` left `null`.
 # Drop `on_error: skip` and the same missing credentials become a hard
 # preflight failure — see docs/orchestration-reference.md's `prompt`
 # section ("on_error and preflight").

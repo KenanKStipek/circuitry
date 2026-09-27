@@ -385,6 +385,24 @@ def test_validate_mixed_effects_hard_failure_names_effect(tmp_path: Path) -> Non
     )
 
 
+def test_validate_fails_for_unknown_adapter_even_when_skippable(
+    tmp_path: Path,
+) -> None:
+    """An unknown/typo'd adapter name is a configuration mistake, not a
+    missing credential — it must stay hard even when every effect using it
+    tolerates failure, so ``cof check`` can't pass while ``cof run`` fails."""
+    p = _write(
+        tmp_path,
+        "orch.yml",
+        "effects:\n"
+        "  - {type: prompt, name: annotate, provider: nosuchadapter, "
+        "template: x, on_error: skip}\n",
+    )
+    result = validate(p, config=CircuitryConfig())
+    assert result["ok"] is False
+    assert any("nosuchadapter" in e for e in result["errors"])
+
+
 def test_run_completes_ok_when_skippable_adapter_unavailable(
     tmp_path: Path,
 ) -> None:
@@ -438,6 +456,16 @@ def test_run_aborts_when_mixed_hard_effect_present(tmp_path: Path) -> None:
     assert result.ok is False
     assert "Preflight failed" in (result.error or "")
     assert "decide" in (result.error or "")
+
+
+def test_optional_inference_example_passes_preflight_with_warning() -> None:
+    """The curation example this feature ships (learn/optional_inference)
+    actually exercises preflight — smoke-curation.sh always passes
+    ``--skip-preflight``, so nothing else does."""
+    path = Path("src/circuitry/curation/learn/optional_inference.yml")
+    result = validate(path, config=CircuitryConfig())
+    assert result["ok"] is True
+    assert any("cyberdiner" in w and "annotate" in w for w in result["warnings"])
 
 
 # ---------- doctor exit codes ----------
