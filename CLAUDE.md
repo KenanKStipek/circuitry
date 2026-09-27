@@ -2,7 +2,8 @@
 
 ## What it is
 Cybernetic orchestration framework (Python). Core library in `src/`, tests in
-`tests/`, bundled orchestration curation in `scripts/`, docs in `docs/`.
+`tests/`, bundled orchestration curation in `src/circuitry/curation/`, docs in
+`docs/`.
 
 ## Minimum verification for any change
 ```
