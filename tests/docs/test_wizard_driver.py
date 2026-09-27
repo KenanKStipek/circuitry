@@ -3,35 +3,19 @@
 `docs/wizard.md` documents `cof wizard` and the `drive_conversation` loop it
 wraps, neither of which hard-code a state path or a source-tree path — that
 coupling (a `src/circuitry/curation/...` path that only resolves from a
-checkout) was exactly what the old, since-replaced `scripts/wizard-chat`
-implementation got wrong. What is still worth checking against the wizard's
-own interface is the turn contract table; what is worth checking about the
-script is that it now delegates rather than reimplementing the loop.
+checkout) is exactly what this suite guards against. What is worth checking
+against the wizard's own interface is the turn contract table.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
-import sys
 from pathlib import Path
 
 import yaml
 
-#: Rich styles each dash of an option separately (bold/dim spans mid-token),
-#: which splits a literal "--goal" across escape codes; stripping ANSI SGR
-#: sequences before asserting is what makes a plain substring check reliable.
-_ANSI = re.compile(r"\x1b\[[0-9;]*m")
-_NO_COLOR_ENV = {**os.environ, "NO_COLOR": "1"}
-
-
-def _plain(text: str) -> str:
-    return _ANSI.sub("", text)
-
 DOC_PATH = Path("docs/wizard.md")
-SCRIPT_PATH = Path("scripts/wizard-chat")
 WIZARD_PATH = Path("src/circuitry/curation/agents/wizard.yml")
 
 
@@ -88,43 +72,3 @@ def test_manifest_documents_the_same_contract() -> None:
     )
     entry = next(e for e in manifest["entries"] if e["name"] == "agents/wizard")
     assert {k: v["path"] for k, v in entry["outputs"].items()} == _declared_paths()
-
-
-# ── The wrapper script ───────────────────────────────────────────────────────
-
-
-def test_wizard_chat_is_a_thin_wrapper_over_cof_wizard() -> None:
-    """`scripts/wizard-chat` only ever worked from a checkout. It now forwards
-    to `cof wizard` instead of reimplementing the loop, the state-path digging,
-    or the source-tree resolution a second time."""
-    source = SCRIPT_PATH.read_text(encoding="utf-8")
-    assert "circuitry.cli.app" in source
-    assert str(WIZARD_PATH) not in source
-    assert "prime.turn.decide" not in source
-
-
-def test_wizard_chat_delegates_argument_handling_to_cof_wizard() -> None:
-    """Run the script for real, with a bad flag `cof wizard` alone would
-    reject — proof this is dispatch, not a parallel argument parser."""
-    result = subprocess.run(
-        [sys.executable, str(SCRIPT_PATH), "--not-a-real-flag"],
-        capture_output=True,
-        text=True,
-        env=_NO_COLOR_ENV,
-        check=False,
-    )
-    assert result.returncode != 0
-    assert "--not-a-real-flag" in _plain(result.stdout + result.stderr)
-
-
-def test_wizard_chat_help_is_cof_wizards_help() -> None:
-    result = subprocess.run(
-        [sys.executable, str(SCRIPT_PATH), "--help"],
-        capture_output=True,
-        text=True,
-        check=True,
-        env=_NO_COLOR_ENV,
-    )
-    plain = _plain(result.stdout)
-    assert "--goal" in plain
-    assert "--reply" in plain

@@ -12,7 +12,7 @@ Please skim this document before opening your first PR.
 
 ## Development setup
 
-Circuitry targets Python 3.9–3.13.
+Circuitry targets Python 3.10–3.13.
 
 ```bash
 git clone https://github.com/kenankstipek/circuitry.git
@@ -41,6 +41,12 @@ mypy src                           # static types
 ```
 
 If you only changed one area, run the targeted suite first (e.g. `pytest tests/cli -q`) and run the full suite before pushing.
+
+Integration tests (real model/persistence backends) are opt-in and skipped by default:
+
+```bash
+CIRCUITRY_RUN_INTEGRATION=1 CIRCUITRY_INTEGRATION_MODEL=smollm2:135m pytest -m integration tests/integration/
+```
 
 ## Changelog fragments
 
@@ -105,7 +111,6 @@ Before opening a PR:
 - [ ] You added or updated tests for any behavior change
 - [ ] You added a changelog fragment — a **new file** `changelog.d/<issue-or-pr>.<type>.md` — rather than editing [`CHANGELOG.md`](CHANGELOG.md) (see [Changelog fragments](#changelog-fragments))
 - [ ] If you changed the public API surface (see [`docs/stability.md`](docs/stability.md)), the change is intentional and called out in the PR description
-- [ ] If you changed bundled orchestrations under `src/circuitry/bundled/orchestrations/`, you re-ran `scripts/sync-bundled` so the repo-root copies match
 
 Use the PR template that appears when you open a pull request — it covers the same items.
 

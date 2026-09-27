@@ -5,17 +5,15 @@
 # that is richer, more accurate to the original intent, and better utilizes
 # Circuitry primitives.
 #
-# Designed to be called repeatedly by the `improve-orchestration` script,
-# which drives the iteration loop, detects convergence, and saves state
-# after each call.
+# Designed to be called repeatedly by a driver loop (e.g. `cof run agents/improver`
+# in a shell loop), which detects convergence and saves state after each call.
 #
 # ─── USAGE ───────────────────────────────────────────────────────────────────
 #
 #   1. Run a single improvement pass directly:
 #
 #        echo '{"input_yaml": "...", "original_prompt": "..."}' > input.json
-#        ./scripts/circuitry run orchestrations/orchestration_improver.yml \
-#          --state input.json --out improved.json
+#        cof run agents/improver --state input.json --out improved.json
 #
 #   2. Extract the improved YAML from state:
 #
@@ -24,18 +22,16 @@
 #          print(json.load(sys.stdin)['prime']['generate']['final_yaml']['value'])
 #        "
 #
-#   3. Use the improve-orchestration script for iterative refinement:
-#
-#        ./scripts/improve-orchestration \
-#          --orchestration path/to/orch.yml \
-#          --prompt "original intent"
+#   3. For iterative refinement, drive `cof run agents/improver` in a loop,
+#      feeding each pass's `final_yaml` back in as the next `input_yaml`
+#      until the output stops changing (convergence).
 #
 # ─── INPUT STATE ─────────────────────────────────────────────────────────────
 #
 #   Key              Type     Description
 #   input_yaml       string   The current orchestration YAML to improve
 #   original_prompt  string   The original intent/goal the orchestration was built for
-#   rules            string   LLM authoring rules injected from docs/orchestration-reference.md
+#   rules            string   LLM authoring rules injected from src/circuitry/bundled/rules/
 #
 # ─── OUTPUT STATE PATHS ──────────────────────────────────────────────────────
 #
@@ -76,7 +72,7 @@ interface:
     rules:
       type: string
       required: true
-      description: LLM authoring rules injected from docs/orchestration-reference.md.
+      description: LLM authoring rules injected from src/circuitry/bundled/rules/.
 
 effects:
   - type: dynamic
@@ -181,9 +177,8 @@ effects:
       # draft before returning the final output. Mirrors the review pass in
       # meta_orchestrator.yml.
       # Note: this is not a structural guarantee — the same model that wrote
-      # the draft is reviewing it. The improve-orchestration script additionally
-      # strips markdown fences and the caller should validate the output via
-      # `./scripts/circuitry validate` before relying on it in production.
+      # the draft is reviewing it. The caller should validate the output via
+      # `cof validate` before relying on it in production.
       # PRIMARY OUTPUT: prime.generate.final_yaml.value
       - type: prompt
         name: final_yaml
@@ -205,12 +200,12 @@ effects:
 
       # ─── Step 4: Convergence judge ────────────────────────────────────────
       # Compare the just-produced final_yaml against the input_yaml that was fed
-      # into this iteration. If the judge reports convergence, the driver script
-      # will stop the improvement loop after this pass.
+      # into this iteration. If the judge reports convergence, the caller
+      # driving the improvement loop should stop after this pass.
       #
       # Uses the agents/improver_judge orchestration via `use:`. The judge call
       # is wrapped in on_error: continue so a judge failure (e.g. malformed
-      # output) doesn't abort the whole iteration — the driver falls back to
+      # output) doesn't abort the whole iteration — the caller can fall back to
       # hash-based convergence in that case.
       - type: use
         name: judge_convergence
