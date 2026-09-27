@@ -49,6 +49,23 @@ def _wait_until(predicate, timeout: float = 2.0, interval: float = 0.01) -> bool
     return predicate()
 
 
+def _settled(run_id: str, *, timeout: float = 2.0, interval: float = 0.01) -> dict:
+    """get_run_state, polled past a transient 'running' status.
+
+    _run_orchestration_impl/_submit_response_impl return whatever the
+    RunManager's internal quiesce wait considered settled, but a stable
+    *empty* pending_prompts set (worker thread not yet scheduled) looks
+    identical to a genuinely settled one to that wait — same race as
+    issue #191, reachable here since this layer wraps the same calls.
+    """
+    resp = srv._get_run_state_impl(run_id=run_id)
+    deadline = time.monotonic() + timeout
+    while resp["status"] == "running" and time.monotonic() < deadline:
+        time.sleep(interval)
+        resp = srv._get_run_state_impl(run_id=run_id)
+    return resp
+
+
 # ---------------------------------------------------------------------------
 # 1. list_orchestrations
 # ---------------------------------------------------------------------------
@@ -116,8 +133,9 @@ def test_run_orchestration_returns_paused_with_one_prompt(tmp_path: Path) -> Non
             template: "hi {{input.who}}"
     """)
     resp = srv._run_orchestration_impl(orchestration=str(p), initial_state={"who": "Ada"})
-    assert resp["status"] == "paused"
     assert isinstance(resp["run_id"], str) and len(resp["run_id"]) > 0
+    resp = _settled(resp["run_id"])
+    assert resp["status"] == "paused"
     assert len(resp["pending_prompts"]) == 1
     pp = resp["pending_prompts"][0]
     assert pp["prompt"] == "hi Ada"
@@ -137,10 +155,11 @@ def test_submit_response_drives_to_completion(tmp_path: Path) -> None:
             template: "ping"
     """)
     started = srv._run_orchestration_impl(orchestration=str(p))
-    pid = started["pending_prompts"][0]["prompt_id"]
     rid = started["run_id"]
+    pid = _settled(rid)["pending_prompts"][0]["prompt_id"]
 
-    final = srv._submit_response_impl(run_id=rid, prompt_id=pid, response="pong")
+    srv._submit_response_impl(run_id=rid, prompt_id=pid, response="pong")
+    final = _settled(rid)
     assert final["status"] == "completed"
     assert final["pending_prompts"] == []
     assert final["state"] is not None
@@ -171,6 +190,7 @@ def test_run_orchestration_returns_paused_with_multiple_prompts(tmp_path: Path) 
     resp = srv._run_orchestration_impl(
         orchestration=str(p), initial_state={"items": ["a", "b"]}
     )
+    resp = _settled(resp["run_id"])
     assert resp["status"] == "paused"
     assert len(resp["pending_prompts"]) == 2
     pids = {pp["prompt_id"] for pp in resp["pending_prompts"]}
@@ -198,16 +218,17 @@ def test_submit_responses_in_arbitrary_order(tmp_path: Path) -> None:
     resp = srv._run_orchestration_impl(
         orchestration=str(p), initial_state={"items": ["a", "b", "c"]}
     )
-    assert len(resp["pending_prompts"]) == 3
     rid = resp["run_id"]
+    resp = _settled(rid)
+    assert len(resp["pending_prompts"]) == 3
     pids = [pp["prompt_id"] for pp in resp["pending_prompts"]]
 
     # Submit in reverse order.
-    last = None
     for pid in reversed(pids):
-        last = srv._submit_response_impl(
+        srv._submit_response_impl(
             run_id=rid, prompt_id=pid, response=f"r-{pid[:4]}"
         )
+    last = _settled(rid)
     assert last["status"] == "completed"
 
     state = last["state"]
@@ -234,12 +255,12 @@ def test_get_run_state_during_pause_includes_partial_state(tmp_path: Path) -> No
     """)
     started = srv._run_orchestration_impl(orchestration=str(p))
     rid = started["run_id"]
-    pid_a = started["pending_prompts"][0]["prompt_id"]
+    pid_a = _settled(rid)["pending_prompts"][0]["prompt_id"]
 
     after_a = srv._submit_response_impl(run_id=rid, prompt_id=pid_a, response="A-out")
     # Run is paused on prompt 'b' now; the wire protocol returns state=None
     # for non-terminal statuses on submit/run, so we use get_run_state.
-    assert after_a["status"] == "paused"
+    assert _settled(rid)["status"] == "paused"
     assert after_a["state"] is None
 
     snap = srv._get_run_state_impl(run_id=rid)
@@ -306,9 +327,9 @@ def test_unknown_prompt_id_returns_error_response(tmp_path: Path) -> None:
     assert "Unknown prompt_id" in resp.get("error", "")
 
     # Run still alive: real prompt_id still works.
-    real_pid = started["pending_prompts"][0]["prompt_id"]
-    final = srv._submit_response_impl(run_id=rid, prompt_id=real_pid, response="ok")
-    assert final["status"] == "completed"
+    real_pid = _settled(rid)["pending_prompts"][0]["prompt_id"]
+    srv._submit_response_impl(run_id=rid, prompt_id=real_pid, response="ok")
+    assert _settled(rid)["status"] == "completed"
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +367,7 @@ def test_run_state_response_is_json_safe(tmp_path: Path) -> None:
             template: "hi"
     """)
     started = srv._run_orchestration_impl(orchestration=str(p))
-    pid = started["pending_prompts"][0]["prompt_id"]
+    pid = _settled(started["run_id"])["pending_prompts"][0]["prompt_id"]
     final = srv._submit_response_impl(run_id=started["run_id"], prompt_id=pid, response="ok")
     json.dumps(final)  # must not raise
 
@@ -368,11 +389,12 @@ def test_run_orchestration_with_override_model(tmp_path: Path) -> None:
     started = srv._run_orchestration_impl(
         orchestration=str(p), override_model=True, override_to="claude-opus-4-7"
     )
-    assert started["status"] == "paused"
-    pid = started["pending_prompts"][0]["prompt_id"]
-    final = srv._submit_response_impl(
-        run_id=started["run_id"], prompt_id=pid, response="ok"
-    )
+    rid = started["run_id"]
+    settled = _settled(rid)
+    assert settled["status"] == "paused"
+    pid = settled["pending_prompts"][0]["prompt_id"]
+    srv._submit_response_impl(run_id=rid, prompt_id=pid, response="ok")
+    final = _settled(rid)
     assert final["status"] == "completed"
     assert final["state"]["prime"]["x"]["value"] == "ok"
 

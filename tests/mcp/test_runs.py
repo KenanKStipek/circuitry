@@ -53,7 +53,7 @@ def _wait_until(predicate, timeout: float = 2.0, interval: float = 0.01) -> bool
 
 
 def _single_pending_id(run) -> str:
-    assert len(run.pending_prompts) == 1, list(run.pending_prompts)
+    assert _wait_until(lambda: len(run.pending_prompts) == 1), list(run.pending_prompts)
     return next(iter(run.pending_prompts))
 
 
@@ -73,7 +73,7 @@ def test_simple_chain_pauses_then_completes(mgr: RunManager, tmp_path: Path) -> 
     """)
     run = mgr.start_run(orchestration_path=p)
 
-    assert run.status == RunStatus.PAUSED
+    assert _wait_until(lambda: run.status == RunStatus.PAUSED)
     pid = _single_pending_id(run)
     assert run.pending_prompts[pid].prompt == "Say hi"
 
@@ -109,7 +109,7 @@ def test_three_prompt_chain(mgr: RunManager, tmp_path: Path) -> None:
     assert run.pending_prompts[pid_a].prompt == "first"
     mgr.submit_response(run_id=run.run_id, prompt_id=pid_a, response_text="A-out")
 
-    assert run.status == RunStatus.PAUSED
+    assert _wait_until(lambda: run.status == RunStatus.PAUSED)
     pid_b = _single_pending_id(run)
     assert run.pending_prompts[pid_b].prompt == "saw a=A-out"
     mgr.submit_response(run_id=run.run_id, prompt_id=pid_b, response_text="B-out")
@@ -148,7 +148,7 @@ def test_sequential_loop(mgr: RunManager, tmp_path: Path) -> None:
 
     responses = []
     for i in range(3):
-        assert run.status == RunStatus.PAUSED, f"iter {i}: {run.status}"
+        assert _wait_until(lambda: run.status == RunStatus.PAUSED), f"iter {i}: {run.status}"
         pid = _single_pending_id(run)
         text = f"hi-{i}"
         responses.append(text)
@@ -185,8 +185,7 @@ def test_tree_flow_two_branches(mgr: RunManager, tmp_path: Path) -> None:
         orchestration_path=p, initial_state={"items": ["alpha", "beta"]},
     )
 
-    assert run.status == RunStatus.PAUSED
-    assert len(run.pending_prompts) == 2
+    assert _wait_until(lambda: run.status == RunStatus.PAUSED and len(run.pending_prompts) == 2)
     pids = list(run.pending_prompts)
     prompts = {pp.prompt for pp in run.pending_prompts.values()}
     assert prompts == {"Q: alpha", "Q: beta"}
@@ -373,8 +372,8 @@ def test_concurrent_runs_isolated(mgr: RunManager, tmp_path: Path) -> None:
     run_a = mgr.start_run(orchestration_path=p, initial_state={"tag": "A"})
     run_b = mgr.start_run(orchestration_path=p, initial_state={"tag": "B"})
 
-    assert run_a.status == RunStatus.PAUSED
-    assert run_b.status == RunStatus.PAUSED
+    assert _wait_until(lambda: run_a.status == RunStatus.PAUSED)
+    assert _wait_until(lambda: run_b.status == RunStatus.PAUSED)
     assert run_a.run_id != run_b.run_id
 
     pid_a = _single_pending_id(run_a)
@@ -414,9 +413,10 @@ def test_get_state_during_pause(mgr: RunManager, tmp_path: Path) -> None:
     pid_a = _single_pending_id(run)
     mgr.submit_response(run_id=run.run_id, prompt_id=pid_a, response_text="A-out")
 
-    # submit_response returns after _wait_for_quiesce, so the next pending
-    # prompt (for 'b') should already be present.
-    assert run.status == RunStatus.PAUSED
+    # _wait_for_quiesce isn't a guarantee the worker has already reached the
+    # next prompt (a stable-but-empty pending_prompts set right after the
+    # thread pops 'a' looks the same as settled) — poll rather than assert.
+    assert _wait_until(lambda: run.status == RunStatus.PAUSED)
     pid_b = _single_pending_id(run)
     assert pid_b != pid_a
     assert run.pending_prompts[pid_b].prompt == "second"
@@ -528,7 +528,7 @@ def test_override_model_runs_non_claude_orchestration(
             template: "hi"
     """)
     run = mgr.start_run(orchestration_path=p, override_model=True)
-    assert run.status == RunStatus.PAUSED
+    assert _wait_until(lambda: run.status == RunStatus.PAUSED)
     pid = _single_pending_id(run)
     mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text="resp")
     assert _wait_until(lambda: run.status == RunStatus.COMPLETED)
