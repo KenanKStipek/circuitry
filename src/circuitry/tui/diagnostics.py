@@ -430,10 +430,13 @@ def validate_report(
     if config is None:
         skipped.append("allowlist")
     else:
-        issues += [
-            ValidationIssue("allowlist", message)
-            for message in check_allowlist(orch=orch, config=config)
-        ]
+        try:
+            issues += [
+                ValidationIssue("allowlist", message)
+                for message in check_allowlist(orch=orch, config=config, root_path=path)
+            ]
+        except Exception as exc:
+            issues.append(ValidationIssue("allowlist", str(exc)))
 
     try:
         compile_orchestration(orch=orch, root_name="prime")

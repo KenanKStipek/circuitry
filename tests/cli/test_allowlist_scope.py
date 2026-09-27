@@ -18,7 +18,7 @@ import pytest
 import yaml
 
 from circuitry.adapters.base import GenerateResult
-from circuitry.allowlist_gate import AllowlistError, install_allowlists
+from circuitry.allowlist_gate import AllowlistError, install_allowlists, require_tool
 from circuitry.cli import runtime_shim
 from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.runtime_shim import RunRequest, run, validate
@@ -174,6 +174,21 @@ def test_check_accepts_children_inside_the_allowlist(tmp_path: Path) -> None:
     assert result["ok"] is True, result["errors"]
 
 
+def test_check_does_not_judge_a_use_childs_own_adapter_field(tmp_path: Path) -> None:
+    """A child's `adapter:` is dead text — it runs on the adapter its parent
+    already built (core/use.py), never on its own declared adapter."""
+    parent = _inline_parent(
+        tmp_path,
+        "adapter: ollama\neffects:\n  - type: tool\n    name: t\n    provider: json\n"
+        "    params: {op: parse, input: '{}'}\n",
+    )
+    config = CircuitryConfig(enabled_adapters=["openai"], enabled_tools=["json"])
+
+    result = validate(parent, config=config, skip_preflight=True)
+
+    assert result["ok"] is True, result["errors"]
+
+
 def test_check_leaves_templated_names_to_the_run(tmp_path: Path) -> None:
     """`provider: "{{input.tool}}"` is not a name until the child renders."""
     parent = _inline_parent(
@@ -241,12 +256,38 @@ def test_document_runtime_block_cannot_reopen_the_allowlists(tmp_path: Path) -> 
     assert "tool 'uuid' not in enabled_tools allowlist" in (result.error or "")
 
 
+def test_run_ignores_a_use_childs_own_adapter_field(tmp_path: Path) -> None:
+    """The child runs on the parent's already-built adapter, never on the
+    build its own `adapter:` field would name — UseRuntime._check_allowlists
+    must not judge it."""
+    parent = _inline_parent(
+        tmp_path,
+        "adapter: ollama\neffects:\n  - type: prompt\n    name: greet\n    template: hi\n",
+    )
+    config = CircuitryConfig(enabled_adapters=["openai"], default_model="m")
+    adapter = RecordingAdapter(name="openai")
+
+    result = _run(parent, config, adapter=adapter)
+
+    assert result.ok is True, result.error
+    assert adapter.calls == [("m", "hi")]
+
+
 def test_run_allows_children_when_no_allowlist_is_set(tmp_path: Path) -> None:
     parent = _inline_parent(tmp_path, DENIED_TOOL_CHILD)
 
     result = _run(parent, CircuitryConfig())
 
     assert result.ok is True, result.error
+
+
+def test_require_tool_matches_an_uppercase_config_entry() -> None:
+    """`enabled_tools: ["JSON"]` in config.json normalizes to lowercase
+    (config.py's ``_normalize_allowlist``), so it matches the lowercase
+    provider name the build-time gate canonicalises to."""
+    cfg = CircuitryConfig.from_dict({"enabled_tools": ["JSON"]})
+
+    require_tool("json", cfg.enabled_tools)  # must not raise
 
 
 def test_tool_runtime_refuses_a_tool_outside_the_installed_allowlist(

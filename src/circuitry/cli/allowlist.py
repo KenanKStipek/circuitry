@@ -26,11 +26,13 @@ from ..core.cycle_check import iter_use_children
 from .config import CircuitryConfig
 
 
-def walk_orchestration_refs(orch: dict[str, Any]) -> tuple[set[str], set[str]]:
+def walk_orchestration_refs(
+    orch: dict[str, Any], *, include_document_adapter: bool = True
+) -> tuple[set[str], set[str]]:
     """Collect (adapter_names, tool_names) referenced in a YAML orchestration.
 
     Adapter references come from:
-      * top-level ``adapter:``
+      * top-level ``adapter:`` (unless ``include_document_adapter`` is False)
       * prompt-effect ``provider:`` and each item of ``provider_fallbacks``
         (provider tokens follow ``adapter[:model]`` syntax — see
         ``PromptRuntime._parse_provider_token``).
@@ -41,13 +43,20 @@ def walk_orchestration_refs(orch: dict[str, Any]) -> tuple[set[str], set[str]]:
     reflector effects. Does NOT cross ``use:`` boundaries — each child is
     walked on its own (:func:`check_allowlist` statically, ``UseRuntime`` as
     it loads).
+
+    ``include_document_adapter`` is False for a ``use`` child: a child runs
+    on the adapter object its parent already built (``core/use.py``), so its
+    own top-level ``adapter:`` is dead text, never consulted at run time —
+    judging it would reject documents that never actually use that adapter.
+    A child's prompt ``provider:`` tokens are real references and are always
+    collected.
     """
     adapters: set[str] = set()
     tools: set[str] = set()
 
     if isinstance(orch, dict):
         top_adapter = orch.get("adapter")
-        if isinstance(top_adapter, str) and top_adapter.strip():
+        if include_document_adapter and isinstance(top_adapter, str) and top_adapter.strip():
             adapters.add(top_adapter.strip())
         _walk_effects(orch.get("effects"), adapters, tools)
 
@@ -229,6 +238,8 @@ def orchestration_denials(
     *,
     enabled_adapters: list[str] | None,
     enabled_tools: list[str] | None,
+    skip_templated: bool = False,
+    include_document_adapter: bool = True,
 ) -> list[str]:
     """Denial messages for one document's own adapter and tool references.
 
@@ -236,21 +247,29 @@ def orchestration_denials(
     follow ``use:`` — see :func:`check_allowlist` for the static walk and
     ``UseRuntime`` for the run-time check of each child as it loads.
 
-    A name with a Mustache tag in it (an unrendered ``inline:`` child's
-    ``provider: "{{input.tool}}"``) is not judged here: it only becomes a
-    name once rendered, and the run-time gate checks it then.
+    ``skip_templated`` leaves a name with a Mustache tag in it (an unrendered
+    ``inline:`` child's ``provider: "{{input.tool}}"``) unjudged here: it only
+    becomes a name once rendered, and the run-time gate checks it then. Callers
+    walking a ``use`` child or a generated plan pass ``True``; a top-level
+    document is judged as written — a literal template there is not going to
+    render into something else, so it fails the same way it always has.
+
+    ``include_document_adapter`` is False for a ``use`` child's own checks
+    (see :func:`walk_orchestration_refs`); a top-level document keeps it.
     """
-    adapter_refs, tool_refs = walk_orchestration_refs(orch)
+    adapter_refs, tool_refs = walk_orchestration_refs(
+        orch, include_document_adapter=include_document_adapter
+    )
     errors = [
         denial
         for name in sorted(adapter_refs)
-        if "{{" not in name
+        if not (skip_templated and "{{" in name)
         and (denial := adapter_denial(name, enabled_adapters)) is not None
     ]
     errors.extend(
         denial
         for name in sorted(tool_refs)
-        if "{{" not in name
+        if not (skip_templated and "{{" in name)
         and (denial := tool_denial(name, enabled_tools)) is not None
     )
     return errors
@@ -302,6 +321,8 @@ def check_allowlist(
     ):
         errors.extend(
             f"use child {label}: {denial}"
-            for denial in orchestration_denials(child, **allowlists)
+            for denial in orchestration_denials(
+                child, **allowlists, skip_templated=True, include_document_adapter=False
+            )
         )
     return errors

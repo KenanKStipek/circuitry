@@ -68,6 +68,24 @@ def test_project_list_is_intersected_with_the_global_list(
     assert "['shell']" in caplog.text
 
 
+def test_intersection_is_case_insensitive_for_tools_and_adapters(
+    layers: tuple[Path, Path]
+) -> None:
+    """`enabled_tools`/`enabled_adapters` normalize to lowercase, so an
+    uppercase entry in either layer still narrows correctly."""
+    global_path, project = layers
+    _write_json(global_path, {"enabled_tools": ["JSON", "HTTP"], "enabled_adapters": ["OLLAMA"]})
+    _write_json(
+        project / "circuitry.config.json",
+        {"enabled_tools": ["json", "shell"], "enabled_adapters": ["ollama"]},
+    )
+
+    cfg = resolve_config(cwd=project)
+
+    assert cfg.enabled_tools == ["json"]
+    assert cfg.enabled_adapters == ["ollama"]
+
+
 def test_project_null_does_not_reopen_a_global_list(
     layers: tuple[Path, Path], caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -569,6 +569,7 @@ def _check_allowlists(plan: _Plan, runtime_config: Mapping[str, Any]) -> list[st
         parsed,
         enabled_adapters=allowed_adapters(runtime_config),
         enabled_tools=allowed_tools(runtime_config),
+        skip_templated=True,
     )
 
 

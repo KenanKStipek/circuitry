@@ -546,6 +546,12 @@ class UseRuntime:
         Checked as the child loads, before any of it runs — inline and
         generated children only exist from here on, so no earlier check can
         see them. The factories still gate every build as a backstop.
+
+        A child's own top-level ``adapter:`` is not judged: the child runs on
+        the adapter object its parent already built (see ``execute`` below),
+        never on a build from its own ``adapter:`` field, so that field is
+        dead text. Its prompt ``provider:`` tokens are real references and are
+        still checked.
         """
         from ..allowlist_gate import AllowlistError, allowed_adapters, allowed_tools
         from ..cli.allowlist import orchestration_denials
@@ -554,6 +560,8 @@ class UseRuntime:
             child_orch,
             enabled_adapters=allowed_adapters(self.runtime_config),
             enabled_tools=allowed_tools(self.runtime_config),
+            skip_templated=True,
+            include_document_adapter=False,
         )
         if denials:
             raise AllowlistError(

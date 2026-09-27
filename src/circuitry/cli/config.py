@@ -133,25 +133,32 @@ class CircuitryConfig:
             default_model=d.get("default_model"),
             default_adapter=d.get("default_adapter"),
             plugins=list(d.get("plugins") or []),
-            enabled_adapters=_normalize_allowlist(d.get("enabled_adapters")),
+            enabled_adapters=_normalize_allowlist(d.get("enabled_adapters"), lowercase=True),
             enabled_plugins=_normalize_allowlist(d.get("enabled_plugins")),
-            enabled_tools=_normalize_allowlist(d.get("enabled_tools")),
+            enabled_tools=_normalize_allowlist(d.get("enabled_tools"), lowercase=True),
             environment=env,  # type: ignore[arg-type]
             runtime=dict(d.get("runtime") or {}),
         )
 
 
-def _normalize_allowlist(value: Any) -> list[str] | None:
+def _normalize_allowlist(value: Any, *, lowercase: bool = False) -> list[str] | None:
     """Coerce config-loaded allowlist values into Optional[list[str]].
 
     None → None (default-open).
     list → list[str] (filtered to truthy strings).
     Anything else → None (treated as unset).
+
+    ``lowercase`` matches the case-insensitive comparison ``enabled_adapters``
+    / ``enabled_tools`` get everywhere else (``adapter_denial``, ``tool_denial``,
+    ``require_adapter``, ``require_tool``), so ``["JSON"]`` matches the
+    lowercase provider name ``json``. ``enabled_plugins`` entries are dotted
+    Python import paths, which are case-sensitive, so callers leave it False.
     """
     if value is None:
         return None
     if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return [item.lower() for item in items] if lowercase else items
     return None
 
 
@@ -342,10 +349,11 @@ def _narrow_allowlists(
     """
     result = dict(merged)
     for key in _ALLOWLIST_KEYS:
-        global_list = _normalize_allowlist(global_config.get(key))
+        lowercase = key != "enabled_plugins"
+        global_list = _normalize_allowlist(global_config.get(key), lowercase=lowercase)
         if global_list is None or key not in project_config:
             continue
-        project_list = _normalize_allowlist(project_config.get(key))
+        project_list = _normalize_allowlist(project_config.get(key), lowercase=lowercase)
         if project_list is None:
             logger.warning(
                 "Project config %s cannot re-open %s; keeping the global list %s.",
