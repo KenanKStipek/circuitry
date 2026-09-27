@@ -245,6 +245,8 @@ def test_a_skipped_project_config_warning_reaches_the_status_line(
     status = run_app(scenario)
     assert status.startswith(DONE)
     assert "warning" in status
+    # The notice text itself is shown, not just a count (issue #283 review).
+    assert "Skipped project config" in status
 
 
 def test_form_fill_then_launch_reaches_completion(run_app: Any, tmp_path: Path) -> None:

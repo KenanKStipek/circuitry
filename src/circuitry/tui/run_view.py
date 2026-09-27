@@ -743,6 +743,7 @@ class RunScreen(ViewScreen):
             status = f"{DONE} ({self._updates} state updates)"
             if message.result.warnings:
                 status += f" — {len(message.result.warnings)} warning(s)"
+                status += "".join(f"\n{line}" for line in message.result.warnings)
             self._set_status(status, "-done")
         else:
             self._set_status(f"{FAILED}: {message.result.error}", "-failed")

@@ -383,11 +383,13 @@ class ChatScreen(ViewScreen):
         if not callable(launch):  # pragma: no cover - the app always has it
             self._status("This app has no Run view to hand it to.")
             return
-        # A file the model just generated is trusted the same way as `cof
-        # wizard --out f.yml` followed by `cof run f.yml`: the owner reviewed
-        # and saved it. See PR #284's review for the open question of
-        # whether this should instead stay limited.
-        launch(self.saved_path, trust_document=True)
+        # A model-generated document stays limited, same as any other
+        # generated or fetched document (issue #283): saving it does not
+        # name it by path. Running that same file with `cof run f.yml`, or
+        # picking it from the Run view's local-file picker, trusts it as
+        # usual — this hand-off is the one exception carved out for what the
+        # model itself just produced.
+        launch(self.saved_path, trust_document=False)
 
     def _savable(self) -> bool:
         """Guard every save path with the pane's own verdict."""

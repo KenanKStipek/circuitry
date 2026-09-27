@@ -167,15 +167,20 @@ or environment a tool plugin gets, which MCP server commands start, where state
 is persisted and which Python modules are imported.
 
 **The rule.** A file you run by path is trusted like a script you run:
-`cof run ./my.yml`, `cof check` / `cof score` on a path, a local file in the
-TUI, the SDK's `run_orchestration(orchestration_path=...)` /
+`cof run ./my.yml`, `cof check` / `cof score` on a path, a local file picked
+in the TUI's Run view, the SDK's `run_orchestration(orchestration_path=...)` /
 `validate_orchestration` and scheduler jobs apply the document's whole
 `runtime:` block and `plugins:` list. A fetched, library, generated or
 tool-chosen document is limited: `cof run <library name>`, `cof run-library`,
 `run_shared_orchestration`, the MCP `run_orchestration` / `validate_orchestration`
-tools and the REST trigger cannot change host settings. `cof fetch` followed
-by `cof run ./fetched.yml` is running the file by path, so read a fetched file
-before you run it that way.
+tools, the REST trigger and the TUI Library view's "run this entry" (bundled,
+folder or github source alike) cannot change host settings. The TUI Chat
+view's "run it now" hand-off is limited too, even once the draft is saved to
+disk: the document is still what the model just generated, not something you
+named by path. Save it, then run that same file with `cof run f.yml` or pick
+it from the Run view's local-file list, and it trusts like any other local
+file. `cof fetch` followed by `cof run ./fetched.yml` is running the file by
+path, so read a fetched file before you run it that way.
 
 **Mitigation.** A limited document's `runtime:` block contributes only the
 author-level keys in `ORCHESTRATION_RUNTIME_KEYS` — `runtime.complexity` and
@@ -195,9 +200,11 @@ programmatic caller that does not say otherwise is limited. Implementation:
 [`src/circuitry/cli/effective_settings.py`](../src/circuitry/cli/effective_settings.py).
 
 **Residual risk.** A path is trusted whoever wrote the file: a document
-cloned with a repository, downloaded, or saved from the TUI's Chat view runs
-with full host authority once you name it. The notice makes that visible but
-does not stop it. `trust_orchestration_runtime: true` in config (or
+cloned with a repository or downloaded runs with full host authority once you
+name it by path — including a document the TUI's Chat view generated, once
+you save it and then run that saved file by path instead of through Chat's
+own "run it now" hand-off. The notice makes that visible but does not stop
+it. `trust_orchestration_runtime: true` in config (or
 `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME=1`) extends trust to every document the
 host runs, including library names, MCP and REST callers and everything
 reachable through `use: ref:`. Enable it only on a host that runs nothing but
