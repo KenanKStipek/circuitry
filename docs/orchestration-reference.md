@@ -106,6 +106,8 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
       content: "Is this text positive? {{text}}"
 ```
 
+**`on_error` and preflight — optional adapters:** `cof check`/`cof run` walk every `adapter`/`provider` an orchestration references and probe its credentials before anything runs (`check()`, see the plugins pages). By default that's a **hard** dependency: a missing credential fails preflight for the whole file, even if only one effect needs it. Set `on_error: skip` (or `continue`) on every `prompt` effect that uses a given adapter and preflight reclassifies it as **soft** — a missing credential downgrades to a warning naming the effects that will skip, and the run proceeds, leaving those effects' `value` as `null`. An adapter is soft only when *every* effect referencing it tolerates failure; one effect without `on_error` handling makes the whole adapter a hard dependency again, and preflight's error names that effect specifically. This looks at each `prompt` effect's own `on_error`, not an enclosing `dynamic`/`loop`/`if` container's — a `prompt` effect nested in a container that tolerates failure still needs its own `on_error: skip`/`continue` to be classified as soft. `cof run --skip-preflight` bypasses preflight entirely (hard and soft alike) — unrelated to this classification.
+
 ---
 
 ### `dynamic`
@@ -229,6 +231,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 - Final pass (after the loop completes): `prime.<name>.last.<body_effect>.value` — the last *completed* iteration's node, same shape as `iter_<N>`. A pass that errored under `on_error: continue`/`break` is skipped in favor of the last one that finished; a zero-iteration loop writes no `last` key.
 - Aggregated (when `collect` is set): `prime.<name>.collected.value` — array of every iteration's collected effect value
 - From *inside* the body: `prime.<body_effect>.value` — the current pass. See [Referencing a sibling within an iteration](#referencing-a-sibling-within-an-iteration).
+- Termination: `prime.<name>.value.termination.reason` — see [Loop termination](#loop-termination) below.
 
 | Field | Type | Required | Default | Constraints |
 |-------|------|----------|---------|-------------|
@@ -239,14 +242,15 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `max_concurrency` | integer | no | unbounded | Max parallel workers when `flow: tree`. |
 | `body` | array | yes | — | Non-empty list of effects to execute per iteration |
 | `each` | object | one-of | — | Collection iteration; mutually exclusive with `while` |
-| `each.in` | string | yes (each) | — | Root-relative state path to a JSON array — `input.`/`prime.`/`runtime.`-rooted. `input.*` is a first-class source; the array need not come from a `prompt_type: json` effect. `state.`-prefixed and bare-key spellings are hard errors here (`state.` is a CEL-only binding). |
+| `each.in` | string | yes (each) | — | Root-relative state path to a JSON array — `input.`/`prime.`/`runtime.`-rooted, or a binding of an enclosing loop (`each.as`), e.g. `s.crops` inside a loop whose `each.as` is `s`. `input.*` is a first-class source; the array need not come from a `prompt_type: json` effect. `state.`-prefixed spellings and bare keys that name no binding in scope are hard errors here (`state.` is a CEL-only binding). |
 | `each.as` | string | no | `item` | Variable name for current element in body templates *and* in `mode: cel` expressions inside this loop's own body — see [CEL Expressions](#cel-expressions) |
+| `each.truncate` | bool | no | `false` | `false`: a collection longer than `max_iterations` fails the loop at start (see [Loop termination](#loop-termination)). `true`: process only the first `max_iterations` elements and record `termination: max_iterations_reached` plus `unvisited` instead. |
 | `while` | object | one-of | — | Continuation condition; mutually exclusive with `each` |
 | `while.mode` | string | no | `model` | `model` or `cel` |
 | `while.template` | string | model only | — | LLM returns boolean for continuation decision. The runtime wraps it and appends `Should the loop continue? Answer (yes/no):`, so phrase the ask as yes/no — `yes`, `true`, `1` and `y` all parse as true |
 | `while.expr` | string | cel only | — | CEL expression against state |
 | `while.strict` | bool | no | `false` | cel only. When true, an unset `state.` path raises instead of making the expression `False` |
-| `max_iterations` | integer | no | `100` | Hard cap on iterations |
+| `max_iterations` | integer | no | `100` | Hard cap on iterations. For `each`, when set, the collection must not be longer than it unless `each.truncate: true` is set — see [Loop termination](#loop-termination). |
 | `min_iterations` | integer | no | `0` | Minimum iterations before condition is checked |
 | `on_error` | string | no | `fail` | `fail`, `break`, `continue` |
 | `labels` | object | no | — | |
@@ -324,6 +328,32 @@ The condition is checked between passes and sees the pass that just finished
 under the same within-iteration names the body uses — so `{{prime.polish.value}}`
 above is the latest `polish` output, not the first one. Before the first pass
 there is nothing to see yet and the name falls through to the enclosing scope.
+
+#### Loop termination
+
+Every completed named loop node writes `prime.<name>.value.termination.reason`,
+one of:
+
+| Reason | Modes | Meaning |
+|---|---|---|
+| `condition_false` | `while` | The condition evaluated false (after `min_iterations`) — the loop converged. |
+| `collection_exhausted` | `each` | Every element was visited; nothing was cut short. |
+| `max_iterations_reached` | `while`, `each` (with `each.truncate: true`) | The cap ended the loop, not the condition or the collection. `while` prints a `--verbose` warning line when this happens. An `each` loop also writes `termination.unvisited` — the count of elements it never got to. |
+| `collection_unresolved` | `each` | `each.in` didn't resolve to an array (missing path, wrong type). See `meta.each_in_error`. |
+| `condition_error` | `while` | The condition raised under `on_error: break`/`continue` — a broken condition can never become false, so the loop stops rather than spinning to `max_iterations`. |
+| `error` | both | The loop (or a body effect under `on_error: fail`) raised. See `termination.detail` and `meta.error`. |
+
+**`each` and `max_iterations` don't mix the way `while` does.** A `while` loop
+has no other bound, so `max_iterations` is the deliberate floor against
+runaway feedback — hitting it is expected and the run stays green. An `each`
+loop's bound *is* the collection: its length is known before the first pass
+runs, so when `max_iterations` is set on an `each` loop, a collection longer
+than it is never a runaway, it's under-provisioning. By default this **fails
+the loop at start** — before any iteration executes — with a message naming
+both numbers (`collection has 144 items but max_iterations is 100`). Set
+`each.truncate: true` to opt back into processing just the first
+`max_iterations` elements; the node then records `termination:
+max_iterations_reached` and `unvisited` instead of erroring.
 
 #### Referencing a sibling within an iteration
 
@@ -445,6 +475,8 @@ Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously
 | `timeout_ms` | integer | no | — | Per-effect timeout in milliseconds |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `description` | string | no | — | |
+
+Tool providers reference a *tool plugin*, not an *adapter*, so the `prompt`-effect `on_error` reclassification above does not apply here: a missing tool-plugin dependency (e.g. `ffmpeg` not on `PATH`) always hard-fails preflight regardless of this effect's `on_error`.
 
 **Supported providers:**
 
@@ -1084,7 +1116,8 @@ else:
 ### Loop `each.in` Must Be Root-Relative and Resolve to a JSON Array
 
 `each.in` must be rooted at one of the three state namespaces —
-`input.`/`prime.`/`runtime.` — and must resolve to an array at runtime.
+`input.`/`prime.`/`runtime.` — or at a binding of an enclosing loop
+(its `each.as` name), and must resolve to an array at runtime.
 `input.*` is a first-class source, so the array does not have to come from a
 `prompt_type: json` effect; a caller-supplied array works directly:
 
@@ -1119,10 +1152,18 @@ else:
     in: prime.topics.value   # not an array
   body: [...]
 
+# Good: an enclosing loop's binding — a nested loop over a field of the outer item
+- type: loop
+  each: {in: input.sets, as: s}
+  body:
+    - type: loop
+      each: {in: s.crops, as: c}   # s is the enclosing loop's binding
+      body: [...]
+
 # Bad: not root-relative — both are hard errors from `cof check`
 - type: loop
   each:
-    in: topics               # bare key — write input.topics or prime.topics.value
+    in: topics               # bare key, no enclosing loop binds it — write input.topics or prime.topics.value
   body: [...]
 
 - type: loop
@@ -1160,7 +1201,7 @@ The following rules are sufficient for generating structurally correct Circuitry
 **State path addressing:**
 14. In templates (Mustache): use `{{key}}` for initial state keys; use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
 15. In CEL expressions (`if.expr`, `while.expr`): always use the full prefix `state.prime.<name>.value`. Never omit `state.`.
-16. Loop `each.in` must be a root-relative path to a JSON array — `input.<name>`, `prime.<name>.value`, or a `runtime.` path. `input.*` is a first-class source; it need not point to a `prompt_type: json` effect. Bare keys and `state.`-prefixed spellings are hard errors here.
+16. Loop `each.in` must be a root-relative path to a JSON array — `input.<name>`, `prime.<name>.value`, or a `runtime.` path — or a binding of an enclosing loop (its `each.as` name), e.g. `s.crops` inside a loop whose `each.as` is `s`. `input.*` is a first-class source; it need not point to a `prompt_type: json` effect. Bare keys that name no binding in scope and `state.`-prefixed spellings are hard errors here.
 
 **If/else branches:**
 17. Use the same inner effect `name` in both `then` and `else` branches of any `if` effect, so downstream state path references resolve regardless of which branch executed.

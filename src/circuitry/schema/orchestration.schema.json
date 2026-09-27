@@ -365,11 +365,16 @@
           "properties": {
             "in": {
               "type": "string",
-              "description": "Dot-delimited state path resolving to a JSON array, e.g. prime.my_prompt.value."
+              "description": "Dot-delimited state path resolving to a JSON array, e.g. prime.my_prompt.value, or an enclosing loop's each.as binding, e.g. s.crops inside a loop whose each.as is s."
             },
             "as": {
               "type": "string",
               "description": "Variable name for the current element. Defaults to 'item'. Accessible in body templates as {{as_name}} and, inside this loop's own body, in mode: cel expressions as state.<as_name>."
+            },
+            "truncate": {
+              "type": "boolean",
+              "default": false,
+              "description": "Default false: a collection longer than max_iterations fails the loop at start (the length is known up front, so hitting the cap is never a runaway). Set true to process only the first max_iterations elements and record termination: max_iterations_reached plus the unvisited count instead."
             }
           }
         },
@@ -380,7 +385,7 @@
         "max_iterations": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum iteration cap. Default 100."
+          "description": "Maximum iteration cap. Default 100. For each-loops, when set, the collection must not be longer than it unless each.truncate: true is set."
         },
         "min_iterations": {
           "type": "integer",

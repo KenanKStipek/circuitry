@@ -635,10 +635,13 @@ def _compile_loop(
         each_config = effect.get("each")
         if isinstance(each_config, dict):
             in_path = str(each_config.get("in") or "")
-            validate_each_in_path(in_path, effect_path=effect_path)
+            validate_each_in_path(
+                in_path, effect_path=effect_path, loop_names=loop_names
+            )
             each_def = LoopEachDef(
                 in_path=in_path,
                 as_name=each_as_name or "item",
+                truncate=bool(each_config.get("truncate")),
             )
 
     # Iteration bounds

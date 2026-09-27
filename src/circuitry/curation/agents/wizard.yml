@@ -313,6 +313,12 @@ effects:
                    (default 100), min_iterations, on_error (fail | break | continue).
                    - each.in is a state path resolving to an ARRAY; each.as names the element
                      (default `item`), available in the body as {{item}}.
+                   - each + max_iterations: when max_iterations is set on an each loop, a
+                     collection longer than it FAILS the loop at start (before any iteration
+                     runs), naming both numbers, instead of silently truncating. Set
+                     each.truncate: true to opt back into processing only the first
+                     max_iterations elements, recording termination: max_iterations_reached
+                     plus unvisited on the loop node.
                    - while is a condition block (mode: cel | model), checked before each pass.
                    - collect: <body effect name> aggregates that effect's .value across
                      iterations into prime.<loop_name>.collected.value. Requires a named loop.

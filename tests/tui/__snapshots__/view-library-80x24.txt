@@ -5,12 +5,12 @@
   ▊  / to search — name, intent, tags                                        ▎  
   ▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎  
   ╭──────────────╮╭─────────────────────╮╭───────────────────────────────────╮  
-  │▼ All (32)    ││learn/hello          ││ learn/hello                       │  
-  │├── learn (10)││learn/prompt         ││                                   │  
+  │▼ All (33)    ││learn/hello          ││ learn/hello                       │  
+  │├── learn (11)││learn/prompt         ││                                   │  
   │├── utilities ││learn/dynamic_chain  ││ Say hello in a creative way —     │  
   │├── patterns (││learn/dynamic_tree   ││ the simplest orchestration.       │  
   │├── recipes (5││learn/conditional    ││                                   │  
-  │└── agents (5)││learn/loop         ▅▅││ Category    learn                 │  
+  │└── agents (5)││learn/loop         ▇▇││ Category    learn                 │  
   │              ││learn/reflector      ││ File        learn/hello.yml    ▁▁ │  
   │              ││learn/cyberdiner_h…  ││ Difficulty  beginner              │  
   │              ││learn/surrealdb_ro…  ││ Primitives  prompt                │  
@@ -19,6 +19,6 @@
   │              ││utilities/refine     ││                                   │  
   │           ▋  ││utilities/judge      ││ Inputs                            │  
   ╰──────────────╯╰─────────────────────╯╰───────────────────────────────────╯  
-  32/32 in all                                                                  
+  33/33 in all                                                                  
                                                                                 
  ⏎ Run  / Search  e Eject  s Source  r Refresh  ^n Next field  ? Help  q Back / 

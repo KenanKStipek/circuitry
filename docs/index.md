@@ -44,6 +44,7 @@ Last Updated: 2026-05-08
 - [Routing](./routing.md) — signals, band tables, the full model precedence ladder, a worked example, and what the scorer honestly cannot see
 - [`surrealdb` tool plugin](./plugins/surrealdb.md) — SurrealQL + record operations, env-only credentials, readiness and error mapping
 - [Runtime Plugin Catalog](./runtime-plugins.md) — per-plugin schema, redaction, and connection/auth docs for the bundled persistence runtime plugins
+- [Binary tool plugins: `binary` and `env`](./plugins/binary-tools.md) — configuring a machine-specific executable path and environment for `imagemagick`, `ffmpeg`, and the other subprocess-wrapping tool plugins
 
 ## Getting Started
 
