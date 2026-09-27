@@ -128,6 +128,20 @@ def _write_state_json(*, out: Path, state: dict, pretty: bool) -> None:
     out.write_text(dumps_saved_state(state, pretty=pretty) + "\n", encoding="utf-8")
 
 
+def _print_run_warnings(warnings: list[str], *, quiet: bool) -> None:
+    """Print a run's warnings on stderr, for a failed run as for a good one.
+
+    Stderr keeps `--json` / `--tail` stdout machine-readable; only `--quiet`
+    silences them.
+    """
+    if quiet:
+        return
+    for w in warnings:
+        err_console.print(
+            f"[yellow]Warning:[/yellow] {escape(w)}", highlight=False, soft_wrap=True
+        )
+
+
 def _parse_env_vars(env_vars: list[str] | None) -> dict[str, Any]:
     """Parse -e KEY=VALUE entries into a state dict."""
     if not env_vars:
@@ -647,6 +661,7 @@ def run_cmd(
         else console.status("[cyan]Running…[/cyan]")
     ):
         result = run(req)
+    _print_run_warnings(result.warnings, quiet=quiet)
 
     # Resolved --out path: the CLI flag if given, else the profile's `out:`
     # (precedence cli > profile > default — see cli.effective_settings).
@@ -714,10 +729,6 @@ def run_cmd(
     if not tail and (print_state or (not resolved_out and json_out)):
         console.print_json(dumps_saved_state(result.state, pretty=pretty))
 
-    # warnings
-    if result.warnings and not (quiet or json_out):
-        for w in result.warnings:
-            console.print(f"[yellow]Warning:[/yellow] {w}")
 
 
 @app.command("fetch", help="Fetch a shared library orchestration.")
@@ -912,6 +923,7 @@ def run_library_cmd(
         else console.status("[cyan]Running…[/cyan]")
     ):
         result = run(req)
+    _print_run_warnings(result.warnings, quiet=quiet)
 
     if out:
         _write_state_json(out=out, state=result.state, pretty=pretty)
@@ -943,10 +955,6 @@ def run_library_cmd(
 
     if not tail and (print_state or (not out and json_out)):
         console.print_json(dumps_saved_state(result.state, pretty=pretty))
-
-    if result.warnings and not (quiet or json_out):
-        for w in result.warnings:
-            console.print(f"[yellow]Warning:[/yellow] {w}")
 
 
 @app.command(
