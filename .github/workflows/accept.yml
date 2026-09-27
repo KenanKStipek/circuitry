@@ -6,9 +6,10 @@
 # the `accepted` label (upstream template still has the bug, see #216).
 # Acceptance = the human approval gate: /accept comment (must START the
 # comment) or the `accepted` label. Verifies actor allowlist, PR state, then
-# every other check green + no conflicts (polled up to 5 min), then
-# squash-merges. A refused label-triggered run exits 0 (comment only, no
-# failed check on the PR head) so it can never itself block a later accept.
+# every other check green (success/neutral/skipped, allowlisted) + no
+# conflicts (polled up to 5 min), then squash-merges the polled head SHA. A
+# refused label-triggered run exits 0 (comment only, no failed check on the
+# PR head) so it can never itself block a later accept.
 # require_demo is off: circuitry has no Vercel preview surface.
 name: Accept PR
 on:
@@ -92,10 +93,10 @@ jobs:
               break
             fi
 
-            checks_json=$(gh api "repos/$REPO/commits/$head_sha/check-runs" -F per_page=100)
+            checks_json=$(gh api "repos/$REPO/commits/$head_sha/check-runs?per_page=100")
             other=$(echo "$checks_json" | jq -c --arg self "$OWN_CHECK" '[.check_runs[] | select(.name != $self)]')
             pending=$(echo "$other" | jq '[.[] | select(.status != "completed")] | length')
-            failing=$(echo "$other" | jq '[.[] | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled" or .conclusion == "action_required")] | length')
+            failing=$(echo "$other" | jq '[.[] | select(.status == "completed" and ((.conclusion // "") as $c | ["success", "neutral", "skipped"] | index($c) | not))] | length')
 
             if [ "$failing" != "0" ]; then
               reason="$failing other check(s) failing"
@@ -123,5 +124,5 @@ jobs:
             fi
           fi
 
-          gh pr merge "$PR" --repo "$REPO" "--$MERGE_METHOD" --delete-branch
+          gh pr merge "$PR" --repo "$REPO" "--$MERGE_METHOD" --delete-branch --match-head-commit "$head_sha"
           say "Accepted by @$ACTOR — merged via $MERGE_METHOD. Task closes via Closes-link."
