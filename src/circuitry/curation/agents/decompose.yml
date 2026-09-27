@@ -247,7 +247,8 @@ effects:
 
         4) loop — repeats a body. Required: type, body (non-empty), plus `each` OR
            `while`. Optional: name, collect, flow, max_concurrency, max_iterations
-           (default 100), min_iterations, on_error (fail | break | continue).
+           (no default — unset runs until the collection/condition ends it),
+           min_iterations, on_error (fail | break | continue).
            - each.in is a state path resolving to an ARRAY; each.as names the element
              (default `item`), available in the body as {{item}}.
            - each + max_iterations: when max_iterations is set on an each loop, a
