@@ -477,6 +477,7 @@ Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously
 | `prompt` | string | no | — | Primary input text. Mustache-rendered. For comfyui: the image generation prompt |
 | `model` | string | no | — | Model/checkpoint name. For comfyui: checkpoint filename |
 | `params` | object | no | `{}` | Plugin-specific parameters. All string values support Mustache rendering. Takes precedence over top-level `prompt`/`model` |
+| `params_json` | string | no | — | A Mustache template rendered to text and parsed as JSON, producing a real array/object instead of a Mustache-rendered string. Deep-merged over `params` (wins on overlapping keys). See [`params_json`](#params_json) below |
 | `timeout_ms` | integer | no | — | Per-effect timeout in milliseconds |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `description` | string | no | — | |
@@ -533,6 +534,60 @@ Tool providers reference a *tool plugin*, not an *adapter*, so the `prompt`-effe
 | `seed` | integer | random | Seed; auto-generated if absent or negative |
 | `negative_prompt` | string | `""` | Negative prompt |
 | `workflow` | object | — | Optional: full custom ComfyUI workflow (overrides built-in) |
+
+#### `params_json`
+
+`params:` values are Mustache-rendered to **strings** — fine for scalars, but
+there is no way to write a static YAML template for an array or object whose
+shape depends on a prior step (e.g. a list of ticker symbols an earlier
+effect produced). `params_json` closes that gap: its value is a Mustache
+template rendered to text and then parsed as JSON, and the resulting
+object is deep-merged over `params` (its keys win on conflicts). This keeps
+`params` for the parts of the call that are known upfront and reserves
+`params_json` for the parts that have to be assembled at runtime.
+
+A prior step's list/object value can be a native Python list/dict already in
+state (e.g. from an `array`/`object` prompt, the `json` plugin's parse/
+extract, MCP `structuredContent`, a `surrealdb` result, or a loop `each.as`
+item) — `params_json` serializes it back to JSON text when splicing it in.
+It can also be a string that already holds JSON text; that string is
+spliced in verbatim. Either way, use `{{{...}}}` (triple-stache) so the
+value is not HTML-escaped, since `params_json` parses the whole rendered
+template as JSON. Only splice a *whole* JSON value this way — a bare scalar
+like `{{{input.name}}}` inside a JSON string literal breaks if the value
+contains a `"`, `\`, or newline; put scalars under `params:` instead and
+reserve `params_json` for array/object values.
+
+Building a real array for an MCP tool call, from a list a previous step
+computed (`prime.symbol_list.value` holding e.g. `'["AAPL","MSFT","TSLA"]'`):
+```yaml
+- type: tool
+  name: get_equity_quotes
+  provider: mcp
+  params:
+    server: robinhood
+    tool: get_equity_quotes
+  params_json: '{"arguments": {"symbols": {{{prime.symbol_list.value}}} }}'
+```
+This sends `arguments.symbols` as a JSON array in one call instead of one
+`mcp` effect per symbol.
+
+Building a nested object for a `surrealdb` `create`, from a JSON object a
+previous step assembled (`prime.person_json.value`):
+```yaml
+- type: tool
+  name: save_person
+  provider: surrealdb
+  params:
+    mode: create
+    table: person
+  params_json: '{"data": {{{prime.person_json.value}}} }'
+```
+
+A `params_json` that fails to render to valid JSON, or renders to something
+other than a JSON object, is a hard error (not silently ignored) — it is
+treated like any other tool-effect failure and follows the effect's
+`on_error` policy.
 
 ---
 
