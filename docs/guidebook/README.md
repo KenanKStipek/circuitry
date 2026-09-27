@@ -48,4 +48,4 @@ Two documents sit alongside the guidebook and are referenced from it throughout:
 
 ## Other formats
 
-The guidebook is also built as a single PDF and an EPUB for e-readers — see [Building the book](build.md). Prebuilt copies live next to this file: [`circuitry-guidebook.pdf`](circuitry-guidebook.pdf) and [`circuitry-guidebook.epub`](circuitry-guidebook.epub).
+The guidebook can also be built as a single PDF and an EPUB for e-readers — see [Building the book](build.md).

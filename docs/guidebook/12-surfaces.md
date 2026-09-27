@@ -54,7 +54,7 @@ Two ways to write an orchestration without writing YAML, and they are different 
 
 ## The TUI
 
-`cof tui` is the same runtime with a keyboard: nine views, reachable by number, every widget focusable without a mouse.
+`cof tui` is the same runtime with a keyboard: eight views, reachable by number (`3`, Inspect, is still a placeholder screen), every widget focusable without a mouse.
 
 | Key | View | |
 | --- | --- | --- |

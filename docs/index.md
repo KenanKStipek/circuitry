@@ -4,7 +4,7 @@ Start with the [README](../README.md) for install, first run, and the mental mod
 
 ## The language
 
-- [**The Guidebook**](./guidebook/README.md) — the long-form tour, fourteen chapters in three acts, one running example. Also built as [PDF](./guidebook/circuitry-guidebook.pdf) and [EPUB](./guidebook/circuitry-guidebook.epub).
+- [**The Guidebook**](./guidebook/README.md) — the long-form tour, fourteen chapters in three acts, one running example. Can also be built as a PDF and an EPUB — see [Building the book](./guidebook/build.md).
   - Part I — Basics: [Prompt](./guidebook/01-prompt.md) · [Dynamic](./guidebook/02-dynamic.md) · [State](./guidebook/03-state.md) · [Configuration](./guidebook/04-configuration.md) · [Errors](./guidebook/05-errors.md)
   - Part II — Cybernetics: [If](./guidebook/06-if.md) · [Loop](./guidebook/07-loop.md) · [Reflector](./guidebook/08-reflector.md)
   - Part III — The machine in the world: [Composition](./guidebook/09-composition.md) · [Complexity](./guidebook/10-complexity.md) · [Decomposition](./guidebook/11-decomposition.md) · [Surfaces](./guidebook/12-surfaces.md) · [Tools and persistence](./guidebook/13-tools-and-persistence.md) · [The whole meal](./guidebook/14-the-whole-meal.md)
@@ -42,5 +42,6 @@ Start with the [README](../README.md) for install, first run, and the mental mod
 - [Threat Model](./threat-model.md) — attack surfaces, mitigations, allowlists, and known limitations.
 - [Testing Policy](./testing-policy.md) · [Test Matrix](./test-matrix.md) — what every change must cover.
 - [Contributing](../CONTRIBUTING.md) · [Releasing](../RELEASING.md) · [Security](../SECURITY.md) · [Changelog](../CHANGELOG.md)
+- [Product Requirements (v0.1.0)](./prd.md) — original product brief and MVP scope.
 
 When adding a link here, append it at the end of its section rather than mid-list — parallel PRs then merge without conflicts (see [Contributing](../CONTRIBUTING.md#changelog-fragments)).

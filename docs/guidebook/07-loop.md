@@ -2,7 +2,7 @@
 
 The loop body executes, writes state, and the continuation condition evaluates against that new state — each iteration's output is the next iteration's input. This is feedback in the literal cybernetic sense: the output of the system is fed back as input, and the system decides from what it observes whether to go around again.
 
-Two kinds of loop answer two kinds of question. `each` asks "for every one of these?" and walks a collection. `while` asks "again?" and consults a condition — a CEL expression, or the model tasting the dish. Neither is capped unless you say so. An `each` loop walks a collection resolved before its first pass, so it can run long but never forever. A `while` loop runs until its condition says stop, and one whose condition never does runs indefinitely. `max_iterations` is the floor you set under that runaway feedback. It is opt-in, and when you set it, it must be at least 1: `cof check` rejects `max_iterations: 0`.
+Two kinds of loop answer two kinds of question. `each` asks "for every one of these?" and walks a collection. `while` asks "again?" and consults a condition — a CEL expression, or the model tasting the dish. Neither is capped unless you say so. An `each` loop walks a collection resolved before its first pass, so it can run long but never forever. A `while` loop runs until its condition says stop, and one whose condition never does runs indefinitely. `max_iterations` is the ceiling you set over that runaway feedback. It is opt-in, and when you set it, it must be at least 1: `cof check` rejects `max_iterations: 0`.
 
 ## The shape
 
@@ -210,7 +210,7 @@ A **named** loop records everything above: `iter_<N>` per pass, `last`, `collect
 prime.courses.value.iterations               # passes completed
 prime.courses.value.termination.reason       # why it stopped (below)
 prime.courses.value.effects_by_iteration     # what each pass ran
-prime.courses.meta.mode                      # "each" / "while"
+prime.courses.meta.mode                      # "each", or the while condition's "model" / "cel"
 prime.courses.meta.max_iterations / min_iterations   # max_iterations only when set
 prime.courses.meta.each_in_path / each_as    # each loops
 prime.courses.iter_0.cook.value
@@ -237,9 +237,9 @@ An **unnamed** loop is transparent: the body writes at stable paths in the enclo
 
 ## Errors in a loop
 
-`on_error` on a loop governs a failed *pass*: `fail` (default) propagates; `break` ends the loop at the failed pass, keeping what completed before it; `continue` drops the pass and goes on. In a `tree` loop, `continue` lets the other passes finish and drops the failed ones. Under `break` and `continue` alike, `last` is the last pass that completed, never the failed one, and under `break` the failed pass is absent from `collected`.
+`on_error` on a loop governs a failed *pass*: `fail` (default) propagates; `break` ends the loop at the failed pass, keeping what completed before it; `continue` drops the pass and goes on. In a `tree` loop every pass is already running, so `break` and `continue` both let the other passes finish and drop the failed ones. Under `break` and `continue` alike, `last` is the last pass that completed, never the failed one, and under `break` in a `chain` loop the failed pass is absent from `collected`.
 
-Under `continue`, `collected` is not yet that clean. The runtime assembles it from the first *k* passes, where *k* counts the passes that completed. So the failed pass leaves a `null` in the array, and an `each` loop loses one pass from the end for each failure: courses `[soup, salad, roast]` with the salad failing collect as `[soup-steps, null]`. Until that is fixed, read the `iter_<N>` nodes when a `continue` loop has had failures; each failed pass is an `iter_<N>` whose step has a `null` value and an error in `meta`.
+Under `continue`, and under `break` in a `tree` loop, `collected` is not yet that clean. The runtime assembles it from the first *k* passes, where *k* counts the passes that completed. So the failed pass leaves a `null` in the array, and an `each` loop loses one pass from the end for each failure: courses `[soup, salad, roast]` with the salad failing collect as `[soup-steps, null]`. Until that is fixed, read the `iter_<N>` nodes when such a loop has had failures; each failed pass is an `iter_<N>` whose step has a `null` value and an error in `meta`.
 
 ## Inside nested containers
 
