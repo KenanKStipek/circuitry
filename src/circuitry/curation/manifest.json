@@ -441,7 +441,7 @@
       "inputs": {
         "input_yaml": {"type": "string", "required": true, "description": "The orchestration YAML to improve."},
         "original_prompt": {"type": "string", "required": true, "description": "The original intent the orchestration was built for."},
-        "rules": {"type": "string", "required": false, "description": "LLM authoring rules (auto-injected by improve-orchestration script)."}
+        "rules": {"type": "string", "required": false, "description": "LLM authoring rules from src/circuitry/bundled/rules/ (supplied by the caller)."}
       },
       "example": "cof run agents/improver --state input.json"
     },

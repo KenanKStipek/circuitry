@@ -42,6 +42,12 @@ mypy src                           # static types
 
 If you only changed one area, run the targeted suite first (e.g. `pytest tests/cli -q`) and run the full suite before pushing.
 
+Integration tests (real model/persistence backends) are opt-in and skipped by default:
+
+```bash
+CIRCUITRY_RUN_INTEGRATION=1 CIRCUITRY_INTEGRATION_MODEL=smollm2:135m pytest -m integration tests/integration/
+```
+
 ## Changelog fragments
 
 Do **not** edit `CHANGELOG.md`'s `## [Unreleased]` section. With several PRs in

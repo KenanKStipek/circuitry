@@ -93,7 +93,7 @@ def test_schema_property_is_documented_in_rules(prop: str):
     assert rules, f"No rules loaded from {RULES_DIR}"
 
     assert re.search(rf"\b{re.escape(prop)}\b", rules), (
-        f"Schema property '{prop}' is not mentioned anywhere in rules/*.yml. "
+        f"Schema property '{prop}' is not mentioned anywhere in {RULES_DIR}/*.yml. "
         f"Add it to the relevant rule file — if it is runner/config policy rather "
         f"than author-facing, document it as such ('usually omitted')."
     )
