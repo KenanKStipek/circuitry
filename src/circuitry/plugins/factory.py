@@ -110,6 +110,8 @@ from .s3_tool import S3ToolPlugin
 from .screenshot import ScreenshotPlugin
 from .shell import ShellPlugin
 from .slack import SlackPlugin
+from .surrealdb import DEFAULT_URL as _SURREALDB_DEFAULT_URL
+from .surrealdb import SurrealDBPlugin
 from .system_info import SystemInfoPlugin
 from .tar import TarPlugin
 from .uuid import UuidPlugin
@@ -466,6 +468,18 @@ def _build_s3_tool(cfg: dict[str, Any]) -> ToolPlugin:
     return S3ToolPlugin()
 
 
+# SurrealDB reads url / namespace / database from
+# runtime.plugins.surrealdb. Credentials are deliberately absent here —
+# the plugin takes them from the environment only, so nothing secret can
+# reach runtime.effective_settings or persisted state.
+def _build_surrealdb(cfg: dict[str, Any]) -> ToolPlugin:
+    return SurrealDBPlugin(
+        url=str(cfg.get("url") or _SURREALDB_DEFAULT_URL),
+        namespace=str(cfg.get("namespace") or ""),
+        database=str(cfg.get("database") or ""),
+    )
+
+
 def _build_playwright(cfg: dict[str, Any]) -> ToolPlugin:
     del cfg
     return PlaywrightPlugin()
@@ -568,6 +582,7 @@ PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "gcalendar": _build_gcalendar,
     "gdrive": _build_gdrive,
     "s3": _build_s3_tool,
+    "surrealdb": _build_surrealdb,
     "playwright": _build_playwright,
     "screenshot": _build_screenshot,
     "embed": _build_embed,

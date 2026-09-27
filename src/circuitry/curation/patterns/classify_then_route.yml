@@ -16,12 +16,19 @@
 # Run:
 #   cof run patterns/classify_then_route -e query="What's the difference between dynamic and reflector?"
 
+interface:
+  inputs:
+    query:
+      type: string
+      required: true
+      description: The inbound query to classify and answer.
+
 effects:
   - type: use
     name: triage
     ref: utilities/classify
     inputs:
-      content: "{{query}}"
+      content: "{{input.query}}"
       labels:
         - definition          # asks "what is X?"
         - comparison          # asks "X vs Y?"
@@ -41,7 +48,7 @@ effects:
         template: |
           Define the concept the user asked about. One paragraph. No examples unless asked.
 
-          Question: {{query}}
+          Question: {{input.query}}
     else:
       - type: if
         if:
@@ -53,11 +60,11 @@ effects:
             template: |
               Compare the two concepts in the user's question. Present as a 3-bullet contrast: same, different, when to choose.
 
-              Question: {{query}}
+              Question: {{input.query}}
         else:
           - type: prompt
             name: response
             template: |
               The user is asking how to do something. Give 3–5 numbered steps. Concrete actions only.
 
-              Question: {{query}}
+              Question: {{input.query}}

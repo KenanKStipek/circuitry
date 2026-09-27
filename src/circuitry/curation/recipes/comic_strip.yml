@@ -1,8 +1,23 @@
 name: comic_strip
 description: |
   Generates a 2–4 panel comic strip with separate character/backdrop compositing.
-  Inputs: {{prompt}} (optional), {{panel_count}} (0=random, 2–4), {{genre}} (optional)
+  Inputs: {{input.prompt}} (optional), {{input.panel_count}} (0=random, 2–4), {{input.genre}} (optional)
   Outputs: ./output/comics/{{_timestamp}}/ (ref sheets, backdrops, characters, composites, final strip)
+
+interface:
+  inputs:
+    prompt:
+      type: string
+      required: false
+      description: Premise for the strip. If omitted, the model invents one.
+    panel_count:
+      type: number
+      required: false
+      description: Number of panels (2-4). 0 or omitted lets the model choose.
+    genre:
+      type: string
+      required: false
+      description: Genre/tone for the strip. If omitted, defaults to dark comedy.
 
 effects:
   # ── Step 1: Write the concept ────────────────────────────────────────────
@@ -13,16 +28,16 @@ effects:
     template: |
       You are a comedy writer planning a short comic strip.
 
-      {{#genre}}Genre: {{genre}}{{/genre}}
-      {{^genre}}Genre: Joking Hazard-style dark comedy{{/genre}}
+      {{#input.genre}}Genre: {{input.genre}}{{/input.genre}}
+      {{^input.genre}}Genre: Joking Hazard-style dark comedy{{/input.genre}}
 
-      {{#prompt}}Premise: {{prompt}}{{/prompt}}
-      {{^prompt}}No premise was provided. Use the timestamp {{_timestamp}} as a random seed —
+      {{#input.prompt}}Premise: {{input.prompt}}{{/input.prompt}}
+      {{^input.prompt}}No premise was provided. Use the timestamp {{_timestamp}} as a random seed —
       let its digits suggest a theme, setting, or absurd situation. Invent a completely
-      original premise from it.{{/prompt}}
+      original premise from it.{{/input.prompt}}
 
-      {{#panel_count}}Number of panels requested: {{panel_count}}{{/panel_count}}
-      {{^panel_count}}Choose between 2 and 4 panels — pick whatever fits best.{{/panel_count}}
+      {{#input.panel_count}}Number of panels requested: {{input.panel_count}}{{/input.panel_count}}
+      {{^input.panel_count}}Choose between 2 and 4 panels — pick whatever fits best.{{/input.panel_count}}
 
       Panel count rules:
       - If panel_count is 0 or not provided, YOU choose between 2 and 4 panels.

@@ -175,6 +175,7 @@ Evaluates a condition against state and executes exactly one branch (`then` or `
 | `if.mode` | string | no | `model` | `model` or `cel` |
 | `if.template` | string | model only | — | LLM evaluates and returns boolean. The runtime wraps it and appends `Answer (yes/no):`, so phrase the ask as yes/no — `yes`, `true`, `1` and `y` all parse as true |
 | `if.expr` | string | cel only | — | CEL expression; must use `state.prime.<name>.value` prefix |
+| `if.strict` | bool | no | `false` | cel only. When true, an unset `state.` path raises instead of making the expression `False` |
 | `then` | array | yes | — | Effects when condition is true |
 | `else` | array | no | `[]` | Effects when condition is false |
 | `threshold` | number | no | `0.5` | Confidence threshold for model mode |
@@ -239,11 +240,12 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `body` | array | yes | — | Non-empty list of effects to execute per iteration |
 | `each` | object | one-of | — | Collection iteration; mutually exclusive with `while` |
 | `each.in` | string | yes (each) | — | Root-relative state path to a JSON array — `input.`/`prime.`/`runtime.`-rooted. `input.*` is a first-class source; the array need not come from a `prompt_type: json` effect. `state.`-prefixed and bare-key spellings are hard errors here (`state.` is a CEL-only binding). |
-| `each.as` | string | no | `item` | Variable name for current element in body templates |
+| `each.as` | string | no | `item` | Variable name for current element in body templates *and* in `mode: cel` expressions inside this loop's own body — see [CEL Expressions](#cel-expressions) |
 | `while` | object | one-of | — | Continuation condition; mutually exclusive with `each` |
 | `while.mode` | string | no | `model` | `model` or `cel` |
 | `while.template` | string | model only | — | LLM returns boolean for continuation decision. The runtime wraps it and appends `Should the loop continue? Answer (yes/no):`, so phrase the ask as yes/no — `yes`, `true`, `1` and `y` all parse as true |
 | `while.expr` | string | cel only | — | CEL expression against state |
+| `while.strict` | bool | no | `false` | cel only. When true, an unset `state.` path raises instead of making the expression `False` |
 | `max_iterations` | integer | no | `100` | Hard cap on iterations |
 | `min_iterations` | integer | no | `0` | Minimum iterations before condition is checked |
 | `on_error` | string | no | `fail` | `fail`, `break`, `continue` |
@@ -377,6 +379,9 @@ Rules of the form:
   `cof validate` warns on in-body use.
 - In CEL the same forms apply with the `state.` prefix and no braces:
   `state.prime.<step>.value`.
+- **A loop's `each.as` binding and its iteration index are also legal
+  `state.<name>` reads in CEL, but only inside that loop's own body** — see
+  [CEL Expressions](#cel-expressions).
 
 ---
 
@@ -500,7 +505,11 @@ Runs another orchestration as an isolated sub-step. State is fully isolated: dec
 
 Isolated state, shared observation: the child's effects are reported to the parent run's observers — `--live-state`, the TUI, and every runtime plugin's `on_effect_start` / `on_effect_complete` — at paths namespaced under the use node (`prime.<name>.<child_effect>`, nesting further for a `use` inside a `use`). Live snapshots mirror the child's in-flight effects under that node for watchers only; what actually lands in parent state is still exactly what the namespacing mode below says.
 
+Config inheritance: the child executes with the exact same resolved `runtime.*` config as the parent run — adapters, tool plugins (including MCP servers), complexity settings — never re-resolved from disk. See point 30 under "Composition via `use`" below for the one case (a parent-level `runtime:` block of its own) where that can still surprise you.
+
 **State output path:** `prime.<name>.value` (declared-outputs mode) or `prime.<name>.<child_effect>.value` (full-namespace mode)
+
+**`meta.child_errors`:** `null` when nothing was swallowed, otherwise a list of `{path, error}` for every effect anywhere in the child's tree whose own `on_error: skip`/`continue` absorbed a failure — see point 31 below.
 
 | Field | Type | Required | Default | Constraints |
 |-------|------|----------|---------|-------------|
@@ -511,7 +520,7 @@ Isolated state, shared observation: the child's effects are reported to the pare
 | `inline` | string | * | — | Mustache template that renders to orchestration YAML at runtime |
 | `orchestration` | string | * | — | **DEPRECATED** — use `ref` or `path` instead. Still accepted; emits `DeprecationWarning` |
 | `validate` | bool | no | `true` | Schema-validate inline YAML before execution |
-| `inputs` | object | no | `{}` | Map of name → value passed to child as initial state. String values are Mustache-rendered |
+| `inputs` | object | no | `{}` | Map of name → value passed to child as initial state. String values are Mustache-rendered; `{from: <path>}` passes the value at that path unchanged (see [Inputs by reference](#inputs-by-reference)) |
 | `outputs` | object | no | — | Declared outputs — see [Outputs](#outputs). When present, switches to declared-outputs mode |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `description` | string | no | — | |
@@ -562,6 +571,58 @@ resolved: Library source 'hub' (owner/name@main) has not been fetched yet — ru
 ```
 
 The check follows the static `use` graph, so a ref reached transitively through other orchestrations is caught just as early. Genuinely unknown refs (a typo, an entry that no source carries) are not a preflight failure — they surface as the `use` effect's own error at run time.
+
+#### Inputs by reference
+
+A string input is Mustache-rendered, so it always reaches the child as text. To hand the
+child a value as it is (an array, an object, a number, a boolean) write `{from: <path>}`:
+
+```yaml
+- type: loop
+  name: ladder
+  each: {in: input.rungs, as: r}
+  body:
+    - type: use
+      name: rung
+      path: parts/rung.yml
+      inputs:
+        rung: {from: r}                              # the loop item, as an object
+        methods: {from: prime.render.value.methods}  # an array
+        base: "{{input.base}}"                       # a string, rendered as before
+```
+
+- The path is rooted at `input.`, `prime.` or `runtime.` (like `each.in` and `outputs.path`), or at
+  a binding of an enclosing loop (`each.as`, `iter`), with dotted keys and integer list indices
+  after it (`input.rungs.1.name`). Any other root is an error at `cof check` time.
+- The child gets a deep copy: nothing it does can reach the parent's state.
+- A path that resolves to nothing passes `null`; if the child's interface marks that input
+  `required`, the `use` fails with the path in the message.
+- Only a mapping with the single key `from` is a reference. Any other mapping is a literal value.
+
+#### Complete record (opt-in)
+
+In declared-outputs mode only the declared values land at `prime.<name>.value`; what the
+child did (its commands, answers, decisions) is visible in `--live-state` while it runs and
+then dropped. Set `runtime.state.record_children: true` (in config, or in the orchestration's
+own `runtime:` block) to keep it: each `use` node keeps its child's effects beside its
+`value` and `meta`, in the same shape live state shows them, at every depth of `use`, and a
+failed child keeps whatever it got to. The run's `--out` file then holds the whole run.
+
+```yaml
+runtime:
+  state:
+    record_children: true
+```
+
+The record is for reading after the run, not for wiring: downstream effects still read a
+`use`'s declared outputs.
+
+Every `use` node also records, whether or not the setting is on:
+
+| Field | Meaning |
+|-------|---------|
+| `meta.inputs` | What the child received: rendered strings, referenced values, literals |
+| `meta.orchestration_sha256` | SHA-256 of the child's YAML text (the file's bytes, or the rendered inline YAML) |
 
 **Cycle detection:**
 
@@ -718,12 +779,13 @@ the node, so observability sees the skip rather than a gap.
 
 - Mustache templates referencing it render empty:
   `"report on <{{prime.goal.value}}>"` → `"report on <>"`
-- CEL conditions that test for a value evaluate `False` — both by comparison
-  (`state.prime.goal.value == "yes"`) and via the existing error→`False`
-  behavior (`size(state.prime.goal.value) > 0`).
-- Negative tests are the exception worth knowing: `state.prime.goal.value != ""`
-  is `True` against `null`, exactly as it would be for any unset value. Prefer
-  positive tests in conditions that may read a disableable effect.
+- CEL conditions that read it evaluate `False` — a `state.` path that is unset
+  (missing, or resolving through `null`) makes the whole expression `False` by
+  rule, before evaluation, and logs a warning naming the path. That covers
+  comparisons (`state.prime.goal.value == "yes"`), sizes
+  (`size(state.prime.goal.value) > 0`) and negative tests
+  (`state.prime.goal.value != ""`) alike: nothing there is never a satisfied
+  condition.
 
 A run with no `--profile` is unaffected: `enabled` is never set from
 orchestration YAML, so every effect compiles as enabled.
@@ -758,6 +820,150 @@ CEL expressions (in `if.expr` and `while.expr`) evaluate against a root object n
 | `state.prime.pipeline.step.value != ""` | `my_effect.value != ""` |
 
 **Always use the full `state.prime.<name>.value` prefix in CEL expressions.**
+
+#### The language
+
+Expressions are evaluated by [cel-python](https://pypi.org/project/cel-python/),
+a real [CEL](https://github.com/google/cel-spec) implementation, so the whole
+language is available — not a subset:
+
+| Construct | Example |
+|-----------|---------|
+| Comparison | `state.prime.score.value >= 0.8` |
+| Boolean logic, negation | `state.input.a && !state.input.b`, `state.input.a \|\| state.input.b` |
+| Ternary | `state.input.tier == 'pro' ? 10 : 1` |
+| Field presence | `has(state.prime.summary.value)` |
+| Comprehension macros | `state.input.items.all(i, i.score > 0)`, `.exists(...)`, `.exists_one(...)`, `.map(...)`, `.filter(...)` |
+| Standard functions | `size(...)`, `int(...)`, `string(...)`, `double(...)`, `matches(...)` |
+| String methods | `state.input.url.startsWith('https://')`, `.contains(...)`, `.endsWith(...)` |
+| Membership | `'admin' in state.input.roles` |
+| List / map literals | `state.input.role in ['admin', 'owner']` |
+
+Two CEL rules that surprise people coming from Python:
+
+- **Equality is typed.** `1 == true` is `false`, and `'1' == 1` is `false`. Only
+  `int`/`uint`/`double` compare across types (`1 == 1.0` is `true`).
+- **`&&` / `||` / `!`, not `and` / `or` / `not`.** Python spellings do not parse.
+
+Expressions are capped at 4096 characters and parsed once, then cached — a
+loop's `while` expression pays the parser cost on its first iteration only.
+
+Only `state` is in scope. Values are converted into CEL's type system on the
+way in, so an expression cannot reach a Python object's attributes, methods or
+class; anything with no CEL counterpart reads as `null`.
+
+#### CEL scoping: what `state.<key>` may name, at each nesting level
+
+`state.<key>` is a hard error at compile time (`cof check`) unless `<key>`
+resolves to something actually in scope for the expression's exact position
+in the effect tree:
+
+| Nesting level | Legal `state.<key>` roots |
+|---|---|
+| Anywhere | `input`, `prime`, `runtime` |
+| Inside a loop's own `body` (`each` or `while`) | + `iter` — loop metadata, currently just `iter.index` (0-based) |
+| Inside an `each` loop's own `body` | + the loop's `each.as` name, bound to the current element |
+
+These loop-scoped names stack with nesting and are visible to *every*
+`mode: cel` expression inside that body — a body `if`, a nested loop's
+`while`, a conditional several containers deep — the same way Mustache's
+`{{<as_name>}}` already resolves through nested `if`/`dynamic` wrappers.
+They go out of scope the moment the loop returns: an expression after the
+loop, or in a sibling loop, gets the same "not a state namespace" error as
+any other undeclared key.
+
+```yaml
+- type: loop
+  name: filter_scores
+  collect: verdict
+  each: {in: input.scores, as: score}
+  body:
+    - type: if
+      if:
+        mode: cel
+        expr: "state.score >= 50"          # the loop's own `as` binding
+      then:
+        - type: prompt
+          name: verdict
+          template: "{{score}} at index {{_loop_index}} passes."
+      else:
+        - type: prompt
+          name: verdict
+          template: "{{score}} at index {{_loop_index}} fails."
+```
+
+**Nested loops shadow by depth, same as templates.** If an inner loop reuses
+an outer loop's `as` name, `state.<name>` inside the inner body reads the
+inner binding; back in the outer body, after the inner loop returns, the
+same spelling reads the outer binding again. `iter.index` shadows the same
+way — it always means *this* loop's own counter, never an ancestor's.
+
+A name no enclosing loop declared is still a hard error, and the message
+names what actually is in scope:
+
+```
+CEL expression at 'prime.effects[0].body[0]': 'state.other' does not name a
+state namespace ('state' binds to the state root). Write
+'state.input.other' for caller-supplied values or 'state.prime.other' for
+effect outputs. Names bound by an enclosing loop here: iter, score.
+```
+
+See `learn/cel_showcase.yml`'s `filter_scores` loop for a runnable example.
+
+#### What fails where
+
+`cof check` parses every `mode: cel` expression at compile time and rejects
+what is not CEL, naming the effect and the expression:
+
+```
+CEL expression at 'prime.effects[0]' (effect 'gate'): expression does not parse
+(not state.prime.x.value
+ ^). Expression: 'not state.prime.x.value'
+```
+
+At run time an expression that cannot be evaluated — a bad `size()` argument,
+an unknown function — **errors the effect** (`meta.error`) and fails the run,
+the same as a failing tool effect. It never quietly takes the `else` branch.
+Set `on_error: continue` on the conditional to opt into the else-branch
+fallback explicitly; the error is still recorded on `meta.error`.
+
+Reading *unset* state is not an error: see
+[Disabling Effects](#disabling-effects) — an unset path makes
+the expression `False` and logs a warning naming the path.
+
+#### `strict: true` — when absent state must not pick a branch
+
+The default is deliberate: a disabled node or an effect that has not run yet
+reads as `False`, matching the way a template referencing one renders empty.
+For a condition where a missing field silently choosing a branch would be
+unsafe — an order-exit rule, a safety gate — set `strict: true` and an
+unresolved path raises instead:
+
+```yaml
+- type: if
+  name: exit_gate
+  if:
+    mode: cel
+    strict: true
+    expr: "state.prime.tick.value.price <= state.input.stop_price"
+  then:
+    - type: tool
+      name: close_position
+      tool: webhook
+```
+
+Without `strict`, a `tick` that failed to produce a `price` would evaluate the
+whole condition to `False` and take the *no-exit* branch. With it, the effect
+errors and `on_error` decides what happens next.
+
+`strict` applies to `mode: cel` only, on both `if:` and a loop's `while:`.
+
+A path passed to `has()` is exempt from the absent-state rule anywhere in the
+expression — that is what `has()` is for:
+
+```yaml
+expr: "has(state.prime.score.value) && state.prime.score.value > 0.8"
+```
 
 ### Loop Iteration Paths
 
@@ -977,3 +1183,5 @@ The following rules are sufficient for generating structurally correct Circuitry
 27a. **Write outputs as objects** — `summary: {path: prime.summarize.value, type: string}`, in `use.outputs` and `interface.outputs` alike. The bare-string form (`summary: prime.summarize.value`) is accepted in both places and means the same thing, but the object form is the one to write.
 28. **Declare an `interface:` block on reusable utilities** — typed `inputs` (with `required: true`) get validated automatically; typed `outputs` with `path:` auto-generate the caller's output mapping so callers don't have to repeat dot-paths. The curation library at `src/circuitry/curation/utilities/` is the canonical exemplar.
 29. **Don't form `use:` cycles.** A→B→A is detected at validate time and at runtime. If two utilities legitimately need to call each other, factor out the shared logic into a third utility they both call.
+30. **A `use:` child always executes with the exact same resolved runtime config as the parent run** — the merged `runtime.*` block (adapters, tool plugins, MCP servers, complexity settings, ...) is never re-resolved from disk for a composed child, at any nesting depth. A server or plugin declared in the user-level `~/.config/circuitry/config.json` is just as visible to a `use:`-composed child as it is to the same orchestration run standalone. The one place this can still surprise you: if the *top-level* orchestration itself declares its own `runtime:` block, that block replaces matching top-level keys from config wholesale (see [Complexity Configuration](./complexity-config.md) for the same rule applied to `runtime.complexity`) — so a parent-level `runtime.plugins` block that's only there to configure one plugin will also drop any *other* plugin's config (e.g. `runtime.plugins.mcp.servers`) that would otherwise have come from the config file. Omit `runtime.plugins` entirely (or repeat the sibling plugin blocks you still need) rather than partially restating it.
+31. **A child effect's own `on_error: skip`/`continue` doesn't hide the failure from the parent.** The `use` node's `meta.child_errors` (`null` when the child was fully healthy) lists every effect anywhere in the child's tree — at any nesting depth, including through further `use:` effects — whose own `meta.error` was swallowed by its `on_error`, as `{path, error}` pairs relative to the child's root. Check it after a composed run whenever the mapped output alone ("ok: false") isn't enough to tell a real failure apart from an intentionally degraded result.

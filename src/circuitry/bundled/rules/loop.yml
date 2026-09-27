@@ -24,6 +24,7 @@ fields:
       mode: "model or cel"
       template: "Prompt template (when mode: model)"
       expr: "CEL expression (when mode: cel). Use state.prime.<name>.value prefix."
+      strict: "mode: cel only. Default false: an unset state. path makes the condition false and logs a WARNING. true: an unresolved path raises instead."
     note: "Loop repeats while condition is true. while-loops always run sequentially."
   collect:
     type: string

@@ -4,6 +4,7 @@ import re
 from dataclasses import replace
 from typing import Any, Literal, cast
 
+from .cel_eval import validate_cel_syntax
 from .conditional import ConditionalDefinition, ConditionDef
 from .dynamic import DynamicDefinition
 from .loop import LoopDefinition, LoopEachDef, LoopWhileDef
@@ -21,9 +22,10 @@ from .state_ns import (
     validate_bare_input_refs,
     validate_cel_expr,
     validate_each_in_path,
+    validate_reference_path,
 )
 from .tool import ToolDefinition
-from .use import UseDefinition
+from .use import UseDefinition, reference_path
 
 EffectDef = (
     DynamicDefinition
@@ -99,6 +101,7 @@ def _compile_effects_in_scope(
     effects: Any,
     scope_path: str,
     container_path: str,
+    loop_names: frozenset[str] = frozenset(),
 ) -> list[EffectDef]:
     if not isinstance(effects, list):
         raise ValueError(f"{container_path} must be a list of effects.")
@@ -140,6 +143,7 @@ def _compile_effects_in_scope(
                 effect,
                 scope_path=scope_path,
                 effect_path=effect_path,
+                loop_names=loop_names,
             )
         )
 
@@ -309,7 +313,11 @@ def _disable_subtree(node: EffectDef) -> EffectDef:
 
 
 def _compile_effect(
-    effect: dict[str, Any], *, scope_path: str, effect_path: str
+    effect: dict[str, Any],
+    *,
+    scope_path: str,
+    effect_path: str,
+    loop_names: frozenset[str] = frozenset(),
 ) -> EffectDef:
     effect_type = (effect.get("type") or "").strip().lower()
     name = effect.get("name")
@@ -348,6 +356,7 @@ def _compile_effect(
             effects=child_effects,
             scope_path=child_scope,
             container_path=f"{effect_path}.effects",
+            loop_names=loop_names,
         )
 
         return DynamicDefinition(
@@ -358,11 +367,13 @@ def _compile_effect(
 
     if effect_type in ("conditional", "if"):
         return _compile_conditional(
-            effect, scope_path=scope_path, effect_path=effect_path
+            effect, scope_path=scope_path, effect_path=effect_path, loop_names=loop_names
         )
 
     if effect_type == "loop":
-        return _compile_loop(effect, scope_path=scope_path, effect_path=effect_path)
+        return _compile_loop(
+            effect, scope_path=scope_path, effect_path=effect_path, loop_names=loop_names
+        )
 
     if effect_type == "tool":
         if name is None:
@@ -388,7 +399,12 @@ def _compile_effect(
             scope_path=scope_path,
             effect_path=effect_path,
         )
-        return _compile_use(effect, scope_path=scope_path, effect_path=effect_path)
+        return _compile_use(
+            effect,
+            scope_path=scope_path,
+            effect_path=effect_path,
+            loop_names=loop_names,
+        )
 
     if effect_type == "reflector":
         if name is None:
@@ -411,6 +427,7 @@ def _compile_effect(
             effects=inner_effects,
             scope_path=inner_scope,
             container_path=f"{effect_path}.effects",
+            loop_names=loop_names,
         )
 
         inner_dynamic = DynamicDefinition(
@@ -445,7 +462,11 @@ def _compile_effect(
 
 
 def _compile_conditional(
-    effect: dict[str, Any], *, scope_path: str, effect_path: str
+    effect: dict[str, Any],
+    *,
+    scope_path: str,
+    effect_path: str,
+    loop_names: frozenset[str] = frozenset(),
 ) -> ConditionalDefinition:
     """Compile a conditional (if/then/else) effect."""
     name = effect.get("name")  # Optional for conditionals
@@ -478,12 +499,17 @@ def _compile_conditional(
             f"Conditional at '{effect_path}': mode 'cel' requires an 'expr' field."
         )
     if mode == "cel":
-        validate_cel_expr(str(if_def.get("expr") or ""), effect_path=effect_path)
+        expr = str(if_def.get("expr") or "")
+        validate_cel_expr(expr, effect_path=effect_path, extra_names=loop_names)
+        validate_cel_syntax(
+            expr, effect_path=effect_path, effect_name=validated_name
+        )
 
     condition = ConditionDef(
         mode=mode,
         template=if_def.get("template") if mode == "model" else None,
         expr=if_def.get("expr") if mode == "cel" else None,
+        strict=bool(if_def.get("strict")) if mode == "cel" else False,
     )
 
     # Parse 'then' branch (required)
@@ -495,6 +521,7 @@ def _compile_conditional(
         effects=then_effects,
         scope_path=branch_scope,
         container_path=f"{effect_path}.then",
+        loop_names=loop_names,
     )
 
     # Parse 'else' branch (optional)
@@ -503,6 +530,7 @@ def _compile_conditional(
         effects=else_effects,
         scope_path=branch_scope,
         container_path=f"{effect_path}.else",
+        loop_names=loop_names,
     )
 
     # Additional options
@@ -525,7 +553,11 @@ def _compile_conditional(
 
 
 def _compile_loop(
-    effect: dict[str, Any], *, scope_path: str, effect_path: str
+    effect: dict[str, Any],
+    *,
+    scope_path: str,
+    effect_path: str,
+    loop_names: frozenset[str] = frozenset(),
 ) -> LoopDefinition:
     """Compile a loop (while/each) effect."""
     name = effect.get("name")  # Optional for loops
@@ -538,6 +570,20 @@ def _compile_loop(
             effect_path=effect_path,
         )
 
+    # This loop's own CEL-visible bindings, added to whatever an enclosing
+    # loop already contributed, so a nested loop's body sees both — the
+    # inner loop's `iter`/`as` shadow the outer's at runtime (see loop.py),
+    # and both are legal `state.<key>` names for CEL at this nesting depth.
+    body_loop_names = loop_names
+    if "while" in effect or "each" in effect:
+        body_loop_names = body_loop_names | {"iter"}
+    each_as_name: str | None = None
+    if "each" in effect:
+        each_config = effect.get("each")
+        if isinstance(each_config, dict):
+            each_as_name = str(each_config.get("as") or "item")
+            body_loop_names = body_loop_names | {each_as_name}
+
     # Parse body (required)
     body_effects = effect.get("body") or []
     body_scope = (
@@ -547,6 +593,7 @@ def _compile_loop(
         effects=body_effects,
         scope_path=body_scope,
         container_path=f"{effect_path}.body",
+        loop_names=body_loop_names,
     )
 
     # Determine loop mode: while or each
@@ -567,24 +614,31 @@ def _compile_loop(
                     f"Loop while at '{effect_path}': mode 'cel' requires an 'expr' field."
                 )
             if mode == "cel":
+                while_expr = str(while_config.get("expr") or "")
                 validate_cel_expr(
-                    str(while_config.get("expr") or ""), effect_path=effect_path
+                    while_expr, effect_path=effect_path, extra_names=body_loop_names
+                )
+                validate_cel_syntax(
+                    while_expr,
+                    effect_path=effect_path,
+                    effect_name=validated_name,
+                    label="Loop while CEL expression",
                 )
             while_def = LoopWhileDef(
                 mode=mode,
                 template=while_config.get("template") if mode == "model" else None,
                 expr=while_config.get("expr") if mode == "cel" else None,
+                strict=bool(while_config.get("strict")) if mode == "cel" else False,
             )
 
     if "each" in effect:
         each_config = effect.get("each")
         if isinstance(each_config, dict):
             in_path = str(each_config.get("in") or "")
-            as_name = each_config.get("as") or "item"
             validate_each_in_path(in_path, effect_path=effect_path)
             each_def = LoopEachDef(
                 in_path=in_path,
-                as_name=str(as_name),
+                as_name=each_as_name or "item",
             )
 
     # Iteration bounds
@@ -681,7 +735,11 @@ def _compile_tool(
 
 
 def _compile_use(
-    effect: dict[str, Any], *, scope_path: str, effect_path: str
+    effect: dict[str, Any],
+    *,
+    scope_path: str,
+    effect_path: str,
+    loop_names: frozenset[str] = frozenset(),
 ) -> UseDefinition:
     """Compile a use (sub-orchestration) effect."""
     import warnings
@@ -733,6 +791,20 @@ def _compile_use(
     inputs = effect.get("inputs") or None
     if inputs is not None and not isinstance(inputs, dict):
         inputs = None
+
+    # By-reference inputs (`name: {from: <path>}`) pass the resolved value
+    # itself; their paths follow the same rooting rules as `each.in`, plus the
+    # bindings of enclosing loops, so a bad root fails at `cof check` time.
+    for input_name, value in (inputs or {}).items():
+        from_path = reference_path(value)
+        if from_path is not None:
+            validate_reference_path(
+                from_path,
+                use_name=str(name),
+                input_name=str(input_name),
+                effect_path=effect_path,
+                loop_names=loop_names,
+            )
 
     # Canonical form is `name: {path: ...}`; the bare-string shorthand
     # `name: prime.x.value` normalizes to the same thing (see core.outputs).

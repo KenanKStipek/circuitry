@@ -1,0 +1,80 @@
+# surrealdb tool plugin — create a record, select it back, assert equality.
+#
+# `create` returns the new record's generated id, so `select` addresses that
+# exact record instead of scanning the whole table. Both raw SDK responses
+# are reduced to the same {name, score} shape and stringified via the `json`
+# tool — comparing two JSON strings sidesteps incidental differences in how
+# the SDK wraps each response (list vs single record, extra metadata) — then
+# `if`/CEL asserts the two agree, deterministically, with no LLM involved.
+#
+# Requires a running SurrealDB with `runtime.plugins.surrealdb` configured
+# (url/namespace/database) and SURREAL_USER + SURREAL_PASS (or
+# SURREAL_TOKEN) in the environment. See docs/plugins/surrealdb.md.
+#
+# Usage:
+#   cof run learn/surrealdb_roundtrip -e name=Ada -e score=10
+#   cof run learn/surrealdb_roundtrip -e name=Ada -e score=10 --tail
+#
+# State path: prime.result.value (true/false, written by whichever branch ran)
+#
+# Note: inputs are read as {{input.name}} / {{input.score}} — the namespaced
+# form — because a bare {{name}} would resolve against the top-level state,
+# not the `input` namespace that `-e KEY=VALUE` populates.
+
+effects:
+  - name: create_record
+    type: tool
+    provider: surrealdb
+    params:
+      mode: create
+      table: circuitry_roundtrip
+      data:
+        name: "{{input.name}}"
+        score: "{{input.score}}"
+
+  - name: select_record
+    type: tool
+    provider: surrealdb
+    params:
+      mode: select
+      target: "{{prime.create_record.value.id}}"
+
+  # create() on a table returns the new record as a single object; select()
+  # always returns a list (even for one record) — hence the shape difference
+  # from selected_view below.
+  - name: created_view
+    type: tool
+    provider: json
+    params:
+      mode: stringify
+      input:
+        name: "{{prime.create_record.value.name}}"
+        score: "{{prime.create_record.value.score}}"
+
+  - name: selected_view
+    type: tool
+    provider: json
+    params:
+      mode: stringify
+      input:
+        name: "{{prime.select_record.value.0.name}}"
+        score: "{{prime.select_record.value.0.score}}"
+
+  - type: if
+    if:
+      mode: cel
+      expr: "state.prime.created_view.value == state.prime.selected_view.value"
+    then:
+      - name: result
+        type: tool
+        provider: json
+        params:
+          mode: parse
+          input: "true"
+    else:
+      - name: result
+        type: tool
+        provider: json
+        params:
+          mode: parse
+          input: "false"

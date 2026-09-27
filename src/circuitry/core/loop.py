@@ -72,6 +72,9 @@ class LoopWhileDef:
     mode: Literal["model", "cel"] = "model"
     template: str | None = None  # for mode: model
     expr: str | None = None  # for mode: cel
+    #: mode: cel — raise instead of reading an unset ``state.`` path as
+    #: false, so a missing field cannot quietly end (or extend) the loop.
+    strict: bool = False
 
 
 @dataclass(frozen=True)
@@ -252,6 +255,7 @@ class LoopRuntime:
                         iter_ctx = deepcopy(ctx)
                         iter_ctx[self.defn.each_def.as_name] = item
                         iter_ctx["_loop_index"] = idx
+                        iter_ctx["iter"] = {"index": idx}
                         iter_ctxs.append((idx, iter_ctx))
 
                     # Per-thread isolated stores: each thread writes into its own
@@ -352,6 +356,7 @@ class LoopRuntime:
                         iter_ctx = dict(ctx)
                         iter_ctx[self.defn.each_def.as_name] = item
                         iter_ctx["_loop_index"] = idx
+                        iter_ctx["iter"] = {"index": idx}
 
                         try:
                             iter_effects, _ = self._execute_body(
@@ -389,10 +394,32 @@ class LoopRuntime:
                 last_writes: dict[str, Any] = {}
 
                 while iteration_count < self.defn.max_iterations:
-                    # Check continuation condition
-                    should_continue = self._evaluate_condition(
-                        ctx=_scope_ctx(ctx, last_writes)
-                    )
+                    # Check continuation condition. A CEL expression that
+                    # cannot be evaluated raises (see ``cel_eval``) rather
+                    # than answering False — a broken condition used to be
+                    # indistinguishable from an exhausted loop.
+                    try:
+                        should_continue = self._evaluate_condition(
+                            ctx=_scope_ctx(ctx, last_writes)
+                        )
+                    except Exception as exc:
+                        if self.defn.on_error == "fail":
+                            termination_reason = "error"
+                            raise
+                        # break/continue: a condition we cannot evaluate can
+                        # never become false, so continuing would spin to
+                        # max_iterations. Both stop the loop, loudly.
+                        logger.warning(
+                            "Loop %r: while-condition failed (%s); on_error=%s, "
+                            "stopping the loop",
+                            self.defn.name or "<unnamed>",
+                            exc,
+                            self.defn.on_error,
+                        )
+                        termination_reason = "condition_error"
+                        if meta:
+                            meta["error"] = str(exc)
+                        break
 
                     if (
                         not should_continue
@@ -402,6 +429,7 @@ class LoopRuntime:
                         break
 
                     ctx["_loop_index"] = iteration_count
+                    ctx["iter"] = {"index": iteration_count}
                     try:
                         iter_effects, last_writes = self._execute_body(
                             store=child_store,
@@ -602,7 +630,11 @@ Should the loop continue? Answer (yes/no):"""
         if not self.defn.while_def:
             return False
 
-        return evaluate_cel(self.defn.while_def.expr or "", ctx)
+        return evaluate_cel(
+            self.defn.while_def.expr or "",
+            ctx,
+            strict=self.defn.while_def.strict,
+        )
 
     def _body_names(self) -> frozenset[str]:
         """Names of this loop's own body effects."""

@@ -26,7 +26,14 @@
 adapter: cyberdiner
 model: cheap
 
+interface:
+  inputs:
+    question:
+      type: string
+      required: true
+      description: The question to answer.
+
 effects:
   - type: prompt
     name: ask
-    template: "Answer in two sentences, plainly: {{question}}"
+    template: "Answer in two sentences, plainly: {{input.question}}"

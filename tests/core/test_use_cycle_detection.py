@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 import yaml
 
+from circuitry.adapters.base import GenerateResult
 from circuitry.cli.runtime_shim import validate
 from circuitry.core.compiler import compile_orchestration
 from circuitry.core.dynamic import DynamicRuntime
 from circuitry.core.store import Store
+from circuitry.core.use import UseDefinition, UseRuntime
 
 
 def _write(tmp_path: Path, name: str, content: dict) -> Path:
@@ -30,6 +34,28 @@ def _mock_adapter(response: str = "ok") -> MagicMock:
     result.tokens_received = 0
     adapter.generate.return_value = result
     return adapter
+
+
+class _GatedAdapter:
+    """Signals ``started`` on the first ``generate`` call, then blocks on ``release``.
+
+    Lets a test hold a ``use`` child mid-flight — its cycle-guard identity
+    still "on the stack" — while a sibling runs its own cycle check, without
+    depending on real thread-scheduling luck to produce that overlap.
+    """
+
+    name = "gated"
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def generate(
+        self, *, model: str, prompt: str, timeout_seconds: int = 120
+    ) -> GenerateResult:
+        self.started.set()
+        assert self.release.wait(timeout=10), "test never released the gate"
+        return GenerateResult(text="ok", raw={"model": model})
 
 
 # ── Runtime cycle detection (Task 26 / AC 5) ─────────────────────────────────
@@ -109,6 +135,190 @@ def test_runtime_cycle_inline_self_reference() -> None:
     UseRuntime(defn, adapter=adapter, model="test").execute(store=store, ctx=store.state)
     # No cycle raised because the inner inline content is distinct.
     assert "step" in store.state["outer"]
+
+
+def test_use_call_stack_is_not_shared_across_concurrent_siblings(tmp_path: Path) -> None:
+    """A `use` mid-flight must not make its sibling see a false cycle.
+
+    Regression for #206: `_use_call_stack` used to be one list shared (and
+    mutated in place) across every runtime in the run. Tree-flow iterations
+    execute on a `ThreadPoolExecutor`, so one iteration's `use` of a child
+    could still be running — its identity still "on the stack" — when a
+    sibling iteration's `use` of the *same* child ran its own cycle check,
+    which then saw the in-flight sibling as an ancestor and raised a false
+    `RecursionError`.
+
+    A gated adapter holds thread A's child genuinely mid-flight (rather than
+    hoping the real thread scheduler happens to overlap two fast, synchronous
+    calls) so this reproduces the race every run instead of intermittently.
+    """
+    child_path = tmp_path / "child.yml"
+    child_path.write_text(
+        yaml.dump({"effects": [{"type": "prompt", "name": "step", "template": "x"}]})
+    )
+    # A non-empty dict: `Runtime.__init__` does `runtime_config or {}`, which
+    # would silently swap in a fresh, unshared dict if this started empty —
+    # not the race this test means to exercise.
+    shared_runtime_config: dict[str, Any] = {"_test_marker": True}
+    gate = _GatedAdapter()
+
+    thread_a = threading.Thread(
+        target=lambda: UseRuntime(
+            UseDefinition(name="call_child", path=str(child_path)),
+            adapter=gate,
+            model="test",
+            runtime_config=shared_runtime_config,
+        ).execute(store=Store(state={}), ctx={}),
+    )
+    thread_a.start()
+    try:
+        assert gate.started.wait(timeout=5), "thread A never reached its child's generate()"
+
+        # Thread A's `use` has pushed its identity and is now blocked deep
+        # inside the child — exactly the tree-flow window where a sibling
+        # iteration used to see it as an ancestor.
+        sibling_errors: list[BaseException] = []
+
+        def _run_sibling() -> None:
+            try:
+                UseRuntime(
+                    UseDefinition(name="call_child", path=str(child_path)),
+                    adapter=_mock_adapter(),
+                    model="test",
+                    runtime_config=shared_runtime_config,
+                ).execute(store=Store(state={}), ctx={})
+            except BaseException as exc:  # captured for the assertion below
+                sibling_errors.append(exc)
+
+        thread_b = threading.Thread(target=_run_sibling)
+        thread_b.start()
+        thread_b.join(timeout=5)
+        assert not thread_b.is_alive(), "sibling never returned"
+        assert sibling_errors == [], f"sibling falsely raised: {sibling_errors}"
+    finally:
+        gate.release.set()
+        thread_a.join(timeout=5)
+
+
+def test_tree_flow_parallel_use_does_not_false_positive_cycle(tmp_path: Path) -> None:
+    """Sibling tree-flow iterations `use`-ing the same child must not collide.
+
+    End-to-end companion to the unit-level
+    ``test_use_call_stack_is_not_shared_across_concurrent_siblings``: the same
+    guarantee, exercised through a real `flow: tree` loop.
+    """
+    child_path = tmp_path / "child.yml"
+    child_path.write_text(
+        yaml.dump({"effects": [{"type": "prompt", "name": "step", "template": "child {{input.item}}"}]})
+    )
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "outer",
+                "flow": "tree",
+                "max_concurrency": 4,
+                "each": {"in": "input.items", "as": "item"},
+                "body": [
+                    {
+                        "type": "use",
+                        "name": "call_child",
+                        "path": str(child_path),
+                        "inputs": {"item": "{{item}}"},
+                    }
+                ],
+            }
+        ]
+    }
+
+    root = compile_orchestration(orch=orch)
+    adapter = _mock_adapter()
+    store = Store(state={"input": {"items": ["a", "b", "c", "d"]}})
+    # Non-empty: `Runtime.__init__` does `runtime_config or {}`, which would
+    # silently swap in a fresh, unshared dict per thread if this started
+    # empty — a real run's runtime_config is never actually empty (adapter
+    # settings, library sources, etc. are always present).
+    DynamicRuntime(
+        root, adapter=adapter, model="test", runtime_config={"_test_marker": True}
+    ).execute(store=store)
+
+    for idx in range(4):
+        iter_node = store.state["prime"]["outer"][f"iter_{idx}"]
+        assert iter_node["call_child"]["meta"]["error"] is None, iter_node["call_child"]["meta"]
+
+
+def test_two_level_parallel_use_composition_does_not_false_positive_cycle(
+    tmp_path: Path,
+) -> None:
+    """Nested tree-flow loops, each `use`-ing a different child, at two levels.
+
+    The outer tree loop's iterations each `use` a `mid` orchestration that
+    itself runs a tree loop `use`-ing a `leaf` orchestration — parallel
+    composition two levels deep must not false-positive either level's cycle
+    guard.
+    """
+    leaf_path = tmp_path / "leaf.yml"
+    leaf_path.write_text(
+        yaml.dump({"effects": [{"type": "prompt", "name": "step", "template": "leaf {{input.sub}}"}]})
+    )
+    mid_path = tmp_path / "mid.yml"
+    mid_path.write_text(
+        yaml.dump(
+            {
+                "effects": [
+                    {
+                        "type": "loop",
+                        "name": "inner",
+                        "flow": "tree",
+                        "max_concurrency": 4,
+                        "each": {"in": "input.subs", "as": "sub"},
+                        "body": [
+                            {
+                                "type": "use",
+                                "name": "call_leaf",
+                                "path": str(leaf_path),
+                                "inputs": {"sub": "{{sub}}"},
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "outer",
+                "flow": "tree",
+                "max_concurrency": 4,
+                "each": {"in": "input.items", "as": "item"},
+                "body": [
+                    {
+                        "type": "use",
+                        "name": "call_mid",
+                        "path": str(mid_path),
+                        "inputs": {"subs": ["w", "x", "y", "z"]},
+                    }
+                ],
+            }
+        ]
+    }
+
+    root = compile_orchestration(orch=orch)
+    adapter = _mock_adapter()
+    store = Store(state={"input": {"items": ["a", "b", "c", "d"]}})
+    # Non-empty: `Runtime.__init__` does `runtime_config or {}`, which would
+    # silently swap in a fresh, unshared dict per thread if this started
+    # empty — a real run's runtime_config is never actually empty (adapter
+    # settings, library sources, etc. are always present).
+    DynamicRuntime(
+        root, adapter=adapter, model="test", runtime_config={"_test_marker": True}
+    ).execute(store=store)
+
+    for idx in range(4):
+        iter_node = store.state["prime"]["outer"][f"iter_{idx}"]
+        assert iter_node["call_mid"]["meta"]["error"] is None, iter_node["call_mid"]["meta"]
 
 
 def test_runtime_legitimate_diamond_no_cycle(tmp_path: Path) -> None:

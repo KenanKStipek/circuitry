@@ -76,7 +76,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 ```yaml
 - type: prompt
   name: summarize
-  template: "Summarize this article in one sentence: {{article_text}}"
+  template: "Summarize this article in one sentence: {{input.article_text}}"
 ```
 
 **Example — JSON output with schema:**
@@ -88,7 +88,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
     type: array
     items:
       type: string
-  template: "Extract a JSON array of key items from: {{text}}"
+  template: "Extract a JSON array of key items from: {{input.text}}"
 ```
 
 **Example — role-based messages:**
@@ -100,7 +100,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
     - role: system
       content: "You are a classifier. Reply with only true or false."
     - role: user
-      content: "Is this text positive? {{text}}"
+      content: "Is this text positive? {{input.text}}"
 ```
 
 ---
@@ -135,7 +135,7 @@ A named container that executes child effects sequentially (`chain`) or in paral
   effects:
     - type: prompt
       name: outline
-      template: "Outline an essay on: {{topic}}"
+      template: "Outline an essay on: {{input.topic}}"
     - type: prompt
       name: draft
       template: "Write the essay based on this outline:\n{{prime.pipeline.outline.value}}"
@@ -149,11 +149,11 @@ A named container that executes child effects sequentially (`chain`) or in paral
   effects:
     - type: prompt
       name: summary
-      template: "Summarize: {{text}}"
+      template: "Summarize: {{input.text}}"
     - type: prompt
       name: sentiment
       prompt_type: boolean
-      template: "Is this text positive? {{text}}"
+      template: "Is this text positive? {{input.text}}"
 ```
 
 ---
@@ -254,7 +254,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
     type: array
     items:
       type: string
-  template: "List 3 topics about {{subject}} as a JSON array."
+  template: "List 3 topics about {{input.subject}} as a JSON array."
 
 - type: loop
   name: explain
@@ -398,7 +398,7 @@ The built-in prime constrains the plan's step descriptions and every generated e
     - type: prompt
       name: propose_steps
       prompt_type: json
-      template: "Given the goal '{{user_goal}}', what are the next steps?"
+      template: "Given the goal '{{input.user_goal}}', what are the next steps?"
     - type: prompt
       name: execute
       template: "Execute: {{prime.goal.propose_steps.value}}"
@@ -485,13 +485,14 @@ Templates use Mustache syntax (`{{...}}`). Two kinds of references:
 
 | Reference type | Syntax | Example |
 |---------------|--------|---------|
-| Initial state key | `{{key}}` | `{{user_input}}` |
+| Caller-supplied input | `{{input.<name>}}` | `{{input.user_input}}` |
 | Top-level effect output | `{{prime.<name>.value}}` | `{{prime.summarize.value}}` |
 | Nested effect inside dynamic | `{{prime.<dynamic_name>.<child_name>.value}}` | `{{prime.pipeline.outline.value}}` |
 | Loop iteration element | `{{<each.as>}}` or `{{item}}` | `{{topic}}` (when `as: topic`) |
 
 **Rules:**
 - Never use `{{<name>.value}}` or `{{<name>}}` alone for effect outputs — always include the `prime.` prefix
+- Never use a bare `{{<name>}}` for caller-supplied input — always include the `input.` prefix; a bare reference matching a declared `interface.inputs` name is a hard error from `cof check`
 - Nested effects always include their parent dynamic name in the path
 
 ### CEL Expressions
@@ -573,7 +574,7 @@ For complex outputs, break into stages rather than asking the model to do everyt
 # Good: staged
 - type: prompt
   name: outline
-  template: "Outline the key points of: {{text}}"
+  template: "Outline the key points of: {{input.text}}"
 - type: prompt
   name: expand
   template: "Expand each point: {{prime.outline.value}}"
@@ -584,7 +585,7 @@ For complex outputs, break into stages rather than asking the model to do everyt
 # Avoid: single-shot complex generation
 - type: prompt
   name: result
-  template: "Read, outline, expand, and polish this text in one shot: {{text}}"
+  template: "Read, outline, expand, and polish this text in one shot: {{input.text}}"
 ```
 
 ### Same Name in Both If/Else Branches
@@ -665,7 +666,7 @@ The following rules are sufficient for generating structurally correct Circuitry
 13b. Outputs — in `use.outputs` and `interface.outputs` alike — are objects: `summary: {path: prime.summarize.value, type: string}`. A bare path string is accepted as shorthand in both, but write the object form.
 
 **State path addressing:**
-14. In templates (Mustache): use `{{key}}` for initial state keys; use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
+14. In templates (Mustache): use `{{input.<name>}}` for caller-supplied input (never bare `{{key}}` — that is a hard error when `key` matches a declared `interface.inputs` name); use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
 15. In CEL expressions (`if.expr`, `while.expr`): always use the full prefix `state.prime.<name>.value`. Never omit `state.`.
 16. Loop `each.in` must point to a `prompt_type: json` effect whose output is a JSON array (e.g. `prime.my_prompt.value`).
 
