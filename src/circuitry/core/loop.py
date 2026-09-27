@@ -268,7 +268,8 @@ class LoopRuntime:
                     and not self.defn.each_def.truncate
                 ):
                     raise LoopBoundsError(
-                        f"each loop {self.defn.name or '<unnamed>'!r}: collection "
+                        f"each loop {self.defn.name or '<unnamed>'!r} "
+                        f"({self.defn.each_def.in_path}): collection "
                         f"has {len(collection)} items but max_iterations is "
                         f"{self.defn.max_iterations} — raise max_iterations, bound "
                         f"the collection, or set each.truncate: true to process "
@@ -367,19 +368,25 @@ class LoopRuntime:
                             iteration_count += 1
                             last_completed = idx
 
+                    # Truncation status is independent of whether any
+                    # iteration errored — an on_error: continue run with
+                    # failures is still exhausted (or still truncated) on its
+                    # own terms, not silently relabeled by the errors.
+                    if total < len(collection):
+                        # each.truncate: true cut the collection short.
+                        termination_reason = "max_iterations_reached"
+                        unvisited = len(collection) - total
+                    else:
+                        termination_reason = "collection_exhausted"
+
                     if errors:
                         if self.defn.on_error == "fail":
                             termination_reason = "error"
                             raise next(iter(errors.values()))
                         if self.defn.on_error == "break":
                             termination_reason = "error"
-                        # continue: already skipped failed iterations above
-                    elif total < len(collection):
-                        # each.truncate: true cut the collection short.
-                        termination_reason = "max_iterations_reached"
-                        unvisited = len(collection) - total
-                    else:
-                        termination_reason = "collection_exhausted"
+                        # continue: keep the truncation/exhaustion reason
+                        # computed above — errors don't change it.
                 else:
                     # Sequential iteration (default)
                     total = len(collection)

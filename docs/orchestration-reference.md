@@ -248,7 +248,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `while.template` | string | model only | — | LLM returns boolean for continuation decision. The runtime wraps it and appends `Should the loop continue? Answer (yes/no):`, so phrase the ask as yes/no — `yes`, `true`, `1` and `y` all parse as true |
 | `while.expr` | string | cel only | — | CEL expression against state |
 | `while.strict` | bool | no | `false` | cel only. When true, an unset `state.` path raises instead of making the expression `False` |
-| `max_iterations` | integer | no | `100` | Hard cap on iterations. For `each`, must be ≥ the collection length unless `each.truncate: true` is set — see [Loop termination](#loop-termination). |
+| `max_iterations` | integer | no | `100` | Hard cap on iterations. For `each`, when set, the collection must not be longer than it unless `each.truncate: true` is set — see [Loop termination](#loop-termination). |
 | `min_iterations` | integer | no | `0` | Minimum iterations before condition is checked |
 | `on_error` | string | no | `fail` | `fail`, `break`, `continue` |
 | `labels` | object | no | — | |
@@ -345,12 +345,13 @@ one of:
 has no other bound, so `max_iterations` is the deliberate floor against
 runaway feedback — hitting it is expected and the run stays green. An `each`
 loop's bound *is* the collection: its length is known before the first pass
-runs, so a collection longer than `max_iterations` is never a runaway, it's
-under-provisioning. By default this **fails the loop at start** — before any
-iteration executes — with a message naming both numbers (`collection has 144
-items but max_iterations is 100`). Set `each.truncate: true` to opt back into
-processing just the first `max_iterations` elements; the node then records
-`termination: max_iterations_reached` and `unvisited` instead of erroring.
+runs, so when `max_iterations` is set on an `each` loop, a collection longer
+than it is never a runaway, it's under-provisioning. By default this **fails
+the loop at start** — before any iteration executes — with a message naming
+both numbers (`collection has 144 items but max_iterations is 100`). Set
+`each.truncate: true` to opt back into processing just the first
+`max_iterations` elements; the node then records `termination:
+max_iterations_reached` and `unvisited` instead of erroring.
 
 #### Referencing a sibling within an iteration
 

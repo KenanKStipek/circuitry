@@ -152,3 +152,50 @@ def test_validate_rejects_cel_condition_without_expr(tmp_path: Path) -> None:
     result = validate(path)
     assert result["ok"] is False
     assert any("expr" in e.lower() for e in result["errors"])
+
+
+def test_validate_accepts_each_truncate(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "each_truncate.yml",
+        (
+            "effects:\n"
+            "  - type: loop\n"
+            "    name: raster\n"
+            "    max_iterations: 3\n"
+            "    each:\n"
+            "      in: input.items\n"
+            "      as: item\n"
+            "      truncate: true\n"
+            "    body:\n"
+            "      - type: prompt\n"
+            "        name: step\n"
+            "        template: \"{{item}}\"\n"
+        ),
+    )
+    result = validate(path)
+    assert result["ok"] is True
+    assert result["errors"] == []
+
+
+def test_validate_rejects_each_truncate_wrong_type(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "each_truncate_bad.yml",
+        (
+            "effects:\n"
+            "  - type: loop\n"
+            "    name: raster\n"
+            "    each:\n"
+            "      in: input.items\n"
+            "      as: item\n"
+            "      truncate: \"yes\"\n"
+            "    body:\n"
+            "      - type: prompt\n"
+            "        name: step\n"
+            "        template: \"{{item}}\"\n"
+        ),
+    )
+    result = validate(path)
+    assert result["ok"] is False
+    assert len(result["errors"]) >= 1

@@ -97,19 +97,20 @@ know to check:
   of what the condition actually wanted. A `--verbose` run prints a warning
   line when this happens; without `--verbose` the only signal is this field.
 - `max_iterations_reached` on an `each` loop only happens under
-  `each.truncate: true` — by default a collection longer than
-  `max_iterations` fails the loop at start instead (see below), so if you see
-  this reason on an `each` loop, `truncate` is set on purpose somewhere.
-  `termination.unvisited` names how many elements were skipped; a downstream
-  effect that assumed the full collection (an image compositor, an aggregate
-  count) consumed a partial result without any error to point at.
+  `each.truncate: true` — when `max_iterations` is set on an `each` loop and a
+  collection longer than it isn't truncated, the loop fails at start instead
+  (see below), so if you see this reason on an `each` loop, `truncate` is set
+  on purpose somewhere. `termination.unvisited` names how many elements were
+  skipped; a downstream effect that assumed the full collection (an image
+  compositor, an aggregate count) consumed a partial result without any error
+  to point at.
 
-If an `each` loop's collection is longer than `max_iterations` and
-`each.truncate` is *not* set, the loop does not stay green: it raises at loop
-start, before the first iteration runs, naming both numbers (`collection has
-144 items but max_iterations is 100`). That failure surfaces as the loop
-node's `meta.error` and `value.termination.reason == "error"` — trace it back
-through `inspect_divergence_paths` like any other loop failure.
+If an `each` loop has `max_iterations` set, its collection is longer than
+that cap, and `each.truncate` is *not* set, the loop does not stay green: it
+raises at loop start, before the first iteration runs, naming both numbers
+(`collection has 144 items but max_iterations is 100`). That failure surfaces
+as the loop node's `meta.error` and `value.termination.reason == "error"` —
+trace it back through `inspect_divergence_paths` like any other loop failure.
 
 ## Reproducibility Notes
 

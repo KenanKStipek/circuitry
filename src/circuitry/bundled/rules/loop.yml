@@ -45,7 +45,7 @@ fields:
   max_iterations:
     type: integer
     default: 100
-    note: "Hard cap on iterations. For while-loops this is the deliberate safety floor against runaway feedback — hitting it ends the loop and records termination: max_iterations_reached. For each-loops the collection length is known up front, so it must be >= the collection length; otherwise the loop fails at start (see each.truncate to opt out of that check)."
+    note: "Hard cap on iterations. For while-loops this is the deliberate safety floor against runaway feedback — hitting it ends the loop and records termination: max_iterations_reached. For each-loops the collection length is known up front, so when this is set, the collection must not be longer than it; otherwise the loop fails at start (see each.truncate to opt out of that check)."
   min_iterations:
     type: integer
     min: 0
