@@ -12,7 +12,7 @@ from ..core.saved_state import dumps_saved_state
 logger = logging.getLogger(__name__)
 
 #: The least time between two full serialisations of the ``--live-state``
-#: mirror. ``Store.set`` hands every write to the mirror; the ones that land
+#: mirror. Every ``on_write`` hands the mirror a snapshot; the ones that land
 #: inside the interval are coalesced into the next write, so a run makes at
 #: most ``run time / interval`` serialisations plus the final one.
 LIVE_STATE_INTERVAL_SECONDS = 0.5
@@ -48,12 +48,15 @@ def write_live_state(path: Path, state: dict[str, Any]) -> None:
 class LiveStateMirror:
     """The ``--live-state`` writer: coalesced, and never doing I/O under the store lock.
 
-    Called as ``Store.on_write``, which ``Store.set`` invokes while it holds the
-    lock every tree-flow branch shares. The call only records the snapshot and
-    wakes a writer thread. That thread serialises the latest snapshot at most
-    once per *interval* — under *store_lock*, so it never reads a state halfway
-    through a ``Store.set`` — and writes the file after releasing it, so no
-    branch waits on disk.
+    Called as ``Store.on_write`` — by the runtime after each effect, and by
+    ``Store.set`` while it holds the lock every tree-flow branch shares. Only
+    the first call writes the file itself: ``run`` makes it with the initial
+    snapshot, before any effect and outside the lock, so an unwritable path
+    fails the run up front. Every later call just records the snapshot and
+    wakes a writer thread, which serialises the newest one at most once per
+    *interval* — under *store_lock*, so it never reads a state halfway through
+    a ``Store.set`` — and writes the file after releasing it. No branch waits
+    on disk, and a failed write there is logged rather than failing the run.
 
     :meth:`close` stops the thread and writes the state it is given
     synchronously: the run's final state, including everything recorded after
@@ -73,6 +76,7 @@ class LiveStateMirror:
         self._wake = threading.Condition()
         #: The newest snapshot not yet serialised; guarded by ``_wake``.
         self._pending: dict[str, Any] | None = None
+        self._first_written = False
         self._closed = False
         self._next_due = 0.0
         self._thread = threading.Thread(
@@ -82,8 +86,16 @@ class LiveStateMirror:
 
     def __call__(self, state: dict[str, Any]) -> None:
         with self._wake:
-            self._pending = state
-            self._wake.notify()
+            first = not self._first_written
+            self._first_written = True
+            if not first:
+                self._pending = state
+                self._wake.notify()
+                return
+        payload = _encode(state)
+        if payload is not None:
+            _replace_file(self._path, payload)
+        self._next_due = time.monotonic() + self._interval
 
     def _write_loop(self) -> None:
         while True:

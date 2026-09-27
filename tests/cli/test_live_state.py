@@ -153,6 +153,7 @@ def test_store_writes_never_wait_on_the_mirrors_disk_io(
     monkeypatch.setattr(live_state, "_replace_file", slow_replace)
     mirror = LiveStateMirror(tmp_path / "live.json", store_lock=lock, interval=0)
     store = Store({}, on_write=mirror, _lock=lock)
+    mirror(store.root_state)  # run() hands over the initial snapshot first
 
     slowest = 0.0
     for step in range(20):
@@ -164,6 +165,14 @@ def test_store_writes_never_wait_on_the_mirrors_disk_io(
 
     assert writes and all(writes)
     assert slowest < slow_write / 2
+
+
+def test_first_snapshot_is_written_before_the_call_returns(tmp_path: Path) -> None:
+    target = tmp_path / "live.json"
+    mirror = LiveStateMirror(target, store_lock=threading.RLock())
+    mirror({"step": 0})
+    assert _read(target) == {"step": 0}
+    mirror.close({"step": 0})
 
 
 @dataclass
@@ -201,10 +210,12 @@ def _nested_loops(tail: str) -> dict[str, Any]:
     }
 
 
-def _run_with_mirror(tmp_path: Path, orch: dict[str, Any]) -> tuple[Any, Path, Path]:
+def _run_with_mirror(
+    tmp_path: Path, orch: dict[str, Any], *, live: Path | None = None
+) -> tuple[Any, Path, Path]:
     orch_path = tmp_path / "orch.json"
     orch_path.write_text(json.dumps(orch), encoding="utf-8")
-    live = tmp_path / "live.json"
+    live = live or tmp_path / "live.json"
     out = tmp_path / "out.json"
     result = run(
         RunRequest(
@@ -253,3 +264,13 @@ def test_a_run_serialises_the_mirror_at_most_once_per_interval(
     # Nine loop passes and a tail make dozens of Store writes; the mirror
     # serialises the leading snapshot, one per elapsed interval, and the final.
     assert 1 <= len(serialisations) <= elapsed / LIVE_STATE_INTERVAL_SECONDS + 2
+
+
+def test_an_unwritable_live_state_path_fails_the_run_up_front(tmp_path: Path) -> None:
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("", encoding="utf-8")
+    result, _, _ = _run_with_mirror(
+        tmp_path, _nested_loops("done"), live=blocker / "live.json"
+    )
+    assert not result.ok
+    assert "not-a-dir" in (result.error or "")
