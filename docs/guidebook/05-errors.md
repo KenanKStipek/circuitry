@@ -30,9 +30,9 @@ This chapter comes before the cybernetic effects on purpose. A control loop that
 | `skip` | records the error, writes `value: null` | continues with the next effect |
 | `continue` | records the error, value stays `null` | continues with the next effect |
 
-For a leaf effect — prompt, tool, use — `skip` and `continue` are the same degradation: a null value, an error in `meta`, and a run that keeps going. Downstream templates render the missing value as empty; downstream CEL comparisons against it are false. The difference shows on an `if`: `skip` runs *neither* branch (`branch: null`), while `continue` takes the `else` branch as a degraded default. Choose by what downstream needs.
+For a leaf effect — prompt, tool, use — `skip` and `continue` are the same degradation: a null value, an error in `meta`, and a run that keeps going. Downstream templates render the missing value as empty; a downstream CEL expression that reads it is false as a whole, whatever its operator. The difference shows on an `if`: `skip` runs *neither* branch (`branch: null`), while `continue` takes the `else` branch as a degraded default. Choose by what downstream needs.
 
-Loops have their own vocabulary — `fail` / `break` / `continue` — because a failed *pass* is a different thing from a failed effect. [Loop](07-loop.md) covers it; the short form is that `break` ends the loop at the failed pass and `continue` drops that pass and goes on, and neither a dropped pass nor a broken one counts toward `last` or `collected`.
+Loops have their own vocabulary — `fail` / `break` / `continue` — because a failed *pass* is a different thing from a failed effect. [Loop](07-loop.md) covers it; the short form is that `break` ends the loop at the failed pass and `continue` drops that pass and goes on, and neither a dropped pass nor a broken one counts toward `last`.
 
 ## Where failure lands
 
@@ -47,7 +47,7 @@ prime.<container>.meta.error          # "prime.menu.wine: …" — a breadcrumb 
 
 A container that fails closes its own node with `value: false` and a `meta.error` that names the child path, so from the root down you can follow the breadcrumbs to the leaf. `inspect_divergence_paths(state)` in the SDK does the walk for you and returns every errored node in path order.
 
-Two things never happen. A failure never leaves a *partial* value: a `use` child whose run failed discards its scratch state whole, and nothing lands at the parent's path. And a failure never goes unrecorded: even `on_error: skip` writes the error into `meta`, and the per-effect `on_effect_complete` hook fires for the failed node as it does for a successful one, carrying the error.
+Two things never happen. A failure never leaves a *partial* value: a `use` child whose run failed discards its scratch state, and nothing lands at the parent's `value`. (With `runtime.state.record_children: true`, the child's partial record is kept beside that `value` for the audit trail. It is a record, not something downstream reads.) And a failure never goes unrecorded: even `on_error: skip` writes the error into `meta`, and the per-effect `on_effect_complete` hook fires for the failed node as it does for a successful one, carrying the error. That includes a failure the child absorbed: when an effect inside a `use` child skipped its own failure, the `use` node lists it in `meta.child_errors` as `{path, error}`, so a composed run that went green still says what it lost.
 
 ## Designing for degradation
 
@@ -69,11 +69,13 @@ The dinner party has a step that fetches a recipe from the web for inspiration. 
 
 When the fetch fails, `plan_courses` reads "Inspiration, if any: " and carries on. The model gets less; the run gets a menu; the state file says the fetch failed and why. That is the pattern: put `skip` on the effects whose absence downstream can tolerate, leave `fail` on the ones it cannot, and write the downstream templates so that an empty interpolation reads as "none" rather than as a broken sentence.
 
-The other half of the pattern is *not* to reach for `on_error` when what you want is a decision. If the missing recipe should change what happens next — a different planning prompt, say — that is an [`if`](06-if.md) on `state.prime.fetch_recipe.meta.error != null`… except that a negative test against `null` is exactly the CEL shape to avoid. Test positively for the value you need — `size(state.prime.fetch_recipe.value) > 0` — and let the error case fall to `else`.
+The other half of the pattern is *not* to reach for `on_error` when what you want is a decision. If the missing recipe should change what happens next — a different planning prompt, say — that is an [`if`](06-if.md). Remember the CEL rule from [State](03-state.md): an expression that reads a null or missing path is false as a whole. So test positively for the value you need — `size(state.prime.fetch_recipe.value) > 0` — and let the missing case fall to `else`. To branch on the failure itself, test the error: `state.prime.fetch_recipe.meta.error != null` is true when the fetch failed, and false when it succeeded, because a null `error` makes the whole expression false. Do not write `state.prime.fetch_recipe.value == null`: it reads a null path, so it is false even after the skip.
 
 ## Validation is the first error handler
 
 Most failures should never reach the runtime. `cof check` validates a document against the schema and the static rules — namespace-rooted paths, unique sibling names, required schemas, `use` cycles, unfetched library sources — and then runs *preflight*: every adapter and plugin the document references reports whether it can run (`check()`), so a missing API key or an uninstalled binary stops the run before the first model call rather than after the tenth. `cof doctor` runs the same checks against everything compiled in. `--skip-preflight` exists for the moments you know better.
+
+Preflight reads `on_error` too. When every prompt that uses an adapter has its own `on_error: skip` or `continue`, that adapter is a *soft* dependency: a missing credential becomes a warning that names the effects that will skip, `cof check` passes, and the run goes on with those values `null`. One prompt on that adapter without the handling makes it a hard dependency again, and the error names that prompt. Only each prompt's own `on_error` counts, not an enclosing container's. An adapter name that does not exist is always a hard failure.
 
 Warnings are advisory: deprecated spellings and type-keyword names are reported and never change the exit code.
 
@@ -87,7 +89,7 @@ Warnings are advisory: deprecated spellings and type-keyword names are reported 
 
 **Retrying a parse failure without changing the ask.** If a `json` prompt fails its schema three times, the fourth attempt will too. The fix is the template — "Return ONLY …", a smaller schema — not `max_attempts`.
 
-**Catching errors with negative CEL.** `state.prime.x.value != ""` is true against `null`, which is what a skipped effect leaves. Test positively.
+**Testing for `null` in CEL.** `state.prime.x.value == null` is false after a skip, because an expression that reads a null path is false as a whole. Test positively for the value, or test `meta.error != null`.
 
 **Timeouts in the wrong clock.** A cold-loading 70B model needs minutes; put that in the adapter's `timeout_seconds`, not on every effect.
 

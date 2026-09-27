@@ -32,9 +32,9 @@ cof run dinner.yml --state inputs.json                  # inputs from a file
 cof run dinner.yml -e occasion=anniversary --tail       # print only the final effect's value
 cof run dinner.yml --json | jq '.prime.plate.value'     # machine-readable state (automatic when piped)
 cof run dinner.yml --out state.json --pretty            # write the finished state
-cof run dinner.yml --live-state dinner.live.json        # rewrite the state file after every effect
+cof run dinner.yml --live-state dinner.live.json        # mirror the state while it runs (≤ every 0.5 s, and at the end)
 cof run dinner.yml --dry-run                            # no model calls; rendered prompts and shapes
-cof run dinner.yml --verbose                            # per-effect progress, tokens, timing
+cof run dinner.yml --verbose                            # a start and a result line per effect, pass tags, timing
 cof run --last                                          # re-run the previous invocation
 cof run dinner.yml --profile fast                       # apply profiles/fast.yml
 cof run dinner.yml --profile-from-state runs/fast.json  # reconstruct the profile a past run recorded
@@ -45,6 +45,8 @@ cof run dinner.yml --skip-preflight                     # run even if a check() 
 ```
 
 When stdout is not a terminal, `cof run` switches to `--json` with quiet output on its own, so it composes with `jq` and with scripts without flags. `--tail` overrides that when you want the raw final value. `--quiet` suppresses prose; `--config <path>` (or `CIRCUITRY_CONFIG`) points at a specific config file.
+
+`--verbose` prints one start line and one result line per effect. A step inside a loop carries its pass as `[N]`, and a child effect of a `use` is labelled with the `use` that called it. The adapter on a prompt's line is the one the call actually went to, with a failed primary shown before the fallback that answered. The same run also warns when a `while` loop stops at `max_iterations` rather than on its condition.
 
 ### `cof gen` and `cof wizard`
 
@@ -113,7 +115,7 @@ Underneath is the `host_claude` adapter, which is why the plain `cof run` is unc
 
 The run record *is* the observability. Three layers, from cheapest to most durable:
 
-**The state file.** `--out` at the end, `--live-state` as it happens, `--json` on stdout. Every effect's `value`, every `meta` — adapter, model, `model_reason`, `prompt_sent`, tokens, timing, error, fallback chain, complexity score and band, decomposition record — and `runtime.effective_settings.sources` saying where every setting came from. The TUI's Runs view is a browser for exactly this file.
+**The state file.** `--out` at the end, `--live-state` as it happens, `--json` on stdout. Every effect's `value`, every `meta` — adapter, model, `model_reason`, `prompt_sent`, tokens, timing, error, fallback chain, complexity score and band, decomposition record — and `runtime.effective_settings.sources` saying where every setting came from. A loop's `last` is stored once, as a `{"$ref": "iter_<N>"}` to the pass it aliases ([State](03-state.md)). The TUI's Runs view is a browser for exactly this file, and it links those references back.
 
 **Lifecycle hooks.** Runtime plugins subscribe to `on_run_start`, `on_run_success`, `on_run_failure`, and the balanced per-effect pair `on_effect_start` / `on_effect_complete`. `on_effect_start` fires immediately *before* dispatch, carrying the node as it stands — the resolved model, the rendered prompt, the score — which is where a routing decision is observed at the moment it is made; `on_effect_complete` fires once `value` is final, including on failure. A `use` child's effects fire inside their parent's pair at namespaced paths. Plugins observe; they never change control flow, and a plugin that raises is recorded under `runtime.plugins.events` and isolated from the run.
 

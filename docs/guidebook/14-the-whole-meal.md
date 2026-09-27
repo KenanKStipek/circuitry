@@ -96,19 +96,16 @@ effects:
         name: adjust
         template: "Adjust the seasoning of {{prime.check_diet.main_course.value}} and describe the dish now."
 
-  # reflector — plan the final hour of service live, from a stated goal
-  - type: prompt
-    name: goal
-    template: |
-      State the goal for the final hour of service at {{input.occasion}}, in one sentence,
-      given these courses: {{prime.courses.collected.value}}
+  # reflector — plan the final hour of service live; the planner reads only its own template
   - type: reflector
     name: replan_service
     max_effects: 4
     effects:
       - type: prompt
         name: propose_steps
-        template: "Plan the final hour of service. Output must follow the OUTPUT CONTRACT exactly."
+        template: |
+          The courses are cooked and the main course is seasoned. The guests sit down in one hour.
+          Plan the final hour of service. Output must follow the OUTPUT CONTRACT exactly.
 
   # plate — one prompt reads across everything the run produced
   - type: prompt
@@ -142,15 +139,15 @@ prime.menu.wine.value
 prime.courses.iter_0.cook.value … iter_2        one pass per course, cooked in parallel
 prime.courses.collected.value                   the three sets of steps, in menu order
 prime.courses.value.termination.reason          "collection_exhausted"
+prime.season.value.termination.reason          "condition_false", or "max_iterations_reached" if never satisfied
 prime.season.iter_0.adjust.value …              each tasting pass
-prime.season.last.adjust.value                  the final one
-prime.goal.value                                what the planner was told
+prime.season.last                               {"$ref": "iter_<N>"} — the final pass, stored once
 prime.replan_service.generated.iter_0.…         whatever the planner decided to run
 prime.plate.value                               the menu card
 runtime.effective_settings.sources              where every setting came from
 ```
 
-Every effect's `meta` sits beside its value — which model, why, the rendered prompt, tokens, timing, any fallback that answered.
+Every effect's `meta` sits beside its value — which model, why, the rendered prompt, tokens, timing, any fallback that answered. The file stores `season`'s final pass once and points `last` at it; the run itself read `prime.season.last.adjust.value` as a value when `plate` rendered, and `--state` or the TUI's Runs view link the reference back when they load the file.
 
 ## Turning on the complexity layer
 
@@ -193,7 +190,7 @@ The cheap prompts — `wine`, `cook` — route to the small model; `plate`, read
 | [Errors](05-errors.md) | `on_error: skip` on the optional fetch; a template written for an empty value |
 | [If](06-if.md) | `check_diet`, same name in both branches |
 | [Loop](07-loop.md) | `each` with `collect`; `while` with the model as sensor; `last` after the loop |
-| [Reflector](08-reflector.md) | a `goal` effect, then a bounded planner |
+| [Reflector](08-reflector.md) | a bounded planner whose template states the situation |
 | [Composition](09-composition.md) | `make_sauce.yml` with an interface; outputs auto-generated |
 | [Complexity](10-complexity.md), [Decomposition](11-decomposition.md) | switched on in config, invisible to the document |
 | [Surfaces](12-surfaces.md) | `--live-state`, `--explain-routing`, `--decompose-out` |

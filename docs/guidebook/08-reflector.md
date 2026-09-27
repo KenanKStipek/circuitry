@@ -2,7 +2,7 @@
 
 > "Control mechanisms that lay their own plans." — Gordon Pask, *An Approach to Cybernetics* (1961)
 
-`if` chooses between plans that were written in advance. `loop` repeats one. The **reflector** writes the plan: it reads state, asks a model to *generate* the effects to run next, validates what came back against the same schema every hand-written document passes, executes it, and — if asked — does it again with the results in hand. It is the system planning itself, and it is the effect to reach for only when the steps cannot be known up front.
+`if` chooses between plans that were written in advance. `loop` repeats one. The **reflector** writes the plan: it asks a model to *generate* the effects to run next, validates what came back against the same schema every hand-written document passes, executes it, and — if asked — does it again with the results in hand. It is the system planning itself, and it is the effect to reach for only when the steps cannot be known up front.
 
 That last clause is the whole design guidance. A reflector costs a planning call per cycle, produces a topology you did not review, and is bounded only by the limits you set on it. When you *can* write the steps, write them: a chain is cheaper, faster, and auditable before it runs. The reflector is for the roast that burned an hour before the guests arrive — the recovery plan depends on what is in the kitchen now, and no one could have written it yesterday.
 
@@ -23,10 +23,6 @@ Reflector ::= { type: 'reflector', name: NAME, effects: Effect+,   — the plann
 ## A reflector in the kitchen
 
 ```yaml
-- type: prompt
-  name: goal
-  template: "State the goal for the final hour of service at {{input.occasion}}, in one sentence."
-
 - type: reflector
   name: replan_service
   max_effects: 4
@@ -34,13 +30,15 @@ Reflector ::= { type: 'reflector', name: NAME, effects: Effect+,   — the plann
   effects:
     - type: prompt
       name: propose_steps
-      template: "Plan the final hour of service. Output must follow the OUTPUT CONTRACT exactly."
+      template: |
+        The roast burned. Six guests arrive in one hour for an anniversary dinner.
+        Plan the final hour of service. Output must follow the OUTPUT CONTRACT exactly.
 ```
 
 Each planning cycle runs in five phases:
 
-1. **Render the prime directive.** A planning instruction — Circuitry ships a versioned default, `REFLECTOR_PRIME_V1` — is rendered with the reflector's **goal**, its **context**, and `max_effects`. The goal is the value of a root-level effect named `goal`, if the document has one; the context is the run's effective settings. That is the planner's window onto the run, which is why the example above writes a `goal` prompt first.
-2. **Run the inner dynamic** with the rendered prime prepended to the planning prompt's template. The planner sees the directive, then whatever the template says.
+1. **Render the prime directive.** A planning instruction — Circuitry ships a versioned default, `REFLECTOR_PRIME_V1` — is rendered with `max_effects` and two slots, a **goal** and a **context**. In the current runtime both slots render empty; [what the planner can see](#what-the-planner-can-see) below explains why.
+2. **Run the inner dynamic** with the rendered prime prepended to the planning prompt's template. The planner sees the directive, then whatever the template says — which is why the example above writes the situation into the template itself.
 3. **Extract the plan** from the planning step's output: a YAML document with a `done` flag and an `effects` list. Code fences are tolerated; markdown is not.
 4. **Decide whether to stop.** An empty `effects` list stops. `done: true` stops when `stop_on_done` is set (the default) — *without executing that cycle's effects*. `done` means "there is nothing left to do", so a planner that still has work to run must say `done: false`; the last useful plan is always a `done: false` one, and the cycle after it says `done: true` with nothing to run.
 5. **Validate and execute** the plan through `use(inline)` — full schema validation, the same allowlists, the same cycle guards — as a state-isolated child under `prime.<name>.generated.iter_<cycle>`. Then, if cycles remain, plan again.
@@ -75,7 +73,7 @@ The directive also fixes the plan's *language*: [ASD-STE100 Simplified Technical
 
 ## Isolation, and what the plan can see
 
-A generated plan runs as a child with **isolated state**: like any `use` child, it cannot read the parent's `prime` or `input` namespaces. A generated template that references `{{prime.courses.collected.value}}` renders empty. This is by design — the plan is a self-contained document, and everything its prompts need must be in their templates — and it is why the planner is handed a *goal* rather than a state path: the planner writes the specifics into the plan.
+A generated plan runs as a child with **isolated state**: like any `use` child, it cannot read the parent's `prime` or `input` namespaces. A generated template that references `{{prime.courses.collected.value}}` renders empty. This is by design — the plan is a self-contained document, and everything its prompts need must be in their templates — and it is why the planning template should carry the specifics: the planner writes them into the plan.
 
 The parent, on the other hand, sees everything the plan produced:
 
@@ -89,7 +87,16 @@ prime.replan_service.generated.iter_0.rescue_roast.carve_plan.value
 
 Generated effects are addressable at exactly the paths their names dictate, one level under the cycle they ran in — so a downstream prompt can read a plan's results by name once it knows the plan's vocabulary, and a `use` effect elsewhere can wrap the reflector to map specific outputs.
 
-**A note on the planning prompt's own template.** In the current runtime the inner planning dynamic is rendered against the reflector's own node rather than the run's root, so `{{prime.…}}` and `{{input.…}}` references written directly into `propose_steps` do not resolve. The goal mechanism above is the supported channel; put what the planner must know into the `goal` effect, or into the template as literal text.
+### What the planner can see
+
+Today, three things: the directive, the literal text of its own template, and the reflector's own node. Two things that look like channels into the rest of the run are not:
+
+- **The directive's goal and context slots.** They are meant to carry the value of a root-level effect named `goal` and the run's effective settings. The directive looks both up in the store the reflector runs in, which holds `prime` rather than the state root, so it finds neither and both slots render empty. A `goal` effect before the reflector is harmless, and the planner never reads it.
+- **Root references in the planning prompt.** The inner planning dynamic is rendered against the reflector's own node rather than the run's root, so `{{prime.…}}` and `{{input.…}}` written into `propose_steps` render empty too.
+
+The node itself is readable, with paths relative to it. From the second cycle on, `{{{inner.propose_steps.value}}}` is the previous plan (triple-stache: it is YAML), and `{{generated.iter_0.warm_plates.value}}` is what one of its effects produced. That is how a planner works "with the results in hand": name what the last cycle ran, and ask what comes next.
+
+So write into the planning template, as plain text, everything the planner must know about the rest of the run. That keeps a reflector honest about what it is: a planner for a situation you can describe when you write the document, not one that reads the run. When the plan must depend on what the run produced, generate the plan with an ordinary prompt, which can read state, and run it with a `use` effect's `inline:`, as [Composition](09-composition.md) shows.
 
 ## Bounding the feedback
 
@@ -112,7 +119,7 @@ effects:
 
 **A reflector where a chain would do.** If you can name the steps, name them. The reflector's cost is a plan you did not review.
 
-**No `goal`.** A reflector with nothing to plan *from* plans from the settings block. Write the goal effect, and make it specific.
+**A planning template with no specifics.** "Plan the next steps" is all the planner gets, so it plans generic steps. Write the situation into `propose_steps`, as plain text.
 
 **A plan that reads parent state.** Rendered empty; the plan must carry its own specifics.
 

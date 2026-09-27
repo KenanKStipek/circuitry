@@ -10,8 +10,12 @@ NAME        ::= /^[A-Za-z_][A-Za-z0-9_]*$/          — never iter_<N> (reserved
 STRING, INT(≥0 unless noted), NUMBER, BOOL
 TEMPLATE    ::= STRING with Mustache: {{input.<k>}} {{prime.<path>.value}} {{<loop_var>}} {{_loop_index}}
                 (triple-stache {{{…}}} to skip HTML escaping)
-CEL         ::= STRING; 'state' bound to state root; operators == != < <= > >= && || ! size()
+CEL         ::= STRING in CEL (cel-python); 'state' bound to state root, the only binding;
+                inside a loop's own body also state.<each.as> and state.iter.index;
+                an unset or null state. path makes the whole expression false (unless strict)
 STATE_PATH  ::= dot-delimited path rooted at input. | prime. | runtime.
+BINDING_PATH ::= dot-delimited path rooted at an enclosing loop's each.as (or iter)
+REF         ::= { from: STATE_PATH | BINDING_PATH }     — passes the value unchanged
 JSONSCHEMA  ::= a JSON-Schema (draft-07) object
 ```
 
@@ -81,27 +85,33 @@ If        ::= { type: 'if', if: Condition, then: Effect*,
                 on_error?: OnError, labels?: MAP, description?: STRING }
 
 Condition ::= { mode: 'model', template: TEMPLATE }      — LLM answers yes/no
-            | { mode: 'cel',   expr: CEL }               — deterministic
+            | { mode: 'cel',   expr: CEL,                — deterministic
+                strict?: BOOL }                          — default false; true ⇒ unset path is an error
 ```
 
 ### Loop — each xor while
 
 ```
 Loop ::= { type: 'loop', body: Effect+,
-           each: { in: STATE_PATH, as?: NAME }           — in resolves to an array; as default 'item'
+           each: { in: STATE_PATH | BINDING_PATH,        — resolves to an array
+                   as?: NAME,                            — default 'item'
+                   truncate?: BOOL }                     — default false; see max_iterations
            ⊕ while: Condition,                           — checked before each pass; always sequential
            name?: NAME,                                  — named ⇒ iter_<N>/last/collected nodes;
                                                            unnamed ⇒ body overwrites at stable paths
            collect?: NAME,                               — a body step; needs a named loop
            flow?: Flow, max_concurrency?: INT≥1,         — each-loops only
-           max_iterations?: INT,                         — default 100
+           max_iterations?: INT,                         — default 100; each: a longer collection fails
+                                                           at start unless each.truncate
            min_iterations?: INT,
            on_error?: OnErrorLoop, labels?: MAP, description?: STRING }
 ```
 
 Read grammar (post-loop unless noted): `prime.<step>.value` (this pass, body/while only) ·
 `prime.<loop>.iter_<N>.<step>.value` · `prime.<loop>.last.<step>.value` (last *completed* pass) ·
-`prime.<loop>.collected.value`. Unresolved `each.in` ⇒ `collection_unresolved` termination.
+`prime.<loop>.collected.value`. In saved state `last` is `{"$ref": "iter_<N>"}`, linked back on load.
+Termination (`prime.<loop>.value.termination.reason`): `collection_exhausted` · `condition_false` ·
+`max_iterations_reached` (+ `unvisited` when truncated) · `collection_unresolved` · `condition_error` · `error`.
 
 ### Tool — deterministic plugin call → `prime.<name>.value`
 
@@ -109,6 +119,7 @@ Read grammar (post-loop unless noted): `prime.<step>.value` (this pass, body/whi
 Tool ::= { type: 'tool', name: NAME, provider: PLUGIN_NAME,
            prompt?: TEMPLATE, model?: STRING,
            params?: MAP,                                 — string values Mustache-rendered; wins over prompt/model
+           params_json?: TEMPLATE,                       — renders to a JSON object; deep-merged over params
            timeout_ms?: INT, on_error?: OnError, description?: STRING }
 ```
 
@@ -118,7 +129,7 @@ Tool ::= { type: 'tool', name: NAME, provider: PLUGIN_NAME,
 Use ::= { type: 'use', name: NAME,
           ref: LIBRARY_REF ⊕ path: FILE_PATH ⊕ inline: TEMPLATE,   — inline renders to YAML at runtime
           validate?: BOOL,                               — default true; schema-gates inline YAML
-          inputs?: { NAME: value|TEMPLATE … },           — become the child's input.*
+          inputs?: { NAME: value|TEMPLATE|REF … },       — become the child's input.*; TEMPLATE arrives as text
           outputs?: { NAME: OutputDecl … },              — omitted ⇒ full child namespace exposed
           on_error?: OnError, description?: STRING }
 
@@ -140,7 +151,7 @@ Reflector ::= { type: 'reflector', name: NAME, effects: Effect+,   — base temp
 ## Static semantics (beyond shape)
 
 1. Sibling names unique; names are path segments, never paths; never type-keywords (the validator rejects duplicates and warns on type-keyword names).
-2. `each.in`, CEL paths, and template refs must root at a namespace; a declared `interface.inputs` name is referenced only as `{{input.<name>}}` / `state.input.<name>` — anything else is a compile error.
+2. `each.in`, CEL paths, `use` input references, and template refs must root at a namespace — or, inside a loop, at an enclosing loop's binding (`course.steps` for `each.in` and references, `state.course` / `state.iter.index` in CEL); a declared `interface.inputs` name is referenced only as `{{input.<name>}}` / `state.input.<name>` — anything else is a compile error. Every CEL expression must parse.
 3. `schema` required ⇔ structured `prompt_type`; `template` required ⇔ `mode: model`; `expr` required ⇔ `mode: cel`.
 4. `collect` must name a body step, and needs a named loop to have anywhere to write — on an unnamed loop it validates and silently aggregates nothing. Chain-order reads only; tree siblings can't read each other.
 5. `use` cycle guard: an orchestration cannot (transitively) `use` itself.

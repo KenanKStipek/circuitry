@@ -8,6 +8,7 @@ Three kinds of extension carry a run beyond the process, and all three are behin
 Tool ::= { type: 'tool', name: NAME, provider: PLUGIN_NAME,
            prompt?: TEMPLATE, model?: STRING,
            params?: MAP,                                 — string values Mustache-rendered; wins over prompt/model
+           params_json?: TEMPLATE,                       — rendered, parsed as JSON, deep-merged over params
            timeout_ms?: INT, on_error?: 'fail'|'skip'|'continue', description?: STRING }
 ```
 
@@ -23,6 +24,21 @@ A tool effect is a plugin call. Reading a file, fetching a URL, querying SQL, se
 ```
 
 `provider` names the plugin. `params` is the plugin's own vocabulary — every string value is a Mustache template — and for the two media plugins that predate `params`, `prompt` and `model` are top-level shorthand (`params` wins when both are given). The result lands at `prime.<name>.value` in whatever shape the plugin documents: a path, a parsed document, a list of records.
+
+A value rendered into `params` is always a string, so a list from an earlier step arrives as its string form. When a tool needs a real array or object built at run time, write `params_json`: a template that renders to a JSON object, which is parsed and deep-merged over `params` (its keys win). A list or object from state renders into it as JSON:
+
+```yaml
+- type: tool
+  name: open_issue
+  provider: mcp
+  params:
+    server: github
+    tool: create_issue
+    arguments: {owner: "{{input.owner}}", repo: "{{input.repo}}", title: "Tonight's menu"}
+  params_json: '{"arguments": {"labels": {{{prime.menu.plan_courses.value}}}}}'
+```
+
+Here `arguments.labels` is the course list itself, next to the three strings from `params`. A template that does not render to a JSON object fails the tool; it never runs with other parameters than the ones you wrote.
 
 The division of labour is strict. Tools are for what a model *cannot* do — side effects and observations. Text work — summarising, extracting, classifying, writing, coding — is a prompt, and the pattern that joins them is **prompt-then-tool**: a `json` prompt produces the parameters, a tool executes them.
 
@@ -61,7 +77,7 @@ Seventy-odd ship in-tree. By purpose:
 | Browser | `playwright`, `screenshot` |
 | Communication | `email_smtp`, `slack`, `discord` |
 | Productivity SaaS | `github`, `jira`, `linear`, `notion`, `gcalendar`, `gdrive` |
-| Storage | `s3` |
+| Storage | `s3`, `surrealdb` |
 | Audio / image / video | `ffmpeg`, `comfyui`, `imagemagick`, `exiftool`, `ocr`, `yt_dlp`, `mediainfo` |
 | PDF / documents | `pdf_extract`, `pdf_render`, `pandoc` |
 | Embeddings / RAG | `embed`, `rerank`, `vector_search` |
@@ -74,6 +90,23 @@ Seventy-odd ship in-tree. By purpose:
 | MCP | `mcp` — any tool on any MCP server |
 
 `cof list --extensions` prints the exact compiled-in set. Plugins that need optional PyPI packages or external binaries lazy-import; `cof doctor` reports each one's readiness, and `pip install circuitry-cof[<plugin>]` (`[playwright]`, `[github]`, `[embed]`, …) pulls what a plugin needs. `docs/plugins/` documents the media plugins' parameters in full.
+
+The plugins that wrap a command-line program (`imagemagick`, `ffmpeg`, `git`, `pandoc`, `yt_dlp`, and the other subprocess tools) search `PATH` for it by default. Config can name the exact executable and add to its environment — both machine-specific, so both stay out of the document:
+
+```json
+{
+  "runtime": {
+    "plugins": {
+      "imagemagick": {
+        "binary": "~/opt/imagemagick-omp/bin/magick",
+        "env": {"MAGICK_THREAD_LIMIT": "4"}
+      }
+    }
+  }
+}
+```
+
+`binary` is an absolute path (`~` is expanded) and replaces the `PATH` search; `env` is merged over the inherited environment. A configured binary that does not exist fails the tool and preflight with a message that names the setting. Each tool node records the executable that actually ran in `meta.binary`. [Binary tool plugins](../plugins/binary-tools.md) lists the plugins that read these settings.
 
 Two are gated on purpose. `shell` runs a single binary from an allowlist that is deliberately tiny and read-only by default, with a per-effect `allowed_commands` override the author must write down; `python_eval` is likewise sandboxed. Shell metacharacters are rejected in `ffmpeg` paths. And the `enabled_tools` allowlist in config is the deployment-level gate: a document that references a tool outside it fails validation before anything runs.
 
@@ -109,7 +142,7 @@ The `mcp` provider is the client-side complement to the MCP *server* in [Surface
       title: "Tonight's menu: {{prime.plate.value}}"
 ```
 
-Transport is inferred from the shape (`command` → stdio, `url` → HTTP). `operation: list_tools` returns a server's catalogue — a way for an orchestration, or a reflector, to discover capabilities at run time.
+Transport is inferred from the shape (`command` → stdio, `url` → HTTP). The value is the tool's structured content when the server sends it; otherwise, under the default `parse: auto`, its text is parsed as JSON when it is a JSON object or array, and kept as text when not. `operation: list_tools` returns a server's catalogue — a way for an orchestration, or a reflector, to discover capabilities at run time.
 
 ## Adapters
 
@@ -142,12 +175,12 @@ class MyPlugin:
 
 `context` carries `run_id`, `orchestration_path`, `dry_run`, `validate_only`, and `runtime_config`. The per-effect pair is balanced — an effect that fires one fires the other, failure included — and namespaced through `use` children. Plugins register in config (`"plugins": ["my_package.plugins:make_plugin"]`, a `module:attr` that may be a zero-argument factory); a plugin that raises is recorded under `runtime.plugins.events` and never fails the run. The contract version is reported at `runtime.plugins.contract_version`.
 
-Thirty ship in-tree, behind the one protocol:
+Thirty-one ship in-tree, behind the one protocol:
 
 | Kind | Plugins |
 | --- | --- |
 | SQL persistence (one schema, seven dialects) | `sqlite`, `postgres`, `mysql`, `mssql`, `cockroachdb`, `duckdb`, `clickhouse` |
-| Document / KV / object stores | `mongodb`, `couchdb`, `firestore`, `dynamodb`, `elasticsearch`, `opensearch`, `redis`, `memcached`, `s3`, `gcs`, `azure_blob`, `r2` |
+| Document / KV / object stores | `mongodb`, `couchdb`, `firestore`, `dynamodb`, `elasticsearch`, `opensearch`, `surrealdb`, `redis`, `memcached`, `s3`, `gcs`, `azure_blob`, `r2` |
 | Append log | `jsonl_file` |
 | Pub/sub | `kafka`, `nats`, `rabbitmq` |
 | Observability exporters | `opentelemetry`, `sentry`, `datadog`, `honeycomb`, `prometheus`, `loki`, `cloudwatch` |
@@ -196,5 +229,5 @@ With a backend configured, a run loads the last persisted state for the orchestr
 ## See also
 
 - [Plugin Extension Guide](../plugins.md) · [Adapter Conformance](../adapter-conformance.md) · [Postgres Persistence](../postgres-persistence.md).
-- [`docs/plugins/ffmpeg.md`](../plugins/ffmpeg.md) · [`docs/plugins/comfyui.md`](../plugins/comfyui.md).
+- [`docs/plugins/ffmpeg.md`](../plugins/ffmpeg.md) · [`docs/plugins/comfyui.md`](../plugins/comfyui.md) · [`docs/plugins/surrealdb.md`](../plugins/surrealdb.md) · [Binary tool plugins](../plugins/binary-tools.md) · [Runtime Plugin Catalog](../runtime-plugins.md).
 - [Threat Model](../threat-model.md).

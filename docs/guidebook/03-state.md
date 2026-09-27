@@ -21,7 +21,7 @@ State has exactly three root namespaces. Every path starts with one of them.
 | Effect | Writes | Notes |
 | --- | --- | --- |
 | `prompt`, `tool` | `prime.<name>.value` | plus `meta` |
-| `use` | `prime.<name>.value` | a dict of declared outputs — or the child's whole `prime` subtree under `prime.<name>.<child_effect>` when nothing is declared |
+| `use` | `prime.<name>.value` | a dict of declared outputs — or the child's whole `prime` subtree under `prime.<name>.<child_effect>` when nothing is declared; `meta.inputs` records what the child received |
 | `dynamic` | `prime.<name>.<child>…` | one segment per container |
 | named `if` | `prime.<name>.<branch_effect>…` | plus the decision under `value` and `meta` |
 | unnamed `if` | into the parent scope | the branch's effects write as if they were siblings of the `if` |
@@ -53,14 +53,16 @@ state.prime.parse_recipe.value.servings >= 8 && size(state.prime.parse_recipe.va
 !(state.input.diet == 'vegetarian')
 ```
 
-The operators are `== != < <= > >= && || !`, plus `size()`. That is the whole language — deliberately. A predicate that needs more than that is a job for a model-mode condition, or for a prompt that computes the answer into state first.
+This is real [CEL](https://github.com/google/cel-spec), evaluated by cel-python: comparisons, `&& || !`, the `?:` ternary, `has()`, the macros (`all`, `exists`, `exists_one`, `map`, `filter`), and the standard functions (`size()`, `int()`, `string()`, `matches()`, …). Equality is typed the way CEL specifies it, so `1 == true` is `false`. `cof check` parses every expression, so one that does not parse is an error before the run. `state` is the only binding; `cof run learn/cel_showcase` runs one branch per construct.
 
-## Three spellings that fail — and two that silently misbehave
+One rule is Circuitry's own. **An expression that reads an unset path is `false` as a whole**, whatever the operator: a `state.` path that is missing or resolves through `null` makes the whole expression false, and the runtime logs a warning that names the path. So `state.prime.fetch_recipe.value != ""` is false after the fetch was skipped, and so is `state.prime.fetch_recipe.value == null`. Only `has()` is exempt: `has(state.input.diet)` asks whether the key is there. [If](06-if.md) covers `strict: true`, which makes an unset path an error.
+
+## Three spellings that fail — and two that fail only at run time
 
 The compiler enforces the namespace rule wherever it can see the path. Three shapes are hard errors from `cof check`, each with the fix spelled out in the message:
 
 ```yaml
-# ✗ each.in must be rooted at input. / prime. / runtime.
+# ✗ each.in must be rooted at input. / prime. / runtime. (or at an enclosing loop's binding)
 - type: loop
   each: {in: menu, as: course}
   body:
@@ -90,7 +92,7 @@ effects:
     template: "Suggest one main course for {{occasion}}."
 ```
 
-Two more shapes are well-formed YAML that the compiler cannot flag, because a template is free text and a missing reference is legal Mustache. Both go green and produce the wrong prompt:
+Two more shapes are well-formed YAML that the compiler cannot flag. A template is free text and a missing reference is legal Mustache, and the validator checks the paths written after `state.`, not the names written without it. Both pass `cof check`:
 
 ```yaml
 # ✗ runtime — state. is a CEL binding; in a template it resolves to nothing
@@ -100,7 +102,7 @@ Two more shapes are well-formed YAML that the compiler cannot flag, because a te
 ```
 
 ```yaml
-# ✗ runtime — the CEL root is missing, so the expression is false on every run
+# ✗ runtime — the CEL root is missing, so the first evaluation fails the run
 - type: if
   if: {mode: cel, expr: "input.diet == 'vegetarian'"}
   then:
@@ -113,7 +115,7 @@ Two more shapes are well-formed YAML that the compiler cannot flag, because a te
       template: "Suggest a main course."
 ```
 
-The first renders "Suggest one main course for ." The second takes the `else` branch for every guest, vegetarian or not — a CEL expression that errors evaluates to `false`, and an unrooted path errors. The defence against both is the same: read `meta.prompt_sent` on the prompt, and the `branch` recorded on the `if`.
+The first goes green and renders "Suggest one main course for ." The second fails the run the first time it is evaluated. `input` is not a name CEL knows (`state` is the only binding), so the `if` records a CEL evaluation error on its `meta.error`, and the run ends with `ok` false. The second failure is loud; the first is silent. For both, read what the run recorded: `meta.prompt_sent` on the prompt, and `meta.error` on the `if`.
 
 ## Rendering values
 
@@ -133,6 +135,8 @@ A node without `.value` is also a legal read and renders the whole node, `meta` 
 ## Inside a loop
 
 Two bare bindings exist only inside a loop body: `{{<each.as>}}` (the current element of an `each` loop, `{{item}}` by default) and `{{_loop_index}}` (the zero-based pass number, in `each` and `while` loops). They reach every effect in the body however deeply it is nested — inside an `if` branch, a grouping dynamic, an inner loop.
+
+CEL has the same two bindings, one level down: in an `if` condition inside the body, `state.<each.as>` is the current element and `state.iter.index` is the pass number. They are legal only inside the loop that binds them; outside it, `state.course` is the namespace error above. An inner loop's `each.in` can also start at an outer loop's binding (`course.steps`), and [Loop](07-loop.md) shows it.
 
 Within the body, `{{prime.<step>.value}}` means *this pass's* `<step>`. Resolution is a scope chain: the current iteration first, then the enclosing scope, then root — so a root input or an effect that ran before the loop keeps resolving, and a body step with the same name as an outer effect shadows it for the length of the body. The four read forms for loop state — this pass, a fixed pass, the final pass, every pass — are the subject of [Loop](07-loop.md); they are the most-consulted table in the reference.
 
@@ -159,7 +163,11 @@ cof run dinner.yml -e occasion=anniversary --out ./dinner.json --pretty
 cof run dinner.yml -e occasion=anniversary --json | jq '.prime.suggest_dish'
 ```
 
-`--live-state` rewrites the file atomically after every effect; point a viewer at it and you watch the graph grow. `--out` is the finished record. `--json` (automatic when stdout is not a terminal) prints it. And when a run diverges from what you expected, `inspect_divergence_paths(state)` from the SDK walks the whole tree and returns every node with a `meta.error`, in path order — [Troubleshooting State Paths](../troubleshooting-state-paths.md) is the workflow built around it.
+`--live-state` mirrors the graph to the file while the run goes. It writes the first snapshot at once, then at most every half second, and the last write at the end of the run makes the mirror equal to the `--out` state. Each write is atomic, so a viewer pointed at the file watches the graph grow. `--out` is the finished record. `--json` (automatic when stdout is not a terminal) prints it.
+
+A saved state holds each loop's final pass only once. In `--out`, `--json`, and the live mirror, a named loop's `last` is written as a reference to the pass it aliases, `"last": {"$ref": "iter_2"}`. Every reader that loads a state file links it back: `--state`, a persistence resume, and the TUI's Runs view. A run-time read of `{{prime.courses.last.cook.value}}` does not change. Only a tool that reads the file directly must follow the reference: `jq '.prime.courses | .[.last["$ref"]]'`.
+
+And when a run diverges from what you expected, `inspect_divergence_paths(state)` from the SDK walks the whole tree and returns every node with a `meta.error`, in path order — [Troubleshooting State Paths](../troubleshooting-state-paths.md) is the workflow built around it.
 
 ## Anti-patterns
 

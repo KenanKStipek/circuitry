@@ -12,7 +12,7 @@ Orchestrations as organs. The curation library is the organ bank. And — the re
 Use ::= { type: 'use', name: NAME,
           ref: LIBRARY_REF ⊕ path: FILE_PATH ⊕ inline: TEMPLATE,
           validate?: BOOL,                               — default true; gates inline YAML
-          inputs?: { NAME: value | TEMPLATE … },         — become the child's input.*
+          inputs?: { NAME: value | TEMPLATE | {from: PATH} … },   — become the child's input.*
           outputs?: { NAME: OutputDecl … },              — omitted ⇒ full child namespace exposed
           on_error?: 'fail'|'skip'|'continue', description?: STRING }
 
@@ -32,7 +32,9 @@ A `use` runs another orchestration as an isolated sub-step. The child runs in it
     recipe: {path: prime.compose.value, type: string}
 ```
 
-**`inputs`** is a map of child input name to value; string values are Mustache-rendered in the parent before they cross. Inside the child they are `input.base` and `input.style`, indistinguishable from values a caller would have passed on the command line. The child cannot see the parent's `prime` — there is no path from inside `make_sauce.yml` to the parent's `main_course`, which is the point: a child that could read its caller's state could not be reasoned about on its own.
+**`inputs`** is a map of child input name to value; string values are Mustache-rendered in the parent before they cross. Inside the child they are `input.base` and `input.style`, indistinguishable from values a caller would have passed on the command line.
+
+A rendered string always arrives as text, so a list interpolated with `{{…}}` crosses as its string form. To pass a value as it is — an array, an object, a number — write a reference instead of a template: `courses: {from: prime.menu.plan_courses.value}`. The path is rooted at `input.`, `prime.`, or `runtime.`, or at an enclosing loop's binding (`{from: course}` inside a loop over courses), and `cof check` rejects any other root. A reference that resolves to nothing passes `null`, and if the child's interface marks that input required, the `use` fails and names the path. The child cannot see the parent's `prime` — there is no path from inside `make_sauce.yml` to the parent's `main_course`, which is the point: a child that could read its caller's state could not be reasoned about on its own.
 
 **`outputs`** is a map of parent-side name to a path *in the child*: `{path: prime.compose.value, type: string, description: …}`. When present, `prime.sauce.value` is a flat dict of those names — `{{prime.sauce.value.recipe}}` downstream. (A bare string, `recipe: prime.compose.value`, is accepted shorthand for `{path: …}`; write the object form — it is the one the library uses and the one with somewhere to put a `type`.)
 
@@ -126,7 +128,9 @@ Isolated *state*, shared *observation*. The child's effects are reported to the 
 
 **Unfetched sources fail early.** A `ref` into a GitHub source whose cache was never populated fails at validation, naming the command that fixes it (`cof library refresh hub`) — never mid-run. A genuinely unknown ref (a typo) surfaces as the `use` effect's own error when it runs.
 
-Errors inside the child are the child's, under its own effects' `on_error`; a child that fails as a whole fails the `use`, under the `use`'s `on_error`. Nothing partial ever lands — a failed child's scratch state is discarded whole.
+Errors inside the child are the child's, under its own effects' `on_error`; a child that fails as a whole fails the `use`, under the `use`'s `on_error`. Nothing partial ever lands in the `use` node's `value` — a failed child's scratch state is discarded.
+
+The `use` node keeps a record of the call either way. `meta.inputs` is what the child actually received, `meta.orchestration_sha256` is the SHA-256 of the child's YAML, and `meta.child_errors` lists, as `{path, error}`, every effect inside the child that failed and was skipped under its own `on_error` — so a composed call that went green still says what it lost (`null` when nothing did). To keep the child's own effects in the final state as well, set `runtime.state.record_children: true` in config. Each `use` node then holds its child's effects beside the mapped `value`, at every depth, a failed child's partial record included. That is for the audit trail: downstream effects still read the declared outputs, never the recorded child effects.
 
 ## The library
 

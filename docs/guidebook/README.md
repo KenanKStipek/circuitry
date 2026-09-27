@@ -39,7 +39,7 @@ The arc has three acts:
 
 ## How to read the examples
 
-Every YAML block in this guidebook is checked by the test suite: positive examples validate with `cof check`, and every anti-pattern is shown under a **✗** and provably fails validation (or, where the validator can only warn, is marked **⚠** and provably produces that warning). A handful of anti-patterns are wrong at *run* time rather than validation time — the document is well-formed, the run goes green, and the result is silently wrong. Those are marked **✗ runtime**, and the text says exactly what goes wrong.
+Every YAML block in this guidebook is checked by the test suite: positive examples validate with `cof check`, and every anti-pattern is shown under a **✗** and provably fails validation (or, where the validator can only warn, is marked **⚠** and provably produces that warning). A handful of anti-patterns are wrong at *run* time rather than validation time — the document is well-formed and passes `cof check`, and the mistake shows only when the run reaches it: most go green with a silently wrong result, and a few fail the run. Those are marked **✗ runtime**, and the text says exactly what goes wrong.
 
 Two documents sit alongside the guidebook and are referenced from it throughout:
 
