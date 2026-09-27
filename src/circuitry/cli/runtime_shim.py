@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from ..core.runtime_plugins import (
     invoke_plugins,
     load_plugins,
 )
+from ..core.saved_state import link_last_refs
 from ..core.state_ns import migrate_legacy_state
 from ..core.store import Store, build_persistence_backend
 from ..plugins.factory import build_plugin
@@ -35,6 +37,7 @@ from .allowlist import (
 )
 from .config import CircuitryConfig
 from .effective_settings import EffectiveSettings, resolve_effective_settings
+from .live_state import LiveStateMirror
 from .orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
 from .profiles import (
     ProfileSettings,
@@ -142,13 +145,16 @@ def _load_state(
 ) -> dict[str, Any]:
     # The single choke point where caller state enters a run: whatever the
     # source (--state file, -e inline values, REST/TUI/MCP initial_state),
-    # legacy bare root keys are lifted under the `input` namespace here.
+    # legacy bare root keys are lifted under the `input` namespace here, and
+    # a previous run's saved `last` references are relinked to their passes.
     if initial_state is not None:
         # Isolate runtime mutations from caller-owned dictionaries.
-        return migrate_legacy_state(deepcopy(initial_state))
+        return link_last_refs(migrate_legacy_state(deepcopy(initial_state)))
     if not path or not path.exists():
         return migrate_legacy_state({})
-    return migrate_legacy_state(json.loads(path.read_text(encoding="utf-8")))
+    return link_last_refs(
+        migrate_legacy_state(json.loads(path.read_text(encoding="utf-8")))
+    )
 
 
 def run(req: RunRequest) -> RunResult:
@@ -161,6 +167,10 @@ def run(req: RunRequest) -> RunResult:
     # profile, if any, is loaded below. Kept outside the try's happy path so
     # a failure before that point still reports the caller's own --out.
     resolved_out: Path | None = req.out_path
+    # Every store of this run shares one lock; the --live-state mirror
+    # serialises under it and writes the file after releasing it.
+    store_lock = threading.RLock()
+    live_mirror: LiveStateMirror | None = None
 
     try:
         cfg = req.config or CircuitryConfig()
@@ -249,7 +259,9 @@ def run(req: RunRequest) -> RunResult:
                 if isinstance(persisted, dict):
                     # Lift-on-hydrate: pre-namespace snapshots get their
                     # bare root keys moved under `input` (logged once).
-                    hydrated = migrate_legacy_state(deepcopy(persisted))
+                    hydrated = link_last_refs(
+                        migrate_legacy_state(deepcopy(persisted))
+                    )
                     if profile is not None and profile.inputs:
                         # Profile inputs stay the lowest layer: they fill
                         # keys the persisted snapshot doesn't carry rather
@@ -425,9 +437,8 @@ def run(req: RunRequest) -> RunResult:
         # Execute using core runtime against Store
         callbacks: list[Callable[[dict[str, Any]], None]] = []
         if req.live_state_path is not None:
-            from .live_state import make_live_state_callback
-
-            callbacks.append(make_live_state_callback(req.live_state_path))
+            live_mirror = LiveStateMirror(req.live_state_path, store_lock=store_lock)
+            callbacks.append(live_mirror)
         if req.state_observer is not None:
             callbacks.append(req.state_observer)
 
@@ -505,6 +516,7 @@ def run(req: RunRequest) -> RunResult:
             on_write=on_write,
             effect_complete=_compose_effect_observers(effect_observers),
             effect_start=_compose_effect_observers(start_observers),
+            _lock=store_lock,
         )
 
         runtime = DynamicRuntime(
@@ -601,6 +613,17 @@ def run(req: RunRequest) -> RunResult:
         except Exception:
             logger.exception("Error during error-handling cleanup")
         return RunResult(ok=False, state=state, warnings=warnings, error=str(e), out_path=resolved_out)
+    finally:
+        # The final flush, success or failure: everything recorded after the
+        # last effect included, so the mirror ends equal to --out. `warnings`
+        # is the same list every already-built RunResult above holds, so
+        # appending to it here still reaches whichever one is about to be
+        # returned.
+        if live_mirror is not None and live_mirror.close(state):
+            warnings.append(
+                f"Could not keep --live-state {req.live_state_path} in sync with "
+                "the run; see the log for details."
+            )
 
 
 def _compose_effect_observers(

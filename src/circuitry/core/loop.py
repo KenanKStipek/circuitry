@@ -571,7 +571,8 @@ class LoopRuntime:
         ``on_error: continue``/``break`` is skipped in favor of the last one
         that finished, and a zero-iteration loop writes no ``last`` key at
         all — reads fall through/render empty exactly like a missing
-        ``iter_<N>``.
+        ``iter_<N>``. Saved state writes the alias as a reference to the
+        pass, not a second copy (:mod:`circuitry.core.saved_state`).
         """
         if last_completed is None:
             return
