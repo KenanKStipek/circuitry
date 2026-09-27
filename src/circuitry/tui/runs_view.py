@@ -542,6 +542,7 @@ class RunsScreen(ViewScreen):
             model_override=stashed.model or None,
             skip_preflight=stashed.skip_preflight,
             profile_name=stashed.profile or None,
+            trust_document=stashed.trust_document,
         )
         self.store.begin(label=orch.name)
         self._mode = LIVE

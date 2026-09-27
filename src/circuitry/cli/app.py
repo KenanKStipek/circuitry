@@ -259,7 +259,14 @@ def _do_validate(
         _print_header("Circuitry · Validate")
         console.print(f"[bold]Config:[/bold] {describe_config_sources(cfg.sources)}")
     with console.status("[cyan]Validating…[/cyan]") if not json_out else nullcontext():
-        result = validate(orchestration, config=cfg, skip_preflight=skip_preflight)
+        # The argument is always a path the user named: trusted like `cof run
+        # ./file.yml`, so the report matches what that run would apply.
+        result = validate(
+            orchestration,
+            config=cfg,
+            skip_preflight=skip_preflight,
+            trust_document=True,
+        )
 
     if json_out:
         console.print_json(json.dumps(result, ensure_ascii=False))
@@ -313,6 +320,16 @@ def _lookup_entry(registry: LibraryRegistry, name: str) -> Entry | None:
     return resolution.entry
 
 
+def _names_a_file(name_or_path: str) -> bool:
+    """Whether *name_or_path* is a file on disk rather than a library name.
+
+    The first step of `_resolve_orchestration`, and what makes a `cof run`
+    argument a document the user named by path — a trusted one (see
+    RunRequest.trust_document).
+    """
+    return Path(name_or_path).is_file()
+
+
 def _resolve_orchestration(
     name_or_path: str,
     *,
@@ -331,9 +348,8 @@ def _resolve_orchestration(
     JSON-RPC over stdout — stay silent by default.
     """
     # 1. Try as a file path
-    candidate = Path(name_or_path)
-    if candidate.exists() and candidate.is_file():
-        return candidate
+    if _names_a_file(name_or_path):
+        return Path(name_or_path)
 
     # 2. Try library source resolution
     try:
@@ -366,6 +382,10 @@ RUN_EPILOG = """
   cof run --last
 
 [bold]Resolution order:[/bold] local file path > bundled orchestration name.
+
+[bold]Trust:[/bold] a file you name by path applies its whole runtime: block
+and plugins: list, with one notice naming any host settings among them; a
+library name applies only runtime.complexity and runtime.state.
 
 [bold]Settings precedence:[/bold] CLI flags (--adapter/--model) > --profile >
 orchestration > environment (CIRCUITRY_ADAPTER/CIRCUITRY_MODEL) > config file
@@ -512,9 +532,13 @@ def run_cmd(
     ),
 ):
     # --last: replay stashed args
+    stashed_trust: bool | None = None
     if last:
         stashed = _load_last_run()
         orchestration = stashed["orchestration"]
+        # The stash holds the resolved file even for a library name, so
+        # whether the original run named a file comes from the stash too.
+        stashed_trust = stashed.get("trust_document") is True
         config = Path(stashed["config"]) if stashed.get("config") else None
         state = Path(stashed["state"]) if stashed.get("state") else None
         out = Path(stashed["out"]) if stashed.get("out") else None
@@ -560,6 +584,12 @@ def run_cmd(
     # for example one skipped file that defined runtime.library sources —
     # can still explain an "Orchestration not found".
     cfg = resolve_config(explicit_path=config)
+
+    # A file named by path is trusted with its whole runtime:/plugins:; a
+    # library name resolves to someone else's document and stays limited.
+    trust_document = (
+        stashed_trust if stashed_trust is not None else _names_a_file(orchestration)
+    )
 
     # Resolve orchestration: local file path > library source name
     run_registry = _library_registry(config, cfg=cfg)
@@ -668,6 +698,7 @@ def run_cmd(
         decompose_override=decompose,
         effect_start_observer=effect_start_observer,
         decompose_out=decompose_out,
+        trust_document=trust_document,
     )
 
     with (
@@ -729,6 +760,7 @@ def run_cmd(
             "scoring": scoring,
             "routing": routing,
             "decompose": decompose,
+            "trust_document": trust_document,
         })
 
     if tail:

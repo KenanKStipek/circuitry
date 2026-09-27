@@ -627,6 +627,9 @@ class RunScreen(ViewScreen):
             decompose_override=_switch_value(self.query_one("#run-decompose", Select)),
             skip_preflight=False,
             profile_name=self.profile_name,
+            # A local file the user picked is theirs, like `cof run ./file.yml`;
+            # a bundled one stays limited like `cof run <name>`.
+            trust_document=self._form.choice.source == "local",
         )
 
         self._updates = 0
