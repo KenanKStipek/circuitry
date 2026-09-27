@@ -18,12 +18,12 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
 
 from ..preflight import CheckResult
+from ._curl_errors import curl_failure_message
 from .base import GenerateResult
 
 
@@ -106,14 +106,17 @@ def chat_completion(
         raise RuntimeError("curl is not installed or not on PATH") from e
 
     if proc.returncode != 0:
-        # Mask api_key in any echoed cmd string.
-        masked_cmd = " ".join(shlex.quote(c) for c in cmd)
-        if api_key:
-            masked_cmd = masked_cmd.replace(api_key, "***")
-        err = (proc.stderr or proc.stdout or "").strip()
+        secrets = [api_key, *(extra_headers or {}).values()]
         raise RuntimeError(
-            f"OpenAI-compatible request failed (curl exit {proc.returncode}): "
-            f"{err} cmd={masked_cmd}"
+            curl_failure_message(
+                adapter="OpenAI-compatible",
+                model=model,
+                url=url,
+                returncode=proc.returncode,
+                stdout=proc.stdout,
+                stderr=proc.stderr,
+                secrets=secrets,
+            )
         )
 
     try:

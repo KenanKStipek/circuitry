@@ -138,8 +138,8 @@ def test_conformance_validator_surfaces_actionable_contract_mismatch() -> None:
 @pytest.mark.parametrize(
     ("adapter", "error_substring"),
     [
-        (OpenAIAdapter(), "curl failed"),
-        (AnthropicAdapter(), "curl failed"),
+        (OpenAIAdapter(), "request failed (curl exit 28)"),
+        (AnthropicAdapter(), "request failed (curl exit 28)"),
     ],
 )
 def test_direct_provider_errors_are_actionable(
@@ -163,8 +163,47 @@ def test_direct_provider_errors_are_actionable(
 
     message = str(exc.value)
     assert error_substring in message
-    assert "cmd=" in message
-    assert "error=" in message
+    # The fix for #246: never echo the curl argv (it carries the
+    # Authorization/api-key header) back in the error message.
+    assert "cmd=" not in message
+    assert "operation timed out" in message
+
+
+@pytest.mark.parametrize(
+    ("adapter", "env_var"),
+    [
+        (OpenAIAdapter(), "OPENAI_API_KEY"),
+        (AnthropicAdapter(), "ANTHROPIC_API_KEY"),
+    ],
+)
+def test_direct_provider_curl_failure_masks_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    adapter: Any,
+    env_var: str,
+) -> None:
+    """Regression for #246: the canary key must never appear in the raised
+    error, whether via the (now-removed) echoed curl command line or the
+    provider's response body."""
+    secret = "sk-canary-" + "x" * 24
+    monkeypatch.setenv(env_var, secret)
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(
+            returncode=22,
+            stdout=json.dumps({"error": {"message": "Incorrect API key provided"}}),
+            stderr="curl: (22) The requested URL returned error: 401",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    with pytest.raises(RuntimeError) as exc:
+        adapter.generate(model="model", prompt="ping")
+
+    message = str(exc.value)
+    assert secret not in message
+    assert "cmd=" not in message
+    assert "Incorrect API key provided" in message
 
 
 def test_litellm_errors_are_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -471,6 +510,36 @@ def test_ollama_exit_28_hint_says_timed_out(
     assert "runtime.adapters.ollama.timeout_seconds" in message
     assert "not reachable" not in message
     assert "ollama serve" not in message
+
+
+def test_ollama_404_model_not_found_includes_body_and_pull_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 404 from Ollama (`--fail-with-body` -> curl exit 22) writes the
+    provider's explanation to stdout, not stderr; today's code prioritized
+    stderr and reported only the useless `curl: (22) ...` line. The parsed
+    body must be surfaced, plus a `ollama pull <model>` hint."""
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(
+            returncode=22,
+            stdout=json.dumps(
+                {"error": 'model "ghost:latest" not found, try pulling it first'}
+            ),
+            stderr="curl: (22) The requested URL returned error: 404",
+        )
+
+    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+
+    adapter = OllamaAdapter()
+    with pytest.raises(RuntimeError) as exc_info:
+        adapter.generate(model="ghost:latest", prompt="ping")
+
+    message = str(exc_info.value)
+    assert "not found, try pulling it first" in message
+    assert "cmd=" not in message
+    assert "ollama pull ghost:latest" in message
 
 
 # ---------------------------------------------------------------------------

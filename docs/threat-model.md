@@ -96,11 +96,21 @@ from the process environment by each adapter. The reads happen at adapter
 instantiation, so a missing key fails loudly with a hint instead of silently
 sending an unauthenticated request.
 
-**Mitigation — error masking.** When an adapter shells out to `curl` for a
-debugging dump on failure, the API key is replaced with `***` before the
-command is logged: see
-[`adapters/openai.py:71`](../src/circuitry/adapters/openai.py) and
-[`adapters/anthropic.py:76`](../src/circuitry/adapters/anthropic.py).
+**Mitigation — error masking.** Every curl-based adapter (`openai`,
+`anthropic`, `ollama`, `replicate`, `watsonx`, and the ~20 providers that
+share transport via
+[`adapters/_openai_compat.py`](../src/circuitry/adapters/_openai_compat.py))
+raises through
+[`adapters/_curl_errors.py`](../src/circuitry/adapters/_curl_errors.py),
+which never echoes the curl command line — the one place an
+`Authorization`/`api-key`/Bearer header value could leak — and instead
+reports the adapter, model, target URL (credential-free) and a parsed form
+of the provider's error body. Credential values passed on the request are
+also stripped from that body/stderr text as a second layer, in case a
+provider ever echoes back what it was sent. `meta.error` and
+`meta.fallback_attempts[].error`, which land in run state on every prompt
+failure, are additionally passed through the redaction helper (below)
+before being stored.
 
 **Mitigation — state serialization.** The `runtime.effective_settings`
 snapshot embedded in run state (and surfaced via `--out`, `--json`,

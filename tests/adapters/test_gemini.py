@@ -127,6 +127,41 @@ def test_chat_completion_curl_failure_masks_api_key(
     assert secret not in str(exc.value)
 
 
+def test_chat_completion_curl_failure_masks_extra_header_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #246: adapters that pass a credential via
+    `extra_headers` (Azure's `api-key`, and any future provider that isn't
+    Bearer-authenticated) must have that value masked too — the old code
+    only ever masked `api_key`, the Bearer-path credential."""
+    secret = "sk-extra-header-canary-999"
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(
+            returncode=22,
+            stdout=json.dumps({"error": {"message": "bad credential"}}),
+            stderr="curl: (22) The requested URL returned error: 401",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    cfg = OpenAICompatibleConfig(
+        base_url="https://example.test/v1",
+        api_key_env="",
+        default_model="m",
+    )
+    with pytest.raises(RuntimeError) as exc:
+        chat_completion(
+            cfg=cfg, model="m", prompt="ping", extra_headers={"api-key": secret}
+        )
+
+    message = str(exc.value)
+    assert secret not in message
+    assert "cmd=" not in message
+    assert "bad credential" in message
+
+
 def test_chat_completion_non_json_response_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

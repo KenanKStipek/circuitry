@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from ..adapters import Adapter, build_adapter
 from ..adapters.base import GenerateResult
+from ..cli.redaction import redact
 from ..output import console as _console
 from .store import Store
 
@@ -581,7 +582,7 @@ class PromptRuntime:
                     _console.print(line)
             meta["fallback_attempts"] = attempts_meta
             meta["fallback_recovered"] = False
-            meta["error"] = str(e)
+            meta["error"] = redact(str(e))
             meta["completed_at"] = _now_iso()
             if self.defn.on_error == "skip":
                 node["value"] = None
@@ -861,7 +862,7 @@ class PromptRuntime:
                         "adapter": adapter_name,
                         "model": model_name,
                         "status": "failed",
-                        "error": str(e),
+                        "error": redact(str(e)),
                     }
                 )
 
