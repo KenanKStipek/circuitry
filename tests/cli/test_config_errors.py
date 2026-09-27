@@ -19,7 +19,9 @@ from circuitry.cli.config import (
     _load_json_file,
     load_config,
     resolve_config,
+    trust_store_path,
 )
+from circuitry.cli.config_trust import record_trust
 
 runner = CliRunner()
 
@@ -154,7 +156,10 @@ def test_discovered_config_stays_a_warning(
 ) -> None:
     """An auto-discovered broken config warns and falls back — it is not fatal."""
     monkeypatch.delenv("CIRCUITRY_CONFIG", raising=False)
-    (tmp_path / "circuitry.config.json").write_text("{oops", encoding="utf-8")
+    discovered = tmp_path / "circuitry.config.json"
+    discovered.write_text("{oops", encoding="utf-8")
+    # Trusted, so it is parsed at all (an untrusted file is skipped unread).
+    record_trust(discovered, discovered.read_bytes(), store_path=trust_store_path())
 
     cfg = resolve_config(cwd=tmp_path)
 

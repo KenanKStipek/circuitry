@@ -11,7 +11,9 @@ from circuitry.cli.config import (
     _apply_env_vars,
     _deep_merge,
     resolve_config,
+    trust_store_path,
 )
+from circuitry.cli.config_trust import record_trust
 
 # This whole file exercises config discovery tiers directly (each test
 # patches GLOBAL_CONFIG_PATH to its own controlled location), so it opts out
@@ -133,6 +135,8 @@ def test_resolve_config_project_local_overrides_defaults(
     )
     fake_global = tmp_path / "no-global" / "config.json"
     with patch("circuitry.cli.config.GLOBAL_CONFIG_PATH", fake_global):
+        # The trust store sits beside the (patched) global config.
+        record_trust(local, local.read_bytes(), store_path=trust_store_path())
         cfg = resolve_config(cwd=tmp_path)
 
     assert cfg.default_model == "custom-model"
