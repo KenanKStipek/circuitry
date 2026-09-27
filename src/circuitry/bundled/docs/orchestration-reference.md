@@ -234,7 +234,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `max_concurrency` | integer | no | unbounded | Max parallel workers when `flow: tree`. |
 | `body` | array | yes | — | Non-empty list of effects to execute per iteration |
 | `each` | object | one-of | — | Collection iteration; mutually exclusive with `while` |
-| `each.in` | string | yes (each) | — | State path to a JSON array (must be `prompt_type: json` output) |
+| `each.in` | string | yes (each) | — | State path to a JSON array (must be `prompt_type: json` output), or a binding of an enclosing loop (its `each.as` name) |
 | `each.as` | string | no | `item` | Variable name for current element in body templates |
 | `while` | object | one-of | — | Continuation condition; mutually exclusive with `each` |
 | `while.mode` | string | no | `model` | `model` or `cel` |
@@ -611,7 +611,7 @@ else:
 
 ### Loop `each.in` Must Point to a JSON Array
 
-The state path in `each.in` must resolve to an array at runtime. This means it must point to a `prompt_type: json` effect whose output is a JSON array:
+The state path in `each.in` must resolve to an array at runtime. This means it must point to a `prompt_type: json` effect whose output is a JSON array, or to a binding of an enclosing loop (its `each.as` name) that itself holds an array, e.g. `s.crops` inside a loop whose `each.as` is `s`:
 
 ```yaml
 # Good: source is prompt_type: json producing an array
@@ -668,7 +668,7 @@ The following rules are sufficient for generating structurally correct Circuitry
 **State path addressing:**
 14. In templates (Mustache): use `{{input.<name>}}` for caller-supplied input (never bare `{{key}}` — that is a hard error when `key` matches a declared `interface.inputs` name); use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
 15. In CEL expressions (`if.expr`, `while.expr`): always use the full prefix `state.prime.<name>.value`. Never omit `state.`.
-16. Loop `each.in` must point to a `prompt_type: json` effect whose output is a JSON array (e.g. `prime.my_prompt.value`).
+16. Loop `each.in` must point to a `prompt_type: json` effect whose output is a JSON array (e.g. `prime.my_prompt.value`), or to a binding of an enclosing loop (its `each.as` name).
 
 **If/else branches:**
 17. Use the same inner effect `name` in both `then` and `else` branches of any `if` effect, so downstream state path references resolve regardless of which branch executed.

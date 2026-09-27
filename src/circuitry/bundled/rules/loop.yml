@@ -14,10 +14,10 @@ fields:
   each:
     type: object
     properties:
-      in: "Dot-delimited state path to a JSON array, rooted at input., prime., or runtime. (e.g. input.items, prime.my_list.value)."
+      in: "Dot-delimited state path to a JSON array, rooted at input., prime., or runtime. (e.g. input.items, prime.my_list.value), or at an enclosing loop's each.as binding (e.g. s.crops inside a loop whose each.as is s) for a nested loop over a field of the outer item."
       as: "Variable name for current element (default: item). Accessible as {{as_name}}."
     required: [in]
-    note: "each.in must be root-relative — input./prime./runtime.-rooted. A bare key or a state.-prefixed spelling (state. is a CEL-only binding, not legal here) is a hard error from cof check, naming the canonical spelling. input.<name> is a first-class source: each.in does not have to point at a prompt_type: json effect."
+    note: "each.in must be root-relative — input./prime./runtime.-rooted — or rooted at an enclosing loop's each.as binding. A bare key that names no binding in scope, or a state.-prefixed spelling (state. is a CEL-only binding, not legal here), is a hard error from cof check, naming the canonical spelling and the bindings in scope. input.<name> is a first-class source: each.in does not have to point at a prompt_type: json effect."
   while:
     type: object
     properties:
@@ -57,7 +57,7 @@ state_paths:
   loop_variable: "{{as_name}}"
 constraints:
   - "Exactly one of each or while is required, never both."
-  - "each.in must be a JSON array at a root-relative path (input.<name>, prime.<effect_name>.value, or a runtime. path). input.* is a first-class source — the array does not have to come from a prompt_type: json effect."
+  - "each.in must be a JSON array at a root-relative path (input.<name>, prime.<effect_name>.value, or a runtime. path), or at an enclosing loop's each.as binding (e.g. s.crops inside a loop whose each.as is s). input.* is a first-class source — the array does not have to come from a prompt_type: json effect."
   - "collect requires the loop to have a name."
   - "Within-iteration, cross-iteration, last-pass and post-loop references are four different things: prime.<body_name>.value, prime.<loop_name>.iter_N.<body_name>.value, prime.<loop_name>.last.<body_name>.value, prime.<loop_name>.collected.value. Do not substitute one for another."
   - "last is legal AFTER the loop only, like iter_N. Inside the loop's own body (or while condition) it resolves to the previous pass at best — validation warns; write prime.<body_name>.value for the current pass."

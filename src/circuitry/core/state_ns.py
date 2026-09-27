@@ -117,15 +117,19 @@ def validate_reference_path(
     )
 
 
-def validate_each_in_path(path: str, *, effect_path: str) -> None:
+def validate_each_in_path(
+    path: str, *, effect_path: str, loop_names: frozenset[str] = frozenset()
+) -> None:
     """Hard-error unless a loop ``each.in`` path is rooted at a namespace.
 
-    Legal roots are ``input.``/``prime.``/``runtime.``. Bare keys and
+    Legal roots are ``input.``/``prime.``/``runtime.``, or a binding of an
+    enclosing loop (``each.as``) — the same scope ``{from: ...}`` resolves
+    against (see ``validate_reference_path``). Bare keys and
     ``state.``-prefixed spellings both raise, with the canonical spelling
     named in the message.
     """
     root, _, rest = path.partition(".")
-    if root in NAMESPACES:
+    if root in NAMESPACES or root in loop_names:
         return
     if root == "state":
         if rest.partition(".")[0] in NAMESPACES:
@@ -140,14 +144,17 @@ def validate_each_in_path(path: str, *, effect_path: str) -> None:
             f"state namespace. Write 'input.{suffix}' for caller-supplied "
             f"values or 'prime.{suffix}' for effect outputs."
         )
+    bindings = ", ".join(sorted(loop_names)) if loop_names else "none here"
     if not path:
         raise ValueError(
             f"Loop each.in at '{effect_path}' must be a dot path rooted at "
-            "'input.', 'prime.', or 'runtime.' (e.g. 'input.items')."
+            "'input.', 'prime.', or 'runtime.' (e.g. 'input.items'), or an "
+            f"enclosing loop binding (loop bindings in scope: {bindings})."
         )
     raise ValueError(
         f"Loop each.in at '{effect_path}': bare key '{path}' is not rooted "
-        f"at a state namespace. Write 'input.{path}' for caller-supplied "
+        f"at a state namespace or an enclosing loop binding (loop bindings "
+        f"in scope: {bindings}). Write 'input.{path}' for caller-supplied "
         f"values or 'prime.{path}' for effect outputs."
     )
 
