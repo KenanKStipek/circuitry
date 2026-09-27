@@ -478,6 +478,41 @@ def test_a_local_file_runs_trusted_and_a_bundled_one_limited(
     assert captured[0].trust_document is trusted
 
 
+def test_a_library_hand_off_stays_limited_even_though_it_resolves_outside_the_scan(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """Library states its own trust explicitly (issue #283): a document from
+    a GitHub or folder source is not among Run's own scanned choices, so
+    before the fix it fell back to a source="local" guess and ran trusted.
+    """
+    path = _write(tmp_path, TWO_INPUTS)
+    captured: list[RunRequest] = []
+
+    def runner(request: RunRequest) -> RunResult:
+        captured.append(request)
+        return RunResult(ok=True, state={}, warnings=[])
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        pilot.app.pending_run = path
+        pilot.app.pending_trust = False
+        screen = RunScreen(
+            RUN_SPEC,
+            choices=[],
+            adapter=EchoAdapter(),
+            config=CircuitryConfig(),
+            runner=runner,
+        )
+        await pilot.app.push_screen(screen)
+        await pilot.pause()
+        await pilot.pause()
+        _fill(screen, text="hello")
+        screen.action_launch()
+        await _settle(pilot, lambda: screen.last_result is not None)
+
+    run_app(scenario)
+    assert captured[0].trust_document is False
+
+
 # -- complexity switches (issue #110) ----------------------------------------
 
 

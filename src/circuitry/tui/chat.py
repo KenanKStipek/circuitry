@@ -383,7 +383,11 @@ class ChatScreen(ViewScreen):
         if not callable(launch):  # pragma: no cover - the app always has it
             self._status("This app has no Run view to hand it to.")
             return
-        launch(self.saved_path)
+        # A file the model just generated is trusted the same way as `cof
+        # wizard --out f.yml` followed by `cof run f.yml`: the owner reviewed
+        # and saved it. See PR #284's review for the open question of
+        # whether this should instead stay limited.
+        launch(self.saved_path, trust_document=True)
 
     def _savable(self) -> bool:
         """Guard every save path with the pane's own verdict."""
