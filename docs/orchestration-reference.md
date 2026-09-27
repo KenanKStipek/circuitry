@@ -30,12 +30,20 @@ Top-level fields of an orchestration YAML file:
 | `version` | string | no | — | Free-form version string for **this document**, e.g. `"1.2.0"` |
 | `interface` | object | no | — | Declared `inputs` / `outputs` — see [Interface](#interface) |
 
-Additional top-level keys are allowed. Two of them feed the run's configuration, and both are limited to what an author may decide:
+Additional top-level keys are allowed. Two of them feed the run's configuration, and how much of them applies depends on how the document reached `cof`:
 
-- **`runtime:`** — a document may set only `runtime.complexity` (see [Complexity Configuration](./complexity-config.md)) and `runtime.state` (e.g. `record_children`, see [Complete record](#complete-record-opt-in)). Each replaces the config-level block of the same name. Every other key — `adapters`, `plugins`, `persistence`, `library`, `mcp`, anything else — is a host setting: it comes only from config.json, and a document that sets one has it ignored, with a warning from `cof run` (on stderr) and `cof check` naming the key.
-- **`plugins:`** — runtime-plugin modules to load. An entry loads only if config.json already lists it in `plugins` or `enabled_plugins`; any other is skipped with a warning.
+- **`runtime:`** — `runtime.complexity` (see [Complexity Configuration](./complexity-config.md)) and `runtime.state` (e.g. `record_children`, see [Complete record](#complete-record-opt-in)) always apply; each replaces the config-level block of the same name. Every other key — `adapters`, `plugins`, `persistence`, `library`, `mcp`, anything else — is a host setting.
+- **`plugins:`** — runtime-plugin modules to load. An entry config.json already lists in `plugins` or `enabled_plugins` always loads; any other is a host setting too.
 
-This is the trust boundary for running someone else's orchestration (`cof fetch`, `cof run-library`, `use: ref:`, a github library source): the document decides what the run does, never where an adapter sends prompts and credentials, which binaries a tool runs, or where state is stored. A host that only ever runs its own documents can switch the check off with `trust_orchestration_runtime: true` in config.json (or `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME=1`) — see [Configuration](./guidebook/04-configuration.md) for what that exposes.
+**A file you run by path is trusted**, like a script you run: `cof run ./my.yml`, `cof check` / `cof score` on a path, a local file in the TUI, the SDK's `run_orchestration(orchestration_path=...)` and scheduler jobs apply the document's whole `runtime:` block and `plugins:` list. When that includes host settings, `cof run` prints one line on stderr naming them (keys only, never values), and `cof check` shows the same line:
+
+```
+Warning: Applied host settings from my.yml: runtime.adapters.openai.base_url, plugins: acme.telemetry
+```
+
+**A document that arrives any other way is limited** to `runtime.complexity` and `runtime.state`: `cof run <library name>` (bundled, folder and github sources), `cof run-library` and `run_shared_orchestration`, the MCP `run_orchestration` / `validate_orchestration` tools, the REST trigger, and plans a model generates. Its host settings are ignored, with a warning from `cof run` (on stderr) and `cof check` naming each key, and an unlisted `plugins:` entry is skipped. `use:` children never contribute their own `runtime:` or `plugins:` — they run on the parent's settings.
+
+This is the trust boundary for someone else's orchestration: the document decides what the run does, never where an adapter sends prompts and credentials, which binaries a tool runs, or where state is stored. `cof fetch` followed by `cof run ./fetched.yml` is running the file by path, so read a fetched file before you run it that way. A host that only ever runs its own documents can trust every document with `trust_orchestration_runtime: true` in config.json (or `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME=1`) — see [Configuration](./guidebook/04-configuration.md) for what that exposes. See the [threat model](./threat-model.md) for the risk.
 
 **About `version`.** It is the author's own version string for the file — a changelog handle, nothing more. It is **not** a schema version and **not** a feature gate: the runtime reads it and ignores it, and no behaviour anywhere keys off its value. Numbers are still accepted for back-compat with files written before this was pinned down, but a string is canonical. Omit the field entirely unless you are actually versioning the document.
 
@@ -1265,7 +1273,7 @@ else:
 The following rules are sufficient for generating structurally correct Circuitry orchestration YAML. Apply all of them exactly.
 
 **File structure:**
-1. Top-level fields: `adapter` (string), `model` (string), `effects` (array). Only `effects` is required. Additional top-level keys are allowed. A top-level `runtime:` block may set only `complexity` and `state`; never put `adapters`, `plugins`, `persistence`, `library` or credentials in it — those are host settings that belong in config.json, and a document's copy is ignored with a warning.
+1. Top-level fields: `adapter` (string), `model` (string), `effects` (array). Only `effects` is required. Additional top-level keys are allowed. A top-level `runtime:` block should set only `complexity` and `state`; never put `adapters`, `plugins`, `persistence`, `library` or credentials in it — those are host settings that belong in config.json. A document run by library name, fetched or generated has its copy ignored with a warning; a file run by path applies it with a notice.
 2. `adapter` and `model` are only required when the orchestration contains `prompt` or `reflector` effects. Tool-only orchestrations (`type: tool` effects only) do not need `adapter` or `model`.
 3. Valid `adapter` values: any name in the compiled-in adapter registry (`cof list --extensions`) — e.g. `ollama`, `openai`, `anthropic`, `litellm`, `cyberdiner`, `host_claude`. Two need special handling. `cyberdiner` is a job-queue broker: `model:` must be a capability tier (`cheap`, `fast-cheap`, `fast`, `good-cheap`, `good`, `good-fast`, `alpha` — the network owns the list), not a provider model name, and `runtime.adapters.cyberdiner.expo_url` / `token` must be set in config — never in the YAML. `host_claude` is MCP-only (the host Claude session generates each prompt — set via `circuitry-mcp` rather than config.json. By default rejects non-Claude `model:` pins; pass `override_model=True` to `run_orchestration` to ignore the pin and run through Claude regardless).
 4. Valid `flow` values: `chain` (sequential) and `tree` (parallel). Write nothing else — `chain_of_thought`/`cot` and `tree_of_thought`/`tot` still parse but are deprecated and warned about.

@@ -32,6 +32,14 @@ Key parameters:
   the config resolves — the seam a host uses to supply its own model transport
   (and a test uses to script one). Preflight is skipped when it is supplied,
   since such an adapter need not be buildable from config.
+- `trust_document` (default `True`): the file is trusted like `cof run
+  ./file.yml` — its whole `runtime:` block and `plugins:` list apply, and
+  `RunResult.warnings` carries one `Applied host settings from <file>: ...`
+  line naming any host settings among them. Pass `False` for a path you did
+  not choose yourself (fetched, generated, picked by a tool or network
+  caller): the document is then limited to `runtime.complexity` and
+  `runtime.state`, and its other settings are ignored with a warning. See
+  [Orchestration reference](./orchestration-reference.md).
 
 ### `run_shared_orchestration`
 
@@ -47,12 +55,18 @@ Key parameters:
 - `service_profile`: optional runtime override profile name
 - `auth_token`: optional library auth token
 
+A fetched asset is limited: it may only set `runtime.complexity` and
+`runtime.state` (unless config sets `trust_orchestration_runtime`).
+
 ### `validate_orchestration`
 
 Compiler-backed structure validation.
 
 - Module: `src/circuitry/api.py`
 - Returns: validation report dictionary
+- `trust_document` (default `True`) matches `run_orchestration`: the report's
+  `warnings` name the host settings the file would apply, or with `False` the
+  ones a run would ignore.
 
 ### `inspect_orchestration`
 

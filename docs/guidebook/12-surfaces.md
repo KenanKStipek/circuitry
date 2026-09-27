@@ -1,6 +1,6 @@
 # Surfaces — CLI, TUI, SDK, MCP, and observability
 
-Everything the world reaches Circuitry through. One runtime sits under all of them — the CLI, the terminal UI, the Python SDK, the MCP server, and the REST trigger all call the same `run` path, so an orchestration behaves identically whichever door it came in by — and one record comes out of all of them: the state graph, which is the complete decision record of the run.
+Everything the world reaches Circuitry through. One runtime sits under all of them — the CLI, the terminal UI, the Python SDK, the MCP server, and the REST trigger all call the same `run` path, so an orchestration behaves identically whichever door it came in by (except for the host settings in its `runtime:` block: a file you name by path applies them, a document a library, tool or network caller hands in does not — see [Configuration](04-configuration.md#what-a-document-can-set)) — and one record comes out of all of them: the state graph, which is the complete decision record of the run.
 
 ## The CLI: `cof`
 
@@ -87,6 +87,8 @@ print(result.state["runtime"]["effective_settings"]["sources"])
 
 `run_orchestration` reuses the CLI runtime path deliberately, so behaviour is identical across interfaces. `state` is wrapped under `input` for you. `dry_run=True` and `validate_only=True` do what the flags do; `out_path` writes the state; `raise_on_error=True` (the default) raises `CircuitryExecutionError` — which carries the failed `RunResult` as `.result`, so the partial state is never lost — and `False` returns the result with `ok` false instead.
 
+`run_orchestration` trusts the file you pass the way `cof run ./file.yml` does: its whole `runtime:` block and `plugins:` list apply, with a notice in `result.warnings` when they include host settings. Pass `trust_document=False` for a path you did not choose — a fetched or generated file, or one a caller of your code named — and the document is limited to `runtime.complexity` and `runtime.state`. `run_shared_orchestration` is always limited.
+
 The `adapter=` parameter is the seam: pass an already-constructed object implementing the `Adapter` protocol (`generate(model=, prompt=, timeout_seconds=)`) and the run uses it instead of the one config resolves, with preflight skipped. It is how a host supplies its own model transport, and how a test scripts one.
 
 The rest of the public surface: `validate_orchestration(orchestration_path=)` returns `{ok, errors, warnings}`; `inspect_orchestration` returns static metadata; `inspect_divergence_paths(state=)` walks a finished state and returns every errored node in path order; `run_shared_orchestration` runs a shared-library asset by id and version; `circuitry.adapters.build_adapter` constructs an adapter from config. [API Reference](../api-reference.md) and [Stability](../stability.md) say what is public and how it is versioned.
@@ -105,13 +107,13 @@ Embedded callers also get the two per-effect events without writing a plugin: `R
 }
 ```
 
-The tool loop: `list_orchestrations()` → `run_orchestration(orchestration, initial_state)` returns `{run_id, status, pending_prompts, state}` → for each entry in `pending_prompts`, `submit_response(run_id, prompt_id, response)` → repeat until `status` is `completed`, `failed`, or `cancelled`. `pending_prompts` is always a list: length one for a sequential run, length *N* for a `flow: tree` or a parallel loop — parallel branches simply arrive together, and submission order does not matter. `get_run_state(run_id)` snapshots mid-run; `cancel_run(run_id)` wakes every blocked branch. `validate_orchestration(path)` is there too.
+The tool loop: `list_orchestrations()` → `run_orchestration(orchestration, initial_state)` returns `{run_id, status, pending_prompts, state}` → for each entry in `pending_prompts`, `submit_response(run_id, prompt_id, response)` → repeat until `status` is `completed`, `failed`, or `cancelled`. `pending_prompts` is always a list: length one for a sequential run, length *N* for a `flow: tree` or a parallel loop — parallel branches simply arrive together, and submission order does not matter. `get_run_state(run_id)` snapshots mid-run; `cancel_run(run_id)` wakes every blocked branch. `validate_orchestration(path)` is there too. The model picks the path, so an MCP run or validation is limited like a library document: only `runtime.complexity` and `runtime.state` apply, and the response's `warnings` name what was ignored.
 
 Underneath is the `host_claude` adapter, which is why the plain `cof run` is unchanged and the MCP server is a strict addition. The bundled `/cof` slash command (`.claude/commands/cof.md`) teaches the loop to a Claude Code session; a project `.mcp.json` registers the server.
 
 ## REST and scheduling
 
-`circuitry.service` carries a minimal REST trigger — `POST /v1/triggers/run` with a `state` payload, bearer-token gated — and a scheduler, both calling the same runtime. They are building blocks for embedding rather than a deployment; a service that needs them wires them into its own HTTP stack.
+`circuitry.service` carries a minimal REST trigger — `POST /v1/triggers/run` with a `state` payload, bearer-token gated — and a scheduler, both calling the same runtime. They are building blocks for embedding rather than a deployment; a service that needs them wires them into its own HTTP stack. A REST caller names the document over the network, so it runs limited to `runtime.complexity` and `runtime.state`; a scheduler job's path is the operator's own, so it is trusted like `cof run ./file.yml` unless the job sets `trust_document=False`.
 
 ## Observability
 

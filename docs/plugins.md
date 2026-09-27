@@ -76,7 +76,7 @@ configured plugins.
 
 ## Registration
 
-Configure plugin identifiers in `config.json`. An orchestration's own `plugins:` list only loads identifiers that config already lists in `plugins` or `enabled_plugins` (others are skipped with a warning), unless the host sets `trust_orchestration_runtime`:
+Configure plugin identifiers in `config.json`. An orchestration's own `plugins:` list only loads identifiers that config already lists in `plugins` or `enabled_plugins` (others are skipped with a warning), unless the document is trusted — a file you run by path, or any document once the host sets `trust_orchestration_runtime`:
 
 ```json
 {

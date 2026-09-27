@@ -52,9 +52,19 @@ Other top-level keys you will meet later: `runtime.complexity` ([Complexity](10-
 
 ## What a document can set
 
-A document may carry a `runtime:` block of its own, but only for the two settings that belong to its author: `runtime.complexity` and `runtime.state`. Each replaces the config block of the same name for that run. Everything else under `runtime` — `adapters`, `plugins`, `persistence`, `library`, `mcp` — is a host setting and comes only from config. A document that sets one has it ignored, and `cof run` (on stderr) and `cof check` print one warning per key saying it must go in config.json. A document's top-level `plugins:` list is held to the same line: an entry loads only if config already lists it in `plugins` or `enabled_plugins`.
+A document may carry a `runtime:` block and a top-level `plugins:` list of its own. Two `runtime` settings belong to its author and always apply: `runtime.complexity` and `runtime.state`, each replacing the config block of the same name for that run. Everything else under `runtime` — `adapters`, `plugins`, `persistence`, `library`, `mcp` — is a host setting, and so is a `plugins:` entry config does not already list in `plugins` or `enabled_plugins`. Whether a document's host settings apply depends on how it reached `cof`.
 
-That boundary is what makes it reasonable to run a document you did not write — one fetched with `cof fetch`, run with `cof run-library`, or pulled in by `use: ref:` from a github source. The document chooses what the run does; config alone chooses where each adapter sends your prompts and API keys, which binaries and environment a tool gets, which MCP servers start, and where state is written. A composed `use:` child is held tighter still: it runs on the parent's resolved runtime and its own `runtime:` and `plugins:` keys are never read.
+**A file you run by path is trusted**, the way a script you run is. `cof run ./my.yml`, `cof check` and `cof score` on a path, a local file picked in the TUI, the SDK's `run_orchestration(orchestration_path=...)` and scheduler jobs apply the document's whole `runtime:` block and `plugins:` list. Naming the file is the decision to run it. When it sets host settings, `cof run` prints one line on stderr naming them — key paths only, never values — and `cof check` shows the same line:
+
+```
+Warning: Applied host settings from my.yml: runtime.adapters.openai.base_url, plugins: acme.telemetry
+```
+
+A file that sets only `runtime.complexity` / `runtime.state` prints nothing extra. From Python, `run_orchestration(..., trust_document=False)` opts a path out, for a file you did not choose yourself.
+
+**A document that arrives any other way is limited** to `runtime.complexity` and `runtime.state`: `cof run <name>` from a library source (bundled, folder or github), `cof run-library` and `run_shared_orchestration`, the MCP server's `run_orchestration` and `validate_orchestration` tools, the REST trigger, and plans a model generates. Its host settings are ignored, and `cof run` (on stderr) and `cof check` print one warning per key saying it must go in config.json; an unlisted `plugins:` entry is skipped.
+
+That limit is what makes it reasonable to run a document you did not write. The document chooses what the run does; config alone chooses where each adapter sends your prompts and API keys, which binaries and environment a tool gets, which MCP servers start, and where state is written. A composed `use:` child is held tighter still: it runs on the parent's resolved runtime and its own `runtime:` and `plugins:` keys are never read, however the parent was run. Note that `cof fetch` followed by `cof run ./fetched.yml` is running the file by path: read a fetched file before you run it that way, or run it through `cof run-library`.
 
 ```json
 {
@@ -62,7 +72,7 @@ That boundary is what makes it reasonable to run a document you did not write �
 }
 ```
 
-`trust_orchestration_runtime: true` (or `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME=1`) switches the boundary off and restores the old behaviour: a document's whole `runtime:` block is merged over config and every module in its `plugins:` list is imported. Only set it on a host that runs nothing but documents you wrote or have read. With it on, any document the host runs can point an adapter at its own server — which then receives your prompts and the adapter's credentials — change a tool's `binary` or `env`, add an MCP server command, redirect persistence, or import arbitrary Python, and `use: ref:` means that includes every document your library sources can reach.
+`trust_orchestration_runtime: true` (or `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME=1`) trusts every document, however it arrived: its whole `runtime:` block is merged over config and every module in its `plugins:` list is imported, with the same one-line notice. Only set it on a host that runs nothing but documents you wrote or have read. With it on, any document the host runs can point an adapter at its own server — which then receives your prompts and the adapter's credentials — change a tool's `binary` or `env`, add an MCP server command, redirect persistence, or import arbitrary Python, and `use: ref:` means that includes every document your library sources can reach.
 
 ## Trusting a project config
 
