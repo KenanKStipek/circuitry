@@ -881,9 +881,18 @@ class PromptRuntime:
         over the run-default adapter, exactly as ``_generate_with_fallbacks``
         tries it first. ``self.adapter`` alone would only be correct for a
         prompt with no override.
+
+        Called ahead of the dispatch ``try`` block (there is no attempt or
+        error to report yet), so a bad ``provider:`` must not raise here —
+        that would skip the outer error handling (``on_error``, ``meta.error``,
+        the balanced start/complete pair) entirely. Fall back to a plain
+        label; the real build, and its real error, happen at dispatch time.
         """
         adapter_name, model_name = self._build_attempts(default_model=model)[0]
-        adapter = self._resolve_adapter(adapter_name)
+        try:
+            adapter = self._resolve_adapter(adapter_name)
+        except Exception:
+            return f"{adapter_name} · {model_name}"
         return _adapter_target(adapter, model_name)
 
     def _attempts_target(self, attempts_meta: list[dict[str, Any]]) -> str:
@@ -900,8 +909,11 @@ class PromptRuntime:
             return ""
         parts = [f"{attempt['adapter']} ✗" for attempt in attempts_meta[:-1]]
         last = attempts_meta[-1]
-        adapter = self._resolve_adapter(last["adapter"])
-        label = _adapter_target(adapter, last["model"])
+        try:
+            adapter = self._resolve_adapter(last["adapter"])
+            label = _adapter_target(adapter, last["model"])
+        except Exception:
+            label = f"{last['adapter']} · {last['model']}"
         if last.get("status") == "failed":
             label += " ✗"
         parts.append(label)
