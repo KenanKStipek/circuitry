@@ -259,12 +259,13 @@ def _do_validate(
     else:
         console.print("[red]Invalid[/red]")
         for e in result.get("errors", []):
-            console.print(f" - {e}")
+            console.print(f" - {escape(str(e))}")
 
     # Advisory only — deprecated aliases and type-keyword names still run.
-    # Printed for both outcomes; never affects the exit code.
+    # Printed for both outcomes; never affects the exit code. Warnings can
+    # quote document text (e.g. an ignored runtime key), so escape markup.
     for w in result.get("warnings", []):
-        console.print(f"[yellow]Warning:[/yellow] {w}")
+        console.print(f"[yellow]Warning:[/yellow] {escape(w)}")
 
     if not result["ok"]:
         raise typer.Exit(code=1)
@@ -727,7 +728,6 @@ def run_cmd(
     # Print --print (or default print for --json with no --out)
     if not tail and (print_state or (not resolved_out and json_out)):
         console.print_json(dumps_saved_state(result.state, pretty=pretty))
-
 
 
 @app.command("fetch", help="Fetch a shared library orchestration.")
