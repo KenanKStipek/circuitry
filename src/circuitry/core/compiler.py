@@ -704,6 +704,13 @@ def _compile_tool(
     if not isinstance(params, dict):
         params = {}
 
+    params_json = effect.get("params_json")
+    if params_json is not None and not isinstance(params_json, str):
+        raise ValueError(
+            f"Tool effect '{name}' at '{effect_path}' has invalid 'params_json': "
+            "expected a string (a Mustache template that renders to JSON)."
+        )
+
     prompt = effect.get("prompt")
     if prompt is not None and not isinstance(prompt, str):
         prompt = None
@@ -732,6 +739,7 @@ def _compile_tool(
         name=name,
         provider=provider.strip(),
         params=params,
+        params_json=params_json,
         prompt=prompt,
         model=model,
         timeout_ms=timeout_ms,

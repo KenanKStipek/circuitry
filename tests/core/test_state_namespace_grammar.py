@@ -189,6 +189,23 @@ def test_validate_bare_input_refs_rejects_bare_ref_to_declared_input() -> None:
         validate_bare_input_refs(orch)
 
 
+def test_validate_bare_input_refs_rejects_bare_ref_in_params_json() -> None:
+    orch = {
+        "interface": {"inputs": {"symbols": {"type": "array"}}},
+        "effects": [
+            {
+                "type": "tool",
+                "name": "step",
+                "provider": "mcp",
+                "params": {"server": "robinhood"},
+                "params_json": '{"arguments": {"symbols": {{{symbols}}} }}',
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="declared interface input 'symbols'"):
+        validate_bare_input_refs(orch)
+
+
 def test_validate_bare_input_refs_accepts_namespaced_ref() -> None:
     orch = {
         "interface": {"inputs": {"topic": {"type": "string"}}},

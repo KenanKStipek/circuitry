@@ -81,6 +81,12 @@ the bare-payload fallback.
 Values are coerced to JSON-safe types (record ids and datetimes become strings)
 so results survive serialization into run state.
 
+`data` is plain `params:` YAML, so it works well for a shape known upfront.
+For a `data` object assembled at runtime (e.g. a prior step produced a JSON
+object rather than individual scalar fields), use `params_json:` instead —
+see [`params_json`](../orchestration-reference.md#params_json) in the
+orchestration reference.
+
 ## Examples
 
 Runnable end-to-end: `cof run learn/surrealdb_roundtrip -e name=Ada -e score=10`

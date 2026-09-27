@@ -1,12 +1,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from circuitry.plugins.base import ToolResult, validate_tool_result
 from circuitry.plugins.ffmpeg import FfmpegPlugin
+
+_FFMPEG_PATH = "/usr/bin/ffmpeg"
+
+
+@pytest.fixture(autouse=True)
+def _ffmpeg_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Most tests exercise command construction, not PATH resolution —
+    stub ``ffmpeg`` as always resolvable so they don't depend on a real
+    install. Tests for the missing-binary case override this."""
+    monkeypatch.setattr(
+        "circuitry.plugins._subprocess.shutil.which",
+        lambda name: _FFMPEG_PATH if name == "ffmpeg" else None,
+    )
 
 
 @dataclass
@@ -46,7 +60,7 @@ def test_ffmpeg_injects_y_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     FfmpegPlugin().execute(params={"input": "a.mp4", "output": "b.mp4"})
 
     cmd = captured_cmd[0]
-    assert cmd[0] == "ffmpeg"
+    assert cmd[0] == _FFMPEG_PATH
     assert "-y" in cmd
     # -y must come before -i
     assert cmd.index("-y") < cmd.index("-i")
@@ -119,6 +133,82 @@ def test_ffmpeg_raises_when_not_installed(monkeypatch: pytest.MonkeyPatch) -> No
 
     with pytest.raises(RuntimeError, match="not installed"):
         FfmpegPlugin().execute(params={"input": "a.mp4", "output": "b.mp4"})
+
+
+def test_ffmpeg_raises_when_not_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("circuitry.plugins._subprocess.shutil.which", lambda name: None)
+    with pytest.raises(RuntimeError, match="found on PATH"):
+        FfmpegPlugin().execute(params={"input": "a.mp4", "output": "b.mp4"})
+
+
+def test_ffmpeg_check_reports_missing_when_not_on_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("circuitry.plugins._subprocess.shutil.which", lambda name: None)
+    r = FfmpegPlugin().check()
+    assert r.ok is False
+    assert "binary:ffmpeg" in r.missing
+
+
+def test_ffmpeg_check_ok_when_on_path() -> None:
+    assert FfmpegPlugin().check().ok is True
+
+
+# --- configured binary / env (runtime.plugins.ffmpeg) ---
+
+
+def test_ffmpeg_configured_binary_runs_real_script(tmp_path: Path) -> None:
+    """A configured ``binary`` bypasses PATH search entirely; prove it with
+    a real temporary executable rather than depending on a real ffmpeg
+    install being on the test machine."""
+    script = tmp_path / "fake-ffmpeg"
+    output = tmp_path / "out.mp4"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'echo "ARGS: $@" > "{output}"\n'
+        f'echo "THREADS: $MAGICK_THREAD_LIMIT" >> "{output}"\n'
+    )
+    script.chmod(0o755)
+
+    plugin = FfmpegPlugin(binary=str(script), env={"MAGICK_THREAD_LIMIT": "4"})
+    result = plugin.execute(params={"input": "a.mp4", "output": str(output)})
+
+    assert result.exit_code == 0
+    assert result.raw["binary"] == str(script)
+    written = output.read_text()
+    assert "-y" in written and "-i" in written and "a.mp4" in written
+    assert "THREADS: 4" in written
+
+
+def test_ffmpeg_configured_binary_missing_fails_naming_setting_and_path(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "nope"
+    with pytest.raises(RuntimeError, match=r"runtime\.plugins\.ffmpeg\.binary.*nope"):
+        FfmpegPlugin(binary=str(missing)).execute(
+            params={"input": "a.mp4", "output": "b.mp4"}
+        )
+
+
+def test_ffmpeg_configured_binary_not_executable_fails_check(tmp_path: Path) -> None:
+    not_exec = tmp_path / "not-exec"
+    not_exec.write_text("#!/bin/sh\necho hi\n")
+    not_exec.chmod(0o644)
+
+    r = FfmpegPlugin(binary=str(not_exec)).check()
+    assert r.ok is False
+    assert "binary:ffmpeg" in r.missing
+    assert "runtime.plugins.ffmpeg.binary" in (r.message or "")
+
+
+def test_ffmpeg_configured_binary_relative_path_rejected() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match=r"runtime\.plugins\.ffmpeg\.binary=.*must be an absolute path",
+    ):
+        FfmpegPlugin(binary="relative/ffmpeg").execute(
+            params={"input": "a.mp4", "output": "b.mp4"}
+        )
 
 
 def test_validate_tool_result_passes_for_valid_result() -> None:

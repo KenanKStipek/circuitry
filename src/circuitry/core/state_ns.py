@@ -248,7 +248,7 @@ def _walk_bare_refs(
 def _iter_template_strings(effect: dict[str, Any]) -> list[tuple[str, str]]:
     """Every (field-label, text) pair the runtime Mustache-renders."""
     found: list[tuple[str, str]] = []
-    for field in ("template", "prompt", "inline"):
+    for field in ("template", "prompt", "inline", "params_json"):
         value = effect.get(field)
         if isinstance(value, str):
             found.append((field, value))

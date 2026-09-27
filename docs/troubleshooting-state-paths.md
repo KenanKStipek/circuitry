@@ -82,7 +82,8 @@ under `on_error: continue`/`break` are skipped; a zero-iteration loop writes no
 
 `{{prime.<step>.value}}` is the within-iteration form and resolves through a
 scope chain — current iteration, then enclosing scope, then root state — in
-named and unnamed loops, `chain` and `tree` flow, and `while` conditions. See
+named and unnamed loops, `chain` and `tree` flow, and `while` conditions. An
+`if` branch is its own link in that same chain, loop body or not. See
 [Referencing a sibling within an iteration](orchestration-reference.md#referencing-a-sibling-within-an-iteration).
 
 ## A Loop Stopped Early and the Run Stayed Green
