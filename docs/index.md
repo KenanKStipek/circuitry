@@ -4,7 +4,7 @@ Start with the [README](../README.md) for install, first run, and the mental mod
 
 ## The language
 
-- [**The Guidebook**](./guidebook/README.md) — the long-form tour, fourteen chapters in three acts, one running example. Can also be built as a PDF and an EPUB — see [Building the book](./guidebook/build.md).
+- [**The Guidebook**](./guidebook/README.md) — the long-form tour, fourteen chapters in three acts, one running example. Also built as [PDF](./guidebook/circuitry-guidebook.pdf) and [EPUB](./guidebook/circuitry-guidebook.epub).
   - Part I — Basics: [Prompt](./guidebook/01-prompt.md) · [Dynamic](./guidebook/02-dynamic.md) · [State](./guidebook/03-state.md) · [Configuration](./guidebook/04-configuration.md) · [Errors](./guidebook/05-errors.md)
   - Part II — Cybernetics: [If](./guidebook/06-if.md) · [Loop](./guidebook/07-loop.md) · [Reflector](./guidebook/08-reflector.md)
   - Part III — The machine in the world: [Composition](./guidebook/09-composition.md) · [Complexity](./guidebook/10-complexity.md) · [Decomposition](./guidebook/11-decomposition.md) · [Surfaces](./guidebook/12-surfaces.md) · [Tools and persistence](./guidebook/13-tools-and-persistence.md) · [The whole meal](./guidebook/14-the-whole-meal.md)

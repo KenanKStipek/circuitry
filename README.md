@@ -11,7 +11,7 @@
 
 An orchestration is exactly that: a declared control mechanism which, through reflectors and decomposition, lays its own plans.
 
-This README is the short tour — install, first run, the mental model, and where things live. The **[Guidebook](docs/guidebook/README.md)** is the long one: every primitive, every state path, every switch, in fourteen chapters with one running example. It can also be built as a PDF and an EPUB — see [Building the book](docs/guidebook/build.md).
+This README is the short tour — install, first run, the mental model, and where things live. The **[Guidebook](docs/guidebook/README.md)** is the long one: every primitive, every state path, every switch, in fourteen chapters with one running example. It is also available as a [PDF](docs/guidebook/circuitry-guidebook.pdf) and an [EPUB](docs/guidebook/circuitry-guidebook.epub).
 
 ## Getting started
 
