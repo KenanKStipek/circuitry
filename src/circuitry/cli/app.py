@@ -128,14 +128,13 @@ def _write_state_json(*, out: Path, state: dict, pretty: bool) -> None:
     out.write_text(dumps_saved_state(state, pretty=pretty) + "\n", encoding="utf-8")
 
 
-def _print_run_warnings(warnings: list[str], *, quiet: bool) -> None:
+def _print_run_warnings(warnings: list[str]) -> None:
     """Print a run's warnings on stderr, for a failed run as for a good one.
 
-    Stderr keeps `--json` / `--tail` stdout machine-readable; only `--quiet`
-    silences them.
+    Stderr leaves `--json` / `--tail` / piped stdout machine-readable, so
+    `--quiet` (which a pipe implies) does not silence them: a warning can say
+    that part of the orchestration was ignored.
     """
-    if quiet:
-        return
     for w in warnings:
         err_console.print(
             f"[yellow]Warning:[/yellow] {escape(w)}", highlight=False, soft_wrap=True
@@ -661,7 +660,7 @@ def run_cmd(
         else console.status("[cyan]Running…[/cyan]")
     ):
         result = run(req)
-    _print_run_warnings(result.warnings, quiet=quiet)
+    _print_run_warnings(result.warnings)
 
     # Resolved --out path: the CLI flag if given, else the profile's `out:`
     # (precedence cli > profile > default — see cli.effective_settings).
@@ -923,7 +922,7 @@ def run_library_cmd(
         else console.status("[cyan]Running…[/cyan]")
     ):
         result = run(req)
-    _print_run_warnings(result.warnings, quiet=quiet)
+    _print_run_warnings(result.warnings)
 
     if out:
         _write_state_json(out=out, state=result.state, pretty=pretty)
