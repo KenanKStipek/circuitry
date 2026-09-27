@@ -168,9 +168,10 @@ treated as expected behavior, not vulnerabilities.
   defensive system prompts).
 - **Resource exhaustion from runaway loops.** `max_iterations` is a cap the
   orchestration author sets, not a built-in floor — a loop with no cap runs
-  until its collection or condition ends it, and one that never converges
-  (a `while` condition that never goes false, an `each` collection with no
-  bound) will run indefinitely.
+  until its collection or condition ends it. An `each` loop walks a
+  collection resolved before its first pass, so a large one can run long
+  but not forever; a `while` loop whose condition never goes false runs
+  indefinitely.
 - **Network-level attacks on adapter endpoints.** TLS validation is
   delegated to the underlying transport (`urllib`, `httpx`, or the vendor
   SDK). Misconfigured TLS in the user's environment is the user's problem.
