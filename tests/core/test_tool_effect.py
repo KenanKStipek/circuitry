@@ -264,6 +264,77 @@ def test_tool_runtime_params_json_builds_array_from_prior_step(
     assert store.state["get_equity_quotes"]["meta"]["params_rendered"] == captured_params
 
 
+def test_tool_runtime_params_json_builds_array_from_native_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A prior step's value can already be a native list in state (e.g. an
+    `array` prompt, `json` parse, MCP structuredContent, or a loop item) —
+    not just a pre-serialized JSON string."""
+    captured_params: dict[str, Any] = {}
+    monkeypatch.setattr(
+        "circuitry.plugins.factory.build_plugin", _capturing_plugin(captured_params)
+    )
+
+    defn = ToolDefinition(
+        name="get_equity_quotes",
+        provider="mcp",
+        params={"server": "robinhood"},
+        params_json='{"arguments": {"symbols": {{{prime.symbol_list.value}}} }}',
+    )
+    store = _make_store()
+    ctx = {"prime": {"symbol_list": {"value": ["AAPL", "MSFT", "TSLA"]}}}
+
+    ToolRuntime(defn).execute(store=store, ctx=ctx)
+
+    assert captured_params["arguments"] == {"symbols": ["AAPL", "MSFT", "TSLA"]}
+
+
+def test_tool_runtime_params_json_builds_object_from_native_dict_loop_item(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A loop `each.as` item is a native dict, not a JSON string."""
+    captured_params: dict[str, Any] = {}
+    monkeypatch.setattr(
+        "circuitry.plugins.factory.build_plugin", _capturing_plugin(captured_params)
+    )
+
+    defn = ToolDefinition(
+        name="save_person",
+        provider="surrealdb",
+        params={"mode": "create", "table": "person"},
+        params_json='{"data": {{{item}}} }',
+    )
+    store = _make_store()
+    ctx = {"item": {"name": "Ada", "score": 42}}
+
+    ToolRuntime(defn).execute(store=store, ctx=ctx)
+
+    assert captured_params["data"] == {"name": "Ada", "score": 42}
+
+
+def test_tool_runtime_params_json_builds_empty_array_from_native_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty list is falsy; chevron must still splice `[]`, not ''."""
+    captured_params: dict[str, Any] = {}
+    monkeypatch.setattr(
+        "circuitry.plugins.factory.build_plugin", _capturing_plugin(captured_params)
+    )
+
+    defn = ToolDefinition(
+        name="x",
+        provider="mcp",
+        params={},
+        params_json='{"symbols": {{{symbols}}} }',
+    )
+    store = _make_store()
+    ctx: dict[str, Any] = {"symbols": []}
+
+    ToolRuntime(defn).execute(store=store, ctx=ctx)
+
+    assert captured_params["symbols"] == []
+
+
 def test_tool_runtime_params_json_builds_nested_object(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -328,9 +399,10 @@ def test_tool_runtime_params_json_invalid_json_fail_raises(
     assert "params_json" in store.state["x"]["meta"]["error"]
 
 
-def test_tool_runtime_params_json_invalid_json_skip_does_not_raise(
+def test_tool_runtime_params_json_non_object_skip_does_not_raise(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Valid JSON that isn't an object (e.g. a bare array) is still an error."""
     monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: MagicMock())
 
     defn = ToolDefinition(
@@ -342,6 +414,22 @@ def test_tool_runtime_params_json_invalid_json_skip_does_not_raise(
 
     assert store.state["x"]["value"] is None
     assert "JSON object" in store.state["x"]["meta"]["error"]
+
+
+def test_tool_runtime_params_json_invalid_json_continue_does_not_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: MagicMock())
+
+    defn = ToolDefinition(
+        name="x", provider="mcp", params={}, params_json="{not valid json", on_error="continue"
+    )
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={})  # should not raise
+
+    assert store.state["x"]["value"] is None
+    assert "params_json" in store.state["x"]["meta"]["error"]
 
 
 # ---------------------------------------------------------------------------

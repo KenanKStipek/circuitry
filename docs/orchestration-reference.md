@@ -509,10 +509,17 @@ object is deep-merged over `params` (its keys win on conflicts). This keeps
 `params` for the parts of the call that are known upfront and reserves
 `params_json` for the parts that have to be assembled at runtime.
 
-A prior step's list/object value must already be a JSON string in state
-(e.g. produced by the `json` tool provider, or a reflector that wrote JSON
-text) — `{{{...}}}` (triple-stache) renders it unescaped, and `params_json`
-then parses the whole template as JSON.
+A prior step's list/object value can be a native Python list/dict already in
+state (e.g. from an `array`/`object` prompt, the `json` plugin's parse/
+extract, MCP `structuredContent`, a `surrealdb` result, or a loop `each.as`
+item) — `params_json` serializes it back to JSON text when splicing it in.
+It can also be a string that already holds JSON text; that string is
+spliced in verbatim. Either way, use `{{{...}}}` (triple-stache) so the
+value is not HTML-escaped, since `params_json` parses the whole rendered
+template as JSON. Only splice a *whole* JSON value this way — a bare scalar
+like `{{{input.name}}}` inside a JSON string literal breaks if the value
+contains a `"`, `\`, or newline; put scalars under `params:` instead and
+reserve `params_json` for array/object values.
 
 Building a real array for an MCP tool call, from a list a previous step
 computed (`prime.symbol_list.value` holding e.g. `'["AAPL","MSFT","TSLA"]'`):
