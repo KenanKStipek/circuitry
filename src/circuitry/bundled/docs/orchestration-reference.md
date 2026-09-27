@@ -354,6 +354,10 @@ Rules of the form:
   the body, and only inside the body.
 - **Named and unnamed loops behave identically**, in `chain` and in `tree` flow.
   (A `tree` loop parallelises whole iterations, not the steps inside one.)
+- **An `if` branch is its own link in the same scope chain.** A step inside a
+  `then`/`else` branch resolves the branch's own earlier steps first, then
+  falls through to the enclosing scope. This holds for a named `if` too, and
+  for one nested inside another.
 - **The bare form `{{<step>.value}}` also works** and means the same node. It is
   accepted, not preferred: a bare name can collide with a user-supplied state
   key, and `prime.`-prefixed cannot.
