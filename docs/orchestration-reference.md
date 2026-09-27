@@ -364,6 +364,11 @@ Rules of the form:
   flow. (A `tree` loop parallelises whole iterations, not the steps inside one —
   body steps still run in order and still chain.) Adding or removing a loop's
   `name:` never changes which spelling resolves.
+- **An `if` branch is its own link in the same scope chain.** A step inside a
+  `then`/`else` branch resolves the branch's own earlier steps first, then
+  falls through to whatever this rule already says for the enclosing scope —
+  a loop iteration's prior steps, an outer branch's, or root state. This
+  holds for a named `if` too, and for one nested inside another.
 - **The bare form `{{<step>.value}}` also works** and means the same node. It is
   accepted, not preferred: a bare name can collide with a user-supplied state
   key, and `prime.`-prefixed cannot.

@@ -193,6 +193,10 @@ class ConditionalRuntime:
 
         # Execute selected branch effects
         executed_effects: list[dict[str, Any]] = []
+        # Overlays are always rebuilt from the ctx the branch started with,
+        # never from the previous overlay — see loop.py's _execute_body for
+        # why layering copies on copies is the wrong move.
+        base_ctx = ctx
 
         try:
             from .dynamic import (
@@ -223,7 +227,7 @@ class ConditionalRuntime:
                     # Expose the skip node to later branch steps on the same
                     # terms as a produced one (see the sibling merge below).
                     ctx = scope_ctx(
-                        ctx, local_writes(child_store.state, branch_baseline, branch_names)
+                        base_ctx, local_writes(child_store.state, branch_baseline, branch_names)
                     )
                     continue
 
@@ -355,7 +359,7 @@ class ConditionalRuntime:
                 # what lets a step read a sibling earlier in the same branch,
                 # in a loop body exactly as at the top level.
                 ctx = scope_ctx(
-                    ctx, local_writes(child_store.state, branch_baseline, branch_names)
+                    base_ctx, local_writes(child_store.state, branch_baseline, branch_names)
                 )
 
             if node:

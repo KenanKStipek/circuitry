@@ -127,7 +127,10 @@ def test_cel_condition_inside_the_branch_sees_the_branch_earlier_step() -> None:
                                         "state.prime.inner1.value == 'D'"
                                     ),
                                 },
-                                "then": [_json_str("nested_hit", "yes")],
+                                "then": [
+                                    _json_str("nested_hit", "yes"),
+                                    _combine("nested_probe", "prime.inner1.value"),
+                                ],
                                 "else": [_json_str("nested_hit", "no")],
                             },
                         ],
@@ -143,3 +146,6 @@ def test_cel_condition_inside_the_branch_sees_the_branch_earlier_step() -> None:
     nested = iter_0["nested"]
     assert nested["value"]["branch"] == "then"
     assert nested["nested_hit"]["value"] == "yes"
+    # A step of the nested if's own branch must also see the outer branch's
+    # earlier step (inner1) — the fix rebuilds ctx recursively, not just once.
+    assert '"prime.inner1.value": "D"' in nested["nested_probe"]["value"]
