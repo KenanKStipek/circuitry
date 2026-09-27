@@ -175,6 +175,32 @@ def test_submit_response_drives_to_completion(tmp_path: Path) -> None:
     assert final["pending_prompts"] == []
     assert final["state"] is not None
     assert final["state"]["prime"]["greet"]["value"] == "pong"
+    assert final["warnings"] == []
+
+
+def test_run_response_surfaces_an_untrusted_project_config_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "circuitry.config.json").write_text(
+        '{"default_model": "project-model"}', encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    p = _write_yml(tmp_path, "one.yml", """
+        adapter: host_claude
+        model: claude-sonnet-4
+        effects:
+          - type: prompt
+            name: greet
+            template: "ping"
+    """)
+    started = srv._run_orchestration_impl(orchestration=str(p))
+    rid = started["run_id"]
+    pid = _settled(rid)["pending_prompts"][0]["prompt_id"]
+
+    srv._submit_response_impl(run_id=rid, prompt_id=pid, response="pong")
+    final = _settled(rid)
+    assert final["status"] == "completed"
+    assert any("Skipped project config" in w for w in final["warnings"])
 
 
 # ---------------------------------------------------------------------------

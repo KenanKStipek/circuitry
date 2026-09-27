@@ -54,10 +54,13 @@ def register_doctor(app: typer.Typer) -> None:
 
         table = Table(title="Circuitry · Doctor", show_lines=True)
         table.add_column("Check")
-        table.add_column("Result")
+        table.add_column("Result", overflow="fold")
 
         # Config
         table.add_row("Config path", str(cfg_path) if cfg_path else "— (defaults)")
+        # A discovered project source is listed here even when skipped for
+        # lack of trust, with its trust state as part of the entry — see
+        # ConfigSource.note — so there is one row for this, not two.
         table.add_row("Config sources", describe_config_sources(resolved_cfg.sources))
         table.add_row(
             "Effective adapter",

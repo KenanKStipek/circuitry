@@ -180,6 +180,9 @@ def run(req: RunRequest) -> RunResult:
 
     try:
         cfg = req.config or CircuitryConfig()
+        # A skipped (untrusted) project config, first, so a failing run
+        # still says which settings it ran without.
+        warnings.extend(cfg.resolution_warnings())
         orch = load_orchestration_file(req.orchestration_path)
 
         allowlist_errors = check_allowlist(
@@ -692,20 +695,22 @@ def validate(
     config: CircuitryConfig | None = None,
     skip_preflight: bool = False,
 ) -> dict[str, Any]:
+    # A skipped (untrusted) project config: the checks below ran without it.
+    config_warnings = config.resolution_warnings() if config is not None else []
     text = orchestration_path.read_text(encoding="utf-8").strip()
     if not text:
-        return {"ok": False, "errors": ["Orchestration file is empty."], "warnings": []}
+        return {"ok": False, "errors": ["Orchestration file is empty."], "warnings": config_warnings}
 
     # Advisory lint (deprecated aliases, type-keyword effect names). Populated
     # as soon as the document parses and carried through every exit below —
     # warnings never change ``ok``, so a file can be valid and still noisy.
-    lint_warnings: list[str] = []
+    lint_warnings: list[str] = list(config_warnings)
 
     try:
         orch = load_orchestration_file(orchestration_path)
 
         from ..core.lint import lint_orchestration
-        lint_warnings = lint_orchestration(orch)
+        lint_warnings = [*config_warnings, *lint_orchestration(orch)]
         # Host settings the document tries to set are dropped at run time;
         # say so here too, whether or not the rest of the file is valid.
         lint_warnings += orchestration_host_setting_warnings(

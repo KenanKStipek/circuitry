@@ -10,15 +10,15 @@ Resolution is layered, each layer deep-merged over the last:
 
 1. **Sane defaults** — `ollama` at `http://localhost:11434`, `llama3.1:8b`.
 2. **Global config** — `~/.config/circuitry/config.json`.
-3. **Project config** — `circuitry.config.json` or `config.json` in the working directory.
+3. **Project config** — `circuitry.config.json` or `config.json` in the working directory, once you have trusted it with `cof trust` (see [Trusting a project config](#trusting-a-project-config)).
 4. **An explicit file** — `--config <path>` or `CIRCUITRY_CONFIG`, which *replaces* 2 and 3 rather than layering over them.
 5. **Environment variables** — `CIRCUITRY_ADAPTER`, `CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER_URL`, `CIRCUITRY_COMFYUI_URL`, the allowlists `CIRCUITRY_ENABLED_ADAPTERS` / `CIRCUITRY_ENABLED_TOOLS` / `CIRCUITRY_ENABLED_PLUGINS`, and `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME` (below).
 
-One exception to "the last layer wins": a project config found in the working directory may *narrow* an allowlist the global config set, never widen it. Its list is intersected with the global one, and `"enabled_tools": null` in a cloned repo does not re-open what your global config locked down; a warning names what was ignored. A file you name yourself — `--config` or `CIRCUITRY_CONFIG` — is trusted as written.
+Two exceptions to "the last layer wins", both about a project config found in the working directory rather than named explicitly. First, trust: it applies only once you have run `cof trust` on it (or set `CIRCUITRY_TRUST_PROJECT_CONFIG=1`) — see [Trusting a project config](#trusting-a-project-config). Second, once trusted, it may *narrow* an allowlist the global config set, never widen it: its list is intersected with the global one, and `"enabled_tools": null` in a cloned repo does not re-open what your global config locked down; a warning names what was ignored. A file you name yourself — `--config` or `CIRCUITRY_CONFIG` — skips both checks and is trusted as written.
 
-`cof run` and `cof check` print the config files and environment variables they resolved from on their `Config:` line; `cof doctor` lists them as `Config sources`.
+`cof run` and `cof check` print the config files and environment variables they resolved from on their `Config:` line; `cof doctor` lists them as `Config sources`. A discovered project file appears there even when it was skipped for lack of trust — as `(project, not trusted — skipped)` rather than `(project, trusted)` — so the line explains a missing setting as well as a present one.
 
-`cof setup` walks you through creating the global file — it detects local backends and writes a working config. `cof init` writes a project config and a `hello.yml` beside it. `cof doctor` tells you what the resolved config can actually reach.
+`cof setup` walks you through creating the global file — it detects local backends and writes a working config. `cof init` writes a project config and a `hello.yml` beside it, and trusts the config it wrote. `cof doctor` tells you what the resolved config can actually reach.
 
 A local-first project config:
 
@@ -63,6 +63,29 @@ That boundary is what makes it reasonable to run a document you did not write �
 ```
 
 `trust_orchestration_runtime: true` (or `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME=1`) switches the boundary off and restores the old behaviour: a document's whole `runtime:` block is merged over config and every module in its `plugins:` list is imported. Only set it on a host that runs nothing but documents you wrote or have read. With it on, any document the host runs can point an adapter at its own server — which then receives your prompts and the adapter's credentials — change a tool's `binary` or `env`, add an MCP server command, redirect persistence, or import arbitrary Python, and `use: ref:` means that includes every document your library sources can reach.
+
+## Trusting a project config
+
+A project config is picked up from whatever directory you run in, and it carries the same authority as your own global file: it can repoint an adapter (and the credentials sent with every prompt), choose the binary and environment a tool plugin executes, start MCP server commands, send run state to a persistence backend, and import runtime plugins. A cloned or downloaded repository can ship one. So, like `direnv allow`, Circuitry applies a discovered project config only after you have said so:
+
+```bash
+cof trust                  # the circuitry.config.json / config.json in this directory
+cof trust path/to/config.json --yes
+cof trust --list           # every trusted file, and whether it still matches
+cof untrust                # stop applying it
+```
+
+`cof trust` prints every setting the file makes, flags the host-sensitive ones — adapter settings, a tool's `binary` or `env`, MCP servers, `plugins`, persistence, library sources, `trust_orchestration_runtime` — and asks before it records anything (`--yes` skips the question). Trust is kept in `~/.config/circuitry/trusted.json`, beside the global config, as the file's resolved path and the SHA-256 of its contents; your `config.json` is never rewritten. Edit the file and it stops applying until you trust it again.
+
+Until then the file is skipped as a whole, and the run says so once, on stderr:
+
+```
+Warning: Skipped project config /home/you/repo/circuitry.config.json: it is not trusted, so none of its settings apply. Review it, then run `cof trust /home/you/repo/circuitry.config.json` to apply it.
+```
+
+The run itself goes ahead on the other layers, and exit codes do not change. `cof check` prints the same warning; `cof doctor` and the TUI's Doctor and Settings views show the file and its trust state.
+
+Two kinds of file are always trusted, because you named them: the global config, and a file passed with `--config` or `CIRCUITRY_CONFIG`. For CI jobs and containers where the checked-out repository is your own, `CIRCUITRY_TRUST_PROJECT_CONFIG=1` trusts every discovered project config without a trust entry. That is the whole protection switched off: set it only where every directory a run can start in holds a config you would have trusted anyway.
 
 ## Which model actually runs
 

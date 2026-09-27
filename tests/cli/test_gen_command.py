@@ -13,7 +13,10 @@ from circuitry.cli.app import app
 runner = CliRunner()
 
 
-def _make_fake_run(generated_yaml: str = "effects:\n  - type: prompt\n    name: hello\n    template: Hi"):
+def _make_fake_run(
+    generated_yaml: str = "effects:\n  - type: prompt\n    name: hello\n    template: Hi",
+    warnings: list[str] | None = None,
+):
     """Return a fake ``run`` that simulates meta_orchestrator output."""
     from circuitry.cli.runtime_shim import RunResult
 
@@ -32,7 +35,7 @@ def _make_fake_run(generated_yaml: str = "effects:\n  - type: prompt\n    name: 
                     }
                 }
             },
-            warnings=[],
+            warnings=warnings or [],
         )
 
     return _fake
@@ -52,6 +55,23 @@ def test_gen_outputs_yaml(tmp_path: Path):
     orch_file = Path(f"{orch_name}.yml")
     assert orch_file.exists()
     assert "effects:" in orch_file.read_text(encoding="utf-8")
+
+
+def test_gen_prints_the_run_warnings(tmp_path: Path) -> None:
+    """cof gen must surface result.warnings — e.g. a skipped project config —
+    not swallow them (#278)."""
+    orch_name = str(tmp_path / "greeting_bot")
+    warning = "Skipped project config /tmp/circuitry.config.json: it is not trusted."
+
+    with patch("circuitry.cli.app.run", _make_fake_run(warnings=[warning])):
+        with patch("circuitry.cli.app.resolve_config") as mock_cfg:
+            from circuitry.cli.config import CircuitryConfig
+
+            mock_cfg.return_value = CircuitryConfig()
+            result = runner.invoke(app, ["gen", orch_name, "make a greeting bot"])
+
+    assert result.exit_code == 0, result.output
+    assert warning in result.stderr
 
 
 def test_gen_writes_state_to_out(tmp_path: Path):

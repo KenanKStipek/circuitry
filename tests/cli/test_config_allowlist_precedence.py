@@ -27,7 +27,9 @@ from circuitry.cli.config import (
     ConfigSource,
     describe_config_sources,
     resolve_config,
+    trust_store_path,
 )
+from circuitry.cli.config_trust import record_trust
 
 # Each test builds its own global/project layering.
 pytestmark = pytest.mark.real_config_discovery
@@ -53,12 +55,17 @@ def _write_json(path: Path, data: dict) -> Path:
     return path
 
 
+def _trust(path: Path) -> None:
+    """Record trust for a discovered project config, as `cof trust` would."""
+    record_trust(path, path.read_bytes(), store_path=trust_store_path())
+
+
 def test_project_list_is_intersected_with_the_global_list(
     layers: tuple[Path, Path], caplog: pytest.LogCaptureFixture
 ) -> None:
     global_path, project = layers
     _write_json(global_path, {"enabled_tools": ["json", "http"]})
-    _write_json(project / "circuitry.config.json", {"enabled_tools": ["json", "shell"]})
+    _trust(_write_json(project / "circuitry.config.json", {"enabled_tools": ["json", "shell"]}))
 
     with caplog.at_level(logging.WARNING, logger="circuitry.cli.config"):
         cfg = resolve_config(cwd=project)
@@ -75,9 +82,11 @@ def test_intersection_is_case_insensitive_for_tools_and_adapters(
     uppercase entry in either layer still narrows correctly."""
     global_path, project = layers
     _write_json(global_path, {"enabled_tools": ["JSON", "HTTP"], "enabled_adapters": ["OLLAMA"]})
-    _write_json(
-        project / "circuitry.config.json",
-        {"enabled_tools": ["json", "shell"], "enabled_adapters": ["ollama"]},
+    _trust(
+        _write_json(
+            project / "circuitry.config.json",
+            {"enabled_tools": ["json", "shell"], "enabled_adapters": ["ollama"]},
+        )
     )
 
     cfg = resolve_config(cwd=project)
@@ -91,7 +100,7 @@ def test_project_null_does_not_reopen_a_global_list(
 ) -> None:
     global_path, project = layers
     _write_json(global_path, {"enabled_tools": ["json"], "enabled_adapters": ["ollama"]})
-    _write_json(project / "config.json", {"enabled_tools": None, "enabled_adapters": None})
+    _trust(_write_json(project / "config.json", {"enabled_tools": None, "enabled_adapters": None}))
 
     with caplog.at_level(logging.WARNING, logger="circuitry.cli.config"):
         cfg = resolve_config(cwd=project)
@@ -104,7 +113,7 @@ def test_project_null_does_not_reopen_a_global_list(
 def test_project_without_the_key_keeps_the_global_list(layers: tuple[Path, Path]) -> None:
     global_path, project = layers
     _write_json(global_path, {"enabled_plugins": ["sqlite"]})
-    _write_json(project / "circuitry.config.json", {"default_model": "m"})
+    _trust(_write_json(project / "circuitry.config.json", {"default_model": "m"}))
 
     cfg = resolve_config(cwd=project)
 
@@ -115,16 +124,75 @@ def test_project_without_the_key_keeps_the_global_list(layers: tuple[Path, Path]
 def test_project_may_lock_down_further(layers: tuple[Path, Path]) -> None:
     global_path, project = layers
     _write_json(global_path, {"enabled_tools": ["json", "http"]})
-    _write_json(project / "circuitry.config.json", {"enabled_tools": []})
+    _trust(_write_json(project / "circuitry.config.json", {"enabled_tools": []}))
 
     assert resolve_config(cwd=project).enabled_tools == []
 
 
 def test_project_list_applies_when_global_sets_none(layers: tuple[Path, Path]) -> None:
     _, project = layers
-    _write_json(project / "circuitry.config.json", {"enabled_tools": ["json"]})
+    _trust(_write_json(project / "circuitry.config.json", {"enabled_tools": ["json"]}))
 
     assert resolve_config(cwd=project).enabled_tools == ["json"]
+
+
+def test_an_untrusted_project_config_neither_narrows_nor_widens(
+    layers: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Trust comes before narrowing (#278 x #245): an untrusted discovered
+    file contributes nothing at all, not even a narrowing of the global
+    allowlist — and it still gets exactly one warning."""
+    global_path, project = layers
+    _write_json(global_path, {"enabled_tools": ["json", "http"]})
+    local = _write_json(project / "circuitry.config.json", {"enabled_tools": ["json"]})
+
+    cfg = resolve_config(cwd=project)
+
+    assert cfg.enabled_tools == ["json", "http"]  # unchanged: no narrowing happened
+    assert cfg.resolution_warnings() == [
+        (
+            f"Skipped project config {local}: it is not trusted, so none of its "
+            f"settings apply. Review it, then run `cof trust {local}` to apply it."
+        )
+    ]
+    assert cfg.sources == (
+        ConfigSource("global", str(global_path)),
+        ConfigSource("project", str(local), "not trusted — skipped"),
+    )
+
+
+def test_a_trusted_project_config_narrows_after_the_trust_gate(
+    layers: tuple[Path, Path]
+) -> None:
+    """The mirror of the untrusted case: once trusted, the file both applies
+    and is narrowed (#245), and the source note says so."""
+    global_path, project = layers
+    _write_json(global_path, {"enabled_tools": ["json", "http"]})
+    local = _write_json(project / "circuitry.config.json", {"enabled_tools": ["json", "shell"]})
+    _trust(local)
+
+    cfg = resolve_config(cwd=project)
+
+    assert cfg.enabled_tools == ["json"]  # narrowed: shell dropped, http never added
+    assert cfg.resolution_warnings() == []
+    assert cfg.sources[-1] == ConfigSource("project", str(local), "trusted")
+
+
+def test_the_env_escape_hatch_trusts_and_narrows(
+    layers: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    global_path, project = layers
+    _write_json(global_path, {"enabled_tools": ["json", "http"]})
+    local = _write_json(project / "circuitry.config.json", {"enabled_tools": ["json", "shell"]})
+    monkeypatch.setenv("CIRCUITRY_TRUST_PROJECT_CONFIG", "1")
+
+    cfg = resolve_config(cwd=project)
+
+    assert cfg.enabled_tools == ["json"]  # applied and narrowed, same as a `cof trust`
+    assert cfg.resolution_warnings() == []
+    assert cfg.sources[-1] == ConfigSource(
+        "project", str(local), "trusted by CIRCUITRY_TRUST_PROJECT_CONFIG"
+    )
 
 
 def test_circuitry_config_file_keeps_its_precedence(
@@ -172,6 +240,7 @@ def test_sources_list_every_applied_layer_in_order(
     global_path, project = layers
     _write_json(global_path, {})
     local = _write_json(project / "circuitry.config.json", {})
+    _trust(local)
     monkeypatch.setenv("CIRCUITRY_ENABLED_TOOLS", "")
     monkeypatch.setenv("CIRCUITRY_MODEL", "")  # empty: not applied, not listed
 
@@ -179,11 +248,11 @@ def test_sources_list_every_applied_layer_in_order(
 
     assert cfg.sources == (
         ConfigSource("global", str(global_path)),
-        ConfigSource("project", str(local)),
+        ConfigSource("project", str(local), "trusted"),
         ConfigSource("env", "CIRCUITRY_ENABLED_TOOLS"),
     )
     assert describe_config_sources(cfg.sources) == (
-        f"{global_path} (global), {local} (project), CIRCUITRY_ENABLED_TOOLS (env)"
+        f"{global_path} (global), {local} (project, trusted), CIRCUITRY_ENABLED_TOOLS (env)"
     )
 
 
@@ -206,6 +275,7 @@ def test_check_and_run_headers_name_the_config_sources(
     global_path, project = layers
     _write_json(global_path, {"enabled_tools": ["json"]})
     local = _write_json(project / "circuitry.config.json", {})
+    _trust(local)
     doc = project / "doc.yml"
     doc.write_text(
         "effects:\n  - type: tool\n    name: t\n    provider: json\n"
@@ -220,7 +290,7 @@ def test_check_and_run_headers_name_the_config_sources(
         SimpleNamespace(stdout=SimpleNamespace(isatty=lambda: True), stdin=sys.stdin),
     )
     monkeypatch.setattr(app_module, "console", Console(width=1000))
-    expected = f"Config: {global_path} (global), {local} (project)"
+    expected = f"Config: {global_path} (global), {local} (project, trusted)"
 
     check = runner.invoke(app, ["check", str(doc), "--skip-preflight"])
     assert check.exit_code == 0, check.stdout

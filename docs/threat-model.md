@@ -186,6 +186,38 @@ that runs nothing but documents its operator wrote or has reviewed. Within the
 boundary, a document still uses whatever config allows — the adapters, tools
 and plugins config enables — so the allowlists remain the way to narrow that.
 
+### 7. Project config files
+
+`circuitry.config.json` or `config.json` in the working directory is
+discovered automatically, and a config file carries full host authority:
+adapter endpoints (and so where prompts and credentials go), tool plugin
+binaries and environments, MCP server commands, persistence targets, library
+sources and runtime plugin imports. A cloned or downloaded repository can ship
+one, so "run anything in this directory" would otherwise mean "apply settings
+nobody reviewed".
+
+**Mitigation.** A discovered project config applies only once the user has
+trusted it with `cof trust`, which prints every setting the file makes and
+flags the host-sensitive ones before asking. Trust is recorded in
+`~/.config/circuitry/trusted.json` (created `0600` in a `0700` directory,
+beside the global config, which is never rewritten) as the file's resolved
+absolute path plus the SHA-256 of its contents, so any edit — or the same
+contents at another path — needs trusting again. An untrusted or changed file
+is skipped whole, with one warning naming the file and the `cof trust` command;
+the run continues on the remaining layers and exit codes do not change.
+`cof doctor` and the TUI show the file's trust state. The global config and a
+file named with `--config` or `CIRCUITRY_CONFIG` are always trusted: the user
+chose them. Implementation:
+[`src/circuitry/cli/config_trust.py`](../src/circuitry/cli/config_trust.py).
+
+**Residual risk.** `CIRCUITRY_TRUST_PROJECT_CONFIG=1` trusts every discovered
+project config without a trust entry — the protection is off wherever it is
+set. Use it only in CI jobs and containers whose checked-out repository is the
+user's own, never in a shell profile. Trust is by content, not by review:
+`cof trust --yes` records a file nobody read. Nothing stops a *trusted* file's
+directory from also containing hostile orchestrations; trust covers the config
+file only.
+
 ---
 
 ## What Circuitry does NOT defend against

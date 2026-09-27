@@ -485,7 +485,10 @@ The bottom panel — and the Settings view on its own — is
 the layer it came from (`cli`, `orchestration`, `config`, `default`). `runtime`
 is flattened to dotted keys so a nested credential gets its own row, and every
 value goes through `circuitry.cli.redaction.redact` first, so a token renders as
-`***REDACTED***` and never reaches the compositor.
+`***REDACTED***` and never reaches the compositor. When the working directory
+has a project config, the first row names it with its trust state — `trusted`,
+or `not trusted — skipped` / `changed since trusted — skipped` with the
+`cof trust` hint — so a file whose values are missing below says why.
 
 ## Validate (`7`)
 
