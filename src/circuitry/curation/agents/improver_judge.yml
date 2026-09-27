@@ -5,9 +5,8 @@
 # converged (functionally equivalent or only trivially different), false if
 # they are meaningfully different and iteration should continue.
 #
-# Called by the improve-orchestration script as a secondary convergence signal
-# after the SHA-256 hash check. Only invoked when hashes differ but the
-# convergence window threshold is met.
+# Called by agents/improver via `use:` after each improvement pass, as a
+# convergence signal for iterative refinement loops.
 #
 # ─── INPUT STATE ─────────────────────────────────────────────────────────────
 #
