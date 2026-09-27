@@ -22,12 +22,12 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
 
 from ..preflight import CheckResult
+from ._curl_errors import curl_failure_message
 from .base import GenerateResult
 
 
@@ -81,11 +81,16 @@ class ReplicateAdapter:
             raise RuntimeError("curl is not installed or not on PATH") from exc
 
         if proc.returncode != 0:
-            masked_cmd = " ".join(shlex.quote(c) for c in cmd).replace(api_token, "***")
-            err = (proc.stderr or proc.stdout or "").strip()
             raise RuntimeError(
-                f"Replicate request failed (curl exit {proc.returncode}): {err} "
-                f"cmd={masked_cmd}"
+                curl_failure_message(
+                    adapter="replicate",
+                    model=target_model,
+                    url=url,
+                    returncode=proc.returncode,
+                    stdout=proc.stdout,
+                    stderr=proc.stderr,
+                    secrets=[api_token],
+                )
             )
         try:
             raw = json.loads(proc.stdout)

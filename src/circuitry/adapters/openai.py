@@ -6,6 +6,7 @@ import shutil
 from dataclasses import dataclass
 
 from ..preflight import CheckResult
+from ._curl_errors import curl_failure_message
 from .base import GenerateResult
 
 
@@ -29,7 +30,6 @@ class OpenAIAdapter:
     def generate(
         self, *, model: str, prompt: str, timeout_seconds: int = 120
     ) -> GenerateResult:
-        import shlex
         import subprocess
 
         model = model or self.default_model
@@ -72,11 +72,16 @@ class OpenAIAdapter:
             raise RuntimeError("curl is not installed or not on PATH") from e
 
         if proc.returncode != 0:
-            # Mask API key in error message
-            safe_cmd = " ".join(shlex.quote(c) for c in cmd).replace(api_key, "***")
-            err = (proc.stderr or proc.stdout or "").strip()
             raise RuntimeError(
-                f"curl failed (exit {proc.returncode}). cmd={safe_cmd}. error={err}"
+                curl_failure_message(
+                    adapter="openai",
+                    model=model,
+                    url=url,
+                    returncode=proc.returncode,
+                    stdout=proc.stdout,
+                    stderr=proc.stderr,
+                    secrets=[api_key],
+                )
             )
 
         try:
