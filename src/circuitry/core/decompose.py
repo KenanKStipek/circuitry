@@ -617,48 +617,53 @@ def _execute_plan(
     if not isinstance(parsed, dict):
         raise ValueError("the emitted orchestration is not a YAML mapping")
 
-    # Same guard, same stack, same identity scheme as an inline `use` child:
-    # a plan that (transitively) re-emits an orchestration already executing
-    # up-stack is cut off here rather than recursing.
+    # Same guard, same identity scheme as an inline `use` child: a plan that
+    # (transitively) re-emits an orchestration already executing up-stack is
+    # cut off here rather than recursing. The stack is derived per call-path
+    # rather than mutated in place — `runtime_config` is one dict shared by
+    # every runtime in the run, and a decomposing prompt may itself run
+    # inside a tree-flow loop body, so a shared, mutated list would let
+    # concurrent sibling iterations see each other as ancestors.
     identity = f"inline:{hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]}"
-    call_stack: list[str] = runtime_config.setdefault("_use_call_stack", [])
-    if identity in call_stack:
-        cycle_path = " → ".join([*call_stack, identity])
+    parent_stack: list[str] = list(runtime_config.get("_use_call_stack", []))
+    if identity in parent_stack:
+        cycle_path = " → ".join([*parent_stack, identity])
         raise RecursionError(
             f"decomposition of '{defn.name}': cycle detected — {cycle_path}"
         )
-    call_stack.append(identity)
-    try:
-        # A *copy* of the effect's own render context — loop overlays and
-        # prompt-local inputs included — so chunk templates resolve exactly
-        # the references the source template could, while every child write
-        # stays in scratch state the parent never sees.
-        child_state = copy.deepcopy(
-            {key: value for key, value in ctx.items() if isinstance(key, str)}
-        )
-        # Clear any copied node at the result path: the merged value must be
-        # something the child wrote, never stale parent state read back.
-        result_parts = plan.result_path.split(".")
-        copied_prime = child_state.get("prime")
-        if isinstance(copied_prime, dict) and len(result_parts) >= 2:
-            copied_prime.pop(result_parts[1], None)
+    child_runtime_config = {
+        **runtime_config,
+        "_use_call_stack": [*parent_stack, identity],
+        _DEPTH_KEY: depth + 1,
+    }
 
-        child_store = _run_isolated(
-            parsed,
-            initial_state=child_state,
-            parent_store=store,
-            node=node,
-            node_path=node_path,
-            adapter=adapter,
-            model=model,
-            runtime_config={**runtime_config, _DEPTH_KEY: depth + 1},
-            timeout_seconds=timeout_seconds,
-            verbose=verbose,
-            display_depth=display_depth,
-        )
-    finally:
-        if call_stack and call_stack[-1] == identity:
-            call_stack.pop()
+    # A *copy* of the effect's own render context — loop overlays and
+    # prompt-local inputs included — so chunk templates resolve exactly
+    # the references the source template could, while every child write
+    # stays in scratch state the parent never sees.
+    child_state = copy.deepcopy(
+        {key: value for key, value in ctx.items() if isinstance(key, str)}
+    )
+    # Clear any copied node at the result path: the merged value must be
+    # something the child wrote, never stale parent state read back.
+    result_parts = plan.result_path.split(".")
+    copied_prime = child_state.get("prime")
+    if isinstance(copied_prime, dict) and len(result_parts) >= 2:
+        copied_prime.pop(result_parts[1], None)
+
+    child_store = _run_isolated(
+        parsed,
+        initial_state=child_state,
+        parent_store=store,
+        node=node,
+        node_path=node_path,
+        adapter=adapter,
+        model=model,
+        runtime_config=child_runtime_config,
+        timeout_seconds=timeout_seconds,
+        verbose=verbose,
+        display_depth=display_depth,
+    )
 
     value = _resolve_dot_path(child_store.state, plan.result_path)
     if value is None:

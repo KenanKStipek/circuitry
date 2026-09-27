@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any, Literal, Union
 from ..adapters import Adapter
 from ..output import console as _console
 from .disabled import is_disabled_node, is_enabled
+from .scope import local_writes as _local_writes_state
+from .scope import scope_ctx as _scope_ctx
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -28,31 +30,6 @@ if TYPE_CHECKING:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _scope_ctx(ctx: dict[str, Any], local: dict[str, Any]) -> dict[str, Any]:
-    """Layer one iteration's own writes over the context its body renders against.
-
-    A body step reading the step before it — the chained-body pattern — is a
-    *within-iteration* reference, and it resolves through a scope chain:
-    current iteration first, then the enclosing scope, then root state.  The
-    overlay lands in two places so both taught spellings mean the same node:
-
-    * top level, for the bare ``{{step.value}}`` form
-    * inside ``prime``, for the canonical ``{{prime.step.value}}`` form (and
-      its CEL twin ``state.prime.step.value``)
-
-    Shallow by design. Nested nodes stay shared by reference, so every path
-    that already resolved against the enclosing scope — ``{{prime.<dynamic>.
-    <name>.value}}``, the loop's own ``prime.<loop>.iter_<N>`` subtree, root
-    inputs — keeps resolving. Only the iteration's own names are shadowed.
-    """
-    if not local:
-        return ctx
-    merged = {**ctx, **local}
-    parent = ctx.get("prime")
-    merged["prime"] = {**parent, **local} if isinstance(parent, dict) else dict(local)
-    return merged
 
 
 EffectDef = Union[
@@ -72,6 +49,9 @@ class LoopWhileDef:
     mode: Literal["model", "cel"] = "model"
     template: str | None = None  # for mode: model
     expr: str | None = None  # for mode: cel
+    #: mode: cel — raise instead of reading an unset ``state.`` path as
+    #: false, so a missing field cannot quietly end (or extend) the loop.
+    strict: bool = False
 
 
 @dataclass(frozen=True)
@@ -80,6 +60,23 @@ class LoopEachDef:
 
     in_path: str  # dot-delimited path into effective context
     as_name: str = "item"  # binding name for current element
+    #: An each-loop's collection length is known before the first pass runs,
+    #: so by default a collection larger than max_iterations fails the loop
+    #: at start rather than silently running a truncated subset (see
+    #: LoopBoundsError). Setting this opts into the old truncate-and-continue
+    #: behavior, recording max_iterations_reached + unvisited on the node.
+    truncate: bool = False
+
+
+class LoopBoundsError(ValueError):
+    """Raised when an ``each`` loop's collection outgrows ``max_iterations``.
+
+    Unlike ``while``, an each-loop's bound is known up front — hitting the
+    cap here is never a runaway, it is a caller error. Raise
+    ``max_iterations``, bound the collection, or opt into
+    ``each.truncate: true`` to process the first N and record the rest as
+    unvisited.
+    """
 
 
 @dataclass(frozen=True)
@@ -150,6 +147,7 @@ class LoopRuntime:
         verbose: bool = False,
         depth: int = 0,
         ancestors: list | None = None,
+        label_prefix: str | None = None,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -164,6 +162,8 @@ class LoopRuntime:
         self.verbose = verbose
         self.depth = depth
         self._ancestors = ancestors or []
+        # Set by an enclosing ``use`` effect — see ``_child_display_name``.
+        self._label_prefix = label_prefix
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         # Named loop: create a node for this loop
@@ -204,7 +204,10 @@ class LoopRuntime:
         # errored under on_error: continue/break leaves a partial iter node
         # (and, in while mode, still advances the count).
         last_completed: int | None = None
-        termination_reason = "max_iterations"
+        termination_reason = "max_iterations_reached"
+        # Set only when an each-loop's `truncate: true` actually cut the
+        # collection short — the count of elements the loop never visited.
+        unvisited: int | None = None
 
         # Build ancestor context for children (this loop is now a parent)
         from .dynamic import _EFFECT_STYLE as _ES
@@ -240,6 +243,19 @@ class LoopRuntime:
                         meta["each_in_error"] = each_error
                 elif not collection:
                     termination_reason = "collection_exhausted"
+                elif (
+                    len(collection) > self.defn.max_iterations
+                    and not self.defn.each_def.truncate
+                ):
+                    raise LoopBoundsError(
+                        f"each loop {self.defn.name or '<unnamed>'!r} "
+                        f"({self.defn.each_def.in_path}): collection "
+                        f"has {len(collection)} items but max_iterations is "
+                        f"{self.defn.max_iterations} — raise max_iterations, bound "
+                        f"the collection, or set each.truncate: true to process "
+                        f"the first {self.defn.max_iterations} and record the "
+                        f"rest as unvisited"
+                    )
                 elif self.defn.flow == "tree":
                     # Parallel iteration: submit all at once, collect results in order.
                     # Each thread gets a deepcopy of ctx to prevent nested mutation
@@ -252,6 +268,7 @@ class LoopRuntime:
                         iter_ctx = deepcopy(ctx)
                         iter_ctx[self.defn.each_def.as_name] = item
                         iter_ctx["_loop_index"] = idx
+                        iter_ctx["iter"] = {"index": idx}
                         iter_ctxs.append((idx, iter_ctx))
 
                     # Per-thread isolated stores: each thread writes into its own
@@ -331,27 +348,42 @@ class LoopRuntime:
                             iteration_count += 1
                             last_completed = idx
 
+                    # Truncation status is independent of whether any
+                    # iteration errored — an on_error: continue run with
+                    # failures is still exhausted (or still truncated) on its
+                    # own terms, not silently relabeled by the errors.
+                    if total < len(collection):
+                        # each.truncate: true cut the collection short.
+                        termination_reason = "max_iterations_reached"
+                        unvisited = len(collection) - total
+                    else:
+                        termination_reason = "collection_exhausted"
+
                     if errors:
                         if self.defn.on_error == "fail":
                             termination_reason = "error"
                             raise next(iter(errors.values()))
                         if self.defn.on_error == "break":
                             termination_reason = "error"
-                        # continue: already skipped failed iterations above
-                    else:
-                        termination_reason = "collection_exhausted"
+                        # continue: keep the truncation/exhaustion reason
+                        # computed above — errors don't change it.
                 else:
                     # Sequential iteration (default)
                     total = len(collection)
                     for idx, item in enumerate(collection):
                         if idx >= self.defn.max_iterations:
-                            termination_reason = "max_iterations"
+                            # Only reachable under each.truncate: true — the
+                            # fail-fast check above already stopped the
+                            # untruncated case before the first pass.
+                            termination_reason = "max_iterations_reached"
+                            unvisited = total - idx
                             break
 
                         # Bind current item to context
                         iter_ctx = dict(ctx)
                         iter_ctx[self.defn.each_def.as_name] = item
                         iter_ctx["_loop_index"] = idx
+                        iter_ctx["iter"] = {"index": idx}
 
                         try:
                             iter_effects, _ = self._execute_body(
@@ -389,10 +421,32 @@ class LoopRuntime:
                 last_writes: dict[str, Any] = {}
 
                 while iteration_count < self.defn.max_iterations:
-                    # Check continuation condition
-                    should_continue = self._evaluate_condition(
-                        ctx=_scope_ctx(ctx, last_writes)
-                    )
+                    # Check continuation condition. A CEL expression that
+                    # cannot be evaluated raises (see ``cel_eval``) rather
+                    # than answering False — a broken condition used to be
+                    # indistinguishable from an exhausted loop.
+                    try:
+                        should_continue = self._evaluate_condition(
+                            ctx=_scope_ctx(ctx, last_writes)
+                        )
+                    except Exception as exc:
+                        if self.defn.on_error == "fail":
+                            termination_reason = "error"
+                            raise
+                        # break/continue: a condition we cannot evaluate can
+                        # never become false, so continuing would spin to
+                        # max_iterations. Both stop the loop, loudly.
+                        logger.warning(
+                            "Loop %r: while-condition failed (%s); on_error=%s, "
+                            "stopping the loop",
+                            self.defn.name or "<unnamed>",
+                            exc,
+                            self.defn.on_error,
+                        )
+                        termination_reason = "condition_error"
+                        if meta:
+                            meta["error"] = str(exc)
+                        break
 
                     if (
                         not should_continue
@@ -402,6 +456,7 @@ class LoopRuntime:
                         break
 
                     ctx["_loop_index"] = iteration_count
+                    ctx["iter"] = {"index": iteration_count}
                     try:
                         iter_effects, last_writes = self._execute_body(
                             store=child_store,
@@ -423,12 +478,35 @@ class LoopRuntime:
                         # continue: skip this iteration
                         iteration_count += 1
 
+                if termination_reason == "max_iterations_reached":
+                    # The while python-loop above exited on its own condition
+                    # (iteration_count reached the cap) without any break
+                    # setting a different reason — the cap stopped the loop,
+                    # not the while-condition converging. Distinguishable from
+                    # a converged run only here, so surface it loudly.
+                    logger.warning(
+                        "Loop %r: stopped after %d iterations because "
+                        "max_iterations (%d) was reached, not because the "
+                        "while-condition became false",
+                        self.defn.name or "<unnamed>",
+                        iteration_count,
+                        self.defn.max_iterations,
+                    )
+                    if self.verbose:
+                        _console.print(
+                            f"[warn]⚠[/warn] Loop {self.defn.name or '<unnamed>'!r} "
+                            f"stopped after {iteration_count} iterations: "
+                            f"max_iterations ({self.defn.max_iterations}) reached "
+                            f"without the while-condition becoming false"
+                        )
+
             if node:
+                termination: dict[str, Any] = {"reason": termination_reason}
+                if unvisited is not None:
+                    termination["unvisited"] = unvisited
                 node["value"] = {
                     "iterations": iteration_count,
-                    "termination": {
-                        "reason": termination_reason,
-                    },
+                    "termination": termination,
                     "effects_by_iteration": iterations_effects,
                 }
                 if meta:
@@ -480,7 +558,8 @@ class LoopRuntime:
         ``on_error: continue``/``break`` is skipped in favor of the last one
         that finished, and a zero-iteration loop writes no ``last`` key at
         all — reads fall through/render empty exactly like a missing
-        ``iter_<N>``.
+        ``iter_<N>``. Saved state writes the alias as a reference to the
+        pass, not a second copy (:mod:`circuitry.core.saved_state`).
         """
         if last_completed is None:
             return
@@ -602,7 +681,11 @@ Should the loop continue? Answer (yes/no):"""
         if not self.defn.while_def:
             return False
 
-        return evaluate_cel(self.defn.while_def.expr or "", ctx)
+        return evaluate_cel(
+            self.defn.while_def.expr or "",
+            ctx,
+            strict=self.defn.while_def.strict,
+        )
 
     def _body_names(self) -> frozenset[str]:
         """Names of this loop's own body effects."""
@@ -625,12 +708,7 @@ Should the loop continue? Answer (yes/no):"""
         its slot either way: inside the body, that name means the body's own
         effect.
         """
-        body_names = self._body_names()
-        return {
-            key: value
-            for key, value in iter_store.state.items()
-            if key not in baseline or key in body_names
-        }
+        return _local_writes_state(iter_store.state, baseline, self._body_names())
 
     def _execute_body(
         self,
@@ -663,7 +741,12 @@ Should the loop continue? Answer (yes/no):"""
         else:
             iter_store = store
 
-        from .dynamic import _EFFECT_STYLE, _elapsed_str, _skip_disabled_effect
+        from .dynamic import (
+            _EFFECT_STYLE,
+            _child_display_name,
+            _elapsed_str,
+            _skip_disabled_effect,
+        )
 
         body_indent = "  " * (self.depth + 1)
         executed: list[dict[str, Any]] = []
@@ -681,6 +764,7 @@ Should the loop continue? Answer (yes/no):"""
             name = getattr(effect, "name", None) or "?"
             is_prompt = isinstance(effect, PromptDefinition)
             is_tool = isinstance(effect, ToolDefinition)
+            is_use = isinstance(effect, UseDefinition)
 
             if not is_enabled(effect):
                 _skip_disabled_effect(
@@ -698,7 +782,7 @@ Should the loop continue? Answer (yes/no):"""
                 ctx = _scope_ctx(base_ctx, self._local_writes(iter_store, baseline))
                 continue
 
-            if self.verbose and not is_prompt and not is_tool:
+            if self.verbose and not is_prompt and not is_tool and not is_use:
                 _console.print(
                     f"{body_indent}[info]→[/info] [{color}]{icon}[/{color}]"
                     f" {name}"
@@ -744,7 +828,9 @@ Should the loop continue? Answer (yes/no):"""
                         cb_done=_cb_done,
                         cb_error=_cb_error,
                         cb_running=_cb_running,
-                        display_name=f"{name} {iter_label}" if iter_label else None,
+                        display_name=_child_display_name(
+                            name, label_prefix=self._label_prefix, iter_label=iter_label
+                        ),
                         ancestors=self._child_ancestors if tracker is None else None,
                     ).execute(store=iter_store, ctx=ctx)
 
@@ -760,6 +846,7 @@ Should the loop continue? Answer (yes/no):"""
                         verbose=self.verbose,
                         depth=self.depth + 2,
                         ancestors=self._child_ancestors,
+                        label_prefix=self._label_prefix,
                     ).execute(store=iter_store, ctx_override=ctx)
 
                 elif isinstance(effect, ConditionalDefinition):
@@ -788,6 +875,7 @@ Should the loop continue? Answer (yes/no):"""
                         verbose=self.verbose,
                         depth=self.depth + 1,
                         ancestors=self._child_ancestors,
+                        label_prefix=self._label_prefix,
                     ).execute(store=iter_store, ctx=ctx)
 
                 elif isinstance(effect, ReflectorDefinition):
@@ -810,11 +898,35 @@ Should the loop continue? Answer (yes/no):"""
                         timeout_seconds=self.timeout_seconds,
                         verbose=self.verbose,
                         depth=self.depth + 1,
-                        display_name=f"{name} {iter_label}" if iter_label else None,
+                        display_name=_child_display_name(
+                            name, label_prefix=self._label_prefix, iter_label=iter_label
+                        ),
                         ancestors=self._child_ancestors if tracker is None else None,
                     ).execute(store=iter_store, ctx=ctx)
 
                 elif isinstance(effect, UseDefinition):
+                    use_display_name = _child_display_name(
+                        name, label_prefix=self._label_prefix, iter_label=iter_label
+                    )
+                    if tracker is not None:
+                        def _cb_start(_i=iteration):
+                            return (tracker.on_start(_i))
+                        def _cb_done(line, _i=iteration):
+                            return (tracker.on_done(_i, line))
+                        def _cb_error(line, _i=iteration):
+                            return (tracker.on_error(_i, line))
+                    elif parallel:
+                        def _cb_start(_n=use_display_name or name, _ind=body_indent):
+                            return (_console.print(
+                                                        f"{_ind}[info]→[/info] [green]⊕[/green] {_n}"
+                                                    ))
+                        _cb_done = _console.print
+                        _cb_error = _console.print
+                    else:
+                        _cb_start = None
+                        _cb_done = None
+                        _cb_error = None
+
                     UseRuntime(
                         effect,
                         adapter=self.adapter,
@@ -825,13 +937,17 @@ Should the loop continue? Answer (yes/no):"""
                         timeout_seconds=self.timeout_seconds,
                         verbose=self.verbose,
                         depth=self.depth + 1,
-                        ancestors=self._child_ancestors,
+                        cb_start=_cb_start,
+                        cb_done=_cb_done,
+                        cb_error=_cb_error,
+                        display_name=use_display_name,
+                        ancestors=self._child_ancestors if tracker is None else None,
                     ).execute(store=iter_store, ctx=ctx)
 
                 else:
                     raise TypeError(f"Unsupported effect type: {type(effect)}")
 
-                if self.verbose and not is_prompt and not is_tool:
+                if self.verbose and not is_prompt and not is_tool and not is_use:
                     elapsed = time.monotonic() - t0
                     _console.print(
                         f"{body_indent}[ok]✓[/ok] [{color}]{icon}[/{color}]"
@@ -839,7 +955,7 @@ Should the loop continue? Answer (yes/no):"""
                     )
 
             except Exception:
-                if self.verbose and not is_prompt and not is_tool:
+                if self.verbose and not is_prompt and not is_tool and not is_use:
                     elapsed = time.monotonic() - t0
                     _console.print(
                         f"{body_indent}[err]✗[/err] [{color}]{icon}[/{color}]"

@@ -28,6 +28,21 @@ directly — always go through its shim.
 | `check() -> CheckResult` | `circuitry.preflight.call_check` | ready (`ok=True`) |
 | `list_models() -> list[str]` | `circuitry.adapters.models.call_list_models` | "I don't know" (`[]`) |
 
+### `check()` and preflight's hard/soft classification
+
+`check()` reports one adapter instance's own readiness; whether a failing
+`check()` blocks a run is decided one layer up, by
+`circuitry.cli.runtime_shim.preflight` walking the orchestration that
+references the adapter. By default every `adapter:`/`provider:` an
+orchestration declares is a **hard** dependency — a failing `check()` fails
+`cof check`/`cof run` for the whole file. An orchestration author opts an
+adapter into being a **soft** dependency by setting `on_error: skip` (or
+`continue`) on every `prompt` effect that uses it: preflight then downgrades
+a failing `check()` to a warning naming the effects that will skip, instead
+of hard-failing the run. This is orchestration-file authoring policy, not
+something an adapter implementation controls — see the `prompt` effect's
+`on_error` field in `docs/orchestration-reference.md` for the full rule.
+
 ### `list_models()`
 
 Names the models a user can pick, filling the TUI run launcher's model

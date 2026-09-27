@@ -39,7 +39,7 @@ CODE_PATH_PREFIXES = ("src/", "scripts/")
 CODE_PATH_FILES = ("pyproject.toml",)
 
 #: ...unless the change is only to these (docs, tests, CI, the fragments).
-EXEMPT_PATH_PREFIXES = (f"{FRAGMENTS_DIR}/", "docs/", "tests/", ".github/", "_bmad")
+EXEMPT_PATH_PREFIXES = (f"{FRAGMENTS_DIR}/", "docs/", "tests/", ".github/")
 
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 

@@ -55,6 +55,7 @@ Each record includes:
 - Conditional/loop divergence:
   - Inspect named control-node `value` summary (`branch`, `iterations`, termination reason).
   - Compare with expected execution path in orchestration definition.
+  - A loop node's `value.termination.reason` is always present and names why it stopped: `condition_false`, `collection_exhausted`, `max_iterations_reached`, `collection_unresolved`, `condition_error`, or `error`. `max_iterations_reached` also carries `termination.unvisited` when it comes from an `each` loop with `each.truncate: true`.
 
 ## A Template Rendered Empty Inside a Loop
 
@@ -81,8 +82,36 @@ under `on_error: continue`/`break` are skipped; a zero-iteration loop writes no
 
 `{{prime.<step>.value}}` is the within-iteration form and resolves through a
 scope chain — current iteration, then enclosing scope, then root state — in
-named and unnamed loops, `chain` and `tree` flow, and `while` conditions. See
+named and unnamed loops, `chain` and `tree` flow, and `while` conditions. An
+`if` branch is its own link in that same chain, loop body or not. See
 [Referencing a sibling within an iteration](orchestration-reference.md#referencing-a-sibling-within-an-iteration).
+
+## A Loop Stopped Early and the Run Stayed Green
+
+Check `prime.<loop>.value.termination.reason` first — every completed named
+loop node carries one (see [Loop termination](orchestration-reference.md#loop-termination)
+for the full list). Two reasons in particular look like success unless you
+know to check:
+
+- `max_iterations_reached` on a `while` loop means the cap ended it, not the
+  condition converging — a run that "worked" may have stopped one pass short
+  of what the condition actually wanted. A `--verbose` run prints a warning
+  line when this happens; without `--verbose` the only signal is this field.
+- `max_iterations_reached` on an `each` loop only happens under
+  `each.truncate: true` — when `max_iterations` is set on an `each` loop and a
+  collection longer than it isn't truncated, the loop fails at start instead
+  (see below), so if you see this reason on an `each` loop, `truncate` is set
+  on purpose somewhere. `termination.unvisited` names how many elements were
+  skipped; a downstream effect that assumed the full collection (an image
+  compositor, an aggregate count) consumed a partial result without any error
+  to point at.
+
+If an `each` loop has `max_iterations` set, its collection is longer than
+that cap, and `each.truncate` is *not* set, the loop does not stay green: it
+raises at loop start, before the first iteration runs, naming both numbers
+(`collection has 144 items but max_iterations is 100`). That failure surfaces
+as the loop node's `meta.error` and `value.termination.reason == "error"` —
+trace it back through `inspect_divergence_paths` like any other loop failure.
 
 ## Reproducibility Notes
 

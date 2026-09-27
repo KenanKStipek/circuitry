@@ -5,9 +5,8 @@
 # converged (functionally equivalent or only trivially different), false if
 # they are meaningfully different and iteration should continue.
 #
-# Called by the improve-orchestration script as a secondary convergence signal
-# after the SHA-256 hash check. Only invoked when hashes differ but the
-# convergence window threshold is met.
+# Called by agents/improver via `use:` after each improvement pass, as a
+# convergence signal for iterative refinement loops.
 #
 # ─── INPUT STATE ─────────────────────────────────────────────────────────────
 #
@@ -22,6 +21,17 @@
 #     → false = orchestrations are meaningfully different (continue iterating)
 #
 # ─────────────────────────────────────────────────────────────────────────────
+
+interface:
+  inputs:
+    yaml_a:
+      type: string
+      required: true
+      description: Previous iteration orchestration YAML.
+    yaml_b:
+      type: string
+      required: true
+      description: Current iteration orchestration YAML.
 
 effects:
   - type: prompt
@@ -38,12 +48,12 @@ effects:
 
       Version A (previous iteration):
       <<< BEGIN YAML A >>>
-      {{yaml_a}}
+      {{input.yaml_a}}
       <<< END YAML A >>>
 
       Version B (current iteration):
       <<< BEGIN YAML B >>>
-      {{yaml_b}}
+      {{input.yaml_b}}
       <<< END YAML B >>>
 
       Return ONLY a JSON boolean: true if converged (stop iterating), false if meaningfully different (keep iterating).

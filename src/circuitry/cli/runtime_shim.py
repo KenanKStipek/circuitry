@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..adapters import Adapter, build_adapter
+from ..adapters.factory import ADAPTER_REGISTRY
 from ..core.compiler import apply_effect_overrides, compile_orchestration
 from ..core.dynamic import DynamicRuntime
 from ..core.runtime_plugins import (
@@ -20,13 +22,22 @@ from ..core.runtime_plugins import (
     invoke_plugins,
     load_plugins,
 )
+from ..core.saved_state import link_last_refs
 from ..core.state_ns import migrate_legacy_state
 from ..core.store import Store, build_persistence_backend
 from ..plugins.factory import build_plugin
 from ..preflight import CheckResult, call_check
-from .allowlist import check_allowlist, walk_orchestration_refs
+from .allowlist import (
+    check_allowlist,
+    collect_adapter_usages,
+    hard_effect_names,
+    is_hard_adapter_dependency,
+    skippable_effect_names,
+    walk_orchestration_refs,
+)
 from .config import CircuitryConfig
 from .effective_settings import EffectiveSettings, resolve_effective_settings
+from .live_state import LiveStateMirror
 from .orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
 from .profiles import (
     ProfileSettings,
@@ -134,13 +145,16 @@ def _load_state(
 ) -> dict[str, Any]:
     # The single choke point where caller state enters a run: whatever the
     # source (--state file, -e inline values, REST/TUI/MCP initial_state),
-    # legacy bare root keys are lifted under the `input` namespace here.
+    # legacy bare root keys are lifted under the `input` namespace here, and
+    # a previous run's saved `last` references are relinked to their passes.
     if initial_state is not None:
         # Isolate runtime mutations from caller-owned dictionaries.
-        return migrate_legacy_state(deepcopy(initial_state))
+        return link_last_refs(migrate_legacy_state(deepcopy(initial_state)))
     if not path or not path.exists():
         return migrate_legacy_state({})
-    return migrate_legacy_state(json.loads(path.read_text(encoding="utf-8")))
+    return link_last_refs(
+        migrate_legacy_state(json.loads(path.read_text(encoding="utf-8")))
+    )
 
 
 def run(req: RunRequest) -> RunResult:
@@ -153,6 +167,10 @@ def run(req: RunRequest) -> RunResult:
     # profile, if any, is loaded below. Kept outside the try's happy path so
     # a failure before that point still reports the caller's own --out.
     resolved_out: Path | None = req.out_path
+    # Every store of this run shares one lock; the --live-state mirror
+    # serialises under it and writes the file after releasing it.
+    store_lock = threading.RLock()
+    live_mirror: LiveStateMirror | None = None
 
     try:
         cfg = req.config or CircuitryConfig()
@@ -217,6 +235,12 @@ def run(req: RunRequest) -> RunResult:
         # One shared dict for the whole run: `use` effects append their library
         # pins to it as they resolve, at any nesting depth.
         runtime_config = effective.runtime if effective.runtime is not None else {}
+        # Root directory a `path:`-resolving `use` effect falls back to when
+        # its target isn't absolute or cwd-relative — see `UseRuntime`, which
+        # rewrites this per-child as composition descends into subdirectories.
+        runtime_config["_orchestration_dir"] = str(
+            req.orchestration_path.resolve().parent
+        )
         persistence = build_persistence_backend(effective.runtime)
         plugins, plugin_events = _initialize_plugins(
             effective.plugins, allowed=cfg.enabled_plugins
@@ -235,7 +259,9 @@ def run(req: RunRequest) -> RunResult:
                 if isinstance(persisted, dict):
                     # Lift-on-hydrate: pre-namespace snapshots get their
                     # bare root keys moved under `input` (logged once).
-                    hydrated = migrate_legacy_state(deepcopy(persisted))
+                    hydrated = link_last_refs(
+                        migrate_legacy_state(deepcopy(persisted))
+                    )
                     if profile is not None and profile.inputs:
                         # Profile inputs stay the lowest layer: they fill
                         # keys the persisted snapshot doesn't carry rather
@@ -392,13 +418,17 @@ def run(req: RunRequest) -> RunResult:
             and req.adapter is None
         ):
             preflight_results = preflight(req.orchestration_path, req.config)
-            preflight_errors = format_preflight_errors(preflight_results)
+            hard_results, soft_results = classify_preflight_results(
+                req.orchestration_path, preflight_results
+            )
+            preflight_errors = format_preflight_errors(hard_results)
             if preflight_errors:
                 raise RuntimeError(
                     "Preflight failed: "
                     + "; ".join(preflight_errors)
                     + ". Re-run with --skip-preflight to bypass."
                 )
+            warnings.extend(format_preflight_warnings(soft_results))
 
         # Inject built-in template variables available in all orchestrations.
         state.setdefault("_run_id", run_id)
@@ -407,9 +437,8 @@ def run(req: RunRequest) -> RunResult:
         # Execute using core runtime against Store
         callbacks: list[Callable[[dict[str, Any]], None]] = []
         if req.live_state_path is not None:
-            from .live_state import make_live_state_callback
-
-            callbacks.append(make_live_state_callback(req.live_state_path))
+            live_mirror = LiveStateMirror(req.live_state_path, store_lock=store_lock)
+            callbacks.append(live_mirror)
         if req.state_observer is not None:
             callbacks.append(req.state_observer)
 
@@ -487,6 +516,7 @@ def run(req: RunRequest) -> RunResult:
             on_write=on_write,
             effect_complete=_compose_effect_observers(effect_observers),
             effect_start=_compose_effect_observers(start_observers),
+            _lock=store_lock,
         )
 
         runtime = DynamicRuntime(
@@ -583,6 +613,17 @@ def run(req: RunRequest) -> RunResult:
         except Exception:
             logger.exception("Error during error-handling cleanup")
         return RunResult(ok=False, state=state, warnings=warnings, error=str(e), out_path=resolved_out)
+    finally:
+        # The final flush, success or failure: everything recorded after the
+        # last effect included, so the mirror ends equal to --out. `warnings`
+        # is the same list every already-built RunResult above holds, so
+        # appending to it here still reaches whichever one is about to be
+        # returned.
+        if live_mirror is not None and live_mirror.close(state):
+            warnings.append(
+                f"Could not keep --live-state {req.live_state_path} in sync with "
+                "the run; see the log for details."
+            )
 
 
 def _compose_effect_observers(
@@ -685,13 +726,17 @@ def validate(
         # smoke tests, ``cof check --skip-preflight``) bypass it.
         if config is not None and not skip_preflight:
             preflight_results = preflight(orchestration_path, config)
-            preflight_errors = format_preflight_errors(preflight_results)
+            hard_results, soft_results = classify_preflight_results(
+                orchestration_path, preflight_results
+            )
+            preflight_errors = format_preflight_errors(hard_results)
             if preflight_errors:
                 return {
                     "ok": False,
                     "errors": preflight_errors,
                     "warnings": lint_warnings,
                 }
+            lint_warnings = [*lint_warnings, *format_preflight_warnings(soft_results)]
 
         return {"ok": True, "errors": [], "warnings": lint_warnings}
     except Exception as e:
@@ -805,6 +850,75 @@ def format_preflight_errors(
             parts.append(r.message)
         errors.append(" — ".join(parts))
     return errors
+
+
+def classify_preflight_results(
+    orchestration_path: Path,
+    results: list[tuple[str, CheckResult]],
+) -> tuple[list[tuple[str, CheckResult]], list[tuple[str, CheckResult]]]:
+    """Split raw ``preflight()`` results into ``(hard, soft)``.
+
+    A failing ``adapter:<name>`` result is soft — downgraded to a warning —
+    when every effect referencing that adapter tolerates failure
+    (``on_error: skip``/``continue``): the run degrades gracefully without
+    it, so it shouldn't hard-fail the whole orchestration. Everything else
+    (already-ok results, tool/runtime_plugin/library_ref results, an unknown
+    adapter name, and adapters with at least one non-tolerant usage) stays
+    hard: an adapter that doesn't exist is a configuration mistake, not a
+    missing credential the run can degrade past.
+    """
+    orch = load_orchestration_file(orchestration_path)
+    usages = collect_adapter_usages(orch)
+    hard: list[tuple[str, CheckResult]] = []
+    soft: list[tuple[str, CheckResult]] = []
+    for label, result in results:
+        if result.ok or not label.startswith("adapter:"):
+            hard.append((label, result))
+            continue
+        adapter_name = label.split(":", 1)[1]
+        if (
+            adapter_name.strip().lower() not in ADAPTER_REGISTRY
+            or is_hard_adapter_dependency(adapter_name, usages)
+        ):
+            # Name the non-skippable effect(s) when we have that detail —
+            # the mixed case (one skippable, one not) otherwise reads as an
+            # unqualified adapter failure with no clue which effect forces it.
+            required_by = hard_effect_names(adapter_name, usages)
+            if required_by:
+                message = (
+                    f"adapter '{adapter_name}' unavailable; "
+                    f"required by effects {required_by}"
+                )
+                if result.message:
+                    message += f" ({result.message})"
+                named_result = CheckResult(
+                    ok=False, missing=result.missing, message=message
+                )
+                hard.append((label, named_result))
+            else:
+                hard.append((label, result))
+            continue
+        effects = skippable_effect_names(adapter_name, usages)
+        message = f"adapter '{adapter_name}' unavailable; effects {effects} will skip"
+        if result.message:
+            message += f" ({result.message})"
+        soft.append(
+            (label, CheckResult(ok=False, missing=result.missing, message=message))
+        )
+    return hard, soft
+
+
+def format_preflight_warnings(
+    results: list[tuple[str, CheckResult]],
+) -> list[str]:
+    """Render soft (skippable) preflight dependencies as one-line warnings."""
+    warnings: list[str] = []
+    for label, r in results:
+        message = r.message or f"{label}: not ready"
+        if r.missing:
+            message += f" (missing {r.missing})"
+        warnings.append(message)
+    return warnings
 
 
 def inspect_orchestration(orchestration_path: Path) -> dict[str, Any]:

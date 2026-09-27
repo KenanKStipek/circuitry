@@ -14,16 +14,21 @@ fields:
   each:
     type: object
     properties:
-      in: "Dot-delimited state path to a JSON array, rooted at input., prime., or runtime. (e.g. input.items, prime.my_list.value)."
+      in: "Dot-delimited state path to a JSON array, rooted at input., prime., or runtime. (e.g. input.items, prime.my_list.value), or at an enclosing loop's each.as binding (e.g. s.crops inside a loop whose each.as is s) for a nested loop over a field of the outer item."
       as: "Variable name for current element (default: item). Accessible as {{as_name}}."
+      truncate:
+        type: boolean
+        default: false
+        note: "Default false: a collection longer than max_iterations fails the loop at start (each.in's length is known before the first pass, so hitting the cap is never a runaway — see max_iterations). true opts into the old behavior: process only the first max_iterations elements and record termination: max_iterations_reached plus the unvisited count instead of erroring."
     required: [in]
-    note: "each.in must be root-relative — input./prime./runtime.-rooted. A bare key or a state.-prefixed spelling (state. is a CEL-only binding, not legal here) is a hard error from cof check, naming the canonical spelling. input.<name> is a first-class source: each.in does not have to point at a prompt_type: json effect."
+    note: "each.in must be root-relative — input./prime./runtime.-rooted — or rooted at an enclosing loop's each.as binding. A bare key that names no binding in scope, or a state.-prefixed spelling (state. is a CEL-only binding, not legal here), is a hard error from cof check, naming the canonical spelling and the bindings in scope. input.<name> is a first-class source: each.in does not have to point at a prompt_type: json effect."
   while:
     type: object
     properties:
       mode: "model or cel"
       template: "Prompt template (when mode: model)"
       expr: "CEL expression (when mode: cel). Use state.prime.<name>.value prefix."
+      strict: "mode: cel only. Default false: an unset state. path makes the condition false and logs a WARNING. true: an unresolved path raises instead."
     note: "Loop repeats while condition is true. while-loops always run sequentially."
   collect:
     type: string
@@ -40,6 +45,7 @@ fields:
   max_iterations:
     type: integer
     default: 100
+    note: "Hard cap on iterations. For while-loops this is the deliberate safety floor against runaway feedback — hitting it ends the loop and records termination: max_iterations_reached. For each-loops the collection length is known up front, so when this is set, the collection must not be longer than it; otherwise the loop fails at start (see each.truncate to opt out of that check)."
   min_iterations:
     type: integer
     min: 0
@@ -54,9 +60,10 @@ state_paths:
   last_iteration: "prime.<loop_name>.last.<body_name>.value — the FINAL completed pass, after the loop. Same shape as iter_N (deep field paths work); a pass that errored under on_error: continue/break is skipped in favor of the last one that finished, and a zero-iteration loop writes no last key. Use this instead of guessing N for while loops and data-dependent each loops."
   collected_array: "prime.<loop_name>.collected.value — every pass's value, after the loop. Requires collect."
   loop_variable: "{{as_name}}"
+  termination_reason: "prime.<loop_name>.value.termination.reason — always present on a completed (named) loop node. One of: condition_false (while), collection_exhausted (each), max_iterations_reached (while's cap, or each.truncate: true's cap), collection_unresolved (each.in didn't resolve to an array), condition_error (while condition raised under on_error: break/continue), error (the loop raised — see termination.detail and meta.error). max_iterations_reached under each.truncate: true also carries termination.unvisited (count of elements never visited)."
 constraints:
   - "Exactly one of each or while is required, never both."
-  - "each.in must be a JSON array at a root-relative path (input.<name>, prime.<effect_name>.value, or a runtime. path). input.* is a first-class source — the array does not have to come from a prompt_type: json effect."
+  - "each.in must be a JSON array at a root-relative path (input.<name>, prime.<effect_name>.value, or a runtime. path), or at an enclosing loop's each.as binding (e.g. s.crops inside a loop whose each.as is s). input.* is a first-class source — the array does not have to come from a prompt_type: json effect."
   - "collect requires the loop to have a name."
   - "Within-iteration, cross-iteration, last-pass and post-loop references are four different things: prime.<body_name>.value, prime.<loop_name>.iter_N.<body_name>.value, prime.<loop_name>.last.<body_name>.value, prime.<loop_name>.collected.value. Do not substitute one for another."
   - "last is legal AFTER the loop only, like iter_N. Inside the loop's own body (or while condition) it resolves to the previous pass at best — validation warns; write prime.<body_name>.value for the current pass."

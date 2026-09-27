@@ -24,7 +24,7 @@ def test_conditional_records_executed_effects_metadata() -> None:
             {
                 "type": "if",
                 "name": "gate",
-                "if": {"mode": "cel", "expr": "state.input.ok == True"},
+                "if": {"mode": "cel", "expr": "state.input.ok == true"},
                 "then": [{"type": "prompt", "name": "then_step", "template": "yes"}],
                 "else": [{"type": "prompt", "name": "else_step", "template": "no"}],
             }

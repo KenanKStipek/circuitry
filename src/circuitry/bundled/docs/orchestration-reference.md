@@ -76,7 +76,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 ```yaml
 - type: prompt
   name: summarize
-  template: "Summarize this article in one sentence: {{article_text}}"
+  template: "Summarize this article in one sentence: {{input.article_text}}"
 ```
 
 **Example — JSON output with schema:**
@@ -88,7 +88,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
     type: array
     items:
       type: string
-  template: "Extract a JSON array of key items from: {{text}}"
+  template: "Extract a JSON array of key items from: {{input.text}}"
 ```
 
 **Example — role-based messages:**
@@ -100,7 +100,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
     - role: system
       content: "You are a classifier. Reply with only true or false."
     - role: user
-      content: "Is this text positive? {{text}}"
+      content: "Is this text positive? {{input.text}}"
 ```
 
 ---
@@ -135,7 +135,7 @@ A named container that executes child effects sequentially (`chain`) or in paral
   effects:
     - type: prompt
       name: outline
-      template: "Outline an essay on: {{topic}}"
+      template: "Outline an essay on: {{input.topic}}"
     - type: prompt
       name: draft
       template: "Write the essay based on this outline:\n{{prime.pipeline.outline.value}}"
@@ -149,11 +149,11 @@ A named container that executes child effects sequentially (`chain`) or in paral
   effects:
     - type: prompt
       name: summary
-      template: "Summarize: {{text}}"
+      template: "Summarize: {{input.text}}"
     - type: prompt
       name: sentiment
       prompt_type: boolean
-      template: "Is this text positive? {{text}}"
+      template: "Is this text positive? {{input.text}}"
 ```
 
 ---
@@ -222,6 +222,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 
 **State output paths (named each loop):**
 - Per-iteration: `prime.<name>.iter_0.<body_effect>.value`, `prime.<name>.iter_1.<body_effect>.value`, ...
+- Final pass (after the loop completes): `prime.<name>.last.<body_effect>.value` — the last *completed* iteration's node, same shape as `iter_<N>`; a zero-iteration loop writes no `last` key. Saved state (`--out`, `--live-state`) writes it as a reference to that pass, `"last": {"$ref": "iter_<N>"}`, not a second copy; `--state` and the TUI resolve it back.
 - Aggregated (when `collect` is set): `prime.<name>.collected.value` — array of every iteration's collected effect value
 - From *inside* the body: `prime.<body_effect>.value` — the current pass. See [Referencing a sibling within an iteration](#referencing-a-sibling-within-an-iteration).
 
@@ -234,7 +235,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `max_concurrency` | integer | no | unbounded | Max parallel workers when `flow: tree`. |
 | `body` | array | yes | — | Non-empty list of effects to execute per iteration |
 | `each` | object | one-of | — | Collection iteration; mutually exclusive with `while` |
-| `each.in` | string | yes (each) | — | State path to a JSON array (must be `prompt_type: json` output) |
+| `each.in` | string | yes (each) | — | State path to a JSON array (must be `prompt_type: json` output), or a binding of an enclosing loop (its `each.as` name) |
 | `each.as` | string | no | `item` | Variable name for current element in body templates |
 | `while` | object | one-of | — | Continuation condition; mutually exclusive with `each` |
 | `while.mode` | string | no | `model` | `model` or `cel` |
@@ -254,7 +255,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
     type: array
     items:
       type: string
-  template: "List 3 topics about {{subject}} as a JSON array."
+  template: "List 3 topics about {{input.subject}} as a JSON array."
 
 - type: loop
   name: explain
@@ -354,6 +355,10 @@ Rules of the form:
   the body, and only inside the body.
 - **Named and unnamed loops behave identically**, in `chain` and in `tree` flow.
   (A `tree` loop parallelises whole iterations, not the steps inside one.)
+- **An `if` branch is its own link in the same scope chain.** A step inside a
+  `then`/`else` branch resolves the branch's own earlier steps first, then
+  falls through to the enclosing scope. This holds for a named `if` too, and
+  for one nested inside another.
 - **The bare form `{{<step>.value}}` also works** and means the same node. It is
   accepted, not preferred: a bare name can collide with a user-supplied state
   key, and `prime.`-prefixed cannot.
@@ -398,7 +403,7 @@ The built-in prime constrains the plan's step descriptions and every generated e
     - type: prompt
       name: propose_steps
       prompt_type: json
-      template: "Given the goal '{{user_goal}}', what are the next steps?"
+      template: "Given the goal '{{input.user_goal}}', what are the next steps?"
     - type: prompt
       name: execute
       template: "Execute: {{prime.goal.propose_steps.value}}"
@@ -475,6 +480,60 @@ Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously
 | `negative_prompt` | string | `""` | Negative prompt |
 | `workflow` | object | — | Optional: full custom ComfyUI workflow (overrides built-in) |
 
+#### `params_json`
+
+`params:` values are Mustache-rendered to **strings** — fine for scalars, but
+there is no way to write a static YAML template for an array or object whose
+shape depends on a prior step (e.g. a list of ticker symbols an earlier
+effect produced). `params_json` closes that gap: its value is a Mustache
+template rendered to text and then parsed as JSON, and the resulting
+object is deep-merged over `params` (its keys win on conflicts). This keeps
+`params` for the parts of the call that are known upfront and reserves
+`params_json` for the parts that have to be assembled at runtime.
+
+A prior step's list/object value can be a native Python list/dict already in
+state (e.g. from an `array`/`object` prompt, the `json` plugin's parse/
+extract, MCP `structuredContent`, a `surrealdb` result, or a loop `each.as`
+item) — `params_json` serializes it back to JSON text when splicing it in.
+It can also be a string that already holds JSON text; that string is
+spliced in verbatim. Either way, use `{{{...}}}` (triple-stache) so the
+value is not HTML-escaped, since `params_json` parses the whole rendered
+template as JSON. Only splice a *whole* JSON value this way — a bare scalar
+like `{{{input.name}}}` inside a JSON string literal breaks if the value
+contains a `"`, `\`, or newline; put scalars under `params:` instead and
+reserve `params_json` for array/object values.
+
+Building a real array for an MCP tool call, from a list a previous step
+computed (`prime.symbol_list.value` holding e.g. `'["AAPL","MSFT","TSLA"]'`):
+```yaml
+- type: tool
+  name: get_equity_quotes
+  provider: mcp
+  params:
+    server: robinhood
+    tool: get_equity_quotes
+  params_json: '{"arguments": {"symbols": {{{prime.symbol_list.value}}} }}'
+```
+This sends `arguments.symbols` as a JSON array in one call instead of one
+`mcp` effect per symbol.
+
+Building a nested object for a `surrealdb` `create`, from a JSON object a
+previous step assembled (`prime.person_json.value`):
+```yaml
+- type: tool
+  name: save_person
+  provider: surrealdb
+  params:
+    mode: create
+    table: person
+  params_json: '{"data": {{{prime.person_json.value}}} }'
+```
+
+A `params_json` that fails to render to valid JSON, or renders to something
+other than a JSON object, is a hard error (not silently ignored) — it is
+treated like any other tool-effect failure and follows the effect's
+`on_error` policy.
+
 ---
 
 ## State Path Addressing
@@ -485,13 +544,14 @@ Templates use Mustache syntax (`{{...}}`). Two kinds of references:
 
 | Reference type | Syntax | Example |
 |---------------|--------|---------|
-| Initial state key | `{{key}}` | `{{user_input}}` |
+| Caller-supplied input | `{{input.<name>}}` | `{{input.user_input}}` |
 | Top-level effect output | `{{prime.<name>.value}}` | `{{prime.summarize.value}}` |
 | Nested effect inside dynamic | `{{prime.<dynamic_name>.<child_name>.value}}` | `{{prime.pipeline.outline.value}}` |
 | Loop iteration element | `{{<each.as>}}` or `{{item}}` | `{{topic}}` (when `as: topic`) |
 
 **Rules:**
 - Never use `{{<name>.value}}` or `{{<name>}}` alone for effect outputs — always include the `prime.` prefix
+- Never use a bare `{{<name>}}` for caller-supplied input — always include the `input.` prefix; a bare reference matching a declared `interface.inputs` name is a hard error from `cof check`
 - Nested effects always include their parent dynamic name in the path
 
 ### CEL Expressions
@@ -573,7 +633,7 @@ For complex outputs, break into stages rather than asking the model to do everyt
 # Good: staged
 - type: prompt
   name: outline
-  template: "Outline the key points of: {{text}}"
+  template: "Outline the key points of: {{input.text}}"
 - type: prompt
   name: expand
   template: "Expand each point: {{prime.outline.value}}"
@@ -584,7 +644,7 @@ For complex outputs, break into stages rather than asking the model to do everyt
 # Avoid: single-shot complex generation
 - type: prompt
   name: result
-  template: "Read, outline, expand, and polish this text in one shot: {{text}}"
+  template: "Read, outline, expand, and polish this text in one shot: {{input.text}}"
 ```
 
 ### Same Name in Both If/Else Branches
@@ -610,7 +670,7 @@ else:
 
 ### Loop `each.in` Must Point to a JSON Array
 
-The state path in `each.in` must resolve to an array at runtime. This means it must point to a `prompt_type: json` effect whose output is a JSON array:
+The state path in `each.in` must resolve to an array at runtime. This means it must point to a `prompt_type: json` effect whose output is a JSON array, or to a binding of an enclosing loop (its `each.as` name) that itself holds an array, e.g. `s.crops` inside a loop whose `each.as` is `s`:
 
 ```yaml
 # Good: source is prompt_type: json producing an array
@@ -665,9 +725,9 @@ The following rules are sufficient for generating structurally correct Circuitry
 13b. Outputs — in `use.outputs` and `interface.outputs` alike — are objects: `summary: {path: prime.summarize.value, type: string}`. A bare path string is accepted as shorthand in both, but write the object form.
 
 **State path addressing:**
-14. In templates (Mustache): use `{{key}}` for initial state keys; use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
+14. In templates (Mustache): use `{{input.<name>}}` for caller-supplied input (never bare `{{key}}` — that is a hard error when `key` matches a declared `interface.inputs` name); use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
 15. In CEL expressions (`if.expr`, `while.expr`): always use the full prefix `state.prime.<name>.value`. Never omit `state.`.
-16. Loop `each.in` must point to a `prompt_type: json` effect whose output is a JSON array (e.g. `prime.my_prompt.value`).
+16. Loop `each.in` must point to a `prompt_type: json` effect whose output is a JSON array (e.g. `prime.my_prompt.value`), or to a binding of an enclosing loop (its `each.as` name).
 
 **If/else branches:**
 17. Use the same inner effect `name` in both `then` and `else` branches of any `if` effect, so downstream state path references resolve regardless of which branch executed.

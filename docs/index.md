@@ -31,6 +31,9 @@ Start with the [README](../README.md) for install, first run, and the mental mod
 - [Adapter Conformance](./adapter-conformance.md) — the adapter contract and how to validate a new provider.
 - [Postgres Persistence](./postgres-persistence.md) — the persistence backends in production.
 - [Editor Highlighting](./editor-highlighting.md) — the VS Code grammar under `editor/`.
+- [`surrealdb` tool plugin](./plugins/surrealdb.md) — SurrealQL and record operations, env-only credentials, readiness and error mapping.
+- [Runtime Plugin Catalog](./runtime-plugins.md) — per-plugin schema, redaction, and connection/auth docs for the bundled persistence runtime plugins.
+- [Binary tool plugins: `binary` and `env`](./plugins/binary-tools.md) — a machine-specific executable path and environment for `imagemagick`, `ffmpeg`, and the other subprocess-wrapping tool plugins.
 
 ## Project
 

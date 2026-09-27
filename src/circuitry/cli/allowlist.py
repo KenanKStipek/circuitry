@@ -12,6 +12,7 @@ allowlist is enforced at plugin load time in
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from .config import CircuitryConfig
@@ -80,6 +81,122 @@ def _walk_effects(
             _walk_effects(effect.get("effects"), adapters, tools)
         # `use` effects expand at compile time; their refs are validated
         # when the referenced orchestration is loaded.
+
+
+@dataclass(frozen=True)
+class AdapterUsage:
+    """One effect's reference to an adapter, plus how it handles failure."""
+
+    effect_name: str | None
+    on_error: str  # "fail" | "skip" | "continue"
+
+
+def collect_adapter_usages(orch: dict[str, Any]) -> dict[str, list[AdapterUsage]]:
+    """Collect, for each adapter referenced in the orchestration, every effect
+    that uses it and that effect's ``on_error`` handling.
+
+    Mirrors the traversal in :func:`walk_orchestration_refs` but keeps the
+    detail needed to classify a dependency as hard or soft: an adapter is a
+    soft (skippable) dependency only when every recorded usage tolerates
+    failure (``on_error: skip`` or ``on_error: continue``). A top-level
+    ``adapter:`` default that no effect ends up using (e.g. a tool-only
+    orchestration) has no entry here — callers should treat that as hard,
+    since there's no effect to prove it's safe to skip.
+    """
+    usages: dict[str, list[AdapterUsage]] = {}
+    if isinstance(orch, dict):
+        top_adapter = orch.get("adapter")
+        default_adapter = (
+            top_adapter.strip()
+            if isinstance(top_adapter, str) and top_adapter.strip()
+            else None
+        )
+        _walk_effects_usages(orch.get("effects"), default_adapter, usages)
+    return usages
+
+
+def _walk_effects_usages(
+    effects: Any,
+    default_adapter: str | None,
+    usages: dict[str, list[AdapterUsage]],
+) -> None:
+    if not isinstance(effects, list):
+        return
+    for effect in effects:
+        if not isinstance(effect, dict):
+            continue
+        etype = effect.get("type")
+        effect_name = effect.get("name") if isinstance(effect.get("name"), str) else None
+
+        if etype == "prompt":
+            on_error = effect.get("on_error")
+            if on_error not in ("fail", "skip", "continue"):
+                on_error = "fail"
+            primary = effect.get("provider")
+            adapter_name = (
+                _provider_token_to_adapter(primary)
+                if isinstance(primary, str)
+                else None
+            )
+            if not adapter_name:
+                adapter_name = default_adapter
+            if adapter_name:
+                usages.setdefault(adapter_name, []).append(
+                    AdapterUsage(effect_name, on_error)
+                )
+            for tok in effect.get("provider_fallbacks") or []:
+                if isinstance(tok, str):
+                    fb_name = _provider_token_to_adapter(tok)
+                    if fb_name:
+                        usages.setdefault(fb_name, []).append(
+                            AdapterUsage(effect_name, on_error)
+                        )
+        elif etype == "dynamic":
+            _walk_effects_usages(effect.get("effects"), default_adapter, usages)
+        elif etype in ("if", "conditional"):
+            _walk_effects_usages(effect.get("then"), default_adapter, usages)
+            _walk_effects_usages(effect.get("else"), default_adapter, usages)
+        elif etype == "loop":
+            _walk_effects_usages(effect.get("body"), default_adapter, usages)
+        elif etype == "reflector":
+            _walk_effects_usages(effect.get("effects"), default_adapter, usages)
+        # `use` effects expand at compile time; not walked here either.
+
+
+def is_hard_adapter_dependency(
+    adapter_name: str, usages: dict[str, list[AdapterUsage]]
+) -> bool:
+    """Whether preflight must hard-fail when ``adapter_name`` isn't ready.
+
+    Soft only when there's at least one recorded usage and every one of them
+    tolerates failure (``on_error: skip``/``continue``).
+    """
+    effect_usages = usages.get(adapter_name)
+    if not effect_usages:
+        return True
+    return any(u.on_error == "fail" for u in effect_usages)
+
+
+def skippable_effect_names(
+    adapter_name: str, usages: dict[str, list[AdapterUsage]]
+) -> list[str]:
+    """Names of effects using ``adapter_name`` that will skip cleanly if it's unavailable."""
+    return [
+        u.effect_name or "<unnamed>"
+        for u in usages.get(adapter_name, [])
+        if u.on_error != "fail"
+    ]
+
+
+def hard_effect_names(
+    adapter_name: str, usages: dict[str, list[AdapterUsage]]
+) -> list[str]:
+    """Names of effects using ``adapter_name`` that have no failure tolerance."""
+    return [
+        u.effect_name or "<unnamed>"
+        for u in usages.get(adapter_name, [])
+        if u.on_error == "fail"
+    ]
 
 
 def _provider_token_to_adapter(token: str) -> str | None:

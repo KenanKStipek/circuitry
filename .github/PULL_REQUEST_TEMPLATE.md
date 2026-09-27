@@ -30,7 +30,6 @@
 - [ ] Conventional Commits subject (`<type>(<scope>): <summary>`)
 - [ ] Tests added or updated for the behavior change
 - [ ] `CHANGELOG.md` updated under `## [Unreleased]`
-- [ ] If bundled orchestrations changed, `scripts/sync-bundled` re-run
 - [ ] Public-API impact considered (`docs/stability.md`); breaking change called out above if applicable
 - [ ] Documentation updated (`docs/`, README, inline help)
 

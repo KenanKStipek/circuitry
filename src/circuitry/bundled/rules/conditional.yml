@@ -13,6 +13,7 @@ fields:
       mode: "model (LLM evaluates) or cel (CEL expression)"
       template: "Prompt template for model-based evaluation (required when mode: model)"
       expr: "CEL expression (required when mode: cel). Must use state.prime.<name>.value prefix."
+      strict: "mode: cel only. Default false: an unset state. path makes the expression false and logs a WARNING. true: an unresolved path raises instead, so a missing field cannot silently pick a branch."
     note: "Determines which branch executes."
   then:
     type: array

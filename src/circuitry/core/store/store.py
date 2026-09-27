@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import json
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from ..saved_state import dumps_saved_state
 
 
 @dataclass
@@ -132,10 +133,6 @@ class Store:
 
     def dump_json(self, out_path: Path, *, pretty: bool = False) -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        if pretty:
-            out_path.write_text(
-                json.dumps(self.state, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-        else:
-            out_path.write_text(json.dumps(self.state) + "\n", encoding="utf-8")
+        out_path.write_text(
+            dumps_saved_state(self.state, pretty=pretty) + "\n", encoding="utf-8"
+        )

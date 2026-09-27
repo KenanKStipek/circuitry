@@ -8,9 +8,9 @@
   Not valid JSON — Expecting value (line 1, column 20).                                             
   ▼ half-written.json                   │ Not valid JSON — Expecting value (line 1, column 20).     
                                         │                                                           
-                                        │ A --live-state file is rewritten after every effect; if   
-                                        │ the run is still going, open it again in a moment.        
-                                        │                                                           
+                                        │ A --live-state file is rewritten periodically while the   
+                                        │ run goes (and once more when it ends); if the run is      
+                                        │ still going, open it again in a moment.                   
                                         │                                                           
                                         │                                                           
                                         │                                                           

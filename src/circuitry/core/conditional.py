@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal, Union
 from ..adapters import Adapter
 from ..output import console as _console
 from .disabled import is_enabled
+from .scope import local_writes, scope_ctx
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,10 @@ class ConditionDef:
     mode: Literal["model", "cel"] = "model"
     template: str | None = None  # for mode: model
     expr: str | None = None  # for mode: cel
+    #: mode: cel — raise instead of reading an unset ``state.`` path as
+    #: false. For conditions where a missing field must not silently pick
+    #: a branch (an order-exit rule, a safety gate).
+    strict: bool = False
 
 
 @dataclass(frozen=True)
@@ -137,7 +142,18 @@ class ConditionalRuntime:
             meta = None
             child_store = store
 
-        # Evaluate condition
+        # Keys child_store already carried before this branch runs — for a
+        # transparent (unnamed) conditional that is the enclosing scope's own
+        # state (a loop iteration's prior siblings, an outer container's), so
+        # the branch's own writes can be told apart from what it inherited.
+        branch_baseline = frozenset(child_store.state)
+
+        # Evaluate condition. A CEL expression that cannot be evaluated
+        # raises (see ``cel_eval``); the failure is recorded on the effect
+        # and, under the default ``on_error: fail``, propagates so the run
+        # ends ``ok=False`` — the same shape a failing tool effect has.
+        # Falling to the else branch is only ever an explicit opt-in via
+        # ``on_error: continue``.
         try:
             result = self._evaluate_condition(ctx=ctx)
         except Exception as e:
@@ -151,10 +167,21 @@ class ConditionalRuntime:
                     node["value"] = {"result": None, "branch": None, "effects": {}}
                 return
             # continue - default to else branch
+            logger.warning(
+                "Conditional %r: condition failed (%s); on_error=continue, "
+                "taking the else branch",
+                self.defn.name or "<unnamed>",
+                e,
+            )
             result = False
 
         branch = "then" if result else "else"
         effects_to_run = self.defn.then_effects if result else self.defn.else_effects
+        branch_names = frozenset(
+            name
+            for name in (getattr(e, "name", None) for e in effects_to_run)
+            if isinstance(name, str) and name
+        )
 
         if meta:
             meta["condition_result"] = result
@@ -166,6 +193,10 @@ class ConditionalRuntime:
 
         # Execute selected branch effects
         executed_effects: list[dict[str, Any]] = []
+        # Overlays are always rebuilt from the ctx the branch started with,
+        # never from the previous overlay — see loop.py's _execute_body for
+        # why layering copies on copies is the wrong move.
+        base_ctx = ctx
 
         try:
             from .dynamic import (
@@ -193,6 +224,11 @@ class ConditionalRuntime:
                     )
                     effect_record["disabled"] = True
                     executed_effects.append(effect_record)
+                    # Expose the skip node to later branch steps on the same
+                    # terms as a produced one (see the sibling merge below).
+                    ctx = scope_ctx(
+                        base_ctx, local_writes(child_store.state, branch_baseline, branch_names)
+                    )
                     continue
 
                 if self.verbose and not is_prompt:
@@ -317,6 +353,15 @@ class ConditionalRuntime:
 
                 executed_effects.append(effect_record)
 
+                # Make prior branch steps' outputs available to subsequent
+                # branch steps under the canonical within-branch names — both
+                # {{prime.<step>.value}} and the bare {{<step>.value}}. This is
+                # what lets a step read a sibling earlier in the same branch,
+                # in a loop body exactly as at the top level.
+                ctx = scope_ctx(
+                    base_ctx, local_writes(child_store.state, branch_baseline, branch_names)
+                )
+
             if node:
                 node["value"] = {
                     "result": result,
@@ -386,7 +431,17 @@ Answer (yes/no):"""
         return answer in ("yes", "true", "1", "y")
 
     def _evaluate_cel(self, *, ctx: dict[str, Any]) -> bool:
-        """Deterministic evaluation: evaluate CEL expression against state."""
+        """Deterministic evaluation: evaluate CEL expression against state.
+
+        Propagates ``CelEvaluationError`` — a broken expression is a
+        defect, not a false condition. ``execute`` records it on the
+        effect's ``meta.error`` and then honours ``on_error``. Under
+        ``strict: true`` an unset ``state.`` path is such a defect too.
+        """
         from .cel_eval import evaluate_cel
 
-        return evaluate_cel(self.defn.condition.expr or "", ctx)
+        return evaluate_cel(
+            self.defn.condition.expr or "",
+            ctx,
+            strict=self.defn.condition.strict,
+        )

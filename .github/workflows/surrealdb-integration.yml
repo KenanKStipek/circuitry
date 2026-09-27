@@ -1,0 +1,46 @@
+name: SurrealDB integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "src/circuitry/plugins/surrealdb.py"
+      - "src/circuitry/runtime_plugins/surrealdb.py"
+      - "tests/integration/**"
+      - ".github/workflows/surrealdb-integration.yml"
+
+jobs:
+  surrealdb-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Start SurrealDB
+        run: |
+          docker run -d --name surrealdb -p 8000:8000 surrealdb/surrealdb:latest \
+            start --user root --pass root --bind 0.0.0.0:8000
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:8000/health && break
+            sleep 1
+          done
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[tools,surrealdb]"
+          pip install -r requirements-dev.txt
+
+      - name: Run SurrealDB integration tests
+        env:
+          CIRCUITRY_RUN_INTEGRATION: "1"
+          SURREAL_URL: ws://localhost:8000/rpc
+          SURREAL_USER: root
+          SURREAL_PASS: root
+        run: |
+          shopt -s nullglob
+          files=(tests/integration/*surreal*)
+          if [ ${#files[@]} -eq 0 ]; then echo "no surrealdb integration tests yet"; exit 0; fi
+          pytest -m integration "${files[@]}"

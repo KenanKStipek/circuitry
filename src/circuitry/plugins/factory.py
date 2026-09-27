@@ -72,6 +72,7 @@ from . import (
 from . import (
     yt_dlp as _yt_dlp_mod,
 )
+from ._subprocess import plugin_binary_override, plugin_env_override
 from .base import ToolPlugin
 from .base64 import Base64Plugin
 from .clock import ClockPlugin
@@ -110,6 +111,8 @@ from .s3_tool import S3ToolPlugin
 from .screenshot import ScreenshotPlugin
 from .shell import ShellPlugin
 from .slack import SlackPlugin
+from .surrealdb import DEFAULT_URL as _SURREALDB_DEFAULT_URL
+from .surrealdb import SurrealDBPlugin
 from .system_info import SystemInfoPlugin
 from .tar import TarPlugin
 from .uuid import UuidPlugin
@@ -126,7 +129,10 @@ PluginBuilder = Callable[[dict[str, Any]], ToolPlugin]
 
 
 def _build_ffmpeg(cfg: dict[str, Any]) -> ToolPlugin:
-    return FfmpegPlugin()
+    return FfmpegPlugin(
+        binary=plugin_binary_override(cfg),
+        env=plugin_env_override(cfg, plugin_name="ffmpeg"),
+    )
 
 
 def _build_comfyui(cfg: dict[str, Any]) -> ToolPlugin:
@@ -236,93 +242,75 @@ def _build_validate_yaml(cfg: dict[str, Any]) -> ToolPlugin:
 # returns a configured GenericSubprocessTool (or a dedicated class for
 # the multi-mode / sandboxed cases).
 def _build_git(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _git_mod.make_plugin()
+    return _git_mod.make_plugin(cfg)
 
 
 def _build_ripgrep(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _ripgrep_mod.make_plugin()
+    return _ripgrep_mod.make_plugin(cfg)
 
 
 def _build_pytest(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _pytest_mod.make_plugin()
+    return _pytest_mod.make_plugin(cfg)
 
 
 def _build_awk(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _awk_mod.make_plugin()
+    return _awk_mod.make_plugin(cfg)
 
 
 def _build_sed(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _sed_mod.make_plugin()
+    return _sed_mod.make_plugin(cfg)
 
 
 def _build_pandoc(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _pandoc_mod.make_plugin()
+    return _pandoc_mod.make_plugin(cfg)
 
 
 def _build_mediainfo(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _mediainfo_mod.make_plugin()
+    return _mediainfo_mod.make_plugin(cfg)
 
 
 def _build_imagemagick(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _imagemagick_mod.make_plugin()
+    return _imagemagick_mod.make_plugin(cfg)
 
 
 def _build_exiftool(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _exiftool_mod.make_plugin()
+    return _exiftool_mod.make_plugin(cfg)
 
 
 def _build_yt_dlp(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _yt_dlp_mod.make_plugin()
+    return _yt_dlp_mod.make_plugin(cfg)
 
 
 def _build_sevenz(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _sevenz_mod.make_plugin()
+    return _sevenz_mod.make_plugin(cfg)
 
 
 def _build_ping(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _ping_mod.make_plugin()
+    return _ping_mod.make_plugin(cfg)
 
 
 def _build_traceroute(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _traceroute_mod.make_plugin()
+    return _traceroute_mod.make_plugin(cfg)
 
 
 def _build_docker(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _docker_mod.make_plugin()
+    return _docker_mod.make_plugin(cfg)
 
 
 def _build_kubectl(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _kubectl_mod.make_plugin()
+    return _kubectl_mod.make_plugin(cfg)
 
 
 def _build_gh(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _gh_mod.make_plugin()
+    return _gh_mod.make_plugin(cfg)
 
 
 def _build_linter(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _linter_mod.make_plugin()
+    return _linter_mod.make_plugin(cfg)
 
 
 def _build_ocr(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return _ocr_mod.make_plugin()
+    return _ocr_mod.make_plugin(cfg)
 
 
 def _build_shell(cfg: dict[str, Any]) -> ToolPlugin:
@@ -466,6 +454,18 @@ def _build_s3_tool(cfg: dict[str, Any]) -> ToolPlugin:
     return S3ToolPlugin()
 
 
+# SurrealDB reads url / namespace / database from
+# runtime.plugins.surrealdb. Credentials are deliberately absent here —
+# the plugin takes them from the environment only, so nothing secret can
+# reach runtime.effective_settings or persisted state.
+def _build_surrealdb(cfg: dict[str, Any]) -> ToolPlugin:
+    return SurrealDBPlugin(
+        url=str(cfg.get("url") or _SURREALDB_DEFAULT_URL),
+        namespace=str(cfg.get("namespace") or ""),
+        database=str(cfg.get("database") or ""),
+    )
+
+
 def _build_playwright(cfg: dict[str, Any]) -> ToolPlugin:
     del cfg
     return PlaywrightPlugin()
@@ -568,6 +568,7 @@ PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "gcalendar": _build_gcalendar,
     "gdrive": _build_gdrive,
     "s3": _build_s3_tool,
+    "surrealdb": _build_surrealdb,
     "playwright": _build_playwright,
     "screenshot": _build_screenshot,
     "embed": _build_embed,

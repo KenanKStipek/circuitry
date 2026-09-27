@@ -107,6 +107,27 @@
       "example": "cof run learn/cyberdiner_hello -e question=\"What is cybernetics?\""
     },
     {
+      "name": "learn/surrealdb_roundtrip",
+      "file": "learn/surrealdb_roundtrip.yml",
+      "category": "learn",
+      "intent": "surrealdb tool plugin — create a record, select it back, assert equality via json + if/CEL.",
+      "description": "Template: create a record with the surrealdb tool, select it back by the id create() returned, reduce both raw responses to a comparable {name, score} view with the json tool, and assert equality deterministically with if/CEL. No LLM involved.",
+      "when_to_use": "When you want to see how the surrealdb tool plugin's create/select operations round-trip data, or as the starting point for a persistence-backed orchestration. Requires runtime.plugins.surrealdb (url, namespace, database) in config and SURREAL_USER/SURREAL_PASS (or SURREAL_TOKEN) in the environment — see docs/plugins/surrealdb.md.",
+      "primitives": ["tool", "if"],
+      "difficulty": "intermediate",
+      "backends": ["tool"],
+      "inputs": {
+        "name": {"type": "string", "required": true, "description": "Value stored in the record's name field."},
+        "score": {"type": "string", "required": true, "description": "Value stored in the record's score field."}
+      },
+      "outputs": {
+        "roundtrip_ok": {"type": "boolean", "path": "prime.result.value", "description": "True when the selected record matches what was created."}
+      },
+      "state_paths": ["prime.create_record.value", "prime.select_record.value", "prime.result.value"],
+      "tags": ["tool", "surrealdb", "json", "persistence", "roundtrip"],
+      "example": "cof run learn/surrealdb_roundtrip -e name=Ada -e score=10"
+    },
+    {
       "name": "utilities/summarize",
       "file": "utilities/summarize.yml",
       "category": "utilities",
@@ -420,7 +441,7 @@
       "inputs": {
         "input_yaml": {"type": "string", "required": true, "description": "The orchestration YAML to improve."},
         "original_prompt": {"type": "string", "required": true, "description": "The original intent the orchestration was built for."},
-        "rules": {"type": "string", "required": false, "description": "LLM authoring rules (auto-injected by improve-orchestration script)."}
+        "rules": {"type": "string", "required": false, "description": "LLM authoring rules from src/circuitry/bundled/rules/ (supplied by the caller)."}
       },
       "example": "cof run agents/improver --state input.json"
     },
@@ -503,6 +524,38 @@
       ],
       "tags": ["decomposition", "complexity", "meta", "self-validating", "yaml", "planner"],
       "example": "cof run agents/decompose --state source.json"
+    },
+    {
+      "name": "learn/cel_showcase",
+      "file": "learn/cel_showcase.yml",
+      "category": "learn",
+      "intent": "CEL expressions \u2014 macros, has(), '!', ternary, typed equality, strict",
+      "description": "Template: every construct the mode: cel evaluator supports, one branch each.",
+      "when_to_use": "Reach for it when writing a mode: cel condition and you want to watch the construct work before you rely on it.",
+      "primitives": ["if", "prompt"],
+      "difficulty": "intermediate",
+      "backends": ["llm"],
+      "inputs": {
+        "role": {"type": "string", "required": false, "description": "Role to gate on. Try 'admin'."},
+        "scores": {"type": "array", "required": false, "description": "Numbers for the comprehension macros to run over."},
+        "tier": {"type": "string", "required": false, "description": "Tier for the ternary. Try 'pro'."}
+      },
+      "example": "cof run learn/cel_showcase -e role=admin -e scores='[10, 0, 95]' -e tier=pro"
+    },
+    {
+      "name": "learn/optional_inference",
+      "file": "learn/optional_inference.yml",
+      "category": "learn",
+      "intent": "on_error: skip — an adapter dependency that preflight treats as optional",
+      "description": "Template: a prompt effect marked on_error: skip so preflight classifies its adapter as a soft dependency — a missing credential warns instead of hard-failing, and the run still completes ok=true with the effect skipped.",
+      "when_to_use": "Reach for it when one effect's inference is genuinely optional (annotation, best-effort enrichment) and the orchestration should still run cleanly without that adapter's credentials — CI, fake-MCP tests, offline dev.",
+      "primitives": ["prompt"],
+      "difficulty": "beginner",
+      "backends": ["llm"],
+      "inputs": {
+        "topic": {"type": "string", "required": true, "description": "Topic to (optionally) annotate with a one-line summary."}
+      },
+      "example": "cof run learn/optional_inference -e topic='graceful degradation'"
     }
   ]
 }

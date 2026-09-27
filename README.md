@@ -105,7 +105,7 @@ circuitry/
 │   ├── schema/               orchestration.schema.json, profile.schema.json
 │   ├── adapters/             29 model providers behind one Adapter protocol
 │   ├── plugins/              70+ tool providers (fs, http, ffmpeg, github, slack, mcp, …)
-│   ├── runtime_plugins/      30 observers: persistence backends, pub/sub, telemetry exporters
+│   ├── runtime_plugins/      31 observers: persistence backends, pub/sub, telemetry exporters
 │   ├── curation/             the bundled library — learn/ utilities/ patterns/ recipes/ agents/
 │   ├── bundled/              the authoring rules and docs injected into cof gen / cof wizard
 │   ├── cli/                  cof (Typer + Rich): config, profiles, doctor, score, library sources
@@ -120,7 +120,7 @@ circuitry/
 │   ├── assets/               figures
 │   └── examples/             runnable routing and profile examples
 ├── editor/                   VS Code syntax highlighting for orchestration YAML
-├── scripts/                  install.sh, the curation smoke test, the changelog compiler
+├── scripts/                  install.sh, the curation smoke test, the changelog compiler and checker, the guidebook build
 ├── changelog.d/              one changelog fragment per change, compiled at release
 ├── .claude/                  the /cof slash command and agent settings
 ├── CHANGELOG.md · CONTRIBUTING.md · RELEASING.md · SECURITY.md · CODE_OF_CONDUCT.md
