@@ -162,6 +162,61 @@ def test_chat_completion_curl_failure_masks_extra_header_secret(
     assert "bad credential" in message
 
 
+def test_chat_completion_curl_failure_does_not_mask_short_header_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #246 follow-up: only header values long enough to be
+    a plausible credential are masked, so a short, non-secret header (e.g.
+    an API version number) doesn't get replaced with `***` wherever its
+    value happens to reappear in the message."""
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(
+            returncode=22,
+            stdout=json.dumps({"error": {"message": "bad version 1"}}),
+            stderr="curl: (22) The requested URL returned error: 401",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    cfg = OpenAICompatibleConfig(
+        base_url="https://example.test/v1",
+        api_key_env="",
+        default_model="m",
+    )
+    with pytest.raises(RuntimeError) as exc:
+        chat_completion(
+            cfg=cfg, model="m", prompt="ping", extra_headers={"api-version": "1"}
+        )
+
+    assert "bad version 1" in str(exc.value)
+
+
+def test_chat_completion_curl_failure_does_not_leak_base_url_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #246 follow-up: a self-hosted OpenAI-compatible proxy
+    configured with credentials embedded in its base_url (rather than via
+    `api_key_env`) must not have them echoed into the error message."""
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=22, stderr="HTTP 401 Unauthorized")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    cfg = OpenAICompatibleConfig(
+        base_url="https://user:canarypw@example.test/v1",
+        api_key_env="",
+        default_model="m",
+    )
+    with pytest.raises(RuntimeError) as exc:
+        chat_completion(cfg=cfg, model="m", prompt="ping")
+
+    assert "canarypw" not in str(exc.value)
+
+
 def test_chat_completion_non_json_response_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

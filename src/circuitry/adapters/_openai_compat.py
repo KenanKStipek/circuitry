@@ -106,7 +106,12 @@ def chat_completion(
         raise RuntimeError("curl is not installed or not on PATH") from e
 
     if proc.returncode != 0:
-        secrets = [api_key, *(extra_headers or {}).values()]
+        # Header values under 8 chars are treated as non-secret (a future
+        # short header like "1" shouldn't get masked wherever it appears in
+        # the message) — credentials are effectively never that short.
+        secrets = [api_key] + [
+            v for v in (extra_headers or {}).values() if len(v) >= 8
+        ]
         raise RuntimeError(
             curl_failure_message(
                 adapter="OpenAI-compatible",

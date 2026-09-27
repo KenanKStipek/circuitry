@@ -488,6 +488,29 @@ def test_ollama_exit_7_hint_says_not_reachable(
     assert "didn't finish" not in message
 
 
+def test_ollama_exit_7_hint_does_not_leak_base_url_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #246 follow-up: the exit-7 hint interpolates
+    `self.base_url` directly (not the `url=` field the helper already
+    masks), so a self-hosted Ollama configured with credentials in its
+    base_url must not leak them here."""
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=7, stderr="curl: (7) Failed to connect")
+
+    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+
+    adapter = OllamaAdapter(base_url="http://user:canarypw@example.test:11434")
+    with pytest.raises(RuntimeError) as exc_info:
+        adapter.generate(model="phi3:mini", prompt="ping")
+
+    message = str(exc_info.value)
+    assert "canarypw" not in message
+    assert "not reachable" in message
+
+
 def test_ollama_exit_28_hint_says_timed_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
