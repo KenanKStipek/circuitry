@@ -12,7 +12,9 @@ from typing import Any, Literal
 from ..adapters import Adapter, build_adapter
 from ..adapters.base import GenerateResult
 from ..allowlist_gate import allowed_adapters, require_adapter
+from ..cli.redaction import redact
 from ..output import console as _console
+from .answers import parse_boolean_answer, parse_number_answer
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -507,6 +509,8 @@ class PromptRuntime:
                         ) from generation_error
 
                     # Decode and validate output based on prompt_type
+                    if self.defn.prompt_type in ("boolean", "number"):
+                        meta["answer"] = res.text
                     decoded_value = self._decode_output(res.text)
 
                     # Validate against schema if provided
@@ -582,7 +586,7 @@ class PromptRuntime:
                     _console.print(line)
             meta["fallback_attempts"] = attempts_meta
             meta["fallback_recovered"] = False
-            meta["error"] = str(e)
+            meta["error"] = redact(str(e))
             meta["completed_at"] = _now_iso()
             if self.defn.on_error == "skip":
                 node["value"] = None
@@ -862,7 +866,7 @@ class PromptRuntime:
                         "adapter": adapter_name,
                         "model": model_name,
                         "status": "failed",
-                        "error": str(e),
+                        "error": redact(str(e)),
                     }
                 )
 
@@ -938,8 +942,15 @@ class PromptRuntime:
         return ""
 
     def _decode_output(self, text: str) -> Any:
-        """Decode the model output based on prompt_type."""
-        if not text:
+        """Decode the model output based on prompt_type.
+
+        ``boolean``/``number`` go through the shared lenient parser (see
+        ``core.answers``), which raises on an answer it cannot read rather
+        than returning ``None`` — an unparseable reply is a dispatch failure,
+        so ``on_error`` and retries apply to it exactly like a failed adapter
+        call.
+        """
+        if self.defn.prompt_type not in ("boolean", "number") and not text:
             return None
 
         text = text.strip()
@@ -948,20 +959,10 @@ class PromptRuntime:
             return text
 
         if self.defn.prompt_type == "boolean":
-            lower = text.lower()
-            if lower in ("true", "yes", "1", "y"):
-                return True
-            if lower in ("false", "no", "0", "n"):
-                return False
-            return None
+            return parse_boolean_answer(text)
 
         if self.defn.prompt_type == "number":
-            try:
-                if "." in text:
-                    return float(text)
-                return int(text)
-            except ValueError:
-                return None
+            return parse_number_answer(text)
 
         if self.defn.prompt_type in ("json", "object", "array"):
             # Try to extract JSON from the response

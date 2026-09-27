@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import threading
@@ -32,6 +31,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
+from ._curl_errors import curl_failure_message
 from .base import GenerateResult
 
 # Module-level token cache: api_key -> (token, expires_at_epoch_seconds).
@@ -63,10 +63,17 @@ def _exchange_iam_token(api_key: str, *, timeout_seconds: int) -> tuple[str, flo
     except FileNotFoundError as exc:
         raise RuntimeError("curl is not installed or not on PATH") from exc
     if proc.returncode != 0:
-        err = (proc.stderr or proc.stdout or "").strip()
-        # Mask the raw api_key out of any error trace.
-        masked = err.replace(api_key, "***")
-        raise RuntimeError(f"watsonx IAM token exchange failed: {masked}")
+        raise RuntimeError(
+            curl_failure_message(
+                adapter="watsonx-iam",
+                model=None,
+                url="https://iam.cloud.ibm.com/identity/token",
+                returncode=proc.returncode,
+                stdout=proc.stdout,
+                stderr=proc.stderr,
+                secrets=[api_key],
+            )
+        )
     try:
         raw = json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
@@ -154,13 +161,16 @@ class WatsonXAdapter:
             raise RuntimeError("curl is not installed or not on PATH") from exc
 
         if proc.returncode != 0:
-            masked = " ".join(shlex.quote(c) for c in cmd).replace(token, "***")
-            if api_key:
-                masked = masked.replace(api_key, "***")
-            err = (proc.stderr or proc.stdout or "").strip()
             raise RuntimeError(
-                f"watsonx request failed (curl exit {proc.returncode}): {err} "
-                f"cmd={masked}"
+                curl_failure_message(
+                    adapter="watsonx",
+                    model=target_model,
+                    url=url,
+                    returncode=proc.returncode,
+                    stdout=proc.stdout,
+                    stderr=proc.stderr,
+                    secrets=[api_key, token],
+                )
             )
 
         try:

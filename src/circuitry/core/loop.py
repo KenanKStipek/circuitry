@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal, Union
 
 from ..adapters import Adapter
 from ..output import console as _console
+from .answers import parse_boolean_answer
 from .disabled import is_disabled_node, is_enabled
 from .scope import local_writes as _local_writes_state
 from .scope import scope_ctx as _scope_ctx
@@ -165,6 +166,10 @@ class LoopRuntime:
         self._ancestors = ancestors or []
         # Set by an enclosing ``use`` effect — see ``_child_display_name``.
         self._label_prefix = label_prefix
+        # Raw reply from the last `mode: model` while-condition evaluation,
+        # success or failure — set inside _evaluate_model and read back in
+        # execute() to record meta["answer"] alongside the parsed result.
+        self._model_answer: str | None = None
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         # Named loop: create a node for this loop
@@ -442,7 +447,15 @@ class LoopRuntime:
                         should_continue = self._evaluate_condition(
                             ctx=_scope_ctx(ctx, last_writes)
                         )
+                        if meta and self.defn.while_def.mode == "model":
+                            meta["answer"] = self._model_answer
+                            meta["adapter"] = getattr(self.adapter, "name", "unknown")
+                            meta["model"] = self.model
                     except Exception as exc:
+                        if meta and self.defn.while_def.mode == "model":
+                            meta["answer"] = self._model_answer
+                            meta["adapter"] = getattr(self.adapter, "name", "unknown")
+                            meta["model"] = self.model
                         if self.defn.on_error == "fail":
                             termination_reason = "error"
                             raise
@@ -656,6 +669,7 @@ class LoopRuntime:
 
     def _evaluate_model(self, *, ctx: dict[str, Any]) -> bool:
         """Cybernetic evaluation: invoke model with rendered template."""
+        self._model_answer = None
         if self.dry_run:
             return False  # Stop loop in dry run after first iteration
 
@@ -682,10 +696,11 @@ Should the loop continue? Answer (yes/no):"""
             prompt=prompt,
             timeout_seconds=self.timeout_seconds,
         )
+        self._model_answer = res.text
 
-        # Parse response as boolean
-        answer = (res.text or "").strip().lower()
-        return answer in ("yes", "true", "1", "y")
+        # Parse response as a lenient yes/no; raises on an answer that
+        # doesn't unambiguously read as one (see core.answers).
+        return parse_boolean_answer(res.text or "")
 
     def _evaluate_cel(self, *, ctx: dict[str, Any]) -> bool:
         """Deterministic evaluation: evaluate CEL expression against state."""

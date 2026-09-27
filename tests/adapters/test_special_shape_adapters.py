@@ -78,6 +78,40 @@ def test_azure_url_includes_deployment_and_api_version(
     )
 
 
+def test_azure_curl_failure_masks_api_key_sent_via_extra_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #246: Azure sends its key through `extra_headers`
+    rather than the shared helper's Bearer path (`api_key_env=""`), so the
+    old "mask api_key if non-empty" logic never ran and the key leaked into
+    the error via the echoed curl command line.
+    """
+    secret = "sk-azure-canary-123"
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", secret)
+    monkeypatch.setenv(
+        "AZURE_OPENAI_ENDPOINT", "https://example.invalid"
+    )
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(
+            returncode=22,
+            stdout=json.dumps({"error": {"message": "DeploymentNotFound"}}),
+            stderr="curl: (22) The requested URL returned error: 404",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    adapter = build_adapter(adapter_name="azure-openai", runtime={})
+    with pytest.raises(RuntimeError) as exc:
+        adapter.generate(model="dep", prompt="x")
+
+    message = str(exc.value)
+    assert secret not in message
+    assert "cmd=" not in message
+    assert "DeploymentNotFound" in message
+
+
 def test_azure_check_reports_missing_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

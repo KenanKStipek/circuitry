@@ -105,6 +105,45 @@ def test_prompt_fallback_exhaustion_surfaces_structured_error(
     assert "All adapter attempts failed" in error
 
 
+def test_prompt_error_meta_is_redacted_before_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An adapter exception that is itself a bare credential-shaped string
+    (e.g. an SDK surfacing a raw API key) must not land verbatim in
+    ``meta.error`` / ``meta.fallback_attempts`` — both are stored in run
+    state and echoed by ``--out``, ``--print``, ``--live-state``, etc.
+    """
+    from circuitry.cli.redaction import REDACTED
+
+    secret = "sk-" + "a" * 30
+
+    @dataclass(frozen=True)
+    class LeakyAdapter:
+        name: str
+
+        def generate(
+            self, *, model: str, prompt: str, timeout_seconds: int = 120
+        ) -> GenerateResult:
+            raise RuntimeError(secret)
+
+    orch = {
+        "effects": [{"type": "prompt", "name": "task", "template": "hello"}]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+
+    store = Store({})
+    with pytest.raises(RuntimeError):
+        DynamicRuntime(
+            root, adapter=LeakyAdapter(name="primary"), model="m"
+        ).execute(store=store)
+
+    error = store.get("prime.task.meta.error")
+    assert secret not in error
+    attempts = store.get("prime.task.meta.fallback_attempts")
+    assert secret not in attempts[0]["error"]
+    assert attempts[0]["error"] == REDACTED
+
+
 def _capture_console_prints(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Patch ``output.console.print`` to record calls."""
     import circuitry.output as output_mod

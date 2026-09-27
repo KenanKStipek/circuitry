@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shlex
 import shutil
 import subprocess
 import urllib.request
@@ -9,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
+from ._curl_errors import curl_failure_message, parse_error_body
 from .base import GenerateResult
 
 
@@ -24,6 +24,7 @@ class OllamaAdapter:
         method: str = "GET",
         payload: dict[str, Any] | None = None,
         timeout_seconds: int = 120,
+        model: str | None = None,
     ) -> dict[str, Any]:
         cmd = [
             "curl",
@@ -50,31 +51,41 @@ class OllamaAdapter:
             raise RuntimeError("curl is not installed or not on PATH") from e
 
         if proc.returncode != 0:
-            cmd_str = " ".join(shlex.quote(c) for c in cmd)
-            err = (proc.stderr or proc.stdout or "").strip()
             # curl exit 7 = couldn't connect (daemon down / wrong base_url);
-            # 28 = --max-time elapsed (daemon reached, still generating).
-            # These are opposite problems — surface a hint that names the
-            # actual next step instead of forcing the user to decode curl,
-            # and don't tell someone whose server answered that it isn't
-            # reachable.
+            # 28 = --max-time elapsed (daemon reached, still generating);
+            # 22 (--fail-with-body) = HTTP 4xx/5xx, body already parsed into
+            # the message below. These are different problems — surface a
+            # hint that names the actual next step instead of forcing the
+            # user to decode curl, and don't tell someone whose server
+            # answered that it isn't reachable.
             hint = ""
             if proc.returncode == 7:
                 hint = (
-                    f" Ollama at {self.base_url} is not reachable. "
+                    f"Ollama at {self.base_url} is not reachable. "
                     "Start it (`ollama serve`), or set "
                     "`runtime.adapters.ollama.base_url` in your config. "
                     "Run `cof doctor` to verify connectivity."
                 )
             elif proc.returncode == 28:
                 hint = (
-                    f" The model didn't finish within {int(timeout_seconds)}s. "
+                    f"The model didn't finish within {int(timeout_seconds)}s. "
                     "Raise `runtime.adapters.ollama.timeout_seconds` in your "
                     "config, or use a smaller/faster model."
                 )
+            elif proc.returncode == 22:
+                body_message = parse_error_body(proc.stdout) or ""
+                if model and "not found" in body_message.lower():
+                    hint = f"Try `ollama pull {model}` first."
             raise RuntimeError(
-                f"Ollama request failed (curl exit {proc.returncode}): {err}.{hint}"
-                f" cmd={cmd_str}"
+                curl_failure_message(
+                    adapter="ollama",
+                    model=model,
+                    url=url,
+                    returncode=proc.returncode,
+                    stdout=proc.stdout,
+                    stderr=proc.stderr,
+                    hint=hint,
+                )
             )
 
         try:
@@ -118,7 +129,11 @@ class OllamaAdapter:
         url = self.base_url.rstrip("/") + "/api/generate"
         payload = {"model": model, "prompt": prompt, "stream": False}
         raw = self._curl_json(
-            url=url, method="POST", payload=payload, timeout_seconds=timeout_seconds
+            url=url,
+            method="POST",
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+            model=model,
         )
 
         # Ollama commonly returns:
