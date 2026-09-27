@@ -615,9 +615,15 @@ def run(req: RunRequest) -> RunResult:
         return RunResult(ok=False, state=state, warnings=warnings, error=str(e), out_path=resolved_out)
     finally:
         # The final flush, success or failure: everything recorded after the
-        # last effect included, so the mirror ends equal to --out.
-        if live_mirror is not None:
-            live_mirror.close(state)
+        # last effect included, so the mirror ends equal to --out. `warnings`
+        # is the same list every already-built RunResult above holds, so
+        # appending to it here still reaches whichever one is about to be
+        # returned.
+        if live_mirror is not None and live_mirror.close(state):
+            warnings.append(
+                f"Could not keep --live-state {req.live_state_path} in sync with "
+                "the run; see the log for details."
+            )
 
 
 def _compose_effect_observers(

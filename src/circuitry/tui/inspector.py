@@ -508,8 +508,9 @@ def load_state_file(path: Path) -> LoadedState:
             path=path,
             error=f"Not valid JSON — {exc.msg} (line {exc.lineno}, column {exc.colno}).",
             hint=(
-                "A --live-state file is rewritten after every effect; if the run "
-                "is still going, open it again in a moment."
+                "A --live-state file is rewritten periodically while the run "
+                "goes (and once more when it ends); if the run is still going, "
+                "open it again in a moment."
             ),
         )
     if not isinstance(payload, dict):

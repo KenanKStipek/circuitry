@@ -56,11 +56,14 @@ class LiveStateMirror:
     wakes a writer thread, which serialises the newest one at most once per
     *interval* — under *store_lock*, so it never reads a state halfway through
     a ``Store.set`` — and writes the file after releasing it. No branch waits
-    on disk, and a failed write there is logged rather than failing the run.
+    on disk, and a failed write there is logged and recorded (see
+    :meth:`close`) rather than failing the run.
 
     :meth:`close` stops the thread and writes the state it is given
     synchronously: the run's final state, including everything recorded after
-    the last effect, so the mirror ends equal to ``--out``.
+    the last effect, so the mirror ends equal to ``--out``. It reports
+    whether any write, mid-run or this final one, failed, so the caller can
+    fold that into a single warning rather than leaving it silent.
     """
 
     def __init__(
@@ -79,6 +82,11 @@ class LiveStateMirror:
         self._first_written = False
         self._closed = False
         self._next_due = 0.0
+        #: Set once by any write after the first — mid-run or the final one
+        #: in :meth:`close` — that failed to serialise or reach disk. Read by
+        #: :meth:`close`, which folds the whole run into a single warning
+        #: instead of the silent log this always was.
+        self._had_failure = False
         self._thread = threading.Thread(
             target=self._write_loop, name="circuitry-live-state", daemon=True
         )
@@ -112,29 +120,50 @@ class LiveStateMirror:
                 state = self._pending
                 self._pending = None
             assert state is not None
-            with self._store_lock:
-                payload = _encode(state)
             self._next_due = time.monotonic() + self._interval
-            if payload is not None:
-                self._write(payload)
+            # The mirror is for watchers: a failure here — expected (an
+            # unencodable state, a disk error) or not (e.g. a RecursionError
+            # out of the recursive compaction in saved_state.py on very deep
+            # or circular state) — is recorded, never allowed to kill this
+            # thread or fail the run it mirrors.
+            try:
+                with self._store_lock:
+                    payload = _encode(state)
+                if payload is not None:
+                    self._write(payload)
+            except Exception:
+                logger.exception("--live-state mirror write failed for %s", self._path)
+                self._had_failure = True
 
     def _write(self, payload: str) -> None:
-        # The mirror is for watchers: a failed write is reported, never
-        # allowed to fail the run it mirrors.
         try:
             _replace_file(self._path, payload)
         except OSError as exc:
             logger.warning("Could not write --live-state %s: %s", self._path, exc)
+            self._had_failure = True
 
-    def close(self, final_state: dict[str, Any]) -> None:
-        """Stop the writer thread, then write *final_state* to the mirror."""
+    def close(self, final_state: dict[str, Any]) -> bool:
+        """Stop the writer thread, then write *final_state* to the mirror.
+
+        Returns whether any write — mid-run or this final one — failed to
+        serialise or reach disk over the mirror's whole lifetime, so the
+        caller can fold it into one warning on the run's result.
+        """
         with self._wake:
             if self._closed:
-                return
+                return self._had_failure
             self._closed = True
             self._pending = None
             self._wake.notify()
         self._thread.join()
-        payload = _encode(final_state)
-        if payload is not None:
-            self._write(payload)
+        # The run's own result must always win: a failure writing the final
+        # snapshot (or an unexpected one, e.g. RecursionError) is recorded,
+        # never raised into run()'s finally.
+        try:
+            payload = _encode(final_state)
+            if payload is not None:
+                self._write(payload)
+        except Exception:
+            logger.exception("--live-state mirror final write failed for %s", self._path)
+            self._had_failure = True
+        return self._had_failure

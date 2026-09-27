@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+import circuitry.cli.runtime_shim as runtime_shim
 from circuitry.adapters.base import GenerateResult
 from circuitry.cli import live_state
 from circuitry.cli.app import _write_state_json
@@ -274,3 +275,103 @@ def test_an_unwritable_live_state_path_fails_the_run_up_front(tmp_path: Path) ->
     )
     assert not result.ok
     assert "not-a-dir" in (result.error or "")
+
+
+@dataclass
+class _SlowEchoAdapter:
+    """Like ``_EchoAdapter``, but slow enough for the writer thread to run
+    (and, in the failure tests below, fail) several times mid-run."""
+
+    name: str = "echo"
+    delay: float = 0.02
+
+    def generate(
+        self, *, model: str, prompt: str, timeout_seconds: int = 120
+    ) -> GenerateResult:
+        time.sleep(self.delay)
+        return GenerateResult(text=prompt, raw={})
+
+
+def test_a_mid_run_write_failure_surfaces_as_one_warning_not_one_per_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Several failed writes over the run fold into a single warning."""
+    fail_count = {"n": 0}
+    real_replace = live_state._replace_file
+
+    def flaky_replace(path: Path, payload: str) -> None:
+        # The first write is the initial snapshot, made synchronously before
+        # any effect runs; it must succeed, or the run fails up front.
+        if fail_count["n"] == 0:
+            fail_count["n"] += 1
+            real_replace(path, payload)
+            return
+        fail_count["n"] += 1
+        raise OSError("disk full")
+
+    monkeypatch.setattr(live_state, "_replace_file", flaky_replace)
+    monkeypatch.setattr(
+        runtime_shim,
+        "LiveStateMirror",
+        lambda path, *, store_lock: LiveStateMirror(
+            path, store_lock=store_lock, interval=0.005
+        ),
+    )
+
+    orch_path = tmp_path / "orch.json"
+    orch_path.write_text(json.dumps(_nested_loops("done")), encoding="utf-8")
+    result = run(
+        RunRequest(
+            orchestration_path=orch_path,
+            state_path=None,
+            out_path=tmp_path / "out.json",
+            dry_run=False,
+            validate_only=False,
+            initial_state={"outer_items": ["a", "b"], "inner_items": ["x", "y"]},
+            config=CircuitryConfig(),
+            adapter=_SlowEchoAdapter(),
+            live_state_path=tmp_path / "live.json",
+            skip_preflight=True,
+        )
+    )
+
+    assert result.ok, result.error
+    # The leading write succeeded; every write after it (mid-run and the
+    # final one in close()) was made to fail — more than one.
+    assert fail_count["n"] >= 3
+    matching = [w for w in result.warnings if "live-state" in w]
+    assert len(matching) == 1
+
+
+def test_a_failing_final_encode_does_not_replace_a_successful_run_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unexpected error (e.g. RecursionError) writing the final mirror
+    snapshot in close() must not escape run()'s finally and replace the
+    run's own successful result."""
+    boom = {"active": False}
+    real_encode = live_state._encode
+
+    def flaky_encode(state: Any) -> str | None:
+        if boom["active"]:
+            raise RecursionError("maximum recursion depth exceeded")
+        return real_encode(state)
+
+    monkeypatch.setattr(live_state, "_encode", flaky_encode)
+
+    real_close = LiveStateMirror.close
+
+    def closing(self: LiveStateMirror, final_state: dict[str, Any]) -> bool:
+        boom["active"] = True
+        try:
+            return real_close(self, final_state)
+        finally:
+            boom["active"] = False
+
+    monkeypatch.setattr(LiveStateMirror, "close", closing)
+
+    result, _, _ = _run_with_mirror(tmp_path, _nested_loops("done"))
+
+    assert result.ok is True
+    assert result.state["prime"]["tail"]["value"] == "done"
+    assert any("live-state" in w for w in result.warnings)

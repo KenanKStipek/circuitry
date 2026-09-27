@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import circuitry.cli.runtime_shim as runtime_shim
 from circuitry.adapters.base import GenerateResult
 from circuitry.cli.app import _write_state_json
 from circuitry.cli.config import CircuitryConfig
@@ -214,4 +215,54 @@ def test_tui_state_file_relinks_last(tmp_path: Path) -> None:
     assert loaded.ok
     assert loaded.state is not None
     outer = loaded.state["prime"]["outer"]
+    assert outer["last"] is outer["iter_1"]
+
+
+@dataclass
+class _StubPersistenceBackend:
+    """``load_latest_state`` hands back a ref-form snapshot, as a real
+    backend would if the run that saved it wrote references (#220)."""
+
+    snapshot: dict[str, Any]
+
+    def describe(self) -> dict[str, Any]:
+        return {"backend": "stub"}
+
+    def load_latest_state(self, *, orchestration_path: str) -> dict[str, Any]:
+        del orchestration_path
+        return json.loads(json.dumps(self.snapshot))
+
+    def save_run_snapshot(self, **kwargs: Any) -> None:
+        del kwargs
+
+
+def test_resuming_from_a_persisted_snapshot_relinks_last(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A ref-form snapshot loaded via persistence.load_latest_state (not
+    --state) is relinked the same way (runtime_shim._load_state's sibling
+    path for a persisted snapshot, around line 254)."""
+    snapshot = json.loads(dumps_saved_state(_run_nested()))
+    backend = _StubPersistenceBackend(snapshot=snapshot)
+    monkeypatch.setattr(
+        runtime_shim, "build_persistence_backend", lambda runtime: backend
+    )
+
+    adapter = EchoAdapter()
+    result = run(
+        RunRequest(
+            orchestration_path=_write_orch(tmp_path / "reader.json", READER),
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            config=CircuitryConfig(runtime={"persistence": {"enabled": True}}),
+            adapter=adapter,
+            skip_preflight=True,
+        )
+    )
+
+    assert result.ok, result.error
+    assert adapter.prompts == ["read=[PASS b-y]"]
+    outer = result.state["prime"]["outer"]
     assert outer["last"] is outer["iter_1"]
