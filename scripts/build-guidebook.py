@@ -73,6 +73,22 @@ def _slug(text: str) -> str:
     return re.sub(r"\s", "-", text)
 
 
+def _pin_chapter_anchor(md: str, anchor: str) -> str:
+    """Give a (shifted) chapter heading the explicit id its links point at.
+
+    Cross-chapter links use ``_slug``; pandoc derives heading ids with its own
+    rules, which differ for titles with punctuation (an em dash gives ``--``
+    here but ``-`` in pandoc 3.x), so the id is pinned rather than inferred.
+    """
+    return re.sub(
+        r"^(## .+?)\s*$",
+        lambda m: f"{m.group(1)} {{#{anchor}}}",
+        md,
+        count=1,
+        flags=re.MULTILINE,
+    )
+
+
 def _chapter_title(md: str) -> str:
     for line in md.splitlines():
         if line.startswith("# "):
@@ -146,21 +162,28 @@ def assemble(include_figure: Path | None) -> str:
             md = HEADING.sub(
                 lambda m: "#" + m.group(1) + " ", md
             )  # shift down one level
+            md = _pin_chapter_anchor(md, anchors[name])
             out.append(_rewrite_links(md, anchors).strip() + "\n\n")
     # Appendices: LaTeX letters them (A, B, …); other writers ignore the raw block.
     out.append("```{=latex}\n\\appendix\n```\n\n")
     for name in APPENDICES:
         md = (GUIDEBOOK / name).read_text(encoding="utf-8")
         md = HEADING.sub(lambda m: "#" + m.group(1) + " ", md)
+        md = _pin_chapter_anchor(md, anchors[name])
         out.append(_rewrite_links(md, anchors).strip() + "\n\n")
     return "".join(out)
 
 
 LATEX_HEADER = r"""
 \usepackage{fvextra}
-\DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,breakanywhere,commandchars=\\\{\},fontsize=\small}
+% Code blocks use rigid spaces, so an overlong line wraps instead of squeezing
+% its spaces and breaking column alignment (inline code keeps normal spacing).
+\newfontfamily\codefont{DejaVu Sans Mono}[WordSpace={1,0,0},Scale=MatchLowercase]
+\DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,breakanywhere,commandchars=\\\{\},fontsize=\small,formatcom=\codefont}
+% Plain code blocks (the grammar shapes) get the same wrapping, so a long line
+% breaks instead of running off the page.
+\RecustomVerbatimEnvironment{verbatim}{Verbatim}{breaklines,breakanywhere,fontsize=\small,formatcom=\codefont}
 \usepackage{etoolbox}
-\AtBeginEnvironment{verbatim}{\small}
 \usepackage{microtype}
 \setlength{\emergencystretch}{3em}
 % The serif and the oblique mono lack a few symbols the guidebook leans on;
