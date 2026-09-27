@@ -21,5 +21,5 @@ def make_plugin(cfg: dict[str, Any] | None = None) -> GenericSubprocessTool:
         name="git",
         binary_candidates=("git",),
         binary=plugin_binary_override(cfg),
-        env=plugin_env_override(cfg),
+        env=plugin_env_override(cfg, plugin_name="git"),
     )

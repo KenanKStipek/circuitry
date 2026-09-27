@@ -21,5 +21,5 @@ def make_plugin(cfg: dict[str, Any] | None = None) -> GenericSubprocessTool:
         name="awk",
         binary_candidates=("awk", "gawk", "mawk"),
         binary=plugin_binary_override(cfg),
-        env=plugin_env_override(cfg),
+        env=plugin_env_override(cfg, plugin_name="awk"),
     )

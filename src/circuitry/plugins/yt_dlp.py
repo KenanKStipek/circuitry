@@ -22,5 +22,5 @@ def make_plugin(cfg: dict[str, Any] | None = None) -> GenericSubprocessTool:
         name="yt_dlp",
         binary_candidates=("yt-dlp",),
         binary=plugin_binary_override(cfg),
-        env=plugin_env_override(cfg),
+        env=plugin_env_override(cfg, plugin_name="yt_dlp"),
     )

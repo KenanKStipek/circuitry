@@ -201,6 +201,16 @@ def test_ffmpeg_configured_binary_not_executable_fails_check(tmp_path: Path) -> 
     assert "runtime.plugins.ffmpeg.binary" in (r.message or "")
 
 
+def test_ffmpeg_configured_binary_relative_path_rejected() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match=r"runtime\.plugins\.ffmpeg\.binary=.*must be an absolute path",
+    ):
+        FfmpegPlugin(binary="relative/ffmpeg").execute(
+            params={"input": "a.mp4", "output": "b.mp4"}
+        )
+
+
 def test_validate_tool_result_passes_for_valid_result() -> None:
     result = ToolResult(value="/out/video.mp4", raw={}, stdout="", stderr="", exit_code=0)
     assert validate_tool_result(result, plugin_name="ffmpeg") == []

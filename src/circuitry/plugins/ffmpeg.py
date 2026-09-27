@@ -157,7 +157,7 @@ class FfmpegPlugin:
         except FileNotFoundError as e:
             raise RuntimeError(
                 "ffmpeg is not installed or not on PATH. "
-                "Install ffmpeg to use the ffmpeg plugin."
+                "Install ffmpeg, or set runtime.plugins.ffmpeg.binary."
             ) from e
         except subprocess.TimeoutExpired as e:
             raise RuntimeError(
@@ -181,4 +181,6 @@ class FfmpegPlugin:
         )
 
     def check(self) -> CheckResult:
-        return check_binary(("ffmpeg",), label="ffmpeg", configured=self.binary)
+        return check_binary(
+            ("ffmpeg",), label="ffmpeg", configured=self.binary, plugin_name="ffmpeg"
+        )

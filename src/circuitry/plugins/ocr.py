@@ -22,5 +22,5 @@ def make_plugin(cfg: dict[str, Any] | None = None) -> GenericSubprocessTool:
         name="ocr",
         binary_candidates=("tesseract",),
         binary=plugin_binary_override(cfg),
-        env=plugin_env_override(cfg),
+        env=plugin_env_override(cfg, plugin_name="ocr"),
     )

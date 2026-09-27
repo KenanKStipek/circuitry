@@ -12,7 +12,7 @@ Every tool plugin that wraps a command-line binary — the 18
 - `env` — environment variables for the tool's process, merged over the
   inherited environment (it adds to and overrides, it never replaces).
 
-Both are config-only: they are machine-specific (a locally built binary,
+Both belong in config: they are machine-specific (a locally built binary,
 a thread-limit tuned for one box) and orchestration YAML stays portable
 across machines. Neither can be set via `params` on the tool effect.
 
@@ -40,9 +40,9 @@ variables are introduced.
 
 ## A configured `binary` that doesn't work fails clearly
 
-If `binary` points at a path that doesn't exist or isn't executable, the
-tool effect fails with a message naming both the setting and the path,
-e.g.:
+If `binary` is a relative path, or points at a path that doesn't exist or
+isn't executable, the tool effect fails with a message naming both the
+setting and the path, e.g.:
 
 ```
 imagemagick: configured runtime.plugins.imagemagick.binary='/opt/imagemagick-omp/bin/magick'

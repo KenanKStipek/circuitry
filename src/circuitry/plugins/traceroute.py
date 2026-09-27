@@ -21,5 +21,5 @@ def make_plugin(cfg: dict[str, Any] | None = None) -> GenericSubprocessTool:
         name="traceroute",
         binary_candidates=("traceroute", "tracert"),
         binary=plugin_binary_override(cfg),
-        env=plugin_env_override(cfg),
+        env=plugin_env_override(cfg, plugin_name="traceroute"),
     )

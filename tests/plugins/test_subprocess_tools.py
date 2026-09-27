@@ -289,6 +289,54 @@ def test_generic_tool_check_reports_configured_binary_missing() -> None:
     assert "runtime.plugins.imagemagick.binary" in (r.message or "")
 
 
+def test_generic_tool_configured_binary_relative_path_rejected() -> None:
+    plugin = GenericSubprocessTool(
+        name="imagemagick",
+        binary_candidates=("magick", "convert"),
+        binary="relative/magick",
+    )
+    with pytest.raises(
+        RuntimeError,
+        match=r"runtime\.plugins\.imagemagick\.binary=.*must be an absolute path",
+    ):
+        plugin.execute(params={"args": []})
+
+
+def test_generic_tool_check_reports_relative_configured_binary() -> None:
+    plugin = GenericSubprocessTool(
+        name="imagemagick",
+        binary_candidates=("magick", "convert"),
+        binary="relative/magick",
+    )
+    r = plugin.check()
+    assert r.ok is False
+    assert "must be an absolute path" in (r.message or "")
+
+
+def test_generic_tool_check_no_path_match_names_the_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda n: None)
+    plugin = GenericSubprocessTool(name="imagemagick", binary_candidates=("magick", "convert"))
+    r = plugin.check()
+    assert r.ok is False
+    assert "runtime.plugins.imagemagick.binary" in (r.message or "")
+
+
+def test_plugin_env_override_rejects_non_mapping() -> None:
+    from circuitry.plugins._subprocess import plugin_env_override
+
+    with pytest.raises(ValueError, match=r"runtime\.plugins\.imagemagick\.env"):
+        plugin_env_override({"env": "A=1"}, plugin_name="imagemagick")
+
+
+def test_plugin_env_override_rejects_non_dict_non_string() -> None:
+    from circuitry.plugins._subprocess import plugin_env_override
+
+    with pytest.raises(ValueError, match=r"runtime\.plugins\.imagemagick\.env"):
+        plugin_env_override({"env": 5}, plugin_name="imagemagick")
+
+
 def test_generic_tool_not_found_message_names_the_setting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

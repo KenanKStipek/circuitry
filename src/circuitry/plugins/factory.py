@@ -131,7 +131,7 @@ PluginBuilder = Callable[[dict[str, Any]], ToolPlugin]
 def _build_ffmpeg(cfg: dict[str, Any]) -> ToolPlugin:
     return FfmpegPlugin(
         binary=plugin_binary_override(cfg),
-        env=plugin_env_override(cfg),
+        env=plugin_env_override(cfg, plugin_name="ffmpeg"),
     )
 
 

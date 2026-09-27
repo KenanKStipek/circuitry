@@ -62,13 +62,18 @@ def plugin_binary_override(cfg: dict[str, Any]) -> str | None:
     return str(value) if value else None
 
 
-def plugin_env_override(cfg: dict[str, Any]) -> dict[str, str] | None:
+def plugin_env_override(cfg: dict[str, Any], *, plugin_name: str) -> dict[str, str] | None:
     """Read the optional ``env`` setting from a plugin's
     ``runtime.plugins.<name>`` config block."""
     value = cfg.get("env")
     if not value:
         return None
-    return {str(k): str(v) for k, v in dict(value).items()}
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"runtime.plugins.{plugin_name}.env must be a mapping of environment "
+            f"variable names to values, got {type(value).__name__}."
+        )
+    return {str(k): str(v) for k, v in value.items()}
 
 
 def merged_env(overrides: dict[str, str] | None) -> dict[str, str] | None:
@@ -79,10 +84,18 @@ def merged_env(overrides: dict[str, str] | None) -> dict[str, str] | None:
     return {**os.environ, **overrides}
 
 
-def _expand_and_validate(path_str: str) -> tuple[str, bool]:
+def _expand_and_validate(path_str: str) -> tuple[str, str | None]:
+    """Expand ``~`` and validate a configured binary path.
+
+    Returns ``(resolved_path, error)`` — ``error`` is ``None`` when the path
+    is absolute, exists, and is executable; otherwise a short reason.
+    """
     path = str(Path(path_str).expanduser())
-    ok = Path(path).is_file() and os.access(path, os.X_OK)
-    return path, ok
+    if not Path(path).is_absolute():
+        return path, "must be an absolute path"
+    if not (Path(path).is_file() and os.access(path, os.X_OK)):
+        return path, "does not exist or is not executable"
+    return path, None
 
 
 def resolve_plugin_binary(
@@ -95,18 +108,18 @@ def resolve_plugin_binary(
     path. Unset, falls back to the first of ``candidates`` found on PATH.
     """
     if configured:
-        path, ok = _expand_and_validate(configured)
-        if not ok:
+        path, error = _expand_and_validate(configured)
+        if error:
             raise RuntimeError(
                 f"{plugin_name}: configured runtime.plugins.{plugin_name}.binary"
-                f"={configured!r} does not exist or is not executable "
-                f"(resolved: {path})."
+                f"={configured!r} {error} (resolved: {path})."
             )
         return path
     binary = resolve_binary(candidates)
     if binary is None:
         raise RuntimeError(
-            f"{plugin_name}: none of {list(candidates)} found on PATH."
+            f"{plugin_name}: none of {list(candidates)} found on PATH. "
+            f"Install one of them, or set runtime.plugins.{plugin_name}.binary."
         )
     return binary
 
@@ -116,34 +129,38 @@ def check_binary(
     *,
     label: str | None = None,
     configured: str | None = None,
+    plugin_name: str | None = None,
 ) -> CheckResult:
     """Standard preflight: report ``binary:<first-candidate>`` missing
     when none of the candidates are available on PATH, or — when a
     ``binary`` override is configured — when that path doesn't exist or
-    isn't executable."""
+    isn't executable. ``plugin_name``, when given, names the
+    ``runtime.plugins.<name>.binary`` setting in the not-found message —
+    omit it for plugins (e.g. ``gpg``) that don't support the override."""
     primary = label or (candidates[0] if candidates else "?")
     if configured:
-        path, ok = _expand_and_validate(configured)
-        if ok:
+        path, error = _expand_and_validate(configured)
+        if error is None:
             return CheckResult(ok=True, missing=[])
         return CheckResult(
             ok=False,
             missing=[f"binary:{primary}"],
             message=(
                 f"configured runtime.plugins.{primary}.binary={configured!r} "
-                f"does not exist or is not executable (resolved: {path})."
+                f"{error} (resolved: {path})."
             ),
         )
     if resolve_binary(candidates):
         return CheckResult(ok=True, missing=[])
-    return CheckResult(
-        ok=False,
-        missing=[f"binary:{primary}"],
-        message=(
-            f"none of {list(candidates)} found on PATH. Install the binary "
-            "or set the per-plugin path override."
-        ) if len(candidates) > 1 else None,
-    )
+    message: str | None = None
+    if plugin_name:
+        message = (
+            f"none of {list(candidates)} found on PATH. Install one of them, "
+            f"or set runtime.plugins.{plugin_name}.binary."
+        )
+    elif len(candidates) > 1:
+        message = f"none of {list(candidates)} found on PATH. Install one of them."
+    return CheckResult(ok=False, missing=[f"binary:{primary}"], message=message)
 
 
 def run_binary(
@@ -256,4 +273,9 @@ class GenericSubprocessTool:
         )
 
     def check(self) -> CheckResult:
-        return check_binary(self.binary_candidates, label=self.name, configured=self.binary)
+        return check_binary(
+            self.binary_candidates,
+            label=self.name,
+            configured=self.binary,
+            plugin_name=self.name,
+        )
