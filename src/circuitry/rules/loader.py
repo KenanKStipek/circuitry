@@ -1,4 +1,4 @@
-"""Loader for structured rule files in the rules/ directory.
+"""Loader for structured rule files in src/circuitry/bundled/rules/.
 
 Rule files are YAML documents designed for LLM consumption — compact,
 structured descriptions of each Circuitry effect type. The loader reads
@@ -9,11 +9,11 @@ Usage:
     from circuitry.rules import load_all_rules, load_rules_for
 
     # Full ruleset (replaces old _load_rules() markdown extraction)
-    rules = load_all_rules(Path("rules"))
+    rules = load_all_rules(rules_dir)
 
     # Per-type: common + specific type(s)
-    rules_prompt = load_rules_for("prompt", rules_dir=Path("rules"))
-    rules_loop = load_rules_for("loop", rules_dir=Path("rules"))
+    rules_prompt = load_rules_for("prompt", rules_dir=rules_dir)
+    rules_loop = load_rules_for("loop", rules_dir=rules_dir)
 """
 
 from __future__ import annotations

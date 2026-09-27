@@ -12,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..adapters import Adapter, build_adapter
+from ..adapters.factory import ADAPTER_REGISTRY
 from ..core.compiler import apply_effect_overrides, compile_orchestration
 from ..core.dynamic import DynamicRuntime
 from ..core.runtime_plugins import (
@@ -26,7 +27,14 @@ from ..core.state_ns import migrate_legacy_state
 from ..core.store import Store, build_persistence_backend
 from ..plugins.factory import build_plugin
 from ..preflight import CheckResult, call_check
-from .allowlist import check_allowlist, walk_orchestration_refs
+from .allowlist import (
+    check_allowlist,
+    collect_adapter_usages,
+    hard_effect_names,
+    is_hard_adapter_dependency,
+    skippable_effect_names,
+    walk_orchestration_refs,
+)
 from .config import CircuitryConfig
 from .effective_settings import EffectiveSettings, resolve_effective_settings
 from .live_state import LiveStateMirror
@@ -410,13 +418,17 @@ def run(req: RunRequest) -> RunResult:
             and req.adapter is None
         ):
             preflight_results = preflight(req.orchestration_path, req.config)
-            preflight_errors = format_preflight_errors(preflight_results)
+            hard_results, soft_results = classify_preflight_results(
+                req.orchestration_path, preflight_results
+            )
+            preflight_errors = format_preflight_errors(hard_results)
             if preflight_errors:
                 raise RuntimeError(
                     "Preflight failed: "
                     + "; ".join(preflight_errors)
                     + ". Re-run with --skip-preflight to bypass."
                 )
+            warnings.extend(format_preflight_warnings(soft_results))
 
         # Inject built-in template variables available in all orchestrations.
         state.setdefault("_run_id", run_id)
@@ -708,13 +720,17 @@ def validate(
         # smoke tests, ``cof check --skip-preflight``) bypass it.
         if config is not None and not skip_preflight:
             preflight_results = preflight(orchestration_path, config)
-            preflight_errors = format_preflight_errors(preflight_results)
+            hard_results, soft_results = classify_preflight_results(
+                orchestration_path, preflight_results
+            )
+            preflight_errors = format_preflight_errors(hard_results)
             if preflight_errors:
                 return {
                     "ok": False,
                     "errors": preflight_errors,
                     "warnings": lint_warnings,
                 }
+            lint_warnings = [*lint_warnings, *format_preflight_warnings(soft_results)]
 
         return {"ok": True, "errors": [], "warnings": lint_warnings}
     except Exception as e:
@@ -828,6 +844,75 @@ def format_preflight_errors(
             parts.append(r.message)
         errors.append(" — ".join(parts))
     return errors
+
+
+def classify_preflight_results(
+    orchestration_path: Path,
+    results: list[tuple[str, CheckResult]],
+) -> tuple[list[tuple[str, CheckResult]], list[tuple[str, CheckResult]]]:
+    """Split raw ``preflight()`` results into ``(hard, soft)``.
+
+    A failing ``adapter:<name>`` result is soft — downgraded to a warning —
+    when every effect referencing that adapter tolerates failure
+    (``on_error: skip``/``continue``): the run degrades gracefully without
+    it, so it shouldn't hard-fail the whole orchestration. Everything else
+    (already-ok results, tool/runtime_plugin/library_ref results, an unknown
+    adapter name, and adapters with at least one non-tolerant usage) stays
+    hard: an adapter that doesn't exist is a configuration mistake, not a
+    missing credential the run can degrade past.
+    """
+    orch = load_orchestration_file(orchestration_path)
+    usages = collect_adapter_usages(orch)
+    hard: list[tuple[str, CheckResult]] = []
+    soft: list[tuple[str, CheckResult]] = []
+    for label, result in results:
+        if result.ok or not label.startswith("adapter:"):
+            hard.append((label, result))
+            continue
+        adapter_name = label.split(":", 1)[1]
+        if (
+            adapter_name.strip().lower() not in ADAPTER_REGISTRY
+            or is_hard_adapter_dependency(adapter_name, usages)
+        ):
+            # Name the non-skippable effect(s) when we have that detail —
+            # the mixed case (one skippable, one not) otherwise reads as an
+            # unqualified adapter failure with no clue which effect forces it.
+            required_by = hard_effect_names(adapter_name, usages)
+            if required_by:
+                message = (
+                    f"adapter '{adapter_name}' unavailable; "
+                    f"required by effects {required_by}"
+                )
+                if result.message:
+                    message += f" ({result.message})"
+                named_result = CheckResult(
+                    ok=False, missing=result.missing, message=message
+                )
+                hard.append((label, named_result))
+            else:
+                hard.append((label, result))
+            continue
+        effects = skippable_effect_names(adapter_name, usages)
+        message = f"adapter '{adapter_name}' unavailable; effects {effects} will skip"
+        if result.message:
+            message += f" ({result.message})"
+        soft.append(
+            (label, CheckResult(ok=False, missing=result.missing, message=message))
+        )
+    return hard, soft
+
+
+def format_preflight_warnings(
+    results: list[tuple[str, CheckResult]],
+) -> list[str]:
+    """Render soft (skippable) preflight dependencies as one-line warnings."""
+    warnings: list[str] = []
+    for label, r in results:
+        message = r.message or f"{label}: not ready"
+        if r.missing:
+            message += f" (missing {r.missing})"
+        warnings.append(message)
+    return warnings
 
 
 def inspect_orchestration(orchestration_path: Path) -> dict[str, Any]:

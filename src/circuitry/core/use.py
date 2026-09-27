@@ -327,6 +327,10 @@ class UseRuntime:
         timeout_seconds: int = 120,
         verbose: bool = False,
         depth: int = 0,
+        cb_start: Callable[[], None] | None = None,
+        cb_done: Callable[[str], None] | None = None,
+        cb_error: Callable[[str], None] | None = None,
+        display_name: str | None = None,
         ancestors: list | None = None,
     ):
         self.defn = definition
@@ -341,6 +345,10 @@ class UseRuntime:
         self.timeout_seconds = timeout_seconds
         self.verbose = verbose
         self.depth = depth
+        self.cb_start = cb_start
+        self.cb_done = cb_done
+        self.cb_error = cb_error
+        self.display_name = display_name or definition.name
         self._ancestors = ancestors or []
         # Pin recorded when `ref:` resolved through a library source, mirrored
         # onto the effect's meta for per-effect introspection.
@@ -606,6 +614,14 @@ class UseRuntime:
         # including a child that blew up, closes the pair.
         store.fire_effect_start(self.defn.name, node)
 
+        if self.verbose:
+            if self.cb_start is not None:
+                self.cb_start()
+            else:
+                _console.print(
+                    f"{indent}[info]→[/info] [green]⊕[/green] {self.display_name}"
+                )
+
         try:
             if self.dry_run:
                 node["value"] = None
@@ -613,10 +629,14 @@ class UseRuntime:
                 meta["dry_run"] = True
                 if self.verbose:
                     elapsed = time.monotonic() - t0
-                    _console.print(
-                        f"{indent}[ok]✓[/ok] [green]⊕[/green] {self.defn.name}"
+                    line = (
+                        f"{indent}[ok]✓[/ok] [green]⊕[/green] {self.display_name}"
                         f" [dim]{label} | {_elapsed_str(elapsed)} (dry)[/dim]"
                     )
+                    if self.cb_done is not None:
+                        self.cb_done(line)
+                    else:
+                        _console.print(line)
                 return
 
             # Load (file or inline) and compile
@@ -682,7 +702,15 @@ class UseRuntime:
                 _lock=store._lock,
             )
 
-            # Execute child orchestration
+            # Execute child orchestration. The child's own effects inherit
+            # this invocation's display name as a label prefix — but only
+            # when it actually differs from the bare effect name (i.e. an
+            # enclosing loop or `use` gave it one); otherwise every
+            # unqualified `use` would start tagging its child's lines,
+            # changing output that today has nothing to disambiguate.
+            child_label_prefix = (
+                self.display_name if self.display_name != self.defn.name else None
+            )
             DynamicRuntime(
                 child_root,
                 adapter=self.adapter,
@@ -694,6 +722,7 @@ class UseRuntime:
                 verbose=self.verbose,
                 depth=self.depth + 1,
                 ancestors=self._ancestors,
+                label_prefix=child_label_prefix,
             ).execute(store=child_store)
 
             # Surface errors an on_error: skip/continue swallowed inside the
@@ -734,10 +763,14 @@ class UseRuntime:
 
             if self.verbose:
                 elapsed = time.monotonic() - t0
-                _console.print(
-                    f"{indent}[ok]✓[/ok] [green]⊕[/green] {self.defn.name}"
+                line = (
+                    f"{indent}[ok]✓[/ok] [green]⊕[/green] {self.display_name}"
                     f" [dim]{label} | {_elapsed_str(elapsed)}[/dim]"
                 )
+                if self.cb_done is not None:
+                    self.cb_done(line)
+                else:
+                    _console.print(line)
 
         except Exception as e:
             error_msg = str(e)
@@ -761,10 +794,14 @@ class UseRuntime:
 
             if self.verbose:
                 elapsed = time.monotonic() - t0
-                _console.print(
-                    f"{indent}[err]✗[/err] [green]⊕[/green] {self.defn.name}"
+                line = (
+                    f"{indent}[err]✗[/err] [green]⊕[/green] {self.display_name}"
                     f" [dim]{label} | {_elapsed_str(elapsed)}[/dim]"
                 )
+                if self.cb_error is not None:
+                    self.cb_error(line)
+                else:
+                    _console.print(line)
 
             if self.defn.on_error == "fail":
                 raise RuntimeError(

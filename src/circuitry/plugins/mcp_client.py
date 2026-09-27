@@ -44,7 +44,15 @@ Params:
     discover capabilities at runtime (e.g. feed them to a reflector).
   - ``parse`` (optional, ``auto`` | ``json`` | ``text``, default ``auto``):
     ``auto`` prefers the server's ``structuredContent`` when present, else
-    returns the joined text content. ``json`` force-parses the text content.
+    tries to parse the joined text content as a JSON object or array, else
+    falls back to the raw text — structured → JSON-in-text → text. Bare
+    JSON scalars (numbers, booleans, ``null``, quoted strings) in text are
+    left as text, since a text-only reply is otherwise indistinguishable
+    from a plain string. ``json`` force-parses the
+    text content; on an ``isError`` response it returns ``value: None``
+    instead of raising when the text isn't JSON (the error is still
+    surfaced via ``stderr``/``exit_code``). ``text`` always returns the raw
+    joined text.
 
 ToolResult shape:
   - ``value``: structured content, parsed JSON, or text per ``parse``; for
@@ -265,14 +273,27 @@ class McpPlugin:
             try:
                 value = _json.loads(text) if text else None
             except _json.JSONDecodeError as exc:
-                raise RuntimeError(
-                    f"McpPlugin: parse='json' but tool {tool_name!r} returned "
-                    f"non-JSON text: {exc}"
-                ) from exc
+                if is_error:
+                    # isError text is conventionally a plain error message,
+                    # not JSON — surface it via stderr/exit_code below rather
+                    # than crashing the effect.
+                    value = None
+                else:
+                    raise RuntimeError(
+                        f"McpPlugin: parse='json' but tool {tool_name!r} returned "
+                        f"non-JSON text: {exc}"
+                    ) from exc
         elif parse == "text":
             value = text
         else:  # auto
-            value = structured if structured is not None else text
+            if structured is not None:
+                value = structured
+            else:
+                try:
+                    parsed = _json.loads(text)
+                except _json.JSONDecodeError:
+                    parsed = None
+                value = parsed if isinstance(parsed, (dict, list)) else text
 
         return ToolResult(
             value=value,
