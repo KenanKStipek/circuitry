@@ -22,9 +22,10 @@ from .state_ns import (
     validate_bare_input_refs,
     validate_cel_expr,
     validate_each_in_path,
+    validate_reference_path,
 )
 from .tool import ToolDefinition
-from .use import UseDefinition
+from .use import UseDefinition, reference_path
 
 EffectDef = (
     DynamicDefinition
@@ -398,7 +399,12 @@ def _compile_effect(
             scope_path=scope_path,
             effect_path=effect_path,
         )
-        return _compile_use(effect, scope_path=scope_path, effect_path=effect_path)
+        return _compile_use(
+            effect,
+            scope_path=scope_path,
+            effect_path=effect_path,
+            loop_names=loop_names,
+        )
 
     if effect_type == "reflector":
         if name is None:
@@ -737,7 +743,11 @@ def _compile_tool(
 
 
 def _compile_use(
-    effect: dict[str, Any], *, scope_path: str, effect_path: str
+    effect: dict[str, Any],
+    *,
+    scope_path: str,
+    effect_path: str,
+    loop_names: frozenset[str] = frozenset(),
 ) -> UseDefinition:
     """Compile a use (sub-orchestration) effect."""
     import warnings
@@ -789,6 +799,20 @@ def _compile_use(
     inputs = effect.get("inputs") or None
     if inputs is not None and not isinstance(inputs, dict):
         inputs = None
+
+    # By-reference inputs (`name: {from: <path>}`) pass the resolved value
+    # itself; their paths follow the same rooting rules as `each.in`, plus the
+    # bindings of enclosing loops, so a bad root fails at `cof check` time.
+    for input_name, value in (inputs or {}).items():
+        from_path = reference_path(value)
+        if from_path is not None:
+            validate_reference_path(
+                from_path,
+                use_name=str(name),
+                input_name=str(input_name),
+                effect_path=effect_path,
+                loop_names=loop_names,
+            )
 
     # Canonical form is `name: {path: ...}`; the bare-string shorthand
     # `name: prime.x.value` normalizes to the same thing (see core.outputs).
