@@ -60,7 +60,7 @@ state_paths:
   root_rule: "State has exactly three root namespaces: input, prime, runtime. Every path outside CEL is root-relative — it starts with input., prime., or runtime. There is no sugar layer: a bare key (key_name) or a state.-prefixed spelling (state.key_name) is a hard error from cof check / validate(), not a deprecation warning."
   cel_binding: "Inside a CEL expression, state binds to the state root: state.input.<name>, state.prime.<effect_name>.value, state.runtime.<key>. state.<key> where <key> is not one of the three namespaces is a hard error."
   hard_errors:
-    - "each.in not rooted at input./prime./runtime. — bare keys and state.-prefixed spellings both fail cof check, with the canonical spelling named in the error."
+    - "each.in not rooted at input./prime./runtime. or an enclosing loop's each.as binding — bare keys and state.-prefixed spellings both fail cof check, with the canonical spelling and the bindings in scope named in the error."
     - "CEL state.<key> where <key> is not input, prime, or runtime — fails cof check."
     - "A bare {{name}} template ref that matches a name declared in the document's own interface.inputs — fails cof check, naming {{input.<name>}} as the fix. Undeclared bare keys (loop as vars, _loop_index, sibling shorthand inside a loop body) are unaffected and stay legal."
   in_templates:

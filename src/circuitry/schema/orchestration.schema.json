@@ -365,7 +365,7 @@
           "properties": {
             "in": {
               "type": "string",
-              "description": "Dot-delimited state path resolving to a JSON array, e.g. prime.my_prompt.value."
+              "description": "Dot-delimited state path resolving to a JSON array, e.g. prime.my_prompt.value, or an enclosing loop's each.as binding, e.g. s.crops inside a loop whose each.as is s."
             },
             "as": {
               "type": "string",

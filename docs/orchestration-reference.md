@@ -241,7 +241,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `max_concurrency` | integer | no | unbounded | Max parallel workers when `flow: tree`. |
 | `body` | array | yes | — | Non-empty list of effects to execute per iteration |
 | `each` | object | one-of | — | Collection iteration; mutually exclusive with `while` |
-| `each.in` | string | yes (each) | — | Root-relative state path to a JSON array — `input.`/`prime.`/`runtime.`-rooted. `input.*` is a first-class source; the array need not come from a `prompt_type: json` effect. `state.`-prefixed and bare-key spellings are hard errors here (`state.` is a CEL-only binding). |
+| `each.in` | string | yes (each) | — | Root-relative state path to a JSON array — `input.`/`prime.`/`runtime.`-rooted, or a binding of an enclosing loop (`each.as`), e.g. `s.crops` inside a loop whose `each.as` is `s`. `input.*` is a first-class source; the array need not come from a `prompt_type: json` effect. `state.`-prefixed spellings and bare keys that name no binding in scope are hard errors here (`state.` is a CEL-only binding). |
 | `each.as` | string | no | `item` | Variable name for current element in body templates *and* in `mode: cel` expressions inside this loop's own body — see [CEL Expressions](#cel-expressions) |
 | `while` | object | one-of | — | Continuation condition; mutually exclusive with `each` |
 | `while.mode` | string | no | `model` | `model` or `cel` |
@@ -1088,7 +1088,8 @@ else:
 ### Loop `each.in` Must Be Root-Relative and Resolve to a JSON Array
 
 `each.in` must be rooted at one of the three state namespaces —
-`input.`/`prime.`/`runtime.` — and must resolve to an array at runtime.
+`input.`/`prime.`/`runtime.` — or at a binding of an enclosing loop
+(its `each.as` name), and must resolve to an array at runtime.
 `input.*` is a first-class source, so the array does not have to come from a
 `prompt_type: json` effect; a caller-supplied array works directly:
 
@@ -1123,10 +1124,18 @@ else:
     in: prime.topics.value   # not an array
   body: [...]
 
+# Good: an enclosing loop's binding — a nested loop over a field of the outer item
+- type: loop
+  each: {in: input.sets, as: s}
+  body:
+    - type: loop
+      each: {in: s.crops, as: c}   # s is the enclosing loop's binding
+      body: [...]
+
 # Bad: not root-relative — both are hard errors from `cof check`
 - type: loop
   each:
-    in: topics               # bare key — write input.topics or prime.topics.value
+    in: topics               # bare key, no enclosing loop binds it — write input.topics or prime.topics.value
   body: [...]
 
 - type: loop
@@ -1164,7 +1173,7 @@ The following rules are sufficient for generating structurally correct Circuitry
 **State path addressing:**
 14. In templates (Mustache): use `{{key}}` for initial state keys; use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
 15. In CEL expressions (`if.expr`, `while.expr`): always use the full prefix `state.prime.<name>.value`. Never omit `state.`.
-16. Loop `each.in` must be a root-relative path to a JSON array — `input.<name>`, `prime.<name>.value`, or a `runtime.` path. `input.*` is a first-class source; it need not point to a `prompt_type: json` effect. Bare keys and `state.`-prefixed spellings are hard errors here.
+16. Loop `each.in` must be a root-relative path to a JSON array — `input.<name>`, `prime.<name>.value`, or a `runtime.` path — or a binding of an enclosing loop (its `each.as` name), e.g. `s.crops` inside a loop whose `each.as` is `s`. `input.*` is a first-class source; it need not point to a `prompt_type: json` effect. Bare keys that name no binding in scope and `state.`-prefixed spellings are hard errors here.
 
 **If/else branches:**
 17. Use the same inner effect `name` in both `then` and `else` branches of any `if` effect, so downstream state path references resolve regardless of which branch executed.

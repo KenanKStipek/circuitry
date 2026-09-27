@@ -106,6 +106,22 @@ def test_validate_each_in_path_rejects_state_dot_non_namespace_key() -> None:
         validate_each_in_path("state.items", effect_path="prime.loop")
 
 
+def test_validate_each_in_path_accepts_an_enclosing_loop_binding() -> None:
+    validate_each_in_path("s.crops", effect_path="prime.loop", loop_names=frozenset({"s"}))
+
+
+def test_validate_each_in_path_rejects_a_binding_outside_its_loop() -> None:
+    with pytest.raises(ValueError, match="loop bindings in scope: none here"):
+        validate_each_in_path("s.crops", effect_path="prime.loop")
+
+
+def test_validate_each_in_path_lists_bindings_in_scope_on_rejection() -> None:
+    with pytest.raises(ValueError, match="loop bindings in scope: iter, s"):
+        validate_each_in_path(
+            "missing.crops", effect_path="prime.loop", loop_names=frozenset({"s", "iter"})
+        )
+
+
 # ── validate_cel_expr ────────────────────────────────────────────────────
 
 
@@ -257,6 +273,118 @@ def test_compile_orchestration_rejects_state_prefixed_each_in() -> None:
         ]
     }
     with pytest.raises(ValueError, match="CEL-only binding"):
+        compile_orchestration(orch=orch, root_name="prime")
+
+
+@pytest.mark.parametrize("flow", ["chain", "tree"])
+def test_compile_orchestration_each_in_accepts_an_enclosing_loops_binding(flow: str) -> None:
+    """Regression for #221: a nested loop's each.in may root at the outer
+    loop's each.as binding, the way {from: ...} already does (#218/#219)."""
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "outer",
+                "flow": flow,
+                "each": {"in": "input.sets", "as": "s"},
+                "body": [
+                    {
+                        "type": "loop",
+                        "name": "inner",
+                        "flow": flow,
+                        "collect": "tag",
+                        "each": {"in": "s.crops", "as": "c"},
+                        "body": [
+                            {
+                                "type": "prompt",
+                                "name": "tag",
+                                "template": "{{s.name}}:{{c}}",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    sets = [
+        {"name": "a", "crops": ["a1", "a2"]},
+        {"name": "b", "crops": ["b1"]},
+    ]
+    store = Store({"input": {"sets": sets}})
+
+    DynamicRuntime(root, adapter=EchoAdapter(), model="unit-test").execute(store=store)
+
+    assert store.get("prime.outer.iter_0.inner.collected.value") == ["a:a1", "a:a2"]
+    assert store.get("prime.outer.iter_1.inner.collected.value") == ["b:b1"]
+
+
+@pytest.mark.parametrize("flow", ["chain", "tree"])
+def test_compile_orchestration_each_in_accepts_a_binding_two_loops_up(flow: str) -> None:
+    """A loop nested two deep sees both enclosing loops' bindings."""
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "outer",
+                "flow": flow,
+                "each": {"in": "input.groups", "as": "g"},
+                "body": [
+                    {
+                        "type": "loop",
+                        "name": "middle",
+                        "flow": flow,
+                        "each": {"in": "g.sets", "as": "s"},
+                        "body": [
+                            {
+                                "type": "loop",
+                                "name": "inner",
+                                "flow": flow,
+                                "collect": "tag",
+                                "each": {"in": "s.crops", "as": "c"},
+                                "body": [
+                                    {
+                                        "type": "prompt",
+                                        "name": "tag",
+                                        "template": "{{g.label}}/{{s.name}}:{{c}}",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    groups = [{"label": "g1", "sets": [{"name": "a", "crops": ["a1"]}]}]
+    store = Store({"input": {"groups": groups}})
+
+    DynamicRuntime(root, adapter=EchoAdapter(), model="unit-test").execute(store=store)
+
+    assert store.get(
+        "prime.outer.iter_0.middle.iter_0.inner.collected.value"
+    ) == ["g1/a:a1"]
+
+
+def test_compile_orchestration_each_in_rejects_a_binding_outside_its_loop() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "outer",
+                "each": {"in": "input.sets", "as": "s"},
+                "body": [{"type": "prompt", "name": "noop", "template": "ok"}],
+            },
+            {
+                "type": "loop",
+                "name": "after",
+                "each": {"in": "s.crops", "as": "c"},
+                "body": [{"type": "prompt", "name": "tag", "template": "{{c}}"}],
+            },
+        ]
+    }
+    with pytest.raises(ValueError, match="loop bindings in scope: none here"):
         compile_orchestration(orch=orch, root_name="prime")
 
 
