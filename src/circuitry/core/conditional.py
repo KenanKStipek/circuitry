@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal, Union
 from ..adapters import Adapter
 from ..output import console as _console
 from .disabled import is_enabled
+from .scope import local_writes, scope_ctx
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -141,6 +142,12 @@ class ConditionalRuntime:
             meta = None
             child_store = store
 
+        # Keys child_store already carried before this branch runs — for a
+        # transparent (unnamed) conditional that is the enclosing scope's own
+        # state (a loop iteration's prior siblings, an outer container's), so
+        # the branch's own writes can be told apart from what it inherited.
+        branch_baseline = frozenset(child_store.state)
+
         # Evaluate condition. A CEL expression that cannot be evaluated
         # raises (see ``cel_eval``); the failure is recorded on the effect
         # and, under the default ``on_error: fail``, propagates so the run
@@ -170,6 +177,11 @@ class ConditionalRuntime:
 
         branch = "then" if result else "else"
         effects_to_run = self.defn.then_effects if result else self.defn.else_effects
+        branch_names = frozenset(
+            name
+            for name in (getattr(e, "name", None) for e in effects_to_run)
+            if isinstance(name, str) and name
+        )
 
         if meta:
             meta["condition_result"] = result
@@ -208,6 +220,11 @@ class ConditionalRuntime:
                     )
                     effect_record["disabled"] = True
                     executed_effects.append(effect_record)
+                    # Expose the skip node to later branch steps on the same
+                    # terms as a produced one (see the sibling merge below).
+                    ctx = scope_ctx(
+                        ctx, local_writes(child_store.state, branch_baseline, branch_names)
+                    )
                     continue
 
                 if self.verbose and not is_prompt:
@@ -331,6 +348,15 @@ class ConditionalRuntime:
                     raise
 
                 executed_effects.append(effect_record)
+
+                # Make prior branch steps' outputs available to subsequent
+                # branch steps under the canonical within-branch names — both
+                # {{prime.<step>.value}} and the bare {{<step>.value}}. This is
+                # what lets a step read a sibling earlier in the same branch,
+                # in a loop body exactly as at the top level.
+                ctx = scope_ctx(
+                    ctx, local_writes(child_store.state, branch_baseline, branch_names)
+                )
 
             if node:
                 node["value"] = {

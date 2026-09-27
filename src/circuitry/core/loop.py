@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any, Literal, Union
 from ..adapters import Adapter
 from ..output import console as _console
 from .disabled import is_disabled_node, is_enabled
+from .scope import local_writes as _local_writes_state
+from .scope import scope_ctx as _scope_ctx
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -28,31 +30,6 @@ if TYPE_CHECKING:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _scope_ctx(ctx: dict[str, Any], local: dict[str, Any]) -> dict[str, Any]:
-    """Layer one iteration's own writes over the context its body renders against.
-
-    A body step reading the step before it — the chained-body pattern — is a
-    *within-iteration* reference, and it resolves through a scope chain:
-    current iteration first, then the enclosing scope, then root state.  The
-    overlay lands in two places so both taught spellings mean the same node:
-
-    * top level, for the bare ``{{step.value}}`` form
-    * inside ``prime``, for the canonical ``{{prime.step.value}}`` form (and
-      its CEL twin ``state.prime.step.value``)
-
-    Shallow by design. Nested nodes stay shared by reference, so every path
-    that already resolved against the enclosing scope — ``{{prime.<dynamic>.
-    <name>.value}}``, the loop's own ``prime.<loop>.iter_<N>`` subtree, root
-    inputs — keeps resolving. Only the iteration's own names are shadowed.
-    """
-    if not local:
-        return ctx
-    merged = {**ctx, **local}
-    parent = ctx.get("prime")
-    merged["prime"] = {**parent, **local} if isinstance(parent, dict) else dict(local)
-    return merged
 
 
 EffectDef = Union[
@@ -657,12 +634,7 @@ Should the loop continue? Answer (yes/no):"""
         its slot either way: inside the body, that name means the body's own
         effect.
         """
-        body_names = self._body_names()
-        return {
-            key: value
-            for key, value in iter_store.state.items()
-            if key not in baseline or key in body_names
-        }
+        return _local_writes_state(iter_store.state, baseline, self._body_names())
 
     def _execute_body(
         self,
