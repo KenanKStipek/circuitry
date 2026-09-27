@@ -222,6 +222,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 
 **State output paths (named each loop):**
 - Per-iteration: `prime.<name>.iter_0.<body_effect>.value`, `prime.<name>.iter_1.<body_effect>.value`, ...
+- Final pass (after the loop completes): `prime.<name>.last.<body_effect>.value` — the last *completed* iteration's node, same shape as `iter_<N>`; a zero-iteration loop writes no `last` key. Saved state (`--out`, `--live-state`) writes it as a reference to that pass, `"last": {"$ref": "iter_<N>"}`, not a second copy; `--state` and the TUI resolve it back.
 - Aggregated (when `collect` is set): `prime.<name>.collected.value` — array of every iteration's collected effect value
 - From *inside* the body: `prime.<body_effect>.value` — the current pass. See [Referencing a sibling within an iteration](#referencing-a-sibling-within-an-iteration).
 

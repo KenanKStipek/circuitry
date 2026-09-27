@@ -15,6 +15,8 @@ from rich.panel import Panel
 from rich.table import Table
 from typer.core import TyperGroup
 
+from ..core.saved_state import dumps_saved_state
+
 # The wizard host (chat's transcript, verdict, and save logic) — `cof wizard`
 # drives the exact same functions `circuitry.tui.chat.ChatScreen` does, so the
 # two hosts can never produce different artifacts from the same input.
@@ -123,13 +125,7 @@ def _print_header(title: str) -> None:
 
 def _write_state_json(*, out: Path, state: dict, pretty: bool) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
-    if pretty:
-        out.write_text(
-            json.dumps(state, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-    else:
-        out.write_text(json.dumps(state) + "\n", encoding="utf-8")
+    out.write_text(dumps_saved_state(state, pretty=pretty) + "\n", encoding="utf-8")
 
 
 def _parse_env_vars(env_vars: list[str] | None) -> dict[str, Any]:
@@ -400,7 +396,8 @@ def run_cmd(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed progress."),
     live_state: Path | None = typer.Option(
         None, "--live-state",
-        help="Write state atomically to this file after each effect. For live monitoring.",
+        help="Mirror state atomically to this file while the run goes (at most every "
+        "0.5 s, and once more when it ends). For live monitoring.",
     ),
     env_vars: list[str] | None = typer.Option(
         None, "-e",
@@ -715,10 +712,7 @@ def run_cmd(
 
     # Print --print (or default print for --json with no --out)
     if not tail and (print_state or (not resolved_out and json_out)):
-        if pretty:
-            console.print_json(json.dumps(result.state, indent=2, sort_keys=True))
-        else:
-            console.print_json(json.dumps(result.state))
+        console.print_json(dumps_saved_state(result.state, pretty=pretty))
 
     # warnings
     if result.warnings and not (quiet or json_out):
@@ -819,7 +813,8 @@ def run_library_cmd(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed progress."),
     live_state: Path | None = typer.Option(
         None, "--live-state",
-        help="Write state atomically to this file after each effect. For live monitoring.",
+        help="Mirror state atomically to this file while the run goes (at most every "
+        "0.5 s, and once more when it ends). For live monitoring.",
     ),
     env_vars: list[str] | None = typer.Option(
         None, "-e",
@@ -947,10 +942,7 @@ def run_library_cmd(
             console.print(f"[bold]State written:[/bold] {out}")
 
     if not tail and (print_state or (not out and json_out)):
-        if pretty:
-            console.print_json(json.dumps(result.state, indent=2, sort_keys=True))
-        else:
-            console.print_json(json.dumps(result.state))
+        console.print_json(dumps_saved_state(result.state, pretty=pretty))
 
     if result.warnings and not (quiet or json_out):
         for w in result.warnings:
