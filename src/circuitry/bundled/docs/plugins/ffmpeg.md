@@ -11,6 +11,15 @@ Transcoding, format conversion, image compositing, adding text overlays, combini
 - `params.input` (string) — input file path
 - `params.output` (string) — output file path
 
+## Configuration
+
+`runtime.plugins.ffmpeg.binary` (absolute path, `~` expanded) and
+`runtime.plugins.ffmpeg.env` select a specific ffmpeg build and its
+process environment, replacing the default `PATH` search when set. See
+[Binary tool plugins: `binary` and `env`](./binary-tools.md) for the
+full picture (also covers `imagemagick` and 17 other subprocess-wrapping
+plugins) — unset, behaviour is unchanged.
+
 ## Optional params
 
 - `params.flags` (string) — raw ffmpeg flags (e.g. `-c:v libx264 -crf 23`)

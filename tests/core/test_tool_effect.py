@@ -102,6 +102,56 @@ def test_tool_runtime_writes_value_to_store(monkeypatch: pytest.MonkeyPatch) -> 
     assert store.state["transcode"]["meta"]["error"] is None
 
 
+def test_tool_runtime_records_resolved_binary_in_meta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """issue #222: a plugin result carrying raw['binary'] (the resolved
+    absolute executable) surfaces at meta.binary on the run record."""
+    fake_result = ToolResult(
+        value="out.png",
+        raw={"binary": "/opt/imagemagick-omp/bin/magick"},
+        stdout="",
+        stderr="",
+        exit_code=0,
+    )
+
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = fake_result
+
+    monkeypatch.setattr(
+        "circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin
+    )
+
+    defn = ToolDefinition(name="resize", provider="imagemagick", params={"args": []})
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert store.state["resize"]["meta"]["binary"] == "/opt/imagemagick-omp/bin/magick"
+
+
+def test_tool_runtime_omits_binary_from_meta_when_result_has_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plugin whose result carries no 'binary' key (e.g. a pure-Python
+    tool) leaves meta.binary unset rather than recording a stale value."""
+    fake_result = ToolResult(value=42, raw={}, stdout="", stderr="", exit_code=0)
+
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = fake_result
+
+    monkeypatch.setattr(
+        "circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin
+    )
+
+    defn = ToolDefinition(name="calc", provider="math", params={})
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert "binary" not in store.state["calc"]["meta"]
+
+
 def test_tool_runtime_dry_run_skips_plugin(monkeypatch: pytest.MonkeyPatch) -> None:
     build_plugin_called = False
 
