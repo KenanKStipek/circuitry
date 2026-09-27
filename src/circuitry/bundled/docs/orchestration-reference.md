@@ -63,7 +63,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `name` | string | yes | — | Pattern `^[A-Za-z_][A-Za-z0-9_]*$`; `iter_<N>` reserved |
 | `template` | string | one-of | — | Mustache template; mutually exclusive with `messages` |
 | `messages` | array | one-of | — | Role-based messages; mutually exclusive with `template` |
-| `prompt_type` | string | no | `text` | `text`, `json`, `boolean`, `number`, `array`, `object`, `tool` |
+| `prompt_type` | string | no | `text` | `text`, `json`, `boolean`, `number`, `array`, `object`, `tool`. `boolean`/`number` parse the reply leniently (`Yes.`, `**TRUE**`, `42.`, `1e3` all read correctly) and raise — rather than decoding to `null` — on a reply that still doesn't parse. Raw reply kept on `meta.answer` |
 | `schema` | object | no | — | JSON Schema for validating structured output |
 | `description` | string | no | — | Human-readable description |
 | `model` | string | no | — | Per-effect model override |
@@ -175,7 +175,7 @@ Evaluates a condition against state and executes exactly one branch (`then` or `
 | `name` | string | no | — | Optional; enables state recording of the decision |
 | `if` | object | yes | — | Condition definition |
 | `if.mode` | string | no | `model` | `model` or `cel` |
-| `if.template` | string | model only | — | LLM evaluates and returns boolean |
+| `if.template` | string | model only | — | LLM evaluates and returns boolean, parsed leniently (`Yes.`, `**TRUE**`, `Y` all read as true); an unreadable answer raises rather than defaulting to false. Raw reply on `meta.answer` |
 | `if.expr` | string | cel only | — | CEL expression; must use `state.prime.<name>.value` prefix |
 | `then` | array | yes | — | Effects when condition is true |
 | `else` | array | no | `[]` | Effects when condition is false |
@@ -244,7 +244,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `each.as` | string | no | `item` | Variable name for current element in body templates |
 | `while` | object | one-of | — | Continuation condition; mutually exclusive with `each` |
 | `while.mode` | string | no | `model` | `model` or `cel` |
-| `while.template` | string | model only | — | LLM returns boolean for continuation decision |
+| `while.template` | string | model only | — | LLM returns boolean for continuation decision, parsed the same lenient way as `if.template`. Raw reply on `meta.answer` on each check |
 | `while.expr` | string | cel only | — | CEL expression against state |
 | `max_iterations` | integer | no | — (no cap) | Hard cap on iterations. Unset means the loop runs until its collection is exhausted (`each`) or its condition is false (`while`) |
 | `min_iterations` | integer | no | `0` | Minimum iterations before condition is checked |
