@@ -441,6 +441,33 @@ def test_replay_carries_the_stashed_adapter_and_model(run_app: Any, tmp_path: Pa
     assert request.dry_run is True
 
 
+@pytest.mark.parametrize("stashed_trust", [True, False, None])
+def test_replay_carries_the_stashed_document_trust(
+    run_app: Any, tmp_path: Path, stashed_trust: bool | None
+) -> None:
+    """The stash names the resolved file even for a library name, so the
+    replay trusts it only when the original run named it by path."""
+    orch = tmp_path / "demo.yml"
+    orch.write_text("effects: []\n", encoding="utf-8")
+    seen: dict[str, Any] = {}
+    extra = {} if stashed_trust is None else {"trust_document": stashed_trust}
+
+    def runner(request: RunRequest) -> RunResult:
+        seen["request"] = request
+        return RunResult(ok=True, state={}, warnings=[])
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        screen = await _open(pilot, _screen(last_run=_stash(orch, **extra), runner=runner))
+        screen.action_replay()
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if "request" in seen:
+                break
+
+    run_app(scenario)
+    assert seen["request"].trust_document is (stashed_trust is True)
+
+
 def test_replay_refuses_a_run_that_stashed_redacted_secrets(
     run_app: Any, tmp_path: Path
 ) -> None:

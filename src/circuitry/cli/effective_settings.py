@@ -64,7 +64,7 @@ ORCHESTRATION_RUNTIME_KEYS: frozenset[str] = frozenset({"complexity", "state"})
 #: How many levels below `runtime.<key>` the "Applied host settings" notice
 #: names: `runtime.adapters.openai.base_url`, never deeper (an `env` map's
 #: variable names stay out of it). Keys only, never values.
-_NOTICE_KEY_DEPTH = 3
+_NOTICE_KEY_DEPTH = 2
 
 
 def _split_orchestration_runtime(

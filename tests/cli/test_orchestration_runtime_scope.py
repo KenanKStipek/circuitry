@@ -5,6 +5,8 @@ A document's own `runtime:` block contributes `runtime.complexity` and
 configuration that only config.json supplies, and is dropped with a warning.
 A document's top-level `plugins:` list only adds modules config already lists.
 `trust_orchestration_runtime` (or its env var) restores the old behaviour.
+This is the limit for documents that reach `cof` indirectly; a file named by
+path is trusted (see test_trust_named_document.py).
 No network: adapters are built but never called.
 """
 
@@ -184,7 +186,12 @@ def test_trusted_config_keeps_the_whole_document_runtime() -> None:
 
     adapter = build_adapter(adapter_name="openai", runtime=effective.runtime)
     assert adapter.base_url == DOCUMENT_BASE_URL  # type: ignore[attr-defined]
-    assert effective.warnings == ()
+    assert effective.warnings == (
+        (
+            "Applied host settings from the orchestration: "
+            "runtime.adapters.openai.base_url"
+        ),
+    )
 
 
 def test_trust_opt_in_from_config_file_and_env(
@@ -244,7 +251,7 @@ def test_trusted_config_loads_unlisted_document_plugin(
     )
 
     assert result.state["runtime"]["plugins"]["loaded"] == [name]
-    assert result.warnings == []
+    assert result.warnings == [f"Applied host settings from orch.yml: plugins: {name}"]
 
 
 @dataclass
@@ -330,11 +337,27 @@ def _config_file(tmp_path: Path) -> Path:
 
 
 def test_cof_run_prints_dropped_settings_on_stderr(tmp_path: Path) -> None:
-    orch = _tool_orch(tmp_path, runtime=_document_runtime())
+    # Run by library name: a file named by path would be trusted.
+    folder = tmp_path / "lib"
+    folder.mkdir()
+    _tool_orch(folder, runtime=_document_runtime())
+    config = tmp_path / "config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "runtime": {
+                    "adapters": {},
+                    "library": {
+                        "sources": [{"type": "folder", "name": "local", "path": str(folder)}]
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = runner.invoke(
-        app_module.app,
-        ["run", str(orch), "-c", str(_config_file(tmp_path)), "--skip-preflight"],
+        app_module.app, ["run", "local:orch", "-c", str(config), "--skip-preflight"]
     )
 
     assert result.exit_code == 0, result.output
@@ -345,8 +368,10 @@ def test_cof_run_prints_dropped_settings_on_stderr(tmp_path: Path) -> None:
     json.loads(result.stdout)
 
 
-def test_cof_check_prints_dropped_settings(tmp_path: Path) -> None:
-    orch = _tool_orch(tmp_path, runtime=_document_runtime())
+def test_cof_check_escapes_document_keys_in_its_report(tmp_path: Path) -> None:
+    # `cof check` names a file by path, so it reports the applied-settings
+    # notice; that quotes document keys, which must not be read as markup.
+    orch = _tool_orch(tmp_path, runtime={"[/x]": 1, "[conceal]hidden": 2})
 
     result = runner.invoke(
         app_module.app,
@@ -355,5 +380,7 @@ def test_cof_check_prints_dropped_settings(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     output = " ".join(result.output.split())
-    assert "Warning: Ignored runtime.adapters from the orchestration" in output
-    assert "must go in config.json" in output
+    assert (
+        "Warning: Applied host settings from orch.yml: "
+        "runtime.[/x], runtime.[conceal]hidden"
+    ) in output

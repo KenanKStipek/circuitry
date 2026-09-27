@@ -447,6 +447,37 @@ def test_leaving_the_dropdowns_alone_overrides_nothing(
     assert captured[0].decompose_override is None
 
 
+@pytest.mark.parametrize(("source", "trusted"), [("local", True), ("bundled", False)])
+def test_a_local_file_runs_trusted_and_a_bundled_one_limited(
+    run_app: Any, tmp_path: Path, source: str, trusted: bool
+) -> None:
+    path = _write(tmp_path, TWO_INPUTS)
+    choice = OrchestrationChoice(key=str(path), label=path.name, path=path, source=source)
+    captured: list[RunRequest] = []
+
+    def runner(request: RunRequest) -> RunResult:
+        captured.append(request)
+        return RunResult(ok=True, state={}, warnings=[])
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        screen = await _open(
+            pilot,
+            RunScreen(
+                RUN_SPEC,
+                choices=[choice],
+                adapter=EchoAdapter(),
+                config=CircuitryConfig(),
+                runner=runner,
+            ),
+        )
+        _fill(screen, text="hello")
+        screen.action_launch()
+        await _settle(pilot, lambda: screen.last_result is not None)
+
+    run_app(scenario)
+    assert captured[0].trust_document is trusted
+
+
 # -- complexity switches (issue #110) ----------------------------------------
 
 
