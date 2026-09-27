@@ -669,6 +669,7 @@ class LoopRuntime:
 
     def _evaluate_model(self, *, ctx: dict[str, Any]) -> bool:
         """Cybernetic evaluation: invoke model with rendered template."""
+        self._model_answer = None
         if self.dry_run:
             return False  # Stop loop in dry run after first iteration
 

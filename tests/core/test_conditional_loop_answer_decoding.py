@@ -161,6 +161,43 @@ def test_while_model_condition_error_stops_the_loop_and_records_the_answer() -> 
     assert "unclear" in store.get("prime.spin.meta.error")
 
 
+@dataclass
+class RaisesOnSecondCallAdapter:
+    """Answers 'Yes.' on the first while-condition check, lets the body's
+    own prompt succeed, then raises (e.g. a timeout) on the second
+    condition check, before ever generating a reply for it.
+    """
+
+    name: str = "flaky"
+    calls: int = field(default=0, init=False)
+
+    def generate(
+        self, *, model: str, prompt: str, timeout_seconds: int = 120
+    ) -> GenerateResult:
+        self.calls += 1
+        if self.calls == 1:
+            return GenerateResult(text="Yes.", raw={})
+        if self.calls == 2:
+            return GenerateResult(text="STEP", raw={})
+        raise TimeoutError("simulated timeout")
+
+
+def test_while_model_condition_does_not_carry_over_a_previous_answer_on_error() -> None:
+    """Check 2's own failure must not be reported next to check 1's answer."""
+    orch = _while_orch()
+    orch["effects"][0]["on_error"] = "break"
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({})
+    adapter = RaisesOnSecondCallAdapter()
+
+    DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
+
+    value = store.get("prime.spin.value")
+    assert value["termination"]["reason"] == "condition_error"
+    assert store.get("prime.spin.meta.answer") is None
+    assert "simulated timeout" in store.get("prime.spin.meta.error")
+
+
 # --------------------------------------------------------------------------
 # Guidebook regression: chapter 1's `is_vegetarian` classifier pattern.
 # --------------------------------------------------------------------------

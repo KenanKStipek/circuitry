@@ -412,6 +412,7 @@ class ConditionalRuntime:
 
     def _evaluate_model(self, *, ctx: dict[str, Any]) -> bool:
         """Cybernetic evaluation: invoke model with rendered template."""
+        self._model_answer = None
         if self.dry_run:
             return True  # Default to then branch in dry run
 

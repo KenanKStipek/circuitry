@@ -119,6 +119,7 @@ def test_boolean_prompt_raises_on_unreadable_reply_instead_of_null() -> None:
     assert error is not None
     assert "maybe" in error
     assert store.get("prime.task.value") is None
+    assert store.get("prime.task.meta.answer") == "maybe"
 
 
 def test_number_prompt_raises_rather_than_guessing_from_trailing_words() -> None:

@@ -507,9 +507,9 @@ class PromptRuntime:
                         ) from generation_error
 
                     # Decode and validate output based on prompt_type
-                    decoded_value = self._decode_output(res.text)
                     if self.defn.prompt_type in ("boolean", "number"):
                         meta["answer"] = res.text
+                    decoded_value = self._decode_output(res.text)
 
                     # Validate against schema if provided
                     if self.defn.schema and self.defn.prompt_type in (
@@ -944,8 +944,8 @@ class PromptRuntime:
         ``boolean``/``number`` go through the shared lenient parser (see
         ``core.answers``), which raises on an answer it cannot read rather
         than returning ``None`` — an unparseable reply is a dispatch failure,
-        so ``on_error``, retries and fallbacks apply to it exactly like a
-        failed adapter call.
+        so ``on_error`` and retries apply to it exactly like a failed adapter
+        call.
         """
         if self.defn.prompt_type not in ("boolean", "number") and not text:
             return None

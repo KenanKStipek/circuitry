@@ -58,6 +58,8 @@ def test_parse_boolean_answer_raises_on_unparseable(text: str) -> None:
         ("42", 42),
         ("42.", 42),
         ("3.5", 3.5),
+        (".5", 0.5),
+        ("-.5", -0.5),
         ("-1", -1),
         ("1e3", 1000.0),
         ("  7  ", 7),
@@ -74,3 +76,9 @@ def test_parse_number_answer_raises_rather_than_guessing(text: str) -> None:
     with pytest.raises(AnswerParseError) as excinfo:
         parse_number_answer(text)
     assert excinfo.value.raw_response_text == text
+
+
+@pytest.mark.parametrize("text", ["nan", "-nan", "inf", "-inf", "Infinity", "1_000"])
+def test_parse_number_answer_rejects_non_finite_and_underscored_values(text: str) -> None:
+    with pytest.raises(AnswerParseError):
+        parse_number_answer(text)

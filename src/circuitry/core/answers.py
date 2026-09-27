@@ -9,11 +9,13 @@ A real model rarely replies with a bare ``yes``/``42`` — it wraps the answer
 in a trailing period, a markdown emphasis, an explanation. The parsers here
 strip that wrapping, but they never *guess*: an answer that isn't
 unambiguously a yes/no or a number raises :class:`AnswerParseError` rather
-than returning ``None`` or defaulting to false, so ``on_error``, retries and
-provider fallbacks all get a chance to act on it.
+than returning ``None`` or defaulting to false, so ``on_error`` and retries
+get a chance to act on it.
 """
 
 from __future__ import annotations
+
+import math
 
 _QUOTE_CHARS = "\"'`"
 _EMPHASIS_MARKERS = ("**", "__", "*", "_", "`")
@@ -69,7 +71,7 @@ def _split_leading_token(text: str) -> tuple[str, str]:
     if not text:
         return "", ""
     parts = text.split(None, 1)
-    token = parts[0].strip(_TRAILING_PUNCT)
+    token = parts[0].rstrip(_TRAILING_PUNCT)
     token = _strip_wrapping(token)
     remainder = parts[1] if len(parts) > 1 else ""
     return token, remainder
@@ -101,7 +103,7 @@ def parse_number_answer(text: str) -> int | float:
     rather than guessing which number was meant.
     """
     token, remainder = _split_leading_token(text)
-    if not token or remainder:
+    if not token or remainder or "_" in token:
         raise AnswerParseError(
             f"could not parse a number from {text!r}", raw_response_text=text
         )
@@ -110,8 +112,13 @@ def parse_number_answer(text: str) -> int | float:
     except ValueError:
         pass
     try:
-        return float(token)
+        value = float(token)
     except ValueError:
         raise AnswerParseError(
             f"could not parse a number from {text!r}", raw_response_text=text
         ) from None
+    if not math.isfinite(value):
+        raise AnswerParseError(
+            f"could not parse a number from {text!r}", raw_response_text=text
+        )
+    return value
