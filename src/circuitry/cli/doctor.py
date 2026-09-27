@@ -12,7 +12,12 @@ from ..adapters.factory import ADAPTER_REGISTRY
 from ..core.runtime_plugins import load_plugins
 from ..plugins.factory import PLUGIN_REGISTRY, build_plugin
 from ..preflight import call_check
-from .config import find_config_path, load_config, resolve_config
+from .config import (
+    describe_config_sources,
+    find_config_path,
+    load_config,
+    resolve_config,
+)
 from .detect import detect_all
 from .effective_settings import resolve_effective_settings
 from .orchestration_loader import load_orchestration_file
@@ -54,6 +59,7 @@ def register_doctor(app: typer.Typer) -> None:
 
         # Config
         table.add_row("Config path", str(cfg_path) if cfg_path else "— (defaults)")
+        table.add_row("Config sources", describe_config_sources(resolved_cfg.sources))
         project_config = resolved_cfg.project_config
         if project_config is not None:
             table.add_row("Project config", escape(project_config.report()))

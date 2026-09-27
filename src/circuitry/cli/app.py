@@ -38,10 +38,11 @@ from .config import (
     GLOBAL_CONFIG_DIR,
     CircuitryConfig,
     ConfigError,
+    describe_config_sources,
     resolve_config,
     trust_store_path,
 )
-from .config_trust import record_trust
+from .config_trust import TrustStoreError, record_trust
 from .doctor import register_doctor
 from .effective_settings import resolve_effective_settings
 from .explain_routing import make_explain_routing_observer
@@ -256,6 +257,7 @@ def _do_validate(
     cfg = resolve_config(explicit_path=config)
     if not json_out:
         _print_header("Circuitry · Validate")
+        console.print(f"[bold]Config:[/bold] {describe_config_sources(cfg.sources)}")
     with console.status("[cyan]Validating…[/cyan]") if not json_out else nullcontext():
         result = validate(orchestration, config=cfg, skip_preflight=skip_preflight)
 
@@ -280,10 +282,12 @@ def _do_validate(
         raise typer.Exit(code=1)
 
 
-def _library_registry(config_path: Path | None = None) -> LibraryRegistry:
+def _library_registry(
+    config_path: Path | None = None, *, cfg: CircuitryConfig | None = None
+) -> LibraryRegistry:
     """Build the configured library registry, reporting config errors as CLI errors."""
     try:
-        return build_registry(config_path=config_path)
+        return build_registry(config_path=config_path, cfg=cfg)
     except LibrarySourceError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
@@ -552,8 +556,13 @@ def run_cmd(
         console.print("[dim]Tip: run [bold]cof list[/bold] to see available orchestrations.[/dim]")
         raise typer.Exit(code=1)
 
+    # Resolved once, up front, so a project config the run never reaches —
+    # for example one skipped file that defined runtime.library sources —
+    # can still explain an "Orchestration not found".
+    cfg = resolve_config(explicit_path=config)
+
     # Resolve orchestration: local file path > library source name
-    run_registry = _library_registry(config)
+    run_registry = _library_registry(config, cfg=cfg)
     orch_path = _resolve_orchestration(
         orchestration,
         registry=run_registry,
@@ -562,6 +571,7 @@ def run_cmd(
     if orch_path is None:
         console.print(f"[red]Error:[/red] Orchestration not found: {orchestration}")
         _print_source_notices(run_registry)
+        _print_run_warnings(cfg.resolution_warnings())
         console.print("[dim]Tip: run [bold]cof list[/bold] to see available orchestrations.[/dim]")
         raise typer.Exit(code=1)
 
@@ -599,13 +609,9 @@ def run_cmd(
             )
             raise typer.Exit(code=1)
 
-    cfg = resolve_config(explicit_path=config)
-
     if not (quiet or json_out):
         _print_header("Circuitry · Run")
-        console.print(
-            f"[bold]Config:[/bold] {config or '— (resolved)'}"
-        )
+        console.print(f"[bold]Config:[/bold] {describe_config_sources(cfg.sources)}")
         orch_label = orchestration if str(orch_path) == orchestration else f"{orchestration} ({orch_path})"
         console.print(f"[bold]Orchestration:[/bold] {orch_label}")
         console.print(f"[bold]State (in):[/bold] {state or '—'}")
@@ -876,6 +882,7 @@ def run_library_cmd(
         if profile is not None:
             asset.metadata["service_profile"] = profile.name
     except Exception as e:
+        _print_run_warnings(cfg.resolution_warnings())
         if json_out:
             console.print_json(json.dumps({"ok": False, "error": str(e)}))
         else:
@@ -887,6 +894,7 @@ def run_library_cmd(
         console.print(f"[bold]Asset:[/bold] {asset.asset_id}@{asset.version}")
         console.print(f"[bold]Source:[/bold] {asset.source}")
         console.print(f"[bold]Resolved path:[/bold] {asset.file_path}")
+        console.print(f"[bold]Config:[/bold] {describe_config_sources(cfg.sources)}")
         console.print(
             f"[bold]Service profile:[/bold] {service_profile or '—'}"
         )
@@ -1718,6 +1726,8 @@ def gen_cmd(
     else:
         result = run(req)
 
+    _print_run_warnings(result.warnings)
+
     # Write resulting state to --out
     if out:
         _write_state_json(out=out, state=result.state, pretty=False)
@@ -1919,8 +1929,18 @@ def init_cmd():
     config_bytes = (json.dumps(config_data, indent=2) + "\n").encode("utf-8")
     config_path.write_bytes(config_bytes)
     # The user just chose every value in it, so it is theirs: trust it, or
-    # the first run here would skip it (see cli.config_trust).
-    record_trust(config_path, config_bytes, store_path=trust_store_path())
+    # the first run here would skip it (see cli.config_trust). A broken
+    # trust store shouldn't abort init — hello.yml still gets written and
+    # the user can trust the file by hand.
+    trusted = True
+    try:
+        record_trust(config_path, config_bytes, store_path=trust_store_path())
+    except (TrustStoreError, OSError) as exc:
+        trusted = False
+        console.print(
+            f"[yellow]Warning:[/yellow] Could not record trust for {config_path.name}: {exc} "
+            f"Run `cof trust {config_path.name}` once this is fixed."
+        )
 
     hello_yaml = """effects:
   - type: prompt
@@ -1930,7 +1950,8 @@ def init_cmd():
 """
     hello_path.write_text(hello_yaml, encoding="utf-8")
 
-    console.print(f"[green]Created:[/green] {config_path.name} (trusted)")
+    suffix = " (trusted)" if trusted else " (not trusted)"
+    console.print(f"[green]Created:[/green] {config_path.name}{suffix}")
     console.print(f"[green]Created:[/green] {hello_path.name}")
     console.print()
     console.print("Try: [bold]cof run hello.yml -e name=World[/bold]")

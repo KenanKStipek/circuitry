@@ -108,7 +108,7 @@ The plugins that wrap a command-line program (`imagemagick`, `ffmpeg`, `git`, `p
 
 `binary` is an absolute path (`~` is expanded) and replaces the `PATH` search; `env` is merged over the inherited environment. A configured binary that does not exist fails the tool and preflight with a message that names the setting. Each tool node records the executable that actually ran in `meta.binary`. [Binary tool plugins](../plugins/binary-tools.md) lists the plugins that read these settings.
 
-Two are gated on purpose. `shell` runs a single binary from an allowlist that is deliberately tiny and read-only by default, with a per-effect `allowed_commands` override the author must write down; `python_eval` is likewise sandboxed. Shell metacharacters are rejected in `ffmpeg` paths. And the `enabled_tools` allowlist in config is the deployment-level gate: a document that references a tool outside it fails validation before anything runs.
+Two are gated on purpose. `shell` runs a single binary from an allowlist that is deliberately tiny and read-only by default, with a per-effect `allowed_commands` override the author must write down; `python_eval` is likewise sandboxed. Shell metacharacters are rejected in `ffmpeg` paths. And the `enabled_tools` allowlist in config is the deployment-level gate: a document that references a tool outside it — itself or through a `use` child — fails validation before anything runs, and a tool that only appears at run time, in a rendered `inline:` child or a generated plan, is refused before it is built.
 
 ### MCP servers as tool providers
 

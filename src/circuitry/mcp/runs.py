@@ -73,6 +73,7 @@ class Run:
     state: dict[str, Any] = field(default_factory=dict)
     pending_prompts: dict[str, PendingPrompt] = field(default_factory=dict)
     error: str | None = None
+    warnings: list[str] = field(default_factory=list)
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
     thread: threading.Thread | None = field(default=None, repr=False)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -216,6 +217,7 @@ class RunManager:
             result = run_orchestration(request)
             with run._lock:
                 run.state = deepcopy(result.state)
+                run.warnings = list(result.warnings)
                 if result.ok:
                     run.status = RunStatus.COMPLETED
                 else:

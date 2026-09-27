@@ -717,7 +717,10 @@ class RunScreen(ViewScreen):
         if message.cancelled:
             self._set_status(CANCELLED, "-failed")
         elif message.result.ok:
-            self._set_status(f"{DONE} ({self._updates} state updates)", "-done")
+            status = f"{DONE} ({self._updates} state updates)"
+            if message.result.warnings:
+                status += f" — {len(message.result.warnings)} warning(s)"
+            self._set_status(status, "-done")
         else:
             self._set_status(f"{FAILED}: {message.result.error}", "-failed")
 

@@ -14,6 +14,10 @@ Resolution is layered, each layer deep-merged over the last:
 4. **An explicit file** — `--config <path>` or `CIRCUITRY_CONFIG`, which *replaces* 2 and 3 rather than layering over them.
 5. **Environment variables** — `CIRCUITRY_ADAPTER`, `CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER_URL`, `CIRCUITRY_COMFYUI_URL`, the allowlists `CIRCUITRY_ENABLED_ADAPTERS` / `CIRCUITRY_ENABLED_TOOLS` / `CIRCUITRY_ENABLED_PLUGINS`, and `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME` (below).
 
+One exception to "the last layer wins": a project config found in the working directory may *narrow* an allowlist the global config set, never widen it. Its list is intersected with the global one, and `"enabled_tools": null` in a cloned repo does not re-open what your global config locked down; a warning names what was ignored. A file you name yourself — `--config` or `CIRCUITRY_CONFIG` — is trusted as written.
+
+`cof run` and `cof check` print the config files and environment variables they resolved from on their `Config:` line; `cof doctor` lists them as `Config sources`.
+
 `cof setup` walks you through creating the global file — it detects local backends and writes a working config. `cof init` writes a project config and a `hello.yml` beside it, and trusts the config it wrote. `cof doctor` tells you what the resolved config can actually reach.
 
 A local-first project config:
@@ -153,7 +157,7 @@ Every adapter, tool plugin, and runtime plugin implements a `check()`. Before th
 
 An adapter that only optional steps use does not block the run. When every prompt on an adapter has `on_error: skip` or `continue`, a missing credential for it is a warning, not a failure, and those steps skip. [Errors](05-errors.md) has the exact rule.
 
-The allowlists are the other gate: `enabled_adapters`, `enabled_tools`, and `enabled_plugins` in config (or their `CIRCUITRY_ENABLED_*` environment forms) restrict which extensions a run may touch. Unset means everything compiled in is available; set means an orchestration referencing anything else fails at validation, before any call. In a deployment that should never shell out, `enabled_tools` is where you say so. [Threat Model](../threat-model.md) covers the reasoning.
+The allowlists are the other gate: `enabled_adapters`, `enabled_tools`, and `enabled_plugins` in config (or their `CIRCUITRY_ENABLED_*` environment forms) restrict which extensions a run may touch. Unset means everything compiled in is available; set means an orchestration referencing anything else fails at validation, before any call. `cof check` follows the document's `use` children — `path:`, `ref:` and plain `inline:` — and applies the same lists to each. At run time every adapter and tool is checked again as it is built, which covers what no document text shows: a templated `inline:` child once it renders, reflector and decomposition plans, `--adapter`, the config's `default_adapter`, and a profile's `provider` overrides. `cof run-library --service-profile` keeps the lists too. In a deployment that should never shell out, `enabled_tools` is where you say so. [Threat Model](../threat-model.md) covers the reasoning.
 
 ## Timeouts
 

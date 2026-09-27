@@ -236,6 +236,43 @@ def test_an_allowlist_violation_is_its_own_class() -> None:
     assert "allowlist" in report.kinds()
 
 
+def test_the_allowlist_gate_resolves_path_children_against_the_documents_directory(
+    tmp_path: Path,
+) -> None:
+    """A `path:` child is relative to the document being validated, not the
+    process's cwd — `check_allowlist` needs the document's own path to resolve it."""
+    (tmp_path / "child.yml").write_text(
+        "effects:\n  - type: tool\n    name: t\n    provider: uuid\n    params: {}\n",
+        encoding="utf-8",
+    )
+    parent = tmp_path / "parent.yml"
+    parent.write_text(
+        "effects:\n  - type: use\n    name: child\n    path: child.yml\n",
+        encoding="utf-8",
+    )
+    config = CircuitryConfig(enabled_tools=["json"])
+
+    report = validate_report(parent, config=config, skip_preflight=True)
+
+    assert "allowlist" in report.kinds()
+    assert "uuid" in report.of_kind("allowlist")[0].message
+
+
+def test_a_malformed_runtime_library_sources_is_an_allowlist_issue_not_a_crash() -> None:
+    """`check_allowlist` walks `use` children through the library registry;
+    a document that names a library source badly must not crash the report —
+    it is reported as that gate's own failure, like every other gate here."""
+    config = CircuitryConfig(
+        enabled_tools=["json"],
+        runtime={"library": {"sources": "not-a-list"}},
+    )
+
+    report = validate_report(FIXTURES / "valid.yml", config=config, skip_preflight=True)
+
+    assert "allowlist" in report.kinds()
+    assert "runtime.library.sources" in report.of_kind("allowlist")[0].message
+
+
 def test_preflight_issues_carry_their_next_steps(tmp_path: Path) -> None:
     path = tmp_path / "unreachable.yml"
     path.write_text(

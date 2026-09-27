@@ -244,6 +244,8 @@ def host_sensitive_reason(dotted_key: str) -> str | None:
         return "tool plugin setting"
     if section == "persistence":
         return "persistence: where run state is written"
+    if section == "runtime_plugins":
+        return "persistence backend: where run state is sent"
     if section == "library":
         return "library source: where orchestrations are fetched from"
     return None

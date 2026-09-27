@@ -467,6 +467,7 @@ def test_remove_trust(tmp_path: Path) -> None:
         ("runtime.plugins.mcp.servers.fs.command", True),
         ("runtime.persistence.path", True),
         ("runtime.library.sources", True),
+        ("runtime.runtime_plugins.s3.bucket", True),
     ],
 )
 def test_host_sensitive_reason(key: str, sensitive: bool) -> None:

@@ -61,6 +61,42 @@ SANE_DEFAULTS: dict[str, Any] = {
 }
 
 
+_ALLOWLIST_KEYS: tuple[str, ...] = ("enabled_adapters", "enabled_plugins", "enabled_tools")
+
+#: Environment variables :func:`_apply_env_vars` overlays onto a resolved config.
+CONFIG_ENV_VARS: tuple[str, ...] = (
+    "CIRCUITRY_MODEL",
+    "CIRCUITRY_ADAPTER",
+    "CIRCUITRY_ADAPTER_URL",
+    "CIRCUITRY_COMFYUI_URL",
+    "CIRCUITRY_ENABLED_ADAPTERS",
+    "CIRCUITRY_ENABLED_PLUGINS",
+    "CIRCUITRY_ENABLED_TOOLS",
+    "CIRCUITRY_ENVIRONMENT",
+)
+
+ConfigSourceKind = Literal["global", "project", "CIRCUITRY_CONFIG", "--config", "env"]
+
+
+@dataclass(frozen=True)
+class ConfigSource:
+    """One layer :func:`resolve_config` applied: a config file or an env var."""
+
+    kind: ConfigSourceKind
+    #: The file path, or the environment variable's name for ``kind == "env"``.
+    location: str
+
+    def describe(self) -> str:
+        return f"{self.location} ({self.kind})"
+
+
+def describe_config_sources(sources: tuple[ConfigSource, ...]) -> str:
+    """One line naming every layer a config came from, for run/check headers."""
+    if not sources:
+        return "— (built-in defaults)"
+    return ", ".join(source.describe() for source in sources)
+
+
 @dataclass(frozen=True)
 class CircuitryConfig:
     """
@@ -98,6 +134,10 @@ class CircuitryConfig:
     # Reporting only — excluded from equality.
     project_config: ProjectConfigStatus | None = field(default=None, compare=False)
 
+    # Where this config came from, in the order resolve_config applied the
+    # layers. Reporting only — excluded from equality.
+    sources: tuple[ConfigSource, ...] = field(default=(), compare=False)
+
     def resolution_warnings(self) -> list[str]:
         """Warnings from resolving this config, for a run's warnings channel."""
         warning = self.project_config.skip_warning() if self.project_config else None
@@ -116,26 +156,33 @@ class CircuitryConfig:
             default_model=d.get("default_model"),
             default_adapter=d.get("default_adapter"),
             plugins=list(d.get("plugins") or []),
-            enabled_adapters=_normalize_allowlist(d.get("enabled_adapters")),
+            enabled_adapters=_normalize_allowlist(d.get("enabled_adapters"), lowercase=True),
             enabled_plugins=_normalize_allowlist(d.get("enabled_plugins")),
-            enabled_tools=_normalize_allowlist(d.get("enabled_tools")),
+            enabled_tools=_normalize_allowlist(d.get("enabled_tools"), lowercase=True),
             environment=env,  # type: ignore[arg-type]
             runtime=dict(d.get("runtime") or {}),
             trust_orchestration_runtime=d.get("trust_orchestration_runtime") is True,
         )
 
 
-def _normalize_allowlist(value: Any) -> list[str] | None:
+def _normalize_allowlist(value: Any, *, lowercase: bool = False) -> list[str] | None:
     """Coerce config-loaded allowlist values into Optional[list[str]].
 
     None → None (default-open).
     list → list[str] (filtered to truthy strings).
     Anything else → None (treated as unset).
+
+    ``lowercase`` matches the case-insensitive comparison ``enabled_adapters``
+    / ``enabled_tools`` get everywhere else (``adapter_denial``, ``tool_denial``,
+    ``require_adapter``, ``require_tool``), so ``["JSON"]`` matches the
+    lowercase provider name ``json``. ``enabled_plugins`` entries are dotted
+    Python import paths, which are case-sensitive, so callers leave it False.
     """
     if value is None:
         return None
     if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return [item.lower() for item in items] if lowercase else items
     return None
 
 
@@ -250,7 +297,9 @@ def find_config_path(
             if project_config_status(found).applied:
                 return found
         except ConfigError:
-            return found
+            # Unreadable and undiscoverable-as-trusted: treat it the same as
+            # untrusted rather than handing back a file callers can't load.
+            pass
 
     if GLOBAL_CONFIG_PATH.exists() and GLOBAL_CONFIG_PATH.is_file():
         return GLOBAL_CONFIG_PATH
@@ -324,6 +373,63 @@ def _apply_env_vars(d: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _applied_env_vars() -> list[str]:
+    """The CONFIG_ENV_VARS :func:`_apply_env_vars` actually overlays right now.
+
+    An allowlist variable applies whenever it is set (empty means lockdown);
+    the rest only when non-empty.
+    """
+    return [
+        name
+        for name in CONFIG_ENV_VARS
+        if (
+            os.getenv(name) is not None
+            if name.startswith("CIRCUITRY_ENABLED_")
+            else os.getenv(name)
+        )
+    ]
+
+
+def _narrow_allowlists(
+    merged: dict[str, Any],
+    *,
+    global_config: dict[str, Any],
+    project_config: dict[str, Any],
+    project_path: Path,
+) -> dict[str, Any]:
+    """Keep a discovered project config from widening a global allowlist.
+
+    For each ``enabled_*`` list the global config set, the project may only
+    narrow it: a project list is intersected with the global one, and a
+    project ``null`` (or a missing key) leaves the global list in force.
+    Without this, a cloned repo's ``circuitry.config.json`` could re-open
+    everything the machine's owner locked down.
+    """
+    result = dict(merged)
+    for key in _ALLOWLIST_KEYS:
+        lowercase = key != "enabled_plugins"
+        global_list = _normalize_allowlist(global_config.get(key), lowercase=lowercase)
+        if global_list is None or key not in project_config:
+            continue
+        project_list = _normalize_allowlist(project_config.get(key), lowercase=lowercase)
+        if project_list is None:
+            logger.warning(
+                "Project config %s cannot re-open %s; keeping the global list %s.",
+                project_path, key, global_list,
+            )
+            result[key] = global_list
+            continue
+        widened = [name for name in project_list if name not in global_list]
+        if widened:
+            logger.warning(
+                "Project config %s cannot widen %s beyond the global list; "
+                "ignoring %s.",
+                project_path, key, widened,
+            )
+        result[key] = [name for name in project_list if name in global_list]
+    return result
+
+
 def resolve_config(
     *,
     explicit_path: Path | None = None,
@@ -334,36 +440,53 @@ def resolve_config(
 
     1. Sane defaults (lowest priority)
     2. Global config (~/.config/circuitry/config.json)
-    3. Project-local config (circuitry.config.json / config.json in cwd)
+    3. Project-local config (circuitry.config.json / config.json in cwd, or
+       the file CIRCUITRY_CONFIG names)
     4. Explicit --config path (if provided — replaces #2 and #3)
-    5. Environment variables (CIRCUITRY_MODEL, CIRCUITRY_ADAPTER, CIRCUITRY_ADAPTER_URL, CIRCUITRY_COMFYUI_URL)
+    5. Environment variables (CIRCUITRY_MODEL, CIRCUITRY_ADAPTER,
+       CIRCUITRY_ADAPTER_URL, CIRCUITRY_COMFYUI_URL, CIRCUITRY_ENABLED_*,
+       CIRCUITRY_ENVIRONMENT)
 
-    Each layer deep-merges onto the previous. A project config *discovered*
-    in cwd applies only if the user trusted it (``cof trust``) or
-    ``CIRCUITRY_TRUST_PROJECT_CONFIG`` is set; otherwise it is skipped and
-    the result's ``project_config`` says why. A file named by
-    ``CIRCUITRY_CONFIG`` or ``--config`` is trusted as given.
+    Each layer deep-merges onto the previous, with two exceptions. A project
+    config *discovered* in cwd applies only if the user trusted it
+    (``cof trust``) or ``CIRCUITRY_TRUST_PROJECT_CONFIG`` is set; otherwise
+    it is skipped and the result's ``project_config`` says why. And, when it
+    does apply, it may narrow, but never widen, an allowlist the global
+    config set (see :func:`_narrow_allowlists`). A file the caller named —
+    ``--config`` or ``CIRCUITRY_CONFIG`` — is trusted as given.
+
+    The layers actually applied are recorded on the result's ``sources``.
     """
     merged = copy.deepcopy(SANE_DEFAULTS)
+    sources: list[ConfigSource] = []
     project_config: ProjectConfigStatus | None = None
 
     if explicit_path:
         # Explicit path skips global/project discovery — use only that file
         file_config = _load_json_file(explicit_path)
         merged = _deep_merge(merged, file_config)
+        sources.append(ConfigSource("--config", str(explicit_path)))
     else:
         # Layer global config
+        global_config: dict[str, Any] = {}
         if GLOBAL_CONFIG_PATH.exists() and GLOBAL_CONFIG_PATH.is_file():
             try:
                 global_config = _load_json_file(GLOBAL_CONFIG_PATH)
                 merged = _deep_merge(merged, global_config)
+                sources.append(ConfigSource("global", str(GLOBAL_CONFIG_PATH)))
             except (json.JSONDecodeError, ValueError, OSError) as exc:
                 logger.warning("Skipping malformed global config %s: %s", GLOBAL_CONFIG_PATH, exc)
 
         # Layer project-local config
         env = os.getenv("CIRCUITRY_CONFIG")
+        local_kind: ConfigSourceKind
         discovered = not env
-        local_path: Path | None = Path(env) if env else discover_project_config(cwd)
+        if env:
+            local_path: Path | None = Path(env)
+            local_kind = "CIRCUITRY_CONFIG"
+        else:
+            local_path = discover_project_config(cwd)
+            local_kind = "project"
 
         if local_path and local_path.exists():
             try:
@@ -376,10 +499,23 @@ def resolve_config(
                 if project_config is None or project_config.applied:
                     local_config = parse_config_bytes(local_path, data)
                     merged = _deep_merge(merged, local_config)
+                    if local_kind == "project":
+                        merged = _narrow_allowlists(
+                            merged,
+                            global_config=global_config,
+                            project_config=local_config,
+                            project_path=local_path,
+                        )
+                    sources.append(ConfigSource(local_kind, str(local_path)))
             except (json.JSONDecodeError, ValueError, OSError) as exc:
                 logger.warning("Skipping malformed project config %s: %s", local_path, exc)
 
     # Environment variables always overlay on top
     merged = _apply_env_vars(merged)
+    sources.extend(ConfigSource("env", name) for name in _applied_env_vars())
 
-    return replace(CircuitryConfig.from_dict(merged), project_config=project_config)
+    return replace(
+        CircuitryConfig.from_dict(merged),
+        project_config=project_config,
+        sources=tuple(sources),
+    )

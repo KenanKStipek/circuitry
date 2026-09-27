@@ -7,7 +7,7 @@ discover, validate, and drive circuitry orchestrations through a tool-loop:
   list_orchestrations  -> [{name, path, description}, ...]
   validate_orchestration(path)        -> {ok, errors, warnings}
   run_orchestration(orchestration, initial_state?, override_model?, override_to?)
-                                      -> {run_id, status, pending_prompts, state, error}
+                                      -> {run_id, status, pending_prompts, state, error, warnings}
   submit_response(run_id, prompt_id, response)
                                       -> same shape (one branch unblocked)
   get_run_state(run_id)               -> same shape with full state
@@ -70,6 +70,7 @@ def _run_response(run: Run, *, include_state: bool = False) -> dict[str, Any]:
         ]
         snapshot = run.state if include_state or status.is_terminal else None
         error = run.error
+        warnings = list(run.warnings)
 
     payload: dict[str, Any] = {
         "run_id": run.run_id,
@@ -77,6 +78,7 @@ def _run_response(run: Run, *, include_state: bool = False) -> dict[str, Any]:
         "pending_prompts": pending,
         "state": _to_json_safe(snapshot) if snapshot is not None else None,
         "error": error,
+        "warnings": warnings,
     }
     return payload
 

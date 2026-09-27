@@ -427,7 +427,9 @@ def validate_report(
             (ValidationIssue("load", f"Expected a mapping at the top level, got {type(orch).__name__}."),),
         )
 
-    warnings = tuple(lint_orchestration(orch))
+    warnings = tuple(config.resolution_warnings() if config is not None else ()) + tuple(
+        lint_orchestration(orch)
+    )
 
     schema = runtime_shim.load_schema()
     if schema is None:
@@ -445,10 +447,13 @@ def validate_report(
     if config is None:
         skipped.append("allowlist")
     else:
-        issues += [
-            ValidationIssue("allowlist", message)
-            for message in check_allowlist(orch=orch, config=config)
-        ]
+        try:
+            issues += [
+                ValidationIssue("allowlist", message)
+                for message in check_allowlist(orch=orch, config=config, root_path=path)
+            ]
+        except Exception as exc:
+            issues.append(ValidationIssue("allowlist", str(exc)))
 
     try:
         compile_orchestration(orch=orch, root_name="prime")

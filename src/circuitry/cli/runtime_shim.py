@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from ..adapters import Adapter, build_adapter
 from ..adapters.factory import ADAPTER_REGISTRY
+from ..allowlist_gate import AllowlistError, install_allowlists, require_adapter
 from ..core.compiler import apply_effect_overrides, compile_orchestration
 from ..core.dynamic import DynamicRuntime
 from ..core.runtime_plugins import (
@@ -32,6 +33,7 @@ from .allowlist import (
     collect_adapter_usages,
     hard_effect_names,
     is_hard_adapter_dependency,
+    profile_provider_denials,
     skippable_effect_names,
     walk_orchestration_refs,
 )
@@ -183,9 +185,11 @@ def run(req: RunRequest) -> RunResult:
         warnings.extend(cfg.resolution_warnings())
         orch = load_orchestration_file(req.orchestration_path)
 
-        allowlist_errors = check_allowlist(orch=orch, config=cfg)
+        allowlist_errors = check_allowlist(
+            orch=orch, config=cfg, root_path=req.orchestration_path
+        )
         if allowlist_errors:
-            raise ValueError(
+            raise AllowlistError(
                 "Allowlist enforcement failed: " + "; ".join(allowlist_errors)
             )
 
@@ -240,6 +244,13 @@ def run(req: RunRequest) -> RunResult:
                 routing=effective.complexity.routing,
                 profile_name=profile.name,
             )
+            profile_denials = profile_provider_denials(
+                profile.effects, enabled_adapters=cfg.enabled_adapters
+            )
+            if profile_denials:
+                raise AllowlistError(
+                    "Allowlist enforcement failed: " + "; ".join(profile_denials)
+                )
         # One shared dict for the whole run: `use` effects append their library
         # pins to it as they resolve, at any nesting depth.
         runtime_config = effective.runtime if effective.runtime is not None else {}
@@ -248,6 +259,14 @@ def run(req: RunRequest) -> RunResult:
         # rewrites this per-child as composition descends into subdirectories.
         runtime_config["_orchestration_dir"] = str(
             req.orchestration_path.resolve().parent
+        )
+        # What every nested runtime builds — `use` children, generated plans,
+        # profile provider overrides — is checked against these as it is
+        # built; the document check above only sees the document's text.
+        install_allowlists(
+            runtime_config,
+            enabled_adapters=cfg.enabled_adapters,
+            enabled_tools=cfg.enabled_tools,
         )
         persistence = build_persistence_backend(effective.runtime)
         plugins, plugin_events = _initialize_plugins(
@@ -396,6 +415,9 @@ def run(req: RunRequest) -> RunResult:
                 resolved_adapter, resolved_model = _require_resolved_settings(
                     effective=effective, orchestration_path=req.orchestration_path
                 )
+                # `--adapter` and the config's `default_adapter` resolve
+                # here, after the document check — gate them at the build.
+                require_adapter(resolved_adapter, cfg.enabled_adapters)
                 adapter = build_adapter(
                     adapter_name=resolved_adapter, runtime=effective.runtime or {}
                 )
@@ -711,7 +733,9 @@ def validate(
         # default-open. The CLI resolves a config from disk + env vars and
         # passes it explicitly so AC 0.2 (env-var enforcement) holds.
         if config is not None:
-            allowlist_errors = check_allowlist(orch=orch, config=config)
+            allowlist_errors = check_allowlist(
+                orch=orch, config=config, root_path=orchestration_path
+            )
             if allowlist_errors:
                 return {
                     "ok": False,
