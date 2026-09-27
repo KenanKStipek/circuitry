@@ -106,7 +106,7 @@ With `truncate: true` the loop cooks the first eight courses and records why it 
 
 The condition is evaluated *before* each pass, and it sees the pass that just finished under the same within-iteration names the body uses — `{{prime.adjust.value}}` in the condition is the latest adjustment. Before the first pass there is nothing to see yet, and the name falls through to the enclosing scope (empty, here). `min_iterations` forces that many passes regardless of the answer — the way to say "always taste at least once" — and `max_iterations` stops the loop whatever the model thinks. It has no default: without it, a `while` loop runs until its condition says stop, however many passes that takes. A loop stopped that way completes normally, but it is not recorded as converged: its termination reason is `max_iterations_reached`, and a `--verbose` run prints a warning line. A `while` loop is always sequential; `flow` does not apply.
 
-Model mode wraps the template the way `if` does — *"… Should the loop continue? Answer (yes/no):"* — so phrase it as a question whose *yes* means "go around again". CEL mode is deterministic, and reads whatever the previous pass left in state:
+Model mode wraps the template the way `if` does — *"… Should the loop continue? Answer (yes/no):"* — and parses the reply just as leniently (see [If](06-if.md)): `Yes.`/`yes, because …`/`**TRUE**` continue, `No.`/`false!` stop, and an answer that doesn't parse as either raises instead of silently stopping the loop. Each check's raw reply, adapter and model land on `meta.answer`/`meta.adapter`/`meta.model`. So phrase it as a question whose *yes* means "go around again". CEL mode is deterministic, and reads whatever the previous pass left in state:
 
 ```yaml
 - type: prompt

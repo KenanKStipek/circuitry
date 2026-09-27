@@ -365,6 +365,52 @@ def test_check_reports_the_skip_warning_once(tmp_path: Path) -> None:
     assert len([w for w in report["warnings"] if "Skipped project config" in w]) == 1
 
 
+def test_cof_run_warns_once_on_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _project(tmp_path, {"default_model": "project-model"})
+    monkeypatch.chdir(path.parent)
+
+    result = runner.invoke(app, ["run", "hello.yml", "--dry-run", "--skip-preflight"])
+
+    assert result.exit_code == 0, result.output
+    stderr = " ".join(result.stderr.split())
+    assert stderr.count("Skipped project config") == 1
+    assert f"Warning: Skipped project config {path}: it is not trusted" in stderr
+    assert f"`cof trust {path}`" in stderr
+    # Piped stdout stays pure JSON, and the run used the defaults.
+    state = json.loads(result.stdout)
+    assert state["runtime"]["effective_settings"]["model"] == "llama3.1:8b"
+
+
+def test_cof_run_applies_a_trusted_project_config_silently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _project(tmp_path, {"default_model": "project-model"})
+    _trust(path)
+    monkeypatch.chdir(path.parent)
+
+    result = runner.invoke(app, ["run", "hello.yml", "--dry-run", "--skip-preflight"])
+
+    assert result.exit_code == 0, result.output
+    assert "Skipped project config" not in result.stderr
+    state = json.loads(result.stdout)
+    assert state["runtime"]["effective_settings"]["model"] == "project-model"
+
+
+def test_cof_check_prints_the_skip_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _project(tmp_path, {"default_model": "project-model"})
+    monkeypatch.chdir(path.parent)
+
+    result = runner.invoke(app, ["check", "hello.yml", "--skip-preflight"])
+
+    assert result.exit_code == 0, result.output
+    output = " ".join(result.output.split())
+    assert output.count("Skipped project config") == 1
+
+
 # ---------------------------------------------------------------------------
 # The trust store
 # ---------------------------------------------------------------------------

@@ -29,7 +29,12 @@ Top-level fields of an orchestration YAML file:
 | `flow` | string | no | `chain` | Top-level flow for the implicit root dynamic |
 | `version` | string | no | — | Free-form version string for **this document**, e.g. `"1.2.0"`. Not a schema version and not a feature gate — the runtime reads it and ignores it. Omit unless you are versioning the file |
 
-Additional top-level keys (e.g. `runtime`, `plugins`) are allowed and used by the runtime configuration layer.
+Additional top-level keys are allowed. Two of them feed the run's configuration, and both are limited to what an author may decide:
+
+- **`runtime:`** — a document may set only `runtime.complexity` and `runtime.state` (e.g. `record_children`). Every other key — `adapters`, `plugins`, `persistence`, `library`, `mcp`, anything else — is a host setting: it comes only from config.json, and a document that sets one has it ignored, with a warning from `cof run` and `cof check` naming the key.
+- **`plugins:`** — runtime-plugin modules to load. An entry loads only if config.json already lists it in `plugins` or `enabled_plugins`; any other is skipped with a warning.
+
+A host that only ever runs its own documents can switch this check off with `trust_orchestration_runtime: true` in config.json (or `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME=1`).
 
 **Minimal valid file:**
 ```yaml
@@ -58,7 +63,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `name` | string | yes | — | Pattern `^[A-Za-z_][A-Za-z0-9_]*$`; `iter_<N>` reserved |
 | `template` | string | one-of | — | Mustache template; mutually exclusive with `messages` |
 | `messages` | array | one-of | — | Role-based messages; mutually exclusive with `template` |
-| `prompt_type` | string | no | `text` | `text`, `json`, `boolean`, `number`, `array`, `object`, `tool` |
+| `prompt_type` | string | no | `text` | `text`, `json`, `boolean`, `number`, `array`, `object`, `tool`. `boolean`/`number` parse the reply leniently (`Yes.`, `**TRUE**`, `42.`, `1e3` all read correctly) and raise — rather than decoding to `null` — on a reply that still doesn't parse. Raw reply kept on `meta.answer` |
 | `schema` | object | no | — | JSON Schema for validating structured output |
 | `description` | string | no | — | Human-readable description |
 | `model` | string | no | — | Per-effect model override |
@@ -170,7 +175,7 @@ Evaluates a condition against state and executes exactly one branch (`then` or `
 | `name` | string | no | — | Optional; enables state recording of the decision |
 | `if` | object | yes | — | Condition definition |
 | `if.mode` | string | no | `model` | `model` or `cel` |
-| `if.template` | string | model only | — | LLM evaluates and returns boolean |
+| `if.template` | string | model only | — | LLM evaluates and returns boolean, parsed leniently (`Yes.`, `**TRUE**`, `Y` all read as true); an unreadable answer raises rather than defaulting to false. Raw reply on `meta.answer` |
 | `if.expr` | string | cel only | — | CEL expression; must use `state.prime.<name>.value` prefix |
 | `then` | array | yes | — | Effects when condition is true |
 | `else` | array | no | `[]` | Effects when condition is false |
@@ -239,7 +244,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `each.as` | string | no | `item` | Variable name for current element in body templates |
 | `while` | object | one-of | — | Continuation condition; mutually exclusive with `each` |
 | `while.mode` | string | no | `model` | `model` or `cel` |
-| `while.template` | string | model only | — | LLM returns boolean for continuation decision |
+| `while.template` | string | model only | — | LLM returns boolean for continuation decision, parsed the same lenient way as `if.template`. Raw reply on `meta.answer` on each check |
 | `while.expr` | string | cel only | — | CEL expression against state |
 | `max_iterations` | integer | no | — (no cap) | Hard cap on iterations. Unset means the loop runs until its collection is exhausted (`each`) or its condition is false (`while`) |
 | `min_iterations` | integer | no | `0` | Minimum iterations before condition is checked |
@@ -704,7 +709,7 @@ The state path in `each.in` must resolve to an array at runtime. This means it m
 The following rules are sufficient for generating structurally correct Circuitry orchestration YAML. Apply all of them exactly.
 
 **File structure:**
-1. Top-level fields: `adapter` (string), `model` (string), `effects` (array). Only `effects` is required. Additional top-level keys are allowed.
+1. Top-level fields: `adapter` (string), `model` (string), `effects` (array). Only `effects` is required. Additional top-level keys are allowed. A top-level `runtime:` block may set only `complexity` and `state`; never put `adapters`, `plugins`, `persistence`, `library` or credentials in it — those are host settings that belong in config.json, and a document's copy is ignored with a warning.
 2. `adapter` and `model` are only required when the orchestration contains `prompt` or `reflector` effects. Tool-only orchestrations (`type: tool` effects only) do not need `adapter` or `model`.
 3. Valid `adapter` values: `ollama`, `openai`, `anthropic`, `litellm`.
 4. Valid `flow` values: `chain` (sequential) and `tree` (parallel). Write nothing else — `chain_of_thought`/`cot` and `tree_of_thought`/`tot` still parse but are deprecated and warned about.

@@ -87,6 +87,12 @@ class CircuitryConfig:
     # Any additional runtime config to pass through untouched
     runtime: dict[str, Any] = field(default_factory=dict)
 
+    # Let an orchestration's own `runtime:` block set host settings (adapters,
+    # tool plugins, persistence, library, ...) and its `plugins:` list import
+    # modules config doesn't list. Off by default: only for hosts that run
+    # nothing but their own documents — see cli.effective_settings.
+    trust_orchestration_runtime: bool = False
+
     # The project config resolve_config discovered in cwd and its trust
     # state; None when there was none or a file was named explicitly.
     # Reporting only — excluded from equality.
@@ -115,6 +121,7 @@ class CircuitryConfig:
             enabled_tools=_normalize_allowlist(d.get("enabled_tools")),
             environment=env,  # type: ignore[arg-type]
             runtime=dict(d.get("runtime") or {}),
+            trust_orchestration_runtime=d.get("trust_orchestration_runtime") is True,
         )
 
 
@@ -307,6 +314,12 @@ def _apply_env_vars(d: dict[str, Any]) -> dict[str, Any]:
     env_environment = os.getenv("CIRCUITRY_ENVIRONMENT")
     if env_environment:
         result["environment"] = env_environment
+
+    env_trust = os.getenv("CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME")
+    if env_trust is not None and env_trust.strip():
+        result["trust_orchestration_runtime"] = env_trust.strip().lower() in (
+            "1", "true", "yes", "on",
+        )
 
     return result
 

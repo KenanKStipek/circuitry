@@ -75,8 +75,8 @@ Each `content` is a template in its own right. The two forms are mutually exclus
 | `prompt_type` | `value` is | Notes |
 | --- | --- | --- |
 | `text` | string | The default. The reply, as-is. |
-| `boolean` | `true` / `false` | `yes`, `true`, `1`, `y` parse as true. |
-| `number` | number | |
+| `boolean` | `true` / `false` | Lenient: `Yes.`, `yes, because …`, `**TRUE**`, `Y` parse as true, `No.`/`false!`/`N` as false — leading/trailing wrapping (quotes, markdown, punctuation) is stripped first. An answer that still doesn't read as yes/no raises rather than becoming `null`. |
+| `number` | number | Lenient: `42`, `42.`, `3.5`, `-1`, `1e3` all parse. A reply with extra words attached (`about 42`, `42 degrees`) raises instead of guessing which number was meant. |
 | `json` | parsed JSON | `schema` required. |
 | `object` | JSON object | `schema` required. |
 | `array` | JSON array | `schema` required. |
