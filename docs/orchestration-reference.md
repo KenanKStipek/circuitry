@@ -547,7 +547,7 @@ Config inheritance: the child executes with the exact same resolved `runtime.*` 
 | `inline` | string | * | — | Mustache template that renders to orchestration YAML at runtime |
 | `orchestration` | string | * | — | **DEPRECATED** — use `ref` or `path` instead. Still accepted; emits `DeprecationWarning` |
 | `validate` | bool | no | `true` | Schema-validate inline YAML before execution |
-| `inputs` | object | no | `{}` | Map of name → value passed to child as initial state. String values are Mustache-rendered |
+| `inputs` | object | no | `{}` | Map of name → value passed to child as initial state. String values are Mustache-rendered; `{from: <path>}` passes the value at that path unchanged (see [Inputs by reference](#inputs-by-reference)) |
 | `outputs` | object | no | — | Declared outputs — see [Outputs](#outputs). When present, switches to declared-outputs mode |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `description` | string | no | — | |
@@ -598,6 +598,58 @@ resolved: Library source 'hub' (owner/name@main) has not been fetched yet — ru
 ```
 
 The check follows the static `use` graph, so a ref reached transitively through other orchestrations is caught just as early. Genuinely unknown refs (a typo, an entry that no source carries) are not a preflight failure — they surface as the `use` effect's own error at run time.
+
+#### Inputs by reference
+
+A string input is Mustache-rendered, so it always reaches the child as text. To hand the
+child a value as it is (an array, an object, a number, a boolean) write `{from: <path>}`:
+
+```yaml
+- type: loop
+  name: ladder
+  each: {in: input.rungs, as: r}
+  body:
+    - type: use
+      name: rung
+      path: parts/rung.yml
+      inputs:
+        rung: {from: r}                              # the loop item, as an object
+        methods: {from: prime.render.value.methods}  # an array
+        base: "{{input.base}}"                       # a string, rendered as before
+```
+
+- The path is rooted at `input.`, `prime.` or `runtime.` (like `each.in` and `outputs.path`), or at
+  a binding of an enclosing loop (`each.as`, `iter`), with dotted keys and integer list indices
+  after it (`input.rungs.1.name`). Any other root is an error at `cof check` time.
+- The child gets a deep copy: nothing it does can reach the parent's state.
+- A path that resolves to nothing passes `null`; if the child's interface marks that input
+  `required`, the `use` fails with the path in the message.
+- Only a mapping with the single key `from` is a reference. Any other mapping is a literal value.
+
+#### Complete record (opt-in)
+
+In declared-outputs mode only the declared values land at `prime.<name>.value`; what the
+child did (its commands, answers, decisions) is visible in `--live-state` while it runs and
+then dropped. Set `runtime.state.record_children: true` (in config, or in the orchestration's
+own `runtime:` block) to keep it: each `use` node keeps its child's effects beside its
+`value` and `meta`, in the same shape live state shows them, at every depth of `use`, and a
+failed child keeps whatever it got to. The run's `--out` file then holds the whole run.
+
+```yaml
+runtime:
+  state:
+    record_children: true
+```
+
+The record is for reading after the run, not for wiring: downstream effects still read a
+`use`'s declared outputs.
+
+Every `use` node also records, whether or not the setting is on:
+
+| Field | Meaning |
+|-------|---------|
+| `meta.inputs` | What the child received: rendered strings, referenced values, literals |
+| `meta.orchestration_sha256` | SHA-256 of the child's YAML text (the file's bytes, or the rendered inline YAML) |
 
 **Cycle detection:**
 
