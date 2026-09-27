@@ -19,8 +19,7 @@
 #        echo '{"user_request": "Build an orchestration that summarizes articles"}' > input.json
 #
 #   2. Run the orchestration:
-#        ./scripts/circuitry run orchestrations/meta_orchestrator.yml \
-#          --state input.json --out out.json
+#        cof run agents/meta_orchestrator --state input.json --out out.json
 #
 #   3. Extract the generated YAML:
 #        cat out.json | python3 -c "
@@ -32,7 +31,7 @@
 #
 #   Key                Type     Description
 #   user_request       string   Natural language description of the orchestration to build
-#   rules              string   Full ruleset from rules/*.yml (all effect types + patterns)
+#   rules              string   Full ruleset from src/circuitry/bundled/rules/*.yml (all effect types + patterns)
 #   rules_prompt       string   Common + prompt effect rules only
 #   rules_dynamic      string   Common + dynamic effect rules only
 #   rules_loop         string   Common + loop effect rules only
@@ -78,7 +77,7 @@ interface:
     rules:
       type: string
       required: true
-      description: Full ruleset from rules/*.yml (all effect types + patterns).
+      description: Full ruleset from src/circuitry/bundled/rules/*.yml (all effect types + patterns).
     plugins:
       type: string
       required: false

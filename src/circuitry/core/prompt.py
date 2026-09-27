@@ -383,7 +383,7 @@ class PromptRuntime:
         indent = "  " * self.depth
         estimated_out = len(prompt_sent) // 4
         t0 = time.monotonic()
-        target = _adapter_target(self.adapter, resolved_model) if self.verbose else ""
+        target = self._pre_dispatch_target(resolved_model) if self.verbose else ""
 
         if self.verbose and self.cb_start is not None:
             self.cb_start()
@@ -537,9 +537,10 @@ class PromptRuntime:
                         recv = res.tokens_received
                         if sent is not None or recv is not None:
                             suffix += f" | ↑{sent or 0} ↓{recv or 0} tok"
+                        completion_target = self._attempts_target(attempts_meta) or target
                         line = (
                             f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.display_name}"
-                            f" [dim]{target} | {suffix}[/dim]"
+                            f" [dim]{completion_target} | {suffix}[/dim]"
                         )
                         if self.cb_done is not None:
                             self.cb_done(line)
@@ -554,9 +555,10 @@ class PromptRuntime:
                         # Show failure for this attempt, then retry
                         if self.verbose:
                             elapsed = time.monotonic() - t0
+                            failure_target = self._attempts_target(attempts_meta) or target
                             line = (
                                 f"{indent}[err]✗[/err] [cyan]◆[/cyan] {self.display_name}"
-                                f" [dim]{target} | {_elapsed_str(elapsed)}[/dim]"
+                                f" [dim]{failure_target} | {_elapsed_str(elapsed)}[/dim]"
                             )
                             if self.cb_error is not None:
                                 self.cb_error(line)
@@ -568,9 +570,10 @@ class PromptRuntime:
         except Exception as e:
             if self.verbose:
                 elapsed = time.monotonic() - t0
+                failure_target = self._attempts_target(attempts_meta) or target
                 line = (
                     f"{indent}[err]✗[/err] [cyan]◆[/cyan] {self.display_name}"
-                    f" [dim]{target} | {_elapsed_str(elapsed)}[/dim]"
+                    f" [dim]{failure_target} | {_elapsed_str(elapsed)}[/dim]"
                 )
                 if self.cb_error is not None:
                     self.cb_error(line)
@@ -869,6 +872,52 @@ class PromptRuntime:
         if adapter_name == default_name:
             return self.adapter
         return build_adapter(adapter_name=adapter_name, runtime=self.runtime_config)
+
+    def _pre_dispatch_target(self, model: str) -> str:
+        """Verbose label for the adapter this effect will try first.
+
+        Reads the same chain ``_build_attempts`` hands to dispatch — a
+        per-effect ``provider:`` (including one overlaid by a profile) wins
+        over the run-default adapter, exactly as ``_generate_with_fallbacks``
+        tries it first. ``self.adapter`` alone would only be correct for a
+        prompt with no override.
+
+        Called ahead of the dispatch ``try`` block (there is no attempt or
+        error to report yet), so a bad ``provider:`` must not raise here —
+        that would skip the outer error handling (``on_error``, ``meta.error``,
+        the balanced start/complete pair) entirely. Fall back to a plain
+        label; the real build, and its real error, happen at dispatch time.
+        """
+        adapter_name, model_name = self._build_attempts(default_model=model)[0]
+        try:
+            adapter = self._resolve_adapter(adapter_name)
+        except Exception:
+            return f"{adapter_name} · {model_name}"
+        return _adapter_target(adapter, model_name)
+
+    def _attempts_target(self, attempts_meta: list[dict[str, Any]]) -> str:
+        """Verbose label built from the attempts dispatch actually made.
+
+        Any attempt before the last shows as ``adapter ✗`` — it was tried and
+        failed, which is why a later one ran. The last entry is the one that
+        answered (or, if every attempt failed, the one that failed last) and
+        renders with its full ``adapter · model @ host`` target so this label
+        always matches ``meta["adapter"]``/``meta["model"]`` rather than the
+        pre-dispatch guess.
+        """
+        if not attempts_meta:
+            return ""
+        parts = [f"{attempt['adapter']} ✗" for attempt in attempts_meta[:-1]]
+        last = attempts_meta[-1]
+        try:
+            adapter = self._resolve_adapter(last["adapter"])
+            label = _adapter_target(adapter, last["model"])
+        except Exception:
+            label = f"{last['adapter']} · {last['model']}"
+        if last.get("status") == "failed":
+            label += " ✗"
+        parts.append(label)
+        return " → ".join(parts)
 
     def _materialize_input(self, ctx: dict[str, Any]) -> str:
         """Materialize the prompt input from template or messages."""
