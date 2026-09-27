@@ -415,7 +415,7 @@ class TestStandardFunctions:
 
 
 class TestStringLiterals:
-    """Regression for the translator's string mangling (noted on #187)."""
+    """Regression for the translator's string mangling (noted on #187, #188)."""
 
     def test_state_path_inside_a_literal_is_data(self):
         ctx = {"input": {"msg": "state.x.y"}}
@@ -431,6 +431,37 @@ class TestStringLiterals:
         assert evaluate_cel(
             "state.input.msg == 'a && b || !c ? d : e'", ctx
         ) is True
+
+    def test_state_path_literal_compares_against_the_literal(self):
+        # The exact case from #188: `state.a == 'state.b.c'` must compare
+        # against the literal string, not a rewritten `state["b"]["c"]`.
+        ctx = {"a": "state.b.c", "b": {"c": "unrelated"}}
+        assert evaluate_cel("state.a == 'state.b.c'", ctx) is True
+        assert state_paths("state.a == 'state.b.c'") == ("state.a",)
+
+    def test_double_quoted_state_path_literal_is_data(self):
+        ctx = {"a": "state.b.c"}
+        assert evaluate_cel('state.a == "state.b.c"', ctx) is True
+        assert state_paths('state.a == "state.b.c"') == ("state.a",)
+
+    def test_escaped_quote_inside_a_literal_is_data(self):
+        ctx = {"a": "it's state.b.c"}
+        assert evaluate_cel(r"state.a == 'it\'s state.b.c'", ctx) is True
+
+    def test_literal_with_a_deeper_state_path_is_data(self):
+        ctx = {"a": "state.b.c.d.e"}
+        assert evaluate_cel("state.a == 'state.b.c.d.e'", ctx) is True
+        assert state_paths("state.a == 'state.b.c.d.e'") == ("state.a",)
+
+    def test_literal_next_to_a_real_state_path(self):
+        # A literal containing a state-shaped string alongside an actual
+        # state read: only the real path is collected and resolved.
+        ctx = {"a": "state.b.c", "x": 1}
+        assert evaluate_cel("state.a == 'state.b.c' && state.x == 1", ctx) is True
+        assert state_paths("state.a == 'state.b.c' && state.x == 1") == (
+            "state.a",
+            "state.x",
+        )
 
 
 # ---------------------------------------------------------------------------
