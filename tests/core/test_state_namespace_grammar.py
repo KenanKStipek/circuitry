@@ -319,23 +319,27 @@ def test_compile_orchestration_each_in_accepts_an_enclosing_loops_binding(flow: 
     assert store.get("prime.outer.iter_1.inner.collected.value") == ["b:b1"]
 
 
-def test_compile_orchestration_each_in_accepts_a_binding_two_loops_up() -> None:
+@pytest.mark.parametrize("flow", ["chain", "tree"])
+def test_compile_orchestration_each_in_accepts_a_binding_two_loops_up(flow: str) -> None:
     """A loop nested two deep sees both enclosing loops' bindings."""
     orch = {
         "effects": [
             {
                 "type": "loop",
                 "name": "outer",
+                "flow": flow,
                 "each": {"in": "input.groups", "as": "g"},
                 "body": [
                     {
                         "type": "loop",
                         "name": "middle",
+                        "flow": flow,
                         "each": {"in": "g.sets", "as": "s"},
                         "body": [
                             {
                                 "type": "loop",
                                 "name": "inner",
+                                "flow": flow,
                                 "collect": "tag",
                                 "each": {"in": "s.crops", "as": "c"},
                                 "body": [

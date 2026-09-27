@@ -1125,7 +1125,7 @@ else:
   each: {in: input.sets, as: s}
   body:
     - type: loop
-      each: {in: s.crops, as: c}   # s is this loop's own binding
+      each: {in: s.crops, as: c}   # s is the enclosing loop's binding
       body: [...]
 
 # Bad: not root-relative — both are hard errors from `cof check`
