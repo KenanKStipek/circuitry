@@ -89,7 +89,10 @@ Apply per-service profile:
 python -m circuitry.cli.app run-library welcome --service-profile svc-a --dry-run
 ```
 
-This uses the same runtime execution pipeline as local-path runs.
+This uses the same runtime execution pipeline as local-path runs. A service
+profile only overrides the fields it sets (`default_adapter`, `default_model`,
+`plugins`, `runtime`); the `enabled_*` allowlists and `environment` from your
+config still apply to the fetched orchestration.
 
 ## Runtime Metadata
 
