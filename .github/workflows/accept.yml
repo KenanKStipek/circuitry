@@ -1,8 +1,14 @@
 # VENDORED from KenanKStipek/agent-loop@v1 (e43133f) accept.yml +
-# templates/accept.yml (public repo cannot call private hub).
+# templates/accept.yml (public repo cannot call private hub), patched here
+# for #216: readiness is judged from the head commit's check runs (excluding
+# this job's own check) plus mergeable == true, not mergeable_state — which
+# deadlocks against this job's own pending check when the run is triggered by
+# the `accepted` label (upstream template still has the bug, see #216).
 # Acceptance = the human approval gate: /accept comment (must START the
-# comment) or the `accepted` label. Verifies actor allowlist, PR state,
-# green checks via mergeable_state (polled up to 5 min), then squash-merges.
+# comment) or the `accepted` label. Verifies actor allowlist, PR state, then
+# every other check green + no conflicts (polled up to 5 min), then
+# squash-merges. A refused label-triggered run exits 0 (comment only, no
+# failed check on the PR head) so it can never itself block a later accept.
 # require_demo is off: circuitry has no Vercel preview surface.
 name: Accept PR
 on:
@@ -30,13 +36,30 @@ jobs:
           MERGE_METHOD: 'squash'
           REQUIRE_DEMO: 'false'
           PR: ${{ github.event.issue.number || github.event.pull_request.number }}
+          EVENT: ${{ github.event_name }}
+          OWN_CHECK: ${{ github.job }}
         run: |
           set -euo pipefail
           say() { gh pr comment "$PR" --repo "$REPO" --body "$1"; }
+          # A label-triggered refusal must not leave a failed check on the PR
+          # head: that check would itself keep the PR unstable and block a
+          # later accept attempt (#216). issue_comment runs attach no check to
+          # the PR head, so exit 1 there is unchanged from before.
+          fail() {
+            say "$1"
+            if [ "$EVENT" = "pull_request" ]; then
+              echo "::warning::$1"
+              exit 0
+            fi
+            exit 1
+          }
 
           case ",$ALLOWED," in
             *",$ACTOR,"*) ;;
-            *) echo "::error::$ACTOR is not in the accept allowlist ($ALLOWED) — ignoring."; exit 1 ;;
+            *)
+              echo "::error::$ACTOR is not in the accept allowlist ($ALLOWED) — ignoring."
+              if [ "$EVENT" = "pull_request" ]; then exit 0; else exit 1; fi
+              ;;
           esac
 
           info=$(gh pr view "$PR" --repo "$REPO" --json state,isDraft,body)
@@ -45,28 +68,50 @@ jobs:
           body=$(echo "$info" | jq -r .body)
 
           if [ "$state" != "OPEN" ]; then
-            echo "PR #$PR is $state — nothing to accept."; exit 1
+            echo "PR #$PR is $state — nothing to accept."
+            if [ "$EVENT" = "pull_request" ]; then exit 0; else exit 1; fi
           fi
           if [ "$draft" = "true" ] || echo "$body" | grep -qF '**WIP — run in progress**'; then
-            say "Not accepted: PR is still draft/WIP."; exit 1
+            fail "Not accepted: PR is still draft/WIP."
           fi
 
-          mstate="unknown"
+          # Readiness = no merge conflicts, and every check on the head commit
+          # other than this job itself has completed successfully. Polling
+          # mergeable_state directly deadlocks for the label trigger: this
+          # job's own pending check keeps the PR "unstable" for as long as
+          # this job is running (#216).
+          ready=false
+          reason="unknown"
           for i in $(seq 1 20); do
-            mstate=$(gh api "repos/$REPO/pulls/$PR" --jq '.mergeable_state // "unknown"')
-            if [ "$mstate" = "clean" ]; then
+            pr_json=$(gh api "repos/$REPO/pulls/$PR")
+            mergeable=$(echo "$pr_json" | jq -r '.mergeable')
+            head_sha=$(echo "$pr_json" | jq -r '.head.sha')
+
+            if [ "$mergeable" = "false" ]; then
+              reason="mergeable=false (merge conflicts)"
               break
             fi
-            case "$mstate" in
-              dirty|behind)
-                break ;;
-            esac
-            echo "mergeable_state=$mstate (attempt $i/20) — waiting 15s"
+
+            checks_json=$(gh api "repos/$REPO/commits/$head_sha/check-runs" -F per_page=100)
+            other=$(echo "$checks_json" | jq -c --arg self "$OWN_CHECK" '[.check_runs[] | select(.name != $self)]')
+            pending=$(echo "$other" | jq '[.[] | select(.status != "completed")] | length')
+            failing=$(echo "$other" | jq '[.[] | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled" or .conclusion == "action_required")] | length')
+
+            if [ "$failing" != "0" ]; then
+              reason="$failing other check(s) failing"
+              break
+            fi
+            if [ "$mergeable" = "true" ] && [ "$pending" = "0" ]; then
+              reason="clean"
+              ready=true
+              break
+            fi
+            reason="mergeable=$mergeable, $pending other check(s) still pending"
+            echo "not ready ($reason) — attempt $i/20 — waiting 15s"
             sleep 15
           done
-          if [ "$mstate" != "clean" ]; then
-            say "Not accepted: mergeable_state=$mstate after a 5-minute wait (need clean: checks green, no conflicts). Re-run /accept when green."
-            exit 1
+          if [ "$ready" != "true" ]; then
+            fail "Not accepted: $reason after a 5-minute wait (need every other check green, no conflicts). Re-run /accept when green."
           fi
 
           if [ "$REQUIRE_DEMO" = "true" ]; then
@@ -74,8 +119,7 @@ jobs:
               echo "no-demo label present — demo requirement waived for this PR."
             elif ! gh api "repos/$REPO/issues/$PR/comments" --paginate \
                  --jq '.[].body' | grep -q '/releases/download/demos/'; then
-              say "Not accepted: no demo recording found on this PR. (If this change has no visual surface, label the PR no-demo and re-run /accept.)"
-              exit 1
+              fail "Not accepted: no demo recording found on this PR. (If this change has no visual surface, label the PR no-demo and re-run /accept.)"
             fi
           fi
 
