@@ -10,11 +10,11 @@ Resolution is layered, each layer deep-merged over the last:
 
 1. **Sane defaults** — `ollama` at `http://localhost:11434`, `llama3.1:8b`.
 2. **Global config** — `~/.config/circuitry/config.json`.
-3. **Project config** — `circuitry.config.json` or `config.json` in the working directory.
+3. **Project config** — `circuitry.config.json` or `config.json` in the working directory, once you have trusted it with `cof trust` (see [Trusting a project config](#trusting-a-project-config)).
 4. **An explicit file** — `--config <path>` or `CIRCUITRY_CONFIG`, which *replaces* 2 and 3 rather than layering over them.
 5. **Environment variables** — `CIRCUITRY_ADAPTER`, `CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER_URL`, `CIRCUITRY_COMFYUI_URL`, and the allowlists `CIRCUITRY_ENABLED_ADAPTERS` / `CIRCUITRY_ENABLED_TOOLS` / `CIRCUITRY_ENABLED_PLUGINS`.
 
-`cof setup` walks you through creating the global file — it detects local backends and writes a working config. `cof init` writes a project config and a `hello.yml` beside it. `cof doctor` tells you what the resolved config can actually reach.
+`cof setup` walks you through creating the global file — it detects local backends and writes a working config. `cof init` writes a project config and a `hello.yml` beside it, and trusts the config it wrote. `cof doctor` tells you what the resolved config can actually reach.
 
 A local-first project config:
 
@@ -45,6 +45,29 @@ A local-first project config:
 `default_adapter` and `default_model` are the run defaults. `runtime.adapters.<name>` carries each adapter's own settings — base URL, socket timeout, a per-adapter default model, token limits. API keys are *not* in this file: hosted adapters read them from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and so on — a `.env` file works), and `cof doctor` names the missing one. Nothing credential-shaped is ever written into serialized state; the redaction layer scrubs it from `runtime.effective_settings` before it lands.
 
 Other top-level keys you will meet later: `runtime.complexity` ([Complexity](10-complexity.md)), `runtime.persistence` and `runtime.plugins.<name>` — per-plugin settings such as MCP servers and a tool's `binary` ([Tools and persistence](13-tools-and-persistence.md)), `runtime.library.sources` and `runtime.state.record_children` ([Composition](09-composition.md)), `plugins` (runtime plugin identifiers), and the three allowlists.
+
+## Trusting a project config
+
+A project config is picked up from whatever directory you run in, and it carries the same authority as your own global file: it can repoint an adapter (and the credentials sent with every prompt), choose the binary and environment a tool plugin executes, start MCP server commands, send run state to a persistence backend, and import runtime plugins. A cloned or downloaded repository can ship one. So, like `direnv allow`, Circuitry applies a discovered project config only after you have said so:
+
+```bash
+cof trust                  # the circuitry.config.json / config.json in this directory
+cof trust path/to/config.json --yes
+cof trust --list           # every trusted file, and whether it still matches
+cof untrust                # stop applying it
+```
+
+`cof trust` prints every setting the file makes, flags the host-sensitive ones — adapter settings, a tool's `binary` or `env`, MCP servers, `plugins`, persistence, library sources, `trust_orchestration_runtime` — and asks before it records anything (`--yes` skips the question). Trust is kept in `~/.config/circuitry/trusted.json`, beside the global config, as the file's resolved path and the SHA-256 of its contents; your `config.json` is never rewritten. Edit the file and it stops applying until you trust it again.
+
+Until then the file is skipped as a whole, and the run says so once, on stderr:
+
+```
+Warning: Skipped project config /home/you/repo/circuitry.config.json: it is not trusted, so none of its settings apply. Review it, then run `cof trust /home/you/repo/circuitry.config.json` to apply it.
+```
+
+The run itself goes ahead on the other layers, and exit codes do not change. `cof check` prints the same warning; `cof doctor` and the TUI's Doctor and Settings views show the file and its trust state.
+
+Two kinds of file are always trusted, because you named them: the global config, and a file passed with `--config` or `CIRCUITRY_CONFIG`. For CI jobs and containers where the checked-out repository is your own, `CIRCUITRY_TRUST_PROJECT_CONFIG=1` trusts every discovered project config without a trust entry. That is the whole protection switched off: set it only where every directory a run can start in holds a config you would have trusted anyway.
 
 ## Which model actually runs
 

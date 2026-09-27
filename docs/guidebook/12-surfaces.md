@@ -7,8 +7,10 @@ Everything the world reaches Circuitry through. One runtime sits under all of th
 | Command | What it does |
 | --- | --- |
 | `cof setup` | Interactive first-run: detect local backends, pick a model, write the global config. |
-| `cof init` | Write a project config and a `hello.yml` in the current directory. |
-| `cof doctor` | Run every extension's preflight `check()` and report; `--generate` also makes a live model call. Non-zero exit when anything fails. |
+| `cof init` | Write a project config and a `hello.yml` in the current directory, and trust the config. |
+| `cof trust [path]` | Show what a project config sets, flag the host-sensitive settings, and — after you confirm (`--yes` to skip) — trust it so runs apply it. `--list` shows every trusted file and whether it still matches. See [Configuration](04-configuration.md#trusting-a-project-config). |
+| `cof untrust [path]` | Stop applying a project config you trusted. |
+| `cof doctor` | Run every extension's preflight `check()` and report, including the project config and its trust state; `--generate` also makes a live model call. Non-zero exit when anything fails. |
 | `cof run <name-or-path>` | Execute an orchestration. Library entries by slash name (`learn/hello`), files by path. |
 | `cof check <path>` | Validate against the schema and the static rules, then preflight the extensions it references. `validate` is the same command. `--skip-preflight` for structure only. |
 | `cof score <name-or-path>` | Static per-effect complexity preview; no model calls. |
