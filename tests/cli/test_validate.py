@@ -178,6 +178,31 @@ def test_validate_accepts_each_truncate(tmp_path: Path) -> None:
     assert result["errors"] == []
 
 
+def test_validate_rejects_max_iterations_zero(tmp_path: Path) -> None:
+    """Issue #223: max_iterations has no default, so an explicit 0 is a schema
+    error rather than silently becoming 100."""
+    path = _write(
+        tmp_path,
+        "max_iterations_zero.yml",
+        (
+            "effects:\n"
+            "  - type: loop\n"
+            "    name: raster\n"
+            "    max_iterations: 0\n"
+            "    each:\n"
+            "      in: input.items\n"
+            "      as: item\n"
+            "    body:\n"
+            "      - type: prompt\n"
+            "        name: step\n"
+            "        template: \"{{item}}\"\n"
+        ),
+    )
+    result = validate(path)
+    assert result["ok"] is False
+    assert any("max_iterations" in e or "minimum" in e.lower() for e in result["errors"])
+
+
 def test_validate_rejects_each_truncate_wrong_type(tmp_path: Path) -> None:
     path = _write(
         tmp_path,

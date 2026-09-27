@@ -240,7 +240,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `while.mode` | string | no | `model` | `model` or `cel` |
 | `while.template` | string | model only | — | LLM returns boolean for continuation decision |
 | `while.expr` | string | cel only | — | CEL expression against state |
-| `max_iterations` | integer | no | `100` | Hard cap on iterations |
+| `max_iterations` | integer | no | — (no cap) | Hard cap on iterations. Unset means the loop runs until its collection is exhausted (`each`) or its condition is false (`while`) |
 | `min_iterations` | integer | no | `0` | Minimum iterations before condition is checked |
 | `on_error` | string | no | `fail` | `fail`, `break`, `continue` |
 | `labels` | object | no | — | |

@@ -384,8 +384,8 @@
         },
         "max_iterations": {
           "type": "integer",
-          "minimum": 0,
-          "description": "Maximum iteration cap. Default 100. For each-loops, when set, the collection must not be longer than it unless each.truncate: true is set."
+          "minimum": 1,
+          "description": "Maximum iteration cap. No default — unset means the loop runs until its collection or condition ends it. For each-loops, when set, the collection must not be longer than it unless each.truncate: true is set."
         },
         "min_iterations": {
           "type": "integer",

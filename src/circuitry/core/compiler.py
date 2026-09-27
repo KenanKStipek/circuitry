@@ -644,8 +644,11 @@ def _compile_loop(
                 truncate=bool(each_config.get("truncate")),
             )
 
-    # Iteration bounds
-    max_iterations = int(effect.get("max_iterations") or 100)
+    # Iteration bounds. Unset means no cap — see LoopDefinition.max_iterations.
+    max_iterations_raw = effect.get("max_iterations")
+    max_iterations: int | None = (
+        int(max_iterations_raw) if max_iterations_raw is not None else None
+    )
     min_iterations = int(effect.get("min_iterations") or 0)
 
     # Error behavior

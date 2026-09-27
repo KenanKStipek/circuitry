@@ -122,8 +122,9 @@ class LoopDefinition:
     while_def: LoopWhileDef | None = None
     each_def: LoopEachDef | None = None
 
-    # Iteration bounds
-    max_iterations: int = 100
+    # Iteration bounds. None (the default) means no cap: an each loop runs
+    # every item, a while loop runs until its condition is false.
+    max_iterations: int | None = None
     min_iterations: int = 0
 
     # Error behavior
@@ -202,7 +203,8 @@ class LoopRuntime:
                 meta = {}
                 node["meta"] = meta
             meta["created_at"] = _now_iso()
-            meta["max_iterations"] = self.defn.max_iterations
+            if self.defn.max_iterations is not None:
+                meta["max_iterations"] = self.defn.max_iterations
             meta["min_iterations"] = self.defn.min_iterations
             child_store = store.child(self.defn.name)
             iterations_effects: list[dict[str, Any]] = []
@@ -267,7 +269,8 @@ class LoopRuntime:
                 elif not collection:
                     termination_reason = "collection_exhausted"
                 elif (
-                    len(collection) > self.defn.max_iterations
+                    self.defn.max_iterations is not None
+                    and len(collection) > self.defn.max_iterations
                     and not self.defn.each_def.truncate
                 ):
                     raise LoopBoundsError(
@@ -283,7 +286,11 @@ class LoopRuntime:
                     # Parallel iteration: submit all at once, collect results in order.
                     # Each thread gets a deepcopy of ctx to prevent nested mutation
                     # bleed, and its own isolated Store to avoid concurrent dict writes.
-                    capped = collection[: self.defn.max_iterations]
+                    capped = (
+                        collection
+                        if self.defn.max_iterations is None
+                        else collection[: self.defn.max_iterations]
+                    )
                     total = len(capped)
 
                     iter_ctxs: list[tuple[int, dict[str, Any]]] = []
@@ -394,7 +401,10 @@ class LoopRuntime:
                     # Sequential iteration (default)
                     total = len(collection)
                     for idx, item in enumerate(collection):
-                        if idx >= self.defn.max_iterations:
+                        if (
+                            self.defn.max_iterations is not None
+                            and idx >= self.defn.max_iterations
+                        ):
                             # Only reachable under each.truncate: true — the
                             # fail-fast check above already stopped the
                             # untruncated case before the first pass.
@@ -443,7 +453,10 @@ class LoopRuntime:
                 # rather than merely rendering a prompt empty.
                 last_writes: dict[str, Any] = {}
 
-                while iteration_count < self.defn.max_iterations:
+                while (
+                    self.defn.max_iterations is None
+                    or iteration_count < self.defn.max_iterations
+                ):
                     # Check continuation condition. A CEL expression that
                     # cannot be evaluated raises (see ``cel_eval``) rather
                     # than answering False — a broken condition used to be

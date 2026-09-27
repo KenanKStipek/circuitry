@@ -166,9 +166,11 @@ treated as expected behavior, not vulnerabilities.
   prompt-injection mitigation; that responsibility belongs to the
   orchestration author (input sanitization, output schema enforcement,
   defensive system prompts).
-- **Resource exhaustion from runaway loops.** Loops have an explicit
-  `max_iterations` cap — if the user removes or sets it impossibly high,
-  Circuitry will execute that many iterations.
+- **Resource exhaustion from runaway loops.** `max_iterations` is a cap the
+  orchestration author sets, not a built-in floor — a loop with no cap runs
+  until its collection or condition ends it, and one that never converges
+  (a `while` condition that never goes false, an `each` collection with no
+  bound) will run indefinitely.
 - **Network-level attacks on adapter endpoints.** TLS validation is
   delegated to the underlying transport (`urllib`, `httpx`, or the vendor
   SDK). Misconfigured TLS in the user's environment is the user's problem.
