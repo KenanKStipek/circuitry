@@ -255,6 +255,7 @@ class ToolRuntime:
         self._ancestors = ancestors or []
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
+        from ..allowlist_gate import allowed_tools, require_tool
         from ..plugins.factory import build_plugin
 
         node = store.ensure_dict(self.defn.name)
@@ -324,6 +325,7 @@ class ToolRuntime:
             mtag = _model_tag(rendered)
 
             # Build plugin early so we can use its target string in the spinner
+            require_tool(self.defn.provider, allowed_tools(self.runtime_config))
             plugin = build_plugin(
                 plugin_name=self.defn.provider,
                 runtime=self.runtime_config,

@@ -41,6 +41,18 @@ def test_walk_collects_top_level_adapter() -> None:
     assert tools == set()
 
 
+def test_walk_can_exclude_the_document_adapter() -> None:
+    """A `use` child's own `adapter:` never runs (core/use.py); its prompt
+    `provider:` tokens still do."""
+    orch = {
+        "adapter": "ollama",
+        "effects": [{"type": "prompt", "name": "g", "template": "x", "provider": "openai"}],
+    }
+    adapters, tools = walk_orchestration_refs(orch, include_document_adapter=False)
+    assert adapters == {"openai"}
+    assert tools == set()
+
+
 def test_walk_collects_prompt_provider_and_fallbacks() -> None:
     orch = {
         "effects": [
@@ -269,6 +281,45 @@ def test_check_allowlist_passes_when_listed() -> None:
         "effects": [{"type": "tool", "name": "t", "provider": "ffmpeg"}],
     }
     cfg = CircuitryConfig(enabled_adapters=["ollama"], enabled_tools=["ffmpeg"])
+    assert check_allowlist(orch=orch, config=cfg) == []
+
+
+def test_check_allowlist_rejects_a_top_level_templated_name() -> None:
+    """A `use` child's unrendered template is left to the run; the root document
+    is not — a literal Mustache tag there never renders into anything else."""
+    orch = {
+        "effects": [
+            {"type": "prompt", "name": "p", "provider": "{{input.tool}}", "template": "x"},
+        ]
+    }
+    cfg = CircuitryConfig(enabled_adapters=["ollama"])
+    errors = check_allowlist(orch=orch, config=cfg)
+    assert len(errors) == 1
+    assert "{{input.tool}}" in errors[0]
+
+
+def test_from_dict_lowercases_tools_and_adapters_but_not_plugins() -> None:
+    """`enabled_plugins` entries are dotted Python import paths and stay
+    case-sensitive; `enabled_adapters`/`enabled_tools` are canonicalised
+    everywhere else, so config.py normalizes them to match."""
+    cfg = CircuitryConfig.from_dict(
+        {
+            "enabled_tools": ["JSON"],
+            "enabled_adapters": ["OpenAI"],
+            "enabled_plugins": ["myapp.Plugin"],
+        }
+    )
+    assert cfg.enabled_tools == ["json"]
+    assert cfg.enabled_adapters == ["openai"]
+    assert cfg.enabled_plugins == ["myapp.Plugin"]
+
+
+def test_check_allowlist_matches_case_insensitively() -> None:
+    """`enabled_tools: ["JSON"]` in config.json matches the lowercase provider
+    name a document actually writes (config.CircuitryConfig.from_dict lowercases
+    allowlist entries)."""
+    orch = {"effects": [{"type": "tool", "name": "t", "provider": "json"}]}
+    cfg = CircuitryConfig.from_dict({"enabled_tools": ["JSON"]})
     assert check_allowlist(orch=orch, config=cfg) == []
 
 

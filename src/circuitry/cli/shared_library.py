@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -141,7 +141,10 @@ def apply_service_profile(
     merged_runtime = _merge_dict(cfg.runtime, profile.runtime_overrides)
     merged_plugins = _dedupe_plugins(cfg.plugins + profile.plugins)
 
-    return CircuitryConfig(
+    # `replace`, not a fresh CircuitryConfig: every field the profile does
+    # not set — the allowlists and `environment` above all — carries through.
+    return replace(
+        cfg,
         default_model=profile.default_model or cfg.default_model,
         default_adapter=profile.default_adapter or cfg.default_adapter,
         plugins=merged_plugins,

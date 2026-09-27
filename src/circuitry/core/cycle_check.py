@@ -9,6 +9,9 @@ see them.
 sources: a folder orchestration referencing a github entry is followed into
 that source's SHA-pinned cache path, and a cycle that closes through a remote
 source is caught before anything runs.
+
+`iter_use_children` walks the same graph for callers that need every child
+document rather than a cycle — the allowlist check in `cof check`.
 """
 
 from __future__ import annotations
@@ -116,6 +119,62 @@ def load_orch(path: Path) -> dict[str, Any]:
     except (OSError, yaml.YAMLError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def iter_use_children(
+    root_orch: dict[str, Any],
+    *,
+    root_path: Path | None = None,
+    runtime: dict[str, Any] | None = None,
+) -> list[tuple[str, dict[str, Any]]]:
+    """Every orchestration statically reachable from root_orch through `use`.
+
+    Returns ``(label, orch)`` pairs, the root excluded, each file once.
+    `ref:` / `path:` children resolve exactly as :func:`detect_cycles` resolves
+    them; an unresolvable reference is skipped (the run reports it). An
+    `inline:` child is included when its unrendered text parses as YAML; what
+    its Mustache tags render to only exists at run time, where `UseRuntime`
+    checks the rendered document again.
+    """
+    from .library_ref import build_registry
+
+    registry = build_registry(runtime)
+    seen: set[str] = {str(root_path.resolve())} if root_path is not None else set()
+    out: list[tuple[str, dict[str, Any]]] = []
+
+    def visit(orch: dict[str, Any], parent_dir: Path | None) -> None:
+        for kind, value in collect_use_refs(orch):
+            resolved = resolve_reference(
+                kind, value, parent_dir=parent_dir, registry=registry
+            )
+            if resolved is None or str(resolved) in seen:
+                continue
+            seen.add(str(resolved))
+            child = load_orch(resolved)
+            out.append((str(resolved), child))
+            visit(child, resolved.parent)
+
+        effects = orch.get("effects") or orch.get("steps") or []
+        for effect in _walk_effects(effects):
+            if (effect.get("type") or "").strip().lower() != "use":
+                continue
+            text = effect.get("inline")
+            if not isinstance(text, str) or text in seen:
+                continue
+            seen.add(text)
+            try:
+                child = yaml.safe_load(text)
+            except yaml.YAMLError:
+                continue
+            if not isinstance(child, dict):
+                continue
+            out.append((f"inline '{effect.get('name') or 'use'}'", child))
+            # Inline children have no directory of their own; nested `path:`
+            # references resolve against the enclosing document's.
+            visit(child, parent_dir)
+
+    visit(root_orch, root_path.parent if root_path is not None else None)
+    return out
 
 
 def detect_cycles(
