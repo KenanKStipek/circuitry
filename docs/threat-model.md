@@ -146,6 +146,36 @@ library can publish an asset. Treat shared-library assets the same way you
 would treat any third-party orchestration: prefer fetching from a library
 you control, or read the YAML before running it.
 
+### 6. Host settings versus orchestration documents
+
+An orchestration document is not always the operator's own: `cof fetch`,
+`cof run-library`, `use: ref:` and github library sources all run documents
+someone else wrote. The trust boundary is that **host settings come only
+from config** (`config.json` layers and `CIRCUITRY_*` environment variables);
+a document cannot change them.
+
+**Mitigation.** A document's `runtime:` block contributes only the
+author-level keys in `ORCHESTRATION_RUNTIME_KEYS` — `runtime.complexity` and
+`runtime.state`. Every other key (`adapters`, `plugins`, `persistence`,
+`library`, `mcp`, unknown keys) is dropped from the effective settings, with
+one warning per key in `cof run` (stderr) and `cof check` output. A
+document's top-level `plugins:` list only loads runtime-plugin modules config
+already lists in `plugins` or `enabled_plugins`. A `use:` child runs on the
+parent's resolved runtime and its own `runtime:` / `plugins:` keys are never
+read. So a document decides what a run does, but not where an adapter sends
+prompts and credentials, which binary or environment a tool plugin gets,
+which MCP server commands start, where state is persisted, or which Python
+modules are imported. Implementation:
+[`src/circuitry/cli/effective_settings.py`](../src/circuitry/cli/effective_settings.py).
+
+**Residual risk.** `trust_orchestration_runtime: true` in config (or
+`CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME=1`) switches the boundary off: every
+document the host runs, including everything reachable through `use: ref:`,
+can then set any host setting and import any module. Enable it only on a host
+that runs nothing but documents its operator wrote or has reviewed. Within the
+boundary, a document still uses whatever config allows — the adapters, tools
+and plugins config enables — so the allowlists remain the way to narrow that.
+
 ---
 
 ## What Circuitry does NOT defend against
@@ -154,9 +184,11 @@ These are deliberate non-goals. Reports about them will be acknowledged but
 treated as expected behavior, not vulnerabilities.
 
 - **Malicious user-authored orchestrations.** A user with the ability to
-  write a `.yml` file in the project directory can do anything Circuitry
-  can do — invoke models, shell out via tool plugins, download from the
-  shared library, etc. Circuitry runs YAML it is told to run.
+  write a `.yml` file in the project directory can do anything the host's
+  config lets Circuitry do — invoke the configured models, shell out via
+  enabled tool plugins, download from the shared library, etc. Circuitry runs
+  YAML it is told to run; what a document cannot do is change the host's
+  config (see 6 above).
 - **Models that exfiltrate data via tool calls.** A model can choose to
   emit any arbitrary string for any tool argument. If the orchestration
   trusts model output enough to feed it into a tool call, Circuitry will

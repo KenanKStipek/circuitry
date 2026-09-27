@@ -216,8 +216,13 @@ plugin* (an event stream); both can be enabled at once.
 Precedence:
 
 ```
-profile persistence > orchestration runtime.persistence > project config > global config
+profile persistence > project config > global config
 ```
+
+An orchestration's own `runtime.persistence` is a host setting and is
+ignored with a warning, unless config sets `trust_orchestration_runtime:
+true` — then it ranks between the profile and config (see the
+[orchestration reference](./orchestration-reference.md#file-structure)).
 
 The profile block **replaces** rather than merges with a lower-priority
 block — backends take disjoint keys, so a partial overlay would produce a

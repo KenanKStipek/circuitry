@@ -36,7 +36,11 @@ from .allowlist import (
     walk_orchestration_refs,
 )
 from .config import CircuitryConfig
-from .effective_settings import EffectiveSettings, resolve_effective_settings
+from .effective_settings import (
+    EffectiveSettings,
+    orchestration_host_setting_warnings,
+    resolve_effective_settings,
+)
 from .live_state import LiveStateMirror
 from .orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
 from .profiles import (
@@ -219,6 +223,7 @@ def run(req: RunRequest) -> RunResult:
             cli_decompose=req.decompose_override,
             profile=profile,
         )
+        warnings.extend(effective.warnings)
         resolved_out = effective.out
         if profile is not None and profile.effects:
             # A pinned band name can only be checked once the run's actual
@@ -679,6 +684,11 @@ def validate(
 
         from ..core.lint import lint_orchestration
         lint_warnings = lint_orchestration(orch)
+        # Host settings the document tries to set are dropped at run time;
+        # say so here too, whether or not the rest of the file is valid.
+        lint_warnings += orchestration_host_setting_warnings(
+            orch, config or CircuitryConfig()
+        )
 
         schema = _load_schema()
         if schema is not None:

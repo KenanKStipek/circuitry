@@ -128,6 +128,19 @@ def _write_state_json(*, out: Path, state: dict, pretty: bool) -> None:
     out.write_text(dumps_saved_state(state, pretty=pretty) + "\n", encoding="utf-8")
 
 
+def _print_run_warnings(warnings: list[str]) -> None:
+    """Print a run's warnings on stderr, for a failed run as for a good one.
+
+    Stderr leaves `--json` / `--tail` / piped stdout machine-readable, so
+    `--quiet` (which a pipe implies) does not silence them: a warning can say
+    that part of the orchestration was ignored.
+    """
+    for w in warnings:
+        err_console.print(
+            f"[yellow]Warning:[/yellow] {escape(w)}", highlight=False, soft_wrap=True
+        )
+
+
 def _parse_env_vars(env_vars: list[str] | None) -> dict[str, Any]:
     """Parse -e KEY=VALUE entries into a state dict."""
     if not env_vars:
@@ -246,12 +259,13 @@ def _do_validate(
     else:
         console.print("[red]Invalid[/red]")
         for e in result.get("errors", []):
-            console.print(f" - {e}")
+            console.print(f" - {escape(str(e))}")
 
     # Advisory only — deprecated aliases and type-keyword names still run.
-    # Printed for both outcomes; never affects the exit code.
+    # Printed for both outcomes; never affects the exit code. Warnings can
+    # quote document text (e.g. an ignored runtime key), so escape markup.
     for w in result.get("warnings", []):
-        console.print(f"[yellow]Warning:[/yellow] {w}")
+        console.print(f"[yellow]Warning:[/yellow] {escape(w)}")
 
     if not result["ok"]:
         raise typer.Exit(code=1)
@@ -647,6 +661,7 @@ def run_cmd(
         else console.status("[cyan]Running…[/cyan]")
     ):
         result = run(req)
+    _print_run_warnings(result.warnings)
 
     # Resolved --out path: the CLI flag if given, else the profile's `out:`
     # (precedence cli > profile > default — see cli.effective_settings).
@@ -713,11 +728,6 @@ def run_cmd(
     # Print --print (or default print for --json with no --out)
     if not tail and (print_state or (not resolved_out and json_out)):
         console.print_json(dumps_saved_state(result.state, pretty=pretty))
-
-    # warnings
-    if result.warnings and not (quiet or json_out):
-        for w in result.warnings:
-            console.print(f"[yellow]Warning:[/yellow] {w}")
 
 
 @app.command("fetch", help="Fetch a shared library orchestration.")
@@ -912,6 +922,7 @@ def run_library_cmd(
         else console.status("[cyan]Running…[/cyan]")
     ):
         result = run(req)
+    _print_run_warnings(result.warnings)
 
     if out:
         _write_state_json(out=out, state=result.state, pretty=pretty)
@@ -943,10 +954,6 @@ def run_library_cmd(
 
     if not tail and (print_state or (not out and json_out)):
         console.print_json(dumps_saved_state(result.state, pretty=pretty))
-
-    if result.warnings and not (quiet or json_out):
-        for w in result.warnings:
-            console.print(f"[yellow]Warning:[/yellow] {w}")
 
 
 @app.command(
