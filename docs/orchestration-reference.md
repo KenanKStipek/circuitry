@@ -226,7 +226,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 
 **State output paths (named each loop):**
 - Per-iteration: `prime.<name>.iter_0.<body_effect>.value`, `prime.<name>.iter_1.<body_effect>.value`, ...
-- Final pass (after the loop completes): `prime.<name>.last.<body_effect>.value` — the last *completed* iteration's node, same shape as `iter_<N>`. A pass that errored under `on_error: continue`/`break` is skipped in favor of the last one that finished; a zero-iteration loop writes no `last` key.
+- Final pass (after the loop completes): `prime.<name>.last.<body_effect>.value` — the last *completed* iteration's node, same shape as `iter_<N>`. A pass that errored under `on_error: continue`/`break` is skipped in favor of the last one that finished; a zero-iteration loop writes no `last` key. Saved state writes it as a reference, `"last": {"$ref": "iter_<N>"}` — see [Loop Iteration Paths](#loop-iteration-paths).
 - Aggregated (when `collect` is set): `prime.<name>.collected.value` — array of every iteration's collected effect value
 - From *inside* the body: `prime.<body_effect>.value` — the current pass. See [Referencing a sibling within an iteration](#referencing-a-sibling-within-an-iteration).
 
@@ -996,6 +996,26 @@ field paths work). A pass that errored under `on_error: continue`/`break` is
 skipped in favor of the last one that finished; a loop that ran zero iterations
 writes no `last` key, so the read renders empty exactly like a missing
 `iter_<N>`.
+
+`last` is not a second copy of that pass. During a run it *is* the `iter_<N>`
+node, and saved state (`--out`, `--print`, the `--live-state` mirror) writes it
+as a reference to the sibling key it names, so each loop's final pass is on
+disk once:
+
+```json
+"explain": {
+  "iter_0": { "summary": { "value": "…" } },
+  "iter_1": { "summary": { "value": "…" } },
+  "last": { "$ref": "iter_1" }
+}
+```
+
+A tool reading a saved state file follows the reference itself
+(`node[node["last"]["$ref"]]`). Circuitry does it for you wherever saved state
+comes back in — a previous run's state passed with `--state`, the TUI's Runs
+view — so `{{prime.<loop>.last.<step>.value}}` reads through it exactly as it
+does in the run that wrote it. State files written before the reference form
+hold `last` as a full copy of the pass; they still load as they always did.
 
 ### Iteration Bindings Inside Nested Containers
 

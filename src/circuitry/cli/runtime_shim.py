@@ -20,6 +20,7 @@ from ..core.runtime_plugins import (
     invoke_plugins,
     load_plugins,
 )
+from ..core.saved_state import link_last_refs
 from ..core.state_ns import migrate_legacy_state
 from ..core.store import Store, build_persistence_backend
 from ..plugins.factory import build_plugin
@@ -134,13 +135,16 @@ def _load_state(
 ) -> dict[str, Any]:
     # The single choke point where caller state enters a run: whatever the
     # source (--state file, -e inline values, REST/TUI/MCP initial_state),
-    # legacy bare root keys are lifted under the `input` namespace here.
+    # legacy bare root keys are lifted under the `input` namespace here, and
+    # a previous run's saved `last` references are relinked to their passes.
     if initial_state is not None:
         # Isolate runtime mutations from caller-owned dictionaries.
-        return migrate_legacy_state(deepcopy(initial_state))
+        return link_last_refs(migrate_legacy_state(deepcopy(initial_state)))
     if not path or not path.exists():
         return migrate_legacy_state({})
-    return migrate_legacy_state(json.loads(path.read_text(encoding="utf-8")))
+    return link_last_refs(
+        migrate_legacy_state(json.loads(path.read_text(encoding="utf-8")))
+    )
 
 
 def run(req: RunRequest) -> RunResult:
@@ -241,7 +245,9 @@ def run(req: RunRequest) -> RunResult:
                 if isinstance(persisted, dict):
                     # Lift-on-hydrate: pre-namespace snapshots get their
                     # bare root keys moved under `input` (logged once).
-                    hydrated = migrate_legacy_state(deepcopy(persisted))
+                    hydrated = link_last_refs(
+                        migrate_legacy_state(deepcopy(persisted))
+                    )
                     if profile is not None and profile.inputs:
                         # Profile inputs stay the lowest layer: they fill
                         # keys the persisted snapshot doesn't carry rather

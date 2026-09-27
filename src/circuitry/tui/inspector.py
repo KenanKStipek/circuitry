@@ -33,6 +33,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ..core.saved_state import link_last_refs
 from .complexity import EffectComplexity
 from .complexity import read as read_complexity
 from .execution import DONE, FAILED, GLYPHS, PENDING, RUNNING, SKIPPED
@@ -517,7 +518,9 @@ def load_state_file(path: Path) -> LoadedState:
             error=f"Top-level JSON is a {_kind(payload)}, not an object.",
             hint="State files hold an object with prime and runtime at the top.",
         )
-    return LoadedState(path=path, state=payload)
+    # A saved loop's `last` is a reference to its final pass; relink it so the
+    # file browses exactly like the live run it was written from.
+    return LoadedState(path=path, state=link_last_refs(payload))
 
 
 # -- the live source ---------------------------------------------------------

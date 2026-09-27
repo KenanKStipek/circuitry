@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import json
 import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+from ..core.saved_state import dumps_saved_state
 
 
 def write_live_state(path: Path, state: dict[str, Any]) -> None:
@@ -14,7 +15,7 @@ def write_live_state(path: Path, state: dict[str, Any]) -> None:
     (e.g. contains non-serializable objects mid-execution).
     """
     try:
-        payload = json.dumps(state) + "\n"
+        payload = dumps_saved_state(state) + "\n"
     except (TypeError, ValueError, OverflowError):
         return  # Skip — not valid JSON yet
     path.parent.mkdir(parents=True, exist_ok=True)
