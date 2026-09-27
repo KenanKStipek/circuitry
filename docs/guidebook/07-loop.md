@@ -2,7 +2,7 @@
 
 The loop body executes, writes state, and the continuation condition evaluates against that new state — each iteration's output is the next iteration's input. This is feedback in the literal cybernetic sense: the output of the system is fed back as input, and the system decides from what it observes whether to go around again.
 
-Two kinds of loop answer two kinds of question. `each` asks "for every one of these?" and walks a collection. `while` asks "again?" and consults a condition — a CEL expression, or the model tasting the dish. Both are bounded by `max_iterations`, the deliberate floor under runaway feedback — though an `each` loop's real bound is its collection, as you will see.
+Two kinds of loop answer two kinds of question. `each` asks "for every one of these?" and walks a collection. `while` asks "again?" and consults a condition — a CEL expression, or the model tasting the dish. Neither is capped unless you say so: an `each` loop ends when its collection does, a `while` loop when its condition says stop, and `max_iterations` is the floor you set under runaway feedback.
 
 ## The shape
 
@@ -15,7 +15,7 @@ Loop ::= { type: 'loop', body: Effect+,
            name?: NAME,                                  — named ⇒ iter_<N> / last / collected nodes
            collect?: NAME,                               — a body step; needs a named loop
            flow?: 'chain' | 'tree', max_concurrency?: INT≥1,   — each loops only
-           max_iterations?: INT,                         — default 100; an each collection may not exceed it
+           max_iterations?: INT≥1,                       — no default; an each collection may not exceed it
            min_iterations?: INT,
            on_error?: 'fail'|'break'|'continue',
            labels?: MAP, description?: STRING }
@@ -58,7 +58,7 @@ The path is checked statically for its root — a bare key or a `state.` spellin
 
 The fix is upstream: `prompt_type: array` with a schema, so the producing prompt is held to the shape the loop needs.
 
-**The collection is the bound.** An `each` loop knows its length before the first pass, so hitting `max_iterations` is never a runaway; it means the list is longer than you said it could be. A collection with more elements than `max_iterations` (100 unless you set it) fails the loop at start, with no pass run. The error names both numbers and the `each.in` path: *each loop 'courses' (prime.menu.plan_courses.value): collection has 12 items but max_iterations is 8 — …*. Raise the cap, bound the collection upstream, or say that the first *N* are enough:
+**The collection is the bound.** An `each` loop knows its length before the first pass, so hitting `max_iterations` is never a runaway; it means the list is longer than you said it could be. Without `max_iterations`, the loop runs every element. With it, a collection with more elements than the cap fails the loop at start, with no pass run. The error names both numbers and the `each.in` path: *each loop 'courses' (prime.menu.plan_courses.value): collection has 12 items but max_iterations is 8 — …*. Raise the cap, bound the collection upstream, or say that the first *N* are enough:
 
 ```yaml
 - type: loop
@@ -104,7 +104,7 @@ With `truncate: true` the loop cooks the first eight courses and records why it 
       template: "Adjust the seasoning of {{prime.check_diet.main_course.value}} and describe the dish now."
 ```
 
-The condition is evaluated *before* each pass, and it sees the pass that just finished under the same within-iteration names the body uses — `{{prime.adjust.value}}` in the condition is the latest adjustment. Before the first pass there is nothing to see yet, and the name falls through to the enclosing scope (empty, here). `min_iterations` forces that many passes regardless of the answer — the way to say "always taste at least once" — and `max_iterations` (default `100`) stops the loop whatever the model thinks. A loop stopped that way completes normally, but it is not recorded as converged: its termination reason is `max_iterations_reached`, and a `--verbose` run prints a warning line. A `while` loop is always sequential; `flow` does not apply.
+The condition is evaluated *before* each pass, and it sees the pass that just finished under the same within-iteration names the body uses — `{{prime.adjust.value}}` in the condition is the latest adjustment. Before the first pass there is nothing to see yet, and the name falls through to the enclosing scope (empty, here). `min_iterations` forces that many passes regardless of the answer — the way to say "always taste at least once" — and `max_iterations` stops the loop whatever the model thinks. It has no default: without it, a `while` loop runs until its condition says stop, however many passes that takes. A loop stopped that way completes normally, but it is not recorded as converged: its termination reason is `max_iterations_reached`, and a `--verbose` run prints a warning line. A `while` loop is always sequential; `flow` does not apply.
 
 Model mode wraps the template the way `if` does — *"… Should the loop continue? Answer (yes/no):"* — so phrase it as a question whose *yes* means "go around again". CEL mode is deterministic, and reads whatever the previous pass left in state:
 
@@ -211,7 +211,7 @@ prime.courses.value.iterations               # passes completed
 prime.courses.value.termination.reason       # why it stopped (below)
 prime.courses.value.effects_by_iteration     # what each pass ran
 prime.courses.meta.mode                      # "each" / "while"
-prime.courses.meta.max_iterations / min_iterations
+prime.courses.meta.max_iterations / min_iterations   # max_iterations only when set
 prime.courses.meta.each_in_path / each_as    # each loops
 prime.courses.iter_0.cook.value
 prime.courses.last.cook.value
@@ -233,7 +233,7 @@ An **unnamed** loop is transparent: the body writes at stable paths in the enclo
       template: "Write the cooking steps for: {{course}}"
 ```
 
-**Termination reasons** — every completed named loop records one: `collection_exhausted` (every element done), `condition_false` (the `while` said stop), `max_iterations_reached` (the cap: a `while` that never said stop, or a truncated `each`, which also records `unvisited`), `collection_unresolved` (`each.in` was not an array), `condition_error` (the `while` condition could not be evaluated, under `break` or `continue`), `error` (the loop failed; `termination.detail` and `meta.error` say why). They are CEL-readable — `state.prime.season.value.termination.reason == 'max_iterations_reached'` is a fine thing to branch on after a taste loop that never converged.
+**Termination reasons** — every completed named loop records one: `collection_exhausted` (every element done), `condition_false` (the `while` said stop), `max_iterations_reached` (the cap you set: a `while` that never said stop, or a truncated `each`, which also records `unvisited`), `collection_unresolved` (`each.in` was not an array), `condition_error` (the `while` condition could not be evaluated, under `break` or `continue`), `error` (the loop failed; `termination.detail` and `meta.error` say why). They are CEL-readable — `state.prime.season.value.termination.reason == 'max_iterations_reached'` is a fine thing to branch on after a taste loop that never converged.
 
 ## Errors in a loop
 
@@ -292,7 +292,7 @@ With `input.menu` as `[{name: soup, steps: [chop, simmer]}, …]`, each course's
 
 **`iter_0` inside the body.** Stale data with a warning. Above.
 
-**Unbounded feedback.** A model-mode `while` with `max_iterations: 100` and a question the model tends to answer *yes* to is a hundred model calls. Set the cap to the number of passes you would accept, and make the condition ask for *stop* evidence, not *continue* enthusiasm.
+**Unbounded feedback.** A model-mode `while` with no `max_iterations` and a question the model tends to answer *yes* to does not stop; with `max_iterations: 100` it is a hundred model calls. Set the cap to the number of passes you would accept, and make the condition ask for *stop* evidence, not *continue* enthusiasm.
 
 **A plural body.** `summarize_articles` as a single prompt inside the loop is a sign the loop is not doing the iterating. One element, one singular step.
 

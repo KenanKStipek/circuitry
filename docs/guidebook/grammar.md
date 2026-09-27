@@ -101,8 +101,8 @@ Loop ::= { type: 'loop', body: Effect+,
                                                            unnamed ⇒ body overwrites at stable paths
            collect?: NAME,                               — a body step; needs a named loop
            flow?: Flow, max_concurrency?: INT≥1,         — each-loops only
-           max_iterations?: INT,                         — default 100; each: a longer collection fails
-                                                           at start unless each.truncate
+           max_iterations?: INT≥1,                       — no default (uncapped); each: a longer collection
+                                                           fails at start unless each.truncate
            min_iterations?: INT,
            on_error?: OnErrorLoop, labels?: MAP, description?: STRING }
 ```
