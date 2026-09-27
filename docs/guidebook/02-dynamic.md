@@ -126,7 +126,7 @@ effects:
 
 A dynamic has its own `on_error`, and one field the leaf effects do not: `stop_on_error`. In a tree, `stop_on_error: true` halts the remaining children when one fails; by default the others run to completion and the failures are collected. Per-effect `on_error` covers the same intent one effect at a time and is usually the better tool — see [Errors](05-errors.md).
 
-## What lands in state
+## What lands in the shadow state
 
 ```
 prime.<dynamic>.value                 # true when the container completed

@@ -543,6 +543,8 @@ treated like any other tool-effect failure and follows the effect's
 
 ## State Path Addressing
 
+A run's **shadow state** has the same keys as the orchestration: every effect writes to the path its name and position dictate, one segment per named container, and later effects read it there.
+
 ### Mustache Template Interpolation
 
 Templates use Mustache syntax (`{{...}}`). Two kinds of references:

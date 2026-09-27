@@ -10,7 +10,7 @@ NAME        ::= /^[A-Za-z_][A-Za-z0-9_]*$/          — never iter_<N> (reserved
 STRING, INT(≥0 unless noted), NUMBER, BOOL
 TEMPLATE    ::= STRING with Mustache: {{input.<k>}} {{prime.<path>.value}} {{<loop_var>}} {{_loop_index}}
                 (triple-stache {{{…}}} to skip HTML escaping)
-CEL         ::= STRING in CEL (cel-python); 'state' bound to state root, the only binding;
+CEL         ::= STRING in CEL (cel-python); 'state' bound to the shadow state's root, the only binding;
                 inside a loop's own body also state.<each.as> and state.iter.index;
                 an unset or null state. path makes the whole expression false (unless strict)
 STATE_PATH  ::= dot-delimited path rooted at input. | prime. | runtime.
@@ -109,7 +109,7 @@ Loop ::= { type: 'loop', body: Effect+,
 
 Read grammar (post-loop unless noted): `prime.<step>.value` (this pass, body/while only) ·
 `prime.<loop>.iter_<N>.<step>.value` · `prime.<loop>.last.<step>.value` (last *completed* pass) ·
-`prime.<loop>.collected.value`. In saved state `last` is `{"$ref": "iter_<N>"}`, linked back on load.
+`prime.<loop>.collected.value`. In a saved shadow state `last` is `{"$ref": "iter_<N>"}`, linked back on load.
 Termination (`prime.<loop>.value.termination.reason`): `collection_exhausted` · `condition_false` ·
 `max_iterations_reached` (+ `unvisited` when truncated) · `collection_unresolved` · `condition_error` · `error`.
 
