@@ -55,7 +55,7 @@ The run goes green, the cause prompt reads "Name the most likely cause of this e
 
 ## Tree
 
-Before an agent changes anything it looks around: it searches the code for the error message, reads the recent history, and checks for related issues. None of the three needs a model. Each is a `tool` effect, which calls a plugin — here `ripgrep`, `git` and `gh` — instead of a model, and composes like any other leaf ([Tools and persistence](13-tools-and-persistence.md) covers them). None of the three needs the others either:
+Before an agent changes anything it looks around: it searches the code for the error message, reads the recent history, and checks for related issues. These are `tool` effects: a tool calls a plugin — here `ripgrep`, `git` and `gh` — instead of a model, and composes like any other leaf ([Tools and persistence](13-tools-and-persistence.md) covers them). And none of the three needs the others:
 
 ```yaml
 - type: dynamic
