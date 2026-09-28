@@ -64,33 +64,34 @@ With scoring off there is no `complexity` key at all — not `null`, not `{}` �
   name: review_depth
   if:
     mode: cel
-    expr: "state.prime.plan_courses.meta.complexity.score > 60.0"
+    expr: "state.prime.plan.meta.complexity.score > 60.0"
   then:
     - type: prompt
       name: review
-      template: "Review this menu plan in detail, course by course: {{prime.plan_courses.value}}"
+      template: "Review this fix plan step by step, and name the test that proves each step: {{prime.plan.value}}"
   else:
     - type: prompt
       name: review
-      template: "Sanity-check this menu plan in two lines: {{prime.plan_courses.value}}"
+      template: "Sanity-check this fix plan in two lines: {{prime.plan.value}}"
 ```
 
 ### Previewing: `cof score`
 
 ```
-$ cof score dinner_party.yml --config bands.json
+$ cof score reply.yml --config bands.json
                           Circuitry · Score (static preview)
 ┏━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃ Effect        ┃ Type   ┃ Score ┃ Band  ┃ Dominant signals / reason             ┃
 ┡━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
-│ draft_menu    │ prompt │   7.3 │ light │ state_references 4.3                  │
+│ reply         │ prompt │   7.5 │ light │ state_references 4.3                  │
 │ critique_step │ use    │     — │ —     │ not scoreable — compiled at runtime   │
-│ menu_card     │ prompt │   7.2 │ light │ state_references 4.3                  │
+│ refine_step   │ use    │     — │ —     │ not scoreable — compiled at runtime   │
+│ comment       │ prompt │   7.4 │ light │ state_references 4.3                  │
 └───────────────┴────────┴───────┴───────┴───────────────────────────────────────┘
-2 scored, 1 not scoreable, 3 effect(s) total.
+2 scored, 2 not scoreable, 4 effect(s) total.
 ```
 
-`cof score` compiles the document and scores each prompt's *template* with no state available — a static preview, no model calls. Five signals are identical either way; `prompt_size` and `keywords` move once real state is interpolated, usually upward. Four kinds of effect cannot be scored at all and are reported as rows with a reason rather than dropped: a `use` (its child is not compiled until it runs), a `tool` (no prompt), a reflector-generated effect (does not exist yet), and an effect a profile disabled. `--json` gives the same table as data.
+Here `reply.yml` is the reply-and-critique document from [Composition](09-composition.md). `cof score` compiles the document and scores each prompt's *template* with no state available — a static preview, no model calls. Five signals are identical either way; `prompt_size` and `keywords` move once real state is interpolated, usually upward. Four kinds of effect cannot be scored at all and are reported as rows with a reason rather than dropped: a `use` (its child is not compiled until it runs), a `tool` (no prompt), a reflector-generated effect (does not exist yet), and an effect a profile disabled. `--json` gives the same table as data.
 
 ## Routing
 
@@ -148,22 +149,22 @@ runtime.effective_settings.sources.model   # "router" when the router won the ru
 ### Watching it happen
 
 ```
-$ cof run dinner_party.yml --explain-routing -e occasion=anniversary
-▸ prime.classify score 7.2/100 · band light · model phi3:mini · why router
-▸ prime.plan_courses score 20.5/100 · band mid · model qwen2.5:7b-instruct · why router
-▸ prime.audit score 41.7/100 · band heavy · model llama3.1:70b · why explicit
+$ cof run fix_plan.yml --dry-run --explain-routing -e issue="parse_duration fails on 1h30m"
+▸ prime.kind score 7.7/100 · band light · model phi3:mini · why router
+▸ prime.plan score 22.3/100 · band mid · model qwen2.5:7b-instruct · why router
+▸ prime.review score 23.2/100 · band mid · model llama3.1:70b · why explicit
 ```
 
-One line per prompt effect, printed the moment before it dispatches, read straight off the node's pre-dispatch `meta` — score, band, model, and *why*. The third line is the router deferring: `audit` names its own model and still reports the band it scored into. With scoring off the flag prints nothing; `--quiet` and `--json` suppress it.
+One line per prompt effect, printed the moment before it dispatches, read straight off the node's pre-dispatch `meta` — score, band, model, and *why*. The short triage prompt goes to the small model and the longer planning prompt to a larger one. The third line is the router deferring: `review` names its own model and still reports the band it scored into. With scoring off the flag prints nothing; `--quiet` and `--json` suppress it.
 
 `docs/examples/routing/` is a runnable demonstration — one orchestration, two band tables, a pin-and-opt-out profile — that runs under `--dry-run`, because routing happens in the pre-dispatch meta block and no model is ever called.
 
 ## Per-run switches and precedence
 
 ```bash
-cof run dinner_party.yml --scoring --routing              # force both on for this run
-cof run dinner_party.yml --no-routing                     # off, whatever config says — beats a profile pin too
-cof run dinner_party.yml --scoring --decompose --dry-run  # try decomposition without editing config
+cof run issue_to_pr.yml --scoring --routing              # force both on for this run
+cof run issue_to_pr.yml --no-routing                     # off, whatever config says — beats a profile pin too
+cof run issue_to_pr.yml --scoring --decompose --dry-run  # try decomposition without editing config
 ```
 
 Each flag flips one `enabled` field; the rest of the sub-block (weights, bands, thresholds) is whatever config or the document already set. The block itself rides the normal `runtime.*` precedence — a document's `runtime.complexity` **replaces** the config's wholesale rather than merging, so a document that overrides it must restate everything it still wants:

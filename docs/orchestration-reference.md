@@ -852,7 +852,7 @@ effects:
 ```
 
 ```bash
-cof run recipe --profile no-planning
+cof run agent.yml --profile no-planning
 ```
 
 A disabled effect **is not executed**. In its place the runtime writes a skip

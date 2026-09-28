@@ -2,7 +2,7 @@
 
 > "Control mechanisms that lay their own plans." — Gordon Pask, *An Approach to Cybernetics* (1961)
 
-This is the long-form companion to the [README](../../README.md). The README gets you running and gives you the mental model; the guidebook is the exhaustive tour — every primitive, every state path, every switch, and the methodology that ties them together. It is written as a curriculum: each chapter assumes only the ones before it, and one running example (a dinner party) threads through all of them, so by the last chapter you have seen every part of the language in one document.
+This is the long-form companion to the [README](../../README.md). The README gets you running and gives you the mental model; the guidebook is the exhaustive tour — every primitive, every state path, every switch, and the methodology that ties them together. It is written as a curriculum: each chapter assumes only the ones before it, and one running example threads through all of them: an agent that takes an issue from a repository, triages it, gathers context with tools, plans a fix, patches the code until the tests pass, and opens the pull request. By the last chapter you have seen every part of the language in one document.
 
 The arc has three acts:
 
@@ -35,7 +35,7 @@ The arc has three acts:
 11. [Decomposition](11-decomposition.md) — over-threshold prompts that plan their own fan-out and merge.
 12. [Surfaces](12-surfaces.md) — CLI, TUI, SDK, MCP server, and observability.
 13. [Tools and persistence](13-tools-and-persistence.md) — tool plugins, adapters, runtime plugins, and durable state.
-14. [The whole meal](14-the-whole-meal.md) — every primitive in one document.
+14. [Issue to pull request](14-issue-to-pull-request.md) — the whole agent: every primitive in one document.
 
 ## How to read the examples
 

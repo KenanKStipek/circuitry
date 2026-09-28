@@ -131,33 +131,39 @@ Twenty-nine adapters ship in-tree behind one `Adapter` protocol — hosted APIs,
 
 A profile is a YAML file that overlays one run — defaults, inputs, per-effect overrides, persistence — without touching the orchestration:
 
+A profile that keeps every model call on this machine — a small local model reads the issue, a larger local model writes the patches:
+
 ```yaml
-# profiles/fast.yml
+# profiles/local.yml
 adapter: ollama
-model: llama3.2
-out: runs/fast.json
+model: llama3.1:8b
+out: runs/local.json
 inputs:
-  occasion: "weeknight"          # merged under input.*; -e still wins
+  repo: "."                      # merged under input.*; -e still wins
 effects:                         # keyed by effect path, as in state minus the prime. root
-  plan_courses:
-    model: cheap
-    provider: cyberdiner
-  season:
+  error:
+    model: llama3.2:3b
+  patch:
+    model: qwen2.5-coder:14b
+    provider: ollama
+  pre_review:
     enabled: false               # switch an effect off for this run
-  replan_service:
-    routing: premium             # pin to a named routing band (chapter 10)
+  plan:
+    routing: heavy               # pin to a named routing band (chapter 10)
 persistence:
   backend: jsonl-file
   path: runs.jsonl
 ```
 
 ```bash
-cof run dinner.yml --profile fast
+cof run issue_to_pr.yml --profile local
 ```
+
+The effect paths are those of the agent's whole document, which [Issue to pull request](14-issue-to-pull-request.md) builds.
 
 Profiles are discovered at `<orchestration_dir>/profiles/<name>.yml` first, then `<cwd>/profiles/<name>.yml`, and validated against a schema — an unknown effect path fails with the list of valid ones. `enabled: false` is the flagship: it turns a reflector's agentic planning off for one run and leaves everything else intact, writing a skip node in its place so downstream paths still resolve (to `null`). A container disabled this way disables its whole subtree; a condition (`if:` on an `if`, `while:` on a loop) cannot be disabled on its own — disable the container.
 
-The recorded profile is enough to reproduce the run without the file: `cof run dinner.yml --profile-from-state ./runs/fast.json` reconstructs it from `runtime.effective_settings.profile`. Redacted secrets are the exception — reconstruction refuses to replay a `***REDACTED***` sentinel and tells you to bring the file.
+The recorded profile is enough to reproduce the run without the file: `cof run issue_to_pr.yml --profile-from-state ./runs/local.json` reconstructs it from `runtime.effective_settings.profile`. Redacted secrets are the exception — reconstruction refuses to replay a `***REDACTED***` sentinel and tells you to bring the file.
 
 [Named Profiles](../profiles.md) has the full precedence rules and the persistence table.
 

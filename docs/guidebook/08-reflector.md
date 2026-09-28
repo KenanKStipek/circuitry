@@ -4,7 +4,7 @@
 
 `if` chooses between plans that were written in advance. `loop` repeats one. The **reflector** writes the plan: it asks a model to *generate* the effects to run next, validates what came back against the same schema every hand-written document passes, executes it, and — if asked — does it again with the results in hand. It is the system planning itself, and it is the effect to reach for only when the steps cannot be known up front.
 
-That last clause is the whole design guidance. A reflector costs a planning call per cycle, produces a topology you did not review, and is bounded only by the limits you set on it. When you *can* write the steps, write them: a chain is cheaper, faster, and auditable before it runs. The reflector is for the roast that burned an hour before the guests arrive — the recovery plan depends on what is in the kitchen now, and no one could have written it yesterday.
+That last clause is the whole design guidance. A reflector costs a planning call per cycle, produces a topology you did not review, and is bounded only by the limits you set on it. When you *can* write the steps, write them: a chain is cheaper, faster, and auditable before it runs. The reflector is for the issue that arrived this morning — the steps to fix it depend on what is broken now, and no one could have written them yesterday.
 
 ## The shape
 
@@ -20,19 +20,20 @@ Reflector ::= { type: 'reflector', name: NAME, effects: Effect+,   — the plann
 
 `name` and a non-empty `effects` list are required. Among the inner effects, one prompt — `propose_steps` by default, or whatever `plan_from_step` names — is the planner: its output *is* the plan.
 
-## A reflector in the kitchen
+## A reflector plans a fix
 
 ```yaml
 - type: reflector
-  name: replan_service
+  name: plan_fix
   max_effects: 4
   max_iterations: 2
   effects:
     - type: prompt
       name: propose_steps
       template: |
-        The roast burned. Six guests arrive in one hour for an anniversary dinner.
-        Plan the final hour of service. Output must follow the OUTPUT CONTRACT exactly.
+        Issue #42: parse_duration("1h30m") raises ValueError: invalid duration. "90m" works.
+        The error is raised in src/durations.py, where one regular expression matches one number and one unit.
+        Plan the steps to find the cause and describe the fix. Output must follow the OUTPUT CONTRACT exactly.
 ```
 
 Each planning cycle runs in five phases:
@@ -53,18 +54,18 @@ The directive fixes the output shape, and it is deliberately narrow:
 done: false
 effects:
   - type: prompt
-    name: warm_plates
-    template: "Warm four plates. Keep the oven at the lowest setting."
+    name: reproduce
+    template: "Write a pytest test that calls parse_duration with the text 1h30m. The test expects 5400."
   - type: dynamic
-    name: rescue_roast
+    name: locate
     flow: chain
     effects:
       - type: prompt
-        name: assess_roast
-        template: "Describe the burned roast. Name the parts that are safe to serve."
+        name: read_pattern
+        template: "Explain which texts the regular expression (\\d+)([hms]) matches with re.fullmatch."
       - type: prompt
-        name: carve_plan
-        template: "Write a carving plan for the safe parts."
+        name: propose_fix
+        template: "Write a regular expression that matches one or more pairs of a number and a unit."
 ```
 
 Every generated effect is an ordinary effect — the plan is a Circuitry orchestration, and it passes the same gate as one you wrote. `max_effects` caps the number of top-level effects per cycle (`8` by default; the alias `max_steps` is accepted).
@@ -73,16 +74,16 @@ The directive also fixes the plan's *language*: [ASD-STE100 Simplified Technical
 
 ## Isolation, and what the plan can see
 
-A generated plan runs as a child with **isolated state**: like any `use` child, it cannot read the parent's `prime` or `input` namespaces. A generated template that references `{{prime.courses.collected.value}}` renders empty. This is by design — the plan is a self-contained document, and everything its prompts need must be in their templates — and it is why the planning template should carry the specifics: the planner writes them into the plan.
+A generated plan runs as a child with **isolated state**: like any `use` child, it cannot read the parent's `prime` or `input` namespaces. A generated template that references `{{prime.context.search.value}}` renders empty. This is by design — the plan is a self-contained document, and everything its prompts need must be in their templates — and it is why the planning template should carry the specifics: the planner writes them into the plan.
 
 The parent, on the other hand, sees everything the plan produced:
 
 ```
-prime.replan_service.value                              # true when planning finished
-prime.replan_service.meta.iterations                    # one record per cycle: done, stop, parsed, error, plan_text
-prime.replan_service.inner.propose_steps.value          # the last planner reply
-prime.replan_service.generated.iter_0.warm_plates.value # a generated effect's output
-prime.replan_service.generated.iter_0.rescue_roast.carve_plan.value
+prime.plan_fix.value                                    # true when planning finished
+prime.plan_fix.meta.iterations                          # one record per cycle: done, stop, parsed, error, plan_text
+prime.plan_fix.inner.propose_steps.value                # the last planner reply
+prime.plan_fix.generated.iter_0.reproduce.value         # a generated effect's output
+prime.plan_fix.generated.iter_0.locate.propose_fix.value
 ```
 
 Generated effects are addressable at exactly the paths their names dictate, one level under the cycle they ran in — so a downstream prompt can read a plan's results by name once it knows the plan's vocabulary, and a `use` effect elsewhere can wrap the reflector to map specific outputs.
@@ -94,7 +95,7 @@ Today, three things: the directive, the literal text of its own template, and th
 - **The directive's goal and context slots.** They are meant to carry the value of a root-level effect named `goal` and the run's effective settings. The directive looks both up in the store the reflector runs in, which holds `prime` rather than the state root, so it finds neither and both slots render empty. A `goal` effect before the reflector is harmless, and the planner never reads it.
 - **Root references in the planning prompt.** The inner planning dynamic is rendered against the reflector's own node rather than the run's root, so `{{prime.…}}` and `{{input.…}}` written into `propose_steps` render empty too.
 
-The node itself is readable, with paths relative to it. From the second cycle on, `{{{inner.propose_steps.value}}}` is the previous plan (triple-stache: it is YAML), and `{{generated.iter_0.warm_plates.value}}` is what one of its effects produced. That is how a planner works "with the results in hand": name what the last cycle ran, and ask what comes next.
+The node itself is readable, with paths relative to it. From the second cycle on, `{{{inner.propose_steps.value}}}` is the previous plan (triple-stache: it is YAML), and `{{generated.iter_0.reproduce.value}}` is what one of its effects produced. That is how a planner works "with the results in hand": name what the last cycle ran, and ask what comes next.
 
 So write into the planning template, as plain text, everything the planner must know about the rest of the run. That keeps a reflector honest about what it is: a planner for a situation you can describe when you write the document, not one that reads the run. When the plan must depend on what the run produced, generate the plan with an ordinary prompt, which can read state, and run it with a `use` effect's `inline:`, as [Composition](09-composition.md) shows.
 
@@ -106,12 +107,12 @@ Three limits, all worth setting explicitly:
 - `max_effects` — the plan's width.
 - `stop_on_done` — whether the planner's own `done: true` ends the loop. Turn it off only when you want exactly `max_iterations` cycles regardless.
 
-And one switch outside the document: a [profile](04-configuration.md) with `effects.replan_service.enabled: false` turns agentic planning off for a single run, writing a skip node in its place. It is the effect most worth switching off — for a cost-controlled rerun, a deterministic test, a demo where the plan should not vary.
+And one switch outside the document: a [profile](04-configuration.md) with `effects.plan_fix.enabled: false` turns agentic planning off for a single run, writing a skip node in its place. It is the effect most worth switching off — for a cost-controlled rerun, a deterministic test, a demo where the plan should not vary.
 
 ```yaml
 # profiles/no-planning.yml
 effects:
-  replan_service:
+  plan_fix:
     enabled: false
 ```
 

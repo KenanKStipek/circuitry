@@ -8,19 +8,19 @@ This chapter comes before the cybernetic effects on purpose. A control loop that
 
 ```yaml
 - type: prompt
-  name: pair_wine
-  template: "Pick a wine to pair with: {{prime.suggest_dish.value}}"
+  name: reply
+  template: "Reply as the maintainer to whoever filed this issue. Thank them and say what happens next. Issue: {{input.issue}}"
   retries: {max_attempts: 3, backoff_ms: 500}
   provider_fallbacks: [ollama, "openai:gpt-4o-mini"]
   timeout_ms: 60000
-  on_error: skip        # no sommelier tonight — dinner goes on
+  on_error: skip        # no reply drafted — the fix goes on
 ```
 
 **`retries`** — `{max_attempts, backoff_ms}` on a prompt. Each attempt re-renders nothing and re-sends the same prompt; `backoff_ms` is the pause between attempts. Each attempt is recorded, and `meta.retries_used` says how many it took. Prompts only — a tool that failed is not usually improved by asking again, and a `use` child carries its own policies.
 
 **`provider_fallbacks`** — an ordered list of providers to try when the primary errors. Each entry is an `adapter[:model]` token: `ollama` means the ollama adapter with the run's default model; `openai:gpt-4o-mini` names both. The attempt chain — every adapter and model tried, in order, with its outcome — lands at `meta.fallback_attempts`, and `meta.fallback_recovered` is `true` when it took more than one. You can always see who actually answered. (An effect's own `provider:` sets the *primary* the same way; both are usually run policy, set in config or a profile, rather than something a document author writes.)
 
-**`timeout_ms`** — the effect's budget. Separate from the adapter's socket timeout in config (`runtime.adapters.<name>.timeout_seconds`), which is per machine rather than per step; a large local model needs cold-load headroom there that no single effect should have to carry.
+**`timeout_ms`** — the effect's budget, on a prompt or a tool: a test run that hangs fails its step when the budget runs out, instead of holding the agent all night. Separate from the adapter's socket timeout in config (`runtime.adapters.<name>.timeout_seconds`), which is per machine rather than per step; a large local model needs cold-load headroom there that no single effect should have to carry.
 
 **`on_error`** — what happens when the attempts are exhausted. Three values on every effect except loops:
 
@@ -42,7 +42,7 @@ prime.<name>.meta.error               # the message
 prime.<name>.meta.fallback_attempts   # [{adapter, model, status, error}, …]
 prime.<name>.meta.fallback_recovered  # true when a fallback answered
 prime.<name>.meta.retries_used        # present when a retry succeeded
-prime.<container>.meta.error          # "prime.menu.wine: …" — a breadcrumb into the child
+prime.<container>.meta.error          # "prime.context.search: …" — a breadcrumb into the child
 ```
 
 A container that fails closes its own node with `value: false` and a `meta.error` that names the child path, so from the root down you can follow the breadcrumbs to the leaf. `inspect_divergence_paths(state)` in the SDK does the walk for you and returns every errored node in path order.
@@ -51,25 +51,27 @@ Two things never happen. A failure never leaves a *partial* value: a `use` child
 
 ## Designing for degradation
 
-The dinner party has a step that fetches a recipe from the web for inspiration. The web is optional; dinner is not:
+The agent looks for related issues with `gh`, which needs a login and the network. Related issues help; the fix does not depend on them:
 
 ```yaml
 - type: tool
-  name: fetch_recipe
-  provider: web_fetch
-  params: {url: "{{input.recipe_url}}"}
+  name: related
+  provider: gh
+  params: {args: [issue, list, --search, "{{input.error}}"], cwd: "{{input.repo}}"}
   on_error: skip
 
 - type: prompt
-  name: plan_courses
+  name: plan
   template: |
-    Plan three courses for {{input.occasion}}.
-    Inspiration, if any: {{prime.fetch_recipe.value}}
+    Plan the fix for this issue in at most three steps.
+    Related issues, if any: {{{prime.related.value}}}
+
+    {{{input.issue}}}
 ```
 
-When the fetch fails, `plan_courses` reads "Inspiration, if any: " and carries on. The model gets less; the run gets a menu; the state file says the fetch failed and why. That is the pattern: put `skip` on the effects whose absence downstream can tolerate, leave `fail` on the ones it cannot, and write the downstream templates so that an empty interpolation reads as "none" rather than as a broken sentence.
+When `gh` fails, `plan` reads "Related issues, if any: " and carries on. The model gets less; the run gets a plan; the state file says the lookup failed and why. That is the pattern: put `skip` on the effects whose absence downstream can tolerate, leave `fail` on the ones it cannot, and write the downstream templates so that an empty interpolation reads as "none" rather than as a broken sentence.
 
-The other half of the pattern is *not* to reach for `on_error` when what you want is a decision. If the missing recipe should change what happens next — a different planning prompt, say — that is an [`if`](06-if.md). Remember the CEL rule from [Shadow state](03-state.md): an expression that reads a null or missing path is false as a whole. So test positively for the value you need — `size(state.prime.fetch_recipe.value) > 0` — and let the missing case fall to `else`. To branch on the failure itself, test the error: `state.prime.fetch_recipe.meta.error != null` is true when the fetch failed, and false when it succeeded, because a null `error` makes the whole expression false. Do not write `state.prime.fetch_recipe.value == null`: it reads a null path, so it is false even after the skip.
+The other half of the pattern is *not* to reach for `on_error` when what you want is a decision. If the missing related issues should change what happens next — a different planning prompt, say — that is an [`if`](06-if.md). Remember the CEL rule from [Shadow state](03-state.md): an expression that reads a null or missing path is false as a whole. So test positively for the value you need — `size(state.prime.related.value) > 0` — and let the missing case fall to `else`. To branch on the failure itself, test the error: `state.prime.related.meta.error != null` is true when the lookup failed, and false when it succeeded, because a null `error` makes the whole expression false. Do not write `state.prime.related.value == null`: it reads a null path, so it is false even after the skip.
 
 ## Validation is the first error handler
 

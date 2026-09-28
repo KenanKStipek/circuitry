@@ -7,7 +7,7 @@ Start with the [README](../README.md) for install, first run, and the mental mod
 - [**The Guidebook**](./guidebook/README.md) — the long-form tour, fourteen chapters in three acts, one running example. Also built as [PDF](./guidebook/circuitry-guidebook.pdf) and [EPUB](./guidebook/circuitry-guidebook.epub).
   - Part I — Basics: [Prompt](./guidebook/01-prompt.md) · [Dynamic](./guidebook/02-dynamic.md) · [Shadow state](./guidebook/03-state.md) · [Configuration](./guidebook/04-configuration.md) · [Errors](./guidebook/05-errors.md)
   - Part II — Cybernetics: [If](./guidebook/06-if.md) · [Loop](./guidebook/07-loop.md) · [Reflector](./guidebook/08-reflector.md)
-  - Part III — The machine in the world: [Composition](./guidebook/09-composition.md) · [Complexity](./guidebook/10-complexity.md) · [Decomposition](./guidebook/11-decomposition.md) · [Surfaces](./guidebook/12-surfaces.md) · [Tools and persistence](./guidebook/13-tools-and-persistence.md) · [The whole meal](./guidebook/14-the-whole-meal.md)
+  - Part III — The machine in the world: [Composition](./guidebook/09-composition.md) · [Complexity](./guidebook/10-complexity.md) · [Decomposition](./guidebook/11-decomposition.md) · [Surfaces](./guidebook/12-surfaces.md) · [Tools and persistence](./guidebook/13-tools-and-persistence.md) · [Issue to pull request](./guidebook/14-issue-to-pull-request.md)
 - [Orchestration Reference](./orchestration-reference.md) — every field of every effect, state path addressing, patterns and antipatterns, and the LLM authoring rules.
 - [Grammar](./guidebook/grammar.md) — the formal grammar, derived from `orchestration.schema.json`.
 - [Troubleshooting State Paths](./troubleshooting-state-paths.md) — the workflow for a run that diverged, and the symptom table for loop paths.

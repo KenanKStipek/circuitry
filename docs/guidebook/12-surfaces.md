@@ -30,20 +30,20 @@ Everything the world reaches Circuitry through. One runtime sits under all of th
 
 ```bash
 cof run learn/hello -e name=World                      # inline inputs, repeatable
-cof run dinner.yml --state inputs.json                  # inputs from a file
-cof run dinner.yml -e occasion=anniversary --tail       # print only the final effect's value
-cof run dinner.yml --json | jq '.prime.plate.value'     # machine-readable state (automatic when piped)
-cof run dinner.yml --out state.json --pretty            # write the finished state
-cof run dinner.yml --live-state dinner.live.json        # mirror the state while it runs (≤ every 0.5 s, and at the end)
-cof run dinner.yml --dry-run                            # no model calls; rendered prompts and shapes
-cof run dinner.yml --verbose                            # a start and a result line per effect, pass tags, timing
+cof run triage.yml --state issue.json                   # inputs from a file
+cof run triage.yml -e issue="parse_duration fails on 1h30m" --tail   # print only the final effect's value
+cof run triage.yml --json | jq '.prime.reply.value'     # machine-readable state (automatic when piped)
+cof run triage.yml --out state.json --pretty            # write the finished state
+cof run issue_to_pr.yml --live-state agent.live.json    # mirror the state while it runs (≤ every 0.5 s, and at the end)
+cof run issue_to_pr.yml --dry-run                       # no model calls; rendered prompts and shapes
+cof run issue_to_pr.yml --verbose                       # a start and a result line per effect, pass tags, timing
 cof run --last                                          # re-run the previous invocation
-cof run dinner.yml --profile fast                       # apply profiles/fast.yml
-cof run dinner.yml --profile-from-state runs/fast.json  # reconstruct the profile a past run recorded
-cof run dinner.yml --adapter ollama --model llama3.2    # the run default, highest-priority layer
-cof run dinner.yml --scoring --routing --explain-routing
-cof run dinner.yml --scoring --decompose --decompose-out ./plans
-cof run dinner.yml --skip-preflight                     # run even if a check() reported not-ready
+cof run issue_to_pr.yml --profile local                 # apply profiles/local.yml
+cof run issue_to_pr.yml --profile-from-state runs/local.json  # reconstruct the profile a past run recorded
+cof run triage.yml --adapter ollama --model llama3.2    # the run default, highest-priority layer
+cof run issue_to_pr.yml --scoring --routing --explain-routing
+cof run issue_to_pr.yml --scoring --decompose --decompose-out ./plans
+cof run issue_to_pr.yml --skip-preflight                # run even if a check() reported not-ready
 ```
 
 When stdout is not a terminal, `cof run` switches to `--json` with quiet output on its own, so it composes with `jq` and with scripts without flags. `--tail` overrides that when you want the raw final value. `--quiet` suppresses prose; `--config <path>` (or `CIRCUITRY_CONFIG`) points at a specific config file.
@@ -72,17 +72,20 @@ Two ways to write an orchestration without writing YAML, and they are different 
 
 ## The SDK
 
+The SDK is how an agent runs inside another program. A webhook handler for new issues, say, triages each one as it arrives:
+
 ```python
 from circuitry import run_orchestration
 
-result = run_orchestration(
-    orchestration_path="dinner.yml",
-    state={"occasion": "anniversary", "diet": "vegetarian"},
-    live_state_path="dinner.live.json",
-)
-print(result.ok)                          # True / False
-print(result.state["prime"]["plate"]["value"])
-print(result.state["runtime"]["effective_settings"]["sources"])
+def on_issue_opened(issue: dict) -> str:        # your webhook handler calls this
+    result = run_orchestration(
+        orchestration_path="triage.yml",
+        state={"issue": issue["title"] + "\n\n" + issue["body"]},
+        live_state_path="triage.live.json",
+    )
+    print(result.ok)                            # True / False
+    print(result.state["runtime"]["effective_settings"]["sources"])
+    return result.state["prime"]["reply"]["value"]
 ```
 
 `run_orchestration` reuses the CLI runtime path deliberately, so behaviour is identical across interfaces. `state` is wrapped under `input` for you. `dry_run=True` and `validate_only=True` do what the flags do; `out_path` writes the state; `raise_on_error=True` (the default) raises `CircuitryExecutionError` — which carries the failed `RunResult` as `.result`, so the partial state is never lost — and `False` returns the result with `ok` false instead.

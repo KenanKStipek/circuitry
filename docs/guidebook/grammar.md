@@ -151,7 +151,7 @@ Reflector ::= { type: 'reflector', name: NAME, effects: Effect+,   — base temp
 ## Static semantics (beyond shape)
 
 1. Sibling names unique; names are path segments, never paths; never type-keywords (the validator rejects duplicates and warns on type-keyword names).
-2. `each.in`, CEL paths, `use` input references, and template refs must root at a namespace — or, inside a loop, at an enclosing loop's binding (`course.steps` for `each.in` and references, `state.course` / `state.iter.index` in CEL); a declared `interface.inputs` name is referenced only as `{{input.<name>}}` / `state.input.<name>` — anything else is a compile error. Every CEL expression must parse.
+2. `each.in`, CEL paths, `use` input references, and template refs must root at a namespace — or, inside a loop, at an enclosing loop's binding (`suite.tests` for `each.in` and references, `state.test` / `state.iter.index` in CEL); a declared `interface.inputs` name is referenced only as `{{input.<name>}}` / `state.input.<name>` — anything else is a compile error. Every CEL expression must parse.
 3. `schema` required ⇔ structured `prompt_type`; `template` required ⇔ `mode: model`; `expr` required ⇔ `mode: cel`.
 4. `collect` must name a body step, and needs a named loop to have anywhere to write — on an unnamed loop it validates and silently aggregates nothing. Chain-order reads only; tree siblings can't read each other.
 5. `use` cycle guard: an orchestration cannot (transitively) `use` itself.

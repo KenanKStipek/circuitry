@@ -2,7 +2,7 @@
 
 The loop body executes, writes state, and the continuation condition evaluates against that new state — each iteration's output is the next iteration's input. This is feedback in the literal cybernetic sense: the output of the system is fed back as input, and the system decides from what it observes whether to go around again.
 
-Two kinds of loop answer two kinds of question. `each` asks "for every one of these?" and walks a collection. `while` asks "again?" and consults a condition — a CEL expression, or the model tasting the dish. Neither is capped unless you say so. An `each` loop walks a collection resolved before its first pass, so it can run long but never forever. A `while` loop runs until its condition says stop, and one whose condition never does runs indefinitely. `max_iterations` is the ceiling you set over that runaway feedback. It is opt-in, and when you set it, it must be at least 1: `cof check` rejects `max_iterations: 0`.
+Two kinds of loop answer two kinds of question. `each` asks "for every one of these?" and walks a collection. `while` asks "again?" and consults a condition — a CEL expression over the latest test run, or the model reading the latest draft. Neither is capped unless you say so. An `each` loop walks a collection resolved before its first pass, so it can run long but never forever. A `while` loop runs until its condition says stop, and one whose condition never does runs indefinitely. `max_iterations` is the ceiling you set over that runaway feedback. It is opt-in, and when you set it, it must be at least 1: `cof check` rejects `max_iterations: 0`.
 
 ## The shape
 
@@ -27,132 +27,147 @@ Loop ::= { type: 'loop', body: Effect+,
 
 ```yaml
 - type: loop
-  name: courses
+  name: diagnoses
   each:
-    in: prime.menu.plan_courses.value
-    as: course
-  collect: cook
+    in: prime.failures.value
+    as: test
+  collect: diagnose
   body:
     - type: prompt
-      name: cook
-      template: "Write the cooking steps for: {{course}}"
+      name: diagnose
+      template: "Explain why this test fails, in two sentences: {{test}}"
 ```
 
-`each.in` is a root-relative state path that must resolve to an array at run time — `input.menu` for a caller-supplied list, `prime.menu.plan_courses.value` for the output of an `array`/`json` prompt, or a `runtime.` path. `as` names the current element for the body (`item` by default). The body runs once per element, in order.
+`each.in` is a root-relative state path that must resolve to an array at run time — `input.failures` for a caller-supplied list, `prime.failures.value` for the output of an `array`/`json` prompt or of a tool that returns a list, or a `runtime.` path. `as` names the current element for the body (`item` by default). The body runs once per element, in order.
 
 The path is checked statically for its root — a bare key or a `state.` spelling is a hard error from `cof check`, with the fix named — and dynamically for its type. A path that resolves to nothing, or to something that is not a list, ends the loop with termination reason `collection_unresolved` and zero passes. Never silent success: a text prompt that was supposed to produce a list, and produced prose, is caught here.
 
 ```yaml
-# ✗ runtime — plan_courses is text; each.in needs an array, so the loop terminates collection_unresolved
+# ✗ runtime — failures is text; each.in needs an array, so the loop terminates collection_unresolved
 - type: prompt
-  name: plan_courses
-  template: "List three courses for {{input.occasion}}."
+  name: failures
+  template: "List the failing tests in this pytest output: {{{prime.test_run.value}}}"
 - type: loop
-  name: courses
-  each: {in: prime.plan_courses.value, as: course}
+  name: diagnoses
+  each: {in: prime.failures.value, as: test}
   body:
     - type: prompt
-      name: cook
-      template: "Write the cooking steps for: {{course}}"
+      name: diagnose
+      template: "Explain why this test fails, in two sentences: {{test}}"
 ```
 
 The fix is upstream: `prompt_type: array` with a schema, so the producing prompt is held to the shape the loop needs.
 
-**The collection is the bound.** An `each` loop knows its length before the first pass, so hitting `max_iterations` is never a runaway; it means the list is longer than you said it could be. Without `max_iterations`, the loop runs every element, and nothing below applies. With it, a collection with more elements than the cap fails the loop at start, with no pass run. The error names both numbers and the `each.in` path: *each loop 'courses' (prime.menu.plan_courses.value): collection has 12 items but max_iterations is 8 — …*. Raise the cap, bound the collection upstream, or say that the first *N* are enough:
+**The collection is the bound.** An `each` loop knows its length before the first pass, so hitting `max_iterations` is never a runaway; it means the list is longer than you said it could be. Without `max_iterations`, the loop runs every element, and nothing below applies. With it, a collection with more elements than the cap fails the loop at start, with no pass run. The error names both numbers and the `each.in` path: *each loop 'diagnoses' (prime.failures.value): collection has 12 items but max_iterations is 8 — …*. Raise the cap, bound the collection upstream, or say that the first *N* are enough:
 
 ```yaml
 - type: loop
-  name: courses
+  name: diagnoses
   max_iterations: 8
-  each: {in: prime.menu.plan_courses.value, as: course, truncate: true}
+  each: {in: prime.failures.value, as: test, truncate: true}
   body:
     - type: prompt
-      name: cook
-      template: "Write the cooking steps for: {{course}}"
+      name: diagnose
+      template: "Explain why this test fails, in two sentences: {{test}}"
 ```
 
-With `truncate: true` the loop cooks the first eight courses and records why it stopped: termination reason `max_iterations_reached`, plus `termination.unvisited`, the count of courses it never reached. A shorter menu is not truncated; the list can end before the cap.
+With `truncate: true` the loop diagnoses the first eight failing tests and records why it stopped: termination reason `max_iterations_reached`, plus `termination.unvisited`, the count of tests it never reached. A shorter list is not truncated; the list can end before the cap.
 
 **In parallel.** An `each` loop is a chain by default. `flow: tree` runs every pass concurrently — the loop's *iterations* fan out, while the steps inside one pass still run in order — and `max_concurrency` bounds the pool. Results are assembled in the original order whatever order they finished in:
 
 ```yaml
 - type: loop
-  name: courses
+  name: diagnoses
   flow: tree
   max_concurrency: 4
-  collect: cook
-  each: {in: prime.menu.plan_courses.value, as: course}
+  collect: diagnose
+  each: {in: prime.failures.value, as: test}
   body:
     - type: prompt
-      name: cook
-      template: "Write the cooking steps for: {{course}}"
+      name: diagnose
+      template: "Explain why this test fails, in two sentences: {{test}}"
 ```
 
 ## `while` — until the condition says stop
 
 ```yaml
 - type: loop
-  name: season
+  name: polish
   while:
     mode: model
-    template: "Taste this. Does the seasoning need adjusting?\n\n{{prime.adjust.value}}"
+    template: "Read this reply to an issue reporter. Does it still need changes before it is posted?\n\n{{prime.revise.value}}"
   min_iterations: 1
   max_iterations: 5
   body:
     - type: prompt
-      name: adjust
-      template: "Adjust the seasoning of {{prime.check_diet.main_course.value}} and describe the dish now."
+      name: revise
+      template: "Revise this maintainer reply so it is accurate, polite and brief: {{prime.reply.value}}"
 ```
 
-The condition is evaluated *before* each pass, and it sees the pass that just finished under the same within-iteration names the body uses — `{{prime.adjust.value}}` in the condition is the latest adjustment. Before the first pass there is nothing to see yet, and the name falls through to the enclosing scope (empty, here). `min_iterations` forces that many passes regardless of the answer — the way to say "always taste at least once" — and `max_iterations` stops the loop whatever the model thinks. It has no default: without it, a `while` loop runs until its condition says stop, however many passes that takes. A loop stopped that way completes normally, but it is not recorded as converged: its termination reason is `max_iterations_reached`, and a `--verbose` run prints a warning line. A `while` loop is always sequential; `flow` does not apply.
+The condition is evaluated *before* each pass, and it sees the pass that just finished under the same within-iteration names the body uses — `{{prime.revise.value}}` in the condition is the latest revision. Before the first pass there is nothing to see yet, and the name falls through to the enclosing scope (empty, here). `min_iterations` forces that many passes regardless of the answer — the way to say "always revise at least once" — and `max_iterations` stops the loop whatever the model thinks. It has no default: without it, a `while` loop runs until its condition says stop, however many passes that takes. A loop stopped that way completes normally, but it is not recorded as converged: its termination reason is `max_iterations_reached`, and a `--verbose` run prints a warning line. A `while` loop is always sequential; `flow` does not apply.
 
 Model mode wraps the template the way `if` does — *"… Should the loop continue? Answer (yes/no):"* — and parses the reply just as leniently (see [If](06-if.md)): `Yes.`/`yes, because …`/`**TRUE**` continue, `No.`/`false!` stop, and an answer that doesn't parse as either raises instead of silently stopping the loop. Each check's raw reply, adapter and model land on `meta.answer`/`meta.adapter`/`meta.model`. So phrase it as a question whose *yes* means "go around again". CEL mode is deterministic, and reads whatever the previous pass left in state:
 
 ```yaml
-- type: prompt
-  name: guest_count
-  prompt_type: number
-  template: "How many guests are coming to {{input.occasion}}? Reply with a number only."
+- type: tool
+  name: test_run
+  provider: pytest
+  params: {args: [-q], cwd: "{{input.repo}}", allow_nonzero: true}
 - type: loop
-  name: courses_until_full
+  name: candidates
   while:
     mode: cel
-    expr: "state.prime.guest_count.value > 6"
+    expr: "state.prime.check.meta.exit_code != 0"
+  min_iterations: 1
   max_iterations: 3
-  collect: course
   body:
     - type: prompt
-      name: course
-      template: "Suggest one more course for {{input.occasion}}, pass {{_loop_index}}."
+      name: patch
+      template: "Write a unified diff for this repository that makes the failing tests pass. Output the diff only.\n\n{{{prime.test_run.value}}}"
+    - type: tool
+      name: check
+      provider: git
+      params: {args: [apply, --check, "-"], cwd: "{{input.repo}}", stdin: "{{{prime.patch.value}}}\n", allow_nonzero: true}
 ```
+
+`git apply --check` only asks whether the patch would apply; `check` records the answer as its exit code, and the loop drafts another patch until one applies, three times at most. After the loop, `prime.candidates.last.patch.value` is the patch that applied. Before the first pass there is no `check` yet, which makes the condition false, so `min_iterations: 1` starts the loop.
 
 One thing a CEL condition cannot do is read the loop's own `collected` or `last` — both are written when the loop *completes*, so from inside the loop the path is missing, and an expression that reads a missing path is `false`. A `while` written that way runs zero passes and terminates `condition_false`. *Where* you read loop state matters as much as *what* you read; the next section is the map.
 
 ### Refining across passes
 
-The condition sees the previous pass. The *body* of a named loop does not: inside the body, `{{prime.adjust.value}}` means *this pass's* `adjust`, which has not been written yet when the pass begins, so it renders empty. `last` and `iter_<N>` are post-loop spellings. There is no spelling in a named loop for "the pass before this one".
+The condition sees the previous pass. The *body* of a named loop does not: inside the body, `{{prime.revise.value}}` means *this pass's* `revise`, which has not been written yet when the pass begins, so it renders empty. `last` and `iter_<N>` are post-loop spellings. There is no spelling in a named loop for "the pass before this one".
 
-When the body needs to build on its own previous output — taste, adjust, taste again — use an **unnamed** loop and let the body overwrite the same name it reads:
+When the body needs to build on its own previous output — patch, apply, run the tests, patch again — use an **unnamed** loop and let the body overwrite the same name it reads:
 
 ```yaml
-- type: prompt
-  name: dish
-  template: "Describe {{prime.check_diet.main_course.value}} as first plated, seasoning included."
+- type: tool
+  name: test_run
+  provider: pytest
+  params: {args: [-q], cwd: "{{input.repo}}", allow_nonzero: true}
 - type: loop
   while:
-    mode: model
-    template: "Taste this. Does the seasoning still need adjusting?\n\n{{prime.dish.value}}"
-  max_iterations: 5
+    mode: cel
+    expr: "state.prime.test_run.meta.exit_code != 0"
+  max_iterations: 3
   body:
     - type: prompt
-      name: dish
-      template: "Adjust the seasoning and describe the dish now:\n{{prime.dish.value}}"
+      name: patch
+      template: "Write a unified diff for this repository that makes the failing tests pass. Output the diff only.\n\n{{{prime.test_run.value}}}"
+    - type: tool
+      name: apply
+      provider: git
+      params: {args: [apply, "-"], cwd: "{{input.repo}}", stdin: "{{{prime.patch.value}}}\n"}
+    - type: tool
+      name: test_run
+      provider: pytest
+      params: {args: [-q], cwd: "{{input.repo}}", allow_nonzero: true}
 - type: prompt
-  name: card
-  template: "Write the menu line for: {{prime.dish.value}}"
+  name: summary
+  template: "Write the pull request description for this fix. The final test run:\n\n{{{prime.test_run.value}}}"
 ```
 
-An unnamed loop writes into the enclosing scope, so each pass's `dish` replaces the last: the body reads the previous pass, the condition tastes the latest, and after the loop `prime.dish.value` is the final version with no `last` to spell. The seed prompt before the loop gives the first pass something to read. What you give up is history — no `iter_<N>`, no `collected` — which is the right trade when only the final state matters. Keep the loop named when the record of every pass is the point.
+An unnamed loop writes into the enclosing scope, so each pass's `test_run` replaces the last: `patch` reads the failures the previous pass left, the condition checks the latest exit code, and after the loop `prime.test_run.value` is the final run with no `last` to spell. The test run before the loop gives the first pass something to read. Name this loop and it goes wrong on the second pass: `patch` reads *this* pass's `test_run`, which has not run yet, so the read falls through to the test run before the loop, and the model patches the first failure again on top of its own first patch. What you give up is history — no `iter_<N>`, no `collected` — which is the right trade when only the final state matters. Keep the loop named when the record of every pass is the point.
 
 ## `collect`
 
@@ -160,8 +175,8 @@ An unnamed loop writes into the enclosing scope, so each pass's `dish` replaces 
 
 ```yaml
 - type: prompt
-  name: menu_card
-  template: "Write the menu card from these courses: {{prime.courses.collected.value}}"
+  name: plan
+  template: "Plan one fix that accounts for all of these diagnoses: {{prime.diagnoses.collected.value}}"
 ```
 
 A collect target that a profile switched off contributes no slot, and nothing after a pass that broke the loop is collected. A pass dropped under `on_error: continue` is, today, the exception; [Errors in a loop](#errors-in-a-loop) says what it leaves.
@@ -189,100 +204,100 @@ The rules of the form:
 ```yaml
 # ⚠ validates with a warning — iter_0 inside the body pins every pass to the first
 - type: loop
-  name: courses
-  each: {in: input.menu, as: course}
+  name: diagnoses
+  each: {in: input.failures, as: test}
   body:
     - type: prompt
-      name: prep
-      template: "List the prep for: {{course}}"
+      name: trace
+      template: "Name the function this test exercises: {{test}}"
     - type: prompt
-      name: cook
-      template: "Cook, given this prep: {{prime.courses.iter_0.prep.value}}"
+      name: diagnose
+      template: "Explain why the test fails, given the function it exercises: {{prime.diagnoses.iter_0.trace.value}}"
 ```
 
-The correct within-pass read is `{{prime.prep.value}}`. [Troubleshooting State Paths](../troubleshooting-state-paths.md) has a symptom table — what `meta.prompt_sent` looks like for each wrong form — for the day one slips through.
+The correct within-pass read is `{{prime.trace.value}}`. [Troubleshooting State Paths](../troubleshooting-state-paths.md) has a symptom table — what `meta.prompt_sent` looks like for each wrong form — for the day one slips through.
 
 ## Named or not
 
 A **named** loop records everything above: `iter_<N>` per pass, `last`, `collected`, and a summary at the node itself:
 
 ```
-prime.courses.value.iterations               # passes completed
-prime.courses.value.termination.reason       # why it stopped (below)
-prime.courses.value.effects_by_iteration     # what each pass ran
-prime.courses.meta.mode                      # "each", or the while condition's "model" / "cel"
-prime.courses.meta.max_iterations / min_iterations   # max_iterations only when set
-prime.courses.meta.each_in_path / each_as    # each loops
-prime.courses.iter_0.cook.value
-prime.courses.last.cook.value
-prime.courses.collected.value
+prime.diagnoses.value.iterations               # passes completed
+prime.diagnoses.value.termination.reason       # why it stopped (below)
+prime.diagnoses.value.effects_by_iteration     # what each pass ran
+prime.diagnoses.meta.mode                      # "each", or the while condition's "model" / "cel"
+prime.diagnoses.meta.max_iterations / min_iterations   # max_iterations only when set
+prime.diagnoses.meta.each_in_path / each_as    # each loops
+prime.diagnoses.iter_0.diagnose.value
+prime.diagnoses.last.diagnose.value
+prime.diagnoses.collected.value
 ```
 
-In a saved shadow state — `--out`, `--json`, the `--live-state` mirror — `last` is not a second copy of the final pass. It is written once as a reference, `"last": {"$ref": "iter_2"}`, and every reader that loads the file links it back. [Shadow state](03-state.md) has the details. Inside the run, `prime.courses.last.cook.value` reads the same as always.
+In a saved shadow state — `--out`, `--json`, the `--live-state` mirror — `last` is not a second copy of the final pass. It is written once as a reference, `"last": {"$ref": "iter_2"}`, and every reader that loads the file links it back. [Shadow state](03-state.md) has the details. Inside the run, `prime.diagnoses.last.diagnose.value` reads the same as always.
 
 An **unnamed** loop is transparent: the body writes at stable paths in the enclosing scope, and each pass overwrites the last. No `iter_<N>`, no `last`, no `collected`. It is the right shape when only the final pass matters and nothing downstream needs the history. `collect` on an unnamed loop has nowhere to write and silently aggregates nothing:
 
 ```yaml
 # ✗ runtime — no name, so no collected node: the array downstream expects is never written
 - type: loop
-  collect: cook
-  each: {in: input.menu, as: course}
+  collect: diagnose
+  each: {in: input.failures, as: test}
   body:
     - type: prompt
-      name: cook
-      template: "Write the cooking steps for: {{course}}"
+      name: diagnose
+      template: "Explain why this test fails, in two sentences: {{test}}"
 ```
 
-**Termination reasons** — every completed named loop records one: `collection_exhausted` (every element done), `condition_false` (the `while` said stop), `max_iterations_reached` (the cap you set: a `while` that never said stop, or a truncated `each`, which also records `unvisited`), `collection_unresolved` (`each.in` was not an array), `condition_error` (the `while` condition could not be evaluated, under `break` or `continue`), `error` (the loop failed; `termination.detail` and `meta.error` say why). They are CEL-readable — `state.prime.season.value.termination.reason == 'max_iterations_reached'` is a fine thing to branch on after a taste loop that never converged.
+**Termination reasons** — every completed named loop records one: `collection_exhausted` (every element done), `condition_false` (the `while` said stop), `max_iterations_reached` (the cap you set: a `while` that never said stop, or a truncated `each`, which also records `unvisited`), `collection_unresolved` (`each.in` was not an array), `condition_error` (the `while` condition could not be evaluated, under `break` or `continue`), `error` (the loop failed; `termination.detail` and `meta.error` say why). They are CEL-readable — `state.prime.candidates.value.termination.reason == 'max_iterations_reached'` is a fine thing to branch on after a loop whose patches never applied.
 
 ## Errors in a loop
 
 `on_error` on a loop governs a failed *pass*: `fail` (default) propagates; `break` ends the loop at the failed pass, keeping what completed before it; `continue` drops the pass and goes on. In a `tree` loop every pass is already running, so `break` and `continue` both let the other passes finish and drop the failed ones. Under `break` and `continue` alike, `last` is the last pass that completed, never the failed one, and under `break` in a `chain` loop the failed pass is absent from `collected`.
 
-Under `continue`, and under `break` in a `tree` loop, `collected` is not yet that clean. The runtime assembles it from the first *k* passes, where *k* counts the passes that completed. So the failed pass leaves a `null` in the array, and an `each` loop loses one pass from the end for each failure: courses `[soup, salad, roast]` with the salad failing collect as `[soup-steps, null]`. Until that is fixed, read the `iter_<N>` nodes when such a loop has had failures; each failed pass is an `iter_<N>` whose step has a `null` value and an error in `meta`.
+Under `continue`, and under `break` in a `tree` loop, `collected` is not yet that clean. The runtime assembles it from the first *k* passes, where *k* counts the passes that completed. So the failed pass leaves a `null` in the array, and an `each` loop loses one pass from the end for each failure: failing tests `[test_a, test_b, test_c]` with `test_b`'s diagnosis failing collect as `[diagnosis-of-a, null]`. Until that is fixed, read the `iter_<N>` nodes when such a loop has had failures; each failed pass is an `iter_<N>` whose step has a `null` value and an error in `meta`.
 
 ## Inside nested containers
 
-`{{course}}` and `{{_loop_index}}` reach every effect in the body however deeply it is wrapped — an `if` branch, a grouping `dynamic`, an inner loop. An inner loop's `as` shadows the outer's if they share a name; give them different names. A CEL condition in the body reads the same two as `state.course` and `state.iter.index`, and a branch step reads the branch's earlier steps, as [If](06-if.md) describes:
+`{{test}}` and `{{_loop_index}}` reach every effect in the body however deeply it is wrapped — an `if` branch, a grouping `dynamic`, an inner loop. An inner loop's `as` shadows the outer's if they share a name; give them different names. A CEL condition in the body reads the same two as `state.test` and `state.iter.index`, and a branch step reads the branch's earlier steps, as [If](06-if.md) describes:
 
 ```yaml
 - type: loop
-  name: courses
-  each: {in: input.menu, as: course}
+  name: diagnoses
+  each: {in: input.failures, as: test}
   body:
     - type: if
-      if: {mode: cel, expr: "state.input.diet == 'vegetarian'"}
+      if: {mode: cel, expr: "state.test.startsWith('tests/integration/')"}
       then:
         - type: prompt
-          name: swaps
-          template: "List vegetarian swaps for: {{course}}"
+          name: services
+          template: "List the external services this integration test needs: {{test}}"
         - type: prompt
-          name: cook
-          template: "Write the cooking steps for course {{_loop_index}}: {{course}}, with these swaps: {{prime.swaps.value}}"
+          name: diagnose
+          template: "Explain why failing test {{_loop_index}} fails: {{test}}. It needs these services: {{prime.services.value}}"
       else:
         - type: prompt
-          name: cook
-          template: "Write the cooking steps for course {{_loop_index}}: {{course}}"
+          name: diagnose
+          template: "Explain why failing test {{_loop_index}} fails: {{test}}"
 ```
 
 An inner loop can iterate a field of the outer loop's element. `each.in` may start at an enclosing loop's `as` binding, the same way a CEL path or a `use` input `{from: …}` can:
 
 ```yaml
 - type: loop
-  name: courses
-  each: {in: input.menu, as: course}
+  name: suites
+  each: {in: input.suites, as: suite}
   body:
     - type: loop
-      name: steps
-      each: {in: course.steps, as: step}
-      collect: do_step
+      name: failing
+      each: {in: suite.tests, as: test}
+      collect: diagnose
       body:
         - type: prompt
-          name: do_step
-          template: "For {{course.name}}: {{step}}"
+          name: diagnose
+          template: "In {{suite.file}}, explain why this test fails: {{test}}"
 ```
 
-With `input.menu` as `[{name: soup, steps: [chop, simmer]}, …]`, each course's inner loop walks that course's own steps. A root that is neither a namespace nor a binding in scope fails `cof check`, and the error lists the bindings that are in scope.
+With `input.suites` as `[{file: tests/test_durations.py, tests: [test_hours_and_minutes, test_all_units]}, …]`, each suite's inner loop walks that suite's own failing tests. A root that is neither a namespace nor a binding in scope fails `cof check`, and the error lists the bindings that are in scope.
 
 ## Anti-patterns
 
