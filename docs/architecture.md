@@ -4,6 +4,34 @@
 
 Circuitry is a single-package Python orchestration runtime for deterministic execution of model-driven workflows. The system compiles declarative YAML orchestration definitions into executable runtime definitions and records all execution outputs and metadata into hierarchical state.
 
+## Overview
+
+```
+Orchestration YAML
+       |
+    Compiler ──> Definition Objects ──> Allowlist + Preflight Gates
+       |
+    Runtime ──> Effect Execution ──> State Writes ──> on_effect_complete hooks
+       |              |
+    Store        Adapter Layer ──> Model Provider
+  (feedback)        Tool Plugins ──> external systems
+                    Runtime Plugins ──> persistence / observability
+```
+
+- **Compiler** — parses YAML into typed definition objects; validates against a Draft-07 JSON Schema and the static rules (namespace-rooted paths, unique names, `use` cycles).
+- **Allowlist + Preflight** — gates every referenced extension before any model call.
+- **Runtime** — executes definitions, manages state feedback between effects, fires lifecycle hooks; the complexity layer (scoring, routing, decomposition) sits here.
+- **Store** — hierarchical state with deterministic path resolution.
+
+## Design principles
+
+1. **Cybernetic feedback** — effects observe state written by prior effects and adapt; the system steers itself.
+2. **Deterministic state paths** — orchestration structure maps to known state keys; feedback is reliable because paths are predictable.
+3. **Explicit control flow** — no implicit branching or hidden reasoning; topology is declared in YAML.
+4. **Full auditability** — every effect, branch decision, iteration, and model-routing choice is recorded in the shadow state.
+5. **Model agnostic** — adapters abstract provider differences; orchestrations are portable.
+6. **Composable** — orchestrations are building blocks; `use` chains them with state isolation and typed interfaces.
+
 ## Technology Stack
 
 | Layer | Technology | Notes |
@@ -74,13 +102,47 @@ Circuitry is a single-package Python orchestration runtime for deterministic exe
 
 ## State and Auditability
 
-- State is hierarchical and mutable only through controlled store writes.
+- State is a **shadow state**: a tree with the same keys as the orchestration (one node per named effect), mutable only through controlled store writes.
 - Runtime writes include both effect `value` and `meta` with timestamps, model/adapter identity, token fields, and errors.
 - The design emphasizes deterministic control flow with explicit effect definitions.
 
 ## Source Tree Reference
 
-See the [Repository layout](../README.md#repository-layout) section of the README for the annotated folder layout.
+```
+circuitry/
+├── src/circuitry/            the package (import circuitry; CLI cof)
+│   ├── core/                 compiler, runtime, and the seven effects
+│   │   ├── compiler.py       YAML → typed definitions, Draft-07 schema validation, static rules
+│   │   ├── prompt.py · dynamic.py · conditional.py · loop.py · reflector.py · use.py · tool.py
+│   │   ├── store/            hierarchical state with deterministic path resolution
+│   │   ├── complexity.py · router.py · decompose.py    the complexity layer
+│   │   └── primes.py         the planning directives (reflector, wizard, decomposition)
+│   ├── schema/               orchestration.schema.json, profile.schema.json
+│   ├── adapters/             29 model providers behind one Adapter protocol
+│   ├── plugins/              70+ tool providers (fs, http, ffmpeg, github, slack, mcp, …)
+│   ├── runtime_plugins/      31 observers: persistence backends, pub/sub, telemetry exporters
+│   ├── curation/             the bundled library — learn/ utilities/ patterns/ recipes/ agents/
+│   ├── bundled/              the authoring rules and docs injected into cof gen / cof wizard
+│   ├── cli/                  cof (Typer + Rich): config, profiles, doctor, score, library sources
+│   ├── tui/                  cof tui (Textual)
+│   ├── mcp/                  circuitry-mcp — the MCP server
+│   ├── service/              REST trigger and scheduler
+│   └── api.py                run_orchestration and the rest of the public SDK
+├── tests/                    pytest, mirroring src/ (core, cli, adapters, plugins, docs, integration)
+├── docs/
+│   ├── guidebook/            the Guidebook — fourteen chapters, the grammar, PDF and EPUB builds
+│   ├── orchestration-reference.md    the field-by-field reference for every effect
+│   ├── assets/               figures
+│   └── examples/             runnable routing and profile examples
+├── editor/                   VS Code syntax highlighting for orchestration YAML
+├── scripts/                  install.sh, the curation smoke test, the changelog compiler and checker, the guidebook build
+├── changelog.d/              one changelog fragment per change, compiled at release
+├── .claude/                  the /cof slash command and agent settings
+├── CHANGELOG.md · CONTRIBUTING.md · RELEASING.md · SECURITY.md · CODE_OF_CONDUCT.md
+└── pyproject.toml · requirements-dev.txt
+```
+
+The library under `src/circuitry/curation/` is what `cof list` shows: **`learn/`** is single-primitive demonstrations, one concept per file; **`utilities/`** are composable single-output orchestrations with typed interfaces, called via `use:`; **`patterns/`** are multi-primitive templates (critique → refine, parallel → judge, classify → route); **`recipes/`** are full workflows; **`agents/`** are orchestrations that build or improve orchestrations — the wizard, the meta-orchestrator, the decomposition planner. `cof eject <name>` copies any of them into your project.
 
 ## API Reference
 

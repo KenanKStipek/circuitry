@@ -185,7 +185,7 @@ The cheap prompts — `wine`, `cook` — route to the small model; `plate`, read
 | --- | --- |
 | [Prompt](01-prompt.md) | typed output (`plan_courses` → array), triple-stache for prose |
 | [Dynamic](02-dynamic.md) | `menu` chain; `courses` fans out with `flow: tree` |
-| [State](03-state.md) | every path derived from names; `input.` / `prime.` / `runtime.` |
+| [Shadow state](03-state.md) | every path derived from names; `input.` / `prime.` / `runtime.` |
 | [Configuration](04-configuration.md) | no `adapter:` or `model:` anywhere in the document |
 | [Errors](05-errors.md) | `on_error: skip` on the optional fetch; a template written for an empty value |
 | [If](06-if.md) | `check_diet`, same name in both branches |

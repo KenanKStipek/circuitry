@@ -187,7 +187,7 @@ Thirty-one ship in-tree, behind the one protocol:
 
 The exporters turn the per-effect pair into spans, events, or metrics; the stores turn the run record into rows. None of them touch control flow, which is the point of the protocol: you can add Datadog to a deployment without re-validating a single orchestration.
 
-## Persistence: the durable side of state
+## Persistence: the durable side of the shadow state
 
 `runtime.persistence` selects a backend that stores each run's final state and rehydrates it for the next:
 

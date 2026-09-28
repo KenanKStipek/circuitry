@@ -1,12 +1,12 @@
-# State
+# Shadow state
 
 Every effect writes to a deterministic path derived from its name, and every later effect reads it there. That single rule is what makes interpolation — and therefore cybernetic feedback — reliable. It is worth being precise about, because the rest of the language rests on it.
 
-State is a real-time graph that shadows the run. The YAML fixes the graph's shape before execution begins — every effect name is a node address — and execution fills it in. A snapshot at any instant is the run's current truth: what has completed, what it produced, which branch was taken, which pass a loop is on, which model answered and why. `--live-state` streams that graph to a file as it grows; `--out` writes the finished one.
+The **shadow state** is a real-time graph with the same keys as the orchestration, shadowing the run. The YAML fixes the graph's shape before execution begins — every effect name is a node address — and execution fills it in. A snapshot at any instant is the run's current truth: what has completed, what it produced, which branch was taken, which pass a loop is on, which model answered and why. `--live-state` streams that graph to a file as it grows; `--out` writes the finished one.
 
 ## Three namespaces
 
-State has exactly three root namespaces. Every path starts with one of them.
+The shadow state has exactly three root namespaces. Every path starts with one of them.
 
 | Namespace | Holds | Written by |
 | --- | --- | --- |
@@ -153,7 +153,7 @@ runtime.library_refs                # every ref: a use effect resolved, with its
 
 `runtime.effective_settings.sources` deserves a sentence of its own. For every setting — model, adapter, `out`, the complexity switches — it records `cli`, `profile`, `orchestration`, `config`, `default`, or `router`. Every model decision is auditable after the fact, from the state file alone. [Configuration](04-configuration.md) explains the layers.
 
-`runtime.*` in a document merges over config with the orchestration winning, which is how an orchestration can carry its own `runtime.complexity` block. CEL can read `state.runtime.<key>` and a loop can iterate a `runtime.` path, though there is rarely a reason to.
+A document's own `runtime:` block merges over config: all of it for a file you run by path, only `runtime.complexity` and `runtime.state` for a document that arrives through a library, a fetch or a model ([Configuration](04-configuration.md) has the rule). CEL can read `state.runtime.<key>` and a loop can iterate a `runtime.` path, though there is rarely a reason to.
 
 ## Watching it fill in
 
@@ -165,7 +165,7 @@ cof run dinner.yml -e occasion=anniversary --json | jq '.prime.suggest_dish'
 
 `--live-state` mirrors the graph to the file while the run goes. It writes the first snapshot at once, then at most every half second, and the last write at the end of the run makes the mirror equal to the `--out` state. Each write is atomic, so a viewer pointed at the file watches the graph grow. `--out` is the finished record. `--json` (automatic when stdout is not a terminal) prints it.
 
-A saved state holds each loop's final pass only once. In `--out`, `--json`, and the live mirror, a named loop's `last` is written as a reference to the pass it aliases, `"last": {"$ref": "iter_2"}`. Every reader that loads a state file links it back: `--state`, a persistence resume, and the TUI's Runs view. A run-time read of `{{prime.courses.last.cook.value}}` does not change. Only a tool that reads the file directly must follow the reference: `jq '.prime.courses | .[.last["$ref"]]'`.
+A saved shadow state holds each loop's final pass only once. In `--out`, `--json`, and the live mirror, a named loop's `last` is written as a reference to the pass it aliases, `"last": {"$ref": "iter_2"}`. Every reader that loads a state file links it back: `--state`, a persistence resume, and the TUI's Runs view. A run-time read of `{{prime.courses.last.cook.value}}` does not change. Only a tool that reads the file directly must follow the reference: `jq '.prime.courses | .[.last["$ref"]]'`.
 
 And when a run diverges from what you expected, `inspect_divergence_paths(state)` from the SDK walks the whole tree and returns every node with a `meta.error`, in path order — [Troubleshooting State Paths](../troubleshooting-state-paths.md) is the workflow built around it.
 

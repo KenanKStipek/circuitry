@@ -41,7 +41,7 @@ prime.suggest_dish.meta     # adapter, model, model_reason, prompt_type, prompt_
 
 ## Templates and messages
 
-`template` is a [Mustache](https://mustache.github.io/) string. Anything in double braces is looked up in state: `{{input.occasion}}` reads a caller-supplied value, `{{prime.suggest_dish.value}}` reads an earlier effect's output. Triple-stache `{{{…}}}` skips HTML escaping, which matters when you interpolate code or markup. [State](03-state.md) covers the full addressing rules; the short version is that every reference starts with `input.`, `prime.`, or `runtime.`.
+`template` is a [Mustache](https://mustache.github.io/) string. Anything in double braces is looked up in the shadow state: `{{input.occasion}}` reads a caller-supplied value, `{{prime.suggest_dish.value}}` reads an earlier effect's output. Triple-stache `{{{…}}}` skips HTML escaping, which matters when you interpolate code or markup. [Shadow state](03-state.md) covers the full addressing rules; the short version is that every reference starts with `input.`, `prime.`, or `runtime.`.
 
 `messages` is the role-based alternative for models that expect a conversation:
 
@@ -144,7 +144,7 @@ Prefer shared state for anything another effect might want; use `inputs` for gen
 
 A prompt can fail: the adapter times out, the model returns something that will not parse as the declared type, the provider is down. `retries`, `provider_fallbacks`, `timeout_ms`, and `on_error` govern what happens next, and they are the subject of [Errors](05-errors.md). The one-line preview: by default a failed prompt fails the run (`on_error: fail`), every attempt is recorded in `meta`, and nothing ever fails silently.
 
-## What lands in state
+## What lands in the shadow state
 
 ```
 prime.<name>.value                       # the typed result (null on skip / dry-run)

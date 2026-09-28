@@ -218,7 +218,7 @@ prime.courses.last.cook.value
 prime.courses.collected.value
 ```
 
-In a saved state — `--out`, `--json`, the `--live-state` mirror — `last` is not a second copy of the final pass. It is written once as a reference, `"last": {"$ref": "iter_2"}`, and every reader that loads the file links it back. [State](03-state.md) has the details. Inside the run, `prime.courses.last.cook.value` reads the same as always.
+In a saved shadow state — `--out`, `--json`, the `--live-state` mirror — `last` is not a second copy of the final pass. It is written once as a reference, `"last": {"$ref": "iter_2"}`, and every reader that loads the file links it back. [Shadow state](03-state.md) has the details. Inside the run, `prime.courses.last.cook.value` reads the same as always.
 
 An **unnamed** loop is transparent: the body writes at stable paths in the enclosing scope, and each pass overwrites the last. No `iter_<N>`, no `last`, no `collected`. It is the right shape when only the final pass matters and nothing downstream needs the history. `collect` on an unnamed loop has nowhere to write and silently aggregates nothing:
 

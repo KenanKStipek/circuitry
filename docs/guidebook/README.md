@@ -6,9 +6,9 @@ This is the long-form companion to the [README](../../README.md). The README get
 
 The arc has three acts:
 
-**I. Basics — the machine.** The two base monads the whole language is built from, the state they communicate through, and the config and error handling that keep a run honest.
+**I. Basics — the machine.** The two base monads the whole language is built from, the shadow state they communicate through, and the config and error handling that keep a run honest.
 
-**II. Cybernetics — the machine steering itself.** The three effects that read state and steer: branching, iterating, and planning. This is what the framework is named for.
+**II. Cybernetics — the machine steering itself.** The three effects that read the shadow state and steer: branching, iterating, and planning. This is what the framework is named for.
 
 **III. The machine in the world.** Orchestrations composing orchestrations, the runtime measuring and routing its own prompts, oversized prompts decomposing themselves, and every surface the outside world arrives through.
 
@@ -18,7 +18,7 @@ The arc has three acts:
 
 1. [Prompt](01-prompt.md) — one model call, one typed value, one deterministic state path.
 2. [Dynamic](02-dynamic.md) — composition as a first-class operator: `chain` and `tree`.
-3. [State](03-state.md) — the three namespaces, the two reading languages, and the addressing rules.
+3. [Shadow state](03-state.md) — the tree with the same keys as the orchestration: its three namespaces, the two reading languages, and the addressing rules.
 4. [Configuration](04-configuration.md) — where capability lives, how it resolves, and how the choice is recorded.
 5. [Errors](05-errors.md) — `on_error`, retries, provider fallbacks, timeouts: degrading deliberately.
 
