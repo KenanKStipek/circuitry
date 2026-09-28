@@ -9,7 +9,7 @@
 
 > "Control mechanisms that lay their own plans." — Gordon Pask, *An Approach to Cybernetics* (1961)
 
-Choose Circuitry when you want to decide how your agent works, not leave it to the model: every step, branch and retry is written down where you can read it.
+The model can decide what happens next: which branch to take, whether to try again, what to plan next. But every run starts from the same place, can only go where you drew the paths, and records each decision at the same spot in the [shadow state](#shadow-state). Circuitry puts the nondeterministic parts of an agent inside a deterministic frame.
 
 This page is the short tour. The **[Guidebook](docs/guidebook/README.md)** covers everything in fourteen chapters, also as a [PDF](docs/guidebook/circuitry-guidebook.pdf) and an [EPUB](docs/guidebook/circuitry-guidebook.epub).
 
