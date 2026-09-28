@@ -286,6 +286,11 @@ class RunScreen(ViewScreen):
         #: Named profile applied to the next launch, when the view was opened
         #: through a hand-off that carried one.
         self.profile_name: str | None = None
+        #: The key of the choice a hand-off named, paired with the trust it
+        #: carried — read once at launch and only while that same choice is
+        #: still selected, so picking something else off the dropdown falls
+        #: back to the ordinary local/bundled rule below.
+        self._pending_trust: tuple[str, bool] | None = None
         #: Last finished result, for tests and for the execution view to pick up.
         self.last_result: RunResult | None = None
 
@@ -401,8 +406,10 @@ class RunScreen(ViewScreen):
         if not isinstance(path, Path):
             return
         self.profile_name = getattr(self.app, "pending_profile", None)
+        trust = bool(getattr(self.app, "pending_trust", False))
         self.app.pending_run = None  # type: ignore[attr-defined]
         self.app.pending_profile = None  # type: ignore[attr-defined]
+        self.app.pending_trust = False  # type: ignore[attr-defined]
 
         choice = next(
             (c for c in self._choices if c.path.resolve() == path.resolve()), None
@@ -416,6 +423,7 @@ class RunScreen(ViewScreen):
             self._choices = [choice, *self._choices]
             select: Select[str] = self.query_one("#run-orchestration", Select)
             select.set_options([(c.option, c.key) for c in self._choices])
+        self._pending_trust = (choice.key, trust)
         self.query_one("#run-orchestration", Select).value = choice.key
 
     # -- selection -----------------------------------------------------------
@@ -591,6 +599,20 @@ class RunScreen(ViewScreen):
                 return
         self.query_one("#run-launch", Button).focus()
 
+    def _trust_for(self, choice: OrchestrationChoice) -> bool:
+        """Whether this launch applies the document's ``runtime:`` settings.
+
+        A hand-off states its own answer (Library keeps its documents
+        limited, Profile and Chat trust like ``cof run ./file.yml``) and
+        wins as long as the same choice is still selected. Otherwise this is
+        the user picking straight from the dropdown, where a local file is
+        theirs like `cof run ./file.yml`; a bundled one stays limited like
+        `cof run <name>`.
+        """
+        if self._pending_trust is not None and self._pending_trust[0] == choice.key:
+            return self._pending_trust[1]
+        return choice.source == "local"
+
     def action_launch(self) -> None:
         """Validate the form and start the run on a worker thread."""
         if self._session is not None and self._session.running:
@@ -627,6 +649,7 @@ class RunScreen(ViewScreen):
             decompose_override=_switch_value(self.query_one("#run-decompose", Select)),
             skip_preflight=False,
             profile_name=self.profile_name,
+            trust_document=self._trust_for(self._form.choice),
         )
 
         self._updates = 0
@@ -720,6 +743,7 @@ class RunScreen(ViewScreen):
             status = f"{DONE} ({self._updates} state updates)"
             if message.result.warnings:
                 status += f" — {len(message.result.warnings)} warning(s)"
+                status += "".join(f"\n{line}" for line in message.result.warnings)
             self._set_status(status, "-done")
         else:
             self._set_status(f"{FAILED}: {message.result.error}", "-failed")

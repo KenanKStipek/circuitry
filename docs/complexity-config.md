@@ -53,9 +53,10 @@ runtime:
         - {name: top, model: large}
 ```
 
-`complexity` is one of the two `runtime:` keys a document may set (the other is
-`state`); any other key in a document's `runtime:` block is a host setting that
-only config supplies, and is ignored with a warning — see the
+`complexity` is one of the two `runtime:` keys every document may set (the other
+is `state`); any other key in a document's `runtime:` block is a host setting,
+applied only from a file you run by path and ignored with a warning otherwise —
+see the
 [orchestration reference](./orchestration-reference.md#file-structure).
 
 ## The three switches

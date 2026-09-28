@@ -527,8 +527,13 @@ def register_score(app: typer.Typer) -> None:
                 err_console.print(f"[red]Error:[/red] {exc}")
                 raise typer.Exit(code=1) from exc
 
+        # A path the user named: resolved as `cof run ./file.yml` would.
         effective = resolve_effective_settings(
-            cfg=cfg, orch=orch, profile=profile_settings
+            cfg=cfg,
+            orch=orch,
+            profile=profile_settings,
+            trust_document=True,
+            document_name=orchestration.name,
         )
         settings = effective.complexity
 

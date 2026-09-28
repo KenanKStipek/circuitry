@@ -70,6 +70,16 @@ class LastRun:
         return str(self.args.get("profile") or "")
 
     @property
+    def trust_document(self) -> bool:
+        """Whether the run named its orchestration by path (a trusted file).
+
+        The stash records the resolved file even for a library name, so this
+        can't be re-derived from ``orchestration``; a stash without it is
+        replayed limited.
+        """
+        return self.args.get("trust_document") is True
+
+    @property
     def dry_run(self) -> bool:
         return bool(self.args.get("dry_run"))
 

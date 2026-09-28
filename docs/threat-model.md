@@ -158,33 +158,59 @@ you control, or read the YAML before running it.
 
 ### 6. Host settings versus orchestration documents
 
-An orchestration document is not always the operator's own: `cof fetch`,
-`cof run-library`, `use: ref:` and github library sources all run documents
-someone else wrote. The trust boundary is that **host settings come only
-from config** (`config.json` layers and `CIRCUITRY_*` environment variables);
-a document cannot change them.
+An orchestration document is not always the operator's own: `cof run-library`,
+a library name served by a github or folder source, `use: ref:`, an MCP or REST
+caller and a model-generated plan all run documents someone else wrote or
+chose. Host settings (`config.json` layers and `CIRCUITRY_*` environment
+variables) decide where an adapter sends prompts and credentials, which binary
+or environment a tool plugin gets, which MCP server commands start, where state
+is persisted and which Python modules are imported.
 
-**Mitigation.** A document's `runtime:` block contributes only the
+**The rule.** A file you run by path is trusted like a script you run:
+`cof run ./my.yml`, `cof check` / `cof score` on a path, a local file picked
+in the TUI's Run view, the SDK's `run_orchestration(orchestration_path=...)` /
+`validate_orchestration` and scheduler jobs apply the document's whole
+`runtime:` block and `plugins:` list. A fetched, library, generated or
+tool-chosen document is limited: `cof run <library name>`, `cof run-library`,
+`run_shared_orchestration`, the MCP `run_orchestration` / `validate_orchestration`
+tools, the REST trigger and the TUI Library view's "run this entry" (bundled,
+folder or github source alike) cannot change host settings. The TUI Chat
+view's "run it now" hand-off is limited too, even once the draft is saved to
+disk: the document is still what the model just generated, not something you
+named by path. Save it, then run that same file with `cof run f.yml` or pick
+it from the Run view's local-file list, and it trusts like any other local
+file. `cof fetch` followed by `cof run ./fetched.yml` is running the file by
+path, so read a fetched file before you run it that way.
+
+**Mitigation.** A limited document's `runtime:` block contributes only the
 author-level keys in `ORCHESTRATION_RUNTIME_KEYS` — `runtime.complexity` and
 `runtime.state`. Every other key (`adapters`, `plugins`, `persistence`,
 `library`, `mcp`, unknown keys) is dropped from the effective settings, with
-one warning per key in `cof run` (stderr) and `cof check` output. A
-document's top-level `plugins:` list only loads runtime-plugin modules config
-already lists in `plugins` or `enabled_plugins`. A `use:` child runs on the
-parent's resolved runtime and its own `runtime:` / `plugins:` keys are never
-read. So a document decides what a run does, but not where an adapter sends
-prompts and credentials, which binary or environment a tool plugin gets,
-which MCP server commands start, where state is persisted, or which Python
-modules are imported. Implementation:
+one warning per key in `cof run` (stderr) and `cof check` output, and its
+top-level `plugins:` list only loads runtime-plugin modules config already
+lists in `plugins` or `enabled_plugins`. A trusted document that applies host
+settings is announced: `cof run` (stderr) and `cof check` print one line,
+`Applied host settings from <file>: ...`, naming the key paths (never values,
+so no secret appears in it). A `use:` child runs on the parent's resolved
+runtime and its own `runtime:` / `plugins:` keys are never read, whether the
+parent is trusted or not; generated reflector and decompose plans never
+contribute them either. Trust is an explicit input (`RunRequest.trust_document`,
+default `False`), set only by the entry points above, so an internal or
+programmatic caller that does not say otherwise is limited. Implementation:
 [`src/circuitry/cli/effective_settings.py`](../src/circuitry/cli/effective_settings.py).
 
-**Residual risk.** `trust_orchestration_runtime: true` in config (or
-`CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME=1`) switches the boundary off: every
-document the host runs, including everything reachable through `use: ref:`,
-can then set any host setting and import any module. Enable it only on a host
-that runs nothing but documents its operator wrote or has reviewed. Within the
-boundary, a document still uses whatever config allows — the adapters, tools
-and plugins config enables — so the allowlists remain the way to narrow that.
+**Residual risk.** A path is trusted whoever wrote the file: a document
+cloned with a repository or downloaded runs with full host authority once you
+name it by path — including a document the TUI's Chat view generated, once
+you save it and then run that saved file by path instead of through Chat's
+own "run it now" hand-off. The notice makes that visible but does not stop
+it. `trust_orchestration_runtime: true` in config (or
+`CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME=1`) extends trust to every document the
+host runs, including library names, MCP and REST callers and everything
+reachable through `use: ref:`. Enable it only on a host that runs nothing but
+documents its operator wrote or has reviewed. Within the boundary, a document
+still uses whatever config allows — the adapters, tools and plugins config
+enables — so the allowlists remain the way to narrow that.
 
 ### 7. Project config files
 

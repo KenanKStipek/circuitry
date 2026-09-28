@@ -806,7 +806,11 @@ class ProfileScreen(ViewScreen):
         if not callable(launch):  # pragma: no cover - only a stub app lacks it
             self._set_status("This app has no Run view to hand off to.", "-failed")
             return
-        launch(self._choice.path, profile=self.draft.name)
+        launch(
+            self._choice.path,
+            profile=self.draft.name,
+            trust_document=self._choice.source == "local",
+        )
 
     def action_leave(self) -> None:
         """``q``/``Esc``, but never silently over the top of unsaved edits."""

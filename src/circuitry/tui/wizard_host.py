@@ -209,6 +209,9 @@ def run_turn(
         config=config,
         adapter=adapter,
         verbose=verbose,
+        # Bundled like any other curated orchestration — limited the same
+        # way `cof run wizard` would be, not trusted by the SDK's default.
+        trust_document=False,
     )
     return Turn.from_state(result.state)
 

@@ -245,6 +245,8 @@ def test_a_skipped_project_config_warning_reaches_the_status_line(
     status = run_app(scenario)
     assert status.startswith(DONE)
     assert "warning" in status
+    # The notice text itself is shown, not just a count (issue #283 review).
+    assert "Skipped project config" in status
 
 
 def test_form_fill_then_launch_reaches_completion(run_app: Any, tmp_path: Path) -> None:
@@ -445,6 +447,72 @@ def test_leaving_the_dropdowns_alone_overrides_nothing(
     assert captured[0].scoring_override is None
     assert captured[0].routing_override is None
     assert captured[0].decompose_override is None
+
+
+@pytest.mark.parametrize(("source", "trusted"), [("local", True), ("bundled", False)])
+def test_a_local_file_runs_trusted_and_a_bundled_one_limited(
+    run_app: Any, tmp_path: Path, source: str, trusted: bool
+) -> None:
+    path = _write(tmp_path, TWO_INPUTS)
+    choice = OrchestrationChoice(key=str(path), label=path.name, path=path, source=source)
+    captured: list[RunRequest] = []
+
+    def runner(request: RunRequest) -> RunResult:
+        captured.append(request)
+        return RunResult(ok=True, state={}, warnings=[])
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        screen = await _open(
+            pilot,
+            RunScreen(
+                RUN_SPEC,
+                choices=[choice],
+                adapter=EchoAdapter(),
+                config=CircuitryConfig(),
+                runner=runner,
+            ),
+        )
+        _fill(screen, text="hello")
+        screen.action_launch()
+        await _settle(pilot, lambda: screen.last_result is not None)
+
+    run_app(scenario)
+    assert captured[0].trust_document is trusted
+
+
+def test_a_library_hand_off_stays_limited_even_though_it_resolves_outside_the_scan(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """Library states its own trust explicitly (issue #283): a document from
+    a GitHub or folder source is not among Run's own scanned choices, so
+    before the fix it fell back to a source="local" guess and ran trusted.
+    """
+    path = _write(tmp_path, TWO_INPUTS)
+    captured: list[RunRequest] = []
+
+    def runner(request: RunRequest) -> RunResult:
+        captured.append(request)
+        return RunResult(ok=True, state={}, warnings=[])
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        pilot.app.pending_run = path
+        pilot.app.pending_trust = False
+        screen = RunScreen(
+            RUN_SPEC,
+            choices=[],
+            adapter=EchoAdapter(),
+            config=CircuitryConfig(),
+            runner=runner,
+        )
+        await pilot.app.push_screen(screen)
+        await pilot.pause()
+        await pilot.pause()
+        _fill(screen, text="hello")
+        screen.action_launch()
+        await _settle(pilot, lambda: screen.last_result is not None)
+
+    run_app(scenario)
+    assert captured[0].trust_document is False
 
 
 # -- complexity switches (issue #110) ----------------------------------------
