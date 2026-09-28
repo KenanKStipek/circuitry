@@ -9,7 +9,9 @@
 
 > "Control mechanisms that lay their own plans." — Gordon Pask, *An Approach to Cybernetics* (1961)
 
-Pick Circuitry when the flow itself (what runs after what, on what condition) is what you want to design and read. This page is the short tour. The **[Guidebook](docs/guidebook/README.md)** covers everything in fourteen chapters, also as a [PDF](docs/guidebook/circuitry-guidebook.pdf) and an [EPUB](docs/guidebook/circuitry-guidebook.epub).
+Choose Circuitry when you want to decide how your agent works, not leave it to the model: every step, branch and retry is written down where you can read it.
+
+This page is the short tour. The **[Guidebook](docs/guidebook/README.md)** covers everything in fourteen chapters, also as a [PDF](docs/guidebook/circuitry-guidebook.pdf) and an [EPUB](docs/guidebook/circuitry-guidebook.epub).
 
 ## Install and run
 
