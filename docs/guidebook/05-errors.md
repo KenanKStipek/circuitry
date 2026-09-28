@@ -42,7 +42,7 @@ prime.<name>.meta.error               # the message
 prime.<name>.meta.fallback_attempts   # [{adapter, model, status, error}, …]
 prime.<name>.meta.fallback_recovered  # true when a fallback answered
 prime.<name>.meta.retries_used        # present when a retry succeeded
-prime.<container>.meta.error          # "prime.context.search: …" — a breadcrumb into the child
+prime.<container>.meta.error          # "investigate.cause: …" — a breadcrumb into the child
 ```
 
 A container that fails closes its own node with `value: false` and a `meta.error` that names the child path, so from the root down you can follow the breadcrumbs to the leaf. `inspect_divergence_paths(state)` in the SDK does the walk for you and returns every errored node in path order.

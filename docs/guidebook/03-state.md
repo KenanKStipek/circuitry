@@ -130,7 +130,7 @@ A node without `.value` is also a legal read and renders the whole node, `meta` 
   template: "Name the one GitHub label for an issue of this kind: {{prime.kind}}"
 ```
 
-**Escaping.** `{{…}}` HTML-escapes what it interpolates: `if a < b and c:` becomes `if a &lt; b and c:`, and every quote in a traceback becomes `&quot;` or `&#x27;`. That is correct for HTML and wrong for a prompt, and an agent's prompts are full of code. When the value is prose, code, or anything that may contain `& < > "`, use triple-stache — `{{{prime.draft.value}}}` — and the text passes through untouched.
+**Escaping.** `{{…}}` HTML-escapes what it interpolates: `if a < b and c:` becomes `if a &lt; b and c:`, and every double quote in a traceback becomes `&quot;`. That is correct for HTML and wrong for a prompt, and an agent's prompts are full of code. When the value is prose, code, or anything that may contain `& < > "`, use triple-stache — `{{{prime.draft.value}}}` — and the text passes through untouched.
 
 ## Inside a loop
 

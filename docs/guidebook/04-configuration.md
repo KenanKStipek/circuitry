@@ -136,7 +136,6 @@ A profile that keeps every model call on this machine — a small local model re
 ```yaml
 # profiles/local.yml
 adapter: ollama
-model: llama3.1:8b
 out: runs/local.json
 inputs:
   repo: "."                      # merged under input.*; -e still wins

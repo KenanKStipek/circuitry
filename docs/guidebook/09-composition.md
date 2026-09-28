@@ -118,7 +118,6 @@ effects:
 ```
 
 Three effects and no model call. `test_run` runs pytest with the caller's arguments (`params_json` passes the array as an array; [Tools and persistence](13-tools-and-persistence.md) explains it). `failures` pulls the failing test ids out of pytest's summary. `verdict` exists for its decision alone: a named `if` records `result`, and the interface hands it back as `passed`.
-```
 
 Two things happen when a `use` calls a document with an interface. **Required inputs are validated** — a caller that omits `repo` fails with *missing required input 'repo' declared in orchestration interface* before the child runs a single effect. And **outputs are auto-generated**: the caller's mapping is the child's `interface.outputs`, so callers do not repeat dot-paths, and the child can rename its internal effects without breaking anyone. The `use` in the first example could drop its `outputs:` block entirely.
 

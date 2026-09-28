@@ -106,6 +106,7 @@ effects:
         name: apply
         provider: git
         params: {args: [apply, "-"], cwd: "{{input.repo}}", stdin: "{{{prime.patch.value}}}\n"}
+        on_error: skip        # a patch that does not apply costs a pass, not the run
       - type: use
         name: tests
         path: ./run_tests.yml
@@ -227,7 +228,7 @@ The short prompts — `error`, `diagnose` — route to the small model; `plan`, 
 | [Dynamic](02-dynamic.md) | `context` fans out with `flow: tree`; the document itself is a chain |
 | [Shadow state](03-state.md) | every path derived from names; `input.` / `prime.` / `runtime.` |
 | [Configuration](04-configuration.md) | no `adapter:` or `model:` anywhere in the document |
-| [Errors](05-errors.md) | `on_error: skip` on the `gh` lookup; a `plan` template written for an empty value |
+| [Errors](05-errors.md) | `on_error: skip` on the `gh` lookup and on `apply`; a `plan` template written for an empty value |
 | [If](06-if.md) | `ready`, a `strict` CEL gate on the test result, same name `pr` in both branches |
 | [Loop](07-loop.md) | `each` with `flow: tree` and `collect`; an unnamed `while` whose body overwrites what it reads |
 | [Reflector](08-reflector.md) | a bounded planner whose template states the situation |
