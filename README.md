@@ -9,7 +9,7 @@
 
 > "Control mechanisms that lay their own plans." — Gordon Pask, *An Approach to Cybernetics* (1961)
 
-This page is the short tour. The **[Guidebook](docs/guidebook/README.md)** covers everything in fourteen chapters, also as a [PDF](docs/guidebook/circuitry-guidebook.pdf) and an [EPUB](docs/guidebook/circuitry-guidebook.epub).
+Pick Circuitry when the flow itself (what runs after what, on what condition) is what you want to design and read. This page is the short tour. The **[Guidebook](docs/guidebook/README.md)** covers everything in fourteen chapters, also as a [PDF](docs/guidebook/circuitry-guidebook.pdf) and an [EPUB](docs/guidebook/circuitry-guidebook.epub).
 
 ## Install and run
 
@@ -63,6 +63,44 @@ runtime:
 - **Three roots.** `input` is what the caller passed, `prime` what the effects produced, `runtime` what the framework recorded.
 - **The whole record.** Each node keeps its `value` and its `meta`: model, prompt, tokens, timings, errors, the branch taken. `--live-state` writes the shadow state as the run goes; `--out` saves the finished one.
 
+## An agent that checks its own work
+
+The triage above only talks. This agent acts: it runs the tests, then keeps asking the model for a patch, applying it and rerunning the tests until they pass, three passes at most.
+
+```yaml
+# fix.yml
+effects:
+  - type: tool
+    name: tests
+    provider: pytest
+    params: {args: [-q], cwd: "{{input.repo}}", allow_nonzero: true}
+  - type: loop                     # unnamed: each pass overwrites patch, apply and tests
+    while: {mode: cel, expr: "state.prime.tests.meta.exit_code != 0"}
+    max_iterations: 3
+    body:
+      - type: prompt
+        name: patch
+        template: |
+          Write a unified diff that fixes this issue. Output only the diff.
+          Issue: {{{input.issue}}}
+          Test output: {{{prime.tests.value}}}
+      - type: tool
+        name: apply
+        provider: git
+        params: {args: [apply, "-"], cwd: "{{input.repo}}", stdin: "{{{prime.patch.value}}}\n"}
+        on_error: skip             # a patch that doesn't apply costs a pass, not the run
+      - type: tool
+        name: tests
+        provider: pytest
+        params: {args: [-q], cwd: "{{input.repo}}", allow_nonzero: true}
+```
+
+```bash
+cof run fix.yml -e repo=. -e issue="parse_duration fails on 1h30m"   # it edits files: use a branch
+```
+
+The model sees the real test output, and the loop's condition reads the latest test result from the shadow state to decide whether to go again. [Chapter 14](docs/guidebook/14-issue-to-pull-request.md) grows this into the whole agent: triage, context gathering, a plan, and a pull request.
+
 ## The language
 
 ![Circuitry — the shape of the language](docs/assets/shape-of-the-language.svg)
@@ -73,7 +111,7 @@ Seven effects, in three kinds:
 - **Structure composes:** `dynamic` runs effects in sequence (`chain`) or in parallel (`tree`).
 - **Cybernetic effects steer:** `if`, `loop` and `reflector` read the shadow state and decide what runs next: a branch, another pass, a new plan.
 
-Models, adapters, tools and limits live in config, not in the document, so the same orchestration runs against a local 8B model or a hosted one. An optional complexity layer scores each prompt, routes it to the cheapest capable model and splits what is too big.
+Out of the box: 29 model providers (Ollama, llama.cpp and vLLM locally; OpenAI, Anthropic, Gemini and OpenRouter hosted) and 72 tool plugins (git, GitHub, files, HTTP, shell, pytest, ffmpeg, ImageMagick, MCP, …). Models, adapters, tools and limits live in config, not in the document, so the same orchestration runs against a local 8B model or a hosted one. An optional complexity layer scores each prompt, routes it to the cheapest capable model and splits what is too big.
 
 ## From Python, or from Claude
 
