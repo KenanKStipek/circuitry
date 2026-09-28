@@ -35,7 +35,11 @@ from ..cli import runtime_shim
 from ..cli.allowlist import check_allowlist
 from ..cli.config import CircuitryConfig, find_config_path, load_config, resolve_config
 from ..cli.config_trust import TRUST_PROJECT_CONFIG_ENV
-from ..cli.effective_settings import EffectiveSettings, resolve_effective_settings
+from ..cli.effective_settings import (
+    EffectiveSettings,
+    orchestration_host_setting_warnings,
+    resolve_effective_settings,
+)
 from ..cli.orchestration_loader import load_orchestration_file
 from ..cli.redaction import redact
 from ..core.compiler import compile_orchestration
@@ -399,6 +403,7 @@ def validate_report(
     *,
     config: CircuitryConfig | None = None,
     skip_preflight: bool = False,
+    trust_document: bool = False,
 ) -> ValidationReport:
     """Run every validation gate against ``path`` and collect all findings.
 
@@ -406,6 +411,10 @@ def validate_report(
     an exit code. The view needs the whole picture, so each gate runs in its own
     ``try`` and a gate blowing up is reported as that gate's failure instead of
     aborting the rest.
+
+    *trust_document* is ``cof check``'s: the file was named by path, so its
+    warnings carry the notice naming the host settings a run would apply
+    rather than the ones it would ignore.
     """
     issues: list[ValidationIssue] = []
     skipped: list[str] = []
@@ -427,8 +436,17 @@ def validate_report(
             (ValidationIssue("load", f"Expected a mapping at the top level, got {type(orch).__name__}."),),
         )
 
-    warnings = tuple(config.resolution_warnings() if config is not None else ()) + tuple(
-        lint_orchestration(orch)
+    warnings = (
+        tuple(config.resolution_warnings() if config is not None else ())
+        + tuple(lint_orchestration(orch))
+        + tuple(
+            orchestration_host_setting_warnings(
+                orch,
+                config or CircuitryConfig(),
+                trust_document=trust_document,
+                document_name=path.name,
+            )
+        )
     )
 
     schema = runtime_shim.load_schema()

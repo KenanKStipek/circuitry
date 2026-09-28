@@ -181,7 +181,10 @@ the file the registry resolved the entry to, which is the file `cof run` and
 `cof eject` would use for the same name. An existing file is never clobbered
 silently: a modal asks first (`y` overwrites, `n`/`Esc` keeps the file), and
 the status line reports what happened. The default eject destination is
-`<category>/<name>.yml`, relative to the current directory.
+`<category>/<name>.yml`, relative to the current directory. A library entry
+stays limited to `runtime.complexity` / `runtime.state` when run this way,
+whatever its source — bundled, folder or github — the same as `cof run
+<library name>`; see [Host settings versus orchestration documents](threat-model.md#6-host-settings-versus-orchestration-documents).
 
 ## Run view (`2`)
 
@@ -557,6 +560,14 @@ entry rather than appending a duplicate.
 slot on mount: it selects the saved file (adding it to the picker if the scan
 never saw it) and clears `pending_run`, so returning to Run later opens clean.
 The Profile view uses the same seam, additionally setting `app.pending_profile`.
+Trust travels with the hand-off rather than being guessed from where the file
+ended up: Chat's draft stays limited to `runtime.complexity` / `runtime.state`
+even once it is on disk, because it is still what the model just generated,
+not a file you named yourself. Run that saved file with `cof run f.yml`, or
+pick it from the Run view's own local-file list, and it trusts like any other
+local file (see [Host settings versus orchestration documents](threat-model.md#6-host-settings-versus-orchestration-documents)).
+The Profile view's hand-off keeps trusting a local file and limiting a bundled
+one, as it always has.
 
 The view never constructs an adapter. It calls a `TurnRunner` — by default
 `api.run_orchestration` over whatever the config resolves — which is what makes

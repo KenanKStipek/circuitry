@@ -477,6 +477,31 @@ def test_run_it_now_hands_the_saved_path_to_the_run_view(
     assert pending is None
 
 
+def test_run_it_now_does_not_trust_the_document_it_just_generated(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """A model-generated document stays limited (issue #283): saving it and
+    pressing Ctrl-R is not the same as naming it by path with `cof run`."""
+    target = tmp_path / "runnable.yml"
+    runner, _ = scripted_runner(draft("Built it.", done=True))
+    handed: list[tuple[Path, bool]] = []
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        screen = await idle(pilot)
+        screen.query_one("#chat-save-path", Input).value = str(target)
+        screen.action_save_file()
+        pilot.app.launch_run = (  # type: ignore[method-assign]
+            lambda path, *, profile=None, trust_document=False: handed.append(
+                (path, trust_document)
+            )
+        )
+        screen.action_run_it()
+        await pilot.pause()
+
+    run_app(scenario, app=chat_app(runner), size=(120, 40))
+    assert handed == [(target, False)]
+
+
 def test_run_it_now_before_saving_says_so(run_app: Any) -> None:
     runner, _ = scripted_runner(draft("Built it.", done=True))
 

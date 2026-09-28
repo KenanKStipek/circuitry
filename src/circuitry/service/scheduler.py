@@ -24,6 +24,9 @@ class ScheduledJob:
     out_path: Path | None = None
     start_at: datetime | None = None
     allowed_lateness_seconds: int = 30
+    # The operator configured this path, so the file is trusted like `cof run
+    # ./file.yml` (see RunRequest.trust_document); False keeps it limited.
+    trust_document: bool = True
 
 
 @dataclass(frozen=True)
@@ -127,6 +130,7 @@ class RecurringScheduler:
             initial_state=state,
             verbose=job.verbose,
             config=self._config,
+            trust_document=job.trust_document,
         )
         result = run(req)
 

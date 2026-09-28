@@ -41,10 +41,13 @@ OK_STATE = "No problems found."
 
 
 def default_validator(path: Path) -> ValidationReport:
-    """Validate against the config ``cof check`` would resolve from disk."""
+    """Validate against the config ``cof check`` would resolve from disk.
+
+    The user typed the path, so the file is trusted as ``cof check`` trusts it.
+    """
     from ..cli.config import resolve_config
 
-    return validate_report(path, config=resolve_config())
+    return validate_report(path, config=resolve_config(), trust_document=True)
 
 
 def issue_lines(issue: ValidationIssue) -> list[str]:

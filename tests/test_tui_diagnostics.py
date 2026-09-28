@@ -214,6 +214,23 @@ def test_a_skipped_project_config_warning_reaches_the_report(tmp_path: Path) -> 
     assert any("Skipped project config" in w for w in report.warnings)
 
 
+def test_host_settings_reach_the_report_as_trusted_or_limited(tmp_path: Path) -> None:
+    path = tmp_path / "hosty.yml"
+    path.write_text(
+        "runtime:\n  adapters:\n    openai:\n      base_url: http://doc.example\n"
+        "effects:\n  - type: tool\n    name: t\n    provider: uuid\n",
+        encoding="utf-8",
+    )
+
+    trusted = validate_report(path, skip_preflight=True, trust_document=True)
+    limited = validate_report(path, skip_preflight=True)
+
+    assert trusted.warnings == (
+        "Applied host settings from hosty.yml: runtime.adapters.openai.base_url",
+    )
+    assert limited.warnings[0].startswith("Ignored runtime.adapters")
+
+
 def test_gates_that_could_not_run_are_named_rather_than_assumed_green() -> None:
     report = validate_report(FIXTURES / "valid.yml", skip_preflight=True)
     assert "preflight" in report.skipped

@@ -496,19 +496,23 @@ def test_a_clean_draft_leaves_without_a_prompt(run_app: Any, tmp_path: Path) -> 
 
 def test_run_with_this_profile_saves_and_hands_off(run_app: Any, tmp_path: Path) -> None:
     orchestration = _write(tmp_path, FIXTURE)
-    handed: list[tuple[Path, str | None]] = []
+    handed: list[tuple[Path, str | None, bool]] = []
 
     class _App:
         pass
 
-    async def scenario(pilot: Pilot[Any]) -> tuple[Path, list[tuple[Path, str | None]]]:
+    async def scenario(
+        pilot: Pilot[Any],
+    ) -> tuple[Path, list[tuple[Path, str | None, bool]]]:
         screen = await _open(pilot, _screen(orchestration))
         # Stand in for the app's launch_run so this test stays about the
         # Profile view; the Run side is covered in test_run_view.py.
         object.__setattr__(
             screen,
             "_launch_probe",
-            lambda path, profile=None: handed.append((path, profile)),
+            lambda path, profile=None, trust_document=False: handed.append(
+                (path, profile, trust_document)
+            ),
         )
         screen.app.launch_run = screen._launch_probe  # type: ignore[method-assign]
         await _set(pilot, screen.query_one("#profile-name", Input), "fast")
@@ -519,7 +523,7 @@ def test_run_with_this_profile_saves_and_hands_off(run_app: Any, tmp_path: Path)
         return orchestration, handed
 
     path, calls = run_app(scenario)
-    assert calls == [(path, "fast")]
+    assert calls == [(path, "fast", True)]
     assert (tmp_path / "profiles" / "fast.yml").exists()
 
 

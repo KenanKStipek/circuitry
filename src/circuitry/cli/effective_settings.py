@@ -44,19 +44,27 @@ class EffectiveSettings:
     # defaults and defers to the pinned ones. Not derivable from `sources`
     # once the router itself wins that entry.
     model_locked: bool = False
-    # Settings the orchestration tried to supply but may not: host `runtime:`
-    # keys and unlisted `plugins:` entries. One line each, for the run's own
-    # warning channel (RunResult.warnings / the validate report).
+    # Host `runtime:` keys and unlisted `plugins:` entries the orchestration
+    # set: one line each when they were dropped, or the one "Applied host
+    # settings" notice when the document is trusted. For the run's own warning
+    # channel (RunResult.warnings / the validate report).
     warnings: tuple[str, ...] = ()
 
 
-#: The `runtime:` keys an orchestration document may set. Everything else in a
-#: document's `runtime:` block (adapters, plugins, persistence, library, ...)
-#: is host configuration and only comes from config: a document can be someone
-#: else's (`cof fetch`, `run-library`, `use: ref:`, a github source), so it
-#: must not be able to repoint an adapter or launch a binary. A host opts out
-#: with `trust_orchestration_runtime`.
+#: The `runtime:` keys a limited orchestration document may set. Everything
+#: else in a document's `runtime:` block (adapters, plugins, persistence,
+#: library, ...) is host configuration and only comes from config: a document
+#: that reached `cof` indirectly can be someone else's (`run-library`, a library
+#: name, a github source, an MCP or REST caller), so it must not be able to
+#: repoint an adapter or launch a binary. A trusted document — one the caller
+#: named by path (`trust_document`), or any document once the host sets
+#: `trust_orchestration_runtime` — keeps its whole block.
 ORCHESTRATION_RUNTIME_KEYS: frozenset[str] = frozenset({"complexity", "state"})
+
+#: How many levels below `runtime.<key>` the "Applied host settings" notice
+#: names: `runtime.adapters.openai.base_url`, never deeper (an `env` map's
+#: variable names stay out of it). Keys only, never values.
+_NOTICE_KEY_DEPTH = 2
 
 
 def _split_orchestration_runtime(
@@ -110,23 +118,81 @@ def _split_orchestration_plugins(
     return accepted, warnings
 
 
+def _key_label(key: Any) -> str:
+    """A document key as notice text, kept on one line."""
+    text = str(key)
+    return text if text.isprintable() else repr(text)
+
+
+def _key_paths(prefix: str, value: Any, depth: int) -> list[str]:
+    if depth <= 0 or not isinstance(value, dict) or not value:
+        return [prefix]
+    return [
+        path
+        for key, sub in value.items()
+        for path in _key_paths(f"{prefix}.{_key_label(key)}", sub, depth - 1)
+    ]
+
+
+def _applied_host_settings_notice(
+    orch_runtime: dict[str, Any],
+    orch_plugins: list[Any],
+    *,
+    cfg: CircuitryConfig,
+    document_name: str | None,
+) -> list[str]:
+    """The one line naming the host settings a trusted document applies.
+
+    Dotted key paths for the `runtime:` keys outside
+    ORCHESTRATION_RUNTIME_KEYS and the `plugins:` entries config does not
+    list; no values, so a credential in the document never reaches it. Empty
+    when the document sets only author-level keys.
+    """
+    runtime_paths = [
+        path
+        for key, value in orch_runtime.items()
+        if key not in ORCHESTRATION_RUNTIME_KEYS
+        for path in _key_paths(f"runtime.{_key_label(key)}", value, _NOTICE_KEY_DEPTH)
+    ]
+    host_listed = {*cfg.plugins, *(cfg.enabled_plugins or [])}
+    plugin_ids = [
+        _key_label(p) for p in orch_plugins if isinstance(p, str) and p not in host_listed
+    ]
+    if not runtime_paths and not plugin_ids:
+        return []
+    parts = [*runtime_paths]
+    if plugin_ids:
+        parts.append("plugins: " + ", ".join(plugin_ids))
+    source = document_name or "the orchestration"
+    return [f"Applied host settings from {source}: {', '.join(parts)}"]
+
+
 def orchestration_host_setting_warnings(
-    orch: dict[str, Any], cfg: CircuitryConfig
+    orch: dict[str, Any],
+    cfg: CircuitryConfig,
+    *,
+    trust_document: bool = False,
+    document_name: str | None = None,
 ) -> list[str]:
     """The warnings `resolve_effective_settings` would record for *orch*.
 
     For `cof check`, which reports them without resolving a whole run (and
     without failing on a malformed block — schema validation owns that).
     """
-    trusted = cfg.trust_orchestration_runtime
-    warnings: list[str] = []
     orch_plugins = orch.get("plugins")
-    if isinstance(orch_plugins, list):
-        warnings += _split_orchestration_plugins(orch_plugins, cfg=cfg, trusted=trusted)[1]
+    if not isinstance(orch_plugins, list):
+        orch_plugins = []
     orch_runtime = orch.get("runtime")
-    if isinstance(orch_runtime, dict):
-        warnings += _split_orchestration_runtime(orch_runtime, trusted=trusted)[1]
-    return warnings
+    if not isinstance(orch_runtime, dict):
+        orch_runtime = {}
+    if trust_document or cfg.trust_orchestration_runtime:
+        return _applied_host_settings_notice(
+            orch_runtime, orch_plugins, cfg=cfg, document_name=document_name
+        )
+    return [
+        *_split_orchestration_plugins(orch_plugins, cfg=cfg, trusted=False)[1],
+        *_split_orchestration_runtime(orch_runtime, trusted=False)[1],
+    ]
 
 
 def _merge_runtime(
@@ -149,7 +215,18 @@ def resolve_effective_settings(
     cli_routing: bool | None = None,
     cli_decompose: bool | None = None,
     profile: ProfileSettings | None = None,
+    trust_document: bool = False,
+    document_name: str | None = None,
 ) -> EffectiveSettings:
+    """Merge cli > profile > orchestration > config > default for one run.
+
+    *trust_document* is True only when the caller named the document by path
+    (`cof run ./my.yml`, the SDK's `run_orchestration`); it then keeps the
+    document's whole `runtime:` block and `plugins:` list, as does
+    `cfg.trust_orchestration_runtime`. *document_name* labels the notice a
+    trusted document that applies host settings produces.
+    """
+    trusted = trust_document or cfg.trust_orchestration_runtime
     sources: dict[str, str] = {}
     warnings: list[str] = []
     model: str | None
@@ -212,13 +289,25 @@ def resolve_effective_settings(
     orch_plugins = orch.get("plugins") or []
     if orch_plugins and not isinstance(orch_plugins, list):
         raise ValueError("Orchestration 'plugins' must be a list if provided.")
+    orch_runtime = orch.get("runtime") or {}
+    if orch_runtime and not isinstance(orch_runtime, dict):
+        raise ValueError("Orchestration 'runtime' must be an object if provided.")
+    if trusted:
+        warnings.extend(
+            _applied_host_settings_notice(
+                orch_runtime,
+                orch_plugins if cli_plugins is None else [],
+                cfg=cfg,
+                document_name=document_name,
+            )
+        )
 
     if cli_plugins is not None:
         plugins = list(cli_plugins)
         sources["plugins"] = "cli"
     else:
         orch_plugins, plugin_warnings = _split_orchestration_plugins(
-            orch_plugins, cfg=cfg, trusted=cfg.trust_orchestration_runtime
+            orch_plugins, cfg=cfg, trusted=trusted
         )
         warnings.extend(plugin_warnings)
         combined = [*cfg.plugins, *orch_plugins]
@@ -237,12 +326,9 @@ def resolve_effective_settings(
         )
 
     # runtime: shallow merge, orch overrides config — for the author-level
-    # keys only (see ORCHESTRATION_RUNTIME_KEYS)
-    orch_runtime = orch.get("runtime") or {}
-    if orch_runtime and not isinstance(orch_runtime, dict):
-        raise ValueError("Orchestration 'runtime' must be an object if provided.")
+    # keys only, unless the document is trusted (see ORCHESTRATION_RUNTIME_KEYS)
     orch_runtime, runtime_warnings = _split_orchestration_runtime(
-        orch_runtime, trusted=cfg.trust_orchestration_runtime
+        orch_runtime, trusted=trusted
     )
     warnings.extend(runtime_warnings)
 

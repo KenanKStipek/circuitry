@@ -50,7 +50,10 @@ def register_doctor(app: typer.Typer) -> None:
         if orchestration:
             orch_obj = load_orchestration_file(orchestration)
 
-        effective = resolve_effective_settings(cfg=cfg, orch=orch_obj)
+        # `--orch` names a file by path: resolved as `cof run` would run it.
+        effective = resolve_effective_settings(
+            cfg=cfg, orch=orch_obj, trust_document=orchestration is not None
+        )
 
         table = Table(title="Circuitry · Doctor", show_lines=True)
         table.add_column("Check")

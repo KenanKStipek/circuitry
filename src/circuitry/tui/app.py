@@ -50,6 +50,11 @@ class CircuitryApp(App[None]):
     #: profile (the Profile view's "run with this profile").
     pending_profile: str | None = None
 
+    #: Set alongside :attr:`pending_run` — whether the handed-off document
+    #: should be trusted, decided by whoever calls :meth:`launch_run` rather
+    #: than inferred from where Run's own picker thinks the path lives.
+    pending_trust: bool = False
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         #: State published by whatever run is in flight, read by the Runs
@@ -217,17 +222,24 @@ class CircuitryApp(App[None]):
 
         self.leaving(_switch)
 
-    def launch_run(self, path: Path, *, profile: str | None = None) -> None:
+    def launch_run(
+        self, path: Path, *, profile: str | None = None, trust_document: bool
+    ) -> None:
         """Hand a saved orchestration — and optionally a profile — to Run.
 
         The Chat view's "run it now", the Profile view's "run with this
         profile" and the Run view are separate stories, so the hand-off is a
         value on the app rather than a call into a screen that may still be a
-        placeholder: Run reads ``app.pending_run`` / ``app.pending_profile``
-        on mount and needs nothing from here.
+        placeholder: Run reads ``app.pending_run`` / ``app.pending_profile`` /
+        ``app.pending_trust`` on mount and needs nothing from here.
+
+        ``trust_document`` is required rather than defaulted so every caller
+        states its own answer instead of inheriting one meant for a
+        different source — see issue #283.
         """
         self.pending_run = path
         self.pending_profile = profile
+        self.pending_trust = trust_document
         for spec in VIEWS:
             if spec.slug == "run":
                 self.show_view(spec)

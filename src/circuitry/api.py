@@ -51,6 +51,7 @@ def run_orchestration(
     raise_on_error: bool = True,
     live_state_path: str | Path | None = None,
     adapter: Adapter | None = None,
+    trust_document: bool = True,
 ) -> RunResult:
     """
     Execute an orchestration from embedded Python.
@@ -66,6 +67,16 @@ def run_orchestration(
     Pass *adapter* to run against an already-constructed adapter instead of the
     one the config resolves — the seam a host uses to drive an orchestration
     over its own model transport, and the one tests use to script one.
+
+    The file at *orchestration_path* is trusted by default, as ``cof run
+    ./file.yml`` trusts it: its whole ``runtime:`` block and ``plugins:`` list
+    apply, and ``RunResult.warnings`` carries one notice naming any host
+    settings among them (``runtime`` keys other than ``complexity`` and
+    ``state``, ``plugins`` config does not list). Pass
+    ``trust_document=False`` for a path you did not choose yourself (fetched,
+    generated, or picked by a tool or network caller): the document may then
+    only set ``runtime.complexity`` and ``runtime.state``, and anything else
+    is ignored with a warning.
     """
     if state is not None and state_path is not None:
         raise ValueError("Provide either 'state' or 'state_path', not both.")
@@ -81,6 +92,7 @@ def run_orchestration(
         config=config,
         live_state_path=Path(live_state_path) if live_state_path is not None else None,
         adapter=adapter,
+        trust_document=trust_document,
     )
     result = _run(req)
 
@@ -109,7 +121,12 @@ def run_shared_orchestration(
     raise_on_error: bool = True,
     live_state_path: str | Path | None = None,
 ) -> RunResult:
-    """Fetch and run a shared-library orchestration using embedded API."""
+    """Fetch and run a shared-library orchestration using embedded API.
+
+    A fetched document is someone else's, so it stays limited: it may only set
+    ``runtime.complexity`` and ``runtime.state`` (unless config sets
+    ``trust_orchestration_runtime``).
+    """
     if state is not None and state_path is not None:
         raise ValueError("Provide either 'state' or 'state_path', not both.")
 
@@ -146,9 +163,16 @@ def run_shared_orchestration(
     return result
 
 
-def validate_orchestration(*, orchestration_path: str | Path) -> dict[str, Any]:
-    """Validate orchestration structure using compiler-backed validation."""
-    return _validate(Path(orchestration_path))
+def validate_orchestration(
+    *, orchestration_path: str | Path, trust_document: bool = True
+) -> dict[str, Any]:
+    """Validate orchestration structure using compiler-backed validation.
+
+    *trust_document* matches :func:`run_orchestration`: by default the report's
+    ``warnings`` carry the notice naming the host settings the file would
+    apply; with ``False`` they name the ones a run would ignore.
+    """
+    return _validate(Path(orchestration_path), trust_document=trust_document)
 
 
 def inspect_orchestration(*, orchestration_path: str | Path) -> dict[str, Any]:

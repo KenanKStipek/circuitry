@@ -129,6 +129,13 @@ class RunRequest:
     # default) writes nothing to disk; the plan still lands in
     # `meta.decomposition` either way.
     decompose_out: Path | None = None
+    # True only when whoever owns this machine named the document by path
+    # (`cof run ./my.yml`, the SDK's `run_orchestration`, a scheduler job): the
+    # document's whole `runtime:` block and `plugins:` list then apply, with a
+    # notice naming the host settings among them. Library, fetched, generated
+    # and network/tool-chosen documents keep the default and stay limited to
+    # ORCHESTRATION_RUNTIME_KEYS — see `resolve_effective_settings`.
+    trust_document: bool = False
 
 
 @dataclass(frozen=True)
@@ -229,6 +236,8 @@ def run(req: RunRequest) -> RunResult:
             cli_routing=req.routing_override,
             cli_decompose=req.decompose_override,
             profile=profile,
+            trust_document=req.trust_document,
+            document_name=req.orchestration_path.name,
         )
         warnings.extend(effective.warnings)
         resolved_out = effective.out
@@ -694,7 +703,10 @@ def validate(
     *,
     config: CircuitryConfig | None = None,
     skip_preflight: bool = False,
+    trust_document: bool = False,
 ) -> dict[str, Any]:
+    # *trust_document*: the caller named this file by path, as `cof check`
+    # does — see RunRequest.trust_document.
     # A skipped (untrusted) project config: the checks below ran without it.
     config_warnings = config.resolution_warnings() if config is not None else []
     text = orchestration_path.read_text(encoding="utf-8").strip()
@@ -711,10 +723,14 @@ def validate(
 
         from ..core.lint import lint_orchestration
         lint_warnings = [*config_warnings, *lint_orchestration(orch)]
-        # Host settings the document tries to set are dropped at run time;
-        # say so here too, whether or not the rest of the file is valid.
+        # Host settings the document sets are dropped at run time, or applied
+        # with a notice when it is trusted; say which here too, whether or not
+        # the rest of the file is valid.
         lint_warnings += orchestration_host_setting_warnings(
-            orch, config or CircuitryConfig()
+            orch,
+            config or CircuitryConfig(),
+            trust_document=trust_document,
+            document_name=orchestration_path.name,
         )
 
         schema = _load_schema()

@@ -924,7 +924,9 @@ class LibraryScreen(ViewScreen):
         if not callable(launch):  # pragma: no cover - only a bare App lacks it
             self._set_status("Run view unavailable.")
             return
-        launch(entry.path)
+        # A library entry stays limited regardless of source — bundled,
+        # folder or GitHub — same as `cof run <library name>` (issue #283).
+        launch(entry.path, trust_document=False)
 
     # -- refresh -------------------------------------------------------------
 
