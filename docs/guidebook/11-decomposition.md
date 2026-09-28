@@ -1,6 +1,6 @@
 # Prompt decomposition
 
-Everything above, composed. "Cook Thanksgiving dinner for twelve" is too much for one prompt — a single model call asked to plan, cook, and plate a dozen dishes does all of them badly — and when that prompt scores over the decomposition threshold, the runtime *knows* it. What it does next uses every part of the language so far: the prompt goes to a **planner that is itself an orchestration** (chapter 8's reflector, purpose-built); the planner emits a fan-out-and-merge document (chapter 2's tree and chain); the document is validated and run as an isolated child (chapter 9's `use`); the merged result is written back at the original prompt's own state path (chapter 3's determinism), so the effect after it reads `{{prime.<name>.value}}` and never knows dinner was ever in pieces.
+Everything above, composed. "Move the parser, the command line and the docs to the new config format" is too much for one prompt — a single model call asked to change three parts of a codebase at once does all of them badly — and when that prompt scores over the decomposition threshold, the runtime *knows* it. What it does next uses every part of the language so far: the prompt goes to a **planner that is itself an orchestration** (chapter 8's reflector, purpose-built); the planner emits a fan-out-and-merge document (chapter 2's tree and chain); the document is validated and run as an isolated child (chapter 9's `use`); the merged result is written back at the original prompt's own state path (chapter 3's determinism), so the effect after it reads `{{prime.<name>.value}}` and never knows the fix was ever in pieces.
 
 This is the third of the three complexity switches, and it needs the first: decomposition consumes scores, so `scoring.enabled` must be on.
 
@@ -42,40 +42,40 @@ When a prompt's recorded score exceeds `threshold`, the runtime replaces the sin
 
 **3. Execute and write back.** The plan runs as a state-isolated child seeded with a *copy* of the effect's render context — the same inline-identity cycle guard as a `use` child, the same namespaced observability (chunk effects announce under the decomposing effect's node, and live-state snapshots mirror them there). The value at `prime.merge.value` is written at the **original effect's own path**. Downstream, nothing changes.
 
-Thanksgiving, decomposed, looks like a plan you might have written yourself:
+The oversized fix, decomposed, looks like a plan you might have written yourself:
 
 ```yaml
 interface:
   inputs:
-    guests: {type: number, required: true}
-    dietary_notes: {type: string, required: false}
+    issue: {type: string, required: true}
+    constraints: {type: string, required: false}
   outputs:
     result: {path: prime.merge.value, type: string}
 
 effects:
   - type: dynamic
-    name: courses
+    name: parts
     flow: tree
     effects:
       - type: prompt
-        name: turkey
-        template: "Write the plan to roast a turkey for {{input.guests}} guests. Note timing."
+        name: parser
+        template: "Write the change to the config parser that this issue needs. Issue: {{input.issue}}"
       - type: prompt
-        name: sides
-        template: "Write the plan for three side dishes for {{input.guests}} guests. Respect: {{input.dietary_notes}}"
+        name: cli
+        template: "Write the change to the command-line options that this issue needs. Respect: {{input.constraints}}. Issue: {{input.issue}}"
       - type: prompt
-        name: dessert
-        template: "Write the plan for two desserts for {{input.guests}} guests."
+        name: docs
+        template: "Write the change to the documentation that this issue needs. Issue: {{input.issue}}"
   - type: prompt
     name: merge
     template: |
-      Combine these plans into one timeline for the day, oven by oven.
-      Turkey: {{prime.courses.turkey.value}}
-      Sides: {{prime.courses.sides.value}}
-      Desserts: {{prime.courses.dessert.value}}
+      Combine these changes into one plan for the pull request, file by file.
+      Parser: {{prime.parts.parser.value}}
+      Command line: {{prime.parts.cli.value}}
+      Docs: {{prime.parts.docs.value}}
 ```
 
-Courses that cook in parallel, and a merge that plates them.
+Parts that are planned in parallel, and a merge that puts them in one order.
 
 ## Bounded at every edge
 
@@ -90,19 +90,19 @@ Courses that cook in parallel, and a merge that plates them.
 `meta.decomposition.yaml` carries the generated orchestration, but a run that finishes and is never looked at makes that plan effectively unreadable. `--decompose-out <dir>` writes every plan out, one file per decomposed effect:
 
 ```bash
-cof run thanksgiving.yml --scoring --decompose --decompose-out ./plans -e guests=12
+cof run migrate_config.yml --scoring --decompose --decompose-out ./plans -e issue="Move to the new config format"
 ```
 
 ```
 plans/
-  3f2c9e7a-…__prime.plan_dinner.yml
+  3f2c9e7a-…__prime.plan.yml
 ```
 
 Each file is `<run_id>__<effect_path>.yml`, the planner's YAML verbatim, headed by a comment block naming the run, the effect, the outcome, and the merge contract — plain comments, so `cof run ./plans/<file>.yml` runs it as an ordinary document. Failed plans are written too, with `# status: failed` and the error: a plan that failed validation or whose execution failed is the one worth reading, and a planner payload that failed its own envelope is written as `.rejected.yml`. This is the loop that grows the library — a good plan is a candidate `recipes/` entry, promoted by hand.
 
 ## Why the seams matter
 
-Decomposition is where the design pays off all at once. The planner can emit a fan-out because the *dynamic* makes parallel composition a first-class thing. The runtime can run the plan safely because *use* isolates it and *validation* gates it. The merged result can be substituted invisibly because every effect's path is *deterministic* — `prime.plan_dinner.value` means the same thing whether one model call or a child orchestration produced it. And the decision is auditable because everything that happened was written to `meta`. None of that was built for decomposition; decomposition is what you get when the pieces fit.
+Decomposition is where the design pays off all at once. The planner can emit a fan-out because the *dynamic* makes parallel composition a first-class thing. The runtime can run the plan safely because *use* isolates it and *validation* gates it. The merged result can be substituted invisibly because every effect's path is *deterministic* — `prime.plan.value` means the same thing whether one model call or a child orchestration produced it. And the decision is auditable because everything that happened was written to `meta`. None of that was built for decomposition; decomposition is what you get when the pieces fit.
 
 ## Anti-patterns
 

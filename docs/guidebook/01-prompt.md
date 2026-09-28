@@ -24,36 +24,36 @@ Two fields are required: `name` and exactly one of `template` or `messages`. Eve
 
 ```yaml
 - type: prompt
-  name: suggest_dish
-  template: "Suggest one main course for {{input.occasion}}, in one sentence."
+  name: kind
+  template: "Is this issue a bug, a feature or a question? Answer with the one word, nothing else. Issue: {{input.issue}}"
 ```
 
 Run it, and one node appears in state:
 
 ```
-prime.suggest_dish.value    # the model's answer
-prime.suggest_dish.meta     # adapter, model, model_reason, prompt_type, prompt_sent,
-                            # tokens_sent, tokens_received, error, fallback_attempts,
-                            # created_at, completed_at
+prime.kind.value    # the model's answer
+prime.kind.meta     # adapter, model, model_reason, prompt_type, prompt_sent,
+                    # tokens_sent, tokens_received, error, fallback_attempts,
+                    # created_at, completed_at
 ```
 
 `value` is what the prompt is *for*. `meta` is the transformed context — the second half of the monadic return, and the reason a Circuitry run is a decision record rather than a transcript. `prompt_sent` in particular is the rendered text the adapter actually received, after every `{{…}}` was interpolated; when a run goes green but the output looks wrong, read it before anything else.
 
 ## Templates and messages
 
-`template` is a [Mustache](https://mustache.github.io/) string. Anything in double braces is looked up in the shadow state: `{{input.occasion}}` reads a caller-supplied value, `{{prime.suggest_dish.value}}` reads an earlier effect's output. Triple-stache `{{{…}}}` skips HTML escaping, which matters when you interpolate code or markup. [Shadow state](03-state.md) covers the full addressing rules; the short version is that every reference starts with `input.`, `prime.`, or `runtime.`.
+`template` is a [Mustache](https://mustache.github.io/) string. Anything in double braces is looked up in the shadow state: `{{input.issue}}` reads a caller-supplied value, `{{prime.kind.value}}` reads an earlier effect's output. Triple-stache `{{{…}}}` skips HTML escaping, which matters when you interpolate code or markup. [Shadow state](03-state.md) covers the full addressing rules; the short version is that every reference starts with `input.`, `prime.`, or `runtime.`.
 
 `messages` is the role-based alternative for models that expect a conversation:
 
 ```yaml
 - type: prompt
-  name: is_vegetarian
+  name: is_bug
   prompt_type: boolean
   messages:
     - role: system
-      content: "You are a strict classifier. Reply with only true or false."
+      content: "You triage issues for a Python library. Reply with only true or false."
     - role: user
-      content: "Is this dish vegetarian? {{prime.suggest_dish.value}}"
+      content: "Does this issue report a bug? {{input.issue}}"
 ```
 
 Each `content` is a template in its own right. The two forms are mutually exclusive — a prompt with both fails validation:
@@ -61,11 +61,11 @@ Each `content` is a template in its own right. The two forms are mutually exclus
 ```yaml
 # ✗ template and messages are alternatives, never companions
 - type: prompt
-  name: suggest_dish
-  template: "Suggest a main course."
+  name: kind
+  template: "Classify this issue."
   messages:
     - role: user
-      content: "Suggest a main course."
+      content: "Classify this issue."
 ```
 
 ## Typed output
@@ -85,33 +85,33 @@ Structured types require a [JSON Schema](https://json-schema.org/) (Draft-07), a
 
 ```yaml
 - type: prompt
-  name: parse_recipe
+  name: assessment
   prompt_type: json
   schema:
     type: object
     properties:
-      ingredients:
+      severity: {type: string, enum: [low, medium, high]}
+      components:
         type: array
         items: {type: string}
-      servings: {type: number}
-    required: [ingredients]
+    required: [severity]
   template: |
-    Extract the ingredient list and the serving count from this recipe.
-    Return ONLY a JSON object with "ingredients" and "servings".
+    Rate the severity of this issue and list the components it affects.
+    Return ONLY a JSON object with "severity" (low, medium or high) and "components".
 
-    {{input.recipe_text}}
+    {{input.issue}}
 ```
 
-Downstream effects then read fields, not text: `{{prime.parse_recipe.value.ingredients}}` in a template, `state.prime.parse_recipe.value.servings > 6` in a CEL expression. This is how effects pass *typed* data to each other, and it is what makes a later `loop` over the ingredients or an `if` on the serving count possible at all — a loop cannot iterate prose.
+Downstream effects then read fields, not text: `{{prime.assessment.value.components}}` in a template, `state.prime.assessment.value.severity == 'high'` in a CEL expression. This is how effects pass *typed* data to each other, and it is what makes a later `loop` over the components or an `if` on the severity possible at all — a loop cannot iterate prose.
 
 A structured type without a schema is rejected:
 
 ```yaml
 # ✗ json, object and array all require a schema
 - type: prompt
-  name: parse_recipe
+  name: assessment
   prompt_type: json
-  template: "Return the ingredients as JSON: {{input.recipe_text}}"
+  template: "Return the severity and the affected components as JSON: {{input.issue}}"
 ```
 
 Keep schemas small. A schema with more than three or four properties is a smell: the prompt is asking the model to do several things at once, and the fix is several prompts with simpler schemas, each one focused. End every template that expects structure with an explicit instruction — "Return ONLY a JSON object with …". The extractor is forgiving about code fences and a sentence of preamble, but a reply that wanders produces a `null` value and a schema failure, and the instruction is what keeps the reply clean.
@@ -130,15 +130,15 @@ Keep schemas small. A schema with more than three or four properties is a smell:
 
 ```yaml
 - type: prompt
-  name: pair_wine
+  name: reply
   inputs:
-    budget: "under forty dollars"
-  template: "Pick a wine {{budget}} to pair with: {{prime.suggest_dish.value}}"
+    length: "two plain sentences"
+  template: "Reply as the maintainer to whoever filed this issue (kind: {{prime.kind.value}}), in {{length}}. Issue: {{input.issue}}"
 ```
 
 Prefer shared state for anything another effect might want; use `inputs` for genuinely local constants.
 
-`assets` attaches non-text inputs — `[{kind: image, ref: ./plate.jpg}]` — for multimodal-capable models. `kind` names the asset type; `ref` is a resolvable path or identifier.
+`assets` attaches non-text inputs — `[{kind: image, ref: ./screenshot.png}]`, the screenshot attached to the issue — for multimodal-capable models. `kind` names the asset type; `ref` is a resolvable path or identifier.
 
 ## Errors, retries, timeouts
 
@@ -160,19 +160,19 @@ prime.<name>.meta.complexity             # present only when scoring is on (chap
 prime.<name>.meta.decomposition          # present only when decomposition fired (chapter 11)
 ```
 
-Inside a `dynamic` the path gains the container's name (`prime.menu.suggest_dish.value`); inside a loop it gains the pass (`prime.courses.iter_0.cook.value`). The rule never changes: the path is derived from the names above it, and nothing else.
+Inside a `dynamic` the path gains the container's name (`prime.context.search.value`); inside a loop it gains the pass (`prime.diagnoses.iter_0.diagnose.value`). The rule never changes: the path is derived from the names above it, and nothing else.
 
 ## Anti-patterns
 
 **One prompt, three jobs.** A template that asks the model to *analyze and generate and review* is three prompts wearing one name. Split it — `outline` → `expand` → `polish` — and each step becomes observable, retryable, and routable on its own. Prefer many small effects over few large ones.
 
-**Naming an effect after its type.** `name: prompt` validates, but the validator warns, and for good reason: generic names are exactly the ones that collide when two of them end up siblings. Name the effect after the job — `suggest_dish`, not `prompt`.
+**Naming an effect after its type.** `name: prompt` validates, but the validator warns, and for good reason: generic names are exactly the ones that collide when two of them end up siblings. Name the effect after the job — `kind`, not `prompt`.
 
 ```yaml
 # ⚠ validates, but warns: name the job, not the type
 - type: prompt
   name: prompt
-  template: "Suggest one main course for {{input.occasion}}."
+  template: "Is this issue a bug, a feature or a question? Issue: {{input.issue}}"
 ```
 
 **A plural name.** `summarize_articles` is a signal that one effect is doing many things; the shape you want is a `loop` over the articles with a singular body effect, `summarize_article`.

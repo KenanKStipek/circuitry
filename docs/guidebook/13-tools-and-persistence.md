@@ -16,14 +16,15 @@ A tool effect is a plugin call. Reading a file, fetching a URL, querying SQL, se
 
 ```yaml
 - type: tool
-  name: fetch_recipe
-  provider: web_fetch
+  name: search
+  provider: ripgrep
   params:
-    url: "{{input.recipe_url}}"
-  on_error: skip
+    args: [--line-number, --fixed-strings, "{{input.error}}", "."]
+    cwd: "{{input.repo}}"
+    allow_nonzero: true
 ```
 
-`provider` names the plugin. `params` is the plugin's own vocabulary — every string value is a Mustache template — and for the two media plugins that predate `params`, `prompt` and `model` are top-level shorthand (`params` wins when both are given). The result lands at `prime.<name>.value` in whatever shape the plugin documents: a path, a parsed document, a list of records.
+`provider` names the plugin. `params` is the plugin's own vocabulary — every string value is a Mustache template — and for the two media plugins that predate `params`, `prompt` and `model` are top-level shorthand (`params` wins when both are given). The result lands at `prime.<name>.value` in whatever shape the plugin documents: a path, a parsed document, a list of records. A plugin that runs a program returns its standard output, and records `stdout`, `stderr` and `exit_code` in `meta`. A non-zero exit fails the step unless `allow_nonzero: true` is set — `rg` exits 1 when nothing matches, and `pytest` exits 1 when a test fails, and an agent wants to read both answers rather than stop on them.
 
 A value rendered into `params` is always a string, so a list from an earlier step arrives as its string form. When a tool needs a real array or object built at run time, write `params_json`: a template that renders to a JSON object, which is parsed and deep-merged over `params` (its keys win). A list or object from state renders into it as JSON:
 
@@ -34,35 +35,33 @@ A value rendered into `params` is always a string, so a list from an earlier ste
   params:
     server: github
     tool: create_issue
-    arguments: {owner: "{{input.owner}}", repo: "{{input.repo}}", title: "Tonight's menu"}
-  params_json: '{"arguments": {"labels": {{{prime.menu.plan_courses.value}}}}}'
+    arguments: {owner: "{{input.owner}}", repo: "{{input.name}}", title: "Follow-up: {{prime.follow_up.value}}"}
+  params_json: '{"arguments": {"labels": {{{prime.labels.value}}}}}'
 ```
 
-Here `arguments.labels` is the course list itself, next to the three strings from `params`. A template that does not render to a JSON object fails the tool; it never runs with other parameters than the ones you wrote.
+Here `arguments.labels` is the label list an `array` prompt chose, the list itself, next to the three strings from `params`. A template that does not render to a JSON object fails the tool; it never runs with other parameters than the ones you wrote.
 
 The division of labour is strict. Tools are for what a model *cannot* do — side effects and observations. Text work — summarising, extracting, classifying, writing, coding — is a prompt, and the pattern that joins them is **prompt-then-tool**: a `json` prompt produces the parameters, a tool executes them.
 
 ```yaml
 - type: prompt
-  name: plan_poster
+  name: plan_search
   prompt_type: json
   schema:
     type: object
     properties:
-      image_prompt: {type: string}
-      width: {type: number}
-    required: [image_prompt]
-  template: "Describe a poster for tonight's menu as an image prompt. Return ONLY JSON with image_prompt and width."
+      pattern: {type: string}
+      glob: {type: string}
+    required: [pattern, glob]
+  template: "Choose a search for the code that raises the error in this issue. Return ONLY JSON with pattern (a literal string from the error) and glob (such as *.py). Issue: {{input.issue}}"
 
 - type: tool
-  name: render_poster
-  provider: comfyui
-  prompt: "{{prime.plan_poster.value.image_prompt}}"
-  model: flux1-schnell-fp8.safetensors
+  name: search
+  provider: ripgrep
   params:
-    width: "{{prime.plan_poster.value.width}}"
-    height: 768
-    image_dir: ./output/posters
+    args: [--line-number, --fixed-strings, --glob, "{{prime.plan_search.value.glob}}", "{{prime.plan_search.value.pattern}}", "."]
+    cwd: "{{input.repo}}"
+    allow_nonzero: true
 ```
 
 ### The built-in providers
@@ -91,15 +90,15 @@ Seventy-odd ship in-tree. By purpose:
 
 `cof list --extensions` prints the exact compiled-in set. Plugins that need optional PyPI packages or external binaries lazy-import; `cof doctor` reports each one's readiness, and `pip install circuitry-cof[<plugin>]` (`[playwright]`, `[github]`, `[embed]`, …) pulls what a plugin needs. `docs/plugins/` documents the media plugins' parameters in full.
 
-The plugins that wrap a command-line program (`imagemagick`, `ffmpeg`, `git`, `pandoc`, `yt_dlp`, and the other subprocess tools) search `PATH` for it by default. Config can name the exact executable and add to its environment — both machine-specific, so both stay out of the document:
+The plugins that wrap a command-line program (`git`, `gh`, `ripgrep`, `pytest`, `ffmpeg`, `imagemagick`, and the other subprocess tools) search `PATH` for it by default. Config can name the exact executable and add to its environment — both machine-specific, so both stay out of the document. Here the agent's `pytest` is the one in the project's own virtual environment, so the tests run against the project's dependencies:
 
 ```json
 {
   "runtime": {
     "plugins": {
-      "imagemagick": {
-        "binary": "~/opt/imagemagick-omp/bin/magick",
-        "env": {"MAGICK_THREAD_LIMIT": "4"}
+      "pytest": {
+        "binary": "~/src/durations/.venv/bin/pytest",
+        "env": {"PYTHONHASHSEED": "0"}
       }
     }
   }
@@ -138,8 +137,8 @@ The `mcp` provider is the client-side complement to the MCP *server* in [Surface
     tool: create_issue
     arguments:
       owner: "{{input.owner}}"
-      repo: "{{input.repo}}"
-      title: "Tonight's menu: {{prime.plate.value}}"
+      repo: "{{input.name}}"
+      title: "Follow-up: {{prime.follow_up.value}}"
 ```
 
 Transport is inferred from the shape (`command` → stdio, `url` → HTTP). The value is the tool's structured content when the server sends it; otherwise, under the default `parse: auto`, its text is parsed as JSON when it is a JSON object or array, and kept as text when not. `operation: list_tools` returns a server's catalogue — a way for an orchestration, or a reflector, to discover capabilities at run time.

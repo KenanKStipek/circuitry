@@ -26,40 +26,40 @@ Hosted providers read their keys from the environment (`OPENAI_API_KEY`, `ANTHRO
 ## Your first orchestration
 
 ```yaml
-# dinner.yml
+# triage.yml
 effects:
   - type: prompt
-    name: dish
-    template: "Suggest one main course for {{input.occasion}}."
+    name: kind
+    template: "Is this issue a bug, a feature or a question? Answer with the one word, nothing else. Issue: {{input.issue}}"
   - type: prompt
-    name: shopping_list
-    template: "List the ingredients to buy for: {{prime.dish.value}}"
+    name: reply
+    template: "Reply as the maintainer to whoever filed this issue (kind: {{prime.kind.value}}). Thank them and say what happens next. Two plain sentences, no subject line. Issue: {{input.issue}}"
 ```
 
 ```bash
-cof check dinner.yml
-cof run dinner.yml -e occasion="anniversary dinner" --out run.json
+cof check triage.yml
+cof run triage.yml -e issue="parse_duration fails on 1h30m with ValueError: invalid duration. 90m works." --out run.json
 ```
 
 ## Shadow state
 
-Every run builds a **shadow state**: a tree with the same keys as the orchestration, holding what each effect produced. The YAML fixes its shape before the run starts, and the run fills it in. For `dinner.yml`, `run.json` holds:
+Every run builds a **shadow state**: a tree with the same keys as the orchestration, holding what each effect produced. The YAML fixes its shape before the run starts, and the run fills it in. For `triage.yml`, `run.json` holds:
 
 ```yaml
 input:
-  occasion: anniversary dinner
+  issue: "parse_duration fails on 1h30m with ValueError: invalid duration. 90m works."
 prime:
-  dish:
-    value: Duck à l'Orange
-    meta: {adapter: ollama, model: llama3.1:8b, prompt_sent: "Suggest one main course for anniversary dinner.", ...}
-  shopping_list:
-    value: "Duck breast, oranges, Grand Marnier, …"
-    meta: {adapter: ollama, model: llama3.1:8b, ...}
+  kind:
+    value: Bug.
+    meta: {adapter: ollama, model: ministral-3:3b, ...}
+  reply:
+    value: "Thank you for bringing this to our attention—I appreciate your patience as we investigate the issue. We’ll look into why `1h30m` fails while `90m` works correctly and will address it promptly in the next update."
+    meta: {adapter: ollama, model: ministral-3:3b, prompt_sent: "Reply as the maintainer to whoever filed this issue (kind: Bug.). Thank them …", ...}
 runtime:
   last_run: {...}
 ```
 
-- **Same keys, as data.** An effect named `dish` lives at `prime.dish`; a `wine` step inside a `menu` dynamic at `prime.menu.wine`. A named loop adds one node per pass (`iter_0`, `iter_1`, …) plus `last`. Since every path is known from the YAML, any effect can read an earlier one: `{{prime.dish.value}}` in a template, `state.prime.dish.value != ""` in a condition ([CEL](https://github.com/google/cel-spec)).
+- **Same keys, as data.** An effect named `kind` lives at `prime.kind`; a `search` step inside a `context` dynamic at `prime.context.search`. A named loop adds one node per pass (`iter_0`, `iter_1`, …) plus `last`. Since every path is known from the YAML, any effect can read an earlier one: `{{prime.kind.value}}` in a template, `state.prime.kind.value != ""` in a condition ([CEL](https://github.com/google/cel-spec)).
 - **Three roots.** `input` is what the caller passed, `prime` what the effects produced, `runtime` what the framework recorded.
 - **The whole record.** Each node keeps its `value` and its `meta`: model, prompt, tokens, timings, errors, the branch taken. `--live-state` writes the shadow state as the run goes; `--out` saves the finished one.
 
@@ -80,8 +80,8 @@ Models, adapters, tools and limits live in config, not in the document, so the s
 ```python
 from circuitry import run_orchestration
 
-result = run_orchestration(orchestration_path="dinner.yml", state={"occasion": "anniversary dinner"})
-print(result.ok, result.state["prime"]["shopping_list"]["value"])
+result = run_orchestration(orchestration_path="triage.yml", state={"issue": "parse_duration fails on 1h30m"})
+print(result.ok, result.state["prime"]["reply"]["value"])
 ```
 
 `circuitry-mcp` serves the same runtime over MCP, so a Claude Code or Claude Desktop session can run an orchestration and act as its model. See [Surfaces](docs/guidebook/12-surfaces.md).

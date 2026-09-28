@@ -170,8 +170,8 @@ effects:
 ```
 
 ```bash
-cof run recipe                          # reflector plans and executes
-cof run recipe --profile no-planning    # reflector is skipped; the rest is unchanged
+cof run agent.yml                          # reflector plans and executes
+cof run agent.yml --profile no-planning    # reflector is skipped; the rest is unchanged
 ```
 
 A conditional's `if` and a loop's `while` are conditions, not effects — they
@@ -266,7 +266,7 @@ doesn't carry rather than overwriting resumed values.
 ## Usage
 
 ```bash
-cof run recipe --profile fast
+cof run agent.yml --profile fast
 ```
 
 Or edit one without touching the YAML: `cof tui`, then `9` for the profile
@@ -301,7 +301,7 @@ file, which is the point: it may have changed or be gone by the time you want
 to reproduce a past run.
 
 ```bash
-cof run recipe --profile-from-state ./state.json
+cof run agent.yml --profile-from-state ./state.json
 ```
 
 `state.json` is any state this project wrote (typically via `--out`) for a

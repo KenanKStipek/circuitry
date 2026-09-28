@@ -23,20 +23,21 @@ A `use` runs another orchestration as an isolated sub-step. The child runs in it
 
 ```yaml
 - type: use
-  name: sauce
-  path: ./make_sauce.yml            # a sauce is a sub-recipe: its own document
+  name: tests
+  path: ./run_tests.yml             # running the tests is a job of its own: its own document
   inputs:
-    base: "{{prime.main_course.value}}"
-    style: pan
+    repo: "{{input.repo}}"
+    command: [-q, tests/]
   outputs:
-    recipe: {path: prime.compose.value, type: string}
+    passed: {path: prime.verdict.value.result, type: boolean}
+    failures: {path: prime.failures.value, type: array}
 ```
 
-**`inputs`** is a map of child input name to value; string values are Mustache-rendered in the parent before they cross. Inside the child they are `input.base` and `input.style`, indistinguishable from values a caller would have passed on the command line.
+**`inputs`** is a map of child input name to value; string values are Mustache-rendered in the parent before they cross. Inside the child they are `input.repo` and `input.command`, indistinguishable from values a caller would have passed on the command line.
 
-A rendered string always arrives as text, so a list interpolated with `{{…}}` crosses as its string form. To pass a value as it is — an array, an object, a number — write a reference instead of a template: `courses: {from: prime.menu.plan_courses.value}`. The path is rooted at `input.`, `prime.`, or `runtime.`, or at an enclosing loop's binding (`{from: course}` inside a loop over courses), and `cof check` rejects any other root. A reference that resolves to nothing passes `null`, and if the child's interface marks that input required, the `use` fails and names the path. The child cannot see the parent's `prime` — there is no path from inside `make_sauce.yml` to the parent's `main_course`, which is the point: a child that could read its caller's state could not be reasoned about on its own.
+A rendered string always arrives as text, so a list interpolated with `{{…}}` crosses as its string form. To pass a value as it is — an array, an object, a number — write a reference instead of a template: `command: {from: prime.tests.value.failures}` reruns just the tests that failed. The path is rooted at `input.`, `prime.`, or `runtime.`, or at an enclosing loop's binding (`{from: test}` inside a loop over failing tests), and `cof check` rejects any other root. A reference that resolves to nothing passes `null`, and if the child's interface marks that input required, the `use` fails and names the path. The child cannot see the parent's `prime` — there is no path from inside `run_tests.yml` to the parent's `patch`, which is the point: a child that could read its caller's state could not be reasoned about on its own.
 
-**`outputs`** is a map of parent-side name to a path *in the child*: `{path: prime.compose.value, type: string, description: …}`. When present, `prime.sauce.value` is a flat dict of those names — `{{prime.sauce.value.recipe}}` downstream. (A bare string, `recipe: prime.compose.value`, is accepted shorthand for `{path: …}`; write the object form — it is the one the library uses and the one with somewhere to put a `type`.)
+**`outputs`** is a map of parent-side name to a path *in the child*: `{path: prime.verdict.value.result, type: boolean, description: …}`. When present, `prime.tests.value` is a flat dict of those names — `{{prime.tests.value.passed}}` downstream. (A bare string, `passed: prime.verdict.value.result`, is accepted shorthand for `{path: …}`; write the object form — it is the one the library uses and the one with somewhere to put a `type`.)
 
 ### Three ways to name the child
 
@@ -48,12 +49,12 @@ A rendered string always arrives as text, so a list interpolated with `{{…}}` 
 
 ```yaml
 - type: prompt
-  name: plan_prep
-  template: "Write a Circuitry orchestration YAML that preps the kitchen for: {{input.dish}}. Output YAML only."
+  name: plan_checks
+  template: "Write a Circuitry orchestration YAML that reviews this patch before a maintainer does. Output YAML only.\n\n{{{prime.patch.value}}}"
 
 - type: use
-  name: run_prep
-  inline: "{{{prime.plan_prep.value}}}"
+  name: run_checks
+  inline: "{{{prime.plan_checks.value}}}"
   validate: true
 ```
 
@@ -79,50 +80,66 @@ InputDecl  ::= { type?: 'string'|'number'|'boolean'|'array'|'object', required?:
 OutputDecl ::= { path: STATE_PATH, type?: STRING, description?: STRING }
 ```
 
-An orchestration declares its contract with a top-level `interface:` block — the child's mise en place, everything it needs laid out and named before any heat is applied:
+An orchestration declares its contract with a top-level `interface:` block — everything the child needs, named and typed, and everything it hands back, before it runs a single effect:
 
 ```yaml
-# make_sauce.yml
+# run_tests.yml
 interface:
   inputs:
-    base:
+    repo:
       type: string
       required: true
-      description: The dish the sauce accompanies.
-    style:
-      type: string
-      required: false
+      description: The checkout to test.
+    command:
+      type: array
+      required: true
+      description: The pytest arguments, such as [-q, tests/].
   outputs:
-    recipe:
-      type: string
-      path: prime.compose.value
+    passed:
+      type: boolean
+      path: prime.verdict.value.result
+    failures:
+      type: array
+      path: prime.failures.value
 
 effects:
-  - type: prompt
-    name: compose
-    template: "Compose a {{input.style}} sauce for {{input.base}}."
+  - type: tool
+    name: test_run
+    provider: pytest
+    params: {cwd: "{{input.repo}}", allow_nonzero: true}
+    params_json: '{"args": {{{input.command}}}}'
+  - type: tool
+    name: failures
+    provider: regex
+    params: {pattern: "^FAILED (\\S+)", input: "{{{prime.test_run.value}}}", flags: [MULTILINE]}
+  - type: if                 # a named if records its decision: verdict.value.result
+    name: verdict
+    if: {mode: cel, expr: "state.prime.test_run.meta.exit_code == 0"}
+    then: []
 ```
 
-Two things happen when a `use` calls a document with an interface. **Required inputs are validated** — a caller that omits `base` fails with *missing required input 'base' declared in orchestration interface* before the child runs a single effect. And **outputs are auto-generated**: the caller's mapping is the child's `interface.outputs`, so callers do not repeat dot-paths, and the child can rename its internal effects without breaking anyone. The `use` in the first example could drop its `outputs:` block entirely.
+Three effects and no model call. `test_run` runs pytest with the caller's arguments (`params_json` passes the array as an array; [Tools and persistence](13-tools-and-persistence.md) explains it). `failures` pulls the failing test ids out of pytest's summary. `verdict` exists for its decision alone: a named `if` records `result`, and the interface hands it back as `passed`.
+
+Two things happen when a `use` calls a document with an interface. **Required inputs are validated** — a caller that omits `repo` fails with *missing required input 'repo' declared in orchestration interface* before the child runs a single effect. And **outputs are auto-generated**: the caller's mapping is the child's `interface.outputs`, so callers do not repeat dot-paths, and the child can rename its internal effects without breaking anyone. The `use` in the first example could drop its `outputs:` block entirely.
 
 The interface is also what `cof info` prints, what `cof list` shows as inputs, and what the [wizard](12-surfaces.md) reads when it composes library entries into a draft. Declare one on anything reusable-shaped.
 
-A declared input has one spelling inside the document — `{{input.base}}` in templates, `state.input.base` in CEL — and the compiler holds you to it:
+A declared input has one spelling inside the document — `{{input.repo}}` in templates, `state.input.repo` in CEL — and the compiler holds you to it:
 
 ```yaml
 # ✗ a declared input read bare is a compile error
 interface:
   inputs:
-    base: {type: string, required: true}
+    repo: {type: string, required: true}
 effects:
   - type: prompt
-    name: compose
-    template: "Compose a sauce for {{base}}."
+    name: summary
+    template: "Summarise the test layout of the checkout at {{repo}}."
 ```
 
 ## Isolation and observation
 
-Isolated *state*, shared *observation*. The child's effects are reported to the parent run's observers — `--live-state`, the TUI, every runtime plugin's `on_effect_start` / `on_effect_complete` — at paths namespaced under the `use` node: a child effect `compose` inside `use: sauce` announces as `prime.sauce.compose`, and a `use` inside a `use` composes the same way. Watchers see the whole tree unfolding; what actually lands in parent state is still exactly what the output mode says.
+Isolated *state*, shared *observation*. The child's effects are reported to the parent run's observers — `--live-state`, the TUI, every runtime plugin's `on_effect_start` / `on_effect_complete` — at paths namespaced under the `use` node: a child effect `test_run` inside `use: tests` announces as `prime.tests.test_run`, and a `use` inside a `use` composes the same way. Watchers see the whole tree unfolding; what actually lands in parent state is still exactly what the output mode says.
 
 **Cycles are rejected.** The compiler walks the static `use` graph across sources — A in a folder, B in the hub cache, A again — and refuses at validation. The runtime keeps a per-execution stack of resolved paths and hashes rendered inline YAML, so a cycle that closes only at run time is caught too. Two utilities that legitimately need each other are a sign of a third utility they both need.
 
@@ -164,32 +181,32 @@ Two more source types extend the list. A **`folder`** source scans a directory o
 
 [Library Sources](../library-sources.md) has the full field table; [Shared Library](../shared-library.md) and its companions cover the contribution workflow and the older `cof fetch` / `cof run-library` retrieval commands.
 
-## Composing the dinner
+## Composing the reply
 
-The utilities are written to chain. A draft menu, critiqued against named criteria, refined on the critique:
+The utilities are written to chain. A draft reply to the reporter, critiqued against named criteria, refined on the critique:
 
 ```yaml
 - type: prompt
-  name: draft_menu
-  template: "Draft a three-course menu for {{input.occasion}}, one line per course."
+  name: reply
+  template: "Reply as the maintainer to whoever filed this issue. Thank them and say what happens next. Issue: {{input.issue}}"
 
 - type: use
   name: critique_step
   ref: utilities/critique
   inputs:
-    content: "{{{prime.draft_menu.value}}}"
-    criteria: "balance, seasonality, brevity"
+    content: "{{{prime.reply.value}}}"
+    criteria: "accurate, polite, brief"
 
 - type: use
   name: refine_step
   ref: utilities/refine
   inputs:
-    content: "{{{prime.draft_menu.value}}}"
+    content: "{{{prime.reply.value}}}"
     feedback: "{{prime.critique_step.value.critique.issues}}"
 
 - type: prompt
-  name: menu_card
-  template: "Write the menu card from: {{{prime.refine_step.value.refined}}}"
+  name: comment
+  template: "Format this reply as a GitHub comment in plain markdown: {{{prime.refine_step.value.refined}}}"
 ```
 
 `critique` declares one output, `critique` (an object with `score`, `issues`, `strengths`), so `prime.critique_step.value.critique.issues` is the list of things to fix; `refine` declares `refined`. Neither caller repeats a path into the child, and either utility can be reworked internally without touching this document. `patterns/critique_refine_loop` wraps the same two calls in a `while` loop with the model judging when to stop.
@@ -202,7 +219,7 @@ The utilities are written to chain. A draft menu, critiqued against named criter
 
 **A `use` with prompt fields.** `template`, `schema`, `prompt_type` do not belong on a `use`. If the step is a model call, it is a `prompt`.
 
-**Naming the effect `use`.** Name it for what the composed step does — `critique_step`, `sauce`.
+**Naming the effect `use`.** Name it for what the composed step does — `critique_step`, `tests`.
 
 **Re-deriving a utility inline.** If a library entry's interface fits, call it; the entry has been tuned and its output shape is stable.
 

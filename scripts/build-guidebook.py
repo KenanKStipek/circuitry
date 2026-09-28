@@ -57,7 +57,7 @@ PARTS: list[tuple[str, list[str]]] = [
             "11-decomposition.md",
             "12-surfaces.md",
             "13-tools-and-persistence.md",
-            "14-the-whole-meal.md",
+            "14-issue-to-pull-request.md",
         ],
     ),
 ]

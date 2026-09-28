@@ -21,91 +21,98 @@ Dynamic ::= { type: 'dynamic', name: NAME, effects: Effect+,
 
 ```yaml
 - type: dynamic
-  name: menu
+  name: investigate
   flow: chain
   effects:
     - type: prompt
-      name: main_course
-      template: "Suggest a main course for {{input.occasion}}."
+      name: error
+      template: "Copy the error message out of this issue, without the values in it. Reply with the message only. Issue: {{input.issue}}"
     - type: prompt
-      name: wine
-      template: "Pick a wine to pair with: {{prime.menu.main_course.value}}"
+      name: cause
+      template: "Name the most likely cause of this error, in one sentence: {{prime.investigate.error.value}}"
 ```
 
 `chain` is sequential: each effect runs after the previous one and sees everything it wrote. This is monadic bind, and it is the shape of chain-of-thought — each step conditioned on the last. It is the default flow, so `flow: chain` can be omitted; writing it is a courtesy to the reader.
 
-Inside the container, the children's paths gain the container's name: `wine` writes to `prime.menu.wine.value`, not `prime.wine.value`. Two spellings reach a sibling from inside the same dynamic — the absolute path, `{{prime.menu.main_course.value}}`, and the container-relative short form, `{{menu.main_course.value}}`. Write the absolute one; it is the same spelling a reader outside the container uses, and it never depends on where the template sits.
+Inside the container, the children's paths gain the container's name: `cause` writes to `prime.investigate.cause.value`, not `prime.cause.value`. Two spellings reach a sibling from inside the same dynamic — the absolute path, `{{prime.investigate.error.value}}`, and the container-relative short form, `{{investigate.error.value}}`. Write the absolute one; it is the same spelling a reader outside the container uses, and it never depends on where the template sits.
 
-What does *not* work is the root spelling. `main_course` lives under `menu`, so `{{prime.main_course.value}}` names a node that does not exist. It does not fail — Mustache renders a missing reference as an empty string — which makes this the first of the silent errors this guidebook will keep pointing at:
+What does *not* work is the root spelling. `error` lives under `investigate`, so `{{prime.error.value}}` names a node that does not exist. It does not fail — Mustache renders a missing reference as an empty string — which makes this the first of the silent errors this guidebook will keep pointing at:
 
 ```yaml
-# ✗ runtime — renders empty: main_course lives at prime.menu.main_course, not prime.main_course
+# ✗ runtime — renders empty: error lives at prime.investigate.error, not prime.error
 - type: dynamic
-  name: menu
+  name: investigate
   effects:
     - type: prompt
-      name: main_course
-      template: "Suggest a main course for {{input.occasion}}."
+      name: error
+      template: "Copy the error message out of this issue, without the values in it. Reply with the message only. Issue: {{input.issue}}"
     - type: prompt
-      name: wine
-      template: "Pick a wine to pair with: {{prime.main_course.value}}"
+      name: cause
+      template: "Name the most likely cause of this error, in one sentence: {{prime.error.value}}"
 ```
 
-The run goes green, the wine prompt reads "Pick a wine to pair with: ", and the model picks a wine for nothing. `prime.menu.wine.meta.prompt_sent` is where you would catch it.
+The run goes green, the cause prompt reads "Name the most likely cause of this error, in one sentence: ", and the model names a cause for no error at all. `prime.investigate.cause.meta.prompt_sent` is where you would catch it.
 
 ## Tree
 
+Before an agent changes anything it looks around: it searches the code for the error message, reads the recent history, and checks for related issues. These are `tool` effects: a tool calls a plugin — here `ripgrep`, `git` and `gh` — instead of a model, and composes like any other leaf ([Tools and persistence](13-tools-and-persistence.md) covers them). And none of the three needs the others:
+
 ```yaml
 - type: dynamic
-  name: courses
+  name: context
   flow: tree
   max_concurrency: 3
   effects:
-    - type: prompt
-      name: starter
-      template: "Suggest a starter to precede {{input.main}}."
-    - type: prompt
-      name: dessert
-      template: "Suggest a dessert to follow {{input.main}}."
-    - type: prompt
-      name: wine
-      template: "Pick a wine for {{input.main}}."
+    - type: tool
+      name: search
+      provider: ripgrep
+      params: {args: [--line-number, --fixed-strings, "{{input.error}}", "."], cwd: "{{input.repo}}"}
+    - type: tool
+      name: history
+      provider: git
+      params: {args: [log, --oneline, "-5"], cwd: "{{input.repo}}"}
+    - type: tool
+      name: related
+      provider: gh
+      params: {args: [issue, list, --search, "{{input.error}}"], cwd: "{{input.repo}}"}
 ```
 
 `tree` is parallel: every child launches against the *same* snapshot of state, taken when the dynamic begins. This is the applicative shape — independent computations over shared input — and it is the shape of tree-of-thought: several branches explored at once, joined afterwards. `max_concurrency` bounds the worker pool; leave it unset and every child runs at once.
 
-The consequence of the shared snapshot is the rule that defines `tree`: **siblings cannot read each other.** `dessert` cannot see `starter`, because when `dessert` was launched `starter` had not written anything yet. A template that tries renders empty, exactly like the wrong-root example above. If one child needs another's output, they are not siblings in a tree — they are steps in a chain.
+The consequence of the shared snapshot is the rule that defines `tree`: **siblings cannot read each other.** `history` cannot see `search`, because when `history` was launched `search` had not written anything yet. A template that tries renders empty, exactly like the wrong-root example above. If the history should cover the files the search found, the two are not siblings in a tree — they are steps in a chain.
 
 The two flows compose. A chain whose second step is a tree fans out; a tree whose branches are each a chain runs several pipelines at once; a chain after the tree joins them:
 
 ```yaml
 - type: dynamic
-  name: plan
+  name: gather
   flow: chain
   effects:
     - type: prompt
-      name: main_course
-      template: "Suggest a main course for {{input.occasion}}."
+      name: error
+      template: "Copy the error message out of this issue, without the values in it. Reply with the message only. Issue: {{input.issue}}"
     - type: dynamic
-      name: around_it
+      name: context
       flow: tree
       effects:
-        - type: prompt
-          name: starter
-          template: "Suggest a starter to precede {{prime.plan.main_course.value}}."
-        - type: prompt
-          name: dessert
-          template: "Suggest a dessert to follow {{prime.plan.main_course.value}}."
+        - type: tool
+          name: search
+          provider: ripgrep
+          params: {args: [--line-number, --fixed-strings, "{{prime.gather.error.value}}", "."], cwd: "{{input.repo}}"}
+        - type: tool
+          name: related
+          provider: gh
+          params: {args: [issue, list, --search, "{{prime.gather.error.value}}"], cwd: "{{input.repo}}"}
     - type: prompt
-      name: menu_card
+      name: brief
       template: |
-        Write the menu card.
-        Starter: {{prime.plan.around_it.starter.value}}
-        Main: {{prime.plan.main_course.value}}
-        Dessert: {{prime.plan.around_it.dessert.value}}
+        Write a short brief for the engineer who will fix this issue.
+        Error: {{prime.gather.error.value}}
+        Where it is raised: {{{prime.gather.context.search.value}}}
+        Related issues: {{{prime.gather.context.related.value}}}
 ```
 
-Nesting deepens the path one segment per container: `prime.plan.around_it.starter.value`. The rule is the same at every depth.
+Nesting deepens the path one segment per container: `prime.gather.context.search.value`. The rule is the same at every depth.
 
 ## The root is a dynamic
 
@@ -115,11 +122,11 @@ An orchestration's top-level `effects:` list is the body of an implicit root dyn
 flow: tree
 effects:
   - type: prompt
-    name: starter
-    template: "Suggest a starter for {{input.occasion}}."
+    name: kind
+    template: "Is this issue a bug, a feature or a question? Answer with the one word, nothing else. Issue: {{input.issue}}"
   - type: prompt
-    name: dessert
-    template: "Suggest a dessert for {{input.occasion}}."
+    name: title
+    template: "Write a short, specific title for this issue. Reply with the title only. Issue: {{input.issue}}"
 ```
 
 ## Errors inside a container
@@ -131,7 +138,7 @@ A dynamic has its own `on_error`, and one field the leaf effects do not: `stop_o
 ```
 prime.<dynamic>.value                 # true when the container completed
 prime.<dynamic>.meta.flow             # "chain" | "tree"
-prime.<dynamic>.meta.error            # null, or the failure (with a breadcrumb into the child)
+prime.<dynamic>.meta.error            # null, or the failure (a chain names the failing child)
 prime.<dynamic>.<child>.value         # each child, one segment deeper
 ```
 
@@ -145,7 +152,7 @@ prime.<dynamic>.<child>.value         # each child, one segment deeper
 
 **Tree siblings that read each other.** They render empty — see above. When a branch depends on another branch, restructure: chain first, then tree.
 
-**Forgetting the container in the path.** `{{prime.wine.value}}` for a `wine` inside `menu`. Every path is the full path from `prime`.
+**Forgetting the container in the path.** `{{prime.error.value}}` for an `error` inside `investigate`. Every path is the full path from `prime`.
 
 ## See also
 
