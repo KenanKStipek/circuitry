@@ -138,7 +138,7 @@ A dynamic has its own `on_error`, and one field the leaf effects do not: `stop_o
 ```
 prime.<dynamic>.value                 # true when the container completed
 prime.<dynamic>.meta.flow             # "chain" | "tree"
-prime.<dynamic>.meta.error            # null, or the failure (with a breadcrumb into the child)
+prime.<dynamic>.meta.error            # null, or the failure (a chain names the failing child)
 prime.<dynamic>.<child>.value         # each child, one segment deeper
 ```
 

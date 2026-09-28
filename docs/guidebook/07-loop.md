@@ -130,7 +130,7 @@ Model mode wraps the template the way `if` does — *"… Should the loop contin
       params: {args: [apply, --check, "-"], cwd: "{{input.repo}}", stdin: "{{{prime.patch.value}}}\n", allow_nonzero: true}
 ```
 
-`git apply --check` only asks whether the patch would apply; `check` records the answer as its exit code, and the loop drafts another patch until one applies, three times at most. After the loop, `prime.candidates.last.patch.value` is the patch that applied. Before the first pass there is no `check` yet, which makes the condition false, so `min_iterations: 1` starts the loop.
+`git apply --check` only asks whether the patch would apply; `check` records the answer as its exit code, and the loop drafts another patch until one applies, three times at most. After the loop, `prime.candidates.last.patch.value` is the patch that passed the check. Before the first pass there is no `check` yet, which makes the condition false, so `min_iterations: 1` starts the loop.
 
 One thing a CEL condition cannot do is read the loop's own `collected` or `last` — both are written when the loop *completes*, so from inside the loop the path is missing, and an expression that reads a missing path is `false`. A `while` written that way runs zero passes and terminates `condition_false`. *Where* you read loop state matters as much as *what* you read; the next section is the map.
 

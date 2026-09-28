@@ -30,11 +30,12 @@ A `use` runs another orchestration as an isolated sub-step. The child runs in it
     command: [-q, tests/]
   outputs:
     passed: {path: prime.verdict.value.result, type: boolean}
+    failures: {path: prime.failures.value, type: array}
 ```
 
 **`inputs`** is a map of child input name to value; string values are Mustache-rendered in the parent before they cross. Inside the child they are `input.repo` and `input.command`, indistinguishable from values a caller would have passed on the command line.
 
-A rendered string always arrives as text, so a list interpolated with `{{…}}` crosses as its string form. To pass a value as it is — an array, an object, a number — write a reference instead of a template: `command: {from: prime.failures.value}` reruns just the tests that failed. The path is rooted at `input.`, `prime.`, or `runtime.`, or at an enclosing loop's binding (`{from: test}` inside a loop over failing tests), and `cof check` rejects any other root. A reference that resolves to nothing passes `null`, and if the child's interface marks that input required, the `use` fails and names the path. The child cannot see the parent's `prime` — there is no path from inside `run_tests.yml` to the parent's `patch`, which is the point: a child that could read its caller's state could not be reasoned about on its own.
+A rendered string always arrives as text, so a list interpolated with `{{…}}` crosses as its string form. To pass a value as it is — an array, an object, a number — write a reference instead of a template: `command: {from: prime.tests.value.failures}` reruns just the tests that failed. The path is rooted at `input.`, `prime.`, or `runtime.`, or at an enclosing loop's binding (`{from: test}` inside a loop over failing tests), and `cof check` rejects any other root. A reference that resolves to nothing passes `null`, and if the child's interface marks that input required, the `use` fails and names the path. The child cannot see the parent's `prime` — there is no path from inside `run_tests.yml` to the parent's `patch`, which is the point: a child that could read its caller's state could not be reasoned about on its own.
 
 **`outputs`** is a map of parent-side name to a path *in the child*: `{path: prime.verdict.value.result, type: boolean, description: …}`. When present, `prime.tests.value` is a flat dict of those names — `{{prime.tests.value.passed}}` downstream. (A bare string, `passed: prime.verdict.value.result`, is accepted shorthand for `{path: …}`; write the object form — it is the one the library uses and the one with somewhere to put a `type`.)
 

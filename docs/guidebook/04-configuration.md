@@ -129,9 +129,7 @@ Twenty-nine adapters ship in-tree behind one `Adapter` protocol — hosted APIs,
 
 ## Profiles
 
-A profile is a YAML file that overlays one run — defaults, inputs, per-effect overrides, persistence — without touching the orchestration:
-
-A profile that keeps every model call on this machine — a small local model reads the issue, a larger local model writes the patches:
+A profile is a YAML file that overlays one run — defaults, inputs, per-effect overrides, persistence — without touching the orchestration. This one keeps every model call on this machine: a small local model reads the issue, a larger local model writes the patches:
 
 ```yaml
 # profiles/local.yml

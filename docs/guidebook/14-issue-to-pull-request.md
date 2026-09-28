@@ -156,11 +156,12 @@ effects:
 ```
 
 ```bash
+git switch -c fix/parse-duration    # the agent commits and pushes the branch you are on
 cof check issue_to_pr.yml
 cof run issue_to_pr.yml -e issue="parse_duration fails on 1h30m with ValueError: invalid duration. 90m works." -e repo=. --live-state agent.live.json
 ```
 
-The `then` branch commits, pushes the branch and opens a draft pull request with your own `git` and `gh` logins, so run the agent in a checkout you mean it to change.
+The `then` branch commits, pushes the current branch and opens a draft pull request with your own `git` and `gh` logins, so create a branch first, as above, and run the agent in a checkout you mean it to change.
 
 ## Reading the run
 
