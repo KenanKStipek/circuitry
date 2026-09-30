@@ -482,9 +482,12 @@ def _run_planner(
         "max_chunks": max_chunks,
     }
 
+    # The planner reads its inputs where every orchestration reads caller input,
+    # under ``input`` ({{{input.source_template}}}, state.input.max_chunks);
+    # seeded at the root, it saw an empty prompt and its gate never passed.
     planner_store = _run_isolated(
         planner_orch,
-        initial_state=planner_state,
+        initial_state={"input": planner_state},
         parent_store=store,
         node=node,
         node_path=node_path,
