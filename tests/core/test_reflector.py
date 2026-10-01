@@ -273,6 +273,109 @@ def test_reflector_non_list_effects_does_not_give_a_misleading_count() -> None:
     assert "exceeds max_effects" not in str(exc_info.value)
 
 
+def test_reflector_renders_root_goal_in_planning_prompt() -> None:
+    """{goal} is the root `goal` effect's value, read from the run's root
+    state — not the reflector's own (child) store node (#240)."""
+    plan_yaml = yaml.dump({
+        "done": True,
+        "effects": [{"type": "prompt", "name": "generated_step", "template": "Do the thing"}],
+    })
+
+    captured_prompts: list[str] = []
+
+    def _generate(*, model: str, prompt: str, timeout_seconds: int) -> MagicMock:
+        captured_prompts.append(prompt)
+        result = MagicMock()
+        result.text = plan_yaml
+        result.raw = {}
+        result.tokens_sent = 10
+        result.tokens_received = 5
+        return result
+
+    adapter = MagicMock()
+    adapter.name = "mock"
+    adapter.generate.side_effect = _generate
+
+    orch = {
+        "effects": [
+            {
+                "type": "reflector",
+                "name": "planner",
+                "effects": [
+                    {"type": "prompt", "name": "propose_steps", "template": "Plan."},
+                ],
+            }
+        ]
+    }
+
+    root = compile_orchestration(orch=orch)
+    store = Store(state={"prime": {"goal": {"value": "Ship the thing by Friday."}}})
+
+    DynamicRuntime(root, adapter=adapter, model="test-model").execute(store=store)
+
+    assert captured_prompts, "expected the planning prompt to be rendered"
+    assert "Ship the thing by Friday." in captured_prompts[0]
+
+
+def test_reflector_renders_redacted_effective_settings_as_context() -> None:
+    """{context} is a concise, redacted summary of `runtime.effective_settings`,
+    read from the run's root state (#240)."""
+    plan_yaml = yaml.dump({
+        "done": True,
+        "effects": [{"type": "prompt", "name": "generated_step", "template": "Do the thing"}],
+    })
+
+    captured_prompts: list[str] = []
+
+    def _generate(*, model: str, prompt: str, timeout_seconds: int) -> MagicMock:
+        captured_prompts.append(prompt)
+        result = MagicMock()
+        result.text = plan_yaml
+        result.raw = {}
+        result.tokens_sent = 10
+        result.tokens_received = 5
+        return result
+
+    adapter = MagicMock()
+    adapter.name = "mock"
+    adapter.generate.side_effect = _generate
+
+    orch = {
+        "effects": [
+            {
+                "type": "reflector",
+                "name": "planner",
+                "effects": [
+                    {"type": "prompt", "name": "propose_steps", "template": "Plan."},
+                ],
+            }
+        ]
+    }
+
+    root = compile_orchestration(orch=orch)
+    store = Store(
+        state={
+            "runtime": {
+                "effective_settings": {
+                    "model": "gpt-5",
+                    "adapter": "openai",
+                    "plugins": ["web_search"],
+                    "runtime": {"adapters": {"openai": {"api_key": "sk-should-not-leak-1234567890"}}},
+                }
+            }
+        }
+    )
+
+    DynamicRuntime(root, adapter=adapter, model="test-model").execute(store=store)
+
+    assert captured_prompts, "expected the planning prompt to be rendered"
+    prompt_text = captured_prompts[0]
+    assert "gpt-5" in prompt_text
+    assert "openai" in prompt_text
+    assert "web_search" in prompt_text
+    assert "sk-should-not-leak" not in prompt_text
+
+
 def test_reflector_invalid_plan_records_error() -> None:
     """Invalid YAML from LLM is caught and recorded as error."""
     adapter = _mock_adapter("This is not YAML at all: [[[invalid")
