@@ -94,6 +94,73 @@ def test_broken_config_is_one_actionable_line(
     assert str(cfg_path) in line
 
 
+# name -> reason fragment the CIRCUITRY_CONFIG-sourced message names (#326).
+CIRCUITRY_CONFIG_REASONS: dict[str, str] = {
+    "missing": "does not exist",
+    "malformed": "is not valid JSON",
+    "non_dict_root": "must contain a JSON object at the root",
+}
+
+
+@pytest.mark.parametrize("kind", sorted(BROKEN_CONFIGS))
+@pytest.mark.parametrize(
+    "argv", [pytest.param(a, id=n) for n, a, _ in CONFIG_COMMANDS]
+)
+def test_broken_circuitry_config_env_names_the_variable(
+    kind: str,
+    argv: list[str],
+    tmp_path: Path,
+    orch_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing/malformed file from ``CIRCUITRY_CONFIG`` must name the
+    variable, not just the path — unlike ``--config``, a stale env var isn't
+    visible in the command line (#326)."""
+    cfg_path = _config_path(tmp_path, kind)
+    args = [a.format(orch=orch_file, out=tmp_path / "fetched.yml") for a in argv]
+    monkeypatch.setenv("CIRCUITRY_CONFIG", str(cfg_path))
+
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 1
+    stderr_lines = [line for line in result.stderr.splitlines() if line.strip()]
+    assert len(stderr_lines) == 1, result.stderr
+    line = stderr_lines[0]
+    assert line.startswith(f"Error: CIRCUITRY_CONFIG points to {cfg_path}, which ")
+    assert CIRCUITRY_CONFIG_REASONS[kind] in line
+    assert "unset it or fix the path" in line
+
+
+def test_circuitry_config_env_missing_exact_wording(
+    tmp_path: Path, orch_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pins the exact wording from the issue (#326)."""
+    cfg_path = tmp_path / "absent.config.json"
+    monkeypatch.setenv("CIRCUITRY_CONFIG", str(cfg_path))
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert result.stderr.strip() == (
+        f"Error: CIRCUITRY_CONFIG points to {cfg_path}, which does not exist; "
+        "unset it or fix the path"
+    )
+
+
+def test_config_flag_wording_unchanged_when_circuitry_config_also_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--config`` wins over ``CIRCUITRY_CONFIG`` and keeps its own wording
+    (#326) — the env var is irrelevant once an explicit flag is given."""
+    monkeypatch.setenv("CIRCUITRY_CONFIG", str(tmp_path / "from-env.json"))
+    flag_path = tmp_path / "from-flag.json"
+
+    result = runner.invoke(app, ["doctor", "-c", str(flag_path)])
+
+    assert result.exit_code == 1
+    assert result.stderr.strip() == f"Error: Config file not found: {flag_path}"
+
+
 def test_valid_config_still_works(tmp_path: Path) -> None:
     cfg_path = tmp_path / "circuitry.config.json"
     cfg_path.write_text(json.dumps({"default_model": "test-model"}), encoding="utf-8")

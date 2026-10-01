@@ -98,7 +98,7 @@ The `adapter=` parameter is the seam: pass an already-constructed object impleme
 
 The rest of the public surface: `validate_orchestration(orchestration_path=)` returns `{ok, errors, warnings}`; `inspect_orchestration` returns static metadata; `inspect_divergence_paths(state=)` walks a finished state and returns every errored node in path order; `run_shared_orchestration` runs a shared-library asset by id and version; `circuitry.adapters.build_adapter` constructs an adapter from config. [API Reference](../api-reference.md) and [Stability](../stability.md) say what is public and how it is versioned.
 
-Embedded callers also get the two per-effect events without writing a plugin: `RunRequest.effect_start_observer` and `RunRequest.effect_observer` are `(effect_path, effect_node)` callables, composed with any configured plugins.
+An embedded caller gets the same two per-effect events a runtime plugin gets (`on_effect_start` / `on_effect_complete`, see below) by writing one: `run_orchestration` composes every configured runtime plugin's hooks on every run, so a plugin is the public way to observe effects from Python, not a `run_orchestration` keyword.
 
 ## The MCP server: a Claude session as the model
 

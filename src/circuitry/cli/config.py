@@ -236,45 +236,92 @@ _JSON_ROOT_NAMES = {
 }
 
 
-def read_config_bytes(path: Path) -> bytes:
+def _config_error_message(
+    path: Path, env_var: str | None, *, reason: str, default: str
+) -> str:
+    """The message for a config-loading failure at *path*.
+
+    With no *env_var*, returns *default* verbatim — the long-standing
+    wording ``--config`` and auto-discovered config files use. With
+    *env_var* (currently only ``"CIRCUITRY_CONFIG"``), names the variable
+    instead of just the path it resolved to, so a stale export in a shell
+    profile is diagnosable rather than looking like a hard-coded path
+    mistake (#326).
+    """
+    if env_var:
+        return f"{env_var} points to {path}, which {reason}; unset it or fix the path"
+    return default
+
+
+def read_config_bytes(path: Path, *, env_var: str | None = None) -> bytes:
     """Read *path*, raising :class:`ConfigError` on any problem."""
     try:
         return path.read_bytes()
     except FileNotFoundError as exc:
-        raise ConfigError(f"Config file not found: {path}") from exc
+        raise ConfigError(
+            _config_error_message(
+                path, env_var, reason="does not exist", default=f"Config file not found: {path}"
+            )
+        ) from exc
     except IsADirectoryError as exc:
-        raise ConfigError(f"Config path is a directory, not a file: {path}") from exc
+        raise ConfigError(
+            _config_error_message(
+                path,
+                env_var,
+                reason="is a directory, not a file",
+                default=f"Config path is a directory, not a file: {path}",
+            )
+        ) from exc
     except OSError as exc:
         detail = exc.strerror or str(exc)
-        raise ConfigError(f"Config file could not be read: {path} ({detail})") from exc
+        raise ConfigError(
+            _config_error_message(
+                path,
+                env_var,
+                reason=f"could not be read ({detail})",
+                default=f"Config file could not be read: {path} ({detail})",
+            )
+        ) from exc
 
 
-def parse_config_bytes(path: Path, data: bytes) -> dict[str, Any]:
+def parse_config_bytes(
+    path: Path, data: bytes, *, env_var: str | None = None
+) -> dict[str, Any]:
     """Parse *data*, read from *path*, as a JSON object; :class:`ConfigError` if not."""
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise ConfigError(f"Config file is not valid UTF-8 text: {path}") from exc
+        raise ConfigError(
+            _config_error_message(
+                path,
+                env_var,
+                reason="is not valid UTF-8 text",
+                default=f"Config file is not valid UTF-8 text: {path}",
+            )
+        ) from exc
 
     try:
         raw = json.loads(text)
     except json.JSONDecodeError as exc:
+        reason = f"is not valid JSON: {exc.msg} (line {exc.lineno}, column {exc.colno})"
         raise ConfigError(
-            f"Config file {path} is not valid JSON: "
-            f"{exc.msg} (line {exc.lineno}, column {exc.colno})"
+            _config_error_message(path, env_var, reason=reason, default=f"Config file {path} {reason}")
         ) from exc
 
     if not isinstance(raw, dict):
         found = _JSON_ROOT_NAMES.get(type(raw), "a non-object value")
+        reason = f"must contain a JSON object at the root; found {found}"
         raise ConfigError(
-            f"Config file {path} must contain a JSON object at the root; found {found}."
+            _config_error_message(
+                path, env_var, reason=reason, default=f"Config file {path} {reason}."
+            )
         )
     return raw
 
 
-def _load_json_file(path: Path) -> dict[str, Any]:
+def _load_json_file(path: Path, *, env_var: str | None = None) -> dict[str, Any]:
     """Read *path* as a JSON object, raising :class:`ConfigError` on any problem."""
-    return parse_config_bytes(path, read_config_bytes(path))
+    return parse_config_bytes(path, read_config_bytes(path, env_var=env_var), env_var=env_var)
 
 
 def discover_project_config(cwd: Path | None = None) -> Path | None:
@@ -491,7 +538,9 @@ def resolve_config(
         # of the global config (#269 item 13 follow-up).
         local_path = explicit_path or Path(env)  # type: ignore[arg-type]
         local_kind: ConfigSourceKind = "--config" if explicit_path else "CIRCUITRY_CONFIG"
-        file_config = _load_json_file(local_path)
+        file_config = _load_json_file(
+            local_path, env_var=None if explicit_path else "CIRCUITRY_CONFIG"
+        )
         merged = _deep_merge(merged, file_config)
         sources.append(ConfigSource(local_kind, str(local_path)))
     else:

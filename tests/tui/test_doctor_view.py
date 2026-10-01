@@ -400,6 +400,7 @@ def test_doctor_mount_does_not_crash_on_a_stale_circuitry_config(
     # Degraded to an on-screen warning, the same message `cof doctor` prints
     # for this case, rather than vanishing with no trace (#259).
     assert "does-not-exist" in frame
+    assert "CIRCUITRY_CONFIG" in frame
 
 
 def test_settings_mount_does_not_crash_on_a_stale_circuitry_config(
@@ -420,6 +421,7 @@ def test_settings_mount_does_not_crash_on_a_stale_circuitry_config(
     running, frame = asyncio.run(_drive())
     assert running is True
     assert "does-not-exist" in frame
+    assert "CIRCUITRY_CONFIG" in frame
 
 
 def test_doctor_screen_shows_an_error_for_a_broken_explicit_config(

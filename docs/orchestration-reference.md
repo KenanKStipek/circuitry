@@ -108,7 +108,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 ```yaml
 - type: prompt
   name: summarize
-  template: "Summarize this article in one sentence: {{article_text}}"
+  template: "Summarize this article in one sentence: {{input.article_text}}"
 ```
 
 **Example — JSON output with schema:**
@@ -120,7 +120,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
     type: array
     items:
       type: string
-  template: "Extract a JSON array of key items from: {{text}}"
+  template: "Extract a JSON array of key items from: {{input.text}}"
 ```
 
 **Example — role-based messages:**
@@ -132,7 +132,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
     - role: system
       content: "You are a classifier. Reply with only true or false."
     - role: user
-      content: "Is this text positive? {{text}}"
+      content: "Is this text positive? {{input.text}}"
 ```
 
 #### Generation options, messages and images
@@ -213,7 +213,7 @@ A named container that executes child effects sequentially (`chain`) or in paral
   effects:
     - type: prompt
       name: outline
-      template: "Outline an essay on: {{topic}}"
+      template: "Outline an essay on: {{input.topic}}"
     - type: prompt
       name: draft
       template: "Write the essay based on this outline:\n{{prime.pipeline.outline.value}}"
@@ -227,11 +227,11 @@ A named container that executes child effects sequentially (`chain`) or in paral
   effects:
     - type: prompt
       name: summary
-      template: "Summarize: {{text}}"
+      template: "Summarize: {{input.text}}"
     - type: prompt
       name: sentiment
       prompt_type: boolean
-      template: "Is this text positive? {{text}}"
+      template: "Is this text positive? {{input.text}}"
 ```
 
 ---
@@ -552,7 +552,7 @@ The built-in prime constrains the plan's step descriptions and every generated e
     - type: prompt
       name: propose_steps
       prompt_type: json
-      template: "Given the goal '{{user_goal}}', what are the next steps?"
+      template: "Given the goal '{{input.user_goal}}', what are the next steps?"
     - type: prompt
       name: execute
       template: "Execute: {{prime.goal.propose_steps.value}}"
@@ -1088,7 +1088,7 @@ Templates use Mustache syntax (`{{...}}`). Two kinds of references:
 
 | Reference type | Syntax | Example |
 |---------------|--------|---------|
-| Initial state key | `{{key}}` | `{{user_input}}` |
+| Caller-supplied input | `{{input.<name>}}` | `{{input.user_input}}` |
 | Top-level effect output | `{{prime.<name>.value}}` | `{{prime.summarize.value}}` |
 | Nested effect inside dynamic | `{{prime.<dynamic_name>.<child_name>.value}}` | `{{prime.pipeline.outline.value}}` |
 | Loop iteration element | `{{<each.as>}}` or `{{item}}` | `{{topic}}` (when `as: topic`) |
@@ -1096,6 +1096,7 @@ Templates use Mustache syntax (`{{...}}`). Two kinds of references:
 
 **Rules:**
 - Never use `{{<name>.value}}` or `{{<name>}}` alone for effect outputs — always include the `prime.` prefix
+- Never use a bare `{{<name>}}` for caller-supplied input — always include the `input.` prefix; a bare reference matching a declared `interface.inputs` name is a hard error from `cof check`
 - Nested effects always include their parent dynamic name in the path
 - A malformed tag (`{{input.topic}`, a section closed under the wrong name) is an error from `cof check` and `cof run`, never text sent on as written
 
@@ -1355,7 +1356,7 @@ For complex outputs, break into stages rather than asking the model to do everyt
 # Good: staged
 - type: prompt
   name: outline
-  template: "Outline the key points of: {{text}}"
+  template: "Outline the key points of: {{input.text}}"
 - type: prompt
   name: expand
   template: "Expand each point: {{prime.outline.value}}"
@@ -1366,7 +1367,7 @@ For complex outputs, break into stages rather than asking the model to do everyt
 # Avoid: single-shot complex generation
 - type: prompt
   name: result
-  template: "Read, outline, expand, and polish this text in one shot: {{text}}"
+  template: "Read, outline, expand, and polish this text in one shot: {{input.text}}"
 ```
 
 ### Same Name in Both If/Else Branches
@@ -1477,7 +1478,7 @@ The following rules are sufficient for generating structurally correct Circuitry
 13b. Write each key at most once, and only the keys the effect type lists. A repeated key, or a near miss of a known key (`whlie`, `max_iteration`, `adapter` on a prompt where `provider` belongs), fails validation; any other unknown key is ignored with a warning. Quote every tool `params.args` entry — unquoted, YAML reads `0x1` as `1`, `off` as `false`, `-0` as `0`.
 
 **State path addressing:**
-14. In templates (Mustache): use `{{key}}` for initial state keys; use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
+14. In templates (Mustache): use `{{input.<name>}}` for caller-supplied input (never bare `{{key}}` — that is a hard error when `key` matches a declared `interface.inputs` name); use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
 15. In CEL expressions (`if.expr`, `while.expr`): always use the full prefix `state.prime.<name>.value`. Never omit `state.`.
 16. Loop `each.in` must be a root-relative path to a JSON array — `input.<name>`, `prime.<name>.value`, or a `runtime.` path — or a binding of an enclosing loop (its `each.as` name), e.g. `s.crops` inside a loop whose `each.as` is `s`. `input.*` is a first-class source; it need not point to a `prompt_type: json` effect. Bare keys that name no binding in scope and `state.`-prefixed spellings are hard errors here.
 

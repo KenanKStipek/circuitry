@@ -154,3 +154,14 @@ def test_reflector_mock_run_yields_ste_templates() -> None:
     parsed_plan = planner["meta"]["iterations"][0]["parsed"]
     templates = _walk_templates(parsed_plan["effects"])
     _assert_ste_sentences(templates)
+
+
+def test_prime_teaches_use_ref_not_the_deprecated_orchestration_key() -> None:
+    """#267 part 3: generated plans copy the prime's `use` shape, so it must
+    show `ref:` and never the deprecated `orchestration:` key."""
+    import re
+
+    from circuitry.core.primes import REFLECTOR_PRIME_V1
+
+    assert "ref:" in REFLECTOR_PRIME_V1
+    assert not re.search(r"^\s*(-\s*)?orchestration:", REFLECTOR_PRIME_V1, re.MULTILINE)

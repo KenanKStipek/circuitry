@@ -6,7 +6,9 @@ from typing import TYPE_CHECKING, Any
 logging.getLogger("circuitry").addHandler(logging.NullHandler())
 
 __all__ = [
+    "CircuitryConfig",
     "CircuitryExecutionError",
+    "RunResult",
     "inspect_divergence_paths",
     "inspect_orchestration",
     "run_orchestration",
@@ -19,7 +21,9 @@ if TYPE_CHECKING:
     # names lazily at runtime so `import circuitry` doesn't pull in `.api`'s
     # whole runtime stack.
     from .api import (
+        CircuitryConfig,
         CircuitryExecutionError,
+        RunResult,
         inspect_divergence_paths,
         inspect_orchestration,
         run_orchestration,

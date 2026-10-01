@@ -18,12 +18,17 @@ the code does not emit usage events, crash reports, model identifiers, or
 network beacons of any kind. The only outbound traffic Circuitry initiates is
 to:
 
-- the configured LLM adapter (Ollama, OpenAI, Anthropic, LiteLLM)
-- the configured tool plugin endpoint (ComfyUI for image generation, ffmpeg
-  invoked locally)
+- the configured LLM adapter — every compiled-in adapter (`cof list --extensions`), not just Ollama/OpenAI/Anthropic/LiteLLM
+- whichever tool plugin an orchestration's `tool:` effects configure, when that plugin reaches the network or a local binary (not just ComfyUI/ffmpeg — see `docs/plugins/` and `src/circuitry/plugins/` for the full set)
 - the shared-library service when `cof fetch`/`cof run-library` is invoked
   with a configured library URL
-- the persistence backend (Postgres or SQLite) when configured
+- the configured persistence backend (`jsonl-file`, `mongodb`, `postgres`, or `sqlite`) when configured
+- any runtime plugin you enable (observability exporters such as Sentry, Datadog,
+  Honeycomb, Loki or CloudWatch, and the persistence and pub/sub plugins such as
+  S3, GCS or Redis): each sends run data to the service it names, and only once
+  enabled. See [`runtime-plugins.md`](./runtime-plugins.md)
+- the library sources you configure, when `cof library refresh` fetches them
+  (for example a GitHub source)
 
 Users can audit this themselves with a sniffer; the framework itself adds no
 hidden network calls.
