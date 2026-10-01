@@ -8,6 +8,7 @@ wiring between the inner planning prompt and the generated orchestration.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -16,9 +17,15 @@ from typing import TYPE_CHECKING, Any
 import yaml as _yaml  # type: ignore[import-untyped]
 
 from ..adapters import Adapter
+from ..cli.redaction import redact
 from .primes import REFLECTOR_PRIME_V1
 from .store import Store
 from .use import UseDefinition, UseRuntime, _clean_yaml_fences
+
+#: {context} is a summary, not a state dump — capped well under a model's
+#: context window so a run with a large plugin/runtime config never crowds
+#: out the actual planning instructions.
+_CONTEXT_MAX_CHARS = 2000
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +45,27 @@ def _store_root(store: Store) -> dict[str, Any]:
     if isinstance(store, dict):
         return store  # type: ignore[return-value]
     raise AttributeError("Store does not expose its underlying dict.")
+
+
+def _run_root_state(store: Store) -> dict[str, Any]:
+    """The whole-run state dict, regardless of how deep *store* is nested.
+
+    A reflector anywhere in the tree receives a ``Store`` already scoped to
+    its container (``prime`` at top level, deeper under a loop/dynamic/
+    conditional, or isolated inside a ``flow: tree`` dynamic or parallel
+    loop branch) — its own ``.state`` is never the run root. ``goal`` and
+    ``context`` read from ``input``/``prime``/``runtime`` at the true root,
+    so they go through ``Store.true_root_state`` (which survives tree/
+    parallel branch isolation, unlike ``Store.root_state``) instead of
+    :func:`_store_root`.
+    """
+    true_root_state = getattr(store, "true_root_state", None)
+    if isinstance(true_root_state, dict):
+        return true_root_state
+    root_state = getattr(store, "root_state", None)
+    if isinstance(root_state, dict):
+        return root_state
+    return _store_root(store)
 
 
 @dataclass(frozen=True)
@@ -310,8 +338,14 @@ def _render_reflector_prime(
 
 
 def _best_effort_goal(store: Store) -> str:
+    """The root ``goal`` effect's value: ``prime.goal.value`` at the run root.
+
+    A top-level ``prompt`` (or any effect) named ``goal`` is the documented
+    source — there is no dedicated goal effect type. Missing or non-string,
+    this renders as an empty slot rather than raising.
+    """
     try:
-        root = _store_root(store)
+        root = _run_root_state(store)
         prime = root.get("prime")
         if isinstance(prime, dict):
             goal = prime.get("goal")
@@ -325,15 +359,35 @@ def _best_effort_goal(store: Store) -> str:
 
 
 def _best_effort_context(store: Store) -> str:
-    try:
-        root = _store_root(store)
-        runtime = root.get("runtime")
-        if isinstance(runtime, dict):
-            eff = runtime.get("effective_settings")
-            if isinstance(eff, dict):
-                import json
+    """A concise, redacted summary of ``runtime.effective_settings``.
 
-                return json.dumps(eff, indent=2, sort_keys=True)
+    Only the knobs a planner can act on — the model/adapter it is running
+    under and the tool plugins it may target with a ``type: tool`` effect —
+    not the full settings object (which also carries the resolved runtime
+    config, profile content, and provenance, and can be arbitrarily large).
+    Redacted again here, in addition to the redaction already applied when
+    ``effective_settings`` was embedded in state: a prime directive is a
+    model-facing surface, so it gets the same defense-in-depth as any other
+    output artifact. Size-capped so a long plugin list can't crowd out the
+    rest of the prime directive.
+    """
+    try:
+        root = _run_root_state(store)
+        runtime = root.get("runtime")
+        if not isinstance(runtime, dict):
+            return ""
+        eff = runtime.get("effective_settings")
+        if not isinstance(eff, dict):
+            return ""
+        summary = {
+            "model": eff.get("model"),
+            "adapter": eff.get("adapter"),
+            "plugins": eff.get("plugins"),
+        }
+        text = json.dumps(redact(summary), indent=2, sort_keys=True)
+        if len(text) > _CONTEXT_MAX_CHARS:
+            text = text[:_CONTEXT_MAX_CHARS].rstrip() + "\n... (truncated)"
+        return text
     except Exception:
         logger.debug("Best-effort context extraction failed", exc_info=True)
     return ""

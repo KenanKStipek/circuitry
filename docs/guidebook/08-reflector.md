@@ -38,7 +38,7 @@ Reflector ::= { type: 'reflector', name: NAME, effects: Effect+,   — the plann
 
 Each planning cycle runs in five phases:
 
-1. **Render the prime directive.** A planning instruction — Circuitry ships a versioned default, `REFLECTOR_PRIME_V1` — is rendered with `max_effects` and two slots, a **goal** and a **context**. In the current runtime both slots render empty; [what the planner can see](#what-the-planner-can-see) below explains why.
+1. **Render the prime directive.** A planning instruction — Circuitry ships a versioned default, `REFLECTOR_PRIME_V1` — is rendered with `max_effects` and two slots, a **goal** and a **context**, both read from the run's root state — not the reflector's own node — filled from the run's root `goal` effect and its effective settings, not from whatever the rest of the run has produced so far: see [what the planner can see](#what-the-planner-can-see) below.
 2. **Run the inner dynamic** with the rendered prime prepended to the planning prompt's template. The planner sees the directive, then whatever the template says — which is why the example above writes the situation into the template itself.
 3. **Extract the plan** from the planning step's output: a YAML document with a `done` flag and an `effects` list. Code fences are tolerated; markdown is not.
 4. **Decide whether to stop.** An empty `effects` list stops. `done: true` stops when `stop_on_done` is set (the default) — *without executing that cycle's effects*. `done` means "there is nothing left to do", so a planner that still has work to run must say `done: false`; the last useful plan is always a `done: false` one, and the cycle after it says `done: true` with nothing to run.
@@ -90,14 +90,13 @@ Generated effects are addressable at exactly the paths their names dictate, one 
 
 ### What the planner can see
 
-Today, three things: the directive, the literal text of its own template, and the reflector's own node. Two things that look like channels into the rest of the run are not:
+Today: the directive's `{goal}` and `{context}` slots (see above), the literal text of its own template, and the reflector's own node. One thing that looks like a channel into the rest of the run is not:
 
-- **The directive's goal and context slots.** They are meant to carry the value of a root-level effect named `goal` and the run's effective settings. The directive looks both up in the store the reflector runs in, which holds `prime` rather than the state root, so it finds neither and both slots render empty. A `goal` effect before the reflector is harmless, and the planner never reads it.
-- **Root references in the planning prompt.** The inner planning dynamic is rendered against the reflector's own node rather than the run's root, so `{{prime.…}}` and `{{input.…}}` written into `propose_steps` render empty too.
+- **Root references in the planning prompt.** The inner planning dynamic is rendered against the reflector's own node rather than the run's root, so `{{prime.…}}` and `{{input.…}}` written into `propose_steps` render empty. The directive's own `{goal}`/`{context}` slots are the one documented way around this — they are filled in automatically, from the run's root state, before `propose_steps` ever runs; `propose_steps` itself still cannot reference `{{prime.goal.value}}`.
 
 The node itself is readable, with paths relative to it. From the second cycle on, `{{{inner.propose_steps.value}}}` is the previous plan (triple-stache: it is YAML), and `{{generated.iter_0.reproduce.value}}` is what one of its effects produced. That is how a planner works "with the results in hand": name what the last cycle ran, and ask what comes next.
 
-So write into the planning template, as plain text, everything the planner must know about the rest of the run. That keeps a reflector honest about what it is: a planner for a situation you can describe when you write the document, not one that reads the run. When the plan must depend on what the run produced, generate the plan with an ordinary prompt, which can read state, and run it with a `use` effect's `inline:`, as [Composition](09-composition.md) shows.
+For anything the goal and the effective settings don't already cover, write it into the planning template as plain text. That keeps a reflector honest about what it is: a planner for a situation you can describe when you write the document, not one that reads the run. When the plan must depend on what the run produced, generate the plan with an ordinary prompt, which can read state, and run it with a `use` effect's `inline:`, as [Composition](09-composition.md) shows.
 
 ## Bounding the feedback
 
