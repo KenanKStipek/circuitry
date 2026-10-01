@@ -19,7 +19,7 @@ network beacons of any kind. The only outbound traffic Circuitry initiates is
 to:
 
 - the configured LLM adapter — every compiled-in adapter (`cof list --extensions`), not just Ollama/OpenAI/Anthropic/LiteLLM
-- whichever tool plugin an orchestration's `tool:` effects configure, when that plugin reaches the network or a local binary (not just ComfyUI/ffmpeg — see `docs/runtime-plugins.md` and `src/circuitry/plugins/` for the full set)
+- whichever tool plugin an orchestration's `tool:` effects configure, when that plugin reaches the network or a local binary (not just ComfyUI/ffmpeg — see `docs/plugins/` and `src/circuitry/plugins/` for the full set)
 - the shared-library service when `cof fetch`/`cof run-library` is invoked
   with a configured library URL
 - the configured persistence backend (`jsonl-file`, `mongodb`, `postgres`, or `sqlite`) when configured
