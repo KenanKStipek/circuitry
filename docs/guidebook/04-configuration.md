@@ -18,7 +18,7 @@ Two exceptions to "the last layer wins", both about a project config found in th
 
 `cof run` and `cof check` print the config files and environment variables they resolved from on their `Config:` line; `cof doctor` lists them as `Config sources`. A discovered project file appears there even when it was skipped for lack of trust — as `(project, not trusted — skipped)` rather than `(project, trusted)` — so the line explains a missing setting as well as a present one.
 
-`cof setup` walks you through creating the global file — it detects local backends and writes a working config. `cof init` writes a project config and a `hello.yml` beside it, and trusts the config it wrote. `cof doctor` tells you what the resolved config can actually reach.
+`cof setup` walks you through creating the global file — it detects local backends and writes a working config, and an API key you enter for the optional `.env` it offers to create. Both `config.json` and `.env` are written mode `0600` in a directory created `0700`, tightening the mode of either file if it already existed looser; `cof doctor` warns if either is still group- or world-readable (e.g. from before this). `cof init` writes a project config and a `hello.yml` beside it, and trusts the config it wrote. `cof doctor` tells you what the resolved config can actually reach.
 
 A local-first project config:
 

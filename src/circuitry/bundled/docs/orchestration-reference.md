@@ -55,8 +55,9 @@ effects:
 
 `cof check` and `cof run` apply one structural check to a document before anything in it runs — `cof run` does not start a document `cof check` rejects. A `use` child loaded by `path:` or `ref:` gets the same check when it loads, as an `inline:` child always has (`validate: false` on the `use` turns it off). Beyond the schema:
 
-- **A repeated key** in one mapping is an error naming both lines, in every YAML document the runtime loads. YAML on its own would keep only the last one.
+- **A repeated key** in one mapping is an error naming the key and where it is, in every document the runtime loads, YAML or JSON. YAML and JSON on their own would each keep only the last one.
 - **An unknown key** on an effect or at the top level is ignored, so it is reported. A near miss of a key that effect knows — `whlie:`, `max_iteration:`, `temlpate:`, or `adapter:` on a `prompt` where `provider:` belongs — is an **error** naming the key it meant; any other unknown key is a **warning**. Inside `each:`, `if:`/`while:` conditions, `retries:`, `messages:` and `assets:` entries, any other key is a schema error.
+- **An `interface.inputs` default that doesn't match its declared `type`** is an error naming the input, the type and the value — no string coercion, so a quoted numeral default is flagged, not silently accepted.
 - **A loop needs exactly one of `each` or `while`.**
 - **A malformed Mustache template** — an unclosed tag (`{{input.topic}`), a section closed under the wrong name — is an error naming the field, wherever a template is rendered. Were one to reach a run anyway, rendering it fails the effect under its `on_error`; the raw text is never sent on.
 
@@ -677,6 +678,15 @@ A `params_json` that fails to render to valid JSON, or renders to something
 other than a JSON object, is a hard error (not silently ignored) — it is
 treated like any other tool-effect failure and follows the effect's
 `on_error` policy.
+
+A handful of keys are security boundaries a plugin enforces — today, only
+`shell`'s `allowed_commands` — and `params_json` may never set one: setting
+it there is a hard error even when the rest of the rendered JSON is valid,
+because `params_json` is runtime-built and can carry model-generated content
+(an LLM's own output feeding back into what commands it is allowed to run).
+The same key is also rejected in `params:` itself when any of its string
+entries is still a Mustache tag (e.g. `allowed_commands: ["{{cmd}}"]`)
+rather than a plain, written-down value — only a literal list counts.
 
 ---
 

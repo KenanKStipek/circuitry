@@ -111,6 +111,18 @@ The plugins that wrap a command-line program (`git`, `gh`, `ripgrep`, `pytest`, 
 
 Two are gated on purpose. `shell` runs a single binary from an allowlist that is deliberately tiny and read-only by default, with a per-effect `allowed_commands` override the author must write down; `python_eval` is likewise sandboxed. Shell metacharacters are rejected in `ffmpeg` paths. And the `enabled_tools` allowlist in config is the deployment-level gate: a document that references a tool outside it — itself or through a `use` child — fails validation before anything runs, and a tool that only appears at run time, in a rendered `inline:` child or a generated plan, is refused before it is built.
 
+`shell`'s own allowlist is a document setting — a per-effect `allowed_commands` replaces the tiny default, and the author who writes it down is trusted to have meant it. What a document *cannot* do is widen that past a host pin: `runtime.plugins.shell.allowed_commands` in config, when set, intersects with whatever the effect lists (or the default), so an effect can only narrow it further. A *limited* document — a library, a `use` child, a generated plan, or one reached through REST/MCP — cannot set the pin itself, for the same reason it cannot set any other `runtime.plugins.*` key (see [Host settings versus orchestration documents](../threat-model.md#6-host-settings-versus-orchestration-documents)). A *trusted* document (named by path, `cof run ./f.yml`, or any document once the host sets `trust_orchestration_runtime`) keeps its whole `runtime:` block, including `runtime.plugins`, and `runtime` merges shallowly — so a trusted document's own `runtime.plugins.shell.allowed_commands` replaces the pin rather than narrowing it. The pin is honoured only from an effect's literal, unrendered `params.allowed_commands`: a value that arrived via `params_json`, or a literal list with a still-unrendered Mustache tag in it, is a hard error rather than silently accepted, so a prior step's (or a model's) output can never be the source of what commands a later step is allowed to run.
+
+```json
+{
+  "runtime": {
+    "plugins": {
+      "shell": {"allowed_commands": ["ls", "cat", "ffmpeg"]}
+    }
+  }
+}
+```
+
 ### MCP servers as tool providers
 
 The `mcp` provider is the client-side complement to the MCP *server* in [Surfaces](12-surfaces.md): it calls tools on external Model Context Protocol servers. Servers are declared in config — named, like adapters, and referenced from YAML by name only, so credentials never enter a document and are redacted before any state is written:

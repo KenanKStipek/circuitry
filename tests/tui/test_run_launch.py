@@ -133,6 +133,7 @@ def test_required_marker_and_hints_reach_the_widgets() -> None:
     assert optional.label == "max_words (number)"
     assert placeholder_for(required) == "The text to compress."
     assert placeholder_for(InputField("n", "array")) == "JSON array, e.g. [1, 2]"
+    assert placeholder_for(InputField("n", "integer")) == "a whole number"
 
 
 def test_defaults_are_rendered_into_the_form() -> None:
@@ -153,6 +154,8 @@ def test_defaults_are_rendered_into_the_form() -> None:
         ("number", "20", 20),
         ("number", "1.5", 1.5),
         ("number", "-3", -3),
+        ("integer", "20", 20),
+        ("integer", "-3", -3),
         ("boolean", "true", True),
         ("boolean", "NO", False),
         ("boolean", "1", True),
@@ -171,6 +174,8 @@ def test_values_are_coerced_to_their_declared_type(
     [
         ("number", "twenty"),
         ("number", ""),
+        ("integer", "1.5"),
+        ("integer", "twenty"),
         ("boolean", "maybe"),
         ("array", "not json"),
         ("array", '{"k": "v"}'),  # a JSON object is not an array

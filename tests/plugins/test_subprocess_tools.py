@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from curl_test_support import assert_not_in_argv, assert_q_first, read_config_headers
 
 from circuitry.plugins import build_plugin
 from circuitry.plugins._subprocess import (
@@ -476,6 +477,34 @@ def test_shell_check_always_ok() -> None:
     assert ShellPlugin().check().ok is True
 
 
+def test_shell_host_pin_narrows_default_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A host pin intersects with the default allowlist, not replaces it."""
+    monkeypatch.setattr(shutil, "which", lambda n: f"/bin/{n}" if n == "ls" else None)
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        captured["cmd"] = cmd
+        return FakeProc(returncode=0, stdout="a\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    plugin = ShellPlugin(pinned_allowed_commands=("ls",))
+    r = plugin.execute(params={"command": "ls"})
+    assert r.value == "a\n"
+
+    with pytest.raises(PermissionError, match="blocked by the host's"):
+        plugin.execute(params={"command": "cat"})
+
+
+def test_shell_host_pin_narrows_effect_override() -> None:
+    """A document's per-effect allowlist can only narrow a host pin, never widen it."""
+    plugin = ShellPlugin(pinned_allowed_commands=("ls",))
+    with pytest.raises(PermissionError, match="blocked by the host's"):
+        plugin.execute(
+            params={"command": "curl", "allowed_commands": ["curl"], "args": ["http://x"]}
+        )
+
+
 # ---------------------------------------------------------------------------
 # gpg — multi-mode
 # ---------------------------------------------------------------------------
@@ -660,6 +689,65 @@ def test_web_search_check_reports_curl_missing(
     assert "binary:curl" in r.missing
 
 
+def test_web_search_uses_q_first_and_no_headers_on_argv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda n: "/usr/bin/curl" if n == "curl" else None)
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        captured["cmd"] = cmd
+        return FakeProc(returncode=0, stdout=_json.dumps({"AbstractText": "x"}))
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    WebSearchPlugin().execute(params={"query": "yaml"})
+    assert_q_first(captured["cmd"])
+
+
+def test_web_search_canary_key_in_extra_params_never_leaks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #280: a search API's key commonly travels in
+    ``extra_params`` as a query parameter, so a failed request's error
+    message must mask it rather than storing it verbatim in the run
+    record."""
+    monkeypatch.setattr(shutil, "which", lambda n: "/usr/bin/curl" if n == "curl" else None)
+    secret = "canary-search-api-key-999"
+
+    def fake_run(*a: Any, **k: Any) -> FakeProc:
+        return FakeProc(returncode=22, stderr="HTTP 401")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError) as exc:
+        WebSearchPlugin().execute(
+            params={"query": "yaml", "extra_params": {"key": secret}}
+        )
+    assert secret not in str(exc.value)
+    assert "cmd=" not in str(exc.value)
+
+
+def test_web_search_user_pass_base_url_masked_in_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #280: a base_url with embedded userinfo must not be
+    echoed verbatim in the error message either."""
+    monkeypatch.setattr(shutil, "which", lambda n: "/usr/bin/curl" if n == "curl" else None)
+
+    def fake_run(*a: Any, **k: Any) -> FakeProc:
+        return FakeProc(returncode=22, stderr="HTTP 401")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError) as exc:
+        WebSearchPlugin().execute(
+            params={
+                "query": "yaml",
+                "base_url": "https://user:canarypw@example.test/search",
+            }
+        )
+    assert "canarypw" not in str(exc.value)
+
+
 # ---------------------------------------------------------------------------
 # weather — wttr.in via curl
 # ---------------------------------------------------------------------------
@@ -715,3 +803,36 @@ def test_weather_format_string_appended_to_url(
     monkeypatch.setattr(subprocess, "run", fake_run)
     WeatherPlugin().execute(params={"location": "Boston", "format": "%C"})
     assert "format=%25C" in captured["cmd"][-1] or "format=%C" in captured["cmd"][-1]
+
+
+def test_weather_uses_q_first_and_header_off_argv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda n: "/usr/bin/curl" if n == "curl" else None)
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        captured["cmd"] = cmd
+        captured["headers"] = read_config_headers(cmd)
+        return FakeProc(returncode=0, stdout="Cloudy")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    WeatherPlugin().execute(params={"location": "Boston"})
+    assert_q_first(captured["cmd"])
+    assert captured["headers"]["Accept-Language"] == "en"
+    assert_not_in_argv(captured["cmd"], "Accept-Language")
+
+
+def test_weather_curl_failure_does_not_echo_cmd(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda n: "/usr/bin/curl" if n == "curl" else None)
+
+    def fake_run(*a: Any, **k: Any) -> FakeProc:
+        return FakeProc(returncode=22, stderr="HTTP 503")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError) as exc:
+        WeatherPlugin().execute(params={"location": "Boston"})
+    assert "cmd=" not in str(exc.value)

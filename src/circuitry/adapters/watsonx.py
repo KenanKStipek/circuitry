@@ -24,14 +24,13 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 import threading
 import time
 from dataclasses import dataclass
 from typing import Any
 
+from ..curl_support import curl_failure_message, run_curl
 from ..preflight import CheckResult
-from ._curl_errors import curl_failure_message
 from .base import GenerateOptions, GenerateResult, ignored_options_warning
 
 # Module-level token cache: api_key -> (token, expires_at_epoch_seconds).
@@ -43,31 +42,25 @@ _TOKEN_TTL_BUFFER_SECONDS = 300
 
 
 def _exchange_iam_token(api_key: str, *, timeout_seconds: int) -> tuple[str, float]:
-    cmd = [
-        "curl",
-        "--silent",
-        "--show-error",
-        "--fail-with-body",
-        "--max-time",
-        str(int(timeout_seconds)),
-        "-X",
-        "POST",
-        "https://iam.cloud.ibm.com/identity/token",
-        "-H",
-        "Content-Type: application/x-www-form-urlencoded",
-        "-d",
-        "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=" + api_key,
-    ]
+    url = "https://iam.cloud.ibm.com/identity/token"
+    # The apikey form field is a secret: it goes on stdin with the rest of
+    # the body, never as a `-d` argument.
+    body = "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=" + api_key
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        proc = run_curl(
+            url=url,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data=body,
+            timeout_seconds=timeout_seconds,
+        )
     except FileNotFoundError as exc:
         raise RuntimeError("curl is not installed or not on PATH") from exc
     if proc.returncode != 0:
         raise RuntimeError(
             curl_failure_message(
-                adapter="watsonx-iam",
+                source="watsonx-iam",
                 model=None,
-                url="https://iam.cloud.ibm.com/identity/token",
+                url=url,
                 returncode=proc.returncode,
                 stdout=proc.stdout,
                 stderr=proc.stderr,
@@ -144,31 +137,23 @@ class WatsonXAdapter:
             "project_id": project_id,
         }
 
-        cmd = [
-            "curl",
-            "--silent",
-            "--show-error",
-            "--fail-with-body",
-            "--max-time",
-            str(int(timeout_seconds)),
-            "-H",
-            "Content-Type: application/json",
-            "-H",
-            f"Authorization: Bearer {token}",
-            "-d",
-            json.dumps(payload),
-            url,
-        ]
-
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            proc = run_curl(
+                url=url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {token}",
+                },
+                data=json.dumps(payload),
+                timeout_seconds=timeout_seconds,
+            )
         except FileNotFoundError as exc:
             raise RuntimeError("curl is not installed or not on PATH") from exc
 
         if proc.returncode != 0:
             raise RuntimeError(
                 curl_failure_message(
-                    adapter="watsonx",
+                    source="watsonx",
                     model=target_model,
                     url=url,
                     returncode=proc.returncode,
