@@ -155,8 +155,11 @@ class CircuitryConfig:
 
     def resolution_warnings(self) -> list[str]:
         """Warnings from resolving this config, for a run's warnings channel."""
-        warning = self.project_config.skip_warning() if self.project_config else None
-        return [warning] if warning else []
+        warnings = []
+        project_warning = self.project_config.skip_warning() if self.project_config else None
+        if project_warning:
+            warnings.append(project_warning)
+        return warnings
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> CircuitryConfig:

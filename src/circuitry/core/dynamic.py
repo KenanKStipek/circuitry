@@ -288,6 +288,17 @@ class DynamicRuntime:
                         1, min(self.defn.max_concurrency, len(self.defn.effects))
                     )
 
+                # One signal, before any branch starts, naming how many can
+                # ever be concurrently pending — bounded by max_concurrency,
+                # since that's the real ceiling the pool enforces, not the
+                # total item count — lets a listener (MCP's RunManager) wait
+                # for a real completion/pause count instead of guessing from
+                # a debounce window (#237).
+                store.fire_concurrent_dispatch(
+                    self.defn.name,
+                    min(max_workers, len(self.defn.effects)),
+                )
+
                 # Set by a worker that just failed, before it re-raises
                 # (see _execute_branch), so the *same* worker thread checks
                 # it before taking its next queued child — no race against
@@ -339,7 +350,13 @@ class DynamicRuntime:
                                     for pending in futures:
                                         if pending is not future:
                                             pending.cancel()
-                                    break
+                            finally:
+                                # This branch is done, whether or not it ever
+                                # registered a prompt — one fewer settle
+                                # point a listener still needs to see (#237).
+                                store.fire_branch_settled(self.defn.name)
+                            if self.defn.stop_on_error and tree_errors:
+                                break
 
                 # Merge isolated stores back into child_store sequentially
                 for idx in range(len(self.defn.effects)):

@@ -202,6 +202,11 @@ class RestTriggerService:
                 "Field 'orchestration_path' must resolve inside the service's "
                 f"orchestration root ({self._orchestration_root})."
             )
+        # A caller-supplied nonexistent path is a 400 caller error, the same
+        # as the "missing field" case above — without this, FileNotFoundError
+        # surfaces through the generic run-failure path as a 500 (#265 part 5).
+        if not self._resolve_under_root(orch_path).is_file():
+            return f"Field 'orchestration_path' does not exist: {orch_path}"
 
         if "state" in payload and not isinstance(payload["state"], dict):
             return "Field 'state' must be a JSON object when provided."

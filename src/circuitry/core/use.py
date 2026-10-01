@@ -713,6 +713,8 @@ class UseRuntime:
                     store.effect_complete, node_path
                 ),
                 effect_start=_namespaced_effect_cb(store.effect_start, node_path),
+                concurrent_dispatch=store.concurrent_dispatch,
+                branch_settled=store.branch_settled,
                 _lock=store._lock,
             )
 

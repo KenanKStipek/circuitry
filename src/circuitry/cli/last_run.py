@@ -88,6 +88,21 @@ class LastRun:
         return bool(self.args.get("skip_preflight"))
 
     @property
+    def scoring(self) -> bool | None:
+        value = self.args.get("scoring")
+        return value if isinstance(value, bool) else None
+
+    @property
+    def routing(self) -> bool | None:
+        value = self.args.get("routing")
+        return value if isinstance(value, bool) else None
+
+    @property
+    def decompose(self) -> bool | None:
+        value = self.args.get("decompose")
+        return value if isinstance(value, bool) else None
+
+    @property
     def env_pairs(self) -> list[str]:
         pairs = self.args.get("env_vars")
         if not isinstance(pairs, list):
@@ -113,6 +128,13 @@ class LastRun:
     @property
     def live_state_path(self) -> Path | None:
         return self._path_arg("live_state")
+
+    @property
+    def profile_from_state(self) -> Path | None:
+        """The recorded-state file a ``--profile-from-state`` run was
+        reconstructed from, if this run used it — mutually exclusive with
+        :attr:`profile` (see ``run_cmd``'s own check)."""
+        return self._path_arg("profile_from_state")
 
     @property
     def has_redacted_secrets(self) -> bool:

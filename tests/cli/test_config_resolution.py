@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,6 +9,7 @@ import pytest
 
 from circuitry.cli.config import (
     SANE_DEFAULTS,
+    ConfigError,
     _apply_env_vars,
     _deep_merge,
     resolve_config,
@@ -250,3 +252,39 @@ def test_resolve_config_circuitry_config_env(
         cfg = resolve_config(cwd=tmp_path)
 
     assert cfg.default_model == "from-env-path"
+
+
+def test_resolve_config_missing_circuitry_config_is_a_hard_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A stale/typo'd CIRCUITRY_CONFIG naming a file that doesn't exist is an
+    explicit, caller-named config — same as `--config` — so it is a hard
+    `ConfigError`, not a silently-skipped warning: it never vanishes with no
+    trace, and callers (the TUI, `cof doctor`) catch it and show it instead
+    of crashing (#259)."""
+    monkeypatch.delenv("CIRCUITRY_MODEL", raising=False)
+    monkeypatch.delenv("CIRCUITRY_ADAPTER", raising=False)
+    missing = tmp_path / "does-not-exist.json"
+    monkeypatch.setenv("CIRCUITRY_CONFIG", str(missing))
+
+    fake_global = tmp_path / "no-global" / "config.json"
+    with patch("circuitry.cli.config.GLOBAL_CONFIG_PATH", fake_global):
+        with pytest.raises(ConfigError, match=re.escape(str(missing))):
+            resolve_config(cwd=tmp_path)
+
+
+def test_resolve_config_malformed_circuitry_config_is_a_hard_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A CIRCUITRY_CONFIG that exists but isn't valid JSON gets the same
+    hard-error treatment as a missing one, same as `--config` (#259)."""
+    monkeypatch.delenv("CIRCUITRY_MODEL", raising=False)
+    monkeypatch.delenv("CIRCUITRY_ADAPTER", raising=False)
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not valid json", encoding="utf-8")
+    monkeypatch.setenv("CIRCUITRY_CONFIG", str(broken))
+
+    fake_global = tmp_path / "no-global" / "config.json"
+    with patch("circuitry.cli.config.GLOBAL_CONFIG_PATH", fake_global):
+        with pytest.raises(ConfigError, match=re.escape(str(broken))):
+            resolve_config(cwd=tmp_path)

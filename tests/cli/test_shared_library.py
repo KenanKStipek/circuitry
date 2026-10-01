@@ -8,6 +8,7 @@ import pytest
 pytest.importorskip("typer")
 from typer.testing import CliRunner
 
+from circuitry.cli import app as app_module
 from circuitry.cli.app import app
 
 runner = CliRunner()
@@ -125,6 +126,146 @@ def test_run_library_executes_retrieved_asset_and_records_metadata(tmp_path: Pat
     assert shared["version"] == "1.0.0"
     assert shared["source"].startswith("filesystem:")
     assert state["runtime"]["last_run"]["completed_at"] is not None
+
+
+def test_run_library_tail_can_be_piped(tmp_path: Path) -> None:
+    """``--tail`` is exempt from the auto-``--json`` pipe detection, the same
+    way ``cof run --tail`` is — its own help text says "Ideal for piping"
+    (#265 part 2)."""
+    lib_root = tmp_path / "library"
+    config_path = tmp_path / "config.json"
+    _write_library_asset(lib_root, "welcome", "1.0.0", "hello-tail")
+    _write_config(config_path, lib_root)
+
+    result = runner.invoke(
+        app,
+        [
+            "run-library", "welcome", "--version", "1.0.0",
+            "--config", str(config_path), "--dry-run", "--tail",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "mutually exclusive" not in result.output
+
+
+def test_run_library_accepts_skip_preflight_and_profile_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Flag parity with `cof run` (#265 part 2): these must parse, not 'no
+    such option' — and `--profile` must behave like `cof run`'s, including
+    writing the profile's own `out:` when `--out` isn't also given, the same
+    as `run_cmd` does via `result.out_path` (#265 part 2 follow-up)."""
+    monkeypatch.chdir(tmp_path)
+    lib_root = tmp_path / "library"
+    config_path = tmp_path / "config.json"
+    _write_library_asset(lib_root, "welcome", "1.0.0", "hello")
+    _write_config(config_path, lib_root)
+    _write(
+        lib_root / "welcome" / "profiles" / "fast.yml",
+        "out: runs/from-profile.json\n",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "run-library", "welcome", "--version", "1.0.0",
+            "--config", str(config_path), "--dry-run",
+            "--skip-preflight", "--no-scoring", "--no-routing", "--no-decompose",
+            "--profile", "fast",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    written = tmp_path / "runs" / "from-profile.json"
+    assert written.exists()
+    state = json.loads(written.read_text(encoding="utf-8"))
+    assert state["runtime"]["effective_settings"]["out"] == "runs/from-profile.json"
+
+
+def test_run_library_stashes_for_last_with_no_trust(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A successful run-library invocation stashes for `cof run --last`, same
+    as `cof run` does — and a library asset is never a trusted document
+    (#265 part 2)."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(app_module, "GLOBAL_CONFIG_DIR", fake_home)
+    monkeypatch.setattr(app_module, "_LAST_RUN_PATH", fake_home / "last-run.json")
+    lib_root = tmp_path / "library"
+    config_path = tmp_path / "config.json"
+    _write_library_asset(lib_root, "welcome", "1.0.0", "hello-{{name}}")
+    _write_config(config_path, lib_root)
+
+    first = runner.invoke(
+        app,
+        [
+            "run-library", "welcome", "--version", "1.0.0",
+            "--config", str(config_path), "--dry-run", "-e", "name=world",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+    stash = json.loads((fake_home / "last-run.json").read_text(encoding="utf-8"))
+    assert stash["orchestration"] == str(lib_root / "welcome" / "1.0.0.yml")
+    assert stash["trust_document"] is False
+
+    second = runner.invoke(app, ["run", "--last"])
+    assert second.exit_code == 0, second.output
+
+
+def test_run_library_service_profile_reapplied_on_last_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run-library run made with `--service-profile` stashes the profile
+    name, and `cof run --last` reapplies it — otherwise the profile's
+    adapter/model/runtime/plugin overrides silently vanish on replay (#265
+    part 2 follow-up)."""
+    monkeypatch.chdir(tmp_path)
+    lib_root = tmp_path / "library"
+    config_path = tmp_path / "config.json"
+    # No document-level `adapter:`/`model:` here (unlike `_write_library_asset`'s
+    # fixed template) so the service profile's `default_model` is the layer
+    # actually under test, not shadowed by a higher-precedence document value.
+    _write(
+        lib_root / "welcome" / "1.0.0.yml",
+        "effects:\n  - type: prompt\n    name: greet\n    template: \"hello\"\n",
+    )
+    cfg = {
+        "default_adapter": "openai",
+        "default_model": "gpt-4o-mini",
+        "runtime": {
+            "library": {
+                "backend": "filesystem",
+                "local_root": str(lib_root),
+                "service_profiles": {
+                    "svc-a": {
+                        "default_model": "gpt-4o",
+                    },
+                },
+            },
+        },
+    }
+    _write(config_path, json.dumps(cfg, indent=2) + "\n")
+
+    first = runner.invoke(
+        app,
+        [
+            "run-library", "welcome", "--version", "1.0.0",
+            "--config", str(config_path), "--dry-run",
+            "--service-profile", "svc-a", "--json",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+    first_state = json.loads(first.stdout)
+    assert (
+        first_state["runtime"]["effective_settings"]["model"] == "gpt-4o"
+    )
+
+    second = runner.invoke(app, ["run", "--last"])
+    assert second.exit_code == 0, second.output
+    second_state = json.loads(second.stdout)
+    assert second_state["runtime"]["effective_settings"]["model"] == "gpt-4o"
 
 
 def _write_library_asset_json(lib_root: Path, asset_id: str, version: str) -> None:

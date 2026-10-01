@@ -100,6 +100,35 @@ effects:
     assert cli_out_source == api_out_source
 
 
+def test_run_orchestration_out_path_writes_the_state_file(tmp_path: Path) -> None:
+    """The SDK's `run_orchestration(out_path=...)` must write the file, the
+    same as `cof run --out` does — `run()` itself only resolves the path,
+    it never writes it (#265, found while rewriting the guidebook/#286)."""
+    orch = _write(
+        tmp_path,
+        "orch.yml",
+        """
+adapter: ollama
+model: phi3:mini
+effects:
+  - type: prompt
+    name: hello
+    template: "hello"
+""".strip()
+        + "\n",
+    )
+    out_path = tmp_path / "state.json"
+
+    result = run_orchestration(
+        orchestration_path=orch, out_path=out_path, dry_run=True
+    )
+
+    assert result.ok is True
+    assert out_path.exists()
+    written = json.loads(out_path.read_text(encoding="utf-8"))
+    assert "prime" in written
+
+
 def test_embedded_api_raises_actionable_error_with_result_context(
     tmp_path: Path,
 ) -> None:

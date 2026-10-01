@@ -42,6 +42,23 @@ def test_list_invalid_category() -> None:
     assert result.exit_code == 1
 
 
+def test_list_category_help_names_real_categories() -> None:
+    """The help text used to name five categories (example, utility,
+    creative, tooling, template) that match none of the real ones
+    (#265 part 5)."""
+    result = runner.invoke(app, ["list", "--help"])
+    assert result.exit_code == 0
+    for fake in ("example", "creative", "tooling", "template"):
+        assert fake not in result.output
+    assert "agents" in result.output
+    assert "learn" in result.output
+
+
+def test_list_category_utilities_matches_the_real_category() -> None:
+    result = runner.invoke(app, ["list", "--category", "utilities"])
+    assert result.exit_code == 0
+
+
 def test_run_by_name_dry_run() -> None:
     result = runner.invoke(app, ["run", "learn/hello", "--dry-run", "-e", "name=Test"])
     assert result.exit_code == 0

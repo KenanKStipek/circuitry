@@ -33,7 +33,7 @@ from ..adapters import build_adapter
 from ..adapters.factory import ADAPTER_REGISTRY
 from ..cli import runtime_shim
 from ..cli.allowlist import check_allowlist
-from ..cli.config import CircuitryConfig, find_config_path, load_config, resolve_config
+from ..cli.config import CircuitryConfig, resolve_config
 from ..cli.config_trust import TRUST_PROJECT_CONFIG_ENV
 from ..cli.effective_settings import (
     EffectiveSettings,
@@ -543,6 +543,12 @@ class DiagnosticsSource(Protocol):
         """The effective settings, redacted, with source attribution."""
         ...
 
+    def warnings(self) -> tuple[str, ...]:
+        """Non-fatal problems resolving the environment itself — an untrusted
+        discovered project config — for an on-screen notice distinct from a
+        per-extension check result (#259)."""
+        ...
+
 
 @dataclass(frozen=True)
 class Diagnostics:
@@ -560,14 +566,28 @@ class Diagnostics:
     def rows(self) -> tuple[SettingRow, ...]:
         return config_file_rows(self.config) + settings_rows(self.settings)
 
+    def warnings(self) -> tuple[str, ...]:
+        return tuple(self.config.resolution_warnings())
+
 
 def load_diagnostics(
     *,
     config_path: Path | None = None,
     orchestration_path: Path | None = None,
 ) -> Diagnostics:
-    """Resolve the machine's config the way ``cof doctor`` resolves it."""
-    raw_config = load_config(find_config_path(explicit_path=config_path))
+    """Resolve the machine's config the way ``cof doctor`` resolves it
+    (``resolve_config()``, the same layered SANE_DEFAULTS + global + project +
+    env resolution every other surface uses — not the bare ``load_config()``
+    that leaves ``None``/``None`` with no config file at all, #265 part 1).
+
+    A *discovered* config that is missing or malformed degrades gracefully
+    (``resolve_config`` logs and skips it, same as ``cof run``); an
+    *explicitly* named ``config_path`` that is missing or malformed raises
+    :class:`~circuitry.cli.config.ConfigError`, left to the caller to catch
+    and show as an error in the view rather than letting it crash the whole
+    app (#259).
+    """
+    resolved_cfg = resolve_config(explicit_path=config_path)
     orch: dict[str, Any] = {}
     if orchestration_path is not None:
         try:
@@ -575,6 +595,8 @@ def load_diagnostics(
         except Exception:
             orch = {}
     return Diagnostics(
-        config=resolve_config(explicit_path=config_path),
-        settings=resolve_effective_settings(cfg=raw_config, orch=orch),
+        config=resolved_cfg,
+        settings=resolve_effective_settings(
+            cfg=resolved_cfg, orch=orch, trust_document=orchestration_path is not None
+        ),
     )

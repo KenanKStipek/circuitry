@@ -18,9 +18,10 @@ pytest.importorskip("typer")
 from typer.testing import CliRunner
 
 from circuitry.adapters.base import GenerateResult
-from circuitry.cli.app import _apply_inline_overrides, _parse_env_vars, app
+from circuitry.cli.app import _parse_env_vars, app
 from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.runtime_shim import RunRequest, run
+from circuitry.cli.state_merge import apply_inline_overrides as _apply_inline_overrides
 
 cli_runner = CliRunner()
 
