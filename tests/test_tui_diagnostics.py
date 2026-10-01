@@ -231,6 +231,21 @@ def test_host_settings_reach_the_report_as_trusted_or_limited(tmp_path: Path) ->
     assert limited.warnings[0].startswith("Ignored runtime.adapters")
 
 
+def test_unknown_keys_reach_the_report_as_cof_check_reports_them(tmp_path: Path) -> None:
+    path = tmp_path / "typo.yml"
+    path.write_text(
+        "effects:\n"
+        "  - type: tool\n    name: t\n    provider: uuid\n"
+        "    time_out_ms: 5\n    owner: ops\n",
+        encoding="utf-8",
+    )
+
+    report = validate_report(path, skip_preflight=True)
+
+    assert "did you mean 'timeout_ms'?" in report.of_kind("schema")[0].message
+    assert any("unknown key 'owner'" in w for w in report.warnings)
+
+
 def test_gates_that_could_not_run_are_named_rather_than_assumed_green() -> None:
     report = validate_report(FIXTURES / "valid.yml", skip_preflight=True)
     assert "preflight" in report.skipped

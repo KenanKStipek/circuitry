@@ -21,7 +21,7 @@ Loop ::= { type: 'loop', body: Effect+,
            labels?: MAP, description?: STRING }
 ```
 
-`body` and exactly one of `each` / `while` are required.
+`body` and exactly one of `each` / `while` are required. `cof check` rejects a loop with neither or both, so a misspelled `whlie:` is an error rather than a loop that runs zero passes and reports a clean finish.
 
 ## `each` — over a collection
 

@@ -14,6 +14,7 @@ file_structure:
     - "Tool-only orchestrations do not need adapter or model."
     - "version is a free-form version string for this document (e.g. '1.2.0'), for the author's own tracking. It is NOT a schema version and NOT a feature gate — the runtime reads it and ignores it. Omit it unless you are actually versioning the file."
     - "Declare interface when the orchestration is meant to be composed by a use effect."
+    - "Write only the keys the top level and each effect type list, each at most once. A repeated key, or a near miss of a known key (whlie, max_iteration, adapter on a prompt where provider belongs), is a cof check error; any other unknown key is ignored with a warning."
   valid_adapters: [ollama, openai, anthropic, litellm]
   valid_flows:
     sequential: chain

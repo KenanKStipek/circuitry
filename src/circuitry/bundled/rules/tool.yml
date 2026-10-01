@@ -33,6 +33,7 @@ constraints:
   - "Tool effects are ONLY for non-LLM side-effects: generating images, processing video/audio, file conversion."
   - "Always use a prompt effect before a tool to generate the tool's parameters via state interpolation."
   - "Available plugin descriptions are injected separately via {{plugins}}."
+  - "Quote every params.args entry. Unquoted, YAML reads 0x1 as 1, off as false and -0 as 0, and the tool receives that instead of what you wrote; cof check warns."
 providers:
   ffmpeg:
     required_params: [input, output]
