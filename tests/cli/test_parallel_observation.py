@@ -328,3 +328,132 @@ def test_a_state_observer_never_sees_a_branch_dict_still_being_written(
         for key, value in lp.items():
             if key.startswith("iter_"):
                 assert id(value) not in final_iterations
+
+
+def test_a_use_inside_a_tree_loop_reports_at_its_full_path(tmp_path: Path) -> None:
+    child = tmp_path / "child.yml"
+    child.write_text(
+        yaml.dump(
+            {"effects": [{"type": "prompt", "name": "step", "template": "child"}]}
+        ),
+        encoding="utf-8",
+    )
+    adapter = GatedAdapter()
+    seen = Recorder(adapter, release_on="")
+    result = _run(
+        tmp_path,
+        {
+            **TREE_LOOP,
+            "effects": [
+                {
+                    **_tree_loop(),
+                    "body": [{"type": "use", "name": "sub", "path": str(child)}],
+                }
+            ],
+        },
+        adapter,
+        effect_start_observer=seen.start,
+        effect_observer=seen.complete,
+    )
+
+    assert result.ok, result.error
+    for i in range(3):
+        step = f"prime.lp.iter_{i}.sub.step"
+        assert seen.events.index(("start", step)) < seen.events.index(
+            ("complete", step)
+        )
+        assert seen.threads[step] != "MainThread"
+
+
+def test_a_failing_step_in_a_tree_iteration_closes_its_pair_with_its_error(
+    tmp_path: Path,
+) -> None:
+    class FailingAdapter(GatedAdapter):
+        def generate(
+            self, *, model: str, prompt: str, timeout_seconds: int = 120
+        ) -> GenerateResult:
+            if "slow" in prompt:
+                raise RuntimeError("the slow item broke")
+            return super().generate(
+                model=model, prompt=prompt, timeout_seconds=timeout_seconds
+            )
+
+    started: list[str] = []
+    completed: dict[str, tuple[Any, str]] = {}
+
+    def complete(path: str, node: dict[str, Any]) -> None:
+        completed[path] = (
+            node.get("meta", {}).get("error"),
+            threading.current_thread().name,
+        )
+
+    result = _run(
+        tmp_path,
+        TREE_LOOP,
+        FailingAdapter(),
+        effect_start_observer=lambda path, node: started.append(path),
+        effect_observer=complete,
+    )
+
+    assert result.ok is False
+    failed = "prime.lp.iter_1.step"
+    assert failed in started
+    error, thread = completed[failed]
+    assert error and "the slow item broke" in error
+    assert thread != "MainThread"
+
+
+def test_live_state_shows_a_parallel_dynamics_finished_branch_while_it_runs(
+    tmp_path: Path,
+) -> None:
+    """The slow branch waits until the mirror file shows the quick one."""
+    live = tmp_path / "live.json"
+
+    def _quick_mirrored() -> bool:
+        try:
+            state = json.loads(live.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        quick = state.get("prime", {}).get("fan", {}).get("quick")
+        return isinstance(quick, dict) and quick.get("value") == "fast"
+
+    class MirrorWatchingAdapter(GatedAdapter):
+        def generate(
+            self, *, model: str, prompt: str, timeout_seconds: int = 120
+        ) -> GenerateResult:
+            if "slow" in prompt:
+                for _ in range(int(RELEASE_TIMEOUT / 0.05)):
+                    if _quick_mirrored():
+                        self.release.set()
+                        break
+                    time.sleep(0.05)
+            return super().generate(
+                model=model, prompt=prompt, timeout_seconds=timeout_seconds
+            )
+
+    adapter = MirrorWatchingAdapter()
+    result = _run(
+        tmp_path,
+        {
+            "adapter": "echo",
+            "model": "echo-1",
+            "effects": [
+                {
+                    "type": "dynamic",
+                    "name": "fan",
+                    "flow": "tree",
+                    "effects": [
+                        {"type": "prompt", "name": "quick", "template": "fast"},
+                        {"type": "prompt", "name": "late", "template": "slow"},
+                    ],
+                }
+            ],
+        },
+        adapter,
+        live_state_path=live,
+    )
+
+    assert result.ok, result.error
+    assert adapter.released_in_time is True
+    final = json.loads(live.read_text(encoding="utf-8"))
+    assert final["prime"]["fan"]["late"]["value"] == "slow"
