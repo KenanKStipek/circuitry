@@ -22,10 +22,10 @@ def _write(tmp_path: Path, name: str, content: str) -> Path:
 
 _NOOP_ORCH = """
 effects:
-  - type: dynamic
+  - type: tool
     name: noop
-    flow: chain
-    effects: []
+    provider: json
+    params: {mode: stringify, input: "noop"}
 """.strip() + "\n"
 
 

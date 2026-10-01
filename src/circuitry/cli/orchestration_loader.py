@@ -6,6 +6,8 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
+from ..core.json_load import DuplicateKeyError as JsonDuplicateKeyError
+from ..core.json_load import load_json
 from ..core.yaml_load import DuplicateKeyError, load_yaml
 
 try:
@@ -43,7 +45,10 @@ def load_orchestration_file(path: Path) -> dict[str, Any]:
         except DuplicateKeyError as exc:
             raise DuplicateKeyError(f"{path}: {exc}") from None
     elif suffix == ".json":
-        data = json.loads(raw)
+        try:
+            data = load_json(raw)
+        except JsonDuplicateKeyError as exc:
+            raise JsonDuplicateKeyError(f"{path}: {exc}") from None
     elif suffix == ".toon":
         if _toon_decode is None:
             raise ImportError(

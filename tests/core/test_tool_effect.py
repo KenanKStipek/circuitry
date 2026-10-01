@@ -689,6 +689,72 @@ def test_has_prompt_effects_returns_true_for_prompt() -> None:
     assert _has_prompt_effects(root) is True
 
 
+def test_has_prompt_effects_returns_true_for_model_mode_if_with_no_prompt_effect() -> None:
+    """Model mode is the compiler's own default for `if` (#254) — a document
+    whose only model use is a model-mode condition still needs a real
+    adapter, not the no-op one, even with zero separate `prompt` effects."""
+    from circuitry.cli.runtime_shim import _has_prompt_effects
+
+    root = compile_orchestration(
+        orch={
+            "effects": [
+                {"type": "tool", "name": "n", "provider": "json", "params": {"input": "3"}},
+                {
+                    "type": "if",
+                    "name": "big",
+                    "if": {"mode": "model", "template": "Is it big?"},
+                    "then": [
+                        {"type": "tool", "name": "yes", "provider": "json", "params": {"input": "1"}}
+                    ],
+                },
+            ]
+        }
+    )
+    assert _has_prompt_effects(root) is True
+
+
+def test_has_prompt_effects_returns_true_for_model_mode_while_with_no_prompt_effect() -> None:
+    from circuitry.cli.runtime_shim import _has_prompt_effects
+
+    root = compile_orchestration(
+        orch={
+            "effects": [
+                {
+                    "type": "loop",
+                    "name": "poll",
+                    "while": {"mode": "model", "template": "Keep going?"},
+                    "body": [
+                        {"type": "tool", "name": "t", "provider": "json", "params": {"input": "1"}}
+                    ],
+                }
+            ]
+        }
+    )
+    assert _has_prompt_effects(root) is True
+
+
+def test_has_prompt_effects_returns_false_for_cel_mode_if() -> None:
+    """A CEL-mode condition never calls generate(); the no-op adapter is
+    still correct for a document whose only control flow is CEL-based."""
+    from circuitry.cli.runtime_shim import _has_prompt_effects
+
+    root = compile_orchestration(
+        orch={
+            "effects": [
+                {
+                    "type": "if",
+                    "name": "ok",
+                    "if": {"mode": "cel", "expr": "true"},
+                    "then": [
+                        {"type": "tool", "name": "yes", "provider": "json", "params": {"input": "1"}}
+                    ],
+                }
+            ]
+        }
+    )
+    assert _has_prompt_effects(root) is False
+
+
 # ---------------------------------------------------------------------------
 # Tool effects nested inside control-flow containers
 #

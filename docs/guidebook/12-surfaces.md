@@ -90,7 +90,7 @@ def on_issue_opened(issue: dict) -> str:        # your webhook handler calls thi
     return result.state["prime"]["reply"]["value"]
 ```
 
-`run_orchestration` reuses the CLI runtime path deliberately, so behaviour is identical across interfaces. `state` is wrapped under `input` for you. `dry_run=True` and `validate_only=True` do what the flags do; `out_path` writes the state; `raise_on_error=True` (the default) raises `CircuitryExecutionError` — which carries the failed `RunResult` as `.result`, so the partial state is never lost — and `False` returns the result with `ok` false instead.
+`run_orchestration` reuses the CLI runtime path deliberately, so behaviour is identical across interfaces. `state` is wrapped under `input` for you. `dry_run=True` does what `--dry-run` does; `validate_only=True` runs the same checks `cof check` runs by default — structural check, compile, preflight — and stops there: `ok` is `False` for any document `cof check` rejects, never `True` before those checks have run. `out_path` writes the state; `raise_on_error=True` (the default) raises `CircuitryExecutionError` — which carries the failed `RunResult` as `.result`, so the partial state is never lost — and `False` returns the result with `ok` false instead.
 
 `run_orchestration` trusts the file you pass the way `cof run ./file.yml` does: its whole `runtime:` block and `plugins:` list apply, with a notice in `result.warnings` when they include host settings. Pass `trust_document=False` for a path you did not choose — a fetched or generated file, or one a caller of your code named — and the document is limited to `runtime.complexity` and `runtime.state`. `run_shared_orchestration` is always limited.
 

@@ -27,6 +27,7 @@ Key parameters:
 - `orchestration_path`: YAML path
 - `state` or `state_path`: initial input state
 - `dry_run`: skip model invocation and emit deterministic placeholder outputs
+- `validate_only`: run the same checks `cof check`/`validate_orchestration` run by default — structural check, compile, preflight — and stop there: `RunResult.ok` is `False` for any document those reject, with the same errors; it never builds the adapter or dispatches an effect
 - `out_path`: write resulting state to disk
 - `adapter`: an already-constructed adapter to run against, instead of the one
   the config resolves — the seam a host uses to supply its own model transport

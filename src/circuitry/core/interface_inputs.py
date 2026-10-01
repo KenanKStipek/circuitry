@@ -12,7 +12,7 @@ import json
 from copy import deepcopy
 from typing import Any
 
-_TYPE_NAMES = ("string", "number", "boolean", "array", "object")
+_TYPE_NAMES = ("string", "number", "integer", "boolean", "array", "object")
 
 # Matches tui/launch.py's _TRUE_WORDS/_FALSE_WORDS so a boolean input reads
 # the same lenient words (CLI -e, use: child) wherever it's declared.
@@ -25,6 +25,8 @@ def _matches_type(value: Any, declared_type: str) -> bool:
         return isinstance(value, str)
     if declared_type == "number":
         return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if declared_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
     if declared_type == "boolean":
         return isinstance(value, bool)
     if declared_type == "array":
@@ -48,6 +50,8 @@ def _coerce(raw: str, declared_type: str) -> Any:
             return int(raw)
         except ValueError:
             return float(raw)
+    if declared_type == "integer":
+        return int(raw)
     if declared_type == "boolean":
         lowered = raw.strip().lower()
         if lowered in _TRUE_WORDS:
