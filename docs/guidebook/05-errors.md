@@ -16,11 +16,11 @@ This chapter comes before the cybernetic effects on purpose. A control loop that
   on_error: skip        # no reply drafted — the fix goes on
 ```
 
-**`retries`** — `{max_attempts, backoff_ms}` on a prompt. Each attempt re-renders nothing and re-sends the same prompt; `backoff_ms` is the pause between attempts. Each attempt is recorded, and `meta.retries_used` says how many it took. Prompts only — a tool that failed is not usually improved by asking again, and a `use` child carries its own policies.
+**`retries`** — `{max_attempts, backoff_ms}` on a prompt. Each attempt re-renders nothing and re-sends the same prompt. Not every failure is retried: a dispatch failure (the adapter call itself erroring) is classified first — a rate limit, a request timeout, a 5xx, or a connection that never completed is worth trying again; a bad request, an auth failure, a not-found, or a missing key never will be, so that failure ends the attempt loop immediately rather than spending the rest of `max_attempts` on something that cannot succeed. A reply that came back but could not be used — see `provider_fallbacks` below — is always worth retrying, the same as before this classification existed. The wait between a retryable failure and the next attempt is exponential backoff with jitter starting from `backoff_ms`, capped at 60 seconds; a provider's own `Retry-After` response header, when the adapter can read one, overrides the computed wait outright (still capped). Each attempt is recorded, and `meta.retries_used` says how many it took. Prompts only — a tool that failed is not usually improved by asking again, and a `use` child carries its own policies.
 
-**`provider_fallbacks`** — an ordered list of providers to try when the primary errors. Each entry is an `adapter[:model]` token: `ollama` means the ollama adapter with the run's default model; `openai:gpt-4o-mini` names both. The attempt chain — every adapter and model tried, in order, with its outcome — lands at `meta.fallback_attempts`, and `meta.fallback_recovered` is `true` when it took more than one. You can always see who actually answered. (An effect's own `provider:` sets the *primary* the same way; both are usually run policy, set in config or a profile, rather than something a document author writes.)
+**`provider_fallbacks`** — an ordered list of providers to try when the primary errors *or* answers with something this effect can't use: an unreadable boolean/number, or JSON that fails its `schema`. Either kind of failure moves to the next provider in the list before a retry is ever counted — a small local model that keeps answering "maybe" to a yes/no prompt reaches a stronger fallback instead of exhausting `retries` on itself. Each entry is an `adapter[:model]` token: `ollama` means the ollama adapter with the run's default model; `openai:gpt-4o-mini` names both. The attempt chain — every adapter and model tried, in order, with its outcome and token cost — lands at `meta.fallback_attempts`, and `meta.fallback_recovered` is `true` when it took more than one. An attempt that answered but was unusable carries a size-capped `raw_reply` alongside its status (`decode_failed` for an unreadable boolean/number, `schema_invalid` for a schema failure) so you can see what was rejected, not just that it was. You can always see who actually answered. With no `provider_fallbacks` configured, an unreadable reply behaves exactly as it always has — it fails the attempt and `retries` applies. (An effect's own `provider:` sets the *primary* the same way; both are usually run policy, set in config or a profile, rather than something a document author writes.)
 
-**`timeout_ms`** — the effect's budget, on a prompt or a tool: a test run that hangs fails its step when the budget runs out, instead of holding the agent all night. A sub-second value rounds up to one second rather than flooring to zero. Separate from both of config's machine-level timeouts — the adapter's socket timeout (`runtime.adapters.<name>.timeout_seconds`) and a tool's own default (`runtime.tools.timeout_seconds`, 300s unset) — which are per machine rather than per step; a large local model needs cold-load headroom there that no single effect should have to carry. Not every tool plugin can actually be killed on overrun — see the `tool` effect's [Timeout](../orchestration-reference.md#tool) section for which ones honor it.
+**`timeout_ms`** — the effect's budget, on a prompt or a tool: a test run that hangs fails its step when the budget runs out, instead of holding the agent all night. A sub-second value rounds up to one second rather than flooring to zero. Separate from both of config's machine-level timeouts — the socket timeout of whichever adapter an attempt actually dispatches to (`runtime.adapters.<name>.timeout_seconds`, read for *that* adapter, not necessarily the run default — a `provider:`/fallback that sends an attempt elsewhere uses that adapter's own configured timeout) and a tool's own default (`runtime.tools.timeout_seconds`, 300s unset) — which are per machine rather than per step; a large local model needs cold-load headroom there that no single effect should have to carry. Not every tool plugin can actually be killed on overrun — see the `tool` effect's [Timeout](../orchestration-reference.md#tool) section for which ones honor it.
 
 **`on_error`** — what happens when the attempts are exhausted. Three values on every effect except loops:
 
@@ -39,9 +39,12 @@ Loops have their own vocabulary — `fail` / `break` / `continue` — because a 
 ```
 prime.<name>.value                    # null after a skip
 prime.<name>.meta.error               # the message
-prime.<name>.meta.fallback_attempts   # [{adapter, model, status, error}, …]
+prime.<name>.meta.fallback_attempts   # [{adapter, model, status, error, tokens_sent,
+                                       #   tokens_received, raw_reply?}, …]
 prime.<name>.meta.fallback_recovered  # true when a fallback answered
 prime.<name>.meta.retries_used        # present when a retry succeeded
+prime.<name>.meta.tokens_sent_total   # every attempt's cost this execution made —
+prime.<name>.meta.tokens_received_total # failed, retried and fallen-back-from alike
 prime.<container>.meta.error          # "investigate.cause: …" — a breadcrumb into the child
 ```
 
@@ -123,7 +126,7 @@ Warnings are advisory: deprecated spellings, type-keyword names, an unknown key 
 
 **`skip` everywhere.** A run where every effect is skippable cannot fail, and therefore cannot tell you anything. Skip the optional; fail the essential.
 
-**Retrying a parse failure without changing the ask.** If a `json` prompt fails its schema three times, the fourth attempt will too. The fix is the template — "Return ONLY …", a smaller schema — not `max_attempts`.
+**Retrying a parse failure without changing the ask.** If a `json` prompt fails its schema against the *same* model three times, the fourth attempt will too — the fix is the template ("Return ONLY …", a smaller schema), not `max_attempts`. A stronger fallback model is a different lever: `provider_fallbacks` moves a schema-invalid reply to the next provider before any retry is spent, so a capable model gets a chance the struggling one never will.
 
 **Testing for `null` in CEL.** `state.prime.x.value == null` is false after a skip, because an expression that reads a null path is false as a whole. Test positively for the value, or test `meta.error != null`.
 

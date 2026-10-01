@@ -33,7 +33,8 @@ Run it, and one node appears in state:
 ```
 prime.kind.value    # the model's answer
 prime.kind.meta     # adapter, model, model_reason, prompt_type, prompt_sent,
-                    # tokens_sent, tokens_received, error, fallback_attempts,
+                    # tokens_sent, tokens_received, tokens_sent_total,
+                    # tokens_received_total, error, fallback_attempts,
                     # created_at, completed_at
 ```
 
@@ -154,7 +155,7 @@ Prefer shared state for anything another effect might want; use `inputs` for gen
 
 ## Errors, retries, timeouts
 
-A prompt can fail: the adapter times out, the model returns something that will not parse as the declared type, the provider is down. `retries`, `provider_fallbacks`, `timeout_ms`, and `on_error` govern what happens next, and they are the subject of [Errors](05-errors.md). A prompt's `timeout_ms` bounds each attempt and can only shorten the adapter's own timeout, never lengthen it; it rounds up to whole seconds. The one-line preview: by default a failed prompt fails the run (`on_error: fail`), every attempt is recorded in `meta`, and nothing ever fails silently.
+A prompt can fail: the adapter times out, the model returns something that will not parse as the declared type, the provider is down. `retries`, `provider_fallbacks`, `timeout_ms`, and `on_error` govern what happens next, and they are the subject of [Errors](05-errors.md). A prompt's `timeout_ms` bounds each attempt and can only shorten the timeout of whichever adapter that attempt actually dispatches to — the one named by `provider:`/`provider_fallbacks` for that attempt, not necessarily the run default — never lengthen it; it rounds up to whole seconds. The one-line preview: by default a failed prompt fails the run (`on_error: fail`), every attempt is recorded in `meta`, and nothing ever fails silently.
 
 ## What lands in the shadow state
 
@@ -165,9 +166,13 @@ prime.<name>.meta.model                  # which model — after routing, if rou
 prime.<name>.meta.model_reason           # "default" | "explicit" | "router"
 prime.<name>.meta.prompt_type
 prime.<name>.meta.prompt_sent            # the rendered prompt, post-interpolation
-prime.<name>.meta.tokens_sent / tokens_received
+prime.<name>.meta.tokens_sent / tokens_received            # the winning attempt's own cost
+prime.<name>.meta.tokens_sent_total / tokens_received_total # every attempt this execution made
 prime.<name>.meta.error                  # null, or the failure
-prime.<name>.meta.fallback_attempts      # the provider attempt chain
+prime.<name>.meta.fallback_attempts      # the provider attempt chain, each with its own
+                                         # tokens_sent/tokens_received (null if it never got a
+                                         # reply) and, for one that answered but was unusable,
+                                         # a size-capped raw_reply
 prime.<name>.meta.finish_reason          # the provider's stop reason, when it reports one
 prime.<name>.meta.warnings               # present only when something needs saying: a reply
                                          # cut off at the length limit, options an adapter ignored
