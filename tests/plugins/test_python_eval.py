@@ -7,6 +7,7 @@ assignment (issue #208), and the comprehension-scope fix for ``inputs``.
 
 from __future__ import annotations
 
+import time
 import types
 from dataclasses import dataclass
 
@@ -17,12 +18,12 @@ pytest.importorskip("RestrictedPython")
 from circuitry.plugins.python_eval import PythonEvalPlugin
 
 
-def _run(code: str, *, mode: str = "eval", inputs: dict | None = None):
+def _run(code: str, *, mode: str = "eval", inputs: dict | None = None, timeout_seconds: int = 300):
     plugin = PythonEvalPlugin()
     params: dict = {"code": code, "mode": mode}
     if inputs is not None:
         params["inputs"] = inputs
-    return plugin.execute(params=params)
+    return plugin.execute(params=params, timeout_seconds=timeout_seconds)
 
 
 class TestWriteGuard:
@@ -135,3 +136,29 @@ class TestSandboxRejections:
     def test_dunder_attribute_access_rejected(self):
         with pytest.raises(PermissionError):
             _run("x.__class__", inputs={"x": 1})
+
+
+class TestTimeout:
+    def test_infinite_loop_is_killed_on_overrun(self):
+        start = time.monotonic()
+        with pytest.raises(RuntimeError, match="exceeded timeout of 1s"):
+            _run("while True:\n    pass", mode="exec", timeout_seconds=1)
+        assert time.monotonic() - start < 10
+
+    def test_sleep_past_budget_is_killed(self):
+        # The sandbox blocks `import`, so pass the sleep call in as an
+        # input instead — this isn't CPU-bound, so only the wall-clock
+        # join+terminate (not RLIMIT_CPU) can catch it.
+        start = time.monotonic()
+        with pytest.raises(RuntimeError, match="exceeded timeout of 1s"):
+            _run(
+                "sleep_fn(30)",
+                mode="exec",
+                inputs={"sleep_fn": time.sleep},
+                timeout_seconds=1,
+            )
+        assert time.monotonic() - start < 10
+
+    def test_fast_code_within_budget_still_succeeds(self):
+        result = _run("1 + 1", timeout_seconds=1)
+        assert result.value == 2

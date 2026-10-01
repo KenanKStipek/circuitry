@@ -14,7 +14,8 @@ Params:
     * ``"markdown"`` — main body as Markdown.
     * ``"html"`` — raw response HTML (no extraction).
     * ``"json"`` — parse JSON response body.
-  - ``timeout_ms`` (optional, default 15000).
+  - ``timeout_ms`` (optional): overrides the effect's own ``timeout_ms`` /
+    ``runtime.tools.timeout_seconds`` budget for this request specifically.
   - ``user_agent`` (optional): override the default UA.
   - ``include_images`` (markdown mode, bool, default False).
 """
@@ -57,7 +58,8 @@ class WebFetchPlugin:
             raise ValueError(
                 f"web_fetch: mode must be text|markdown|html|json, got {mode!r}"
             )
-        timeout_ms = int(params.get("timeout_ms") or 15000)
+        timeout_ms_param = params.get("timeout_ms")
+        timeout_ms = int(timeout_ms_param) if timeout_ms_param else int(timeout_seconds * 1000)
         ua = str(params.get("user_agent") or _DEFAULT_UA)
 
         try:

@@ -49,18 +49,51 @@ starting with ``_``) are rejected at compile time before any side effect.
 Plain ``import`` statements compile (the syntax itself isn't sandboxed)
 but fail at runtime with ``ImportError`` because ``__import__`` isn't in
 the sandboxed builtins.
+
+The compile + eval/exec step runs in a forked child process so the
+effect's ``timeout_ms`` budget can be enforced from outside: a tight
+``while True: pass`` loop (or anything else that never returns control)
+is killed on overrun instead of hanging the run forever. The parent
+joins the child with a wall-clock deadline and terminates/kills it on
+overrun; the child also sets ``RLIMIT_CPU``/``RLIMIT_AS`` (POSIX only,
+best-effort — macOS does not actually enforce ``RLIMIT_AS``, so that
+guard is Linux-only in practice) as a backstop against CPU-bound or
+memory-bomb code even if something upstream fails to join it. ``fork``
+(not ``spawn``) is required: ``inputs`` may hold arbitrary live Python
+objects (closures, locally-defined classes — see
+``TestWriteGuard.test_write_to_frozen_dataclass_rejected``), and only
+``fork`` gives the child the same memory instead of needing to pickle
+them across a process boundary.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import keyword
+import math
+import multiprocessing
 import operator
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from ..preflight import CheckResult
 from .base import ToolResult
+
+try:
+    import resource
+except ImportError:  # Windows: no POSIX resource limits; fork is also unavailable there.
+    resource = None  # type: ignore[assignment]
+
+# Virtual-address-space cap for the sandboxed child (Linux; macOS doesn't
+# enforce RLIMIT_AS at all, see module docstring). Generous on purpose: a
+# forked child already shares the parent's full address space (rich,
+# pydantic, etc. all mapped in), so a tight cap would fail trivial code.
+_MEMORY_LIMIT_BYTES = 1024 * 1024 * 1024  # 1 GiB
+
+try:
+    _FORK_CONTEXT: multiprocessing.context.ForkContext | None = multiprocessing.get_context("fork")
+except ValueError:
+    _FORK_CONTEXT = None
 
 # RestrictedPython rewrites `x += y` (etc.) to `x = _inplacevar_('+=', x, y)`
 # for Name targets — augmented assignment of attributes/subscripts is
@@ -132,6 +165,125 @@ def _validate_input_names(inputs: dict[str, Any]) -> None:
             )
 
 
+def _apply_resource_limits(cpu_seconds: int) -> None:
+    """Best-effort CPU/memory caps for the sandboxed child (POSIX only).
+
+    Both calls are wrapped individually: a platform that rejects one
+    (macOS doesn't actually enforce ``RLIMIT_AS``, see module docstring)
+    shouldn't lose the other.
+    """
+    if resource is None:
+        return
+    try:
+        resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
+    except (ValueError, OSError):
+        pass
+    try:
+        resource.setrlimit(
+            resource.RLIMIT_AS, (_MEMORY_LIMIT_BYTES, _MEMORY_LIMIT_BYTES)
+        )
+    except (ValueError, OSError):
+        pass
+
+
+def _put_result(result_queue: Any, status: str, payload: Any) -> None:
+    """Send ``(status, payload)`` over *result_queue*, which pickles
+    synchronously (it's a ``SimpleQueue``) so a payload that can't cross
+    the process boundary (an exception from a sandboxed-defined class, an
+    unpicklable result) is caught here rather than vanishing in a feeder
+    thread.
+    """
+    try:
+        result_queue.put((status, payload))
+    except Exception:
+        if status == "ok":
+            result_queue.put(("error", RuntimeError(f"python_eval: result is not picklable: {payload!r}")))
+        else:
+            result_queue.put(("error", RuntimeError(f"{type(payload).__name__}: {payload}")))
+
+
+def _run_sandboxed(
+    code: str,
+    mode: Literal["eval", "exec"],
+    inputs: dict[str, Any],
+    cpu_seconds: int,
+    result_queue: Any,
+) -> None:
+    """Child-process entry point. Compiles and runs *code* exactly as the
+    in-process version used to, then sends the outcome back over
+    *result_queue* as a ``(status, payload)`` pair. ``status`` is ``"ok"``
+    (payload is the result value) or ``"error"`` (payload is the exception
+    to re-raise, unchanged, in the parent).
+    """
+    _apply_resource_limits(cpu_seconds)
+
+    try:
+        from RestrictedPython import (  # type: ignore[import-not-found]
+            compile_restricted,
+            safe_globals,
+        )
+        from RestrictedPython.Eval import (  # type: ignore[import-not-found]
+            default_guarded_getitem,
+        )
+        from RestrictedPython.Guards import (  # type: ignore[import-not-found]
+            full_write_guard,
+            guarded_iter_unpack_sequence,
+            guarded_unpack_sequence,
+            safer_getattr,
+        )
+    except ImportError as exc:
+        _put_result(
+            result_queue,
+            "error",
+            RuntimeError(
+                "python_eval: RestrictedPython not installed. "
+                f"Install with: pip install RestrictedPython ({exc})"
+            ),
+        )
+        return
+
+    # Build the evaluation environment. ``safe_globals`` contains
+    # RestrictedPython's runtime helpers; we extend it with our
+    # curated builtins.
+    env_globals: dict[str, Any] = dict(safe_globals)
+    env_globals["__builtins__"] = dict(_SAFE_BUILTINS)
+    env_globals["_getitem_"] = default_guarded_getitem
+    env_globals["_getattr_"] = safer_getattr
+    env_globals["_getiter_"] = iter
+    env_globals["_iter_unpack_sequence_"] = guarded_iter_unpack_sequence
+    env_globals["_unpack_sequence_"] = guarded_unpack_sequence
+    env_globals["_write_"] = full_write_guard
+    env_globals["_inplacevar_"] = _inplacevar
+    # `eval`/`exec` with separate globals/locals make comprehension
+    # bodies a nested scope that only sees globals — mirror inputs into
+    # both so names from `inputs` resolve the same way whether they're
+    # used at the top level or inside a comprehension.
+    env_globals.update(inputs)
+    env_locals = dict(inputs)
+
+    try:
+        compiled = compile_restricted(code, filename="<python_eval>", mode=mode)
+    except SyntaxError as exc:
+        # RestrictedPython raises SyntaxError for sandbox violations
+        # (forbidden imports, dunder access, etc).
+        _put_result(
+            result_queue, "error", PermissionError(f"python_eval: rejected by sandbox: {exc}")
+        )
+        return
+
+    try:
+        if mode == "eval":
+            value: Any = eval(compiled, env_globals, env_locals)  # noqa: S307
+        else:
+            exec(compiled, env_globals, env_locals)  # noqa: S102
+            value = env_locals.get("result")
+    except BaseException as exc:  # re-raised as-is in the parent
+        _put_result(result_queue, "error", exc)
+        return
+
+    _put_result(result_queue, "ok", value)
+
+
 @dataclass(frozen=True)
 class PythonEvalPlugin:
     name: str = "python_eval"
@@ -142,9 +294,8 @@ class PythonEvalPlugin:
         params: dict[str, Any],
         timeout_seconds: int = 300,
     ) -> ToolResult:
-        del timeout_seconds
-        # Validate params first so callers get a clean ValueError /
-        # PermissionError even when RestrictedPython isn't installed.
+        # Validate params first so callers get a clean ValueError even
+        # when RestrictedPython isn't installed or fork is unavailable.
         code = params.get("code")
         if not isinstance(code, str) or not code.strip():
             raise ValueError("python_eval requires params['code'].")
@@ -161,65 +312,57 @@ class PythonEvalPlugin:
             raise ValueError("python_eval: params['inputs'] must be a dict.")
         _validate_input_names(inputs)
 
-        try:
-            from RestrictedPython import (  # type: ignore[import-not-found]
-                compile_restricted,
-                safe_globals,
-            )
-            from RestrictedPython.Eval import (  # type: ignore[import-not-found]
-                default_guarded_getitem,
-            )
-            from RestrictedPython.Guards import (  # type: ignore[import-not-found]
-                full_write_guard,
-                guarded_iter_unpack_sequence,
-                guarded_unpack_sequence,
-                safer_getattr,
-            )
-        except ImportError as exc:
+        if importlib.util.find_spec("RestrictedPython") is None:
             raise RuntimeError(
                 "python_eval: RestrictedPython not installed. "
                 "Install with: pip install RestrictedPython"
+            )
+        if _FORK_CONTEXT is None:
+            raise RuntimeError(
+                "python_eval: this platform has no 'fork' multiprocessing start "
+                "method, which the sandboxed child process requires."
+            )
+
+        cpu_seconds = max(1, math.ceil(timeout_seconds))
+        # SimpleQueue pickles synchronously on put() (no feeder thread), so an
+        # unpicklable payload is caught by _put_result instead of silently
+        # vanishing, and get() raises EOFError (rather than hanging) once the
+        # child exits without ever writing — e.g. killed by RLIMIT_CPU.
+        result_queue = _FORK_CONTEXT.SimpleQueue()
+        proc = _FORK_CONTEXT.Process(
+            target=_run_sandboxed,
+            args=(code, mode, inputs, cpu_seconds, result_queue),
+            daemon=True,
+        )
+        try:
+            proc.start()
+        except Exception as exc:
+            raise RuntimeError(
+                f"python_eval: failed to start the sandboxed process: {exc}"
             ) from exc
 
-        # Build the evaluation environment. ``safe_globals`` contains
-        # RestrictedPython's runtime helpers; we extend it with our
-        # curated builtins.
-        env_globals: dict[str, Any] = dict(safe_globals)
-        env_globals["__builtins__"] = dict(_SAFE_BUILTINS)
-        env_globals["_getitem_"] = default_guarded_getitem
-        env_globals["_getattr_"] = safer_getattr
-        env_globals["_getiter_"] = iter
-        env_globals["_iter_unpack_sequence_"] = guarded_iter_unpack_sequence
-        env_globals["_unpack_sequence_"] = guarded_unpack_sequence
-        env_globals["_write_"] = full_write_guard
-        env_globals["_inplacevar_"] = _inplacevar
-        # `eval`/`exec` with separate globals/locals make comprehension
-        # bodies a nested scope that only sees globals — mirror inputs into
-        # both so names from `inputs` resolve the same way whether they're
-        # used at the top level or inside a comprehension.
-        env_globals.update(inputs)
-        env_locals = dict(inputs)
+        proc.join(timeout_seconds)
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(2)
+            if proc.is_alive():
+                proc.kill()
+                proc.join()
+            raise RuntimeError(f"python_eval: exceeded timeout of {timeout_seconds}s")
 
         try:
-            compiled = compile_restricted(
-                code, filename="<python_eval>", mode=mode
-            )
-        except SyntaxError as exc:
-            # RestrictedPython raises SyntaxError for sandbox violations
-            # (forbidden imports, dunder access, etc).
-            raise PermissionError(
-                f"python_eval: rejected by sandbox: {exc}"
+            status, payload = result_queue.get()
+        except EOFError as exc:
+            raise RuntimeError(
+                "python_eval: sandboxed process exited unexpectedly "
+                f"(exit code {proc.exitcode})."
             ) from exc
 
-        if mode == "eval":
-            result = eval(compiled, env_globals, env_locals)  # noqa: S307
-            value: Any = result
-        else:
-            exec(compiled, env_globals, env_locals)  # noqa: S102
-            value = env_locals.get("result")
+        if status == "error":
+            raise payload
 
         return ToolResult(
-            value=value,
+            value=payload,
             raw={"mode": mode},
             stdout=None, stderr=None, exit_code=None,
         )

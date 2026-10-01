@@ -357,9 +357,10 @@ def test_wikipedia_summary_mode(monkeypatch: pytest.MonkeyPatch) -> None:
             return True
 
     class FakeWiki:
-        def __init__(self, *, user_agent: str, language: str) -> None:
+        def __init__(self, *, user_agent: str, language: str, timeout: float | None = None) -> None:
             captured["user_agent"] = user_agent
             captured["language"] = language
+            captured["timeout"] = timeout
 
         def page(self, title: str) -> FakePage:
             captured["title"] = title
@@ -368,10 +369,13 @@ def test_wikipedia_summary_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_mod.Wikipedia = FakeWiki
     monkeypatch.setitem(sys.modules, "wikipediaapi", fake_mod)
 
-    r = WikipediaPlugin().execute(params={"title": "YAML", "language": "en"})
+    r = WikipediaPlugin().execute(
+        params={"title": "YAML", "language": "en"}, timeout_seconds=45
+    )
     assert r.value == "Summary text."
     assert captured["title"] == "YAML"
     assert "circuitry" in captured["user_agent"]
+    assert captured["timeout"] == 45
 
 
 def test_wikipedia_missing_page(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -398,8 +402,10 @@ def test_wikipedia_missing_page(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_rss_parses_feed(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_mod = types.ModuleType("feedparser")
+    captured: dict[str, Any] = {}
 
-    def fake_parse(url: str) -> Any:
+    def fake_parse(source: Any) -> Any:
+        captured["source"] = source
         return types.SimpleNamespace(
             bozo=False,
             feed=types.SimpleNamespace(title="Example Feed"),
@@ -420,10 +426,55 @@ def test_rss_parses_feed(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_mod.parse = fake_parse
     monkeypatch.setitem(sys.modules, "feedparser", fake_mod)
 
-    r = RssPlugin().execute(params={"url": "https://x.test/feed", "limit": 1})
+    class FakeResponse:
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, *exc: Any) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b"<rss></rss>"
+
+    def fake_urlopen(req: Any, timeout: float = 0) -> FakeResponse:
+        captured["url"] = req.full_url
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    r = RssPlugin().execute(
+        params={"url": "https://x.test/feed", "limit": 1}, timeout_seconds=7
+    )
     assert len(r.value) == 1
     assert r.value[0]["title"] == "Post 1"
     assert r.raw["feed_title"] == "Example Feed"
+    assert captured["url"] == "https://x.test/feed"
+    assert captured["timeout"] == 7
+    assert captured["source"] == b"<rss></rss>"
+
+
+def test_rss_local_path_skips_network_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_mod = types.ModuleType("feedparser")
+    captured: dict[str, Any] = {}
+
+    def fake_parse(source: Any) -> Any:
+        captured["source"] = source
+        return types.SimpleNamespace(
+            bozo=False, feed=types.SimpleNamespace(title="Local"), entries=[]
+        )
+
+    fake_mod.parse = fake_parse
+    monkeypatch.setitem(sys.modules, "feedparser", fake_mod)
+
+    def fail_urlopen(*a: Any, **k: Any) -> None:
+        raise AssertionError("should not fetch a local path over the network")
+
+    monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
+
+    r = RssPlugin().execute(params={"url": "/tmp/feed.xml"})
+    assert r.raw["feed_title"] == "Local"
+    assert captured["source"] == "/tmp/feed.xml"
 
 
 def test_webhook_posts_json_with_mocked_requests(
@@ -521,6 +572,42 @@ def test_web_fetch_html_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert r.value == "<html><body>raw</body></html>"
     assert r.exit_code == 200
+
+
+def test_web_fetch_defaults_timeout_to_the_effect_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """issue 257: web_fetch used to ignore the effect's timeout_ms/
+    timeout_seconds entirely in favor of its own hardcoded 15s default."""
+    fake_mod = types.ModuleType("requests")
+    fake_exc_mod = types.ModuleType("requests.exceptions")
+    fake_exc_mod.RequestException = type("RequestException", (Exception,), {})
+    fake_mod.exceptions = fake_exc_mod
+    captured: dict[str, Any] = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = "ok"
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "text/html"}
+
+    def fake_get(*a: Any, **k: Any) -> FakeResponse:
+        captured["timeout"] = k["timeout"]
+        return FakeResponse()
+
+    fake_mod.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_mod)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_exc_mod)
+
+    WebFetchPlugin().execute(
+        params={"url": "https://x.test", "mode": "html"}, timeout_seconds=42
+    )
+    assert captured["timeout"] == 42.0
+
+    WebFetchPlugin().execute(
+        params={"url": "https://x.test", "mode": "html", "timeout_ms": 3000},
+        timeout_seconds=42,
+    )
+    assert captured["timeout"] == 3.0
 
 
 def test_web_fetch_text_via_trafilatura(monkeypatch: pytest.MonkeyPatch) -> None:
