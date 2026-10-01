@@ -40,6 +40,11 @@ EffectDef = (
 
 _NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+#: Collide with structural slots the runtime itself writes onto an effect's
+#: own node (``value``, ``meta``) or merges into the context (``input``,
+#: ``prime``, ``runtime``) — see issue #260 part 3.
+_RESERVED_EFFECT_NAMES = frozenset({"value", "meta", "input", "prime", "runtime"})
+
 
 def _scope_child(scope_path: str, child_name: str) -> str:
     return f"{scope_path}.{child_name}" if scope_path else child_name
@@ -84,6 +89,14 @@ def _validate_name(
         raise ValueError(
             f"Invalid name '{name}' for {effect_type} at '{effect_path}': "
             "reserved loop iteration segment pattern 'iter_<n>' is not allowed."
+        )
+
+    if name in _RESERVED_EFFECT_NAMES:
+        raise ValueError(
+            f"Invalid name '{name}' for {effect_type} at '{effect_path}': "
+            f"'{name}' is reserved — it collides with a structural slot the "
+            "runtime itself writes ('value', 'meta', 'input', 'prime', "
+            "'runtime'). Choose a different name."
         )
 
     if not _NAME_PATTERN.fullmatch(name):
@@ -707,6 +720,13 @@ def _compile_loop(
     # Collection output: name of the body effect whose .value to aggregate
     collect_raw = effect.get("collect")
     collect: str | None = str(collect_raw).strip() if collect_raw is not None else None
+    if collect and validated_name is None:
+        raise ValueError(
+            f"Loop at '{effect_path}' sets 'collect: {collect}' but has no "
+            "'name': collected values are written under the loop's own node, "
+            "which an unnamed loop has none of. Give the loop a 'name' to fix "
+            "this."
+        )
 
     # Execution topology for each-loops
     flow = _normalize_flow(effect.get("flow") or "chain")

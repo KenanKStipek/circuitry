@@ -193,7 +193,7 @@ Inside a `dynamic` the path gains the container's name (`prime.context.search.va
 
 **A plural name.** `summarize_articles` is a signal that one effect is doing many things; the shape you want is a `loop` over the articles with a singular body effect, `summarize_article`.
 
-**Reserved names.** `iter_<N>` is reserved for loop passes and cannot be an effect name; `last` is reserved under loops. Names match `^[A-Za-z_][A-Za-z0-9_]*$` and must be unique among siblings.
+**Reserved names.** `iter_<N>` is reserved for loop passes and cannot be an effect name; `last` is reserved under loops. `value`, `meta`, `input`, `prime` and `runtime` are reserved everywhere — each names a structural slot the runtime itself writes onto a node or merges into context, so an effect with one of these names would have its real output silently overwritten or shadow the namespace for everything nested under it; `cof check` rejects them. Names match `^[A-Za-z_][A-Za-z0-9_]*$` and must be unique among siblings.
 
 ## See also
 

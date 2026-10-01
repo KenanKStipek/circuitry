@@ -438,6 +438,14 @@ class PromptRuntime:
         meta["dry_run"] = self.dry_run
         meta["fallback_attempts"] = []
         meta["fallback_recovered"] = False
+        # Reset on every pass/attempt rather than only on success — otherwise
+        # a reused node (an unnamed loop's repeated pass, a --state resume)
+        # keeps a prior pass's retry count, decomposition record, or
+        # generation-option metadata sitting next to this pass's error,
+        # misrepresenting what actually happened on this pass (#260).
+        meta.pop("retries_used", None)
+        meta.pop("decomposition", None)
+        meta.pop("answer", None)
         # Written only when they have content, so clear what an earlier
         # iteration of an unnamed loop (same store) left behind.
         for key in ("finish_reason", "warnings", "assets"):
@@ -678,9 +686,11 @@ class PromptRuntime:
             meta["fallback_recovered"] = False
             meta["error"] = redact(str(e))
             meta["completed_at"] = _now_iso()
-            if self.defn.on_error == "skip":
+            if self.defn.on_error in ("skip", "continue"):
+                # A reused node (an unnamed loop's prior pass, a resume)
+                # must not let that pass's value survive next to this
+                # pass's error (#260).
                 node["value"] = None
-            # continue: keep going with None value
             # Fires before the re-raise so the start/complete pair stays
             # balanced on the failure path too — the node carries meta.error.
             store.fire_effect_complete(self.defn.name, node)
