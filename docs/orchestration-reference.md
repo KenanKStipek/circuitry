@@ -87,7 +87,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `name` | string | yes | — | Pattern `^[A-Za-z_][A-Za-z0-9_]*$`; `iter_<N>` reserved; `value`/`meta`/`input`/`prime`/`runtime` reserved |
 | `template` | string | one-of | — | Mustache template; mutually exclusive with `messages` |
 | `messages` | array | one-of | — | Role-based messages; mutually exclusive with `template`. Sent as real conversation turns (a system message, then user/assistant turns) to adapters that take them — see [Generation options](#generation-options-messages-and-images) |
-| `prompt_type` | string | no | `text` | `text`, `json`, `boolean`, `number`, `array`, `object`, `tool`. `boolean`/`number` parse the reply leniently (`Yes.`, `**TRUE**`, `42.`, `1e3` all read correctly; wrapping quotes/markdown/punctuation stripped first) and raise — rather than decoding to `null` — on a reply that still doesn't parse, so `on_error`/`retries` apply. Raw reply kept on `meta.answer` |
+| `prompt_type` | string | no | `text` | `text`, `json`, `boolean`, `number`, `array`, `object`, `tool`. `boolean`/`number` parse the reply leniently (`Yes.`, `**TRUE**`, `42.`, `1e3` all read correctly; wrapping quotes/markdown/punctuation stripped first) and raise — rather than decoding to `null` — on a reply that still doesn't parse; `provider_fallbacks` (see below), when configured, is tried before `on_error`/`retries` apply. Raw reply kept on `meta.answer` |
 | `schema` | object | no | — | JSON Schema for validating structured output |
 | `description` | string | no | — | Human-readable description |
 | `model` | string | no | — | Per-effect model override |
@@ -317,7 +317,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `each.truncate` | bool | no | `false` | `false`: a collection longer than `max_iterations` fails the loop at start (see [Loop termination](#loop-termination)). `true`: process only the first `max_iterations` elements and record `termination: max_iterations_reached` plus `unvisited` instead. |
 | `while` | object | one-of | — | Continuation condition; mutually exclusive with `each` |
 | `while.mode` | string | no | `model` | `model` or `cel` |
-| `while.template` | string | model only | — | LLM returns boolean for continuation decision. The runtime wraps it and appends `Should the loop continue? Answer (yes/no):`, so phrase the ask as yes/no. Parsed the same lenient way as `if.template`; raw reply recorded on `meta.answer` (plus `meta.adapter`/`meta.model`) on each check |
+| `while.template` | string | model only | — | LLM returns boolean for continuation decision. The runtime wraps it and appends `Should the loop continue? Answer (yes/no):`, so phrase the ask as yes/no. Parsed the same lenient way as `if.template`; raw reply recorded on `meta.answer` (plus `meta.adapter`/`meta.model`, `meta.tokens_sent`/`meta.tokens_received` for the last check and `meta.tokens_sent_total`/`meta.tokens_received_total` summed across every check this loop made) on each check |
 | `while.expr` | string | cel only | — | CEL expression against state |
 | `while.strict` | bool | no | `false` | cel only. When true, an unset `state.` path raises instead of making the expression `False` |
 | `max_iterations` | integer | no | — (no cap) | Hard cap on iterations. Unset means the loop runs until its collection is exhausted (`each`) or its condition is false (`while`). For `each`, when set, the collection must not be longer than it unless `each.truncate: true` is set — see [Loop termination](#loop-termination). |

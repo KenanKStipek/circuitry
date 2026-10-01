@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 from ..adapters import Adapter, build_adapter
 from ..adapters._retry import RetryInfo, classify_exception
+from ..adapters.factory import configured_timeout_seconds
 from ..adapters.base import (
     TRUNCATED_FINISH_REASONS,
     ChatMessage,
@@ -546,6 +547,8 @@ class PromptRuntime:
         meta["prompt_sent"] = prompt_sent
         meta["tokens_sent"] = None
         meta["tokens_received"] = None
+        meta["tokens_sent_total"] = None
+        meta["tokens_received_total"] = None
         meta["error"] = None
         meta["dry_run"] = self.dry_run
         meta["fallback_attempts"] = []
@@ -769,13 +772,18 @@ class PromptRuntime:
                     return
 
                 # Every attempt in this pass's chain failed. Retry only if
-                # the chain's last failure is a classified-retryable one
+                # the chain's LAST failure is a classified-retryable one
                 # (429/408/5xx, a timeout, a dropped connection, or a
                 # decode/schema failure — see _retry_info_for) and attempts
                 # remain; anything else (400/401/403/404/422, a missing key,
                 # an unclassified failure) fails the effect now rather than
                 # spending the rest of the retry budget on something that
-                # can't succeed.
+                # can't succeed. Deliberately the last error only, not "any
+                # attempt in the chain was retryable": a primary 503 behind a
+                # fallback that then answers with a permanent 401 is not
+                # retried, while the chain tried in the opposite order is —
+                # the fallback chain's own ordering already decided which
+                # failure gets the final word on this pass.
                 retry_info = _retry_info_for(generation_error)
                 if not retry_info.retryable or _attempt >= max_attempts - 1:
                     last_status = attempts_meta[-1]["status"] if attempts_meta else ""
@@ -1075,16 +1083,13 @@ class PromptRuntime:
         return (adapter_name, model_name)
 
     def _adapter_configured_timeout_seconds(self, adapter_name: str) -> int | None:
-        """``runtime.adapters.<adapter_name>.timeout_seconds``, or ``None`` if unset/invalid."""
-        adapters_cfg = (self.runtime_config or {}).get("adapters") or {}
-        cfg = adapters_cfg.get(adapter_name) or {}
-        raw = cfg.get("timeout_seconds")
-        if raw is None:
-            return None
-        try:
-            return int(raw)
-        except (TypeError, ValueError):
-            return None
+        """``runtime.adapters.<adapter_name>.timeout_seconds``, or ``None`` if
+        unset/invalid. Delegates to :func:`adapters.factory.configured_timeout_seconds`
+        so the name normalisation, the litellm ``timeout`` alias and the
+        "0/negative means unset" rule all come from the one place
+        :func:`~circuitry.adapters.build_adapter` and ``cli.runtime_shim``'s
+        run-default lookup also use."""
+        return configured_timeout_seconds(adapter_name, self.runtime_config)
 
     def _attempt_timeout_seconds(self, adapter_name: str) -> int:
         """One attempt's budget: the effect's ``timeout_ms``, capped by the
@@ -1234,8 +1239,8 @@ class PromptRuntime:
         last_error: Exception | None = None
 
         for adapter_name, model_name in attempts:
-            adapter = self._resolve_adapter(adapter_name)
             try:
+                adapter = self._resolve_adapter(adapter_name)
                 res = call_generate(
                     adapter,
                     model=model_name,

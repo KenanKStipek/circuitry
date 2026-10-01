@@ -64,7 +64,7 @@ def _exchange_iam_token(api_key: str, *, timeout_seconds: int) -> tuple[str, flo
     except FileNotFoundError as exc:
         raise RuntimeError("curl is not installed or not on PATH") from exc
     if proc.returncode != 0:
-        raise RuntimeError(
+        raise AdapterCallError(
             curl_failure_message(
                 adapter="watsonx-iam",
                 model=None,
@@ -73,7 +73,8 @@ def _exchange_iam_token(api_key: str, *, timeout_seconds: int) -> tuple[str, flo
                 stdout=proc.stdout,
                 stderr=proc.stderr,
                 secrets=[api_key],
-            )
+            ),
+            retry_info=classify_curl_exit(proc.returncode, proc.stderr),
         )
     try:
         raw = json.loads(proc.stdout)

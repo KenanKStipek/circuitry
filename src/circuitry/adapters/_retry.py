@@ -30,6 +30,7 @@ moves credentials off the command line).
 from __future__ import annotations
 
 import re
+import urllib.error
 from dataclasses import dataclass
 
 #: curl exit codes that mean the request never got a reply at all — DNS
@@ -119,8 +120,8 @@ class AdapterCallError(RuntimeError):
     :func:`classify_litellm_exception`) in place of a bare ``RuntimeError``,
     so ``core.prompt``'s retry loop can read ``retry_info`` directly instead
     of re-deriving it from the message text. An adapter that raises a plain
-    exception instead is treated as not retryable — the conservative default
-    matches today's behaviour of never retrying anything.
+    exception instead falls back to :func:`_classify_cause_chain`, which
+    reads the stdlib exception it wrapped (see ``classify_exception``).
     """
 
     def __init__(self, message: str, *, retry_info: RetryInfo = NOT_RETRYABLE) -> None:
@@ -128,12 +129,58 @@ class AdapterCallError(RuntimeError):
         self.retry_info = retry_info
 
 
+def _classify_cause_chain(exc: BaseException) -> RetryInfo:
+    """``RetryInfo`` for an exception that isn't an :class:`AdapterCallError`.
+
+    Adapters built on ``urllib.request`` (cyberdiner, watsonx's IAM token
+    exchange) raise a plain ``RuntimeError(...) from exc`` rather than
+    classifying themselves — the retry-worthy information is still there,
+    attached as ``__cause__`` (or ``__context__`` for an implicit chain).
+    Walk it: ``urllib.error.HTTPError`` (checked before ``URLError``, which
+    it subclasses) classifies by its ``.code`` the same way a curl/litellm
+    status does, with ``Retry-After`` read off its headers when present;
+    ``URLError`` with no HTTP status attached, a ``TimeoutError`` (the
+    stdlib alias used for both ``socket.timeout`` and a bare timeout since
+    Python 3.10), or a ``ConnectionError`` all mean the request never got a
+    reply at all —
+    the same transient, infrastructure-level condition
+    :data:`RETRYABLE_CURL_EXIT_CODES` covers for curl. Anything else, or a
+    chain that runs out without finding one of these, is not retryable.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, urllib.error.HTTPError):
+            status = current.code
+            retry_after = None
+            headers = getattr(current, "headers", None)
+            if headers is not None:
+                try:
+                    retry_after = headers.get("Retry-After") or headers.get("retry-after")
+                except AttributeError:
+                    retry_after = None
+            return RetryInfo(
+                retryable=_status_is_retryable(status), status=status, retry_after=retry_after
+            )
+        if isinstance(current, (urllib.error.URLError, TimeoutError, ConnectionError)):
+            return RetryInfo(retryable=True)
+        current = current.__cause__ or current.__context__
+    return NOT_RETRYABLE
+
+
 def classify_exception(exc: BaseException | None) -> RetryInfo:
     """``RetryInfo`` for any exception a dispatch attempt raised.
 
-    ``None`` (nothing raised) and anything that isn't an
-    :class:`AdapterCallError` classify as not retryable.
+    ``None`` (nothing raised) classifies as not retryable. An
+    :class:`AdapterCallError` carries its own classification. Anything else
+    is walked via :func:`_classify_cause_chain` — an adapter that raises a
+    plain exception around a retryable stdlib cause (a connection drop, an
+    HTTP error urllib surfaces) still gets retried; one with no such cause
+    does not.
     """
+    if exc is None:
+        return NOT_RETRYABLE
     if isinstance(exc, AdapterCallError):
         return exc.retry_info
-    return NOT_RETRYABLE
+    return _classify_cause_chain(exc)
