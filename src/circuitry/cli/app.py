@@ -59,7 +59,6 @@ from .orchestration_loader import load_orchestration_file, serialize_orchestrati
 from .profiles import ProfileError, ProfileSettings, load_profile
 from .redaction import REDACTED, redact_env_pairs
 from .registry import eject_destination, resolve_bundled, write_ejected
-from .runtime_shim import RunRequest, inspect_orchestration, run, validate
 from .score import register_score
 from .setup import register_setup
 from .shared_library import (
@@ -71,6 +70,36 @@ from .trust import register_trust
 
 console = Console()
 err_console = Console(stderr=True)
+
+
+# `.runtime_shim` pulls in `core.compiler` -> `core.cel_eval` (a full CEL
+# grammar parser via celpy/lark) and every adapter — real cost for commands
+# that actually run/validate an orchestration, but wasted on `--help`/
+# `version`/every other command that doesn't. These four names keep the same
+# module-level, patchable surface (`patch("circuitry.cli.app.run", ...)` in
+# tests) while deferring the import to first call.
+def RunRequest(**kwargs: Any) -> Any:
+    from .runtime_shim import RunRequest as _RunRequest
+
+    return _RunRequest(**kwargs)
+
+
+def run(req: Any) -> Any:
+    from .runtime_shim import run as _run
+
+    return _run(req)
+
+
+def validate(*args: Any, **kwargs: Any) -> Any:
+    from .runtime_shim import validate as _validate
+
+    return _validate(*args, **kwargs)
+
+
+def inspect_orchestration(*args: Any, **kwargs: Any) -> Any:
+    from .runtime_shim import inspect_orchestration as _inspect_orchestration
+
+    return _inspect_orchestration(*args, **kwargs)
 
 
 class CircuitryGroup(TyperGroup):
@@ -104,10 +133,42 @@ app = typer.Typer(
 )
 
 
+def _resolve_version() -> str:
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as pkg_version
+
+    # Distribution name is `circuitry-cof` on PyPI; the legacy `circuitry`
+    # lookup is kept as a fallback for editable installs that pre-date the
+    # rename.
+    for dist in ("circuitry-cof", "circuitry"):
+        try:
+            return pkg_version(dist)
+        except PackageNotFoundError:
+            continue
+    return "0.1.0+unknown"
+
+
+def _version_callback(value: bool) -> None:
+    # ``is_eager=True`` on the option means this runs before Typer resolves
+    # a subcommand, same as ``--help`` — ``cof --version`` doesn't need (or
+    # want) a subcommand at all, matching the existing `version` subcommand.
+    if value:
+        console.print(f"Circuitry {_resolve_version()}")
+        raise typer.Exit()
+
+
 @app.callback(invoke_without_command=True)
-def _root(ctx: typer.Context) -> None:
+def _root(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        False, "--version",
+        callback=_version_callback, is_eager=True,
+        help="Print version and exit.",
+    ),
+) -> None:
     # No docstring/help here on purpose: the group's help text comes from
     # ``Typer(help=...)`` above and must stay byte-identical.
+    del version  # handled by the eager callback above
     # Baseline WARNING on every invocation; a command with its own
     # --verbose/-v bumps this to INFO once its own options are parsed.
     configure_cli_logging()
@@ -2185,23 +2246,9 @@ def tui_cmd():
     run_tui()
 
 
-@app.command("version", help="Print version.")
+@app.command("version", help="Print version. (also: `cof --version`)")
 def version_cmd():
-    from importlib.metadata import PackageNotFoundError
-    from importlib.metadata import version as pkg_version
-
-    # Distribution name is `circuitry-cof` on PyPI; the legacy `circuitry`
-    # lookup is kept as a fallback for editable installs that pre-date the
-    # rename.
-    for dist in ("circuitry-cof", "circuitry"):
-        try:
-            ver = pkg_version(dist)
-            break
-        except PackageNotFoundError:
-            continue
-    else:
-        ver = "0.1.0+unknown"
-    console.print(f"Circuitry {ver}")
+    console.print(f"Circuitry {_resolve_version()}")
 
 
 def main() -> None:

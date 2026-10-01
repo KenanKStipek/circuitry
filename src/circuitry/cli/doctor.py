@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import stat
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from ..adapters import build_adapter
-from ..adapters.factory import ADAPTER_REGISTRY
-from ..core.runtime_plugins import load_plugins
-from ..plugins.factory import PLUGIN_REGISTRY, build_plugin
-from ..preflight import call_check
+if TYPE_CHECKING:
+    from ..adapters import build_adapter
+    from ..adapters.factory import ADAPTER_REGISTRY
+    from ..core.runtime_plugins import load_plugins
+    from ..plugins.factory import PLUGIN_REGISTRY, build_plugin
+    from ..preflight import call_check
 from .config import (
     GLOBAL_CONFIG_DIR,
     GLOBAL_CONFIG_PATH,
@@ -25,6 +27,33 @@ from .effective_settings import resolve_effective_settings
 from .orchestration_loader import load_orchestration_file
 
 console = Console()
+
+
+def _load_extension_registries() -> None:
+    """Bind this module's adapter/plugin-registry names on first use.
+
+    `register_doctor` runs at `cli.app` import time, but `cof doctor` is the
+    only command that needs the full adapter/plugin registry (every adapter
+    SDK, every tool plugin) — real cost for diagnostics, wasted on `--help`/
+    every other command. See the `TYPE_CHECKING` imports above for the
+    static types.
+    """
+    if "build_adapter" in globals():
+        return
+    from ..adapters import build_adapter
+    from ..adapters.factory import ADAPTER_REGISTRY
+    from ..core.runtime_plugins import load_plugins
+    from ..plugins.factory import PLUGIN_REGISTRY, build_plugin
+    from ..preflight import call_check
+
+    globals().update(
+        build_adapter=build_adapter,
+        ADAPTER_REGISTRY=ADAPTER_REGISTRY,
+        load_plugins=load_plugins,
+        PLUGIN_REGISTRY=PLUGIN_REGISTRY,
+        build_plugin=build_plugin,
+        call_check=call_check,
+    )
 
 
 def register_doctor(app: typer.Typer) -> None:
@@ -45,6 +74,7 @@ def register_doctor(app: typer.Typer) -> None:
             False, "--generate", help="Also run a tiny generate call to test the adapter."
         ),
     ) -> None:
+        _load_extension_registries()
         cfg_path = find_config_path(explicit_path=config)
         cfg = load_config(cfg_path)
         resolved_cfg = resolve_config(explicit_path=config)

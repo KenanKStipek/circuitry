@@ -41,22 +41,23 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from ..core.compiler import apply_effect_overrides, compile_orchestration
-from ..core.complexity import MAX_SCORE, ComplexityScore, StructureContext
-from ..core.complexity import score as score_prompt
-from ..core.conditional import ConditionalDefinition
-from ..core.dynamic import DynamicDefinition
-from ..core.loop import LoopDefinition
-from ..core.prompt import PromptDefinition
-from ..core.reflector import ReflectorDefinition
-from ..core.tool import ToolDefinition
-from ..core.use import UseDefinition
+if TYPE_CHECKING:
+    from ..core.compiler import apply_effect_overrides, compile_orchestration
+    from ..core.complexity import MAX_SCORE, ComplexityScore, StructureContext
+    from ..core.complexity import score as score_prompt
+    from ..core.conditional import ConditionalDefinition
+    from ..core.dynamic import DynamicDefinition
+    from ..core.loop import LoopDefinition
+    from ..core.prompt import PromptDefinition
+    from ..core.reflector import ReflectorDefinition
+    from ..core.tool import ToolDefinition
+    from ..core.use import UseDefinition
 
 # Which signals "dominated" a score is a presentation question the TUI already
 # answered (#107), and a preview that disagreed with the run view about the
@@ -72,6 +73,47 @@ from .orchestration_loader import load_orchestration_file
 from .profiles import ProfileError, ProfileSettings, load_profile
 
 console = Console()
+
+
+def _load_compiler_chain() -> None:
+    """Bind this module's `core.compiler`/`core.<effect>` names on first use.
+
+    `register_score` runs at `cli.app` import time (registering the `cof
+    score` command), but `compile_orchestration` pulls in `core.cel_eval`'s
+    CEL grammar parser and every adapter — real cost for `cof score` itself,
+    wasted on `--help`/every other command. `score_cmd` is this module's only
+    entry point, so calling this once there (before any helper that touches
+    these names runs) is enough; see the `TYPE_CHECKING` imports above for
+    the static types.
+    """
+    if "compile_orchestration" in globals():
+        return
+    from ..core.compiler import apply_effect_overrides, compile_orchestration
+    from ..core.complexity import MAX_SCORE, ComplexityScore, StructureContext
+    from ..core.complexity import score as score_prompt
+    from ..core.conditional import ConditionalDefinition
+    from ..core.dynamic import DynamicDefinition
+    from ..core.loop import LoopDefinition
+    from ..core.prompt import PromptDefinition
+    from ..core.reflector import ReflectorDefinition
+    from ..core.tool import ToolDefinition
+    from ..core.use import UseDefinition
+
+    globals().update(
+        apply_effect_overrides=apply_effect_overrides,
+        compile_orchestration=compile_orchestration,
+        MAX_SCORE=MAX_SCORE,
+        ComplexityScore=ComplexityScore,
+        StructureContext=StructureContext,
+        score_prompt=score_prompt,
+        ConditionalDefinition=ConditionalDefinition,
+        DynamicDefinition=DynamicDefinition,
+        LoopDefinition=LoopDefinition,
+        PromptDefinition=PromptDefinition,
+        ReflectorDefinition=ReflectorDefinition,
+        ToolDefinition=ToolDefinition,
+        UseDefinition=UseDefinition,
+    )
 err_console = Console(stderr=True)
 
 __all__ = ["ScoredEffect", "register_score", "score_orchestration"]
@@ -509,6 +551,7 @@ def register_score(app: typer.Typer) -> None:
             False, "--json", help="Output machine-readable JSON only."
         ),
     ) -> None:
+        _load_compiler_chain()
         cfg = resolve_config(explicit_path=config)
 
         try:

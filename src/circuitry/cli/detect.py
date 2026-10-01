@@ -9,8 +9,6 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..adapters.anthropic import AnthropicAdapter
-
 
 @dataclass
 class BackendStatus:
@@ -82,6 +80,12 @@ def detect_anthropic() -> BackendStatus:
     """Check if ANTHROPIC_API_KEY is set."""
     key = os.getenv("ANTHROPIC_API_KEY", "")
     if key:
+        # Importing one adapter module is cheap on its own, but it's a
+        # submodule of `circuitry.adapters`, whose package __init__ builds
+        # every adapter SDK eagerly — real cost for `cof setup`/`cof doctor`
+        # (which call this), wasted on `--help`/every other command.
+        from ..adapters.anthropic import AnthropicAdapter
+
         return BackendStatus(
             name="anthropic",
             available=True,
