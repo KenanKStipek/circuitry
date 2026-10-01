@@ -544,10 +544,9 @@ class DiagnosticsSource(Protocol):
         ...
 
     def warnings(self) -> tuple[str, ...]:
-        """Non-fatal problems resolving the environment itself — a stale or
-        malformed ``CIRCUITRY_CONFIG``, an untrusted discovered project
-        config — for an on-screen notice distinct from a per-extension check
-        result (#259)."""
+        """Non-fatal problems resolving the environment itself — an untrusted
+        discovered project config — for an on-screen notice distinct from a
+        per-extension check result (#259)."""
         ...
 
 

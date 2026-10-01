@@ -220,10 +220,9 @@ class DoctorScreen(_DiagnosticsScreen):
         self.action_recheck()
 
     def _show_config_warnings(self, warnings: tuple[str, ...]) -> None:
-        """A degraded-but-not-fatal config layer (a stale/malformed
-        ``CIRCUITRY_CONFIG``, an untrusted discovered project config) gets
-        the same on-screen notice ``cof doctor`` prints, instead of silently
-        running without it (#259)."""
+        """A degraded-but-not-fatal config layer (an untrusted discovered
+        project config) gets the same on-screen notice ``cof doctor`` prints,
+        instead of silently running without it (#259)."""
         widget = self.query_one("#doctor-warning", Static)
         if not warnings:
             widget.add_class("-hidden")

@@ -4,6 +4,7 @@ import importlib.resources
 import json
 import os
 import sys
+import tempfile
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
@@ -59,7 +60,6 @@ from .orchestration_loader import load_orchestration_file, serialize_orchestrati
 from .profiles import ProfileError, ProfileSettings, load_profile
 from .redaction import REDACTED, redact_env_pairs
 from .registry import eject_destination, load_index, resolve_bundled, write_ejected
-from .runtime_shim import RunRequest, inspect_orchestration, run, validate
 from .score import register_score
 from .setup import register_setup
 from .shared_library import (
@@ -72,6 +72,36 @@ from .trust import register_trust
 
 console = Console()
 err_console = Console(stderr=True)
+
+
+# `.runtime_shim` pulls in `core.compiler` -> `core.cel_eval` (a full CEL
+# grammar parser via celpy/lark) and every adapter — real cost for commands
+# that actually run/validate an orchestration, but wasted on `--help`/
+# `version`/every other command that doesn't. These four names keep the same
+# module-level, patchable surface (`patch("circuitry.cli.app.run", ...)` in
+# tests) while deferring the import to first call.
+def RunRequest(**kwargs: Any) -> Any:
+    from .runtime_shim import RunRequest as _RunRequest
+
+    return _RunRequest(**kwargs)
+
+
+def run(req: Any) -> Any:
+    from .runtime_shim import run as _run
+
+    return _run(req)
+
+
+def validate(*args: Any, **kwargs: Any) -> Any:
+    from .runtime_shim import validate as _validate
+
+    return _validate(*args, **kwargs)
+
+
+def inspect_orchestration(*args: Any, **kwargs: Any) -> Any:
+    from .runtime_shim import inspect_orchestration as _inspect_orchestration
+
+    return _inspect_orchestration(*args, **kwargs)
 
 
 class CircuitryGroup(TyperGroup):
@@ -105,10 +135,42 @@ app = typer.Typer(
 )
 
 
+def _resolve_version() -> str:
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as pkg_version
+
+    # Distribution name is `circuitry-cof` on PyPI; the legacy `circuitry`
+    # lookup is kept as a fallback for editable installs that pre-date the
+    # rename.
+    for dist in ("circuitry-cof", "circuitry"):
+        try:
+            return pkg_version(dist)
+        except PackageNotFoundError:
+            continue
+    return "0.1.0+unknown"
+
+
+def _version_callback(value: bool) -> None:
+    # ``is_eager=True`` on the option means this runs before Typer resolves
+    # a subcommand, same as ``--help`` — ``cof --version`` doesn't need (or
+    # want) a subcommand at all, matching the existing `version` subcommand.
+    if value:
+        console.print(f"Circuitry {_resolve_version()}")
+        raise typer.Exit()
+
+
 @app.callback(invoke_without_command=True)
-def _root(ctx: typer.Context) -> None:
+def _root(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        False, "--version",
+        callback=_version_callback, is_eager=True,
+        help="Print version and exit.",
+    ),
+) -> None:
     # No docstring/help here on purpose: the group's help text comes from
     # ``Typer(help=...)`` above and must stay byte-identical.
+    del version  # handled by the eager callback above
     # Baseline WARNING on every invocation; a command with its own
     # --verbose/-v bumps this to INFO once its own options are parsed.
     configure_cli_logging()
@@ -268,6 +330,43 @@ def _find_deepest_value(node: dict[str, Any]) -> Any:
             if inner is not None:
                 last_val = inner
     return last_val
+
+
+def _extract_generated_orchestration(yaml_text: str) -> dict[str, Any] | None:
+    """Pull the orchestration mapping out of `cof gen`'s raw model output.
+
+    Tries the whole (fence/separator-stripped) text first, which handles a
+    bare document — but only if every top-level key is one the schema
+    recognizes. A model reply with a prose preamble line (e.g. "Here's the
+    YAML:") parses as a *valid* mapping once fences are stripped, with the
+    preamble as a bogus key, so that key is the only signal left that this
+    wasn't a bare document. Models imitating the bundled examples' own house
+    style often open with a `#`-commented header (e.g. `# effects:\\n  - type:
+    ...`) before the real content; either case falls through to: drop
+    comment-only lines and look for the first effects:/adapter:/interface:
+    line to find the real document's start.
+    """
+    import yaml as _yaml  # type: ignore[import-untyped]
+
+    from ..core.document_check import _known_top_level_keys
+
+    try:
+        parsed = _yaml.safe_load(yaml_text)
+    except _yaml.YAMLError:
+        parsed = None
+    if isinstance(parsed, dict) and set(parsed).issubset(_known_top_level_keys()):
+        return parsed
+
+    lines = [line for line in yaml_text.splitlines() if not line.strip().startswith("#")]
+    for i, line in enumerate(lines):
+        if line.startswith(("effects:", "adapter:", "interface:")):
+            candidate = "\n".join(lines[i:]).strip()
+            try:
+                parsed = _yaml.safe_load(candidate)
+            except _yaml.YAMLError:
+                return None
+            return parsed if isinstance(parsed, dict) else None
+    return None
 
 
 def _save_last_run(args: dict[str, Any]) -> None:
@@ -1852,7 +1951,13 @@ def gen_cmd(
         ..., help="Natural language description of the orchestration to generate."
     ),
     out: Path | None = typer.Option(
-        None, "--out", "-o", help="Write resulting state JSON to this file (live-updated during run)."
+        None, "--out", "-o",
+        help="Write the generated orchestration here (default: ./<name>.<ext>).",
+    ),
+    live_state: Path | None = typer.Option(
+        None, "--live-state",
+        help="Mirror the generation run's state JSON to this file while it goes. "
+        "For live monitoring — not the generated orchestration.",
     ),
     config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config JSON."
@@ -1926,15 +2031,9 @@ def gen_cmd(
     except Exception:
         pass  # Best-effort
 
-    # Determine orchestration output path from name + format
+    # Determine orchestration output path from --out, or name + format
     _ext = {"yaml": ".yml", "json": ".json", "toon": ".toon"}
-    orch_out = Path(f"{name}{_ext.get(output_format, '.yml')}")
-
-    # --out is for live state / resulting state JSON
-    live_state_path = None
-    if out:
-        out.parent.mkdir(parents=True, exist_ok=True)
-        live_state_path = out
+    orch_out = out if out is not None else Path(f"{name}{_ext.get(output_format, '.yml')}")
 
     req = RunRequest(
         orchestration_path=meta_orch_path,
@@ -1945,11 +2044,11 @@ def gen_cmd(
         validate_only=False,
         verbose=verbose,
         config=cfg,
-        live_state_path=live_state_path,
+        live_state_path=live_state,
     )
 
-    if live_state_path:
-        console.print(f"[bold]Live state:[/bold] {live_state_path}")
+    if live_state:
+        console.print(f"[bold]Live state:[/bold] {live_state}")
 
     if not verbose:
         with console.status("[cyan]Generating orchestration…[/cyan]"):
@@ -1958,10 +2057,6 @@ def gen_cmd(
         result = run(req)
 
     _print_run_warnings(result.warnings)
-
-    # Write resulting state to --out
-    if out:
-        _write_state_json(out=out, state=result.state, pretty=False)
 
     if not result.ok:
         console.print(f"[red]Generation failed:[/red] {result.error}")
@@ -1975,7 +2070,7 @@ def gen_cmd(
 
     yaml_text = str(generated)
 
-    # Clean up LLM output: strip fences, preamble, and document separators
+    # Clean up LLM output: strip fences and document separators
     _clean = []
     for _line in yaml_text.splitlines():
         if _line.strip().startswith("```"):
@@ -1985,22 +2080,46 @@ def gen_cmd(
         _clean.append(_line)
     yaml_text = "\n".join(_clean).strip()
 
-    # Strip preamble text before the first effects: or adapter: line
-    _clean_lines = yaml_text.splitlines()
-    for _i, _line in enumerate(_clean_lines):
-        if _line.startswith(("effects:", "adapter:")):
-            yaml_text = "\n".join(_clean_lines[_i:]).strip()
-            break
+    parsed = _extract_generated_orchestration(yaml_text)
+    if parsed is None:
+        console.print(
+            "[red]Error:[/red] The model's response did not contain a "
+            "parseable orchestration document. Nothing was written."
+        )
+        raise typer.Exit(code=1)
 
-    import yaml as _yaml  # type: ignore[import-untyped]
-    parsed = _yaml.safe_load(yaml_text)
-    if not isinstance(parsed, dict):
-        parsed = {"raw": yaml_text}
-    output_text = serialize_orchestration(parsed, output_format).rstrip("\n")
+    output_text = serialize_orchestration(parsed, output_format).rstrip("\n") + "\n"
 
+    # Check the generated document exactly as `cof check` would, before
+    # writing it anywhere the user's own path might already exist. mkstemp
+    # (not a predictable "<stem>.tmp<suffix>" name) avoids a symlink planted
+    # at that path, and the suffix matches --format rather than --out, so the
+    # temp file's own extension is always one `serialize_orchestration` wrote.
     orch_out.parent.mkdir(parents=True, exist_ok=True)
-    orch_out.write_text(output_text + "\n", encoding="utf-8")
-    console.print(f"[green]Generated:[/green] {orch_out}")
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        dir=orch_out.parent, suffix=_ext.get(output_format, ".yml")
+    )
+    tmp_out = Path(tmp_name)
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            fh.write(output_text)
+        report = validate(tmp_out, config=cfg, skip_preflight=False, trust_document=True)
+        if not report["ok"]:
+            console.print(
+                "[red]Error:[/red] The generated orchestration failed `cof check`; nothing was written:"
+            )
+            for err in report["errors"]:
+                console.print(f"  - {escape(str(err))}")
+            for warn in report.get("warnings", []):
+                console.print(f"[yellow]Warning:[/yellow] {escape(str(warn))}")
+            raise typer.Exit(code=1)
+
+        for warn in report.get("warnings", []):
+            console.print(f"[yellow]Warning:[/yellow] {escape(str(warn))}")
+        tmp_out.replace(orch_out)
+    finally:
+        tmp_out.unlink(missing_ok=True)
+    console.print(f"[green]Generated:[/green] {orch_out} (checked: Valid)")
 
 
 WIZARD_EPILOG = """
@@ -2102,7 +2221,13 @@ def wizard_cmd(
         console.print(f"[bold]you[/bold]     {escape(next_reply)}")
         return next_reply
 
-    conversation = drive_conversation(seed, runner=_runner, respond=_respond, max_turns=max_turns)
+    from ..api import CircuitryExecutionError
+
+    try:
+        conversation = drive_conversation(seed, runner=_runner, respond=_respond, max_turns=max_turns)
+    except CircuitryExecutionError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
 
     if not conversation.can_save:
         if not conversation.draft:
@@ -2136,7 +2261,22 @@ def wizard_cmd(
 
 
 @app.command("init", help="Initialize a new circuitry project in the current directory.")
-def init_cmd():
+def init_cmd(
+    yes: bool = typer.Option(
+        False, "--yes", "-y",
+        help="Non-interactive: accept defaults (or --adapter/--adapter-url/--model) "
+        "without prompting.",
+    ),
+    adapter: str | None = typer.Option(
+        None, "--adapter", help="Adapter to configure (default: ollama).",
+    ),
+    adapter_url: str | None = typer.Option(
+        None, "--adapter-url", help="Adapter base URL (default: http://localhost:11434).",
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="Default model (default: llama3.1:8b).",
+    ),
+):
     config_path = Path.cwd() / "circuitry.config.json"
     hello_path = Path.cwd() / "hello.yml"
 
@@ -2144,9 +2284,14 @@ def init_cmd():
         console.print(f"[yellow]Warning:[/yellow] {config_path} already exists. Aborting.")
         raise typer.Exit(code=1)
 
-    adapter = typer.prompt("Adapter", default="ollama")
-    adapter_url = typer.prompt("Adapter URL", default="http://localhost:11434")
-    model = typer.prompt("Model", default="llama3.1:8b")
+    if yes:
+        adapter = adapter or "ollama"
+        adapter_url = adapter_url or "http://localhost:11434"
+        model = model or "llama3.1:8b"
+    else:
+        adapter = adapter or typer.prompt("Adapter", default="ollama")
+        adapter_url = adapter_url or typer.prompt("Adapter URL", default="http://localhost:11434")
+        model = model or typer.prompt("Model", default="llama3.1:8b")
 
     config_data = {
         "default_model": model,
@@ -2175,11 +2320,25 @@ def init_cmd():
             f"Run `cof trust {config_path.name}` once this is fixed."
         )
 
-    hello_yaml = """effects:
-  - type: prompt
+    # No model, no network, no API key: `regex` is a bundled zero-dependency
+    # plugin, so this runs immediately regardless of what adapter/model was
+    # just configured above. See docs/guidebook/04-configuration.md.
+    hello_yaml = """interface:
+  inputs:
+    name:
+      type: string
+      required: true
+      description: Who to greet.
+
+effects:
+  - type: tool
     name: greet
-    template: "Say hello to {{name}} in a creative way."
-    format: text
+    provider: regex
+    params:
+      pattern: "^(.*)$"
+      input: "{{input.name}}"
+      mode: sub
+      replacement: "Hello, \\\\1! Welcome to circuitry."
 """
     hello_path.write_text(hello_yaml, encoding="utf-8")
 
@@ -2226,23 +2385,9 @@ def tui_cmd():
     run_tui()
 
 
-@app.command("version", help="Print version.")
+@app.command("version", help="Print version. (also: `cof --version`)")
 def version_cmd():
-    from importlib.metadata import PackageNotFoundError
-    from importlib.metadata import version as pkg_version
-
-    # Distribution name is `circuitry-cof` on PyPI; the legacy `circuitry`
-    # lookup is kept as a fallback for editable installs that pre-date the
-    # rename.
-    for dist in ("circuitry-cof", "circuitry"):
-        try:
-            ver = pkg_version(dist)
-            break
-        except PackageNotFoundError:
-            continue
-    else:
-        ver = "0.1.0+unknown"
-    console.print(f"Circuitry {ver}")
+    console.print(f"Circuitry {_resolve_version()}")
 
 
 def main() -> None:

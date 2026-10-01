@@ -486,7 +486,20 @@ class LoopRuntime:
                         failed_passes.extend(sorted(errors))
                         if self.defn.on_error == "fail":
                             termination_reason = "error"
-                            raise next(iter(errors.values()))
+                            # `errors` fills in completion order (as_completed),
+                            # not iteration order — every pass is already
+                            # running under tree flow, so raising whichever
+                            # thread happened to fail first is nondeterministic
+                            # and names no index. Report the lowest `each`
+                            # index instead, deterministically, with the index
+                            # named in the message; the original exception and
+                            # traceback are preserved as the cause.
+                            lowest_idx = min(errors)
+                            failing_exc = errors[lowest_idx]
+                            raise RuntimeError(
+                                f"loop {self.defn.name or '<unnamed>'!r} "
+                                f"iteration [{lowest_idx}]: {failing_exc}"
+                            ) from failing_exc
                         if self.defn.on_error == "break":
                             termination_reason = "error"
                         # continue: keep the truncation/exhaustion reason
@@ -1213,13 +1226,22 @@ Should the loop continue? Answer (yes/no):"""
                         f" {name} [dim]{_elapsed_str(elapsed)}[/dim]"
                     )
 
-            except Exception:
+            except Exception as _body_exc:
                 if self.verbose and not is_prompt and not is_tool and not is_use:
                     elapsed = time.monotonic() - t0
                     _console.print(
                         f"{body_indent}[err]✗[/err] [{color}]{icon}[/{color}]"
                         f" {name} [dim]{_elapsed_str(elapsed)}[/dim]"
                     )
+                # Name the failing body effect, the same way
+                # DynamicRuntime._effect_path does for its own children —
+                # without this, an outer, unnamed-loop-unaware wrapper has
+                # nothing but the loop's own (possibly absent) name to go on
+                # and falls back to a bare Python class name, not a state
+                # path (#269 item 12 follow-up).
+                effect_name = getattr(effect, "name", None)
+                if isinstance(effect_name, str) and effect_name:
+                    raise RuntimeError(f"{effect_name}: {_body_exc}") from _body_exc
                 raise
             finally:
                 # A tree iteration's writes stay in its own store until the

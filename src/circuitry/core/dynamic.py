@@ -658,7 +658,13 @@ class DynamicRuntime:
         name = getattr(effect, "name", None)
         if isinstance(name, str) and name:
             return f"{self.defn.name}.{name}"
-        return f"{self.defn.name}.{type(effect).__name__}[{index}]"
+        # An unnamed loop/conditional has no state node of its own and
+        # contributes no path segment — same convention
+        # `cli.profiles.collect_orchestration_effect_paths` documents for
+        # addressing them. `type(effect).__name__` (e.g. `LoopDefinition[0]`)
+        # is a Python class name, not a state path, and was surfacing
+        # verbatim in error messages (#269 item 12 follow-up).
+        return self.defn.name
 
 
 def _skip_disabled_effect(

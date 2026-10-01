@@ -64,14 +64,16 @@ class ChangelogError(Exception):
 def parse_fragment_name(name: str) -> tuple[str, str] | None:
     """Split ``123.added.md`` into ``("123", "added")``.
 
+    ``<identifier>`` must be a bare issue/PR number — every fragment points
+    at one, so a release note can always be traced back to what shipped it.
     Returns ``None`` for anything that is not a fragment (``README.md``,
-    dotfiles, non-markdown files), so the directory can hold documentation
-    alongside the fragments.
+    non-markdown files, a missing or non-numeric identifier), so the
+    directory can hold documentation alongside the fragments.
     """
-    if not name.endswith(".md") or name.startswith("."):
+    if not name.endswith(".md"):
         return None
     identifier, _, type_ = name[: -len(".md")].rpartition(".")
-    if not identifier or type_ not in SECTION_ORDER:
+    if not identifier or type_ not in SECTION_ORDER or not identifier.isdigit():
         return None
     return identifier, type_
 
@@ -100,7 +102,14 @@ def collect_fragments(fragments_dir: Path) -> list[Fragment]:
 
 
 def unknown_fragment_files(fragments_dir: Path) -> list[Path]:
-    """Markdown files in ``fragments_dir`` that are neither fragments nor README."""
+    """``.md`` files in ``fragments_dir`` that are neither fragments nor README.
+
+    A non-``.md`` dotfile (``.DS_Store``, ``.gitkeep``) isn't a fragment
+    candidate at all and is silently ignored; any ``*.md`` file is judged by
+    :func:`parse_fragment_name` like every other one — a fragment with a
+    missing or non-numeric identifier (e.g. ``.changed.md``) is a mistake to
+    report, not a dotfile to wave through.
+    """
     if not fragments_dir.is_dir():
         return []
     return [
@@ -108,7 +117,7 @@ def unknown_fragment_files(fragments_dir: Path) -> list[Path]:
         for path in sorted(fragments_dir.iterdir())
         if path.is_file()
         and path.name != "README.md"
-        and not path.name.startswith(".")
+        and path.name.endswith(".md")
         and parse_fragment_name(path.name) is None
     ]
 

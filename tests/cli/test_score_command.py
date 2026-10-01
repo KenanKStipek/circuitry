@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -675,3 +677,28 @@ def test_dominant_signals_stop_at_the_signals_that_explain_the_score(
     assert [entry["name"] for entry in effect["dominant_signals"]] == [
         "state_references"
     ]
+
+
+def test_score_orchestration_works_without_the_cli_having_run_first() -> None:
+    """``score_orchestration``/``_walk`` are public entry points in their own
+    right (``__all__`` lists ``score_orchestration``); they must not depend
+    on ``score_cmd`` having run first to bind the lazily loaded compiler
+    chain. Run in a subprocess so no earlier test in this session has
+    already loaded it into ``circuitry.cli.score``'s globals."""
+    code = (
+        "from circuitry.cli.complexity_config import ComplexitySettings, ScoringSettings\n"
+        "from circuitry.cli.score import score_orchestration\n"
+        "rows = score_orchestration(\n"
+        "    {'effects': [{'type': 'prompt', 'name': 'hello', 'template': 'Hi'}]},\n"
+        "    settings=ComplexitySettings(scoring=ScoringSettings(enabled=True)),\n"
+        ")\n"
+        "assert len(rows) == 1, rows\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

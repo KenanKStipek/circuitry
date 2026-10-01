@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
@@ -12,6 +13,12 @@ from uuid import uuid4
 from ..cli.config import CircuitryConfig, resolve_config
 from ..cli.runtime_shim import RunRequest, run
 from ..core.state_ns import migrate_legacy_state
+
+#: A caller-supplied `x-request-id`'s own accepted shape — generous enough
+#: for a UUID, a ULID, or a short human-chosen tracking id, bounded so it
+#: can't carry arbitrary-length or control-character content into a response
+#: header or persisted run state.
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 @dataclass(frozen=True)
@@ -274,8 +281,14 @@ class RestTriggerService:
         )
 
     def _request_id_from_headers(self, headers: Mapping[str, str]) -> str:
+        # A client-supplied value is echoed in the response header and
+        # persisted in run state (runtime.trigger.request_id) — bound its
+        # length and charset so neither can be used to smuggle oversized or
+        # control/header-injection-shaped content through either sink.
+        # Anything else (missing, too long, outside the charset) gets a
+        # fresh UUID instead of being rejected outright.
         header_request_id = _header_value(headers, "x-request-id")
-        if header_request_id:
+        if header_request_id and _REQUEST_ID_RE.fullmatch(header_request_id):
             return header_request_id
         return str(uuid4())
 

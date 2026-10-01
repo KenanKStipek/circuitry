@@ -195,19 +195,23 @@ def test_the_env_escape_hatch_trusts_and_narrows(
     )
 
 
-def test_circuitry_config_file_keeps_its_precedence(
+def test_circuitry_config_file_replaces_global_not_layers_over_it(
     layers: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A file the caller named is trusted as given — it layers over global."""
+    """A file the caller named (--config or CIRCUITRY_CONFIG) is trusted as
+    given and *replaces* global/project discovery, same as --config — see
+    test_explicit_config_replaces_discovery and the docs (#269 item 13
+    follow-up). It previously layered over global and listed both as
+    sources, contradicting the documented behavior."""
     global_path, project = layers
     _write_json(global_path, {"enabled_tools": ["json"]})
-    named = _write_json(tmp_path / "named.json", {"enabled_tools": ["json", "shell"]})
+    named = _write_json(tmp_path / "named.json", {"enabled_tools": None})
     monkeypatch.setenv("CIRCUITRY_CONFIG", str(named))
 
     cfg = resolve_config(cwd=project)
 
-    assert cfg.enabled_tools == ["json", "shell"]
-    assert [s.kind for s in cfg.sources] == ["global", "CIRCUITRY_CONFIG"]
+    assert cfg.enabled_tools is None
+    assert cfg.sources == (ConfigSource("CIRCUITRY_CONFIG", str(named)),)
 
 
 def test_explicit_config_replaces_discovery(layers: tuple[Path, Path], tmp_path: Path) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -27,11 +28,28 @@ def _encode(state: dict[str, Any]) -> str | None:
 
 
 def _replace_file(path: Path, payload: str) -> None:
-    """Write *payload* to *path* atomically via tmp-file + rename."""
+    """Write *payload* to *path* atomically via tmp-file + rename.
+
+    ``mkstemp`` opens with ``O_CREAT | O_EXCL`` under a random name it
+    generates itself, in the same directory as *path* (so the rename stays
+    on one filesystem) — unlike a predictable ``path.with_suffix(".tmp")``
+    sibling, a local attacker can't pre-create this path as a symlink and
+    have it followed on write.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(payload, encoding="utf-8")
-    os.replace(str(tmp), str(path))
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.replace(tmp_name, str(path))
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def write_live_state(path: Path, state: dict[str, Any]) -> None:

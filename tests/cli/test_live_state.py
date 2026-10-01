@@ -46,8 +46,20 @@ def test_write_live_state_no_tmp_file_remains(tmp_path: Path):
     target = tmp_path / "state.json"
     write_live_state(target, {"a": 1})
 
-    tmp_file = target.with_suffix(".tmp")
-    assert not tmp_file.exists(), ".tmp file should not remain after atomic rename"
+    leftovers = [p for p in tmp_path.iterdir() if p != target]
+    assert leftovers == [], f"no tmp file should remain after atomic rename, found {leftovers}"
+
+
+def test_write_live_state_tmp_file_uses_an_unpredictable_name(tmp_path: Path) -> None:
+    """The tmp file is not a predictable sibling path (#269 item 9) —
+    mkstemp's O_CREAT|O_EXCL plus a random suffix means a local attacker
+    can't pre-create it as a symlink and have a write follow it. Previously
+    ``path.with_suffix(".tmp")`` (``state.json`` -> ``state.tmp`` —
+    ``with_suffix`` replaces the extension, it doesn't append)."""
+    target = tmp_path / "state.json"
+    write_live_state(target, {"a": 1})
+
+    assert not (tmp_path / "state.tmp").exists()
 
 
 def test_write_live_state_overwrites_existing(tmp_path: Path):
@@ -57,6 +69,22 @@ def test_write_live_state_overwrites_existing(tmp_path: Path):
 
     parsed = json.loads(target.read_text(encoding="utf-8"))
     assert parsed["version"] == 2
+
+
+def test_write_live_state_does_not_follow_a_pre_created_symlink(tmp_path: Path) -> None:
+    """A local attacker who pre-creates the predictable sibling
+    (``path.with_suffix(".tmp")`` — ``state.json`` -> ``state.tmp``) as a
+    symlink used to get it overwritten on the first write (#269 item 9) —
+    mkstemp's random name means there's nothing predictable to pre-create."""
+    target = tmp_path / "state.json"
+    outside_secret = tmp_path.parent / f"outside-secret-{tmp_path.name}.txt"
+    outside_secret.write_text("do not touch\n", encoding="utf-8")
+    (tmp_path / "state.tmp").symlink_to(outside_secret)
+
+    write_live_state(target, {"a": 1})
+
+    assert outside_secret.read_text(encoding="utf-8") == "do not touch\n"
+    assert json.loads(target.read_text(encoding="utf-8")) == {"a": 1}
 
 
 def _wait_for(predicate: Any, timeout: float = 5.0) -> bool:

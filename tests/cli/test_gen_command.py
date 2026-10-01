@@ -74,12 +74,11 @@ def test_gen_prints_the_run_warnings(tmp_path: Path) -> None:
     assert warning in result.stderr
 
 
-def test_gen_writes_state_to_out(tmp_path: Path):
-    """gen --out writes resulting state JSON to the specified file."""
-    import json
-
+def test_gen_out_writes_the_orchestration_document(tmp_path: Path):
+    """gen --out writes the generated orchestration itself (#258), not a
+    side artifact — matching `wizard --out`."""
     orch_name = str(tmp_path / "greeting_bot")
-    state_out = tmp_path / "state.json"
+    out_path = tmp_path / "custom_name.yml"
 
     with patch("circuitry.cli.app.run", _make_fake_run()):
         with patch("circuitry.cli.app.resolve_config") as mock_cfg:
@@ -87,18 +86,51 @@ def test_gen_writes_state_to_out(tmp_path: Path):
 
             mock_cfg.return_value = CircuitryConfig()
             result = runner.invoke(
-                app, ["gen", orch_name, "make a greeting bot", "--out", str(state_out)]
+                app, ["gen", orch_name, "make a greeting bot", "--out", str(out_path)]
             )
 
     assert result.exit_code == 0, result.output
-    # --out should contain state JSON, not orchestration
-    assert state_out.exists()
-    state = json.loads(state_out.read_text(encoding="utf-8"))
-    assert "prime" in state
-    # Orchestration file should also exist
+    assert out_path.exists()
+    assert "effects:" in out_path.read_text(encoding="utf-8")
+    # The default <name>.yml path is NOT also written when --out redirects.
+    assert not Path(f"{orch_name}.yml").exists()
+
+
+def test_gen_live_state_flag_reaches_run_request(tmp_path: Path):
+    """gen --live-state is passed through as RunRequest.live_state_path,
+    decoupled from --out (#258 part 1)."""
+    from circuitry.cli.runtime_shim import RunResult
+
+    captured = {}
+    orch_name = str(tmp_path / "greeting_bot")
+    live_state_path = tmp_path / "live.json"
+
+    def _capture_run(req):
+        captured["live_state_path"] = req.live_state_path
+        return RunResult(
+            ok=True,
+            state={
+                "prime": {
+                    "generate": {"value": True, "review_semantics": {"value": "effects: []"}}
+                }
+            },
+            warnings=[],
+        )
+
+    with patch("circuitry.cli.app.run", _capture_run):
+        with patch("circuitry.cli.app.resolve_config") as mock_cfg:
+            from circuitry.cli.config import CircuitryConfig
+
+            mock_cfg.return_value = CircuitryConfig()
+            result = runner.invoke(
+                app,
+                ["gen", orch_name, "make a greeting bot", "--live-state", str(live_state_path)],
+            )
+
+    assert result.exit_code == 0, result.output
+    assert captured["live_state_path"] == live_state_path
     orch_file = Path(f"{orch_name}.yml")
     assert orch_file.exists()
-    assert "effects:" in orch_file.read_text(encoding="utf-8")
 
 
 def test_gen_passes_user_request_key(tmp_path: Path):
@@ -280,3 +312,111 @@ def test_gen_failure_shows_error(tmp_path: Path):
             result = runner.invoke(app, ["gen", orch_name, "make something"])
 
     assert result.exit_code == 1
+
+
+def test_gen_handles_hash_commented_preamble(tmp_path: Path):
+    """A model echoing the bundled examples' own `# effects:`-commented
+    header (#258 part 1) must still parse — the boundary scan used to only
+    match an uncommented `effects:`/`adapter:` line at column 0."""
+    commented_yaml = (
+        "# effects:\n"
+        "#   - type: prompt\n"
+        "#     name: fetch\n"
+        "effects:\n"
+        "  - type: prompt\n"
+        "    name: hello\n"
+        "    template: Hi\n"
+    )
+    orch_name = str(tmp_path / "bot")
+
+    with patch("circuitry.cli.app.run", _make_fake_run(generated_yaml=commented_yaml)):
+        with patch("circuitry.cli.app.resolve_config") as mock_cfg:
+            from circuitry.cli.config import CircuitryConfig
+
+            mock_cfg.return_value = CircuitryConfig()
+            result = runner.invoke(app, ["gen", orch_name, "make a bot"])
+
+    assert result.exit_code == 0, result.output
+    orch_file = Path(f"{orch_name}.yml")
+    assert orch_file.exists()
+    content = orch_file.read_text(encoding="utf-8")
+    assert "raw:" not in content
+    assert "name: hello" in content
+
+
+def test_extract_generated_orchestration_falls_back_to_the_boundary_scan_on_a_parse_error():
+    """A malformed, non-comment preamble (e.g. stray markdown) before a
+    document whose real top-level key is ``interface:`` — not ``effects:``/
+    ``adapter:`` — must not become ``{"raw": ...}``. The boundary scan used
+    to only look for an ``effects:``/``adapter:`` line, so it never found the
+    real document's start here and kept the whole (unparseable) text as raw.
+    """
+    from circuitry.cli.app import _extract_generated_orchestration
+
+    text = (
+        "**Here's your orchestration:**\n"
+        "\n"
+        "interface:\n"
+        "  cli:\n"
+        "    enabled: true\n"
+    )
+    assert _extract_generated_orchestration(text) == {
+        "interface": {"cli": {"enabled": True}}
+    }
+
+
+def test_extract_generated_orchestration_rejects_a_prose_preamble_as_a_junk_key():
+    """A reply like ``Here's the YAML:`` followed by a fenced document parses,
+    once fences are stripped, as a *valid* mapping with the prose line as a
+    bogus top-level key (#258 part 1 follow-up). Trying the whole text first
+    must not accept that: it has to fall back to the boundary scan, which
+    drops the preamble line entirely."""
+    from circuitry.cli.app import _extract_generated_orchestration
+
+    text = (
+        "Here's the YAML:\n"
+        "effects:\n"
+        "  - type: prompt\n"
+        "    name: hello\n"
+        "    template: Hi\n"
+    )
+    assert _extract_generated_orchestration(text) == {
+        "effects": [{"type": "prompt", "name": "hello", "template": "Hi"}]
+    }
+
+
+def test_gen_rejects_unparseable_output_and_writes_nothing(tmp_path: Path):
+    """When the model's response has no recoverable YAML document, gen must
+    error out and must not fall back to writing `{raw: ...}` (#258 part 1)."""
+    garbage = "I can't help with that right now, sorry!"
+    orch_name = str(tmp_path / "bot")
+
+    with patch("circuitry.cli.app.run", _make_fake_run(generated_yaml=garbage)):
+        with patch("circuitry.cli.app.resolve_config") as mock_cfg:
+            from circuitry.cli.config import CircuitryConfig
+
+            mock_cfg.return_value = CircuitryConfig()
+            result = runner.invoke(app, ["gen", orch_name, "make a bot"])
+
+    assert result.exit_code == 1
+    assert not Path(f"{orch_name}.yml").exists()
+
+
+def test_gen_rejects_structurally_invalid_output_and_writes_nothing(tmp_path: Path):
+    """A document that parses as YAML but fails schema/structural checks
+    (missing required `effects`) must fail the same way `cof check` would,
+    and nothing should land on disk (#258 part 1)."""
+    invalid_yaml = "adapter: ollama\nname: not_an_orchestration\n"
+    orch_name = str(tmp_path / "bot")
+
+    with patch("circuitry.cli.app.run", _make_fake_run(generated_yaml=invalid_yaml)):
+        with patch("circuitry.cli.app.resolve_config") as mock_cfg:
+            from circuitry.cli.config import CircuitryConfig
+
+            mock_cfg.return_value = CircuitryConfig()
+            result = runner.invoke(app, ["gen", orch_name, "make a bot"])
+
+    assert result.exit_code == 1
+    assert "failed" in result.output.lower() or "error" in result.output.lower()
+    assert not Path(f"{orch_name}.yml").exists()
+    assert list(tmp_path.iterdir()) == []

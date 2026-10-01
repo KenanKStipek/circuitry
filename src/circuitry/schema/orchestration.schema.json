@@ -363,7 +363,7 @@
         "max_concurrency": {
           "type": "integer",
           "minimum": 1,
-          "description": "Maximum parallel workers when flow is tree. Default: unbounded."
+          "description": "Maximum parallel workers when flow is tree. Default: ThreadPoolExecutor's own min(32, cpu_count + 4) — each.in has no default bound on collection size, so an unset value is capped rather than spawning one thread per item."
         },
         "body": {
           "type": "array",

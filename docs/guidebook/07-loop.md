@@ -73,7 +73,7 @@ The fix is upstream: `prompt_type: array` with a schema, so the producing prompt
 
 With `truncate: true` the loop diagnoses the first eight failing tests and records why it stopped: termination reason `max_iterations_reached`, plus `termination.unvisited`, the count of tests it never reached. A shorter list is not truncated; the list can end before the cap.
 
-**In parallel.** An `each` loop is a chain by default. `flow: tree` runs every pass concurrently — the loop's *iterations* fan out, while the steps inside one pass still run in order — and `max_concurrency` bounds the pool. Results are assembled in the original order whatever order they finished in:
+**In parallel.** An `each` loop is a chain by default. `flow: tree` runs every pass concurrently — the loop's *iterations* fan out, while the steps inside one pass still run in order — and `max_concurrency` bounds the pool. Left unset, it falls back to `ThreadPoolExecutor`'s own `min(32, cpu_count + 4)` — not "every iteration at once": `each.in` has no default bound on collection size, unlike a `dynamic` tree's fixed, author-declared effect list, so an unset pool size here is deliberately capped. Results are assembled in the original order whatever order they finished in:
 
 ```yaml
 - type: loop
@@ -253,7 +253,7 @@ An **unnamed** loop is transparent: the body writes at stable paths in the enclo
 
 ## Errors in a loop
 
-`on_error` on a loop governs a failed *pass*, and the same too-long-collection bounds check an `each` loop runs before its first pass ("The collection is the bound", above): `fail` (default) propagates; `break` ends the loop at the failed pass, keeping what completed before it; `continue` drops the pass and goes on. In a `tree` loop every pass is already running, so `break` and `continue` both let the other passes finish and drop the failed ones. Under `break` and `continue` alike, `last` is the last pass that completed, never the failed one.
+`on_error` on a loop governs a failed *pass*, and the same too-long-collection bounds check an `each` loop runs before its first pass ("The collection is the bound", above): `fail` (default) propagates; `break` ends the loop at the failed pass, keeping what completed before it; `continue` drops the pass and goes on. In a `tree` loop every pass is already running, so `break` and `continue` both let the other passes finish and drop the failed ones, and `fail` raises the lowest-index failure deterministically — naming that pass's iteration — rather than whichever concurrent pass happened to raise first. Under `break` and `continue` alike, `last` is the last pass that completed, never the failed one.
 
 `collected` holds the values of the passes that produced one, in pass order, and never loses a completed pass: a failed pass is left out entirely — the same contract a disabled collect target already has — even if the collect target itself produced a value before a later body effect in that same pass failed. The loop's `meta.failed_passes` lists the indices of every pass that failed, so failing tests `[test_a, test_b, test_c]` with `test_b` erroring under `on_error: continue` collects `[diagnosis-of-a, diagnosis-of-c]` with `meta.failed_passes: [1]`. The failed pass's own `iter_<N>` node still exists, with whatever body effects ran before the failure and an error in `meta` on the one that failed — reading it directly is how to see what a dropped pass actually did.
 

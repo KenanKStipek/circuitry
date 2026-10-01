@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,6 +9,7 @@ import pytest
 
 from circuitry.cli.config import (
     SANE_DEFAULTS,
+    ConfigError,
     _apply_env_vars,
     _deep_merge,
     resolve_config,
@@ -252,13 +254,14 @@ def test_resolve_config_circuitry_config_env(
     assert cfg.default_model == "from-env-path"
 
 
-def test_resolve_config_missing_circuitry_config_is_a_resolution_warning(
+def test_resolve_config_missing_circuitry_config_is_a_hard_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """A stale/typo'd CIRCUITRY_CONFIG naming a file that doesn't exist must
-    not vanish with no trace — it's recorded on `sources` and surfaced
-    through `resolution_warnings()`, the same as `cof doctor`'s old
-    behaviour for it, instead of being silently skipped (#259)."""
+    """A stale/typo'd CIRCUITRY_CONFIG naming a file that doesn't exist is an
+    explicit, caller-named config — same as `--config` — so it is a hard
+    `ConfigError`, not a silently-skipped warning: it never vanishes with no
+    trace, and callers (the TUI, `cof doctor`) catch it and show it instead
+    of crashing (#259)."""
     monkeypatch.delenv("CIRCUITRY_MODEL", raising=False)
     monkeypatch.delenv("CIRCUITRY_ADAPTER", raising=False)
     missing = tmp_path / "does-not-exist.json"
@@ -266,23 +269,15 @@ def test_resolve_config_missing_circuitry_config_is_a_resolution_warning(
 
     fake_global = tmp_path / "no-global" / "config.json"
     with patch("circuitry.cli.config.GLOBAL_CONFIG_PATH", fake_global):
-        cfg = resolve_config(cwd=tmp_path)
-
-    assert cfg.config_load_warning is not None
-    assert str(missing) in cfg.config_load_warning
-    assert any(str(missing) in w for w in cfg.resolution_warnings())
-    assert any(
-        source.kind == "CIRCUITRY_CONFIG" and source.note == "not found — skipped"
-        for source in cfg.sources
-    )
+        with pytest.raises(ConfigError, match=re.escape(str(missing))):
+            resolve_config(cwd=tmp_path)
 
 
-def test_resolve_config_malformed_circuitry_config_is_a_resolution_warning(
+def test_resolve_config_malformed_circuitry_config_is_a_hard_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """A CIRCUITRY_CONFIG that exists but isn't valid JSON gets the same
-    resolution-warning treatment as a missing one, instead of only a logger
-    line nothing on screen ever shows (#259)."""
+    hard-error treatment as a missing one, same as `--config` (#259)."""
     monkeypatch.delenv("CIRCUITRY_MODEL", raising=False)
     monkeypatch.delenv("CIRCUITRY_ADAPTER", raising=False)
     broken = tmp_path / "broken.json"
@@ -291,11 +286,5 @@ def test_resolve_config_malformed_circuitry_config_is_a_resolution_warning(
 
     fake_global = tmp_path / "no-global" / "config.json"
     with patch("circuitry.cli.config.GLOBAL_CONFIG_PATH", fake_global):
-        cfg = resolve_config(cwd=tmp_path)
-
-    assert cfg.config_load_warning is not None
-    assert str(broken) in cfg.config_load_warning
-    assert any(
-        source.kind == "CIRCUITRY_CONFIG" and source.note == "malformed — skipped"
-        for source in cfg.sources
-    )
+        with pytest.raises(ConfigError, match=re.escape(str(broken))):
+            resolve_config(cwd=tmp_path)
