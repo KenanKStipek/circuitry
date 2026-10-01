@@ -94,11 +94,13 @@ content) and never a list entry that is still a Mustache tag — both are a
 hard error rather than silently accepted. A host may additionally pin
 `runtime.plugins.shell.allowed_commands` in config; when set, the effective
 allowlist is that pin intersected with the effect's own list, so a *limited*
-document can only narrow it further, never widen it past the host's pin. A
-*trusted* document (see [§6](#6-host-settings-versus-orchestration-documents))
-keeps its whole `runtime:` block and can replace the pin outright — the pin
-only constrains documents that reach `cof` indirectly (library, `use` child,
-generated plan, REST, MCP).
+document can only narrow it further, never widen it past the host's pin. The
+pin is a ceiling even for a *trusted* document (see
+[Section 6](#6-host-settings-versus-orchestration-documents)): unlike every
+other `runtime.plugins`/`runtime.adapters` key, which a trusted document's
+own value overrides key by key, its `runtime.plugins.shell.allowed_commands`
+intersects with the host's pin rather than replacing it — the host's
+allowlist is the one thing no document, trusted or not, can widen.
 Implementation: [`src/circuitry/plugins/shell.py`](../src/circuitry/plugins/shell.py),
 [`src/circuitry/core/tool.py`](../src/circuitry/core/tool.py) (the
 `params_json`/templated rejection).
@@ -252,7 +254,15 @@ host runs, including library names, MCP and REST callers and everything
 reachable through `use: ref:`. Enable it only on a host that runs nothing but
 documents its operator wrote or has reviewed. Within the boundary, a document
 still uses whatever config allows — the adapters, tools and plugins config
-enables — so the allowlists remain the way to narrow that.
+enables — so the allowlists remain the way to narrow that. Because
+`plugins`/`adapters` merge key by key rather than block by block, a trusted
+document that sets only one field deep inside a block — an MCP server's
+`command`/`url` under `plugins.mcp.servers.<name>`, say, or an adapter's
+`base_url` — inherits the rest of that block (`env`, headers, credentials)
+from the host rather than dropping it; this is the deep merge working as
+intended for a trusted document, not a leak, but it means a trusted
+document's endpoint choice can run against the host's existing credentials
+for that block.
 
 ### 7. Project config files
 
