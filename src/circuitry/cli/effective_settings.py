@@ -134,6 +134,21 @@ def _key_paths(prefix: str, value: Any, depth: int) -> list[str]:
     ]
 
 
+def _ceiling_intersected_paths(cfg: CircuitryConfig) -> frozenset[str]:
+    """The `_CEILING_LIST_KEYS` notice paths for which the host actually has
+    a pin set — those are narrowed to an intersection, never applied
+    outright, so the notice says so (#316)."""
+    config_runtime = cfg.runtime or {}
+    paths: set[str] = set()
+    for top_key, name, leaf_key in _CEILING_LIST_KEYS:
+        host_block = config_runtime.get(top_key)
+        host_cfg = host_block.get(name) if isinstance(host_block, dict) else None
+        host_list = host_cfg.get(leaf_key) if isinstance(host_cfg, dict) else None
+        if isinstance(host_list, list):
+            paths.add(f"runtime.{top_key}.{name}.{leaf_key}")
+    return frozenset(paths)
+
+
 def _applied_host_settings_notice(
     orch_runtime: dict[str, Any],
     orch_plugins: list[Any],
@@ -146,10 +161,13 @@ def _applied_host_settings_notice(
     Dotted key paths for the `runtime:` keys outside
     ORCHESTRATION_RUNTIME_KEYS and the `plugins:` entries config does not
     list; no values, so a credential in the document never reaches it. Empty
-    when the document sets only author-level keys.
+    when the document sets only author-level keys. A `_CEILING_LIST_KEYS`
+    path is tagged to say it was narrowed to an intersection with the host's
+    pin, not applied as the document wrote it.
     """
+    ceiling_paths = _ceiling_intersected_paths(cfg)
     runtime_paths = [
-        path
+        f"{path} (intersected with host pin)" if path in ceiling_paths else path
         for key, value in orch_runtime.items()
         if key not in ORCHESTRATION_RUNTIME_KEYS
         for path in _key_paths(f"runtime.{_key_label(key)}", value, _NOTICE_KEY_DEPTH)
@@ -195,12 +213,92 @@ def orchestration_host_setting_warnings(
     ]
 
 
+#: `runtime` keys merged one level deeper than the rest: a document setting
+#: `plugins.sqlite.*` must not drop `plugins.shell.*`, and one setting
+#: `adapters.ollama.*` must not drop every other adapter's config (#316).
+#: Every other top-level runtime key (`complexity`, `persistence`, `state`,
+#: `library`, ...) still replaces the config-level value wholesale — see
+#: `complexity_config` and the `persistence`/`complexity` comments below for
+#: why that is each key's own deliberate choice, not an oversight shared with
+#: this one.
+_DEEP_MERGE_RUNTIME_KEYS: frozenset[str] = frozenset({"plugins", "adapters"})
+
+#: Host ceiling that survives a merge as an intersection, never a plain
+#: overlay — a document (trusted or not) can only narrow it, never replace
+#: it outright (#316, the shell half of #264). `(top_key, name, leaf_key)`.
+_CEILING_LIST_KEYS: tuple[tuple[str, str, str], ...] = (
+    ("plugins", "shell", "allowed_commands"),
+)
+
+
+def _deep_merge_dicts(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge *overlay* onto *base*; a nested dict merges key by
+    key, any other value (including a list) replaces the base's value for
+    that key outright."""
+    merged = dict(base)
+    for key, value in overlay.items():
+        base_value = merged.get(key)
+        if isinstance(value, dict) and isinstance(base_value, dict):
+            merged[key] = _deep_merge_dicts(base_value, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _apply_ceiling_intersections(
+    merged: dict[str, Any], *, config_runtime: dict[str, Any], orch_runtime: dict[str, Any]
+) -> dict[str, Any]:
+    """Re-narrow each `_CEILING_LIST_KEYS` entry to the host/document
+    intersection after the deep merge, which would otherwise let a
+    document's own list — or a `null`/non-dict value that erases the whole
+    block the deep merge would otherwise have preserved — drop the host's
+    pin instead of narrowing it. Whenever the host has a pin, it survives:
+    intersected against the document's own list if it gave one, or
+    untouched if the document's value for that leaf (or an ancestor block)
+    isn't a list at all. The one leaf the merge must not treat like every
+    other overridable key."""
+    for top_key, name, leaf_key in _CEILING_LIST_KEYS:
+        host_block = (config_runtime or {}).get(top_key)
+        host_cfg = host_block.get(name) if isinstance(host_block, dict) else None
+        host_list = host_cfg.get(leaf_key) if isinstance(host_cfg, dict) else None
+        if not isinstance(host_list, list):
+            continue
+        orch_block = (orch_runtime or {}).get(top_key)
+        orch_cfg = orch_block.get(name) if isinstance(orch_block, dict) else None
+        orch_list = orch_cfg.get(leaf_key) if isinstance(orch_cfg, dict) else None
+        effective = (
+            [c for c in host_list if c in orch_list]
+            if isinstance(orch_list, list)
+            else host_list
+        )
+        merged = dict(merged)
+        merged_top = merged.get(top_key)
+        merged[top_key] = dict(merged_top) if isinstance(merged_top, dict) else {}
+        merged_name = merged[top_key].get(name)
+        merged[top_key][name] = dict(merged_name) if isinstance(merged_name, dict) else {}
+        merged[top_key][name][leaf_key] = effective
+    return merged
+
+
 def _merge_runtime(
     config_runtime: dict[str, Any], orch_runtime: dict[str, Any]
 ) -> dict[str, Any]:
-    merged = dict(config_runtime or {})
-    merged.update(orch_runtime or {})
-    return merged
+    config_runtime = config_runtime or {}
+    orch_runtime = orch_runtime or {}
+    merged = dict(config_runtime)
+    for key, value in orch_runtime.items():
+        base_value = merged.get(key)
+        if (
+            key in _DEEP_MERGE_RUNTIME_KEYS
+            and isinstance(value, dict)
+            and isinstance(base_value, dict)
+        ):
+            merged[key] = _deep_merge_dicts(base_value, value)
+        else:
+            merged[key] = value
+    return _apply_ceiling_intersections(
+        merged, config_runtime=config_runtime, orch_runtime=orch_runtime
+    )
 
 
 def resolve_effective_settings(
@@ -325,8 +423,10 @@ def resolve_effective_settings(
             else ("config" if cfg.plugins else "default")
         )
 
-    # runtime: shallow merge, orch overrides config — for the author-level
-    # keys only, unless the document is trusted (see ORCHESTRATION_RUNTIME_KEYS)
+    # runtime: orch overrides config, deep-merged under `plugins`/`adapters`
+    # (see _DEEP_MERGE_RUNTIME_KEYS), shallow everywhere else — for the
+    # author-level keys only, unless the document is trusted (see
+    # ORCHESTRATION_RUNTIME_KEYS)
     orch_runtime, runtime_warnings = _split_orchestration_runtime(
         orch_runtime, trusted=trusted
     )
@@ -340,9 +440,11 @@ def resolve_effective_settings(
     # adapter timeout: `runtime.adapters.<adapter>.timeout_seconds` (see
     # cli.runtime_shim, which resolves it generically for whichever adapter
     # the run selected — ollama and every curl-based adapter share the same
-    # `generate(timeout_seconds=...)` knob). `runtime` only merges shallowly
-    # (see above), so the `adapters` block comes wholesale from whichever
-    # layer supplied it — there is no finer-grained merge to track.
+    # `generate(timeout_seconds=...)` knob). `adapters` merges one level
+    # deeper than the rest of `runtime` (see `_DEEP_MERGE_RUNTIME_KEYS`), so
+    # an orchestration setting a *different* adapter's config must not claim
+    # this one's timeout — check the document's own `adapters.<adapter>`
+    # sub-block, not just whether it touched `adapters` at all.
     # "default" means the key was absent and the 120s fallback in
     # runtime_shim applies.
     if adapter:
@@ -354,8 +456,17 @@ def resolve_effective_settings(
             isinstance(this_adapter_cfg, dict)
             and this_adapter_cfg.get("timeout_seconds") is not None
         ):
+            orch_adapters_cfg = orch_runtime.get("adapters")
+            orch_this_adapter_cfg = (
+                orch_adapters_cfg.get(adapter)
+                if isinstance(orch_adapters_cfg, dict)
+                else None
+            )
             sources[f"adapters.{adapter}.timeout_seconds"] = (
-                "orchestration" if "adapters" in orch_runtime else "config"
+                "orchestration"
+                if isinstance(orch_this_adapter_cfg, dict)
+                and orch_this_adapter_cfg.get("timeout_seconds") is not None
+                else "config"
             )
         else:
             sources[f"adapters.{adapter}.timeout_seconds"] = "default"
