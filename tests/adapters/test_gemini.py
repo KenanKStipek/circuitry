@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from curl_test_support import assert_not_in_argv, assert_q_first, read_config_headers
 
 from circuitry.adapters import GeminiAdapter, build_adapter
 from circuitry.adapters._openai_compat import (
@@ -50,6 +51,7 @@ def test_chat_completion_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         captured["cmd"] = cmd
         captured["input"] = kwargs.get("input")
+        captured["headers"] = read_config_headers(cmd)
         return FakeProc(returncode=0, stdout=_ok_payload("hi from gemini"))
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -68,8 +70,10 @@ def test_chat_completion_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     cmd = captured["cmd"]
     # endpoint + auth + JSON body all built correctly
     assert cmd[-1] == "https://example.test/v1/chat/completions"
-    assert "Authorization: Bearer test-key" in cmd
+    assert captured["headers"]["Authorization"] == "Bearer test-key"
     assert json.loads(captured["input"])["model"] == "gemini-2.5-pro"
+    assert_q_first(cmd)
+    assert_not_in_argv(cmd, "test-key", "ping")
 
 
 def test_chat_completion_missing_api_key_raises(
@@ -92,7 +96,7 @@ def test_chat_completion_no_auth_for_self_hosted(
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         # No Authorization header should be present.
-        assert not any(c.startswith("Authorization") for c in cmd)
+        assert "Authorization" not in read_config_headers(cmd)
         return FakeProc(returncode=0, stdout=_ok_payload())
 
     monkeypatch.setattr("subprocess.run", fake_run)

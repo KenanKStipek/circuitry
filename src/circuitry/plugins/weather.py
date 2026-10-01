@@ -16,13 +16,12 @@ Mutually exclusive: ``format`` and ``json``.
 from __future__ import annotations
 
 import json as _json
-import shlex
 import shutil
-import subprocess
 import urllib.parse
 from dataclasses import dataclass
 from typing import Any
 
+from ..curl_support import curl_failure_message, run_curl
 from ..preflight import CheckResult
 from .base import ToolResult
 
@@ -60,20 +59,20 @@ class WeatherPlugin:
         if query:
             url += "?" + urllib.parse.urlencode(query)
 
-        cmd = [
-            "curl", "--silent", "--show-error", "--fail-with-body",
-            "--max-time", str(int(timeout_seconds)),
-            "-H", "Accept-Language: en",
-            url,
-        ]
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, check=False
+        proc = run_curl(
+            url=url,
+            headers={"Accept-Language": "en"},
+            timeout_seconds=timeout_seconds,
         )
         if proc.returncode != 0:
-            err = (proc.stderr or proc.stdout or "").strip()
             raise RuntimeError(
-                f"weather request failed (curl exit {proc.returncode}): {err} "
-                f"cmd={' '.join(shlex.quote(c) for c in cmd)}"
+                curl_failure_message(
+                    source="weather",
+                    url=url,
+                    returncode=proc.returncode,
+                    stdout=proc.stdout,
+                    stderr=proc.stderr,
+                )
             )
 
         body = proc.stdout

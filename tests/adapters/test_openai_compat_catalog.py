@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from curl_test_support import assert_not_in_argv, assert_q_first, read_config_headers
 
 from circuitry.adapters import build_adapter
 from circuitry.adapters.conformance import validate_generate_result
@@ -109,6 +110,7 @@ def test_generate_with_mocked_transport_passes_conformance(
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         captured["cmd"] = cmd
+        captured["headers"] = read_config_headers(cmd)
         return FakeProc(returncode=0, stdout=_ok_payload(f"hi from {name}"))
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -119,11 +121,13 @@ def test_generate_with_mocked_transport_passes_conformance(
     assert result.text == f"hi from {name}"
     assert validate_generate_result(result, adapter_name=name) == []
     # Self-hosted adapters must NOT add an Authorization header.
-    has_auth = any(
-        isinstance(c, str) and c.startswith("Authorization: Bearer")
-        for c in captured["cmd"]
-    )
+    has_auth = captured["headers"].get("Authorization", "").startswith("Bearer")
     assert has_auth == bool(env_var)
+    assert_q_first(captured["cmd"])
+    if env_var:
+        assert_not_in_argv(captured["cmd"], "test-key")
+        assert "test-key" in captured["headers"].get("Authorization", "")
+    assert_not_in_argv(captured["cmd"], "ping")
 
 
 @pytest.mark.parametrize("name,env_var,base_url_substr", CATALOG)
@@ -155,6 +159,7 @@ def test_self_hosted_generate_succeeds_without_api_key(
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         captured["cmd"] = cmd
+        captured["headers"] = read_config_headers(cmd)
         return FakeProc(returncode=0, stdout=_ok_payload("local-llm"))
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -162,9 +167,7 @@ def test_self_hosted_generate_succeeds_without_api_key(
     adapter = build_adapter(adapter_name="vllm", runtime={})
     result = adapter.generate(model="my-local-model", prompt="ping")
     assert result.text == "local-llm"
-    assert not any(
-        isinstance(c, str) and c.startswith("Authorization") for c in captured["cmd"]
-    )
+    assert "Authorization" not in captured["headers"]
 
 
 def test_nvidia_nim_can_disable_auth_via_runtime_override(
@@ -179,6 +182,7 @@ def test_nvidia_nim_can_disable_auth_via_runtime_override(
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         captured["cmd"] = cmd
+        captured["headers"] = read_config_headers(cmd)
         return FakeProc(returncode=0, stdout=_ok_payload("ok"))
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -196,6 +200,4 @@ def test_nvidia_nim_can_disable_auth_via_runtime_override(
     )
     result = adapter.generate(model="m", prompt="ping")
     assert result.text == "ok"
-    assert not any(
-        isinstance(c, str) and c.startswith("Authorization") for c in captured["cmd"]
-    )
+    assert "Authorization" not in captured["headers"]

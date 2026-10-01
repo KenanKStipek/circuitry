@@ -9,10 +9,20 @@ submit/poll job-broker shape doesn't fit this file's curl-based fakes.
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+import time
 from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from curl_test_support import (
+    RecordingJSONHandler,
+    assert_not_in_argv,
+    assert_q_first,
+    local_server,
+    read_config_headers,
+)
 
 from circuitry.adapters import build_adapter
 from circuitry.adapters.azure_openai import AzureOpenAIAdapter
@@ -56,6 +66,7 @@ def test_azure_url_includes_deployment_and_api_version(
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         captured["cmd"] = cmd
+        captured["headers"] = read_config_headers(cmd)
         return FakeProc(returncode=0, stdout=_ok_chat_payload("azure"))
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -71,11 +82,11 @@ def test_azure_url_includes_deployment_and_api_version(
         == "https://my-resource.openai.azure.com/openai/deployments/"
         "my-deployment/chat/completions?api-version=2024-10-21"
     )
-    assert "api-key: secret-k" in captured["cmd"]
+    assert captured["headers"]["api-key"] == "secret-k"
     # Azure does NOT use Bearer auth.
-    assert not any(
-        c.startswith("Authorization: Bearer") for c in captured["cmd"]
-    )
+    assert "Authorization" not in captured["headers"]
+    assert_q_first(captured["cmd"])
+    assert_not_in_argv(captured["cmd"], "secret-k", "ping")
 
 
 def test_azure_curl_failure_masks_api_key_sent_via_extra_headers(
@@ -275,6 +286,7 @@ def test_replicate_synchronous_succeeded(
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         captured["cmd"] = cmd
+        captured["headers"] = read_config_headers(cmd)
         return FakeProc(returncode=0, stdout=json.dumps(payload))
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -283,13 +295,16 @@ def test_replicate_synchronous_succeeded(
     result = adapter.generate(model="meta/meta-llama-3-70b-instruct", prompt="hi")
     assert result.text == "hello world"
     assert validate_generate_result(result, adapter_name="replicate") == []
+    headers = captured["headers"]
     # `Prefer: wait=...` header must be sent.
-    assert any(c.startswith("Prefer: wait=") for c in captured["cmd"])
+    assert headers["Prefer"].startswith("wait=")
     # And model in URL.
     assert (
         "/v1/models/meta/meta-llama-3-70b-instruct/predictions"
         in captured["cmd"][-1]
     )
+    assert_q_first(captured["cmd"])
+    assert_not_in_argv(captured["cmd"], "r-tok", "hi")
 
 
 def test_replicate_still_processing_raises_with_id(
@@ -345,6 +360,72 @@ def test_replicate_curl_failure_masks_token(
     assert secret not in str(exc.value)
 
 
+def test_replicate_large_input_over_200kib_sent_on_stdin_not_argv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #300: a Replicate input carrying a base64 image can
+    outgrow argv's 128 KiB-per-argument ceiling; it must go on stdin."""
+    monkeypatch.setenv("REPLICATE_API_TOKEN", "r-tok")
+    large_prompt = "a" * (250 * 1024)
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        captured["cmd"] = cmd
+        captured["input"] = kwargs.get("input")
+        return FakeProc(
+            returncode=0,
+            stdout=json.dumps({"id": "abc", "status": "succeeded", "output": ["ok"]}),
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    adapter = build_adapter(adapter_name="replicate", runtime={})
+    adapter.generate(model="meta/m", prompt=large_prompt)
+    assert len(captured["input"]) > 200 * 1024
+    assert_not_in_argv(captured["cmd"], large_prompt[:200])
+
+
+class _ReplicateHandler(RecordingJSONHandler):
+    response_body = json.dumps(
+        {"id": "abc", "status": "succeeded", "output": ["hello from local server"]}
+    ).encode()
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl not on PATH")
+def test_replicate_end_to_end_against_local_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real curl, real local server (never a live provider): the token
+    header and a large prompt both arrive correctly and neither touches
+    argv."""
+    secret = "canary-replicate-token"
+    large_prompt = "canary prompt " * 20000
+    monkeypatch.setenv("REPLICATE_API_TOKEN", secret)
+
+    calls: list[list[str]] = []
+    real_run = subprocess.run
+
+    def spying_run(cmd: list[str], **kwargs: Any) -> Any:
+        calls.append(cmd)
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr("subprocess.run", spying_run)
+
+    with local_server(_ReplicateHandler) as base_url:
+        adapter = build_adapter(
+            adapter_name="replicate",
+            runtime={"adapters": {"replicate": {"base_url": base_url}}},
+        )
+        result = adapter.generate(model="meta/m", prompt=large_prompt, timeout_seconds=10)
+
+    assert result.text == "hello from local server"
+    assert _ReplicateHandler.captured_headers["Authorization"] == f"Bearer {secret}"
+    assert large_prompt.encode() in _ReplicateHandler.captured_body
+    for cmd in calls:
+        assert_q_first(cmd)
+        assert_not_in_argv(cmd, secret, large_prompt[:200])
+
+
 # ---------------------------------------------------------------------------
 # watsonx
 # ---------------------------------------------------------------------------
@@ -366,9 +447,11 @@ def test_watsonx_two_step_iam_then_generate(
 
     # First subprocess.run call → IAM token; second → generation.
     calls: list[list[str]] = []
+    headers_by_call: list[dict[str, str]] = []
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         calls.append(list(cmd))
+        headers_by_call.append(read_config_headers(cmd))
         if "iam.cloud.ibm.com" in " ".join(cmd):
             return FakeProc(
                 returncode=0,
@@ -404,7 +487,11 @@ def test_watsonx_two_step_iam_then_generate(
     assert "iam.cloud.ibm.com" in " ".join(calls[0])
     gen_cmd = " ".join(calls[1])
     assert "ml/v1/text/generation" in gen_cmd
-    assert "Authorization: Bearer iam-token-xyz" in calls[1]
+    assert headers_by_call[1]["Authorization"] == "Bearer iam-token-xyz"
+    assert_q_first(calls[0])
+    assert_q_first(calls[1])
+    assert_not_in_argv(calls[0], "ibm-key")
+    assert_not_in_argv(calls[1], "iam-token-xyz", "ping")
 
 
 def test_watsonx_token_cache_avoids_second_iam_call(
@@ -468,3 +555,113 @@ def test_watsonx_iam_failure_masks_api_key(
     with pytest.raises(RuntimeError) as exc:
         adapter.generate(model="m", prompt="p")
     assert secret not in str(exc.value)
+
+
+def test_watsonx_iam_apikey_form_field_never_touches_argv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #264 part 3: the IAM exchange's `apikey=` form field
+    is a secret and must travel on stdin with the rest of the body, not as
+    a `-d` argument."""
+    secret = "ibm-canary-apikey-777"
+    monkeypatch.setenv("WATSONX_API_KEY", secret)
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "p")
+    from circuitry.adapters import watsonx as watsonx_mod
+
+    watsonx_mod._TOKEN_CACHE.clear()
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        captured["cmd"] = cmd
+        captured["input"] = kwargs.get("input")
+        return FakeProc(
+            returncode=0,
+            stdout=json.dumps({"access_token": "tok", "expires_in": 3600}),
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    watsonx_mod._get_token(secret, timeout_seconds=10)
+    assert_q_first(captured["cmd"])
+    assert_not_in_argv(captured["cmd"], secret)
+    assert secret in (captured["input"] or "")
+
+
+def test_watsonx_large_prompt_over_200kib_sent_on_stdin_not_argv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #300."""
+    _seed_watsonx_env(monkeypatch)
+    large_prompt = "a" * (250 * 1024)
+
+    calls: list[dict[str, Any]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        calls.append({"cmd": cmd, "input": kwargs.get("input")})
+        if "iam.cloud.ibm.com" in " ".join(cmd):
+            return FakeProc(
+                returncode=0,
+                stdout=json.dumps({"access_token": "tok", "expires_in": 3600}),
+            )
+        return FakeProc(
+            returncode=0,
+            stdout=json.dumps({"results": [{"generated_text": "ok"}]}),
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    adapter = build_adapter(adapter_name="watsonx", runtime={})
+    adapter.generate(model="m", prompt=large_prompt)
+
+    gen_call = calls[1]
+    assert len(gen_call["input"]) > 200 * 1024
+    assert_not_in_argv(gen_call["cmd"], large_prompt[:200])
+
+
+class _WatsonXGenerationHandler(RecordingJSONHandler):
+    response_body = json.dumps(
+        {"results": [{"generated_text": "hi from local watsonx"}]}
+    ).encode()
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl not on PATH")
+def test_watsonx_generation_end_to_end_against_local_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real curl, real local server standing in for the generation endpoint
+    (the IAM token exchange is pre-seeded to skip IBM's hardcoded URL, since
+    that URL can't be redirected to a local server): the Bearer token and a
+    large prompt both arrive correctly and neither touches argv."""
+    secret = "canary-watsonx-key"
+    monkeypatch.setenv("WATSONX_API_KEY", secret)
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "proj-1")
+    from circuitry.adapters import watsonx as watsonx_mod
+
+    watsonx_mod._TOKEN_CACHE[secret] = ("canary-iam-token", time.time() + 3600)
+
+    large_prompt = "canary prompt " * 20000
+
+    calls: list[list[str]] = []
+    real_run = subprocess.run
+
+    def spying_run(cmd: list[str], **kwargs: Any) -> Any:
+        calls.append(cmd)
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr("subprocess.run", spying_run)
+
+    with local_server(_WatsonXGenerationHandler) as base_url:
+        adapter = build_adapter(
+            adapter_name="watsonx",
+            runtime={"adapters": {"watsonx": {"base_url": base_url}}},
+        )
+        result = adapter.generate(model="m", prompt=large_prompt, timeout_seconds=10)
+
+    assert result.text == "hi from local watsonx"
+    assert (
+        _WatsonXGenerationHandler.captured_headers["Authorization"]
+        == "Bearer canary-iam-token"
+    )
+    assert large_prompt.encode() in _WatsonXGenerationHandler.captured_body
+    for cmd in calls:
+        assert_q_first(cmd)
+        assert_not_in_argv(cmd, secret, "canary-iam-token", large_prompt[:200])

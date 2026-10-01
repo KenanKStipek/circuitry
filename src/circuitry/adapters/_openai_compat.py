@@ -19,12 +19,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 from dataclasses import dataclass
 from typing import Any
 
+from ..curl_support import curl_failure_message, run_curl
 from ..preflight import CheckResult
-from ._curl_errors import curl_failure_message
 from .base import GenerateOptions, GenerateResult, last_user_index
 
 
@@ -150,27 +149,17 @@ def chat_completion(
         payload.update(extra_body)
     payload.update(sampling_fields(options))
 
-    cmd = [
-        "curl",
-        "--silent",
-        "--show-error",
-        "--fail-with-body",
-        "--max-time",
-        str(int(timeout_seconds)),
-        "-H",
-        "Content-Type: application/json",
-    ]
+    headers = {"Content-Type": "application/json"}
     if api_key:
-        cmd += ["-H", f"Authorization: Bearer {api_key}"]
-    for k, v in (extra_headers or {}).items():
-        cmd += ["-H", f"{k}: {v}"]
-    # The body goes on stdin: with base64 images it can outgrow the argv size
-    # limit (128 KiB per argument on Linux).
-    cmd += ["--data-binary", "@-", url]
+        headers["Authorization"] = f"Bearer {api_key}"
+    headers.update(extra_headers or {})
 
     try:
-        proc = subprocess.run(
-            cmd, input=json.dumps(payload), capture_output=True, text=True, check=False
+        proc = run_curl(
+            url=url,
+            headers=headers,
+            data=json.dumps(payload),
+            timeout_seconds=timeout_seconds,
         )
     except FileNotFoundError as e:
         raise RuntimeError("curl is not installed or not on PATH") from e
@@ -184,7 +173,7 @@ def chat_completion(
         ]
         raise RuntimeError(
             curl_failure_message(
-                adapter="OpenAI-compatible",
+                source="OpenAI-compatible",
                 model=model,
                 url=url,
                 returncode=proc.returncode,
