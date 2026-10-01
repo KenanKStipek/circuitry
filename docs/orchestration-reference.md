@@ -564,7 +564,10 @@ read from the run's root state, not from the reflector's own node:
   Empty when `runtime.effective_settings` hasn't been recorded yet.
 
 Both are best-effort: a reflector nested under a loop, dynamic, or
-conditional still reads the run's true root, not its immediate container.
+conditional still reads the run's true root, not its immediate container —
+including a reflector that is a branch of a `flow: tree` dynamic or a
+parallel loop, where the branch's own state is otherwise isolated from the
+rest of the run.
 
 ---
 

@@ -52,10 +52,16 @@ def _run_root_state(store: Store) -> dict[str, Any]:
 
     A reflector anywhere in the tree receives a ``Store`` already scoped to
     its container (``prime`` at top level, deeper under a loop/dynamic/
-    conditional) — its own ``.state`` is never the run root. ``goal`` and
+    conditional, or isolated inside a ``flow: tree`` dynamic or parallel
+    loop branch) — its own ``.state`` is never the run root. ``goal`` and
     ``context`` read from ``input``/``prime``/``runtime`` at the true root,
-    so they go through ``Store.root_state`` instead of :func:`_store_root`.
+    so they go through ``Store.true_root_state`` (which survives tree/
+    parallel branch isolation, unlike ``Store.root_state``) instead of
+    :func:`_store_root`.
     """
+    true_root_state = getattr(store, "true_root_state", None)
+    if isinstance(true_root_state, dict):
+        return true_root_state
     root_state = getattr(store, "root_state", None)
     if isinstance(root_state, dict):
         return root_state

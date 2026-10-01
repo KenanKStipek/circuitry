@@ -38,7 +38,7 @@ Reflector ::= { type: 'reflector', name: NAME, effects: Effect+,   — the plann
 
 Each planning cycle runs in five phases:
 
-1. **Render the prime directive.** A planning instruction — Circuitry ships a versioned default, `REFLECTOR_PRIME_V1` — is rendered with `max_effects` and two slots, a **goal** and a **context**, both read from the run's root state — not the reflector's own node — so they see what the rest of the run has produced so far: see [what the planner can see](#what-the-planner-can-see) below.
+1. **Render the prime directive.** A planning instruction — Circuitry ships a versioned default, `REFLECTOR_PRIME_V1` — is rendered with `max_effects` and two slots, a **goal** and a **context**, both read from the run's root state — not the reflector's own node — filled from the run's root `goal` effect and its effective settings, not from whatever the rest of the run has produced so far: see [what the planner can see](#what-the-planner-can-see) below.
 2. **Run the inner dynamic** with the rendered prime prepended to the planning prompt's template. The planner sees the directive, then whatever the template says — which is why the example above writes the situation into the template itself.
 3. **Extract the plan** from the planning step's output: a YAML document with a `done` flag and an `effects` list. Code fences are tolerated; markdown is not.
 4. **Decide whether to stop.** An empty `effects` list stops. `done: true` stops when `stop_on_done` is set (the default) — *without executing that cycle's effects*. `done` means "there is nothing left to do", so a planner that still has work to run must say `done: false`; the last useful plan is always a `done: false` one, and the cycle after it says `done: true` with nothing to run.
