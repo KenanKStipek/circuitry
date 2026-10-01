@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult, _as_bool
+from .base import ToolResult, _as_bool, http_error_excerpt
 
 _DEFAULT_UA = "circuitry/0.1 (+https://github.com/kenankstipek/circuitry)"
 
@@ -96,7 +96,10 @@ class WebFetchPlugin:
             "content_type": resp.headers.get("Content-Type", ""),
         }
         ok = not (fail_on_error and status >= 400)
-        stderr = None if status < 400 else f"HTTP {status}"
+        stderr = None
+        if status >= 400:
+            excerpt = http_error_excerpt(text)
+            stderr = f"HTTP {status}: {excerpt}" if excerpt else f"HTTP {status}"
 
         if mode == "html":
             return ToolResult(

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from curl_test_support import read_config_url
 
 from circuitry.adapters import (
     AnthropicAdapter,
@@ -57,10 +58,16 @@ class CurlRecorder:
         self.response = response
         self.cmd: list[str] = []
         self.stdin: str | None = None
+        self.config_url: str | None = None
 
     def __call__(self, cmd: list[str], **kwargs: Any) -> FakeProc:
         self.cmd = cmd
         self.stdin = kwargs.get("input")
+        # The `--config` fd is only open for the duration of this call (its
+        # `run_curl` caller closes it in a `finally` right after
+        # `subprocess.run` returns), so the URL has to be read synchronously
+        # here, not lazily from a `.url` property accessed after the fact.
+        self.config_url = read_config_url(cmd)
         return FakeProc(returncode=0, stdout=json.dumps(self.response))
 
     @property
@@ -71,7 +78,8 @@ class CurlRecorder:
 
     @property
     def url(self) -> str:
-        return self.cmd[-1]
+        assert self.config_url is not None
+        return self.config_url
 
     @property
     def max_time(self) -> str:

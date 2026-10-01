@@ -9,6 +9,7 @@ sentence-transformers / etc.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import types
 from typing import Any
@@ -260,6 +261,31 @@ def test_linear_http_error_with_fail_on_error_false_returns_ok_true(
     )
     assert r.ok is True
     assert r.raw["status"] == 401
+
+
+def test_linear_http_error_stderr_includes_reason_but_not_a_canary_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #317: a bounded, redacted excerpt of the response
+    body makes it into the failure message — a reason makes it in, a
+    sibling credential-shaped field does not."""
+    monkeypatch.setenv("LINEAR_API_KEY", "lin_key")
+
+    class FakeResponse:
+        status_code = 400
+        text = json.dumps(
+            {
+                "error": "Validation failed: unknown field 'foo'",
+                "api_key": "sk-canary-DO-NOT-LEAK-0123456789",
+            }
+        )
+
+    _fake_linear_requests(monkeypatch, FakeResponse())
+
+    r = LinearPlugin().execute(params={"mode": "query", "query": "{ x }"})
+    assert r.ok is False
+    assert "Validation failed" in (r.stderr or "")
+    assert "canary" not in (r.stderr or "")
 
 
 def test_linear_graphql_error_returns_ok_false_by_default(

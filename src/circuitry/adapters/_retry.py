@@ -20,11 +20,13 @@ is unknown and the failure is *not* retried — guessing wrong in the
 retryable direction could spin on a request that will never succeed (a bad
 API key, a malformed body), so the conservative read wins.
 
-None of these adapters capture response headers today, so
-:attr:`RetryInfo.retry_after` is always ``None`` for them — honouring a
-provider's ``Retry-After`` header needs that capture, which is itself a curl
-argv change (tracked separately, alongside the header/body hardening that
-moves credentials off the command line).
+``curl_support.run_curl`` also captures a response's ``Retry-After`` header
+on stderr (via ``--write-out``, curl >= 7.84 only — never argv or a temp
+file) and :func:`classify_curl_exit` reads it from there via
+``curl_support.extract_retry_after``, the same way :attr:`RetryInfo.status`
+is read from the exit-code line. It's ``None`` on older curl, when the
+response carried no such header, or when the failure never reached an HTTP
+response at all (a connection failure, for instance).
 """
 
 from __future__ import annotations
@@ -32,6 +34,8 @@ from __future__ import annotations
 import re
 import urllib.error
 from dataclasses import dataclass
+
+from ..curl_support import extract_retry_after
 
 #: curl exit codes that mean the request never got a reply at all — DNS
 #: failure (6), couldn't connect (7), operation timeout (28), SSL connect
@@ -72,15 +76,18 @@ NOT_RETRYABLE = RetryInfo(retryable=False)
 
 def classify_curl_exit(returncode: int, stderr: str) -> RetryInfo:
     """Classify a failed curl-based adapter call from its exit code/stderr."""
+    retry_after = extract_retry_after(stderr)
     if returncode in RETRYABLE_CURL_EXIT_CODES:
-        return RetryInfo(retryable=True)
+        return RetryInfo(retryable=True, retry_after=retry_after)
     if returncode == 22:
         match = _CURL_STATUS_RE.search(stderr or "")
         if match:
             status = int(match.group(1))
-            return RetryInfo(retryable=_status_is_retryable(status), status=status)
-        return NOT_RETRYABLE
-    return NOT_RETRYABLE
+            return RetryInfo(
+                retryable=_status_is_retryable(status), status=status, retry_after=retry_after
+            )
+        return RetryInfo(retryable=False, retry_after=retry_after)
+    return RetryInfo(retryable=False, retry_after=retry_after)
 
 
 def classify_litellm_exception(exc: BaseException) -> RetryInfo:

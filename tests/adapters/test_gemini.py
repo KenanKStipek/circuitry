@@ -13,7 +13,12 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from curl_test_support import assert_not_in_argv, assert_q_first, read_config_headers
+from curl_test_support import (
+    assert_not_in_argv,
+    assert_q_first,
+    read_config,
+    read_config_headers,
+)
 
 from circuitry.adapters import GeminiAdapter, build_adapter
 from circuitry.adapters._openai_compat import (
@@ -51,7 +56,7 @@ def test_chat_completion_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         captured["cmd"] = cmd
         captured["input"] = kwargs.get("input")
-        captured["headers"] = read_config_headers(cmd)
+        captured["url"], captured["headers"] = read_config(cmd)
         return FakeProc(returncode=0, stdout=_ok_payload("hi from gemini"))
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -69,7 +74,7 @@ def test_chat_completion_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert validate_generate_result(result, adapter_name="gemini") == []
     cmd = captured["cmd"]
     # endpoint + auth + JSON body all built correctly
-    assert cmd[-1] == "https://example.test/v1/chat/completions"
+    assert captured["url"] == "https://example.test/v1/chat/completions"
     assert captured["headers"]["Authorization"] == "Bearer test-key"
     assert json.loads(captured["input"])["model"] == "gemini-2.5-pro"
     assert_q_first(cmd)

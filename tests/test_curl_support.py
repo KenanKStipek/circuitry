@@ -7,16 +7,19 @@ helper directly for cases that don't need a whole fake adapter.
 
 from __future__ import annotations
 
+import glob
+import http.server
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
 import pytest
-from curl_test_support import RecordingJSONHandler, local_server
+from curl_test_support import RecordingJSONHandler, assert_not_in_argv, local_server
 
-from circuitry.curl_support import curl_failure_message, run_curl
+from circuitry.curl_support import curl_failure_message, extract_retry_after, run_curl
 
 
 def test_url_userinfo_is_stripped() -> None:
@@ -135,18 +138,21 @@ def test_run_curl_rejects_header_name_with_embedded_cr() -> None:
         )
 
 
-def test_run_curl_raises_clearly_on_windows_with_headers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """`pass_fds` and `/dev/fd` don't exist on Windows; fail loudly rather
-    than silently drop the headers."""
-    monkeypatch.setattr(os, "name", "nt")
-    with pytest.raises(RuntimeError, match="Windows"):
+def test_run_curl_rejects_url_with_embedded_newline() -> None:
+    """Regression for #314: the URL now travels through the same
+    config-file channel as headers, so it must be rejected the same way a
+    header value is — a `\n` would otherwise end the `url = "..."` line
+    early, letting the rest be read as a new curl option."""
+    with pytest.raises(ValueError):
         run_curl(
-            url="https://example.test/x",
-            headers={"Authorization": "Bearer x"},
+            url='https://example.test/x\nheader = "X-Injected: leaked"',
             timeout_seconds=5,
         )
+
+
+def test_run_curl_rejects_url_with_embedded_nul() -> None:
+    with pytest.raises(ValueError):
+        run_curl(url="https://example.test/x\0", timeout_seconds=5)
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +162,55 @@ def test_run_curl_raises_clearly_on_windows_with_headers(
 
 class _RecordingHandler(RecordingJSONHandler):
     response_body = b'{"ok": true}'
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl not on PATH")
+def test_run_curl_on_windows_sends_the_config_via_a_temp_file_and_removes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #315: Windows has no inheritable pipe fd, so the
+    config travels through a file in the per-user temp directory instead,
+    removed once curl is done with it — including on success."""
+    # `pathlib.Path` reads `os.name` in its own constructor to pick
+    # `WindowsPath`/`PosixPath` and would raise trying to build the former
+    # on a real POSIX machine; `glob.glob` has no such dependency, so the
+    # before/after check below uses it instead, even inside the patched
+    # window.
+    pattern = os.path.join(tempfile.gettempdir(), "circuitry-curl-*")
+    before = set(glob.glob(pattern))
+
+    monkeypatch.setattr(os, "name", "nt")
+    with local_server(_RecordingHandler) as base_url:
+        proc = run_curl(
+            url=base_url + "/x",
+            headers={"Authorization": "Bearer winsecret"},
+            timeout_seconds=5,
+        )
+
+    assert proc.returncode == 0
+    assert _RecordingHandler.captured_headers["Authorization"] == "Bearer winsecret"
+    after = set(glob.glob(pattern))
+    assert after == before
+
+
+def test_run_curl_on_windows_removes_the_temp_file_even_when_curl_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The temp file is removed in a `finally`, so a curl invocation that
+    never even started (curl missing) still doesn't leak it."""
+    pattern = os.path.join(tempfile.gettempdir(), "circuitry-curl-*")
+    before = set(glob.glob(pattern))
+
+    monkeypatch.setattr(os, "name", "nt")
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        raise FileNotFoundError("curl")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    with pytest.raises(FileNotFoundError):
+        run_curl(url="https://example.test/x", timeout_seconds=5)
+    after = set(glob.glob(pattern))
+    assert after == before
 
 
 @pytest.mark.skipif(shutil.which("curl") is None, reason="curl not on PATH")
@@ -250,3 +305,98 @@ def test_run_curl_closes_its_pipe_fd(monkeypatch: pytest.MonkeyPatch) -> None:
         )
     open_fds_after = len(os.listdir("/dev/fd"))
     assert open_fds_after <= open_fds_before + 1
+
+
+# ---------------------------------------------------------------------------
+# #314 — the URL itself must never touch argv either.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl not on PATH")
+def test_run_curl_query_string_credential_never_touches_argv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #314: a query-string credential (e.g. a search API
+    key in `extra_params`) must not land on argv now that the whole URL
+    travels through `--config` instead of being curl's final argument."""
+    secret = "canary-query-key-789"
+    calls: list[list[str]] = []
+    real_run = subprocess.run
+
+    def spying_run(cmd: list[str], **kwargs: Any) -> Any:
+        calls.append(cmd)
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr("subprocess.run", spying_run)
+
+    with local_server(_RecordingHandler) as base_url:
+        proc = run_curl(url=f"{base_url}/x?key={secret}", timeout_seconds=5)
+
+    assert proc.returncode == 0
+    assert len(calls) == 1
+    assert_not_in_argv(calls[0], secret)
+    assert "--config" in calls[0]
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl not on PATH")
+def test_run_curl_userinfo_url_never_touches_argv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression for #314: `user:pass@host` (e.g. a `base_url` set that
+    way) must not land on argv either."""
+    calls: list[list[str]] = []
+    real_run = subprocess.run
+
+    def spying_run(cmd: list[str], **kwargs: Any) -> Any:
+        calls.append(cmd)
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr("subprocess.run", spying_run)
+
+    with local_server(_RecordingHandler) as base_url:
+        host_port = base_url.removeprefix("http://")
+        url = f"http://canaryuser:canarypw@{host_port}/x"
+        proc = run_curl(url=url, timeout_seconds=5)
+
+    assert proc.returncode == 0
+    assert len(calls) == 1
+    assert_not_in_argv(calls[0], "canaryuser", "canarypw")
+
+
+# ---------------------------------------------------------------------------
+# #319 — Retry-After capture.
+# ---------------------------------------------------------------------------
+
+
+class _RetryAfterHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        self.send_response(429)
+        self.send_header("Retry-After", "2")
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, *args: Any) -> None:  # quiet test output
+        pass
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl not on PATH")
+def test_run_curl_captures_retry_after_header() -> None:
+    """Regression for #319: a 429's `Retry-After` must reach the caller on
+    stderr (never argv, never a temp file), and the exit-code status line
+    `_retry.py` parses must stay intact alongside it."""
+    with local_server(_RetryAfterHandler) as base_url:
+        proc = run_curl(url=base_url + "/x", timeout_seconds=5)
+
+    assert proc.returncode == 22
+    assert "curl: (22) The requested URL returned error: 429" in proc.stderr
+    assert extract_retry_after(proc.stderr) == "2"
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl not on PATH")
+def test_run_curl_retry_after_absent_on_success() -> None:
+    """No `Retry-After` header on a 200 — `extract_retry_after` reads an
+    empty capture as `None`, not an empty string."""
+    with local_server(_RecordingHandler) as base_url:
+        proc = run_curl(url=base_url + "/x", timeout_seconds=5)
+
+    assert proc.returncode == 0
+    assert extract_retry_after(proc.stderr) is None

@@ -5,13 +5,15 @@ command line, and must never let a local user's ``~/.curlrc`` silently
 change its behaviour:
 
 - :func:`run_curl` always puts ``-q`` first (so ``~/.curlrc`` is ignored),
-  sends headers through an inherited pipe fd via ``--config`` instead of
-  ``-H`` (so a Bearer token or an ``x-api-key`` never shows up in ``ps``),
-  and sends the request body, if any, on stdin via ``--data-binary @-``
-  (so neither argv's 128 KiB-per-argument limit on Linux nor ``ps``
-  visibility is a concern for a large prompt or image). Headers and the
-  body use two different channels because both can't come from stdin at
-  once.
+  sends the URL and headers through a ``--config`` file (so a Bearer token,
+  an ``x-api-key``, a query-string credential, or ``user:pass@`` in the URL
+  never shows up in ``ps`` — argv carries no request data at all), and
+  sends the request body, if any, on stdin via ``--data-binary @-`` (so
+  neither argv's 128 KiB-per-argument limit on Linux nor ``ps`` visibility
+  is a concern for a large prompt or image). The config file travels
+  through an inherited pipe fd on POSIX (``--config /dev/fd/<n>``, never a
+  temp file); Windows has no such fd, so there it's written to a file in
+  the per-user temp directory and removed in a ``finally``.
 - :func:`curl_failure_message` builds a failure message that reports what a
   caller needs — source name, target URL with userinfo and credential-like
   query values masked, curl's exit status, and the provider's own
@@ -21,10 +23,12 @@ change its behaviour:
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
 import subprocess
+import tempfile
 import urllib.parse
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
@@ -122,6 +126,7 @@ def curl_failure_message(
     should not be passing one on purpose.
     """
     secrets = [s for s in secrets if s]
+    stderr = _strip_retry_after_marker(stderr)
     stdout = _mask_secrets(stdout, secrets)
     stderr = _mask_secrets(stderr, secrets)
     detail = parse_error_body(stdout) or stderr.strip() or "no response body"
@@ -138,28 +143,148 @@ def curl_failure_message(
 
 # Curl's config-file format is line-oriented: a bare CR or LF inside a
 # value ends that line early, letting the rest be read as a new option
-# (`output`, `upload-file`, `url`, ...). No header name or value in this
-# codebase is operator/document-controlled today, but `run_curl` is the
-# shared entry point for every curl call, so this is enforced rather than
-# assumed.
+# (`output`, `upload-file`, `url`, ...). No URL, header name or header
+# value in this codebase is operator/document-controlled today, but
+# `run_curl` is the shared entry point for every curl call, so this is
+# enforced rather than assumed.
 _FORBIDDEN_HEADER_CHARS = ("\r", "\n", "\0")
 
 
-def _curl_config_file(headers: Sequence[tuple[str, str]]) -> str:
-    """The ``--config`` file content for ``headers``.
+def _validate_no_control_chars(value: str, label: str) -> None:
+    if any(ch in value for ch in _FORBIDDEN_HEADER_CHARS):
+        raise ValueError(f"{label} contains a forbidden control character")
 
-    Curl's config-file quoting recognises ``\\\\`` and ``\\"`` inside a
-    double-quoted value; both are escaped here so a header value containing
-    either can't break out of its line.
+
+def _escape_config_value(value: str) -> str:
+    """Curl's config-file quoting recognises ``\\\\`` and ``\\"`` inside a
+    double-quoted value; both are escaped here so a value containing either
+    can't break out of its line."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _curl_config_file(url: str, headers: Sequence[tuple[str, str]]) -> str:
+    """The ``--config`` file content for ``url`` and ``headers`` — the
+    whole request, so argv never carries any of it (#314: a query-string
+    credential or ``user:pass@`` in the URL is otherwise visible in ``ps``
+    just like a header would be).
     """
-    lines = []
+    _validate_no_control_chars(url, "url")
+    lines = [f'url = "{_escape_config_value(url)}"']
     for name, value in headers:
-        for part, label in ((name, "name"), (value, "value")):
-            if any(ch in part for ch in _FORBIDDEN_HEADER_CHARS):
-                raise ValueError(f"header {label} contains a forbidden control character")
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-        lines.append(f'header = "{name}: {escaped}"')
-    return "\n".join(lines) + ("\n" if lines else "")
+        _validate_no_control_chars(name, "header name")
+        _validate_no_control_chars(value, "header value")
+        lines.append(f'header = "{name}: {_escape_config_value(value)}"')
+    return "\n".join(lines) + "\n"
+
+
+# curl's `--write-out` format for capturing a response's `Retry-After`
+# header (#319) without putting anything on argv or in a temp file:
+# `%{stderr}` redirects the rest of the format to stderr instead of curl's
+# default of stdout, which here carries the response body and must stay
+# clean for `json.loads`. `%header{retry-after}` was added in curl 7.84.0
+# (`_curl_supports_retry_after_header` gates it so older curl just doesn't
+# get the flag). The marker prefix lets `extract_retry_after` find this
+# specific line among whatever else curl writes to stderr (its own
+# `curl: (22) ...` error line is also there on a failure).
+_RETRY_AFTER_MARKER = "circuitry-retry-after:"
+_RETRY_AFTER_WRITE_OUT_FORMAT = (
+    "%{stderr}" + _RETRY_AFTER_MARKER + "%header{retry-after}\n"
+)
+_RETRY_AFTER_LINE_RE = re.compile(re.escape(_RETRY_AFTER_MARKER) + r"(.*)")
+
+#: The real `subprocess.run`, captured at import time. The curl-version
+#: probe below must always exercise the actual installed curl, never a
+#: test's faked response for the request call `run_curl` itself makes —
+#: tests commonly `monkeypatch.setattr("subprocess.run", fake_run)` for
+#: exactly one call's shape, and a second, unexpected `curl --version` call
+#: routed through that same fake would break them.
+_real_subprocess_run = subprocess.run
+
+
+@functools.lru_cache(maxsize=1)
+def _curl_supports_retry_after_header() -> bool:
+    """Whether the installed curl is new enough for ``%header{...}`` in
+    ``--write-out`` (added in curl 7.84.0). Cached: this runs curl once per
+    process, not once per request."""
+    try:
+        proc = _real_subprocess_run(
+            ["curl", "--version"], capture_output=True, text=True, check=False, timeout=5
+        )
+    except OSError:
+        return False
+    match = re.match(r"curl (\d+)\.(\d+)\.(\d+)", proc.stdout or "")
+    if not match:
+        return False
+    version = tuple(int(g) for g in match.groups())
+    return version >= (7, 84, 0)
+
+
+def extract_retry_after(stderr: str) -> str | None:
+    """The ``Retry-After`` header value :func:`run_curl` captured on
+    ``stderr`` (via ``_RETRY_AFTER_WRITE_OUT_FORMAT``), verbatim — seconds
+    or an HTTP date, whichever the provider sent. ``None`` when curl was too
+    old to capture it, the response had no such header, or the request
+    never produced an HTTP response at all (a connection failure never
+    reaches the write-out stage).
+    """
+    match = _RETRY_AFTER_LINE_RE.search(stderr or "")
+    if not match:
+        return None
+    value = match.group(1).strip()
+    return value or None
+
+
+def _strip_retry_after_marker(text: str) -> str:
+    """``text`` with any ``_RETRY_AFTER_MARKER`` line removed — so the
+    marker :func:`run_curl` writes to stderr on every call never leaks into
+    a failure message built from that stderr."""
+    lines = [ln for ln in text.splitlines() if not ln.startswith(_RETRY_AFTER_MARKER)]
+    return "\n".join(lines)
+
+
+def _run_curl_posix(
+    cmd: list[str], config_bytes: bytes, data: str | None
+) -> subprocess.CompletedProcess[str]:
+    """POSIX: the config travels through a pipe this process creates and
+    keeps open just long enough for curl to read it via ``--config
+    /dev/fd/<n>`` (an inherited file descriptor, passed with ``pass_fds``)
+    — never a temp file."""
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, config_bytes)
+        os.close(write_fd)
+        return subprocess.run(
+            [*cmd, "--config", f"/dev/fd/{read_fd}"],
+            input=data,
+            capture_output=True,
+            text=True,
+            check=False,
+            pass_fds=(read_fd,),
+        )
+    finally:
+        os.close(read_fd)
+
+
+def _run_curl_windows(
+    cmd: list[str], config_bytes: bytes, data: str | None
+) -> subprocess.CompletedProcess[str]:
+    """Windows: `Popen` rejects a non-empty ``pass_fds`` and there's no
+    ``/dev/fd``, so the config is written to a file in the per-user temp
+    directory (``%TEMP%``, private to the user by default ACL) instead, and
+    always removed afterwards — including on error."""
+    fd, path = tempfile.mkstemp(prefix="circuitry-curl-", suffix=".conf")
+    try:
+        with os.fdopen(fd, "wb") as config_file:
+            config_file.write(config_bytes)
+        return subprocess.run(
+            [*cmd, "--config", path],
+            input=data,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        os.remove(path)
 
 
 def run_curl(
@@ -169,27 +294,21 @@ def run_curl(
     data: str | None = None,
     timeout_seconds: int,
 ) -> subprocess.CompletedProcess[str]:
-    """Run curl with ``-q`` first, headers off argv, and ``data`` (if given)
-    on stdin.
+    """Run curl with ``-q`` first, the URL and headers off argv, and
+    ``data`` (if given) on stdin.
 
-    Headers travel through a pipe this process creates and keeps open just
-    long enough for curl to read it via ``--config /dev/fd/<n>`` (an
-    inherited file descriptor, passed with ``pass_fds`` — never a temp
-    file). The body, when present, travels on the *actual* stdin via
-    ``--data-binary @-``; headers can't use that channel too, since a
-    request can have both. May raise ``FileNotFoundError`` if curl is not
-    on PATH — callers translate that into their own error.
-
-    Windows' ``Popen`` rejects a non-empty ``pass_fds`` and has no
-    ``/dev/fd``, so a header-carrying call raises ``RuntimeError`` there
-    instead of silently losing the headers.
+    The URL and headers both travel through ``--config`` (see
+    :func:`_curl_config_file`) — on POSIX via an inherited pipe fd
+    (:func:`_run_curl_posix`), on Windows via a per-user temp file removed
+    in a ``finally`` (:func:`_run_curl_windows`), since Windows' `Popen`
+    has neither `pass_fds` nor `/dev/fd`. The body, when present, travels
+    on the *actual* stdin via ``--data-binary @-``; the config can't use
+    that channel too, since a request can have both. May raise
+    ``FileNotFoundError`` if curl is not on PATH — callers translate that
+    into their own error.
     """
     header_items = list(headers.items()) if isinstance(headers, Mapping) else list(headers)
-    if header_items and os.name == "nt":
-        raise RuntimeError(
-            "run_curl: sending headers via a pipe fd is not supported on Windows"
-        )
-    config_bytes = _curl_config_file(header_items).encode() if header_items else b""
+    config_bytes = _curl_config_file(url, header_items).encode()
     cmd = [
         "curl",
         "-q",
@@ -199,30 +318,11 @@ def run_curl(
         "--max-time",
         str(int(timeout_seconds)),
     ]
+    if _curl_supports_retry_after_header():
+        cmd += ["--write-out", _RETRY_AFTER_WRITE_OUT_FORMAT]
+    if data is not None:
+        cmd += ["--data-binary", "@-"]
 
-    read_fd: int | None = None
-    try:
-        if header_items:
-            read_fd, write_fd = os.pipe()
-            os.write(write_fd, config_bytes)
-            os.close(write_fd)
-            cmd += ["--config", f"/dev/fd/{read_fd}"]
-        if data is not None:
-            cmd += ["--data-binary", "@-"]
-        cmd.append(url)
-
-        run_kwargs: dict[str, Any] = {}
-        if read_fd is not None:
-            run_kwargs["pass_fds"] = (read_fd,)
-
-        return subprocess.run(
-            cmd,
-            input=data,
-            capture_output=True,
-            text=True,
-            check=False,
-            **run_kwargs,
-        )
-    finally:
-        if read_fd is not None:
-            os.close(read_fd)
+    if os.name == "nt":
+        return _run_curl_windows(cmd, config_bytes, data)
+    return _run_curl_posix(cmd, config_bytes, data)
