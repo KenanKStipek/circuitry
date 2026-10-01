@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from ..cli.app import _resolve_orchestration
+from ..cli.config import resolve_config
 from ..cli.registry import load_index
 from ..cli.runtime_shim import validate as validate_orch_path
 from .runs import Run, RunManager
@@ -110,7 +111,19 @@ def _validate_orchestration_impl(path: str) -> dict[str, Any]:
     candidate = _resolve_orchestration(path)
     if candidate is None:
         return {"ok": False, "errors": [f"Orchestration not found: {path}"]}
-    result = validate_orch_path(candidate)
+    # The same resolved config `run_orchestration`/`RunManager.start_run` use
+    # (`resolve_config()`), so a document that validates here also runs —
+    # otherwise an allowlist/preflight failure only surfaces at run time,
+    # after "validate: ok" (#265 part 4). `skip_adapter_check=True` the same
+    # way `RunManager.start_run` runs preflight: every MCP run injects a
+    # `HostClaudeAdapter` regardless of the document's own top-level
+    # `adapter:`, so checking that name here would reject documents (e.g.
+    # `adapter: ollama` with no local daemon, `adapter: openai` with no key)
+    # that run fine through `run_orchestration` — the opposite failure mode
+    # from the one this function exists to catch. A prompt effect's own
+    # `provider:` is still checked (#265 part 9).
+    cfg = resolve_config()
+    result = validate_orch_path(candidate, config=cfg, skip_adapter_check=True)
     return {
         "ok": bool(result.get("ok")),
         "errors": list(result.get("errors") or []),

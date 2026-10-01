@@ -21,11 +21,7 @@ def _write_yml(tmp_path: Path, name: str, body: str) -> Path:
 
 @pytest.fixture
 def mgr() -> RunManager:
-    # Tighter quiesce for fast tests; still covers the slow-branch case
-    # (test_quiescence_returns_after_all_branches_settle uses a sleep
-    # well beyond this threshold).
     m = RunManager(
-        quiesce_seconds=0.02,
         quiesce_max_wait_seconds=2.0,
         cancel_join_timeout=2.0,
         worker_poll_interval=0.05,
@@ -90,6 +86,52 @@ def test_simple_chain_pauses_then_completes(mgr: RunManager, tmp_path: Path) -> 
 
     assert _wait_until(lambda: run.status == RunStatus.COMPLETED)
     assert run.state["prime"]["greet"]["value"] == "the answer"
+
+
+def test_submit_response_never_returns_with_the_answered_prompt_still_pending(
+    mgr: RunManager, tmp_path: Path
+) -> None:
+    """An artificial scheduling delay between the worker thread retrieving
+    the response off its queue and actually popping the prompt from
+    `pending_prompts` must not let `submit_response` return while that same
+    prompt id is still listed as pending (#237) — the exact client-visible
+    staleness the issue describes: "a client re-reading state sees an old
+    prompt as current". The delay happens *before* the worker touches
+    `run._lock` (exactly where a real scheduling delay would land), not
+    while holding it — holding the lock during the delay would merely
+    block the reader rather than let it observe a stale pre-pop snapshot.
+    """
+    import queue
+    import time
+
+    p = _write_yml(tmp_path, "hello.yml", """
+        model: claude-sonnet-4
+        adapter: host_claude
+        effects:
+          - type: prompt
+            name: greet
+            template: "Say hi"
+    """)
+    run = mgr.start_run(orchestration_path=p)
+    assert _wait_until(lambda: run.status == RunStatus.PAUSED)
+    pid = _single_pending_id(run)
+
+    class _SlowQueue(queue.Queue):
+        """Delays *after* the item is retrieved, before the worker thread
+        reaches the `with run._lock:` pop — simulating the worker thread
+        not yet being scheduled, not lock contention."""
+
+        def get(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            item = super().get(*args, **kwargs)
+            time.sleep(0.3)
+            return item
+
+    slow_queue: _SlowQueue = _SlowQueue(maxsize=1)
+    run.pending_prompts[pid].response_queue = slow_queue
+
+    mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text="the answer")
+
+    assert pid not in run.pending_prompts
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +345,155 @@ def test_nested_parallel_tree_in_chain(mgr: RunManager, tmp_path: Path) -> None:
         assert run.state["prime"]["middle"][f"iter_{i}"]["branch"]["value"].startswith("b-")
 
 
+def test_submit_response_returns_with_next_prompt_already_pending(
+    mgr: RunManager, tmp_path: Path
+) -> None:
+    """A three-prompt chain where each `submit_response` call's own return
+    already carries the next prompt — asserted without any `_wait_until`
+    polling, which would defeat the point. `submit_response` used to wake as
+    soon as the answered prompt was popped, before the worker thread (an
+    artificial delay simulates it not yet being scheduled) registered the
+    next one, so a caller reading `run.pending_prompts` straight off the
+    return would see it empty (#237)."""
+    import time
+    from unittest.mock import patch
+
+    p = _write_yml(tmp_path, "chain3.yml", """
+        model: claude-sonnet-4
+        adapter: host_claude
+        effects:
+          - type: prompt
+            name: a
+            template: "first"
+          - type: prompt
+            name: b
+            template: "second"
+          - type: prompt
+            name: c
+            template: "third"
+    """)
+
+    real_handler_for = mgr._handler_for
+
+    def _delayed_handler_for(run, host_req):  # type: ignore[no-untyped-def]
+        time.sleep(0.3)
+        return real_handler_for(run, host_req)
+
+    with patch.object(mgr, "_handler_for", side_effect=_delayed_handler_for):
+        run = mgr.start_run(orchestration_path=p)
+        assert len(run.pending_prompts) == 1
+        pid_a = next(iter(run.pending_prompts))
+        assert run.pending_prompts[pid_a].prompt == "first"
+
+        mgr.submit_response(run_id=run.run_id, prompt_id=pid_a, response_text="A")
+        # Asserted immediately: submit_response's own wait must already have
+        # blocked for the real next-prompt signal.
+        assert len(run.pending_prompts) == 1, list(run.pending_prompts)
+        pid_b = next(iter(run.pending_prompts))
+        assert run.pending_prompts[pid_b].prompt == "second"
+
+        mgr.submit_response(run_id=run.run_id, prompt_id=pid_b, response_text="B")
+        assert len(run.pending_prompts) == 1, list(run.pending_prompts)
+        pid_c = next(iter(run.pending_prompts))
+        assert run.pending_prompts[pid_c].prompt == "third"
+
+        mgr.submit_response(run_id=run.run_id, prompt_id=pid_c, response_text="C")
+
+    assert _wait_until(lambda: run.status == RunStatus.COMPLETED)
+    assert run.state["prime"]["c"]["value"] == "C"
+
+
+def test_nested_tree_inside_a_use_child_reports_the_full_branch_count(
+    mgr: RunManager, tmp_path: Path
+) -> None:
+    """A `flow: tree` dynamic nested inside a `use:` child, itself one
+    branch of an outer `flow: tree` dynamic, must contribute its own branch
+    count to what `start_run` waits for — not just the outer dispatch's,
+    overwritten and lost (#237 part 3). Expects 1 (the outer's other, plain
+    branch) + 2 (the nested tree's own branches) = 3 pending prompts."""
+    p = _write_yml(tmp_path, "nested_use_tree.yml", """
+        model: claude-sonnet-4
+        adapter: host_claude
+        effects:
+          - type: dynamic
+            name: outer
+            flow: tree
+            effects:
+              - type: prompt
+                name: solo
+                template: "solo"
+              - type: use
+                name: nested
+                inline: |
+                  effects:
+                    - type: dynamic
+                      name: inner
+                      flow: tree
+                      effects:
+                        - type: prompt
+                          name: x
+                          template: "x"
+                        - type: prompt
+                          name: y
+                          template: "y"
+    """)
+    run = mgr.start_run(orchestration_path=p)
+
+    assert _wait_until(lambda: len(run.pending_prompts) == 3, timeout=2.0), (
+        f"saw {len(run.pending_prompts)} of 3 expected branches"
+    )
+    prompts = {pp.prompt for pp in run.pending_prompts.values()}
+    assert prompts == {"solo", "x", "y"}
+
+    for pid in list(run.pending_prompts):
+        mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text="ok")
+
+    assert _wait_until(lambda: run.status == RunStatus.COMPLETED)
+
+
+def test_max_concurrency_caps_expected_pending_not_total_branches(
+    mgr: RunManager, tmp_path: Path
+) -> None:
+    """A `max_concurrency: 2` tree of 3 effects can never have more than 2
+    concurrently pending — the pool itself won't start the 3rd until one of
+    the first 2 finishes — so `start_run` must settle at 2, not stall out
+    the full safety-net budget waiting for a 3rd that was never coming yet
+    (#237 part 3)."""
+    p = _write_yml(tmp_path, "capped.yml", """
+        model: claude-sonnet-4
+        adapter: host_claude
+        effects:
+          - type: dynamic
+            name: capped
+            flow: tree
+            max_concurrency: 2
+            effects:
+              - type: prompt
+                name: a
+                template: "a"
+              - type: prompt
+                name: b
+                template: "b"
+              - type: prompt
+                name: c
+                template: "c"
+    """)
+    run = mgr.start_run(orchestration_path=p)
+
+    # Asserted immediately: a 3rd item would only ever show up after one of
+    # the first 2 is answered, so this isn't racing a slow scheduler.
+    assert len(run.pending_prompts) == 2, list(run.pending_prompts)
+
+    first_pid = next(iter(run.pending_prompts))
+    mgr.submit_response(run_id=run.run_id, prompt_id=first_pid, response_text="r1")
+    assert _wait_until(lambda: len(run.pending_prompts) == 2, timeout=2.0)
+
+    for pid in list(run.pending_prompts):
+        mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text="r")
+
+    assert _wait_until(lambda: run.status == RunStatus.COMPLETED)
+
+
 # ---------------------------------------------------------------------------
 # 7. Cancel while paused (parallel branches)
 # ---------------------------------------------------------------------------
@@ -453,13 +644,21 @@ def test_get_state_during_pause(mgr: RunManager, tmp_path: Path) -> None:
 
 def test_quiescence_returns_after_all_branches_settle(tmp_path: Path) -> None:
     """
-    With a 200ms quiesce window and one branch sleeping 50ms before it can
-    spawn, all three branches MUST appear in pending_prompts on the
-    initial start_run() return — proving quiescence kept polling.
+    An artificial scheduling delay well beyond any fixed debounce window
+    (500ms per branch, three branches) must still leave all three branches
+    in `pending_prompts` on the initial `start_run()` return. A time-based
+    quiescence window — however large — can always be raced by a long
+    enough delay; event-based quiescence (#237) cannot, because it waits
+    for the `flow: tree` loop's own `concurrent_dispatch` signal (the real
+    branch count, known before any of them run) rather than guessing from
+    "no change observed for N seconds". This is exactly the regression the
+    old `_wait_for_quiesce` had: on main, this delay reliably makes
+    `start_run()` return with 0-2 branches registered, not 3.
     """
-    big_quiesce_mgr = RunManager(
-        quiesce_seconds=0.2, quiesce_max_wait_seconds=3.0, worker_poll_interval=0.05
-    )
+    import time
+    from unittest.mock import patch
+
+    delay_mgr = RunManager(quiesce_max_wait_seconds=3.0, worker_poll_interval=0.05)
     p = _write_yml(tmp_path, "slow.yml", """
         model: claude-sonnet-4
         adapter: host_claude
@@ -476,19 +675,30 @@ def test_quiescence_returns_after_all_branches_settle(tmp_path: Path) -> None:
                 name: ans
                 template: "for {{it}}"
     """)
-    run = big_quiesce_mgr.start_run(
-        orchestration_path=p, initial_state={"items": ["a", "b", "c"]},
-    )
-    # Intentionally asserted immediately (not polled): this test exists to
-    # prove start_run's internal quiesce wait already blocked long enough,
-    # so polling here would defeat the point. It can still fail if the
-    # worker takes longer than the 200ms window under heavy load.
-    assert len(run.pending_prompts) == 3, (
-        f"quiescence did not wait long enough; saw {len(run.pending_prompts)} branches"
-    )
+
+    real_handler_for = delay_mgr._handler_for
+
+    def _delayed_handler_for(run, host_req):  # type: ignore[no-untyped-def]
+        # Every branch's own thread sleeps before registering its prompt —
+        # simulating exactly the "worker thread hasn't been scheduled yet"
+        # race the issue describes, at a magnitude no fixed window survives.
+        time.sleep(0.5)
+        return real_handler_for(run, host_req)
+
+    with patch.object(delay_mgr, "_handler_for", side_effect=_delayed_handler_for):
+        run = delay_mgr.start_run(
+            orchestration_path=p, initial_state={"items": ["a", "b", "c"]},
+        )
+        # Intentionally asserted immediately (not polled): this test exists
+        # to prove start_run's own wait already blocked for the real signal,
+        # so polling here would defeat the point.
+        assert len(run.pending_prompts) == 3, (
+            f"quiescence did not wait for the real signal; saw "
+            f"{len(run.pending_prompts)} branches"
+        )
 
     # Cleanup: cancel so daemon threads don't linger
-    big_quiesce_mgr.cancel_run(run.run_id)
+    delay_mgr.cancel_run(run.run_id)
 
 
 # ---------------------------------------------------------------------------

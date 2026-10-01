@@ -445,8 +445,13 @@ misreport the file.
 `~/.config/circuitry/last-run.json`, the same ones `cof run --last` reads
 (`circuitry.cli.last_run` owns that file for both). The replay goes through
 the same `RunSession` the Run view launches, with the stashed orchestration,
-`-e` inputs, adapter/model overrides, profile and `--dry-run`; it publishes
-into the store, so the tree fills in as it goes. Two things it will not do:
+`-e` inputs, adapter/model overrides, profile, the `scoring`/`routing`/
+`decompose` overrides, and `--dry-run`; it publishes into the store, so the
+tree fills in as it goes. The `-e` merge with a stashed `--state` file uses
+the same `apply_inline_overrides` the CLI does, so an override lands under
+`input` (not the root) when the state file is already namespaced —
+otherwise it would be unreachable from `{{input.<key>}}`. Two things it will
+not do:
 replay a run whose `-e` values were redacted before being stashed (the literal
 marker would be sent as a real value — the same refusal `cof run --last`
 makes), and rewrite the stashed `--out` / `--live-state` files, because a
@@ -494,6 +499,14 @@ value goes through `circuitry.cli.redaction.redact` first, so a token renders as
 has a project config, the first row names it with its trust state — `trusted`,
 or `not trusted — skipped` / `changed since trusted — skipped` with the
 `cof trust` hint — so a file whose values are missing below says why.
+
+Both screens resolve config the same way `cof doctor` does (`resolve_config`):
+a *discovered* config that is missing or malformed (a stale or typo'd
+`CIRCUITRY_CONFIG`, an unreadable global/project file) degrades to its usual
+`cof run`-style warning rather than failing, so the screen still mounts and
+renders. Only a config a caller named explicitly can still fail outright, and
+that failure renders as an `Error: ...` line in the panel — the same message
+`cof doctor` prints — instead of taking down the whole app (#259).
 
 ## Validate (`7`)
 

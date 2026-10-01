@@ -23,7 +23,6 @@ def _write_yml(tmp_path: Path, name: str, body: str) -> Path:
 def fresh_manager(monkeypatch: pytest.MonkeyPatch) -> RunManager:
     """Each test gets a clean RunManager with tight timing for fast tests."""
     mgr = RunManager(
-        quiesce_seconds=0.02,
         quiesce_max_wait_seconds=2.0,
         cancel_join_timeout=2.0,
         worker_poll_interval=0.05,
@@ -127,6 +126,73 @@ def test_validate_orchestration_unknown_path() -> None:
     result = srv._validate_orchestration_impl("/no/such/file.yml")
     assert result["ok"] is False
     assert "not found" in result["errors"][0]
+
+
+def test_validate_orchestration_uses_the_resolved_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MCP's `validate_orchestration` must use the same resolved config the
+    real `run_orchestration` tool uses (`resolve_config()`), so a tool
+    outside the allowlist fails validation here too — not just at run time
+    (#265 part 4)."""
+    monkeypatch.setenv("CIRCUITRY_ENABLED_TOOLS", "")  # lock every tool out
+    p = _write_yml(tmp_path, "locked.yml", """
+        adapter: host_claude
+        model: claude-sonnet-4
+        effects:
+          - type: tool
+            name: t
+            provider: ffmpeg
+            params: {}
+    """)
+    result = srv._validate_orchestration_impl(str(p))
+    assert result["ok"] is False
+    assert any("ffmpeg" in e for e in result["errors"])
+
+
+def test_validate_orchestration_skips_the_document_adapter_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every MCP run injects a `HostClaudeAdapter` regardless of the
+    document's own top-level `adapter:` (RunManager.start_run always passes
+    its own `adapter=`), so checking that name here must not reject a
+    document that runs fine through `run_orchestration` — the same
+    `skip_adapter_check` RunManager's own preflight call already uses
+    (#265 part 4)"""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    p = _write_yml(tmp_path, "openai.yml", """
+        adapter: openai
+        model: gpt-4
+        effects:
+          - type: prompt
+            name: x
+            template: "hi"
+    """)
+    result = srv._validate_orchestration_impl(str(p))
+    assert result["ok"] is True
+    assert result["errors"] == []
+
+
+def test_validate_orchestration_still_checks_a_per_effect_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unlike the document-level default, a prompt effect's own `provider:`
+    is really built and called at run time (`PromptRuntime._resolve_adapter`)
+    even when MCP injects a HostClaudeAdapter, so it must still fail
+    validation here (#265 part 9)."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    p = _write_yml(tmp_path, "openai_provider.yml", """
+        adapter: host_claude
+        model: claude-sonnet-4
+        effects:
+          - type: prompt
+            name: x
+            provider: openai
+            template: "hi"
+    """)
+    result = srv._validate_orchestration_impl(str(p))
+    assert result["ok"] is False
+    assert any("OPENAI_API_KEY" in e for e in result["errors"])
 
 
 # ---------------------------------------------------------------------------

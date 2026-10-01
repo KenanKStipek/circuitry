@@ -63,7 +63,10 @@ CLI > profile > orchestration > project config > global config > default
 ```
 
 `CLI` here is `cof run --adapter <name>` / `--model <name>` (also available on
-`cof run-library`). Environment variables (`CIRCUITRY_ADAPTER`,
+`cof run-library`, which also now accepts `--profile`, `--skip-preflight`,
+`--scoring`/`--routing`/`--decompose`, and `--explain-routing` — the full set
+`cof run` offers, minus `--profile-from-state` and `--last` itself).
+Environment variables (`CIRCUITRY_ADAPTER`,
 `CIRCUITRY_MODEL`) overlay the *config* layer, so a profile beats them and a
 flag beats both.
 

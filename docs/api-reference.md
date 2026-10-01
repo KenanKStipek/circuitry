@@ -28,11 +28,12 @@ Key parameters:
 - `state` or `state_path`: initial input state
 - `dry_run`: skip model invocation and emit deterministic placeholder outputs
 - `validate_only`: run the same checks `cof check`/`validate_orchestration` run by default — structural check, compile, preflight — and stop there: `RunResult.ok` is `False` for any document those reject, with the same errors; it never builds the adapter or dispatches an effect
-- `out_path`: write resulting state to disk
+- `out_path`: write resulting state to disk (`pretty` controls formatting, same as `cof run --pretty`)
 - `adapter`: an already-constructed adapter to run against, instead of the one
   the config resolves — the seam a host uses to supply its own model transport
-  (and a test uses to script one). Preflight is skipped when it is supplied,
-  since such an adapter need not be buildable from config.
+  (and a test uses to script one). Only the adapter-reachability preflight
+  check is skipped when it is supplied, since such an adapter need not be
+  buildable from config — tool and library-ref preflight still run.
 - `trust_document` (default `True`): the file is trusted like `cof run
   ./file.yml` — its whole `runtime:` block and `plugins:` list apply, and
   `RunResult.warnings` carries one `Applied host settings from <file>: ...`
@@ -55,6 +56,7 @@ Key parameters:
 - `config`: required `CircuitryConfig`
 - `service_profile`: optional runtime override profile name
 - `auth_token`: optional library auth token
+- `out_path`: write resulting state to disk (`pretty` controls formatting)
 
 A fetched asset is limited: it may only set `runtime.complexity` and
 `runtime.state` (unless config sets `trust_orchestration_runtime`).
@@ -68,6 +70,10 @@ Compiler-backed structure validation.
 - `trust_document` (default `True`) matches `run_orchestration`: the report's
   `warnings` name the host settings the file would apply, or with `False` the
   ones a run would ignore.
+- `config` (default `None`): pass the same `CircuitryConfig` the corresponding
+  `run_orchestration` call would use so "valid" reliably predicts "runnable"
+  — without one, the allowlist and preflight gates are skipped here exactly
+  as they are in `run_orchestration(config=None)`.
 
 ### `inspect_orchestration`
 

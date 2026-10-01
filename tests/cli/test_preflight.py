@@ -518,6 +518,63 @@ def test_run_with_unknown_default_adapter_fails_with_preflight_message(tmp_path:
     assert "opneai" in run_result.error
 
 
+def test_preflight_skip_adapter_check_still_runs_tool_preflight(tmp_path: Path) -> None:
+    """An injected adapter must only skip the ``adapter:<name>`` check — tool
+    preflight still runs so a broken tool config is still caught (#265 part 4)."""
+    p = _write(
+        tmp_path,
+        "orch.yml",
+        "adapter: openai\n"
+        "effects:\n"
+        "  - {type: prompt, name: g, template: x}\n"
+        "  - {type: tool, name: t, provider: ffmpeg, params: {}}\n",
+    )
+    cfg = CircuitryConfig()
+    results = preflight(p, cfg, skip_adapter_check=True)
+    labels = {label for label, _ in results}
+    assert labels == {"tool:ffmpeg"}
+
+
+def test_run_with_injected_adapter_still_runs_tool_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An injected ``RunRequest.adapter`` (e.g. MCP's HostClaudeAdapter) must
+    not disable tool/library-ref preflight along with the adapter check it
+    can't exercise (#265 part 4)."""
+    from circuitry.adapters.base import Adapter, GenerateResult
+
+    class _StubAdapter(Adapter):
+        name = "stub"
+
+        def generate(self, *, model, prompt, timeout_seconds=120, **kwargs):
+            return GenerateResult(text="ok", raw={})
+
+    p = _write(
+        tmp_path,
+        "orch.yml",
+        "effects:\n"
+        "  - {type: prompt, name: g, template: x}\n"
+        "  - {type: tool, name: t, provider: ffmpeg, params: {}}\n",
+    )
+    cfg = CircuitryConfig()
+    monkeypatch.setattr("shutil.which", lambda _n: None)
+    result = run(
+        RunRequest(
+            orchestration_path=p,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            initial_state={},
+            config=cfg,
+            adapter=_StubAdapter(),
+        )
+    )
+    assert result.ok is False
+    assert "Preflight failed" in (result.error or "")
+    assert "ffmpeg" in (result.error or "")
+
+
 def test_optional_inference_example_passes_preflight_with_warning() -> None:
     """The curation example this feature ships (learn/optional_inference)
     actually exercises preflight — smoke-curation.sh always passes

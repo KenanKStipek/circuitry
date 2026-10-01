@@ -58,7 +58,7 @@ from .logging_setup import configure_cli_logging
 from .orchestration_loader import load_orchestration_file, serialize_orchestration
 from .profiles import ProfileError, ProfileSettings, load_profile
 from .redaction import REDACTED, redact_env_pairs
-from .registry import eject_destination, resolve_bundled, write_ejected
+from .registry import eject_destination, load_index, resolve_bundled, write_ejected
 from .runtime_shim import RunRequest, inspect_orchestration, run, validate
 from .score import register_score
 from .setup import register_setup
@@ -67,6 +67,7 @@ from .shared_library import (
     fetch_shared_orchestration,
     resolve_service_profile,
 )
+from .state_merge import apply_inline_overrides
 from .trust import register_trust
 
 console = Console()
@@ -231,26 +232,6 @@ def _restore_raw_text_for_string_inputs(
     for key, spec in iface_inputs.items():
         if isinstance(spec, dict) and spec.get("type") == "string" and key in raw:
             inline[key] = raw[key]
-
-
-def _apply_inline_overrides(
-    loaded_state: dict[str, Any], inline: dict[str, Any]
-) -> dict[str, Any]:
-    """Merge -e overrides into a loaded --state file, `-e` wins.
-
-    `-e` values are caller inputs by definition. If the loaded file is
-    already namespaced (e.g. a prior --out snapshot), `migrate_legacy_state`
-    short-circuits on its existing `input` key and never looks at the root
-    again, so the overrides must land under `input` here rather than at the
-    root or they'd be unreachable via `{{input.<key>}}`. A file that isn't
-    namespaced yet is left to the usual root-level lift.
-    """
-    existing_input = loaded_state.get("input")
-    if isinstance(existing_input, dict):
-        existing_input.update(inline)
-    else:
-        loaded_state.update(inline)
-    return loaded_state
 
 
 def _find_last_effect_value(state: dict[str, Any]) -> Any:
@@ -597,12 +578,19 @@ def run_cmd(
 ):
     # --last: replay stashed args
     stashed_trust: bool | None = None
+    stashed_service_profile: str | None = None
     if last:
         stashed = _load_last_run()
         orchestration = stashed["orchestration"]
         # The stash holds the resolved file even for a library name, so
         # whether the original run named a file comes from the stash too.
         stashed_trust = stashed.get("trust_document") is True
+        # A run-library run stashed with `--service-profile` applied its
+        # adapter/model/runtime/plugin overrides on top of `cfg` before
+        # fetching and running — replaying via plain `cof run --last`
+        # otherwise rebuilds `cfg` from `config` alone and silently drops
+        # every one of them (#265 part 2 follow-up).
+        stashed_service_profile = stashed.get("service_profile")
         config = Path(stashed["config"]) if stashed.get("config") else None
         state = Path(stashed["state"]) if stashed.get("state") else None
         out = Path(stashed["out"]) if stashed.get("out") else None
@@ -617,6 +605,9 @@ def run_cmd(
         tail = stashed.get("tail", False)
         skip_preflight = stashed.get("skip_preflight", False)
         profile = stashed.get("profile")
+        profile_from_state = (
+            Path(stashed["profile_from_state"]) if stashed.get("profile_from_state") else None
+        )
         adapter = stashed.get("adapter")
         model = stashed.get("model")
         explain_routing = stashed.get("explain_routing", False)
@@ -650,6 +641,19 @@ def run_cmd(
     # for example one skipped file that defined runtime.library sources —
     # can still explain an "Orchestration not found".
     cfg = resolve_config(explicit_path=config)
+
+    if stashed_service_profile:
+        try:
+            svc_profile = resolve_service_profile(
+                cfg=cfg, profile_name=stashed_service_profile
+            )
+            cfg = apply_service_profile(cfg=cfg, profile=svc_profile)
+        except Exception as exc:
+            console.print(
+                f"[red]Error:[/red] Could not reapply service profile "
+                f"{stashed_service_profile!r}: {exc}"
+            )
+            raise typer.Exit(code=1) from exc
 
     # A file named by path is trusted with its whole runtime:/plugins:; a
     # library name resolves to someone else's document and stays limited.
@@ -736,7 +740,7 @@ def run_cmd(
             except FileNotFoundError as exc:
                 _print_missing_state_file_error(exc, json_out=json_out)
                 raise typer.Exit(code=1) from exc
-            initial_state = _apply_inline_overrides(initial_state, inline)
+            initial_state = apply_inline_overrides(initial_state, inline)
         else:
             initial_state = inline
 
@@ -824,6 +828,7 @@ def run_cmd(
             "tail": tail,
             "skip_preflight": skip_preflight,
             "profile": profile,
+            "profile_from_state": str(profile_from_state) if profile_from_state else None,
             "adapter": adapter,
             "model": model,
             "explain_routing": explain_routing,
@@ -952,6 +957,17 @@ def run_library_cmd(
         False, "--tail",
         help="Print only the final effect's value as plain text. Ideal for piping.",
     ),
+    skip_preflight: bool = typer.Option(
+        False, "--skip-preflight",
+        help="Bypass dependency preflight; run even if check()s reported missing deps.",
+    ),
+    profile: str | None = typer.Option(
+        None, "--profile",
+        help=(
+            "Named profile to apply (profiles/<name>.yml, orchestration-scoped "
+            "wins over project-level). Precedence: CLI > profile > orchestration > config."
+        ),
+    ),
     adapter: str | None = typer.Option(
         None, "--adapter",
         help="Adapter to use for this run. Beats CIRCUITRY_ADAPTER and the orchestration.",
@@ -960,11 +976,47 @@ def run_library_cmd(
         None, "--model",
         help="Model to use for this run. Beats CIRCUITRY_MODEL and the orchestration.",
     ),
+    explain_routing: bool = typer.Option(
+        False, "--explain-routing",
+        help=(
+            "Print each prompt effect's complexity score, band, and model "
+            "choice as it dispatches. Needs runtime.complexity.scoring.enabled; "
+            "prints nothing if scoring is off. Suppressed by --quiet/--json."
+        ),
+    ),
+    scoring: bool | None = typer.Option(
+        None, "--scoring/--no-scoring",
+        help=(
+            "Force runtime.complexity.scoring on/off for this run. Beats "
+            "--profile and the orchestration/config; omit to leave it resolved "
+            "as configured."
+        ),
+    ),
+    routing: bool | None = typer.Option(
+        None, "--routing/--no-routing",
+        help=(
+            "Force runtime.complexity.routing on/off for this run. Beats "
+            "--profile and the orchestration/config; --no-routing also drops "
+            "any profile per-effect routing pin, since routing is off for the "
+            "whole run either way. Requires scoring (from this flag or "
+            "config) when turned on."
+        ),
+    ),
+    decompose: bool | None = typer.Option(
+        None, "--decompose/--no-decompose",
+        help=(
+            "Force runtime.complexity.decomposition on/off for this run. "
+            "Beats --profile and the orchestration/config. Requires scoring "
+            "(from this flag or config) when turned on."
+        ),
+    ),
 ):
     configure_cli_logging(verbose=verbose)
 
-    # Auto-pipe detection
-    if not sys.stdout.isatty():
+    # Auto-pipe detection (before mutual exclusivity check so --tail wins in
+    # pipes) — exactly as `cof run` does, so `run-library ... --tail | cat`
+    # works the same way `run ... --tail | cat` does (#265 part 2).
+    if not sys.stdout.isatty() and not tail:
         json_out = True
         quiet = True
 
@@ -976,16 +1028,16 @@ def run_library_cmd(
     token = auth_token or os.getenv("CIRCUITRY_LIBRARY_TOKEN")
 
     try:
-        profile = resolve_service_profile(cfg=cfg, profile_name=service_profile)
-        effective_cfg = apply_service_profile(cfg=cfg, profile=profile)
+        svc_profile = resolve_service_profile(cfg=cfg, profile_name=service_profile)
+        effective_cfg = apply_service_profile(cfg=cfg, profile=svc_profile)
         asset = fetch_shared_orchestration(
             cfg=effective_cfg,
             asset_id=asset_id,
             version=version,
             auth_token=token,
         )
-        if profile is not None:
-            asset.metadata["service_profile"] = profile.name
+        if svc_profile is not None:
+            asset.metadata["service_profile"] = svc_profile.name
     except Exception as e:
         _print_run_warnings(cfg.resolution_warnings())
         if json_out:
@@ -1011,6 +1063,11 @@ def run_library_cmd(
             console.print(f"[bold]Adapter (override):[/bold] {adapter}")
         if model:
             console.print(f"[bold]Model (override):[/bold] {model}")
+        for label, value in (
+            ("Scoring", scoring), ("Routing", routing), ("Decomposition", decompose),
+        ):
+            if value is not None:
+                console.print(f"[bold]{label} (override):[/bold] {'on' if value else 'off'}")
         console.print(f"[bold]Dry run:[/bold] {dry_run}")
 
     # Build initial state from --state file + -e overrides
@@ -1024,9 +1081,15 @@ def run_library_cmd(
             except FileNotFoundError as exc:
                 _print_missing_state_file_error(exc, json_out=json_out)
                 raise typer.Exit(code=1) from exc
-            initial_state = _apply_inline_overrides(initial_state, inline)
+            initial_state = apply_inline_overrides(initial_state, inline)
         else:
             initial_state = inline
+
+    effect_start_observer = (
+        make_explain_routing_observer(console.print)
+        if explain_routing and not (quiet or json_out)
+        else None
+    )
 
     req = RunRequest(
         orchestration_path=asset.file_path,
@@ -1039,8 +1102,14 @@ def run_library_cmd(
         verbose=verbose,
         config=effective_cfg,
         live_state_path=live_state,
+        skip_preflight=skip_preflight,
+        profile_name=profile,
         adapter_override=adapter,
         model_override=model,
+        scoring_override=scoring,
+        routing_override=routing,
+        decompose_override=decompose,
+        effect_start_observer=effect_start_observer,
     )
 
     with (
@@ -1051,8 +1120,14 @@ def run_library_cmd(
         result = run(req)
     _print_run_warnings(result.warnings)
 
-    if out:
-        _write_state_json(out=out, state=result.state, pretty=pretty)
+    # Resolved --out path: the CLI flag if given, else the profile's `out:`
+    # (precedence cli > profile > default), the same as `cof run` — a
+    # `--profile` here used to silently skip writing the state file when it
+    # set `out:` and `--out` wasn't also given (#265 part 2).
+    resolved_out = result.out_path
+
+    if resolved_out:
+        _write_state_json(out=resolved_out, state=result.state, pretty=pretty)
 
     if not result.ok:
         if json_out:
@@ -1060,15 +1135,50 @@ def run_library_cmd(
                 "ok": False,
                 "error": result.error,
                 "warnings": result.warnings,
-                "state_out": str(out) if out else None,
+                "state_out": str(resolved_out) if resolved_out else None,
             }
             console.print_json(json.dumps(payload))
         else:
             console.print("[red]Run failed[/red]")
             console.print(f"[red]Error:[/red] {result.error}")
-            if out:
-                console.print(f"[bold]State written:[/bold] {out}")
+            if resolved_out:
+                console.print(f"[bold]State written:[/bold] {resolved_out}")
         raise typer.Exit(code=1)
+
+    # Stash for --last, the same shape `cof run` writes — so `cof run --last`
+    # can replay a run-library run too. The resolved asset file (not the
+    # asset id) is what the stash reruns; a library asset is never a trusted
+    # document (#265 part 2).
+    _save_last_run({
+        "orchestration": str(asset.file_path),
+        "config": str(config) if config else None,
+        "state": str(state) if state else None,
+        "out": str(out) if out else None,
+        "pretty": pretty,
+        "print_state": print_state,
+        "dry_run": dry_run,
+        "json_out": json_out,
+        "quiet": quiet,
+        "verbose": verbose,
+        "live_state": str(live_state) if live_state else None,
+        "env_vars": redact_env_pairs(env_vars),
+        "tail": tail,
+        "skip_preflight": skip_preflight,
+        "profile": profile,
+        "profile_from_state": None,
+        "adapter": adapter,
+        "model": model,
+        "explain_routing": explain_routing,
+        "decompose_out": None,
+        "scoring": scoring,
+        "routing": routing,
+        "decompose": decompose,
+        "trust_document": False,
+        # So `cof run --last` can reapply the same adapter/model/runtime/
+        # plugin overrides this run used — otherwise a replayed run-library
+        # run silently loses them (#265 part 2 follow-up).
+        "service_profile": svc_profile.name if svc_profile is not None else None,
+    })
 
     if tail:
         val = _find_last_effect_value(result.state)
@@ -1083,6 +1193,14 @@ def run_library_cmd(
         console.print_json(dumps_saved_state(result.state, pretty=pretty))
 
 
+def _curation_category_names() -> str:
+    """Real `category:` values in the bundled curation index, so the
+    `--category` help text can't drift from them again (#265 part 5) — it
+    used to name five categories that matched none of the real ones."""
+    names = sorted({e["category"] for e in load_index() if e.get("category")})
+    return ", ".join(names)
+
+
 @app.command(
     "list",
     help=(
@@ -1092,7 +1210,8 @@ def run_library_cmd(
 )
 def list_cmd(
     category: str | None = typer.Option(
-        None, "--category", "-C", help="Filter by category (example, utility, creative, tooling, template)."
+        None, "--category", "-C",
+        help=f"Filter by category ({_curation_category_names()}).",
     ),
     json_out: bool = typer.Option(
         False, "--json", help="Output machine-readable JSON only."

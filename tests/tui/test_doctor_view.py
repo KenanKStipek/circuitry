@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from collections.abc import Callable, Iterable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -59,10 +60,12 @@ class FakeDiagnostics:
         checks: Iterable[ExtensionCheck] = FIXTURE_CHECKS,
         rows: tuple[SettingRow, ...] = (),
         gate: threading.Event | None = None,
+        warnings: tuple[str, ...] = (),
     ) -> None:
         self._checks = {check.target: check for check in checks}
         self._rows = rows
         self._gate = gate
+        self._warnings = warnings
         self.calls: list[CheckTarget] = []
 
     def targets(self) -> tuple[CheckTarget, ...]:
@@ -76,6 +79,9 @@ class FakeDiagnostics:
 
     def rows(self) -> tuple[SettingRow, ...]:
         return self._rows
+
+    def warnings(self) -> tuple[str, ...]:
+        return self._warnings
 
 
 class ViewApp(CircuitryApp):
@@ -331,3 +337,110 @@ def test_settings_snapshot(run_app: Any, capture_frame: Any, snapshot: Any) -> N
     snapshot.assert_match(
         run_app(scenario, app=ViewApp(screen), size=(100, 30)), "settings-100x30"
     )
+
+
+# -- a missing/broken config degrades to a warning, never a crash (#259) -------
+
+
+def _screen_text(app: Any) -> str:
+    """Inline copy of ``conftest.screen_text`` — these two tests drive a
+    bare ``CircuitryApp`` without the ``run_app``/``capture_frame``
+    fixtures, since they need to inspect ``app.is_running`` after the pilot
+    block closes."""
+    strips = app.screen._compositor.render_strips()
+    return "\n".join(strip.text for strip in strips)
+
+
+def _lock_down_doctor_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The real ``CircuitryApp`` Doctor/Settings screens below run the actual
+    ``_check_extensions`` walk over every compiled-in adapter (default-open,
+    no allowlist) — including ``cyberdiner``, which makes a real network
+    call to a paid production service whenever ``CYBERDINER_TOKEN``/
+    ``CYBERDINER_EXPO_URL`` happen to be set in the environment running the
+    suite; their mere presence must never be enough on its own. Locking the
+    allowlists empty and moving off the repo's own cwd keeps this hermetic
+    (#265 part 5 / CLAUDE.md)."""
+    monkeypatch.delenv("CIRCUITRY_MODEL", raising=False)
+    monkeypatch.delenv("CIRCUITRY_ADAPTER", raising=False)
+    monkeypatch.setenv("CIRCUITRY_ENABLED_ADAPTERS", "")
+    monkeypatch.setenv("CIRCUITRY_ENABLED_TOOLS", "")
+    monkeypatch.setenv("CIRCUITRY_ENABLED_PLUGINS", "")
+    monkeypatch.chdir(tmp_path)
+
+
+def test_doctor_mount_does_not_crash_on_a_stale_circuitry_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The exact repro from #259: a stale/typo'd ``CIRCUITRY_CONFIG`` pointing
+    at a file that does not exist used to take out the whole app via an
+    unhandled ``ConfigError`` when the Doctor screen mounted. A *discovered*
+    broken config degrades gracefully (``resolve_config`` itself tolerates
+    it, same as ``cof run``/``cof doctor``), so the real Doctor screen — not
+    a fixture one — must mount and render normally.
+    """
+    _lock_down_doctor_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("CIRCUITRY_CONFIG", "/tmp/does-not-exist/config.json")
+
+    async def _drive() -> tuple[bool, str]:
+        app = CircuitryApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("5")  # Doctor
+            await pilot.pause()
+            running = app.is_running
+            frame = _screen_text(app) if running else ""
+            await pilot.press("q")
+            await pilot.pause()
+            return running, frame
+
+    running, frame = asyncio.run(_drive())
+    assert running is True
+    # Degraded to an on-screen warning, the same message `cof doctor` prints
+    # for this case, rather than vanishing with no trace (#259).
+    assert "does-not-exist" in frame
+
+
+def test_settings_mount_does_not_crash_on_a_stale_circuitry_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _lock_down_doctor_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("CIRCUITRY_CONFIG", "/tmp/does-not-exist/config.json")
+
+    async def _drive() -> tuple[bool, str]:
+        app = CircuitryApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("6")  # Settings
+            await pilot.pause()
+            running = app.is_running
+            return running, _screen_text(app) if running else ""
+
+    running, frame = asyncio.run(_drive())
+    assert running is True
+    assert "does-not-exist" in frame
+
+
+def test_doctor_screen_shows_an_error_for_a_broken_explicit_config(
+    run_app: Any, capture_frame: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An *explicitly* named broken config is a `ConfigError` `resolve_config`
+    does not degrade — the screen must catch it and show it, not crash."""
+    import circuitry.tui.doctor as doctor_module
+    from circuitry.cli.config import ConfigError
+
+    def _raise() -> None:
+        raise ConfigError("Config file not found: /no/such/config.json")
+
+    monkeypatch.setattr(doctor_module, "load_diagnostics", _raise)
+
+    screen = DoctorScreen(spec_for("doctor"))
+
+    async def scenario(pilot: Pilot[Any]) -> str:
+        await pilot.pause()
+        return capture_frame(pilot.app)
+
+    frame = run_app(scenario, app=ViewApp(screen), size=(100, 30))
+    assert "Error:" in frame
+    assert "Config file not found" in frame

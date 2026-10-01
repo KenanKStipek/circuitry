@@ -40,6 +40,16 @@ def test_setup_json_runs_without_error() -> None:
     assert "ffmpeg" in names
 
 
+def test_setup_json_is_valid_json_with_no_banner(tmp_path: Path) -> None:
+    """`--json` must print parseable JSON and nothing else — the Rich banner
+    used to print unconditionally before the `--json` branch checked the
+    flag, so piping into a JSON parser failed on the banner text (#265 part 5)."""
+    result = runner.invoke(app, ["setup", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert isinstance(data, list)
+
+
 def test_setup_json_has_expected_fields() -> None:
     result = runner.invoke(app, ["setup", "--json"])
     assert result.exit_code == 0

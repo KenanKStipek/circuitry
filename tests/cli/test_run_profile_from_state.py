@@ -96,6 +96,58 @@ def test_profile_from_state_reproduces_the_run_without_the_profile_file(
     )
 
 
+def test_last_replays_profile_from_state(tmp_path: Path) -> None:
+    """--last must restore --profile-from-state, not silently drop it (#265 part 2)."""
+    orch = _write_orch(tmp_path)
+    _write(
+        tmp_path / "profiles" / "repro.yml",
+        "model: reproduced-model\neffects:\n  extra:\n    enabled: false\n",
+    )
+    first_out = tmp_path / "first.json"
+
+    first = runner.invoke(
+        app,
+        [
+            "run",
+            str(orch),
+            "--profile",
+            "repro",
+            "-e",
+            "topic=widgets",
+            "--dry-run",
+            "--out",
+            str(first_out),
+        ],
+    )
+    assert first.exit_code == 0, first.stdout
+
+    second_out = tmp_path / "second.json"
+    second = runner.invoke(
+        app,
+        [
+            "run",
+            str(orch),
+            "--profile-from-state",
+            str(first_out),
+            "-e",
+            "topic=widgets",
+            "--dry-run",
+            "--out",
+            str(second_out),
+        ],
+    )
+    assert second.exit_code == 0, second.stdout
+
+    # --last replays the previous invocation's own --out path, not a new one
+    # passed on this command line — so read the run back from second_out.
+    third = runner.invoke(app, ["run", "--last"])
+    assert third.exit_code == 0, third.stdout
+
+    third_state = json.loads(second_out.read_text(encoding="utf-8"))
+    assert third_state["runtime"]["effective_settings"]["model"] == "reproduced-model"
+    assert third_state["prime"]["extra"]["meta"]["disabled"] is True
+
+
 def test_profile_and_profile_from_state_are_mutually_exclusive(tmp_path: Path) -> None:
     orch = _write_orch(tmp_path)
     _write(tmp_path / "profiles" / "fast.yml", "model: cheap\n")
