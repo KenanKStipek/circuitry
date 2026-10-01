@@ -88,6 +88,8 @@ With `truncate: true` the loop diagnoses the first eight failing tests and recor
       template: "Explain why this test fails, in two sentences: {{test}}"
 ```
 
+Each pass writes into its own isolated state and cannot see its siblings'; their results are merged in order when the last one lands. Watching the run is a different matter. Every step inside a pass reports to observers at its full path, `prime.diagnoses.iter_3.diagnose`, as it starts and as it lands: the `--live-state` mirror shows the finished diagnoses while the others are still running, and the TUI, effect observers and runtime plugins hear about each one from the worker thread that ran it.
+
 ## `while` — until the condition says stop
 
 ```yaml
