@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from circuitry.cli.runtime_shim import validate
 
 
@@ -224,3 +226,40 @@ def test_validate_rejects_each_truncate_wrong_type(tmp_path: Path) -> None:
     result = validate(path)
     assert result["ok"] is False
     assert len(result["errors"]) >= 1
+
+
+@pytest.mark.parametrize("reserved", ["value", "meta", "input", "prime", "runtime"])
+def test_validate_rejects_reserved_effect_name(tmp_path: Path, reserved: str) -> None:
+    """#260: 'value'/'meta'/'input'/'prime'/'runtime' collide with structural
+    slots the runtime writes — a schema error, not silent data loss."""
+    path = _write(
+        tmp_path,
+        f"reserved_name_{reserved}.yml",
+        f"effects:\n  - type: tool\n    name: {reserved}\n    provider: json\n    params: {{}}\n",
+    )
+    result = validate(path)
+    assert result["ok"] is False
+    assert len(result["errors"]) >= 1
+
+
+def test_validate_rejects_collect_on_unnamed_loop(tmp_path: Path) -> None:
+    """#241: collect has nowhere to write without a named loop."""
+    path = _write(
+        tmp_path,
+        "collect_unnamed.yml",
+        (
+            "effects:\n"
+            "  - type: loop\n"
+            "    collect: step\n"
+            "    each:\n"
+            "      in: input.items\n"
+            "      as: item\n"
+            "    body:\n"
+            "      - type: prompt\n"
+            "        name: step\n"
+            "        template: \"{{item}}\"\n"
+        ),
+    )
+    result = validate(path)
+    assert result["ok"] is False
+    assert any("name" in e.lower() for e in result["errors"])

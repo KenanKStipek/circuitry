@@ -25,7 +25,10 @@ compile-time allow-list an enclosing loop pushes onto ``state.<key>`` for
 CEL expressions inside its own body: the loop's ``each.as`` name (if it
 is an ``each`` loop) and ``iter`` — the loop-metadata namespace holding
 ``iter.index``, the current 0-based iteration count, for both ``each``
-and ``while`` loops. Nested loops accumulate: an expression two loops
+and ``while`` loops. A ``while`` loop's own condition (``while.expr``) also
+sees ``iter``, but there ``iter.index``/``iter.count`` describe the pass
+that just ran rather than the one about to — see ``LoopRuntime.execute``
+in :mod:`circuitry.core.loop`. Nested loops accumulate: an expression two loops
 deep sees both loops' bindings, with a repeated ``as`` name resolving to
 the innermost (shadowing) binding at runtime. Outside any loop, or
 referencing a name no enclosing loop declared, ``state.<key>`` is a hard

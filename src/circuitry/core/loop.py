@@ -215,6 +215,21 @@ class LoopRuntime:
         # Set only when an each-loop's `truncate: true` actually cut the
         # collection short — the count of elements the loop never visited.
         unvisited: int | None = None
+        # Indices (pass order) of every pass that raised under on_error:
+        # break/continue/fail. Excluded from `collected` regardless of
+        # whether the collect target itself produced a value before the
+        # pass's later failure, and surfaced on the node as
+        # meta.failed_passes — see #239.
+        failed_passes: list[int] = []
+        # Indices (pass order) of every pass THIS execute() call actually
+        # completed. Collection reads only from this list, never from the
+        # iter_<N> keys left on *node* — a named loop's node is reused
+        # across outer passes (it sits inside an unnamed outer loop) or
+        # across a --state/persistence resume, so a prior run's iter_<N>
+        # keys can still be sitting on the node when this run starts.
+        # Walking those keys collected stale passes alongside this run's
+        # own; this list can't, since it only ever grows during this call.
+        completed_indices: list[int] = []
 
         # Build ancestor context for children (this loop is now a parent)
         from .dynamic import _EFFECT_STYLE as _ES
@@ -255,7 +270,7 @@ class LoopRuntime:
                     and len(collection) > self.defn.max_iterations
                     and not self.defn.each_def.truncate
                 ):
-                    raise LoopBoundsError(
+                    bounds_error = LoopBoundsError(
                         f"each loop {self.defn.name or '<unnamed>'!r} "
                         f"({self.defn.each_def.in_path}): collection "
                         f"has {len(collection)} items but max_iterations is "
@@ -264,6 +279,24 @@ class LoopRuntime:
                         f"the first {self.defn.max_iterations} and record the "
                         f"rest as unvisited"
                     )
+                    if self.defn.on_error == "fail":
+                        raise bounds_error
+                    # break/continue: gated the same way a pass-level failure
+                    # is (see below) — the loop never starts a pass, same as
+                    # collection_unresolved, but the bound violation is still
+                    # recorded since there is no per-pass node to carry it.
+                    # An unnamed loop has no node (meta is None) to carry
+                    # that record at all, so log loudly here or the failure
+                    # leaves no trace anywhere.
+                    logger.warning(
+                        "Loop %r: %s; on_error=%s, stopping the loop",
+                        self.defn.name or "<unnamed>",
+                        bounds_error,
+                        self.defn.on_error,
+                    )
+                    termination_reason = "error"
+                    if meta:
+                        meta["error"] = str(bounds_error)
                 elif self.defn.flow == "tree":
                     # Parallel iteration: submit all at once, collect results in order.
                     # Each thread gets a deepcopy of ctx to prevent nested mutation
@@ -358,6 +391,7 @@ class LoopRuntime:
                             iterations_effects.append(results[idx])
                             iteration_count += 1
                             last_completed = idx
+                            completed_indices.append(idx)
 
                     # Truncation status is independent of whether any
                     # iteration errored — an on_error: continue run with
@@ -371,6 +405,7 @@ class LoopRuntime:
                         termination_reason = "collection_exhausted"
 
                     if errors:
+                        failed_passes.extend(sorted(errors))
                         if self.defn.on_error == "fail":
                             termination_reason = "error"
                             raise next(iter(errors.values()))
@@ -410,7 +445,9 @@ class LoopRuntime:
                             iterations_effects.append(iter_effects)
                             iteration_count += 1
                             last_completed = idx
+                            completed_indices.append(idx)
                         except Exception:
+                            failed_passes.append(idx)
                             if self.defn.on_error == "fail":
                                 termination_reason = "error"
                                 raise
@@ -442,9 +479,25 @@ class LoopRuntime:
                     # cannot be evaluated raises (see ``cel_eval``) rather
                     # than answering False — a broken condition used to be
                     # indistinguishable from an exhausted loop.
+                    # A per-check overlay, not a mutation of ctx: a while
+                    # loop must not leak its own _loop_index/iter onto the
+                    # caller's dict (see #260). The values match what the
+                    # old leaking mutation left behind for this same check,
+                    # on purpose — the condition sees the *last finished*
+                    # pass's index (-1 before the first pass), not the pass
+                    # about to run, because that is the spelling every
+                    # existing `+ 1`-compensated condition already assumes.
+                    # `iter.count` (0 before the first pass) is the
+                    # uncompensated equivalent for new conditions:
+                    # `state.iter.count < N` reads the same as
+                    # `state.iter.index + 1 < N`.
+                    cond_ctx = {
+                        **ctx,
+                        "iter": {"index": iteration_count - 1, "count": iteration_count},
+                    }
                     try:
                         should_continue = self._evaluate_condition(
-                            ctx=_scope_ctx(ctx, last_writes)
+                            ctx=_scope_ctx(cond_ctx, last_writes)
                         )
                         if meta and self.defn.while_def.mode == "model":
                             meta["answer"] = self._model_answer
@@ -480,20 +533,29 @@ class LoopRuntime:
                         termination_reason = "condition_false"
                         break
 
-                    ctx["_loop_index"] = iteration_count
-                    ctx["iter"] = {"index": iteration_count}
+                    # Per-pass overlay, like each already builds — never a
+                    # mutation of the caller's ctx (see #260): at the root
+                    # ctx IS the run state, and nested inside another loop's
+                    # body it is that outer pass's own dict.
+                    iter_ctx = {
+                        **ctx,
+                        "_loop_index": iteration_count,
+                        "iter": {"index": iteration_count},
+                    }
                     try:
                         iter_effects, last_writes = self._execute_body(
                             store=child_store,
-                            ctx=ctx,
+                            ctx=iter_ctx,
                             iteration=iteration_count,
                             baseline=baseline,
                             iter_label=f"[{iteration_count}]",
                         )
                         iterations_effects.append(iter_effects)
                         last_completed = iteration_count
+                        completed_indices.append(iteration_count)
                         iteration_count += 1
                     except Exception:
+                        failed_passes.append(iteration_count)
                         if self.defn.on_error == "fail":
                             termination_reason = "error"
                             raise
@@ -541,11 +603,13 @@ class LoopRuntime:
                 }
                 if meta:
                     meta["completed_at"] = _now_iso()
+                    if failed_passes:
+                        meta["failed_passes"] = list(failed_passes)
 
                 # collect: aggregate the named body effect's .value across all iterations
                 if self.defn.collect:
                     node["collected"] = {
-                        "value": self._collect_values(node, iteration_count)
+                        "value": self._collect_values(node, completed_indices)
                     }
 
                 self._link_last(node, last_completed)
@@ -566,9 +630,11 @@ class LoopRuntime:
                     },
                     "effects_by_iteration": iterations_effects,
                 }
+                if meta and failed_passes:
+                    meta["failed_passes"] = list(failed_passes)
                 if self.defn.collect:
                     node["collected"] = {
-                        "value": self._collect_values(node, iteration_count)
+                        "value": self._collect_values(node, completed_indices)
                     }
                 self._link_last(node, last_completed)
             if is_named and self.defn.name:
@@ -598,20 +664,31 @@ class LoopRuntime:
             node["last"] = iter_node
 
     def _collect_values(
-        self, node: dict[str, Any], iteration_count: int
+        self, node: dict[str, Any], completed_indices: list[int]
     ) -> list[Any]:
-        """Aggregate the ``collect`` target's value across every iteration.
+        """Aggregate the ``collect`` target's value across every pass that
+        produced one, in pass order.
 
-        A disabled collect target contributes no slot at all: its node exists
-        (value ``None``, ``meta.disabled``), but a caller reading ``collected``
-        wants the values that were actually produced, so the skip is elided
-        rather than surfacing as a run of ``None`` entries.
+        Reads *completed_indices* — the passes this ``execute()`` call
+        itself completed, tracked as they happen — rather than scanning
+        ``node`` for ``iter_<N>`` keys. A named loop's node is reused across
+        calls (the loop sits inside an unnamed outer loop, so every outer
+        pass writes to the same node; or the run was seeded with
+        ``--state``/a persistence resume), so an *older* run's ``iter_<N>``
+        keys can already be sitting on the node when this call starts —
+        scanning the node's keys would collect those stale passes alongside
+        this run's own (#239 follow-up). A failed pass is left out entirely
+        — the same contract a disabled collect target already has (its node
+        exists, value ``None``, ``meta.disabled``, elided here rather than
+        surfacing as a run of ``None`` entries) — even if the collect target
+        itself produced a value before a later body effect in that pass
+        failed.
         """
         key = self.defn.collect
         if not key:
             return []
         collected: list[Any] = []
-        for i in range(iteration_count):
+        for i in completed_indices:
             iter_node = node.get(f"iter_{i}")
             if not isinstance(iter_node, dict):
                 continue

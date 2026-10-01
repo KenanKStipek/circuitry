@@ -64,6 +64,10 @@
         {
           "not": { "pattern": "^iter_\\d+$" },
           "description": "Names matching iter_<N> are reserved for loop iteration segments."
+        },
+        {
+          "not": { "pattern": "^(value|meta|input|prime|runtime)$" },
+          "description": "Names 'value', 'meta', 'input', 'prime', and 'runtime' are reserved structural slot names."
         }
       ]
     },

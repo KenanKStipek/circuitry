@@ -275,3 +275,65 @@ def test_compile_accepts_loop_while_cel_with_expr() -> None:
         ]
     }
     compile_orchestration(orch=orch, root_name="prime")
+
+
+def test_compile_rejects_collect_on_an_unnamed_loop() -> None:
+    """#241: `collect` has nowhere to write without a named loop — a
+    `cof check` error that names the fix, not a silent no-op."""
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "collect": "step",
+                "each": {"in": "input.items", "as": "item"},
+                "body": [{"type": "prompt", "name": "step", "template": "{{item}}"}],
+            },
+        ]
+    }
+    with pytest.raises(ValueError, match="has no 'name'") as excinfo:
+        compile_orchestration(orch=orch, root_name="prime")
+    assert "give the loop a 'name'" in str(excinfo.value).lower()
+
+
+def test_compile_accepts_collect_on_a_named_loop() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "outer",
+                "collect": "step",
+                "each": {"in": "input.items", "as": "item"},
+                "body": [{"type": "prompt", "name": "step", "template": "{{item}}"}],
+            },
+        ]
+    }
+    compile_orchestration(orch=orch, root_name="prime")
+
+
+@pytest.mark.parametrize("reserved", ["value", "meta", "input", "prime", "runtime"])
+def test_compile_rejects_reserved_effect_names(reserved: str) -> None:
+    """#260: these names collide with structural slots the runtime writes
+    onto a node (`value`, `meta`) or merges into context (`input`, `prime`,
+    `runtime`) — a `cof check` error, not silent data loss at run time."""
+    orch = {
+        "effects": [
+            {"type": "tool", "name": reserved, "provider": "json", "params": {}}
+        ]
+    }
+    with pytest.raises(ValueError, match=f"'{reserved}' is reserved"):
+        compile_orchestration(orch=orch, root_name="prime")
+
+
+def test_compile_rejects_reserved_name_on_a_loop_too() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "value",
+                "each": {"in": "input.items", "as": "item"},
+                "body": [{"type": "prompt", "name": "step", "template": "{{item}}"}],
+            },
+        ]
+    }
+    with pytest.raises(ValueError, match="'value' is reserved"):
+        compile_orchestration(orch=orch, root_name="prime")
