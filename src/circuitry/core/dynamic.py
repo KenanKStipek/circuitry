@@ -232,11 +232,11 @@ class DynamicRuntime:
                 # Give each thread its own isolated Store so concurrent
                 # effects never mutate shared dicts.  Results are merged
                 # back into child_store sequentially after all futures
-                # complete.
-                isolated_stores: dict[int, Store] = {
-                    idx: Store(state={})
-                    for idx in range(len(self.defn.effects))
-                }
+                # complete; observers see each branch as it runs (see
+                # Store.parallel_branches).
+                isolated_stores = child_store.parallel_branches(
+                    len(self.defn.effects)
+                )
 
                 with live_ctx:
                     with ThreadPoolExecutor(
@@ -244,7 +244,7 @@ class DynamicRuntime:
                     ) as executor:
                         futures: dict = {
                             executor.submit(
-                                self._execute_effect,
+                                self._execute_branch,
                                 effect,
                                 store=isolated_stores[idx],
                                 ctx=tree_ctx,
@@ -283,6 +283,26 @@ class DynamicRuntime:
             # closes its pair, carrying value False and meta.error.
             store.fire_effect_complete(self.defn.name, dyn)
             raise
+
+    def _execute_branch(
+        self,
+        effect: EffectDef,
+        *,
+        store: Store,
+        ctx: dict[str, Any],
+        tracker: _TreeStatus | None = None,
+    ) -> None:
+        """Run one tree branch, then republish its isolated store.
+
+        The branch's writes stay in its own store until the dynamic merges
+        them, so it publishes them itself — how ``--live-state`` shows a
+        parallel branch that landed while its siblings still run.
+        """
+        try:
+            self._execute_effect(effect, store=store, ctx=ctx, tracker=tracker)
+        finally:
+            if store.on_write:
+                store.on_write(store.root_state)
 
     def _execute_effect(
         self,

@@ -284,11 +284,10 @@ class LoopRuntime:
                         iter_ctxs.append((idx, iter_ctx))
 
                     # Per-thread isolated stores: each thread writes into its own
-                    # Store({}) so there is zero contention during parallel execution.
-                    isolated_stores: dict[int, Store] = {
-                        idx: Store(state={})
-                        for idx in range(total)
-                    }
+                    # state dict, so no iteration sees another's writes, while
+                    # every effect inside still reports to the run's observers
+                    # at its full path (see Store.parallel_branches).
+                    isolated_stores = child_store.parallel_branches(total)
 
                     results: dict[int, dict[str, Any]] = {}
                     errors: dict[int, Exception] = {}
@@ -990,6 +989,12 @@ Should the loop continue? Answer (yes/no):"""
                         f" {name} [dim]{_elapsed_str(elapsed)}[/dim]"
                     )
                 raise
+            finally:
+                # A tree iteration's writes stay in its own store until the
+                # loop merges them, so it republishes after every step — how
+                # --live-state shows a parallel loop's progress while it runs.
+                if parallel and iter_store.on_write:
+                    iter_store.on_write(iter_store.root_state)
 
             executed.append(effect_record)
 

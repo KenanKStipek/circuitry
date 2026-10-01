@@ -93,20 +93,29 @@ class ReflectorRuntime:
 
         reflector_store = store.child(self.defn.name)
 
-        iterations = max(1, int(self.defn.max_iterations or 1))
-        for i in range(iterations):
-            rec = self._run_iteration(i=i, store=store, reflector_store=reflector_store)
-            meta["iterations"].append(rec)
+        # Before planning, so the reflector's own start brackets every
+        # start/complete pair its inner dynamic and generated effects produce.
+        store.fire_effect_start(self.defn.name, node)
+        try:
+            iterations = max(1, int(self.defn.max_iterations or 1))
+            for i in range(iterations):
+                rec = self._run_iteration(
+                    i=i, store=store, reflector_store=reflector_store
+                )
+                meta["iterations"].append(rec)
 
-            if rec.get("error"):
-                node["value"] = False
-                raise RuntimeError(rec["error"])
+                if rec.get("error"):
+                    node["value"] = False
+                    raise RuntimeError(rec["error"])
 
-            if rec.get("stop", False):
-                node["value"] = True
-                return
+                if rec.get("stop", False):
+                    node["value"] = True
+                    return
 
-        node["value"] = True
+            node["value"] = True
+        finally:
+            # Balances the start on every exit, a failed iteration included.
+            store.fire_effect_complete(self.defn.name, node)
 
     def _run_iteration(
         self, *, i: int, store: Store, reflector_store: Store
