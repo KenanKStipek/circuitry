@@ -1006,6 +1006,8 @@ def _compile_prompt(effect: dict[str, Any], *, effect_path: str) -> PromptDefini
             for a in assets_raw
             if isinstance(a, dict)
         )
+        for index, asset in enumerate(assets):
+            _check_templates(asset.ref, effect_path=effect_path, field=f"assets[{index}].ref")
 
     # Retries
     retries_raw = effect.get("retries")

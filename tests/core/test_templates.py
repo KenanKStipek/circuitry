@@ -73,6 +73,15 @@ def test_render_template_raises_instead_of_returning_raw_text() -> None:
             "messages[0].content",
         ),
         (
+            {
+                "type": "prompt",
+                "name": "p",
+                "template": "Describe it.",
+                "assets": [{"kind": "image", "ref": BROKEN}],
+            },
+            "assets[0].ref",
+        ),
+        (
             {"type": "if", "if": {"mode": "model", "template": BROKEN}, "then": [_tool()]},
             "if.template",
         ),
@@ -170,6 +179,49 @@ def test_prompt_that_fails_to_render_honours_on_error_skip() -> None:
     assert adapter.prompts == []
     assert store.get("prime.p.value") is None
     assert "template: malformed Mustache template" in store.get("prime.p.meta.error")
+
+
+@pytest.mark.usefixtures("unchecked_templates")
+def test_prompt_message_that_fails_to_render_honours_on_error_skip() -> None:
+    adapter = RecordingAdapter()
+    store = _run(
+        {
+            "effects": [
+                {
+                    "type": "prompt",
+                    "name": "p",
+                    "messages": [{"role": "user", "content": BROKEN}],
+                    "on_error": "skip",
+                }
+            ]
+        },
+        adapter,
+    )
+    assert adapter.prompts == []
+    assert store.get("prime.p.value") is None
+    assert "messages[0].content: malformed Mustache template" in store.get("prime.p.meta.error")
+
+
+@pytest.mark.usefixtures("unchecked_templates")
+def test_prompt_asset_ref_that_fails_to_render_honours_on_error_skip() -> None:
+    adapter = RecordingAdapter()
+    store = _run(
+        {
+            "effects": [
+                {
+                    "type": "prompt",
+                    "name": "p",
+                    "template": "Describe it.",
+                    "assets": [{"kind": "image", "ref": BROKEN}],
+                    "on_error": "skip",
+                }
+            ]
+        },
+        adapter,
+    )
+    assert adapter.prompts == []
+    assert store.get("prime.p.value") is None
+    assert "assets[0].ref: malformed Mustache template" in store.get("prime.p.meta.error")
 
 
 @pytest.mark.usefixtures("unchecked_templates")
