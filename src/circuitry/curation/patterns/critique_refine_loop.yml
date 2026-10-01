@@ -7,6 +7,9 @@
 #   - use: with ref + outputs (declared-outputs mode → flat dict at .value)
 #   - a chained body: refine_step reads critique_step's output from the same
 #     pass via the within-iteration form {{prime.<step>.value}}
+#   - prime.<loop>.prev.<step>.value — critique_step critiques the PREVIOUS
+#     pass's refinement, not the original draft on every pass. Absent on the
+#     first pass, so the inverted Mustache section falls back to the draft.
 #
 # State paths:
 #   draft.value                                                 — initial draft
@@ -30,13 +33,6 @@ effects:
     template: |
       Write a single paragraph (4–6 sentences) on: {{input.topic}}. Plain prose. No bullets. No headings.
 
-  # Seed the loop's "current text" sentinel with the initial draft so the first
-  # iteration has something to critique.
-  - type: prompt
-    name: seed_text
-    template: |
-      Output unchanged: {{prime.draft.value}}
-
   - type: loop
     name: review
     max_iterations: 3
@@ -48,13 +44,18 @@ effects:
         Answer yes if at least one significant flaw remains; otherwise answer no.
 
         Paragraph:
-        {{prime.seed_text.value}}
+        {{prime.refine_step.value.refined}}
     body:
       - type: use
         name: critique_step
         ref: utilities/critique
         inputs:
-          content: "{{prime.seed_text.value}}"
+          # The previous pass's refinement — not this pass's own (unwritten)
+          # refine_step, and not the first pass's draft forever. Absent on
+          # pass 0 (prime.review.prev), so the inverted section falls back
+          # to the initial draft.
+          content: >-
+            {{#prime.review.prev}}{{prime.review.prev.refine_step.value.refined}}{{/prime.review.prev}}{{^prime.review.prev}}{{prime.draft.value}}{{/prime.review.prev}}
           criteria: "clarity, accuracy, brevity, voice"
         outputs:
           score: {path: prime.critique.value.score}
@@ -65,7 +66,8 @@ effects:
         name: refine_step
         ref: utilities/refine
         inputs:
-          content: "{{prime.seed_text.value}}"
+          content: >-
+            {{#prime.review.prev}}{{prime.review.prev.refine_step.value.refined}}{{/prime.review.prev}}{{^prime.review.prev}}{{prime.draft.value}}{{/prime.review.prev}}
           # Within-iteration reference: critique_step ran a moment ago in THIS
           # pass. prime.review.iter_0.critique_step.value would pin every pass
           # to the first one's critique.

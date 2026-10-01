@@ -251,7 +251,7 @@ Evaluates a condition against state and executes exactly one branch (`then` or `
 | `else` | array | no | `[]` | Effects when condition is false |
 | `threshold` | number | no | `0.5` | Deprecated, no effect: the built-in evaluator is a categorical yes/no with no confidence to cut. Still recorded on `meta.threshold`; `cof check` warns when set. |
 | `on_error` | string | no | `fail` | `fail`, `continue`, `skip` |
-| `labels` | object | no | — | |
+| `labels` | object | no | — | Arbitrary metadata annotations, recorded on `meta.labels` (named only — an unnamed `if` has no node to carry it) |
 
 **CEL mode example:**
 ```yaml
@@ -300,6 +300,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 - Final pass (after the loop completes): `prime.<name>.last.<body_effect>.value` — the last *completed* iteration's node, same shape as `iter_<N>`. A pass that errored under `on_error: continue`/`break` is skipped in favor of the last one that finished; a zero-iteration loop writes no `last` key. Saved state writes it as a reference, `"last": {"$ref": "iter_<N>"}` — see [Loop Iteration Paths](#loop-iteration-paths).
 - Aggregated (when `collect` is set): `prime.<name>.collected.value` — array of every iteration's collected effect value, in pass order. A pass that failed under `on_error: break`/`continue` is left out entirely (not a `null` placeholder), and its index is listed on `prime.<name>.meta.failed_passes`.
 - From *inside* the body: `prime.<body_effect>.value` — the current pass. See [Referencing a sibling within an iteration](#referencing-a-sibling-within-an-iteration).
+- From *inside* the body, the **previous** completed pass: `prime.<name>.prev.<body_effect>.value` (and `.meta`) — chain flow only (`each` and `while`); absent on the first pass, so a template renders it empty and CEL's `has()` reads false. A `flow: tree` body referencing it is a `cof check` error: tree passes run in parallel, so there is no previous one.
 - Termination: `prime.<name>.value.termination.reason` — see [Loop termination](#loop-termination) below.
 
 | Field | Type | Required | Default | Constraints |
@@ -322,7 +323,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `max_iterations` | integer | no | — (no cap) | Hard cap on iterations. Unset means the loop runs until its collection is exhausted (`each`) or its condition is false (`while`). For `each`, when set, the collection must not be longer than it unless `each.truncate: true` is set — see [Loop termination](#loop-termination). |
 | `min_iterations` | integer | no | `0` | Minimum iterations to run before the condition is checked at all. A forced pass does not evaluate the condition and discard the answer — it never evaluates it. `while` loops only; on an `each` loop it has no effect and `cof check` warns. |
 | `on_error` | string | no | `fail` | `fail`, `break`, `continue` |
-| `labels` | object | no | — | |
+| `labels` | object | no | — | Arbitrary metadata annotations, recorded on `meta.labels` (named only — an unnamed loop has no node to carry it) |
 
 **Each loop example:**
 ```yaml
@@ -424,7 +425,7 @@ one of:
 | `max_iterations_reached` | `while`, `each` (with `each.truncate: true`) | The cap ended the loop, not the condition or the collection. `while` prints a `--verbose` warning line when this happens. An `each` loop also writes `termination.unvisited` — the count of elements it never got to. |
 | `collection_unresolved` | `each` | `each.in` didn't resolve to an array (missing path, wrong type). See `meta.each_in_error`. |
 | `condition_error` | `while` | The condition raised under `on_error: break`/`continue` — a broken condition can never become false, so the loop stops rather than spinning to `max_iterations`. |
-| `error` | both | The loop (or a body effect under `on_error: fail`) raised. See `termination.detail` and `meta.error`. |
+| `error` | both | The loop (or a body effect under `on_error: fail`) raised, or an `each` loop's bounds check failed under `on_error: break`/`continue`. `termination.detail` and `meta.error` say why in every case. |
 
 **`max_iterations` has no default — a loop runs until its collection or its
 condition ends it.** A `while` loop with no `max_iterations` set runs until
@@ -446,12 +447,13 @@ of raising; only `on_error: fail` (the default) stops the run.
 #### Referencing a sibling within an iteration
 
 A body step reading the step before it — compute → classify → score — is the
-most common multi-step loop shape. Four *different* questions get four
+most common multi-step loop shape. Five *different* questions get five
 *different* paths, and substituting one for another fails silently:
 
 | You want | Write | Legal where |
 |---|---|---|
 | A step's output in the **current pass** | `{{prime.<step>.value}}` | inside the body, and inside a `while` condition |
+| The **previous completed pass** | `{{prime.<loop>.prev.<step>.value}}` | inside the body only — chain flow (`each`/`while`); absent on the first pass |
 | One **specific past pass** | `{{prime.<loop>.iter_<N>.<step>.value}}` | **after** the loop only |
 | The **final pass** | `{{prime.<loop>.last.<step>.value}}` | **after** the loop only |
 | **Every** pass's output | `{{prime.<loop>.collected.value}}` | after the loop (requires `collect`) |
@@ -490,6 +492,13 @@ Rules of the form:
 - **The bare form `{{<step>.value}}` also works** and means the same node. It is
   accepted, not preferred: a bare name can collide with a user-supplied state
   key, and `prime.`-prefixed cannot.
+- **`prev` is the previous *completed* pass, body-only.** Chain flow only —
+  `each` and `while` both build it, `tree` never does, since tree passes run
+  in parallel and there is no previous one; referencing it in a `flow: tree`
+  body is a `cof check` error. Absent on the first pass — not an empty node
+  — so a template renders it empty and CEL's `has()` reads false; `.meta` is
+  there the same as `.value`. A nested loop's own `prev` is independent of
+  any enclosing loop's.
 - **`{{prime.<loop>.<step>.value}}` does not resolve, by design.** `prime.<loop>`
   is the loop's own node — it holds `iter_<N>`, `last`, `collected` and `meta`,
   never body step names. `cof validate` warns on it.
