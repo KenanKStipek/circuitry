@@ -239,8 +239,10 @@ class DynamicRuntime:
                 }
 
                 with live_ctx:
+                    # An empty tree runs nothing, like an empty chain;
+                    # ThreadPoolExecutor itself refuses max_workers=0.
                     with ThreadPoolExecutor(
-                        max_workers=len(self.defn.effects)
+                        max_workers=max(1, len(self.defn.effects))
                     ) as executor:
                         futures: dict = {
                             executor.submit(

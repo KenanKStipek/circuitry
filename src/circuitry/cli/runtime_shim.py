@@ -193,16 +193,6 @@ def run(req: RunRequest) -> RunResult:
         warnings.extend(cfg.resolution_warnings())
         orch = load_orchestration_file(req.orchestration_path)
 
-        # The same structural gate `cof check` applies, before anything
-        # resolves, compiles or runs: a document `validate` rejects must not
-        # get as far as its first effect.
-        document_errors = structural_errors(orch)
-        if document_errors:
-            raise ValueError(
-                "Orchestration validation failed:\n"
-                + "\n".join(f"  - {error}" for error in document_errors)
-            )
-
         allowlist_errors = check_allowlist(
             orch=orch, config=cfg, root_path=req.orchestration_path
         )
@@ -393,8 +383,16 @@ def run(req: RunRequest) -> RunResult:
         )
         state["runtime"]["plugins"]["events"].extend(start_events)
 
-        # Compile YAML -> core definitions before adapter/model initialization so
-        # structural orchestration errors are surfaced deterministically.
+        # The structural gate `cof check` applies, then compile YAML -> core
+        # definitions, both before adapter/model initialization and before
+        # any effect: a document `validate` rejects never reaches its first
+        # effect, and fails here like a compile error (run-failure hooks see it).
+        document_errors = structural_errors(orch)
+        if document_errors:
+            raise ValueError(
+                "Orchestration validation failed:\n"
+                + "\n".join(f"  - {error}" for error in document_errors)
+            )
         root_def = compile_orchestration(orch=orch, root_name="prime")
         if profile is not None and profile.effects:
             effect_overrides = {
