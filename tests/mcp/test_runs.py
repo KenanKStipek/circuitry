@@ -21,11 +21,7 @@ def _write_yml(tmp_path: Path, name: str, body: str) -> Path:
 
 @pytest.fixture
 def mgr() -> RunManager:
-    # Tighter quiesce for fast tests; still covers the slow-branch case
-    # (test_quiescence_returns_after_all_branches_settle uses a sleep
-    # well beyond this threshold).
     m = RunManager(
-        quiesce_seconds=0.02,
         quiesce_max_wait_seconds=2.0,
         cancel_join_timeout=2.0,
         worker_poll_interval=0.05,
@@ -90,6 +86,52 @@ def test_simple_chain_pauses_then_completes(mgr: RunManager, tmp_path: Path) -> 
 
     assert _wait_until(lambda: run.status == RunStatus.COMPLETED)
     assert run.state["prime"]["greet"]["value"] == "the answer"
+
+
+def test_submit_response_never_returns_with_the_answered_prompt_still_pending(
+    mgr: RunManager, tmp_path: Path
+) -> None:
+    """An artificial scheduling delay between the worker thread retrieving
+    the response off its queue and actually popping the prompt from
+    `pending_prompts` must not let `submit_response` return while that same
+    prompt id is still listed as pending (#237) — the exact client-visible
+    staleness the issue describes: "a client re-reading state sees an old
+    prompt as current". The delay happens *before* the worker touches
+    `run._lock` (exactly where a real scheduling delay would land), not
+    while holding it — holding the lock during the delay would merely
+    block the reader rather than let it observe a stale pre-pop snapshot.
+    """
+    import queue
+    import time
+
+    p = _write_yml(tmp_path, "hello.yml", """
+        model: claude-sonnet-4
+        adapter: host_claude
+        effects:
+          - type: prompt
+            name: greet
+            template: "Say hi"
+    """)
+    run = mgr.start_run(orchestration_path=p)
+    assert _wait_until(lambda: run.status == RunStatus.PAUSED)
+    pid = _single_pending_id(run)
+
+    class _SlowQueue(queue.Queue):
+        """Delays *after* the item is retrieved, before the worker thread
+        reaches the `with run._lock:` pop — simulating the worker thread
+        not yet being scheduled, not lock contention."""
+
+        def get(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            item = super().get(*args, **kwargs)
+            time.sleep(0.3)
+            return item
+
+    slow_queue: _SlowQueue = _SlowQueue(maxsize=1)
+    run.pending_prompts[pid].response_queue = slow_queue
+
+    mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text="the answer")
+
+    assert pid not in run.pending_prompts
 
 
 # ---------------------------------------------------------------------------
@@ -453,13 +495,21 @@ def test_get_state_during_pause(mgr: RunManager, tmp_path: Path) -> None:
 
 def test_quiescence_returns_after_all_branches_settle(tmp_path: Path) -> None:
     """
-    With a 200ms quiesce window and one branch sleeping 50ms before it can
-    spawn, all three branches MUST appear in pending_prompts on the
-    initial start_run() return — proving quiescence kept polling.
+    An artificial scheduling delay well beyond any fixed debounce window
+    (500ms per branch, three branches) must still leave all three branches
+    in `pending_prompts` on the initial `start_run()` return. A time-based
+    quiescence window — however large — can always be raced by a long
+    enough delay; event-based quiescence (#237) cannot, because it waits
+    for the `flow: tree` loop's own `concurrent_dispatch` signal (the real
+    branch count, known before any of them run) rather than guessing from
+    "no change observed for N seconds". This is exactly the regression the
+    old `_wait_for_quiesce` had: on main, this delay reliably makes
+    `start_run()` return with 0-2 branches registered, not 3.
     """
-    big_quiesce_mgr = RunManager(
-        quiesce_seconds=0.2, quiesce_max_wait_seconds=3.0, worker_poll_interval=0.05
-    )
+    import time
+    from unittest.mock import patch
+
+    delay_mgr = RunManager(quiesce_max_wait_seconds=3.0, worker_poll_interval=0.05)
     p = _write_yml(tmp_path, "slow.yml", """
         model: claude-sonnet-4
         adapter: host_claude
@@ -476,19 +526,30 @@ def test_quiescence_returns_after_all_branches_settle(tmp_path: Path) -> None:
                 name: ans
                 template: "for {{it}}"
     """)
-    run = big_quiesce_mgr.start_run(
-        orchestration_path=p, initial_state={"items": ["a", "b", "c"]},
-    )
-    # Intentionally asserted immediately (not polled): this test exists to
-    # prove start_run's internal quiesce wait already blocked long enough,
-    # so polling here would defeat the point. It can still fail if the
-    # worker takes longer than the 200ms window under heavy load.
-    assert len(run.pending_prompts) == 3, (
-        f"quiescence did not wait long enough; saw {len(run.pending_prompts)} branches"
-    )
+
+    real_handler_for = delay_mgr._handler_for
+
+    def _delayed_handler_for(run, host_req):  # type: ignore[no-untyped-def]
+        # Every branch's own thread sleeps before registering its prompt —
+        # simulating exactly the "worker thread hasn't been scheduled yet"
+        # race the issue describes, at a magnitude no fixed window survives.
+        time.sleep(0.5)
+        return real_handler_for(run, host_req)
+
+    with patch.object(delay_mgr, "_handler_for", side_effect=_delayed_handler_for):
+        run = delay_mgr.start_run(
+            orchestration_path=p, initial_state={"items": ["a", "b", "c"]},
+        )
+        # Intentionally asserted immediately (not polled): this test exists
+        # to prove start_run's own wait already blocked for the real signal,
+        # so polling here would defeat the point.
+        assert len(run.pending_prompts) == 3, (
+            f"quiescence did not wait for the real signal; saw "
+            f"{len(run.pending_prompts)} branches"
+        )
 
     # Cleanup: cancel so daemon threads don't linger
-    big_quiesce_mgr.cancel_run(run.run_id)
+    delay_mgr.cancel_run(run.run_id)
 
 
 # ---------------------------------------------------------------------------

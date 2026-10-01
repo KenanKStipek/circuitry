@@ -104,6 +104,11 @@ class RunRequest:
     # ``(effect_path, effect_node)`` payload runtime plugins receive from
     # ``on_effect_start``.
     effect_start_observer: Callable[[str, dict[str, Any]], None] | None = None
+    # Fired once, before any of its branches start, by a ``flow: tree`` loop
+    # or a parallel ``dynamic`` — ``(effect_path, branch_count)``. MCP's
+    # RunManager uses this to wait for a real per-run "settle" signal instead
+    # of a fixed debounce window a scheduling delay can race (#237).
+    concurrent_dispatch_observer: Callable[[str, int], None] | None = None
     skip_preflight: bool = False
     # Caller-level overrides, ranked above the orchestration's own
     # ``adapter``/``model`` (the ``cli`` tier of resolve_effective_settings).
@@ -637,6 +642,7 @@ def run(req: RunRequest) -> RunResult:
             on_write=on_write,
             effect_complete=_compose_effect_observers(effect_observers),
             effect_start=_compose_effect_observers(start_observers),
+            concurrent_dispatch=req.concurrent_dispatch_observer,
             _lock=store_lock,
         )
 

@@ -267,6 +267,12 @@ class DynamicRuntime:
                     len(self.defn.effects)
                 )
 
+                # One signal, before any branch starts, naming exactly how
+                # many are about to dispatch — lets a listener (MCP's
+                # RunManager) wait for a real completion/pause count instead
+                # of guessing from a debounce window (#237).
+                store.fire_concurrent_dispatch(self.defn.name, len(self.defn.effects))
+
                 # An empty tree runs nothing, like an empty chain;
                 # ThreadPoolExecutor itself refuses max_workers=0. Unset
                 # max_concurrency keeps every child running at once, as

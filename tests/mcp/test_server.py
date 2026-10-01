@@ -23,7 +23,6 @@ def _write_yml(tmp_path: Path, name: str, body: str) -> Path:
 def fresh_manager(monkeypatch: pytest.MonkeyPatch) -> RunManager:
     """Each test gets a clean RunManager with tight timing for fast tests."""
     mgr = RunManager(
-        quiesce_seconds=0.02,
         quiesce_max_wait_seconds=2.0,
         cancel_join_timeout=2.0,
         worker_poll_interval=0.05,

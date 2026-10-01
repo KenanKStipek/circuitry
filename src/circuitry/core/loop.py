@@ -363,6 +363,12 @@ class LoopRuntime:
                     )
                     total = len(capped)
 
+                    # One signal, before any branch starts, naming exactly how
+                    # many are about to dispatch — lets a listener (MCP's
+                    # RunManager) wait for a real completion/pause count
+                    # instead of guessing from a debounce window (#237).
+                    store.fire_concurrent_dispatch(self.defn.name, total)
+
                     iter_ctxs: list[tuple[int, dict[str, Any]]] = []
                     for idx, item in enumerate(capped):
                         iter_ctx = {

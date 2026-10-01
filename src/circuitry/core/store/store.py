@@ -66,6 +66,14 @@ class Store:
     on_write: Callable[[dict[str, Any]], None] | None = None
     effect_complete: Callable[[str, dict[str, Any]], None] | None = None
     effect_start: Callable[[str, dict[str, Any]], None] | None = None
+    #: Fired once, synchronously, by a ``flow: tree`` loop or a parallel
+    #: ``dynamic`` right before it submits its branches to a thread pool —
+    #: ``(effect_path, branch_count)``. The one listener today is MCP's
+    #: ``RunManager``, which uses the count to know how many "settle points"
+    #: (a registered prompt, or a branch that finished without one) to wait
+    #: for before ``start_run`` reports a snapshot, instead of guessing from
+    #: a fixed debounce window that a scheduling delay can race (#237).
+    concurrent_dispatch: Callable[[str, int], None] | None = None
     _path_prefix: str = ""
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     #: The top-level state dict this store is a view into; None for a root.
@@ -143,6 +151,7 @@ class Store:
             on_write=self.on_write,
             effect_complete=self.effect_complete,
             effect_start=self.effect_start,
+            concurrent_dispatch=self.concurrent_dispatch,
             _path_prefix=new_prefix,
             _lock=self._lock,
             _root_state=self.root_state,
@@ -240,6 +249,15 @@ class Store:
         if self.effect_complete is None:
             return
         self.effect_complete(self.effect_path(name), effect_result)
+
+    def fire_concurrent_dispatch(self, name: str, branch_count: int) -> None:
+        """Notify ``concurrent_dispatch`` (if set) that *name* is about to run
+        *branch_count* branches concurrently — called once, before any of
+        them starts, from the same thread that submits them to the pool.
+        """
+        if self.concurrent_dispatch is None:
+            return
+        self.concurrent_dispatch(self.effect_path(name), branch_count)
 
     def dump_json(self, out_path: Path, *, pretty: bool = False) -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)

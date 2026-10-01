@@ -78,7 +78,18 @@ class Run:
     thread: threading.Thread | None = field(default=None, repr=False)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
-    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    # How many concurrent "settle points" (a registered prompt, or a branch
+    # that finished without one) `start_run` should wait to see before
+    # returning — 1 by default (the ordinary sequential case), raised to the
+    # real branch count by a `flow: tree` loop's or parallel `dynamic`'s own
+    # `concurrent_dispatch` signal, fired before any of its branches run
+    # (#237). Not consulted by `submit_response`, which waits on the
+    # answered prompt's own removal instead — see `_wait_for_prompt_gone`.
+    expected_concurrent: int = 1
+    # A plain RLock everywhere this was already `with run._lock:`; also a
+    # Condition so `_wait_for_settle`/`_wait_for_prompt_gone` can block on a
+    # real notification instead of polling on a fixed interval (#237).
+    _lock: threading.Condition = field(default_factory=threading.Condition, repr=False)
 
 
 class RunManager:
@@ -91,14 +102,14 @@ class RunManager:
     def __init__(
         self,
         *,
-        quiesce_seconds: float = 0.05,
         quiesce_max_wait_seconds: float = 5.0,
         cancel_join_timeout: float = 5.0,
         worker_poll_interval: float = 0.1,
     ) -> None:
         self._runs: dict[str, Run] = {}
         self._lock = threading.RLock()
-        self._quiesce = quiesce_seconds
+        # The overall safety-net budget `_wait_for_settle`/`_wait_for_prompt_gone`
+        # give up after — not a debounce window; both are event-driven (#237).
         self._quiesce_max_wait = quiesce_max_wait_seconds
         self._cancel_join_timeout = cancel_join_timeout
         self._worker_poll_interval = worker_poll_interval
@@ -123,6 +134,11 @@ class RunManager:
         )
         cfg = resolve_config()
 
+        def _on_concurrent_dispatch(_effect_path: str, branch_count: int) -> None:
+            with run._lock:
+                run.expected_concurrent = branch_count
+                run._lock.notify_all()
+
         def _observe_state(snapshot: dict[str, Any]) -> None:
             # Snapshot is a reference to the worker's live state dict; deepcopy
             # under the per-run lock so callers of get_state() see a frozen
@@ -141,6 +157,7 @@ class RunManager:
             config=cfg,
             adapter=adapter,
             state_observer=_observe_state,
+            concurrent_dispatch_observer=_on_concurrent_dispatch,
         )
         thread = threading.Thread(
             target=self._thread_target,
@@ -152,7 +169,7 @@ class RunManager:
             run.thread = thread
             run.status = RunStatus.RUNNING
         thread.start()
-        self._wait_for_quiesce(run)
+        self._wait_for_settle(run)
         return run
 
     def submit_response(
@@ -167,7 +184,7 @@ class RunManager:
                     f"(known: {sorted(run.pending_prompts)})"
                 )
             pending.response_queue.put(response_text)
-        self._wait_for_quiesce(run)
+        self._wait_for_prompt_gone(run, prompt_id)
         return run
 
     def get_state(self, run_id: str) -> dict[str, Any]:
@@ -209,6 +226,7 @@ class RunManager:
             run.pending_prompts.clear()
             if run.completed_at is None:
                 run.completed_at = datetime.now(timezone.utc)
+            run._lock.notify_all()
         return run
 
     # ----------------------------------------------------------------- worker
@@ -239,6 +257,7 @@ class RunManager:
                 run.pending_prompts.clear()
                 if run.completed_at is None:
                     run.completed_at = datetime.now(timezone.utc)
+                run._lock.notify_all()
 
     def _handler_for(self, run: Run, host_req: HostPromptRequest) -> str:
         # Cancel-before-queue check.
@@ -255,6 +274,7 @@ class RunManager:
         with run._lock:
             run.pending_prompts[prompt_id] = pending
             run.status = RunStatus.PAUSED
+            run._lock.notify_all()
 
         # Block on the per-prompt response queue WITHOUT holding the run lock,
         # otherwise concurrent submit_response/cancel calls would deadlock.
@@ -277,6 +297,7 @@ class RunManager:
                     # No more parallel branches blocking; back to RUNNING until
                     # the next prompt effect (or completion).
                     run.status = RunStatus.RUNNING
+                run._lock.notify_all()
 
         # Final cancel check before returning text — a `submit_response` race
         # with `cancel_run` should still surface as cancelled.
@@ -295,50 +316,57 @@ class RunManager:
             raise KeyError(f"Unknown run_id: {run_id}")
         return run
 
-    def _wait_for_quiesce(self, run: Run) -> None:
+    def _wait_for_settle(self, run: Run) -> None:
         """
-        Poll until either the run reaches a terminal status, or its
-        `pending_prompts` keyset has been stable for `quiesce` seconds.
+        Block until the run reaches a terminal status, or `pending_prompts`
+        holds at least `expected_concurrent` entries — 1 by default (the
+        ordinary sequential case), raised to the real branch count by a
+        `flow: tree` loop's or parallel `dynamic`'s own `concurrent_dispatch`
+        signal, fired before any of its branches run (#237).
 
-        Used after `start_run` and `submit_response` so the caller sees a
-        settled snapshot rather than racing the worker thread spawning the
-        first parallel branch. Returns early on cancel.
+        Event-driven: waits on `run._lock` (a :class:`threading.Condition`),
+        woken by every prompt registration/removal, status change, or
+        cancellation — never a fixed debounce window a scheduling delay can
+        race. `quiesce_max_wait_seconds` remains a safety-net budget, for a
+        run that genuinely pauses fewer branches than were dispatched (e.g.
+        one completes without a prompt) rather than a quiescence timer.
         """
         deadline = _monotonic() + self._quiesce_max_wait
-        last_keys: frozenset[str] | None = None
-        last_change = _monotonic()
+        with run._lock:
+            while True:
+                if run.cancel_event.is_set() or run.status.is_terminal:
+                    return
+                if len(run.pending_prompts) >= run.expected_concurrent:
+                    return
+                remaining = deadline - _monotonic()
+                if remaining <= 0:
+                    return
+                run._lock.wait(timeout=min(remaining, self._worker_poll_interval))
 
-        while True:
-            if run.cancel_event.is_set():
-                return
-            with run._lock:
-                terminal = run.status.is_terminal
-                current_keys = frozenset(run.pending_prompts)
-            if terminal:
-                return
-            now = _monotonic()
-            if last_keys is None or current_keys != last_keys:
-                last_keys = current_keys
-                last_change = now
-            elif now - last_change >= self._quiesce:
-                return
-            if now >= deadline:
-                return
-            # Sleep for the smaller of (poll granularity, time-to-quiesce).
-            remaining = self._quiesce - (now - last_change)
-            sleep_for = min(0.01, max(0.001, remaining))
-            threading_sleep(sleep_for)
+    def _wait_for_prompt_gone(self, run: Run, prompt_id: str) -> None:
+        """
+        Block until *prompt_id* is no longer listed as pending (the worker
+        popped it once `submit_response` unblocked it), or the run is
+        terminal/cancelled — so a client re-reading state never sees the
+        prompt it just answered as still current (#237). Event-driven, same
+        mechanism as :meth:`_wait_for_settle`.
+        """
+        deadline = _monotonic() + self._quiesce_max_wait
+        with run._lock:
+            while True:
+                if run.cancel_event.is_set() or run.status.is_terminal:
+                    return
+                if prompt_id not in run.pending_prompts:
+                    return
+                remaining = deadline - _monotonic()
+                if remaining <= 0:
+                    return
+                run._lock.wait(timeout=min(remaining, self._worker_poll_interval))
 
 
-# Module-level shims so tests can monkeypatch them if ever needed without
-# poking at imported names from inside class methods.
+# Module-level shim so tests can monkeypatch it if ever needed without poking
+# at imported names from inside class methods.
 def _monotonic() -> float:
     import time
 
     return time.monotonic()
-
-
-def threading_sleep(seconds: float) -> None:
-    import time
-
-    time.sleep(seconds)
