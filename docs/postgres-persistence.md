@@ -84,3 +84,13 @@ Persistence failures are non-silent and surfaced in:
 - command/API error result
 - `runtime.persistence.status`
 - `runtime.persistence.error`
+
+## Testing
+
+`tests/core/test_postgres_persistence_io.py` covers the I/O path
+(connect/schema/load/save) against a fake `psycopg`, with no real database
+or driver install required. `tests/integration/test_postgres_persistence_integration.py`
+is the real-database counterpart — opt-in via `CIRCUITRY_RUN_INTEGRATION=1`
+plus `CIRCUITRY_POSTGRES_TEST_DSN` pointed at a disposable Postgres, skipped
+otherwise. CI runs it against a `postgres:16` service container on changes
+to the store or the test itself (`.github/workflows/postgres-integration.yml`).

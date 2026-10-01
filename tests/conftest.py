@@ -42,6 +42,11 @@ def pytest_configure(config: Any) -> None:
     )
     config.addinivalue_line(
         "markers",
+        "live_network: marks tests that make a real request to a live, metered "
+        "network service (opt-in via CIRCUITRY_LIVE_TESTS=1, beyond -m integration)",
+    )
+    config.addinivalue_line(
+        "markers",
         "real_config_discovery: opt out of the autouse hermetic-config fixture "
         "(see _hermetic_global_config below) so a test can exercise genuine "
         "config discovery tiers, constructing its own layering explicitly",

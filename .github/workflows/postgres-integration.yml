@@ -1,0 +1,44 @@
+name: Postgres integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "src/circuitry/core/store/postgres.py"
+      - "src/circuitry/core/store/_identifiers.py"
+      - "tests/integration/test_postgres_persistence_integration.py"
+      - ".github/workflows/postgres-integration.yml"
+
+jobs:
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[tools]"
+          pip install -r requirements-dev.txt
+          pip install "psycopg[binary]"
+
+      - name: Run Postgres integration tests
+        env:
+          CIRCUITRY_RUN_INTEGRATION: "1"
+          CIRCUITRY_POSTGRES_TEST_DSN: "postgresql://postgres:postgres@localhost:5432/postgres"
+        run: pytest -m integration tests/integration/test_postgres_persistence_integration.py

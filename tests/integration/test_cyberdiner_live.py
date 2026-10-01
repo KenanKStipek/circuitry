@@ -1,16 +1,22 @@
 """Live-network integration tests for the ``cyberdiner`` adapter.
 
-These are the only tests in the suite that talk to a real CyberDiner
-network: a running expo (the job broker) plus at least one cook serving
-the requested tier. They are marked ``integration`` — CI runs
-``pytest -m 'not integration'``, so the offline guarantee is unchanged —
-and they additionally skip at fixture time when the credentials are not
-in the environment, so a bare
-``pytest tests/integration/test_cyberdiner_live.py`` is a clean skip on
-any machine.
+These are the only tests in the suite that make a real outbound request to
+a live, metered CyberDiner network — a running expo (the job broker) plus
+at least one cook serving the requested tier, all production infrastructure
+someone pays for. They are marked both ``integration`` and ``live_network``.
+CI runs ``pytest -m 'not integration'``, so the offline guarantee is
+unchanged, and the documented local command
+(``CIRCUITRY_RUN_INTEGRATION=1 pytest -m integration tests/integration/``)
+is *not* enough to run these on its own: having ``CYBERDINER_EXPO_URL``/
+``CYBERDINER_TOKEN`` set in the environment — e.g. the developer's own
+shell, for unrelated reasons — must never be enough either. A third, clearly
+deliberate opt-in, ``CIRCUITRY_LIVE_TESTS=1``, is required before the
+``live`` fixture does anything but skip (#266 — one such accidental request
+reached production during a QA pass that only set the credential env vars).
 
 Run them by hand:
 
+    export CIRCUITRY_LIVE_TESTS=1
     export CYBERDINER_EXPO_URL=https://expo.example.com
     export CYBERDINER_TOKEN=ck_...
     pytest tests/integration/test_cyberdiner_live.py -q
@@ -36,8 +42,7 @@ from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.redaction import REDACTED
 from circuitry.cli.registry import resolve_bundled
 
-pytestmark = pytest.mark.integration
-
+LIVE_OPT_IN_ENV = "CIRCUITRY_LIVE_TESTS"
 EXPO_URL_ENV = "CYBERDINER_EXPO_URL"
 TOKEN_ENV = "CYBERDINER_TOKEN"
 TIER_ENV = "CYBERDINER_TIER"
@@ -89,11 +94,18 @@ class LiveSettings:
 
 @pytest.fixture
 def live() -> LiveSettings:
+    if (os.getenv(LIVE_OPT_IN_ENV) or "").strip() != "1":
+        pytest.skip(
+            f"Live CyberDiner tests spend a real request against production "
+            f"and need an explicit opt-in: set {LIVE_OPT_IN_ENV}=1 (credentials "
+            f"alone are not enough — see the module docstring)."
+        )
+
     expo_url = (os.getenv(EXPO_URL_ENV) or "").strip()
     token = (os.getenv(TOKEN_ENV) or "").strip()
     if not expo_url or not token:
         pytest.skip(
-            f"Live CyberDiner tests need {EXPO_URL_ENV} (expo root URL) and "
+            f"Live CyberDiner tests also need {EXPO_URL_ENV} (expo root URL) and "
             f"{TOKEN_ENV} (ck_... API key) in the environment, plus a cook "
             f"serving the requested tier. See docs/cyberdiner-demo-runbook.md."
         )
@@ -138,6 +150,8 @@ def _completed_effect_values(state: dict[str, Any]) -> list[str]:
     ]
 
 
+@pytest.mark.integration
+@pytest.mark.live_network
 def test_generate_returns_text_from_live_network(live: LiveSettings) -> None:
     """submit → cook serves → completion, straight through the adapter."""
     adapter = CyberdinerAdapter(
@@ -160,6 +174,8 @@ def test_generate_returns_text_from_live_network(live: LiveSettings) -> None:
     assert result.raw.get("tierName") == live.tier
 
 
+@pytest.mark.integration
+@pytest.mark.live_network
 def test_run_orchestration_completes_against_live_network(
     live: LiveSettings, tmp_path: Path
 ) -> None:
@@ -184,3 +200,64 @@ def test_run_orchestration_completes_against_live_network(
     cyberdiner_cfg = embedded["adapters"]["cyberdiner"]
     assert cyberdiner_cfg["token"] == REDACTED
     assert cyberdiner_cfg["expo_url"] == live.expo_url
+
+
+# ---------------------------------------------------------------------------
+# #266 — credentials alone must never enable the tests above. Deliberately
+# *not* marked integration/live_network: the whole point is to prove the
+# ``live`` fixture skips before making any request, so this has to actually
+# run in the default ``-m 'not integration'`` CI lane. ``live.__wrapped__``
+# reaches the fixture's plain function body, bypassing pytest's fixture-
+# injection machinery so it can be called directly like any other function.
+# ---------------------------------------------------------------------------
+
+
+def test_live_fixture_skips_on_credentials_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both credential env vars set, no CIRCUITRY_LIVE_TESTS: must skip."""
+    monkeypatch.setenv(EXPO_URL_ENV, "https://expo.example.com")
+    monkeypatch.setenv(TOKEN_ENV, "ck_test")
+    monkeypatch.delenv(LIVE_OPT_IN_ENV, raising=False)
+
+    with pytest.raises(pytest.skip.Exception) as exc_info:
+        live.__wrapped__()
+
+    assert LIVE_OPT_IN_ENV in str(exc_info.value)
+
+
+def test_live_fixture_skips_when_opt_in_is_not_exactly_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(EXPO_URL_ENV, "https://expo.example.com")
+    monkeypatch.setenv(TOKEN_ENV, "ck_test")
+    monkeypatch.setenv(LIVE_OPT_IN_ENV, "true")  # not "1"
+
+    with pytest.raises(pytest.skip.Exception):
+        live.__wrapped__()
+
+
+def test_live_fixture_still_requires_credentials_after_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(LIVE_OPT_IN_ENV, "1")
+    monkeypatch.delenv(EXPO_URL_ENV, raising=False)
+    monkeypatch.delenv(TOKEN_ENV, raising=False)
+
+    with pytest.raises(pytest.skip.Exception) as exc_info:
+        live.__wrapped__()
+
+    assert EXPO_URL_ENV in str(exc_info.value)
+
+
+def test_live_fixture_proceeds_with_opt_in_and_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(LIVE_OPT_IN_ENV, "1")
+    monkeypatch.setenv(EXPO_URL_ENV, "https://expo.example.com")
+    monkeypatch.setenv(TOKEN_ENV, "ck_test")
+    monkeypatch.delenv(TIER_ENV, raising=False)
+    monkeypatch.delenv(TIMEOUT_ENV, raising=False)
+
+    settings = live.__wrapped__()
+
+    assert settings.expo_url == "https://expo.example.com"
+    assert settings.token == "ck_test"

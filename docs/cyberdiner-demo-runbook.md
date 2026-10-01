@@ -214,13 +214,19 @@ orchestration through `run_orchestration` and asserts `ok=True` plus a redacted
 token in `runtime.effective_settings`.
 
 ```sh
-# With the env from step 1 exported:
+# With the env from step 1 exported, plus the explicit live opt-in:
+export CIRCUITRY_LIVE_TESTS=1
 pytest tests/integration/test_cyberdiner_live.py -q
 ```
 
-Without `CYBERDINER_EXPO_URL` and `CYBERDINER_TOKEN` both set, the tests skip
-with a reason instead of failing — so this command is safe on any machine, and
-the CI-facing `pytest -q -m 'not integration'` never selects them at all.
+These tests spend a real request against production, so `CYBERDINER_EXPO_URL`
+and `CYBERDINER_TOKEN` being set is deliberately **not** enough on its own —
+`CIRCUITRY_LIVE_TESTS=1` is a third, distinct opt-in that must also be set, so
+having the two credential env vars in your shell for unrelated reasons can
+never trigger a live call by accident. Without it (or without the
+credentials), the tests skip with a reason instead of failing — so a bare
+`pytest tests/integration/test_cyberdiner_live.py` is safe on any machine —
+and the CI-facing `pytest -q -m 'not integration'` never selects them at all.
 
 Optional knobs: `CYBERDINER_TIER` (default `cheap`) and
 `CYBERDINER_TIMEOUT_SECONDS` (default 180).
