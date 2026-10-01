@@ -199,6 +199,7 @@ Changelog = "https://github.com/kenankstipek/circuitry/blob/main/CHANGELOG.md"
 testpaths = ["tests"]
 markers = [
     "integration: marks tests that require local runtime dependencies (opt-in)",
+    "live_network: marks tests that make a real request to a live, metered network service (opt-in via CIRCUITRY_LIVE_TESTS=1, beyond -m integration)",
 ]
 addopts = ["--strict-markers"]
 

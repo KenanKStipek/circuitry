@@ -49,10 +49,10 @@ class PostgresStatePersistence:
         }
 
     def load_latest_state(self, *, orchestration_path: str) -> dict[str, Any] | None:
-        from psycopg import sql  # type: ignore[import-not-found]
-
         try:
             with self._connect() as conn:
+                from psycopg import sql  # type: ignore[import-not-found]
+
                 self._ensure_schema(conn)
                 with conn.cursor() as cur:
                     cur.execute(
@@ -95,10 +95,10 @@ class PostgresStatePersistence:
         error: str | None,
         state: dict[str, Any],
     ) -> None:
-        from psycopg import sql  # type: ignore[import-not-found]
-
         try:
             with self._connect() as conn:
+                from psycopg import sql  # type: ignore[import-not-found]
+
                 self._ensure_schema(conn)
                 with conn.cursor() as cur:
                     cur.execute(
