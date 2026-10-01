@@ -328,10 +328,14 @@ The condition is checked between passes and sees the pass that just finished
 under the same within-iteration names the body uses — so `{{prime.polish.value}}`
 above is the latest `polish` output, not the first one. Before the first pass
 there is nothing to see yet and the name falls through to the enclosing scope.
-In `mode: cel`, the condition also sees `state.iter.index`: the number of
-passes that have *run* so far — `0` on the check before the first pass, `N`
-once N passes have run (a pass that failed under `on_error: continue` still
-counts, since the condition only knows a pass started).
+In `mode: cel`, the condition also sees `state.iter.index`: the index of the
+*last finished* pass — `-1` on the check before the first pass, `N - 1` once
+N passes have run (a pass that failed under `on_error: continue` still
+counts, since the condition only knows a pass ran) — so
+`state.iter.index + 1 < 3` caps a loop at 3 passes. `state.iter.count` is
+the same count with no `-1` offset (`0` before the first pass, `N` once N
+have run); `state.iter.count < 3` reads the same thing without the `+ 1`
+and is the recommended spelling for new conditions.
 
 #### Referencing a sibling within an iteration
 

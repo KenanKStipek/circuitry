@@ -479,11 +479,22 @@ class LoopRuntime:
                     # cannot be evaluated raises (see ``cel_eval``) rather
                     # than answering False — a broken condition used to be
                     # indistinguishable from an exhausted loop.
-                    # The number of passes that completed before this check
-                    # — 0 before the first pass — as a per-check overlay, not
-                    # a mutation of ctx: a while loop must not leak its own
-                    # _loop_index/iter onto the caller's dict (see #260).
-                    cond_ctx = {**ctx, "iter": {"index": iteration_count}}
+                    # A per-check overlay, not a mutation of ctx: a while
+                    # loop must not leak its own _loop_index/iter onto the
+                    # caller's dict (see #260). The values match what the
+                    # old leaking mutation left behind for this same check,
+                    # on purpose — the condition sees the *last finished*
+                    # pass's index (-1 before the first pass), not the pass
+                    # about to run, because that is the spelling every
+                    # existing `+ 1`-compensated condition already assumes.
+                    # `iter.count` (0 before the first pass) is the
+                    # uncompensated equivalent for new conditions:
+                    # `state.iter.count < N` reads the same as
+                    # `state.iter.index + 1 < N`.
+                    cond_ctx = {
+                        **ctx,
+                        "iter": {"index": iteration_count - 1, "count": iteration_count},
+                    }
                     try:
                         should_continue = self._evaluate_condition(
                             ctx=_scope_ctx(cond_ctx, last_writes)
