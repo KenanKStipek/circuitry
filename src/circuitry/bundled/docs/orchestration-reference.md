@@ -240,7 +240,7 @@ Evaluates a condition against state and executes exactly one branch (`then` or `
 | `else` | array | no | `[]` | Effects when condition is false |
 | `threshold` | number | no | `0.5` | Deprecated, no effect: the built-in evaluator is a categorical yes/no with no confidence to cut. Still recorded on `meta.threshold`; `cof check` warns when set. |
 | `on_error` | string | no | `fail` | `fail`, `continue`, `skip` |
-| `labels` | object | no | — | |
+| `labels` | object | no | — | Arbitrary metadata annotations, recorded on `meta.labels` (named only — an unnamed `if` has no node to carry it) |
 
 **CEL mode example:**
 ```yaml
@@ -289,6 +289,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 - Final pass (after the loop completes): `prime.<name>.last.<body_effect>.value` — the last *completed* iteration's node, same shape as `iter_<N>`; a zero-iteration loop writes no `last` key. Saved state (`--out`, `--live-state`) writes it as a reference to that pass, `"last": {"$ref": "iter_<N>"}`, not a second copy; `--state` and the TUI resolve it back.
 - Aggregated (when `collect` is set): `prime.<name>.collected.value` — array of every iteration's collected effect value, in pass order. A pass that failed under `on_error: break`/`continue` is left out entirely (not a `null` placeholder), and its index is listed on `prime.<name>.meta.failed_passes`.
 - From *inside* the body: `prime.<body_effect>.value` — the current pass. See [Referencing a sibling within an iteration](#referencing-a-sibling-within-an-iteration).
+- From *inside* the body, the **previous** completed pass: `prime.<name>.prev.<body_effect>.value` (and `.meta`) — chain flow only (`each` and `while`); absent on the first pass, so a template renders it empty and CEL's `has()` reads false. A `flow: tree` body referencing it is a `cof check` error: tree passes run in parallel, so there is no previous one.
 
 | Field | Type | Required | Default | Constraints |
 |-------|------|----------|---------|-------------|
@@ -308,7 +309,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `max_iterations` | integer | no | — (no cap) | Hard cap on iterations. Unset means the loop runs until its collection is exhausted (`each`) or its condition is false (`while`) |
 | `min_iterations` | integer | no | `0` | Minimum iterations to run before the condition is checked at all. A forced pass does not evaluate the condition and discard the answer — it never evaluates it. `while` loops only; on an `each` loop it has no effect and `cof check` warns. |
 | `on_error` | string | no | `fail` | `fail`, `break`, `continue` |
-| `labels` | object | no | — | |
+| `labels` | object | no | — | Arbitrary metadata annotations, recorded on `meta.labels` (named only — an unnamed loop has no node to carry it) |
 
 **Each loop example:**
 ```yaml
@@ -400,12 +401,13 @@ and is the recommended spelling for new conditions.
 #### Referencing a sibling within an iteration
 
 A body step reading the step before it — compute → classify → score — is the
-most common multi-step loop shape. Three *different* questions get three
+most common multi-step loop shape. Four *different* questions get four
 *different* paths, and substituting one for another fails silently:
 
 | You want | Write | Legal where |
 |---|---|---|
 | A step's output in the **current pass** | `{{prime.<step>.value}}` | inside the body, and inside a `while` condition |
+| The **previous completed pass** | `{{prime.<loop>.prev.<step>.value}}` | inside the body only — chain flow (`each`/`while`); absent on the first pass |
 | One **specific past pass** | `{{prime.<loop>.iter_<N>.<step>.value}}` | **after** the loop only |
 | **Every** pass's output | `{{prime.<loop>.collected.value}}` | after the loop (requires `collect`) |
 
@@ -439,6 +441,13 @@ Rules of the form:
 - **The bare form `{{<step>.value}}` also works** and means the same node. It is
   accepted, not preferred: a bare name can collide with a user-supplied state
   key, and `prime.`-prefixed cannot.
+- **`prev` is the previous *completed* pass, body-only.** Chain flow only —
+  `each` and `while` both build it, `tree` never does, since tree passes run
+  in parallel and there is no previous one; referencing it in a `flow: tree`
+  body is a `cof check` error. Absent on the first pass — not an empty node
+  — so a template renders it empty and CEL's `has()` reads false; `.meta` is
+  there the same as `.value`. A nested loop's own `prev` is independent of
+  any enclosing loop's.
 - **`{{prime.<loop>.<step>.value}}` does not resolve, by design.** `prime.<loop>`
   is the loop's own node — `iter_<N>`, `collected`, `meta`. `cof validate` warns.
 - **`iter_<N>` inside the body is a trap.** `N` is a constant, so it renders

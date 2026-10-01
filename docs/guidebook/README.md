@@ -25,7 +25,7 @@ The arc has three acts:
 ### Part II — Cybernetics: the machine steering itself
 
 6. [If](06-if.md) — a predicate over state, with the model as sensor or CEL as the deterministic gate.
-7. [Loop](07-loop.md) — `each` and `while`, `collect`, and the four read forms for loop state.
+7. [Loop](07-loop.md) — `each` and `while`, `collect`, and the five read forms for loop state.
 8. [Reflector](08-reflector.md) — effects generated at runtime from observed state, bounded and validated.
 
 ### Part III — The machine in the world

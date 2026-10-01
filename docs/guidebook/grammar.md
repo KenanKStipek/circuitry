@@ -110,10 +110,13 @@ Loop ::= { type: 'loop', body: Effect+,
 ```
 
 Read grammar (post-loop unless noted): `prime.<step>.value` (this pass, body/while only) ·
+`prime.<loop>.prev.<step>.value` (previous *completed* pass, body only — chain flow; absent
+on the first pass; a `flow: tree` body referencing it is a `cof check` error) ·
 `prime.<loop>.iter_<N>.<step>.value` · `prime.<loop>.last.<step>.value` (last *completed* pass) ·
 `prime.<loop>.collected.value`. In a saved shadow state `last` is `{"$ref": "iter_<N>"}`, linked back on load.
 Termination (`prime.<loop>.value.termination.reason`): `collection_exhausted` · `condition_false` ·
-`max_iterations_reached` (+ `unvisited` when truncated) · `collection_unresolved` · `condition_error` · `error`.
+`max_iterations_reached` (+ `unvisited` when truncated) · `collection_unresolved` · `condition_error` ·
+`error` (+ `detail`, on both a raised pass and the each-loop bounds check).
 
 ### Tool — deterministic plugin call → `prime.<name>.value`
 

@@ -130,6 +130,28 @@ def _check_templates(value: Any, *, effect_path: str, field: str) -> None:
             _check_templates(item, effect_path=effect_path, field=f"{field}[{index}]")
 
 
+def _tree_loop_prev_references(effects: Any, name: str) -> bool:
+    """Whether any string anywhere under *effects* references ``prime.<name>.prev``.
+
+    Walked over the raw (pre-compile) effect dicts, the same way lint's
+    ``_reference_strings`` does — every template, CEL expression, tool param
+    and ``use`` input is just a string carrying state paths, so none of them
+    can be told apart usefully here.
+    """
+    pattern = re.compile(rf"\bprime\.{re.escape(name)}\.prev\b")
+
+    def scan(value: Any) -> bool:
+        if isinstance(value, str):
+            return bool(pattern.search(value))
+        if isinstance(value, dict):
+            return any(scan(v) for v in value.values())
+        if isinstance(value, list):
+            return any(scan(v) for v in value)
+        return False
+
+    return scan(effects)
+
+
 def _compile_effects_in_scope(
     *,
     effects: Any,
@@ -602,6 +624,9 @@ def _compile_conditional(
         else "fail"
     )
 
+    labels_raw = effect.get("labels")
+    labels = dict(labels_raw) if isinstance(labels_raw, dict) else None
+
     return ConditionalDefinition(
         name=validated_name,
         condition=condition,
@@ -609,6 +634,7 @@ def _compile_conditional(
         else_effects=tuple(compiled_else),
         threshold=threshold,
         on_error=on_error,
+        labels=labels,
     )
 
 
@@ -753,11 +779,33 @@ def _compile_loop(
     # Execution topology for each-loops
     flow = _normalize_flow(effect.get("flow") or "chain")
 
+    # prime.<loop>.prev is only defined in chain flow (see LoopRuntime) — a
+    # tree loop runs every pass in parallel, so there is no well-defined
+    # previous pass to read. Checked against the raw body: a reference
+    # several containers deep (an inner if/dynamic/loop) is just as wrong,
+    # since the whole subtree runs inside the same parallel iteration.
+    if (
+        validated_name
+        and flow == "tree"
+        and each_def is not None
+        and _tree_loop_prev_references(body_effects, validated_name)
+    ):
+        raise ValueError(
+            f"Loop '{validated_name}' at '{effect_path}': "
+            f"'prime.{validated_name}.prev' is not defined in flow: tree — "
+            "tree passes run in parallel, so there is no previous pass to "
+            "read. Use flow: chain (the default) if the body needs the "
+            "previous pass, or remove the reference."
+        )
+
     # Max parallel workers (only meaningful when flow="tree")
     max_concurrency_raw = effect.get("max_concurrency")
     max_concurrency: int | None = (
         int(max_concurrency_raw) if max_concurrency_raw is not None else None
     )
+
+    labels_raw = effect.get("labels")
+    labels = dict(labels_raw) if isinstance(labels_raw, dict) else None
 
     return LoopDefinition(
         name=validated_name,
@@ -768,6 +816,7 @@ def _compile_loop(
         min_iterations=min_iterations,
         on_error=on_error,
         collect=collect,
+        labels=labels,
         flow=flow,
         max_concurrency=max_concurrency,
     )

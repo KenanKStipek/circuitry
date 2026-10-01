@@ -140,38 +140,33 @@ One thing a CEL condition cannot do is read the loop's own `collected` or `last`
 
 ### Refining across passes
 
-The condition sees the previous pass. The *body* of a named loop does not: inside the body, `{{prime.revise.value}}` means *this pass's* `revise`, which has not been written yet when the pass begins, so it renders empty. `last` and `iter_<N>` are post-loop spellings. There is no spelling in a named loop for "the pass before this one".
-
-When the body needs to build on its own previous output — patch, apply, run the tests, patch again — use an **unnamed** loop and let the body overwrite the same name it reads:
+The condition sees the previous pass. The *body* of a named loop now does too: `prime.<loop>.prev.<step>.value` (and `.meta`) is the previous **completed** pass — absent on the first pass, so a template renders it empty and a CEL `has()` check reads false. It works for both `each` and `while`, in chain flow; a `flow: tree` body referencing it is a `cof check` error, since tree passes run in parallel and there is no previous one to read. Nested loops: each loop's `prev` is its own, independent of any enclosing loop's.
 
 ```yaml
-- type: tool
-  name: test_run
-  provider: pytest
-  params: {args: [-q], cwd: "{{input.repo}}", allow_nonzero: true}
+- type: prompt
+  name: draft
+  template: "Write a single paragraph on: {{input.topic}}"
 - type: loop
-  while:
-    mode: cel
-    expr: "state.prime.test_run.meta.exit_code != 0"
+  name: review
   max_iterations: 3
+  min_iterations: 1
+  while:
+    mode: model
+    template: "Does this paragraph still need revision for clarity or brevity?\n\n{{prime.refine.value}}"
   body:
     - type: prompt
-      name: patch
-      template: "Write a unified diff for this repository that makes the failing tests pass. Output the diff only.\n\n{{{prime.test_run.value}}}"
-    - type: tool
-      name: apply
-      provider: git
-      params: {args: [apply, "-"], cwd: "{{input.repo}}", stdin: "{{{prime.patch.value}}}\n"}
-    - type: tool
-      name: test_run
-      provider: pytest
-      params: {args: [-q], cwd: "{{input.repo}}", allow_nonzero: true}
-- type: prompt
-  name: summary
-  template: "Write the pull request description for this fix. The final test run:\n\n{{{prime.test_run.value}}}"
+      name: critique
+      template: >-
+        Critique this paragraph for clarity and brevity:
+        {{#prime.review.prev}}{{prime.review.prev.refine.value}}{{/prime.review.prev}}{{^prime.review.prev}}{{prime.draft.value}}{{/prime.review.prev}}
+    - type: prompt
+      name: refine
+      template: "Rewrite the paragraph addressing this critique: {{prime.critique.value}}"
 ```
 
-An unnamed loop writes into the enclosing scope, so each pass's `test_run` replaces the last: `patch` reads the failures the previous pass left, the condition checks the latest exit code, and after the loop `prime.test_run.value` is the final run with no `last` to spell. The test run before the loop gives the first pass something to read. Name this loop and it goes wrong on the second pass: `patch` reads *this* pass's `test_run`, which has not run yet, so the read falls through to the test run before the loop, and the model patches the first failure again on top of its own first patch. What you give up is history — no `iter_<N>`, no `collected` — which is the right trade when only the final state matters. Keep the loop named when the record of every pass is the point.
+`critique` reads the *previous* pass's `refine` — never *this* pass's own (unwritten) `refine`, and never the first pass's `draft` forever the way a bare `{{prime.draft.value}}` would. On the first pass `prime.review.prev` is absent, so the inverted Mustache section (`{{^prime.review.prev}}`) falls back to the pre-loop `draft`; from the second pass on, the regular section (`{{#prime.review.prev}}`) takes over and reads the growing refinement instead. [`patterns/critique_refine_loop`](../../src/circuitry/curation/patterns/critique_refine_loop.yml) is the complete version of this shape.
+
+Before `prev`, the only way to build on a loop's own previous output was an **unnamed** loop overwriting the same name it reads (a `while` loop's body reusing the name `test_run` for both the seed before the loop and every pass's own rerun) — at the cost of losing `iter_<N>` and `collected` for every pass. `prev` keeps both: the body sees the previous pass, and a named loop still records each one, so prefer it unless a loop genuinely has nothing worth keeping history of.
 
 ## `collect`
 
@@ -185,13 +180,14 @@ An unnamed loop writes into the enclosing scope, so each pass's `test_run` repla
 
 A collect target that a profile switched off contributes no slot, and nothing after a pass that broke the loop is collected. A pass dropped under `on_error: continue` is, today, the exception; [Errors in a loop](#errors-in-a-loop) says what it leaves.
 
-## Four read forms, one per question
+## Five read forms, one per question
 
-This is the table to keep. Four *different* questions get four *different* paths, and substituting one for another does not fail — it renders something plausible and wrong.
+This is the table to keep. Five *different* questions get five *different* paths, and substituting one for another does not fail — it renders something plausible and wrong.
 
 | You want | Write | Legal where |
 | --- | --- | --- |
 | A step's output in the **current pass** | `{{prime.<step>.value}}` | inside the body, and inside the `while` condition |
+| The **previous completed pass** | `{{prime.<loop>.prev.<step>.value}}` | inside the body only — chain flow (`each`/`while`); absent on the first pass |
 | One **specific past pass** | `{{prime.<loop>.iter_<N>.<step>.value}}` | **after** the loop only |
 | The **final completed pass** | `{{prime.<loop>.last.<step>.value}}` | **after** the loop only |
 | **Every** pass's output of one step | `{{prime.<loop>.collected.value}}` | after the loop (requires `collect`) |
@@ -199,6 +195,7 @@ This is the table to keep. Four *different* questions get four *different* paths
 The rules of the form:
 
 - **Resolution is a scope chain.** Inside the body, `prime.<step>` means the current iteration first, then the enclosing scope, then root. A root input or an effect that ran before the loop keeps resolving; a body step named the same as an outer effect shadows it, inside the body only.
+- **`prev` is the previous pass that completed, body-only.** Chain flow only — a `flow: tree` body referencing it is a `cof check` error, since tree passes run in parallel. Absent (not an empty node) before the first pass, so a template renders it empty and CEL's `has()` reads false. See [Refining across passes](#refining-across-passes) above.
 - **`last` is the last pass that completed.** A pass that errored under `on_error: continue` or `break` is skipped in favour of the one before it; a loop that ran zero passes writes no `last` key, so a read of it renders empty rather than serving a stale value. Prefer `last` over guessing an `N` — for a `while` loop, and for a data-dependent `each` loop, `N` is unknowable.
 - **`iter_<N>` inside the body is a trap.** `N` is a constant, so it does not render empty — it renders *pass N's* output during every pass, which looks right on pass N and is stale on every other. `cof check` warns.
 - **`prime.<loop>.<step>.value` does not resolve, by design.** `prime.<loop>` is the loop's own node — `iter_<N>`, `last`, `collected`, `value`, `meta` — and never holds body step names. `cof check` warns.
