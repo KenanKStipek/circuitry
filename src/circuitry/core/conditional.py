@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal, Union
@@ -77,6 +77,11 @@ class ConditionalDefinition:
     # ``cli.profiles`` validation.
     enabled: bool = True
 
+    # Free-form metadata, recorded on this conditional's own meta (named
+    # only — an unnamed conditional has no node to carry it). Observability
+    # tagging, not behavior — see DynamicDefinition.labels.
+    labels: Mapping[str, Any] | None = None
+
 
 class ConditionalRuntime:
     """
@@ -135,6 +140,7 @@ class ConditionalRuntime:
             meta["created_at"] = _now_iso()
             meta["mode"] = self.defn.condition.mode
             meta["threshold"] = self.defn.threshold
+            meta["labels"] = dict(self.defn.labels) if self.defn.labels else None
             child_store = store.child(self.defn.name)
             # Before the condition is evaluated, so the decision's own start
             # brackets every start/complete pair its branch produces.

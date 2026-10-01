@@ -3,10 +3,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
-from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal, Union
@@ -125,6 +124,11 @@ class LoopDefinition:
     # disabled node.
     enabled: bool = True
 
+    # Free-form metadata, recorded on this loop's own meta (named only — an
+    # unnamed loop has no node to carry it). Observability tagging, not
+    # behavior — see DynamicDefinition.labels.
+    labels: Mapping[str, Any] | None = None
+
 
 class LoopRuntime:
     """
@@ -189,6 +193,7 @@ class LoopRuntime:
             if self.defn.max_iterations is not None:
                 meta["max_iterations"] = self.defn.max_iterations
             meta["min_iterations"] = self.defn.min_iterations
+            meta["labels"] = dict(self.defn.labels) if self.defn.labels else None
             child_store = store.child(self.defn.name)
             iterations_effects: list[dict[str, Any]] = []
             # Before the first iteration, so the loop's own start brackets
@@ -216,6 +221,19 @@ class LoopRuntime:
         # Set only when an each-loop's `truncate: true` actually cut the
         # collection short — the count of elements the loop never visited.
         unvisited: int | None = None
+        # Set only by the each-loop bounds check (a collection longer than
+        # max_iterations under on_error: break/continue): the one "error"
+        # termination with no failed pass of its own to carry the detail —
+        # see LoopBoundsError and the ch.7 termination-reasons table.
+        termination_detail: str | None = None
+        # The previous *completed* pass's own writes (same shape as
+        # _local_writes), exposed to the next pass's body as
+        # prime.<loop>.prev — chain flow only (each and while), named loops
+        # only (there is no spelling without the loop's own name). None
+        # before the first completed pass, so the key is absent rather than
+        # an empty node: a template renders empty and CEL's has() reads
+        # false, the same "absent" every other unset path gets (#243).
+        prev_writes: dict[str, Any] | None = None
         # Indices (pass order) of every pass that raised under on_error:
         # break/continue/fail. Excluded from `collected` regardless of
         # whether the collect target itself produced a value before the
@@ -296,12 +314,27 @@ class LoopRuntime:
                         self.defn.on_error,
                     )
                     termination_reason = "error"
+                    termination_detail = str(bounds_error)
                     if meta:
                         meta["error"] = str(bounds_error)
                 elif self.defn.flow == "tree":
                     # Parallel iteration: submit all at once, collect results in order.
-                    # Each thread gets a deepcopy of ctx to prevent nested mutation
-                    # bleed, and its own isolated Store to avoid concurrent dict writes.
+                    # Each thread gets a shallow overlay of ctx, the same
+                    # {**ctx, ...} the chain path below builds, not a
+                    # deepcopy — cheap regardless of how large the run state
+                    # or the collection is (#268). This is safe because
+                    # nothing a body effect does can write back through a
+                    # shared nested dict: every write lands in the thread's
+                    # own isolated Store (below), never in ctx itself, and
+                    # every value a body effect reads out of ctx and hands to
+                    # a tool/prompt is already a fresh copy by the time it
+                    # leaves this process — template rendering stringifies it
+                    # (core.templates), and params_json round-trips it through
+                    # json.loads. A nested dict an iteration's own item shares
+                    # with a sibling (or with ctx itself) is read, never
+                    # mutated in place, so sharing it by reference costs
+                    # nothing. See test_loop_tree_each_shallow_overlay for the
+                    # isolation this relies on.
                     capped = (
                         collection
                         if self.defn.max_iterations is None
@@ -311,10 +344,12 @@ class LoopRuntime:
 
                     iter_ctxs: list[tuple[int, dict[str, Any]]] = []
                     for idx, item in enumerate(capped):
-                        iter_ctx = deepcopy(ctx)
-                        iter_ctx[self.defn.each_def.as_name] = item
-                        iter_ctx["_loop_index"] = idx
-                        iter_ctx["iter"] = {"index": idx}
+                        iter_ctx = {
+                            **ctx,
+                            self.defn.each_def.as_name: item,
+                            "_loop_index": idx,
+                            "iter": {"index": idx},
+                        }
                         iter_ctxs.append((idx, iter_ctx))
 
                     # Per-thread isolated stores: each thread writes into its own
@@ -434,9 +469,10 @@ class LoopRuntime:
                         iter_ctx[self.defn.each_def.as_name] = item
                         iter_ctx["_loop_index"] = idx
                         iter_ctx["iter"] = {"index": idx}
+                        iter_ctx = self._with_prev(iter_ctx, prev_writes)
 
                         try:
-                            iter_effects, _ = self._execute_body(
+                            iter_effects, iter_writes = self._execute_body(
                                 store=child_store,
                                 ctx=iter_ctx,
                                 iteration=idx,
@@ -447,6 +483,13 @@ class LoopRuntime:
                             iteration_count += 1
                             last_completed = idx
                             completed_indices.append(idx)
+                            prev_writes = iter_writes
+                            # Publish after every completed pass, the same
+                            # path the tree flow uses since #291 — otherwise
+                            # --live-state and other state observers see
+                            # nothing of a chain loop until it finishes (#299).
+                            if store.on_write:
+                                store.on_write(store.root_state)
                         except Exception:
                             failed_passes.append(idx)
                             if self.defn.on_error == "fail":
@@ -550,6 +593,7 @@ class LoopRuntime:
                         "_loop_index": iteration_count,
                         "iter": {"index": iteration_count},
                     }
+                    iter_ctx = self._with_prev(iter_ctx, prev_writes)
                     try:
                         iter_effects, last_writes = self._execute_body(
                             store=child_store,
@@ -562,6 +606,11 @@ class LoopRuntime:
                         last_completed = iteration_count
                         completed_indices.append(iteration_count)
                         iteration_count += 1
+                        prev_writes = last_writes
+                        # Publish after every completed pass — see the each
+                        # (chain) branch above and #299.
+                        if store.on_write:
+                            store.on_write(store.root_state)
                     except Exception:
                         failed_passes.append(iteration_count)
                         if self.defn.on_error == "fail":
@@ -604,6 +653,8 @@ class LoopRuntime:
                 termination: dict[str, Any] = {"reason": termination_reason}
                 if unvisited is not None:
                     termination["unvisited"] = unvisited
+                if termination_detail is not None:
+                    termination["detail"] = termination_detail
                 node["value"] = {
                     "iterations": iteration_count,
                     "termination": termination,
@@ -821,6 +872,40 @@ Should the loop continue? Answer (yes/no):"""
         effect.
         """
         return _local_writes_state(iter_store.state, baseline, self._body_names())
+
+    def _with_prev(
+        self, iter_ctx: dict[str, Any], prev_writes: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Layer ``prime.<loop>.prev`` onto *iter_ctx* for the pass about to run.
+
+        Chain flow only (both ``each`` and ``while`` build *iter_ctx* this
+        way; tree flow never calls this — ``cof check`` rejects a
+        ``prime.<loop>.prev`` reference in a tree loop's body instead, since
+        tree passes run in parallel and there is no previous one). A no-op
+        for an unnamed loop (nothing to spell ``prime.<loop>`` with) or
+        before the first completed pass (*prev_writes* is ``None``) — the
+        key stays absent rather than an empty node, so a template renders
+        empty and CEL's ``has()`` reads false, same as any other unset path.
+
+        Merges at the ``prime`` dict level, and again one level down at this
+        loop's own name, rather than replacing either — ``prime.<name>``
+        there is this loop's own live node (``ctx["prime"]`` is the run
+        state itself at the root, mutated in place as the loop writes), so
+        replacing it wholesale would drop ``iter_<N>``/``meta`` out of a
+        body's view, and replacing ``prime`` wholesale would drop an outer
+        loop's own already-layered ``prime.<outer>.prev`` — each loop's
+        ``prev`` is its own (#243).
+        """
+        if not self.defn.name or prev_writes is None:
+            return iter_ctx
+        prime = dict(iter_ctx.get("prime") or {})
+        own_node = prime.get(self.defn.name)
+        own_node = dict(own_node) if isinstance(own_node, dict) else {}
+        own_node["prev"] = prev_writes
+        prime[self.defn.name] = own_node
+        iter_ctx = dict(iter_ctx)
+        iter_ctx["prime"] = prime
+        return iter_ctx
 
     def _execute_body(
         self,
