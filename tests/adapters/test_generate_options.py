@@ -50,19 +50,24 @@ class FakeProc:
 
 
 class CurlRecorder:
-    """Stands in for ``subprocess.run``; keeps the URL and JSON body sent."""
+    """Stands in for ``subprocess.run``; keeps the command and the JSON body
+    sent on stdin."""
 
     def __init__(self, response: dict[str, Any]) -> None:
         self.response = response
         self.cmd: list[str] = []
+        self.stdin: str | None = None
 
     def __call__(self, cmd: list[str], **kwargs: Any) -> FakeProc:
         self.cmd = cmd
+        self.stdin = kwargs.get("input")
         return FakeProc(returncode=0, stdout=json.dumps(self.response))
 
     @property
     def body(self) -> dict[str, Any]:
-        return json.loads(self.cmd[self.cmd.index("-d") + 1])
+        assert self.cmd[self.cmd.index("--data-binary") + 1] == "@-"
+        assert self.stdin is not None
+        return json.loads(self.stdin)
 
     @property
     def url(self) -> str:
@@ -395,6 +400,54 @@ def test_anthropic_without_options_keeps_the_configured_max_tokens(
         "max_tokens": 777,
         "messages": [{"role": "user", "content": "p"}],
     }
+
+
+def test_anthropic_system_only_messages_go_out_as_a_user_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    curl = _record(monkeypatch, {"content": [{"type": "text", "text": "hi"}]})
+    AnthropicAdapter(max_tokens=777).generate(
+        model="claude-sonnet-5",
+        prompt="system: Say hi.",
+        options=GenerateOptions(messages=(ChatMessage(role="system", content="Say hi."),)),
+    )
+    assert curl.body == {
+        "model": "claude-sonnet-5",
+        "max_tokens": 777,
+        "messages": [{"role": "user", "content": "Say hi."}],
+    }
+
+
+# ---------- request bodies travel on stdin ----------
+
+
+@pytest.mark.parametrize(
+    "adapter,env_var,response",
+    [
+        (OllamaAdapter(), None, {"response": "ok"}),
+        (GroqAdapter(), "GROQ_API_KEY", _chat_response()),
+        (OpenAIAdapter(), "OPENAI_API_KEY", _chat_response()),
+        (AnthropicAdapter(), "ANTHROPIC_API_KEY", {"content": [{"type": "text", "text": "ok"}]}),
+    ],
+    ids=["ollama", "openai_compat", "openai", "anthropic"],
+)
+def test_a_large_image_goes_on_stdin_not_in_argv(
+    monkeypatch: pytest.MonkeyPatch,
+    adapter: Any,
+    env_var: str | None,
+    response: dict[str, Any],
+) -> None:
+    """A single argv element is capped at 128 KiB on Linux; a real image's
+    base64 body must not be one."""
+    if env_var:
+        monkeypatch.setenv(env_var, "test-key")
+    curl = _record(monkeypatch, response)
+    image = ImageInput(data=b"\x89PNG" + b"\x00" * 300_000, media_type="image/png")
+    adapter.generate(model="m", prompt="What is this?", options=GenerateOptions(images=(image,)))
+    assert curl.stdin is not None and len(curl.stdin) > 400_000
+    assert max(len(arg) for arg in curl.cmd) < 1_000
+    assert curl.body["model"] == "m"
 
 
 # ---------- adapters that accept options but cannot use them ----------

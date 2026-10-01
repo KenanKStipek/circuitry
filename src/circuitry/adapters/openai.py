@@ -74,13 +74,21 @@ class OpenAIAdapter:
             "Content-Type: application/json",
             "-H",
             f"Authorization: Bearer {api_key}",
-            "-d",
-            json.dumps(payload),
+            # The body goes on stdin: with base64 images it can outgrow the
+            # argv size limit (128 KiB per argument on Linux).
+            "--data-binary",
+            "@-",
             url,
         ]
 
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            proc = subprocess.run(
+                cmd,
+                input=json.dumps(payload),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
         except FileNotFoundError as e:
             raise RuntimeError("curl is not installed or not on PATH") from e
 

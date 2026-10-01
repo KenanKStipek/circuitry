@@ -96,18 +96,19 @@ class OllamaAdapter:
             str(int(timeout_seconds)),
         ]
 
+        # The body goes on stdin: with base64 images it can outgrow the
+        # argv size limit (128 KiB per argument on Linux).
+        body: str | None = None
         if method.upper() == "POST":
-            cmd += [
-                "-H",
-                "Content-Type: application/json",
-                "-d",
-                json.dumps(payload or {}),
-            ]
+            body = json.dumps(payload or {})
+            cmd += ["-H", "Content-Type: application/json", "--data-binary", "@-"]
 
         cmd.append(url)
 
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            proc = subprocess.run(
+                cmd, input=body, capture_output=True, text=True, check=False
+            )
         except FileNotFoundError as e:
             raise RuntimeError("curl is not installed or not on PATH") from e
 
@@ -130,9 +131,9 @@ class OllamaAdapter:
             elif proc.returncode == 28:
                 hint = (
                     f"The model didn't finish within {int(timeout_seconds)}s. "
-                    "Raise the prompt's `timeout_ms` or "
-                    "`runtime.adapters.ollama.timeout_seconds` in your "
-                    "config, or use a smaller/faster model."
+                    "Raise `runtime.adapters.ollama.timeout_seconds` in your "
+                    "config (a prompt's `timeout_ms` can only shorten it), "
+                    "or use a smaller/faster model."
                 )
             elif proc.returncode == 22:
                 body_message = parse_error_body(proc.stdout) or ""

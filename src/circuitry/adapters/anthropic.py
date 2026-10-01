@@ -32,6 +32,8 @@ def _request_body(
     The API has no ``tool`` role outside tool-use blocks, so a bare tool turn
     is sent as a user turn prefixed ``tool:``. Images become image blocks
     ahead of the text of the last user turn, which is added if there is none.
+    The API rejects an empty ``messages`` array, so system-only messages
+    without images go out as one user turn.
     """
     system = "\n\n".join(m.content for m in options.messages if m.role == "system")
     turns: list[dict[str, Any]] = [
@@ -43,6 +45,9 @@ def _request_body(
     ]
     if not options.messages:
         turns = [{"role": "user", "content": prompt}]
+    elif not turns and not options.images:
+        turns = [{"role": "user", "content": system}]
+        system = ""
     if options.images:
         index = last_user_index(turns)
         if index is None:
@@ -146,13 +151,21 @@ class AnthropicAdapter:
             f"x-api-key: {api_key}",
             "-H",
             "anthropic-version: 2023-06-01",
-            "-d",
-            json.dumps(payload),
+            # The body goes on stdin: with base64 images it can outgrow the
+            # argv size limit (128 KiB per argument on Linux).
+            "--data-binary",
+            "@-",
             url,
         ]
 
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            proc = subprocess.run(
+                cmd,
+                input=json.dumps(payload),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
         except FileNotFoundError as e:
             raise RuntimeError("curl is not installed or not on PATH") from e
 
