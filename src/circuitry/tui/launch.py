@@ -64,7 +64,7 @@ CUSTOM_MODEL = "custom…"
 CANCEL_MESSAGE = "Run cancelled by request."
 
 #: Input types the schema declares; anything else is treated as a string.
-INPUT_TYPES: tuple[str, ...] = ("string", "number", "boolean", "array", "object")
+INPUT_TYPES: tuple[str, ...] = ("string", "number", "integer", "boolean", "array", "object")
 
 #: Adapters that cannot be built from config alone, so they are never
 #: offered as an override (host_claude needs an injected request handler).
