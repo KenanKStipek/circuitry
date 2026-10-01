@@ -10,6 +10,9 @@ Returns ``value`` = a dict of whois fields (registrar, creation_date,
 expiration_date, name_servers, etc). Date fields are normalised to
 ISO 8601 strings since python-whois returns datetime objects which
 don't survive JSON serialisation.
+
+The effect's ``timeout_seconds`` is forwarded to python-whois's own
+``timeout`` parameter (its default is 10s).
 """
 
 from __future__ import annotations
@@ -59,7 +62,7 @@ class WhoisPlugin:
         if not isinstance(domain, str) or not domain.strip():
             raise ValueError("whois requires params['domain'].")
 
-        result = whois.whois(domain.strip())
+        result = whois.whois(domain.strip(), timeout=int(timeout_seconds))
         # python-whois returns a dict-like WhoisEntry; flatten it.
         as_dict: dict[str, Any] = (
             dict(result) if hasattr(result, "items") else {"raw": str(result)}

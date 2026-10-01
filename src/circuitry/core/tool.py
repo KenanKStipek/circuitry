@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import time
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -213,6 +214,14 @@ class ToolDefinition:
     enabled: bool = True
 
 
+#: Fallback when neither the effect's ``timeout_ms`` nor
+#: ``runtime.tools.timeout_seconds`` in config is set. Tools get their own
+#: budget here, independent of whatever the run's LLM adapter is
+#: configured with (``runtime.adapters.<name>.timeout_seconds``) — see
+#: ToolRuntime._resolve_timeout_seconds.
+DEFAULT_TOOL_TIMEOUT_SECONDS = 300
+
+
 class ToolRuntime:
     """
     Executes a ToolDefinition against a plugin + store.
@@ -231,6 +240,9 @@ class ToolRuntime:
         *,
         runtime_config: dict[str, Any] | None = None,
         dry_run: bool = False,
+        # Accepted for the dynamic/loop/conditional containers that pass their
+        # resolved LLM-adapter timeout here unconditionally, but not used to
+        # compute the tool's own timeout budget below — see _resolve_timeout_seconds.
         timeout_seconds: int = 300,
         verbose: bool = False,
         depth: int = 0,
@@ -254,6 +266,35 @@ class ToolRuntime:
         self.display_name = display_name or definition.name
         self._ancestors = ancestors or []
 
+    def _resolve_timeout_seconds(self) -> int:
+        """The tool's own timeout budget, in whole seconds.
+
+        ``timeout_ms`` on the effect wins when set, rounded up so a
+        sub-second budget (e.g. 500) never floors to 0 and gets handed to
+        a subprocess/curl/urlopen call as "no timeout" or "fail instantly"
+        depending on the plugin. Otherwise ``runtime.tools.timeout_seconds``
+        in config, defaulting to DEFAULT_TOOL_TIMEOUT_SECONDS — deliberately
+        not ``self.timeout_seconds`` (the run's LLM adapter timeout, inherited
+        unconditionally from the dynamic/loop/conditional containers): a tool
+        run on the no-op adapter, or one that just needs more time than the
+        model's socket timeout allows, shouldn't be bound by either.
+        """
+        if self.defn.timeout_ms:
+            return max(1, math.ceil(self.defn.timeout_ms / 1000))
+        tools_cfg = self.runtime_config.get("tools")
+        raw = tools_cfg.get("timeout_seconds") if isinstance(tools_cfg, dict) else None
+        if raw is None:
+            return DEFAULT_TOOL_TIMEOUT_SECONDS
+        try:
+            return max(1, int(raw))
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid runtime.tools.timeout_seconds=%r; using %ds",
+                raw,
+                DEFAULT_TOOL_TIMEOUT_SECONDS,
+            )
+            return DEFAULT_TOOL_TIMEOUT_SECONDS
+
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         from ..allowlist_gate import allowed_tools, require_tool
         from ..plugins.factory import build_plugin
@@ -266,9 +307,7 @@ class ToolRuntime:
             node["meta"] = meta
 
         indent = "  " * self.depth
-        timeout_seconds = (
-            self.defn.timeout_ms // 1000 if self.defn.timeout_ms else self.timeout_seconds
-        )
+        timeout_seconds = self._resolve_timeout_seconds()
         t0 = time.monotonic()
         mtag = ""
 

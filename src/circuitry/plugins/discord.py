@@ -14,16 +14,53 @@ Params:
   - ``username`` (optional, str): override the webhook's display name.
   - ``avatar_url`` (optional, str).
   - ``tts`` (optional, bool, default False).
+
+discord.py's ``SyncWebhook.send`` has no timeout parameter of its own, so
+the effect's ``timeout_seconds`` is enforced by running it on a background
+thread and giving up (raising ``TimeoutError``) if it hasn't returned by
+the deadline. The thread is daemonic and not joined further, so a send
+that's genuinely stuck doesn't block the run — but it also means the
+underlying request isn't actually cancelled, just abandoned.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import queue
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 
 from ..preflight import CheckResult
 from .base import ToolResult
+
+_T = TypeVar("_T")
+
+
+def _run_with_deadline(fn: Callable[[], _T], *, timeout_seconds: float, label: str) -> _T:
+    """Run *fn* on a daemon thread and raise ``TimeoutError`` if it hasn't
+    finished within *timeout_seconds*. Re-raises whatever *fn* raised,
+    unchanged, when it finishes in time.
+    """
+    outcome: queue.SimpleQueue[tuple[str, Any]] = queue.SimpleQueue()
+
+    def worker() -> None:
+        try:
+            outcome.put(("ok", fn()))
+        except BaseException as exc:
+            outcome.put(("error", exc))
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    thread.join(timeout_seconds)
+    if thread.is_alive():
+        raise TimeoutError(f"{label} exceeded timeout of {timeout_seconds}s")
+
+    status, payload = outcome.get()
+    if status == "error":
+        raise payload
+    return payload  # type: ignore[no-any-return]
 
 
 @dataclass(frozen=True)
@@ -36,7 +73,6 @@ class DiscordPlugin:
         params: dict[str, Any],
         timeout_seconds: int = 300,
     ) -> ToolResult:
-        del timeout_seconds
         try:
             import discord  # type: ignore[import-not-found]
         except ImportError as exc:
@@ -61,7 +97,11 @@ class DiscordPlugin:
         if params.get("tts"):
             kwargs["tts"] = True
 
-        message = webhook.send(**kwargs, wait=True)
+        message = _run_with_deadline(
+            lambda: webhook.send(**kwargs, wait=True),
+            timeout_seconds=timeout_seconds,
+            label="discord: webhook.send",
+        )
         return ToolResult(
             value={
                 "id": str(getattr(message, "id", "")),

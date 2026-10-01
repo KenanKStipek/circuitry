@@ -48,7 +48,7 @@ A local-first project config:
 
 `default_adapter` and `default_model` are the run defaults. `runtime.adapters.<name>` carries each adapter's own settings — base URL, socket timeout, a per-adapter default model, token limits. API keys are *not* in this file: hosted adapters read them from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and so on — a `.env` file works), and `cof doctor` names the missing one. Nothing credential-shaped is ever written into serialized state; the redaction layer scrubs it from `runtime.effective_settings` before it lands.
 
-Other top-level keys you will meet later: `runtime.complexity` ([Complexity](10-complexity.md)), `runtime.persistence` and `runtime.plugins.<name>` — per-plugin settings such as MCP servers and a tool's `binary` ([Tools and persistence](13-tools-and-persistence.md)), `runtime.library.sources` and `runtime.state.record_children` ([Composition](09-composition.md)), `plugins` (runtime plugin identifiers), and the three allowlists.
+Other top-level keys you will meet later: `runtime.complexity` ([Complexity](10-complexity.md)), `runtime.persistence` and `runtime.plugins.<name>` — per-plugin settings such as MCP servers and a tool's `binary` ([Tools and persistence](13-tools-and-persistence.md)), `runtime.library.sources` and `runtime.state.record_children` ([Composition](09-composition.md)), `runtime.tools.timeout_seconds` — the default budget for `tool` effects, independent of any adapter's (see [Timeouts](#timeouts) below), `plugins` (runtime plugin identifiers), and the three allowlists.
 
 ## What a document can set
 
@@ -174,7 +174,7 @@ The allowlists are the other gate: `enabled_adapters`, `enabled_tools`, and `ena
 
 ## Timeouts
 
-Two clocks. `timeout_ms` on an effect bounds that effect. `runtime.adapters.<name>.timeout_seconds` in config bounds the adapter's socket — and a large local model can need cold-load headroom well beyond any single effect's budget, which is why the example above gives ollama ten minutes. The two compose: the effect's budget is the one you tune per step; the adapter's is the one you set once per machine. [Errors](05-errors.md) is next.
+Three clocks, two of them in config. `timeout_ms` on an effect bounds that effect, rounded up to the next whole second if you give it a sub-second value — a budget like `250` never floors to an instant 0-second timeout. `runtime.adapters.<name>.timeout_seconds` in config bounds the adapter's socket, for `prompt` effects — a large local model can need cold-load headroom well beyond any single effect's budget, which is why the example above gives ollama ten minutes. `runtime.tools.timeout_seconds` (default 300s) is the same idea for `tool` effects, and deliberately separate from the adapter's: a tool run on the no-op adapter, or a slow `ffmpeg` pass alongside a fast model, each get their own number instead of inheriting whichever adapter the run happens to be using. All three compose: the effect's `timeout_ms` is the one you tune per step; the other two are the ones you set once per machine. Not every tool plugin can actually be bounded this way — see the `tool` effect's [Timeout](../orchestration-reference.md#tool) section for which ones do. [Errors](05-errors.md) is next.
 
 ## Anti-patterns
 
