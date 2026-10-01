@@ -276,6 +276,14 @@ class ToolRuntime:
         meta["completed_at"] = None
         meta["provider"] = self.defn.provider
         meta["error"] = None
+        # Reset every pass/attempt rather than only on success — otherwise a
+        # reused node (an unnamed loop's repeated pass, a --state resume)
+        # keeps a prior pass's result sitting next to this pass's error
+        # (#260).
+        meta["stdout"] = None
+        meta["stderr"] = None
+        meta["exit_code"] = None
+        meta.pop("binary", None)
 
         if self.verbose and self.cb_start is not None:
             self.cb_start()
@@ -395,9 +403,8 @@ class ToolRuntime:
                     _console.print(line)
             meta["error"] = str(e)
             meta["completed_at"] = _now_iso()
-            if self.defn.on_error == "skip":
+            if self.defn.on_error in ("skip", "continue"):
                 node["value"] = None
-            # continue: keep going with None value
             # Fires before the re-raise so the start/complete pair stays
             # balanced on the failure path too — the node carries meta.error.
             store.fire_effect_complete(self.defn.name, node)

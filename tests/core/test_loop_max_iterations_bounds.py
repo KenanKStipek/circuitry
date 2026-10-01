@@ -120,6 +120,45 @@ def test_each_over_max_iterations_fails_at_loop_start_by_default(flow: str) -> N
     assert value["iterations"] == 0
 
 
+@pytest.mark.parametrize("on_error", ["break", "continue"])
+def test_each_over_max_iterations_honors_on_error_break_and_continue(
+    on_error: str,
+) -> None:
+    """#261: the bounds check is a loop failure like any other — gated on
+    the loop's own `on_error`, the same way the pass-level error path
+    already is. The run must not stop, and the effect after the loop must
+    still execute."""
+    orch = _each_orch(max_iterations=3, on_error=on_error)
+    orch["effects"].append(
+        {"type": "prompt", "name": "after", "template": "after"}
+    )
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({"input": {"items": list(range(5))}})
+
+    DynamicRuntime(root, adapter=EchoAdapter(), model="unit-test").execute(store=store)
+
+    value = store.get("prime.raster.value")
+    assert value["termination"]["reason"] == "error"
+    assert value["iterations"] == 0
+    meta = store.get("prime.raster.meta")
+    assert "5 items" in meta["error"]
+    assert "max_iterations is 3" in meta["error"]
+    # The run kept going past the loop.
+    assert store.get("prime.after.value") == "after"
+
+
+def test_each_over_max_iterations_still_fails_the_run_under_on_error_fail() -> None:
+    """The default stays a hard stop — only break/continue opt out."""
+    orch = _each_orch(max_iterations=3, on_error="fail")
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({"input": {"items": list(range(5))}})
+
+    with pytest.raises(RuntimeError) as excinfo:
+        DynamicRuntime(root, adapter=EchoAdapter(), model="unit-test").execute(store=store)
+
+    assert isinstance(excinfo.value.__cause__, LoopBoundsError)
+
+
 def test_each_at_exactly_max_iterations_does_not_error() -> None:
     """Boundary: collection length == max_iterations is fine, not a bounds error."""
     root = compile_orchestration(orch=_each_orch(max_iterations=5), root_name="prime")

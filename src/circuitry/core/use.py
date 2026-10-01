@@ -837,8 +837,10 @@ class UseRuntime:
                 raise RuntimeError(
                     f"use '{self.defn.name}' -> {label}: {e}"
                 ) from e
-            if self.defn.on_error == "skip":
+            if self.defn.on_error in ("skip", "continue"):
+                # A reused node (an unnamed loop's prior pass, a resume)
+                # must not let that pass's value survive next to this
+                # pass's error (#260).
                 node["value"] = None
-            # continue: keep going with None value
         finally:
             store.fire_effect_complete(self.defn.name, node)
