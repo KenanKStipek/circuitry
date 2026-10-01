@@ -273,6 +273,291 @@ def test_reflector_non_list_effects_does_not_give_a_misleading_count() -> None:
     assert "exceeds max_effects" not in str(exc_info.value)
 
 
+def test_reflector_renders_root_goal_in_planning_prompt() -> None:
+    """{goal} is the root `goal` effect's value, read from the run's root
+    state — not the reflector's own (child) store node (#240)."""
+    plan_yaml = yaml.dump({
+        "done": True,
+        "effects": [{"type": "prompt", "name": "generated_step", "template": "Do the thing"}],
+    })
+
+    captured_prompts: list[str] = []
+
+    def _generate(*, model: str, prompt: str, timeout_seconds: int) -> MagicMock:
+        captured_prompts.append(prompt)
+        result = MagicMock()
+        result.text = plan_yaml
+        result.raw = {}
+        result.tokens_sent = 10
+        result.tokens_received = 5
+        return result
+
+    adapter = MagicMock()
+    adapter.name = "mock"
+    adapter.generate.side_effect = _generate
+
+    orch = {
+        "effects": [
+            {
+                "type": "reflector",
+                "name": "planner",
+                "effects": [
+                    {"type": "prompt", "name": "propose_steps", "template": "Plan."},
+                ],
+            }
+        ]
+    }
+
+    root = compile_orchestration(orch=orch)
+    store = Store(state={"prime": {"goal": {"value": "Ship the thing by Friday."}}})
+
+    DynamicRuntime(root, adapter=adapter, model="test-model").execute(store=store)
+
+    assert captured_prompts, "expected the planning prompt to be rendered"
+    assert "Ship the thing by Friday." in captured_prompts[0]
+
+
+def test_reflector_nested_under_tree_dynamic_still_renders_root_goal() -> None:
+    """A reflector that is a direct child of a ``flow: tree`` dynamic — the
+    film reflectors' own topology — still reads the run's root ``goal``
+    effect, not an empty isolated branch state (#240 review finding 1).
+
+    ``Store.parallel_branches`` (used for every ``flow: tree`` dynamic and
+    parallel loop) hands each branch a fresh, isolated state dict with no
+    link back to the run root. Without ``Store.true_root_state`` surviving
+    that isolation, ``{goal}`` renders empty here even though it works for
+    a reflector in an ordinary sequential chain.
+    """
+    plan_yaml = yaml.dump({
+        "done": True,
+        "effects": [{"type": "prompt", "name": "generated_step", "template": "Do the thing"}],
+    })
+
+    captured_prompts: list[str] = []
+
+    def _generate(*, model: str, prompt: str, timeout_seconds: int) -> MagicMock:
+        captured_prompts.append(prompt)
+        result = MagicMock()
+        result.text = plan_yaml
+        result.raw = {}
+        result.tokens_sent = 10
+        result.tokens_received = 5
+        return result
+
+    adapter = MagicMock()
+    adapter.name = "mock"
+    adapter.generate.side_effect = _generate
+
+    orch = {
+        "effects": [
+            {
+                "type": "dynamic",
+                "name": "making",
+                "flow": "tree",
+                "effects": [
+                    {
+                        "type": "reflector",
+                        "name": "plan",
+                        "effects": [
+                            {"type": "prompt", "name": "propose_steps", "template": "Plan."},
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+
+    root = compile_orchestration(orch=orch)
+    store = Store(state={"prime": {"goal": {"value": "Ship the thing by Friday."}}})
+
+    DynamicRuntime(root, adapter=adapter, model="test-model").execute(store=store)
+
+    assert captured_prompts, "expected the planning prompt to be rendered"
+    assert "Ship the thing by Friday." in captured_prompts[0]
+
+
+def test_reflector_renders_redacted_effective_settings_as_context() -> None:
+    """{context} is a concise, redacted summary of `runtime.effective_settings`,
+    read from the run's root state (#240)."""
+    plan_yaml = yaml.dump({
+        "done": True,
+        "effects": [{"type": "prompt", "name": "generated_step", "template": "Do the thing"}],
+    })
+
+    captured_prompts: list[str] = []
+
+    def _generate(*, model: str, prompt: str, timeout_seconds: int) -> MagicMock:
+        captured_prompts.append(prompt)
+        result = MagicMock()
+        result.text = plan_yaml
+        result.raw = {}
+        result.tokens_sent = 10
+        result.tokens_received = 5
+        return result
+
+    adapter = MagicMock()
+    adapter.name = "mock"
+    adapter.generate.side_effect = _generate
+
+    orch = {
+        "effects": [
+            {
+                "type": "reflector",
+                "name": "planner",
+                "effects": [
+                    {"type": "prompt", "name": "propose_steps", "template": "Plan."},
+                ],
+            }
+        ]
+    }
+
+    root = compile_orchestration(orch=orch)
+    # The secret-shaped value sits in `plugins`, a field the {context}
+    # summary actually keeps (see _best_effort_context) — unlike a planted
+    # `effective_settings.runtime.api_key`, which the summary already drops
+    # before redaction ever runs, so a test using that placement would pass
+    # even with the `redact()` call deleted.
+    store = Store(
+        state={
+            "runtime": {
+                "effective_settings": {
+                    "model": "gpt-5",
+                    "adapter": "openai",
+                    "plugins": ["web_search", "sk-" + "x" * 30],
+                }
+            }
+        }
+    )
+
+    DynamicRuntime(root, adapter=adapter, model="test-model").execute(store=store)
+
+    assert captured_prompts, "expected the planning prompt to be rendered"
+    prompt_text = captured_prompts[0]
+    assert "gpt-5" in prompt_text
+    assert "openai" in prompt_text
+    assert "web_search" in prompt_text
+    assert "sk-" + "x" * 30 not in prompt_text
+    assert "***REDACTED***" in prompt_text
+
+
+def test_reflector_nested_under_sequential_loop_still_renders_root_goal() -> None:
+    """A reflector inside an ordinary (chain-flow) loop body still reads the
+    run's root `goal` effect, same as one nested under a dynamic (#240)."""
+    plan_yaml = yaml.dump({
+        "done": True,
+        "effects": [{"type": "prompt", "name": "generated_step", "template": "Do the thing"}],
+    })
+
+    captured_prompts: list[str] = []
+
+    def _generate(*, model: str, prompt: str, timeout_seconds: int) -> MagicMock:
+        captured_prompts.append(prompt)
+        result = MagicMock()
+        result.text = plan_yaml
+        result.raw = {}
+        result.tokens_sent = 10
+        result.tokens_received = 5
+        return result
+
+    adapter = MagicMock()
+    adapter.name = "mock"
+    adapter.generate.side_effect = _generate
+
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "rounds",
+                "each": {"in": "input.items", "as": "item"},
+                "body": [
+                    {
+                        "type": "reflector",
+                        "name": "plan",
+                        "effects": [
+                            {"type": "prompt", "name": "propose_steps", "template": "Plan."},
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+
+    root = compile_orchestration(orch=orch)
+    store = Store(
+        state={
+            "input": {"items": ["one"]},
+            "prime": {"goal": {"value": "Ship the thing by Friday."}},
+        }
+    )
+
+    DynamicRuntime(root, adapter=adapter, model="test-model").execute(store=store)
+
+    assert captured_prompts, "expected the planning prompt to be rendered"
+    assert "Ship the thing by Friday." in captured_prompts[0]
+
+
+def test_reflector_context_truncated_at_max_chars() -> None:
+    """{context} is capped at 2000 characters, not dumped in full (#240)."""
+    plan_yaml = yaml.dump({
+        "done": True,
+        "effects": [{"type": "prompt", "name": "generated_step", "template": "Do the thing"}],
+    })
+
+    captured_prompts: list[str] = []
+
+    def _generate(*, model: str, prompt: str, timeout_seconds: int) -> MagicMock:
+        captured_prompts.append(prompt)
+        result = MagicMock()
+        result.text = plan_yaml
+        result.raw = {}
+        result.tokens_sent = 10
+        result.tokens_received = 5
+        return result
+
+    adapter = MagicMock()
+    adapter.name = "mock"
+    adapter.generate.side_effect = _generate
+
+    orch = {
+        "effects": [
+            {
+                "type": "reflector",
+                "name": "planner",
+                "effects": [
+                    {"type": "prompt", "name": "propose_steps", "template": "Plan."},
+                ],
+            }
+        ]
+    }
+
+    root = compile_orchestration(orch=orch)
+    huge_plugins = [f"plugin_{i}" for i in range(500)]
+    store = Store(
+        state={
+            "runtime": {
+                "effective_settings": {
+                    "model": "gpt-5",
+                    "adapter": "openai",
+                    "plugins": huge_plugins,
+                }
+            }
+        }
+    )
+
+    DynamicRuntime(root, adapter=adapter, model="test-model").execute(store=store)
+
+    assert captured_prompts, "expected the planning prompt to be rendered"
+    prompt_text = captured_prompts[0]
+    # The prime still contains the critical YAML warning and the plan
+    # instructions beyond {context}, so assert on the {context} block's own
+    # size rather than the whole prompt.
+    context_start = prompt_text.index('"model"')
+    context_block = prompt_text[context_start:]
+    truncated_marker = "... (truncated)"
+    assert truncated_marker in context_block
+    assert len(context_block.split(truncated_marker)[0]) <= 2000
+
+
 def test_reflector_invalid_plan_records_error() -> None:
     """Invalid YAML from LLM is caught and recorded as error."""
     adapter = _mock_adapter("This is not YAML at all: [[[invalid")

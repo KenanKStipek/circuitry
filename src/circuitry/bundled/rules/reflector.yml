@@ -36,12 +36,14 @@ fields:
     note: "State key where generated effects are recorded."
   prime_template:
     type: string
-    note: "Custom prime template driving the planning cycle, overriding the built-in REFLECTOR_PRIME_V1. Usually omitted — the built-in prime is tuned for plan generation and constrains plan language to ASD-STE100 Simplified Technical English; a custom prime_template opts out of that constraint."
+    note: "Custom prime template driving the planning cycle, overriding the built-in REFLECTOR_PRIME_V1. Usually omitted — the built-in prime is tuned for plan generation and constrains plan language to ASD-STE100 Simplified Technical English; a custom prime_template opts out of that constraint. It is rendered with {goal} and {context} — see constraints below — plus {max_effects}."
 state_paths:
   output: "prime.<name>.value"
 constraints:
   - "Requires adapter and model (uses LLM for planning)."
   - "Max 8 effects per cycle by default."
+  - "The prime's {goal} slot is the value of a top-level effect named `goal` (prime.goal.value at the run root), read from the run's root state, not the reflector's own node. Empty if no such effect exists yet."
+  - "The prime's {context} slot is a concise, redacted summary of runtime.effective_settings (model, adapter, plugins), capped at 2000 characters. Never carries a secret."
 example: |
   - type: reflector
     name: self_improve
