@@ -153,10 +153,21 @@ class CircuitryConfig:
     # layers. Reporting only — excluded from equality.
     sources: tuple[ConfigSource, ...] = field(default=(), compare=False)
 
+    # Set when a *discovered* `CIRCUITRY_CONFIG` file (not `--config`, which
+    # raises instead — see `resolve_config`) was missing or unreadable, so
+    # that layer was skipped rather than applied. Reporting only — excluded
+    # from equality (#259).
+    config_load_warning: str | None = field(default=None, compare=False)
+
     def resolution_warnings(self) -> list[str]:
         """Warnings from resolving this config, for a run's warnings channel."""
-        warning = self.project_config.skip_warning() if self.project_config else None
-        return [warning] if warning else []
+        warnings = []
+        if self.config_load_warning:
+            warnings.append(self.config_load_warning)
+        project_warning = self.project_config.skip_warning() if self.project_config else None
+        if project_warning:
+            warnings.append(project_warning)
+        return warnings
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> CircuitryConfig:
@@ -478,6 +489,7 @@ def resolve_config(
     merged = copy.deepcopy(SANE_DEFAULTS)
     sources: list[ConfigSource] = []
     project_config: ProjectConfigStatus | None = None
+    config_load_warning: str | None = None
 
     if explicit_path:
         # Explicit path skips global/project discovery — use only that file
@@ -532,7 +544,32 @@ def resolve_config(
                 # explains its own absence on the `Config:` line.
                 sources.append(ConfigSource(local_kind, str(local_path), note))
             except (json.JSONDecodeError, ValueError, OSError) as exc:
-                logger.warning("Skipping malformed project config %s: %s", local_path, exc)
+                logger.warning("Skipping malformed %s config %s: %s", local_kind, local_path, exc)
+                if local_kind == "CIRCUITRY_CONFIG":
+                    # Unlike a discovered project config (where a trust-gate
+                    # skip already has its own on-screen note), a stale/
+                    # typo'd CIRCUITRY_CONFIG otherwise vanishes with no
+                    # trace in `doctor`/the TUI — record it the same way
+                    # (#259).
+                    config_load_warning = (
+                        f"CIRCUITRY_CONFIG={local_path} is malformed ({exc}); "
+                        "continuing without it."
+                    )
+                    sources.append(
+                        ConfigSource(local_kind, str(local_path), "malformed — skipped")
+                    )
+        elif local_path and local_kind == "CIRCUITRY_CONFIG":
+            # A missing discovered project config is routine (most projects
+            # don't have one); an explicit CIRCUITRY_CONFIG naming a file
+            # that doesn't exist is a user-facing mistake — note it the same
+            # way a trust-skipped project config is noted, instead of this
+            # layer vanishing with nothing to show for it (#259).
+            config_load_warning = (
+                f"CIRCUITRY_CONFIG={local_path} not found; continuing without it."
+            )
+            sources.append(
+                ConfigSource(local_kind, str(local_path), "not found — skipped")
+            )
 
     # Environment variables always overlay on top
     merged = _apply_env_vars(merged)
@@ -542,4 +579,5 @@ def resolve_config(
         CircuitryConfig.from_dict(merged),
         project_config=project_config,
         sources=tuple(sources),
+        config_load_warning=config_load_warning,
     )

@@ -509,6 +509,54 @@ def test_replay_carries_the_stashed_adapter_and_model(run_app: Any, tmp_path: Pa
     assert request.dry_run is True
 
 
+def test_replay_carries_the_stashed_profile_from_state(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """A `--profile-from-state` run's stash names the recorded state file it
+    was reconstructed from; replay must rebuild the same `profile_record`
+    `run_cmd --last` does, not silently drop the profile (#265 part 3
+    follow-up)."""
+    orch = tmp_path / "demo.yml"
+    orch.write_text("effects: []\n", encoding="utf-8")
+    recorded = tmp_path / "recorded.json"
+    recorded.write_text(
+        json.dumps(
+            {
+                "runtime": {
+                    "effective_settings": {
+                        "profile": {"name": "fast", "content": {"adapter": "ollama"}}
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    seen: dict[str, Any] = {}
+
+    def runner(request: RunRequest) -> RunResult:
+        seen["request"] = request
+        return RunResult(ok=True, state={}, warnings=[])
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        screen = await _open(
+            pilot,
+            _screen(
+                last_run=_stash(orch, profile_from_state=str(recorded)),
+                runner=runner,
+            ),
+        )
+        screen.action_replay()
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if "request" in seen:
+                break
+
+    run_app(scenario)
+    request = seen["request"]
+    assert request.profile_name is None
+    assert request.profile_record == {"name": "fast", "content": {"adapter": "ollama"}}
+
+
 @pytest.mark.parametrize("stashed_trust", [True, False, None])
 def test_replay_carries_the_stashed_document_trust(
     run_app: Any, tmp_path: Path, stashed_trust: bool | None

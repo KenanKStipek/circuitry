@@ -543,6 +543,13 @@ class DiagnosticsSource(Protocol):
         """The effective settings, redacted, with source attribution."""
         ...
 
+    def warnings(self) -> tuple[str, ...]:
+        """Non-fatal problems resolving the environment itself — a stale or
+        malformed ``CIRCUITRY_CONFIG``, an untrusted discovered project
+        config — for an on-screen notice distinct from a per-extension check
+        result (#259)."""
+        ...
+
 
 @dataclass(frozen=True)
 class Diagnostics:
@@ -559,6 +566,9 @@ class Diagnostics:
 
     def rows(self) -> tuple[SettingRow, ...]:
         return config_file_rows(self.config) + settings_rows(self.settings)
+
+    def warnings(self) -> tuple[str, ...]:
+        return tuple(self.config.resolution_warnings())
 
 
 def load_diagnostics(

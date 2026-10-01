@@ -79,12 +79,14 @@ class Run:
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
     # How many concurrent "settle points" (a registered prompt, or a branch
-    # that finished without one) `start_run` should wait to see before
-    # returning — 1 by default (the ordinary sequential case), raised to the
-    # real branch count by a `flow: tree` loop's or parallel `dynamic`'s own
-    # `concurrent_dispatch` signal, fired before any of its branches run
-    # (#237). Not consulted by `submit_response`, which waits on the
-    # answered prompt's own removal instead — see `_wait_for_prompt_gone`.
+    # that finished without one) `_wait_for_settle` should wait to see
+    # before returning — 1 by default (the ordinary sequential case), raised
+    # by a `flow: tree` loop's or parallel `dynamic`'s own
+    # `concurrent_dispatch` signal (accumulated across nested dispatches,
+    # bounded by `max_concurrency`) and lowered by its `branch_settled`
+    # signal as each dispatched branch finishes (#237). Reset to 1 every time
+    # `_wait_for_settle` returns. `submit_response` consults it too, after
+    # the answered prompt's own removal — see `_wait_for_prompt_gone`.
     expected_concurrent: int = 1
     # A plain RLock everywhere this was already `with run._lock:`; also a
     # Condition so `_wait_for_settle`/`_wait_for_prompt_gone` can block on a
@@ -136,7 +138,26 @@ class RunManager:
 
         def _on_concurrent_dispatch(_effect_path: str, branch_count: int) -> None:
             with run._lock:
-                run.expected_concurrent = branch_count
+                # Accumulate, not overwrite: this dispatch replaces the one
+                # settle point it was itself going to contribute with
+                # *branch_count* of its own (0 if the tree/dynamic is empty
+                # and resolves without dispatching anything) — so a tree
+                # nested inside another tree branch or a `use:` child adds
+                # to what's still outstanding instead of clobbering it.
+                # Floored at 1: a fresh dispatch always owes at least one
+                # settle point immediately after it fires; real completions
+                # (`_on_branch_settled`) are what bring it down from there.
+                run.expected_concurrent = max(
+                    1, run.expected_concurrent + branch_count - 1
+                )
+                run._lock.notify_all()
+
+        def _on_branch_settled(_effect_path: str) -> None:
+            with run._lock:
+                # One branch of some earlier dispatch just finished —
+                # whether or not it ever registered a prompt. One fewer
+                # settle point still outstanding.
+                run.expected_concurrent = max(0, run.expected_concurrent - 1)
                 run._lock.notify_all()
 
         def _observe_state(snapshot: dict[str, Any]) -> None:
@@ -158,6 +179,7 @@ class RunManager:
             adapter=adapter,
             state_observer=_observe_state,
             concurrent_dispatch_observer=_on_concurrent_dispatch,
+            branch_settled_observer=_on_branch_settled,
         )
         thread = threading.Thread(
             target=self._thread_target,
@@ -185,6 +207,12 @@ class RunManager:
                 )
             pending.response_queue.put(response_text)
         self._wait_for_prompt_gone(run, prompt_id)
+        # The answered prompt is gone, but the step it unblocked may not have
+        # reached its own next settle point yet (another prompt, or
+        # completion) — wait the same way `start_run` does so a client never
+        # sees a `running` snapshot with the worker simply not yet scheduled
+        # (#237).
+        self._wait_for_settle(run)
         return run
 
     def get_state(self, run_id: str) -> dict[str, Any]:
@@ -320,16 +348,24 @@ class RunManager:
         """
         Block until the run reaches a terminal status, or `pending_prompts`
         holds at least `expected_concurrent` entries — 1 by default (the
-        ordinary sequential case), raised to the real branch count by a
-        `flow: tree` loop's or parallel `dynamic`'s own `concurrent_dispatch`
-        signal, fired before any of its branches run (#237).
+        ordinary sequential case), raised by a `flow: tree` loop's or
+        parallel `dynamic`'s own `concurrent_dispatch` signal (accumulated,
+        not overwritten, so a tree nested inside another tree branch or a
+        `use:` child adds to what's outstanding instead of clobbering it;
+        bounded by `max_concurrency` when the dispatcher sets one), and
+        lowered again by its `branch_settled` signal as each dispatched
+        branch finishes — including one that never registers a prompt at all
+        (a tool-only branch, a `when:` skip) (#237). Reset to the baseline of
+        1 on every return, so the next call starts fresh rather than reusing
+        a stale branch count from a dispatch this wait already resolved.
 
         Event-driven: waits on `run._lock` (a :class:`threading.Condition`),
-        woken by every prompt registration/removal, status change, or
-        cancellation — never a fixed debounce window a scheduling delay can
-        race. `quiesce_max_wait_seconds` remains a safety-net budget, for a
-        run that genuinely pauses fewer branches than were dispatched (e.g.
-        one completes without a prompt) rather than a quiescence timer.
+        woken by every prompt registration/removal, status change,
+        dispatch/settle signal, or cancellation — never a fixed debounce
+        window a scheduling delay can race. `quiesce_max_wait_seconds`
+        remains a safety-net budget, for a run that genuinely pauses fewer
+        branches than were dispatched before any of them can report in,
+        rather than a quiescence timer.
         """
         deadline = _monotonic() + self._quiesce_max_wait
         with run._lock:
@@ -337,9 +373,16 @@ class RunManager:
                 if run.cancel_event.is_set() or run.status.is_terminal:
                     return
                 if len(run.pending_prompts) >= run.expected_concurrent:
+                    # Settled — reset to the ordinary-sequential baseline so
+                    # the *next* wait (another `submit_response`, or a later
+                    # dispatch) starts fresh instead of carrying this wave's
+                    # branch count forward into a step that may dispatch
+                    # nothing, or something smaller (#237).
+                    run.expected_concurrent = 1
                     return
                 remaining = deadline - _monotonic()
                 if remaining <= 0:
+                    run.expected_concurrent = 1
                     return
                 run._lock.wait(timeout=min(remaining, self._worker_poll_interval))
 

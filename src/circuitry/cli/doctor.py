@@ -70,6 +70,8 @@ def register_doctor(app: typer.Typer) -> None:
         # lack of trust, with its trust state as part of the entry — see
         # ConfigSource.note — so there is one row for this, not two.
         table.add_row("Config sources", describe_config_sources(resolved_cfg.sources))
+        for config_warning in resolved_cfg.resolution_warnings():
+            table.add_row("Config warning", f"[yellow]WARN[/yellow] {config_warning}")
         table.add_row(
             "Effective adapter",
             f"{effective.adapter} (source: {effective.sources.get('adapter')})",

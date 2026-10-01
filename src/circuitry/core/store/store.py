@@ -68,12 +68,22 @@ class Store:
     effect_start: Callable[[str, dict[str, Any]], None] | None = None
     #: Fired once, synchronously, by a ``flow: tree`` loop or a parallel
     #: ``dynamic`` right before it submits its branches to a thread pool —
-    #: ``(effect_path, branch_count)``. The one listener today is MCP's
+    #: ``(effect_path, branch_count)``. The count already accounts for
+    #: ``max_concurrency`` (the most that can ever be pending at once, not
+    #: the total item count). The one listener today is MCP's
     #: ``RunManager``, which uses the count to know how many "settle points"
     #: (a registered prompt, or a branch that finished without one) to wait
     #: for before ``start_run`` reports a snapshot, instead of guessing from
     #: a fixed debounce window that a scheduling delay can race (#237).
     concurrent_dispatch: Callable[[str, int], None] | None = None
+    #: Fired once per branch of a dispatch announced via ``concurrent_dispatch``,
+    #: as soon as that branch's own execution genuinely finishes (whether or
+    #: not it ever registered a prompt) — ``(effect_path,)``. Lets a listener
+    #: lower how many settle points it's still owed by a branch that will
+    #: never produce one (a tool-only branch, a ``when:`` skip), rather than
+    #: waiting out the full safety-net budget for a count that can never be
+    #: reached (#237).
+    branch_settled: Callable[[str], None] | None = None
     _path_prefix: str = ""
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     #: The top-level state dict this store is a view into; None for a root.
@@ -152,6 +162,7 @@ class Store:
             effect_complete=self.effect_complete,
             effect_start=self.effect_start,
             concurrent_dispatch=self.concurrent_dispatch,
+            branch_settled=self.branch_settled,
             _path_prefix=new_prefix,
             _lock=self._lock,
             _root_state=self.root_state,
@@ -209,6 +220,8 @@ class Store:
                     self.effect_complete, self._path_prefix
                 ),
                 effect_start=_prefixed_effect_cb(self.effect_start, self._path_prefix),
+                concurrent_dispatch=self.concurrent_dispatch,
+                branch_settled=self.branch_settled,
                 _lock=self._lock,
                 _true_root=self.true_root_state,
             )
@@ -258,6 +271,14 @@ class Store:
         if self.concurrent_dispatch is None:
             return
         self.concurrent_dispatch(self.effect_path(name), branch_count)
+
+    def fire_branch_settled(self, name: str) -> None:
+        """Notify ``branch_settled`` (if set) that one branch of *name*'s
+        dispatch just finished — called once per branch, as it completes.
+        """
+        if self.branch_settled is None:
+            return
+        self.branch_settled(self.effect_path(name))
 
     def dump_json(self, out_path: Path, *, pretty: bool = False) -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)

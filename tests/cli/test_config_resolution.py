@@ -250,3 +250,52 @@ def test_resolve_config_circuitry_config_env(
         cfg = resolve_config(cwd=tmp_path)
 
     assert cfg.default_model == "from-env-path"
+
+
+def test_resolve_config_missing_circuitry_config_is_a_resolution_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A stale/typo'd CIRCUITRY_CONFIG naming a file that doesn't exist must
+    not vanish with no trace — it's recorded on `sources` and surfaced
+    through `resolution_warnings()`, the same as `cof doctor`'s old
+    behaviour for it, instead of being silently skipped (#259)."""
+    monkeypatch.delenv("CIRCUITRY_MODEL", raising=False)
+    monkeypatch.delenv("CIRCUITRY_ADAPTER", raising=False)
+    missing = tmp_path / "does-not-exist.json"
+    monkeypatch.setenv("CIRCUITRY_CONFIG", str(missing))
+
+    fake_global = tmp_path / "no-global" / "config.json"
+    with patch("circuitry.cli.config.GLOBAL_CONFIG_PATH", fake_global):
+        cfg = resolve_config(cwd=tmp_path)
+
+    assert cfg.config_load_warning is not None
+    assert str(missing) in cfg.config_load_warning
+    assert any(str(missing) in w for w in cfg.resolution_warnings())
+    assert any(
+        source.kind == "CIRCUITRY_CONFIG" and source.note == "not found — skipped"
+        for source in cfg.sources
+    )
+
+
+def test_resolve_config_malformed_circuitry_config_is_a_resolution_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A CIRCUITRY_CONFIG that exists but isn't valid JSON gets the same
+    resolution-warning treatment as a missing one, instead of only a logger
+    line nothing on screen ever shows (#259)."""
+    monkeypatch.delenv("CIRCUITRY_MODEL", raising=False)
+    monkeypatch.delenv("CIRCUITRY_ADAPTER", raising=False)
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not valid json", encoding="utf-8")
+    monkeypatch.setenv("CIRCUITRY_CONFIG", str(broken))
+
+    fake_global = tmp_path / "no-global" / "config.json"
+    with patch("circuitry.cli.config.GLOBAL_CONFIG_PATH", fake_global):
+        cfg = resolve_config(cwd=tmp_path)
+
+    assert cfg.config_load_warning is not None
+    assert str(broken) in cfg.config_load_warning
+    assert any(
+        source.kind == "CIRCUITRY_CONFIG" and source.note == "malformed — skipped"
+        for source in cfg.sources
+    )

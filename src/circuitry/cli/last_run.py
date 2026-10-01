@@ -130,6 +130,13 @@ class LastRun:
         return self._path_arg("live_state")
 
     @property
+    def profile_from_state(self) -> Path | None:
+        """The recorded-state file a ``--profile-from-state`` run was
+        reconstructed from, if this run used it — mutually exclusive with
+        :attr:`profile` (see ``run_cmd``'s own check)."""
+        return self._path_arg("profile_from_state")
+
+    @property
     def has_redacted_secrets(self) -> bool:
         """True when replaying would pass a redaction marker as a real value."""
         return any(pair.endswith(f"={REDACTED}") for pair in self.env_pairs)

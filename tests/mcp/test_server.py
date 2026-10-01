@@ -150,6 +150,51 @@ def test_validate_orchestration_uses_the_resolved_config(
     assert any("ffmpeg" in e for e in result["errors"])
 
 
+def test_validate_orchestration_skips_the_document_adapter_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every MCP run injects a `HostClaudeAdapter` regardless of the
+    document's own top-level `adapter:` (RunManager.start_run always passes
+    its own `adapter=`), so checking that name here must not reject a
+    document that runs fine through `run_orchestration` — the same
+    `skip_adapter_check` RunManager's own preflight call already uses
+    (#265 part 4)"""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    p = _write_yml(tmp_path, "openai.yml", """
+        adapter: openai
+        model: gpt-4
+        effects:
+          - type: prompt
+            name: x
+            template: "hi"
+    """)
+    result = srv._validate_orchestration_impl(str(p))
+    assert result["ok"] is True
+    assert result["errors"] == []
+
+
+def test_validate_orchestration_still_checks_a_per_effect_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unlike the document-level default, a prompt effect's own `provider:`
+    is really built and called at run time (`PromptRuntime._resolve_adapter`)
+    even when MCP injects a HostClaudeAdapter, so it must still fail
+    validation here (#265 part 9)."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    p = _write_yml(tmp_path, "openai_provider.yml", """
+        adapter: host_claude
+        model: claude-sonnet-4
+        effects:
+          - type: prompt
+            name: x
+            provider: openai
+            template: "hi"
+    """)
+    result = srv._validate_orchestration_impl(str(p))
+    assert result["ok"] is False
+    assert any("OPENAI_API_KEY" in e for e in result["errors"])
+
+
 # ---------------------------------------------------------------------------
 # 4-5. run_orchestration + submit_response (single-prompt)
 # ---------------------------------------------------------------------------

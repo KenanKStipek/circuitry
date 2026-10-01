@@ -578,12 +578,19 @@ def run_cmd(
 ):
     # --last: replay stashed args
     stashed_trust: bool | None = None
+    stashed_service_profile: str | None = None
     if last:
         stashed = _load_last_run()
         orchestration = stashed["orchestration"]
         # The stash holds the resolved file even for a library name, so
         # whether the original run named a file comes from the stash too.
         stashed_trust = stashed.get("trust_document") is True
+        # A run-library run stashed with `--service-profile` applied its
+        # adapter/model/runtime/plugin overrides on top of `cfg` before
+        # fetching and running — replaying via plain `cof run --last`
+        # otherwise rebuilds `cfg` from `config` alone and silently drops
+        # every one of them (#265 part 2 follow-up).
+        stashed_service_profile = stashed.get("service_profile")
         config = Path(stashed["config"]) if stashed.get("config") else None
         state = Path(stashed["state"]) if stashed.get("state") else None
         out = Path(stashed["out"]) if stashed.get("out") else None
@@ -634,6 +641,19 @@ def run_cmd(
     # for example one skipped file that defined runtime.library sources —
     # can still explain an "Orchestration not found".
     cfg = resolve_config(explicit_path=config)
+
+    if stashed_service_profile:
+        try:
+            svc_profile = resolve_service_profile(
+                cfg=cfg, profile_name=stashed_service_profile
+            )
+            cfg = apply_service_profile(cfg=cfg, profile=svc_profile)
+        except Exception as exc:
+            console.print(
+                f"[red]Error:[/red] Could not reapply service profile "
+                f"{stashed_service_profile!r}: {exc}"
+            )
+            raise typer.Exit(code=1) from exc
 
     # A file named by path is trusted with its whole runtime:/plugins:; a
     # library name resolves to someone else's document and stays limited.
@@ -1100,8 +1120,14 @@ def run_library_cmd(
         result = run(req)
     _print_run_warnings(result.warnings)
 
-    if out:
-        _write_state_json(out=out, state=result.state, pretty=pretty)
+    # Resolved --out path: the CLI flag if given, else the profile's `out:`
+    # (precedence cli > profile > default), the same as `cof run` — a
+    # `--profile` here used to silently skip writing the state file when it
+    # set `out:` and `--out` wasn't also given (#265 part 2).
+    resolved_out = result.out_path
+
+    if resolved_out:
+        _write_state_json(out=resolved_out, state=result.state, pretty=pretty)
 
     if not result.ok:
         if json_out:
@@ -1109,14 +1135,14 @@ def run_library_cmd(
                 "ok": False,
                 "error": result.error,
                 "warnings": result.warnings,
-                "state_out": str(out) if out else None,
+                "state_out": str(resolved_out) if resolved_out else None,
             }
             console.print_json(json.dumps(payload))
         else:
             console.print("[red]Run failed[/red]")
             console.print(f"[red]Error:[/red] {result.error}")
-            if out:
-                console.print(f"[bold]State written:[/bold] {out}")
+            if resolved_out:
+                console.print(f"[bold]State written:[/bold] {resolved_out}")
         raise typer.Exit(code=1)
 
     # Stash for --last, the same shape `cof run` writes — so `cof run --last`
@@ -1148,6 +1174,10 @@ def run_library_cmd(
         "routing": routing,
         "decompose": decompose,
         "trust_document": False,
+        # So `cof run --last` can reapply the same adapter/model/runtime/
+        # plugin overrides this run used — otherwise a replayed run-library
+        # run silently loses them (#265 part 2 follow-up).
+        "service_profile": svc_profile.name if svc_profile is not None else None,
     })
 
     if tail:

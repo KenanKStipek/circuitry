@@ -345,6 +345,155 @@ def test_nested_parallel_tree_in_chain(mgr: RunManager, tmp_path: Path) -> None:
         assert run.state["prime"]["middle"][f"iter_{i}"]["branch"]["value"].startswith("b-")
 
 
+def test_submit_response_returns_with_next_prompt_already_pending(
+    mgr: RunManager, tmp_path: Path
+) -> None:
+    """A three-prompt chain where each `submit_response` call's own return
+    already carries the next prompt — asserted without any `_wait_until`
+    polling, which would defeat the point. `submit_response` used to wake as
+    soon as the answered prompt was popped, before the worker thread (an
+    artificial delay simulates it not yet being scheduled) registered the
+    next one, so a caller reading `run.pending_prompts` straight off the
+    return would see it empty (#237)."""
+    import time
+    from unittest.mock import patch
+
+    p = _write_yml(tmp_path, "chain3.yml", """
+        model: claude-sonnet-4
+        adapter: host_claude
+        effects:
+          - type: prompt
+            name: a
+            template: "first"
+          - type: prompt
+            name: b
+            template: "second"
+          - type: prompt
+            name: c
+            template: "third"
+    """)
+
+    real_handler_for = mgr._handler_for
+
+    def _delayed_handler_for(run, host_req):  # type: ignore[no-untyped-def]
+        time.sleep(0.3)
+        return real_handler_for(run, host_req)
+
+    with patch.object(mgr, "_handler_for", side_effect=_delayed_handler_for):
+        run = mgr.start_run(orchestration_path=p)
+        assert len(run.pending_prompts) == 1
+        pid_a = next(iter(run.pending_prompts))
+        assert run.pending_prompts[pid_a].prompt == "first"
+
+        mgr.submit_response(run_id=run.run_id, prompt_id=pid_a, response_text="A")
+        # Asserted immediately: submit_response's own wait must already have
+        # blocked for the real next-prompt signal.
+        assert len(run.pending_prompts) == 1, list(run.pending_prompts)
+        pid_b = next(iter(run.pending_prompts))
+        assert run.pending_prompts[pid_b].prompt == "second"
+
+        mgr.submit_response(run_id=run.run_id, prompt_id=pid_b, response_text="B")
+        assert len(run.pending_prompts) == 1, list(run.pending_prompts)
+        pid_c = next(iter(run.pending_prompts))
+        assert run.pending_prompts[pid_c].prompt == "third"
+
+        mgr.submit_response(run_id=run.run_id, prompt_id=pid_c, response_text="C")
+
+    assert _wait_until(lambda: run.status == RunStatus.COMPLETED)
+    assert run.state["prime"]["c"]["value"] == "C"
+
+
+def test_nested_tree_inside_a_use_child_reports_the_full_branch_count(
+    mgr: RunManager, tmp_path: Path
+) -> None:
+    """A `flow: tree` dynamic nested inside a `use:` child, itself one
+    branch of an outer `flow: tree` dynamic, must contribute its own branch
+    count to what `start_run` waits for — not just the outer dispatch's,
+    overwritten and lost (#237 part 3). Expects 1 (the outer's other, plain
+    branch) + 2 (the nested tree's own branches) = 3 pending prompts."""
+    p = _write_yml(tmp_path, "nested_use_tree.yml", """
+        model: claude-sonnet-4
+        adapter: host_claude
+        effects:
+          - type: dynamic
+            name: outer
+            flow: tree
+            effects:
+              - type: prompt
+                name: solo
+                template: "solo"
+              - type: use
+                name: nested
+                inline: |
+                  effects:
+                    - type: dynamic
+                      name: inner
+                      flow: tree
+                      effects:
+                        - type: prompt
+                          name: x
+                          template: "x"
+                        - type: prompt
+                          name: y
+                          template: "y"
+    """)
+    run = mgr.start_run(orchestration_path=p)
+
+    assert _wait_until(lambda: len(run.pending_prompts) == 3, timeout=2.0), (
+        f"saw {len(run.pending_prompts)} of 3 expected branches"
+    )
+    prompts = {pp.prompt for pp in run.pending_prompts.values()}
+    assert prompts == {"solo", "x", "y"}
+
+    for pid in list(run.pending_prompts):
+        mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text="ok")
+
+    assert _wait_until(lambda: run.status == RunStatus.COMPLETED)
+
+
+def test_max_concurrency_caps_expected_pending_not_total_branches(
+    mgr: RunManager, tmp_path: Path
+) -> None:
+    """A `max_concurrency: 2` tree of 3 effects can never have more than 2
+    concurrently pending — the pool itself won't start the 3rd until one of
+    the first 2 finishes — so `start_run` must settle at 2, not stall out
+    the full safety-net budget waiting for a 3rd that was never coming yet
+    (#237 part 3)."""
+    p = _write_yml(tmp_path, "capped.yml", """
+        model: claude-sonnet-4
+        adapter: host_claude
+        effects:
+          - type: dynamic
+            name: capped
+            flow: tree
+            max_concurrency: 2
+            effects:
+              - type: prompt
+                name: a
+                template: "a"
+              - type: prompt
+                name: b
+                template: "b"
+              - type: prompt
+                name: c
+                template: "c"
+    """)
+    run = mgr.start_run(orchestration_path=p)
+
+    # Asserted immediately: a 3rd item would only ever show up after one of
+    # the first 2 is answered, so this isn't racing a slow scheduler.
+    assert len(run.pending_prompts) == 2, list(run.pending_prompts)
+
+    first_pid = next(iter(run.pending_prompts))
+    mgr.submit_response(run_id=run.run_id, prompt_id=first_pid, response_text="r1")
+    assert _wait_until(lambda: len(run.pending_prompts) == 2, timeout=2.0)
+
+    for pid in list(run.pending_prompts):
+        mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text="r")
+
+    assert _wait_until(lambda: run.status == RunStatus.COMPLETED)
+
+
 # ---------------------------------------------------------------------------
 # 7. Cancel while paused (parallel branches)
 # ---------------------------------------------------------------------------

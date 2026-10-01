@@ -363,11 +363,20 @@ class LoopRuntime:
                     )
                     total = len(capped)
 
-                    # One signal, before any branch starts, naming exactly how
-                    # many are about to dispatch — lets a listener (MCP's
-                    # RunManager) wait for a real completion/pause count
-                    # instead of guessing from a debounce window (#237).
-                    store.fire_concurrent_dispatch(self.defn.name, total)
+                    # The real ceiling on how many iterations can ever be
+                    # concurrently pending — bounded by max_concurrency when
+                    # set, else every iteration runs at once.
+                    effective_concurrency = (
+                        total
+                        if self.defn.max_concurrency is None
+                        else max(1, min(self.defn.max_concurrency, total))
+                    )
+
+                    # One signal, before any branch starts, naming how many
+                    # can ever be concurrently pending — lets a listener
+                    # (MCP's RunManager) wait for a real completion/pause
+                    # count instead of guessing from a debounce window (#237).
+                    store.fire_concurrent_dispatch(self.defn.name, effective_concurrency)
 
                     iter_ctxs: list[tuple[int, dict[str, Any]]] = []
                     for idx, item in enumerate(capped):
@@ -438,6 +447,12 @@ class LoopRuntime:
                                     results[i] = future.result()[0]
                                 except Exception as exc:
                                     errors[i] = exc
+                                finally:
+                                    # This iteration is done, whether or not
+                                    # it ever registered a prompt — one fewer
+                                    # settle point a listener still needs to
+                                    # see (#237).
+                                    store.fire_branch_settled(self.defn.name)
 
                     # Merge isolated stores back into child_store sequentially
                     for idx in range(total):

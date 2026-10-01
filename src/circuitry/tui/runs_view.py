@@ -543,6 +543,7 @@ class RunsScreen(ViewScreen):
             model_override=stashed.model or None,
             skip_preflight=stashed.skip_preflight,
             profile_name=stashed.profile or None,
+            profile_record=_replay_profile_record(stashed),
             scoring_override=stashed.scoring,
             routing_override=stashed.routing,
             decompose_override=stashed.decompose,
@@ -678,3 +679,25 @@ def _safe_config(stashed: LastRun) -> CircuitryConfig:
         return resolve_config(explicit_path=stashed.config_path)
     except Exception:
         return CircuitryConfig()
+
+
+def _replay_profile_record(stashed: LastRun) -> dict[str, Any] | None:
+    """The ``runtime.effective_settings.profile`` record a
+    ``--profile-from-state`` run was reconstructed from, the same way
+    ``run_cmd --last`` rebuilds it — otherwise a TUI replay of such a run
+    silently drops the profile's adapter/model/runtime overrides (#265 part
+    3 follow-up). An unreadable or profile-less recorded state degrades to
+    no profile rather than failing the replay."""
+    path = stashed.profile_from_state
+    if path is None:
+        return None
+    try:
+        recorded_state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    record = (
+        recorded_state.get("runtime", {}).get("effective_settings", {}).get("profile")
+        if isinstance(recorded_state, dict)
+        else None
+    )
+    return record if isinstance(record, dict) else None
