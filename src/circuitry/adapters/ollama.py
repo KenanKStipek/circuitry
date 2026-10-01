@@ -130,7 +130,8 @@ class OllamaAdapter:
             elif proc.returncode == 28:
                 hint = (
                     f"The model didn't finish within {int(timeout_seconds)}s. "
-                    "Raise `runtime.adapters.ollama.timeout_seconds` in your "
+                    "Raise the prompt's `timeout_ms` or "
+                    "`runtime.adapters.ollama.timeout_seconds` in your "
                     "config, or use a smaller/faster model."
                 )
             elif proc.returncode == 22:
