@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 
 import pytest
@@ -278,3 +279,48 @@ def test_rest_trigger_returns_runtime_failure_details(tmp_path: Path) -> None:
     trigger = response.body["runtime"]["trigger"]
     assert trigger["status"] == "failed"
     assert trigger["error"] == response.body["error"]
+
+
+@pytest.mark.parametrize(
+    "bad_request_id",
+    [
+        "a" * 129,  # over the length cap
+        "has spaces",
+        "line\ninjection",
+        "has/slash",
+        "\x00null",
+        "",
+    ],
+)
+def test_rest_trigger_replaces_an_invalid_request_id_with_a_fresh_uuid(
+    tmp_path: Path, bad_request_id: str
+) -> None:
+    """An out-of-shape client-supplied x-request-id (#269 item 10) must not
+    be echoed back or persisted verbatim — a fresh UUID replaces it."""
+    svc = RestTriggerService(allow_unauthenticated=True, orchestration_root=tmp_path)
+    response = svc.handle_http_request(
+        method="POST",
+        path="/v1/triggers/run",
+        headers={"X-Request-ID": bad_request_id},
+        body=json.dumps(
+            {"orchestration_path": str(tmp_path / "missing.yml"), "dry_run": True}
+        ),
+    )
+
+    assert response.body["request_id"] != bad_request_id
+    assert response.headers["x-request-id"] != bad_request_id
+    uuid.UUID(response.body["request_id"])  # does not raise
+
+
+def test_rest_trigger_accepts_a_well_formed_request_id(tmp_path: Path) -> None:
+    svc = RestTriggerService(allow_unauthenticated=True, orchestration_root=tmp_path)
+    response = svc.handle_http_request(
+        method="POST",
+        path="/v1/triggers/run",
+        headers={"X-Request-ID": "a-fine_ID-123"},
+        body=json.dumps(
+            {"orchestration_path": str(tmp_path / "missing.yml"), "dry_run": True}
+        ),
+    )
+
+    assert response.body["request_id"] == "a-fine_ID-123"

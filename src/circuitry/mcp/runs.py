@@ -95,6 +95,8 @@ class RunManager:
         quiesce_max_wait_seconds: float = 5.0,
         cancel_join_timeout: float = 5.0,
         worker_poll_interval: float = 0.1,
+        max_concurrent_runs: int = 50,
+        max_retained_runs: int = 200,
     ) -> None:
         self._runs: dict[str, Run] = {}
         self._lock = threading.RLock()
@@ -102,6 +104,12 @@ class RunManager:
         self._quiesce_max_wait = quiesce_max_wait_seconds
         self._cancel_join_timeout = cancel_join_timeout
         self._worker_poll_interval = worker_poll_interval
+        # A run (and its worker thread) is kept until explicitly cancelled or
+        # the retention cap below evicts it — nothing else ever drops one, so
+        # a client that starts runs in a loop and never cancels/evicts them
+        # could otherwise exhaust host memory and threads one call at a time.
+        self._max_concurrent_runs = max_concurrent_runs
+        self._max_retained_runs = max_retained_runs
 
     # ----------------------------------------------------------------- public
     def start_run(
@@ -114,6 +122,14 @@ class RunManager:
     ) -> Run:
         run = Run(run_id=uuid.uuid4().hex, orchestration_path=orchestration_path)
         with self._lock:
+            active = sum(1 for r in self._runs.values() if not r.status.is_terminal)
+            if active >= self._max_concurrent_runs:
+                raise RuntimeError(
+                    f"circuitry-mcp: {active} run(s) already in flight "
+                    f"(limit {self._max_concurrent_runs}); cancel one or wait "
+                    "for it to finish before starting another."
+                )
+            self._evict_oldest_terminal_runs_locked()
             self._runs[run.run_id] = run
 
         adapter = HostClaudeAdapter(
@@ -286,6 +302,27 @@ class RunManager:
         if not isinstance(response_text, str):
             response_text = str(response_text)
         return response_text
+
+    def _evict_oldest_terminal_runs_locked(self) -> None:
+        """Drop the oldest-completed terminal runs once adding one more would
+        exceed ``max_retained_runs``. Caller holds ``self._lock``. Never
+        touches a non-terminal run — its worker thread may still be running
+        and a client may still be waiting to call ``get_run``/
+        ``submit_response`` on it.
+        """
+        if len(self._runs) < self._max_retained_runs:
+            return
+        terminal = sorted(
+            (
+                run
+                for run in self._runs.values()
+                if run.status.is_terminal and run.completed_at is not None
+            ),
+            key=lambda run: run.completed_at,  # type: ignore[arg-type,return-value]
+        )
+        overflow = len(self._runs) - self._max_retained_runs + 1
+        for run in terminal[:overflow]:
+            self._runs.pop(run.run_id, None)
 
     # ----------------------------------------------------------------- internal
     def _require_run(self, run_id: str) -> Run:

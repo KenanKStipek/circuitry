@@ -593,3 +593,100 @@ def test_untrusted_project_config_warning_reaches_the_run(
 
     assert _wait_until(lambda: run.status == RunStatus.COMPLETED)
     assert any("Skipped project config" in w for w in run.warnings)
+
+
+# ---------------------------------------------------------------------------
+# 15. Bounded retention — no unbounded run/thread growth (#269 item 8)
+# ---------------------------------------------------------------------------
+
+
+def test_start_run_refuses_past_the_concurrent_cap(tmp_path: Path) -> None:
+    mgr = RunManager(
+        quiesce_seconds=0.02,
+        quiesce_max_wait_seconds=2.0,
+        cancel_join_timeout=2.0,
+        worker_poll_interval=0.05,
+        max_concurrent_runs=2,
+    )
+    try:
+        p = _write_yml(tmp_path, "hello.yml", """
+            model: claude-sonnet-4
+            adapter: host_claude
+            effects:
+              - type: prompt
+                name: greet
+                template: "Say hi"
+        """)
+        run_a = mgr.start_run(orchestration_path=p)
+        run_b = mgr.start_run(orchestration_path=p)
+        assert _wait_until(lambda: run_a.status == RunStatus.PAUSED)
+        assert _wait_until(lambda: run_b.status == RunStatus.PAUSED)
+
+        with pytest.raises(RuntimeError, match="already in flight"):
+            mgr.start_run(orchestration_path=p)
+    finally:
+        for run_id in list(mgr._runs):
+            run = mgr._runs[run_id]
+            if not run.status.is_terminal:
+                try:
+                    mgr.cancel_run(run_id)
+                except KeyError:
+                    pass
+
+
+def test_retention_cap_evicts_the_oldest_terminal_run_not_a_live_one(
+    tmp_path: Path,
+) -> None:
+    """A completed run older than the cap is dropped; an in-flight run never
+    is, regardless of age — RunManager used to keep every run forever."""
+    mgr = RunManager(
+        quiesce_seconds=0.02,
+        quiesce_max_wait_seconds=2.0,
+        cancel_join_timeout=2.0,
+        worker_poll_interval=0.05,
+        max_concurrent_runs=10,
+        max_retained_runs=2,
+    )
+    try:
+        p = _write_yml(tmp_path, "hello.yml", """
+            model: claude-sonnet-4
+            adapter: host_claude
+            effects:
+              - type: prompt
+                name: greet
+                template: "Say hi"
+        """)
+
+        def _run_to_completion() -> str:
+            run = mgr.start_run(orchestration_path=p)
+            assert _wait_until(lambda: run.status == RunStatus.PAUSED)
+            pid = _single_pending_id(run)
+            mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text="ok")
+            assert _wait_until(lambda: run.status == RunStatus.COMPLETED)
+            return run.run_id
+
+        first_id = _run_to_completion()
+        _run_to_completion()
+        third_id = _run_to_completion()
+
+        # The cap is 2: starting the third completed run evicts the first.
+        assert first_id not in mgr._runs
+        assert third_id in mgr._runs
+        with pytest.raises(KeyError):
+            mgr.get_run(first_id)
+
+        # A still-running (non-terminal) run is never evicted to make room,
+        # even once the cap would otherwise be exceeded.
+        live_run = mgr.start_run(orchestration_path=p)
+        assert _wait_until(lambda: live_run.status == RunStatus.PAUSED)
+        for _ in range(3):
+            _run_to_completion()
+        assert mgr.get_run(live_run.run_id) is live_run
+    finally:
+        for run_id in list(mgr._runs):
+            run = mgr._runs[run_id]
+            if not run.status.is_terminal:
+                try:
+                    mgr.cancel_run(run_id)
+                except KeyError:
+                    pass
