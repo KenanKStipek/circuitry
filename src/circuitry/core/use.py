@@ -16,6 +16,7 @@ from ..adapters import Adapter
 from ..output import console as _console
 from .outputs import normalize_outputs
 from .store import Store
+from .store.store import replace_node
 
 logger = logging.getLogger(__name__)
 
@@ -64,23 +65,6 @@ def _namespaced_effect_cb(
     return _forward
 
 
-def _replace_node(
-    state: dict[str, Any], parts: list[str], replacement: dict[str, Any]
-) -> dict[str, Any]:
-    """A shallow copy of *state* with the node at *parts* swapped out.
-
-    Only the dicts along the path are copied; everything else stays a live
-    reference, which is all a snapshot consumer (JSON dump, deepcopy) needs.
-    """
-    head, rest = parts[0], parts[1:]
-    if not rest:
-        return {**state, head: replacement}
-    inner = state.get(head)
-    if not isinstance(inner, dict):
-        return state
-    return {**state, head: _replace_node(inner, rest, replacement)}
-
-
 def _grafted_snapshot(
     root_state: dict[str, Any],
     node_path: str,
@@ -103,7 +87,7 @@ def _grafted_snapshot(
     }
     if not mirrored:
         return root_state
-    return _replace_node(root_state, node_path.split("."), {**node, **mirrored})
+    return replace_node(root_state, node_path.split("."), {**node, **mirrored})
 
 
 def _collect_child_errors(node: Any, prefix: str = "") -> list[dict[str, Any]]:

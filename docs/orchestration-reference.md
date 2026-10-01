@@ -143,7 +143,7 @@ A named container that executes child effects sequentially (`chain`) or in paral
 
 **Flow semantics:**
 - `chain` — sequential: each effect executes after the previous, and sees all prior outputs in state
-- `tree` — parallel: all effects execute concurrently against the same input snapshot; none see each other's outputs
+- `tree` — parallel: all effects execute concurrently against the same input snapshot; none see each other's outputs. Each branch reports `on_effect_start` / `on_effect_complete` and reaches `--live-state` while it runs, from its own worker thread
 
 **Example — chain (sequential pipeline):**
 ```yaml
@@ -322,6 +322,8 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 
 # prime.draft_effects.collected.value → [block_0, block_1, ...]  (order preserved)
 ```
+
+Each iteration writes into its own isolated state, merged back in index order when the loop finishes, but observers see it while it runs: every effect inside reports `on_effect_start` / `on_effect_complete` at its full path (`prime.draft_effects.iter_3.draft_effect`) from the worker thread running it, and `--live-state` shows each iteration's finished steps before the loop completes.
 
 **While loop example:**
 ```yaml

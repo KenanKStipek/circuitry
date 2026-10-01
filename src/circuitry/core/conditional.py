@@ -119,13 +119,6 @@ class ConditionalRuntime:
         self._model_answer: str | None = None
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
-        from .dynamic import DynamicDefinition, DynamicRuntime
-        from .loop import LoopDefinition, LoopRuntime
-        from .prompt import PromptDefinition, PromptRuntime
-        from .reflector import ReflectorDefinition, ReflectorRuntime
-        from .tool import ToolDefinition, ToolRuntime
-        from .use import UseDefinition, UseRuntime
-
         # Named decision: create a node for this conditional
         # Transparent control: effects merge directly into parent
         is_named = bool(self.defn.name)
@@ -142,10 +135,35 @@ class ConditionalRuntime:
             meta["mode"] = self.defn.condition.mode
             meta["threshold"] = self.defn.threshold
             child_store = store.child(self.defn.name)
+            # Before the condition is evaluated, so the decision's own start
+            # brackets every start/complete pair its branch produces.
+            store.fire_effect_start(self.defn.name, node)
+            try:
+                self._decide_and_run(
+                    child_store=child_store, node=node, meta=meta, ctx=ctx
+                )
+            finally:
+                # Balances the start on every exit: a taken branch, an
+                # on_error: skip, and a failed condition or branch alike.
+                store.fire_effect_complete(self.defn.name, node)
         else:
-            node = None
-            meta = None
-            child_store = store
+            self._decide_and_run(child_store=store, node=None, meta=None, ctx=ctx)
+
+    def _decide_and_run(
+        self,
+        *,
+        child_store: Store,
+        node: dict[str, Any] | None,
+        meta: dict[str, Any] | None,
+        ctx: dict[str, Any],
+    ) -> None:
+        """Evaluate the condition and run the branch it selects."""
+        from .dynamic import DynamicDefinition, DynamicRuntime
+        from .loop import LoopDefinition, LoopRuntime
+        from .prompt import PromptDefinition, PromptRuntime
+        from .reflector import ReflectorDefinition, ReflectorRuntime
+        from .tool import ToolDefinition, ToolRuntime
+        from .use import UseDefinition, UseRuntime
 
         # Keys child_store already carried before this branch runs — for a
         # transparent (unnamed) conditional that is the enclosing scope's own

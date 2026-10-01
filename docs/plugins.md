@@ -57,10 +57,18 @@ one written before these hooks existed keeps working untouched.
 
 The pair is balanced: an effect that fires one fires the other, in that
 order, including when the effect fails (the completion then carries
-`meta.error`) and for effects inside loops and conditional branches, which
-nest inside their container's pair. Effects that fire neither are the ones
-that never dispatch: a tool in `--dry-run`, and the bodies of `flow: tree`
-and parallel loops, whose isolated per-thread stores carry no callbacks.
+`meta.error`) and for effects inside loops, conditional branches and
+reflectors, which nest inside their container's pair — a named `if` and a
+`reflector` fire their own pair around everything they run. Effects that fire
+neither are the ones that never dispatch, such as a tool in `--dry-run`.
+
+Parallel work reports while it runs. Every effect inside a `flow: tree` loop
+or a parallel `dynamic` fires its pair at its full path
+(`prime.diagnoses.iter_3.diagnose`) as it starts and lands, not when the
+whole container finishes. Those calls come from the worker thread running the
+iteration or branch, so pairs from sibling branches interleave and a hook can
+be entered from several threads at once: a plugin that keeps state across
+calls guards it with a lock, as every bundled runtime plugin does.
 
 A `use` effect fires its own pair and its child orchestration's effects fire
 theirs inside it, at paths namespaced under the use node: a child effect
