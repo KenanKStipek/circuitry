@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from circuitry.cli import config as config_module
 from circuitry.service import RestTriggerService
 
 
@@ -156,6 +157,102 @@ def test_rest_trigger_accepts_relative_path_inside_root(tmp_path: Path) -> None:
     )
 
     assert response.status_code == 200, response.body
+
+
+def test_rest_trigger_without_explicit_config_applies_host_shell_pin(tmp_path: Path) -> None:
+    """config=None (the default) no longer means a bare, allowlist-open
+    CircuitryConfig() — the service resolves the host config the same way
+    `cof run` would, so a host-level `runtime.plugins.shell.allowed_commands`
+    pin applies to a REST run even though the request never names it."""
+    config_module.GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    config_module.GLOBAL_CONFIG_PATH.write_text(
+        json.dumps({"runtime": {"plugins": {"shell": {"allowed_commands": ["echo"]}}}}),
+        encoding="utf-8",
+    )
+
+    orch_path = tmp_path / "shell.yml"
+    orch_path.write_text(
+        """
+effects:
+  - type: tool
+    name: step
+    provider: shell
+    params:
+      command: uname
+      allowed_commands: [uname]
+      args: ["-s"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    svc = RestTriggerService(allow_unauthenticated=True, orchestration_root=tmp_path)
+    response = svc.handle_http_request(
+        method="POST",
+        path="/v1/triggers/run",
+        headers={},
+        body=json.dumps({"orchestration_path": str(orch_path), "dry_run": False}),
+    )
+
+    assert response.status_code == 500
+    assert response.body["ok"] is False
+    assert "allowed_commands" in response.body["error"]
+    assert "pin" in response.body["error"]
+
+
+def test_rest_trigger_rejects_relative_dotdot_escape(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside.yml"
+    _write_orchestration(outside)
+    svc = RestTriggerService(allow_unauthenticated=True, orchestration_root=root)
+
+    response = svc.handle_http_request(
+        method="POST",
+        path="/v1/triggers/run",
+        headers={},
+        body=json.dumps({"orchestration_path": "../outside.yml"}),
+    )
+
+    assert response.status_code == 400
+    assert response.body["ok"] is False
+    assert "orchestration root" in response.body["error"]
+
+
+def test_rest_trigger_rejects_symlink_escape(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside.yml"
+    _write_orchestration(outside)
+    link = root / "link.yml"
+    link.symlink_to(outside)
+    svc = RestTriggerService(allow_unauthenticated=True, orchestration_root=root)
+
+    response = svc.handle_http_request(
+        method="POST",
+        path="/v1/triggers/run",
+        headers={},
+        body=json.dumps({"orchestration_path": "link.yml"}),
+    )
+
+    assert response.status_code == 400
+    assert response.body["ok"] is False
+    assert "orchestration root" in response.body["error"]
+
+
+def test_rest_trigger_rejects_nul_byte_path_as_400_not_raise(tmp_path: Path) -> None:
+    svc = RestTriggerService(allow_unauthenticated=True, orchestration_root=tmp_path)
+
+    response = svc.handle_http_request(
+        method="POST",
+        path="/v1/triggers/run",
+        headers={},
+        body=json.dumps({"orchestration_path": "evil\x00.yml"}),
+    )
+
+    assert response.status_code == 400
+    assert response.body["ok"] is False
+    assert "orchestration_path" in response.body["error"]
 
 
 def test_rest_trigger_returns_runtime_failure_details(tmp_path: Path) -> None:

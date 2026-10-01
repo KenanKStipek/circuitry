@@ -505,9 +505,21 @@ def test_tool_runtime_params_json_wins_on_key_conflict(
     assert captured_params["arguments"] == {"symbols": ["AAPL"], "keep": "me"}
 
 
-def test_tool_runtime_rejects_params_json_allowed_commands_override() -> None:
+def test_tool_runtime_rejects_params_json_allowed_commands_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """allowed_commands is only honoured from a document's literal params
-    block — never params_json, which can carry model-generated content."""
+    block — never params_json, which can carry model-generated content.
+
+    ``subprocess.run`` is monkeypatched to fail the test rather than run
+    ``rm -rf /`` for real if this rejection ever regressed."""
+
+    def _fail_if_called(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("shell plugin must not run when allowed_commands is rejected")
+
+    monkeypatch.setattr(
+        "circuitry.plugins._subprocess.subprocess.run", _fail_if_called
+    )
     defn = ToolDefinition(
         name="x",
         provider="shell",

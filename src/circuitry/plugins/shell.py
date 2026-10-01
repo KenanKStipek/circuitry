@@ -25,10 +25,13 @@ Anything mutating the filesystem must be added explicitly per-effect.
 
 A host may additionally pin ``runtime.plugins.shell.allowed_commands`` in
 config; when set, the effective allowlist is the intersection of the pin
-and the effect's own list (or the default), so a document can only narrow
-the allowlist further, never widen it past the host's pin. Only honoured
-from config — a document's own ``runtime:`` block cannot set it (see
-``cli.effective_settings.ORCHESTRATION_RUNTIME_KEYS``).
+and the effect's own list (or the default), so a *limited* document (a
+library, a ``use`` child, a generated plan, or one reached through REST/MCP)
+can only narrow the allowlist further, never widen it past the host's pin
+(see ``cli.effective_settings.ORCHESTRATION_RUNTIME_KEYS``). A *trusted*
+document keeps its whole ``runtime:`` block and can replace the pin outright
+— the pin does not constrain ``cof run ./f.yml`` or
+``trust_orchestration_runtime``.
 
 AC C.5: a non-allowlisted command must be rejected before any side
 effect — the binary is never invoked when the command isn't allowed.
@@ -92,10 +95,21 @@ class ShellPlugin:
                 )
             allowed_set = set(allowed)
 
+        effect_allowed_set = set(allowed_set)
         if self.pinned_allowed_commands is not None:
             allowed_set &= set(self.pinned_allowed_commands)
 
         if command not in allowed_set:
+            if (
+                self.pinned_allowed_commands is not None
+                and command in effect_allowed_set
+            ):
+                raise PermissionError(
+                    f"shell: command {command!r} is blocked by the host's "
+                    f"runtime.plugins.shell.allowed_commands pin "
+                    f"{sorted(self.pinned_allowed_commands)}; adding it to "
+                    "params['allowed_commands'] cannot widen past the pin."
+                )
             raise PermissionError(
                 f"shell: command {command!r} not in allowlist "
                 f"{sorted(allowed_set)}. Add it via params['allowed_commands'] "

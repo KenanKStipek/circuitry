@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 
 import typer
@@ -175,16 +176,22 @@ def _build_config(
 def _write_private_file(path: Path, content: str) -> None:
     """Write *content* to *path*, mode 0600 — may hold API keys.
 
-    ``os.open``'s mode only applies when the file is newly created, so an
-    existing file (e.g. from a `cof setup` that predates this) gets an
-    explicit ``chmod`` too, tightening whatever mode it already had.
+    Written to a sibling temp file (``mkstemp``, 0600 from creation) and
+    ``os.replace``d into place, so a pre-existing looser-mode file (e.g.
+    from a `cof setup` that predates this) is never truncated and rewritten
+    in place at its old mode — the replacement is atomic and always 0600,
+    with no window where the new content is readable under the old mode.
     """
-    fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
     try:
-        os.write(fd, content.encode("utf-8"))
-    finally:
-        os.close(fd)
-    os.chmod(path, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(tmp_name, path)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
 
 
 def _write_config(config: dict) -> Path:
