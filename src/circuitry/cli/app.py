@@ -47,6 +47,7 @@ from .doctor import register_doctor
 from .effective_settings import resolve_effective_settings
 from .explain_routing import make_explain_routing_observer
 from .last_run import LAST_RUN_PATH
+from .state_merge import apply_inline_overrides
 from .library_sources import (
     Entry,
     LibraryFetchError,
@@ -231,26 +232,6 @@ def _restore_raw_text_for_string_inputs(
     for key, spec in iface_inputs.items():
         if isinstance(spec, dict) and spec.get("type") == "string" and key in raw:
             inline[key] = raw[key]
-
-
-def _apply_inline_overrides(
-    loaded_state: dict[str, Any], inline: dict[str, Any]
-) -> dict[str, Any]:
-    """Merge -e overrides into a loaded --state file, `-e` wins.
-
-    `-e` values are caller inputs by definition. If the loaded file is
-    already namespaced (e.g. a prior --out snapshot), `migrate_legacy_state`
-    short-circuits on its existing `input` key and never looks at the root
-    again, so the overrides must land under `input` here rather than at the
-    root or they'd be unreachable via `{{input.<key>}}`. A file that isn't
-    namespaced yet is left to the usual root-level lift.
-    """
-    existing_input = loaded_state.get("input")
-    if isinstance(existing_input, dict):
-        existing_input.update(inline)
-    else:
-        loaded_state.update(inline)
-    return loaded_state
 
 
 def _find_last_effect_value(state: dict[str, Any]) -> Any:
@@ -617,6 +598,9 @@ def run_cmd(
         tail = stashed.get("tail", False)
         skip_preflight = stashed.get("skip_preflight", False)
         profile = stashed.get("profile")
+        profile_from_state = (
+            Path(stashed["profile_from_state"]) if stashed.get("profile_from_state") else None
+        )
         adapter = stashed.get("adapter")
         model = stashed.get("model")
         explain_routing = stashed.get("explain_routing", False)
@@ -736,7 +720,7 @@ def run_cmd(
             except FileNotFoundError as exc:
                 _print_missing_state_file_error(exc, json_out=json_out)
                 raise typer.Exit(code=1) from exc
-            initial_state = _apply_inline_overrides(initial_state, inline)
+            initial_state = apply_inline_overrides(initial_state, inline)
         else:
             initial_state = inline
 
@@ -824,6 +808,7 @@ def run_cmd(
             "tail": tail,
             "skip_preflight": skip_preflight,
             "profile": profile,
+            "profile_from_state": str(profile_from_state) if profile_from_state else None,
             "adapter": adapter,
             "model": model,
             "explain_routing": explain_routing,
@@ -1024,7 +1009,7 @@ def run_library_cmd(
             except FileNotFoundError as exc:
                 _print_missing_state_file_error(exc, json_out=json_out)
                 raise typer.Exit(code=1) from exc
-            initial_state = _apply_inline_overrides(initial_state, inline)
+            initial_state = apply_inline_overrides(initial_state, inline)
         else:
             initial_state = inline
 

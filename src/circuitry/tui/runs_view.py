@@ -46,6 +46,7 @@ from textual.widgets import Input, Static, Tree
 from ..cli.config import CircuitryConfig, resolve_config
 from ..cli.last_run import LastRun, read_last_run
 from ..cli.runtime_shim import RunRequest, RunResult
+from ..cli.state_merge import apply_inline_overrides
 from .inspector import (
     LoadedState,
     StateNode,
@@ -542,6 +543,9 @@ class RunsScreen(ViewScreen):
             model_override=stashed.model or None,
             skip_preflight=stashed.skip_preflight,
             profile_name=stashed.profile or None,
+            scoring_override=stashed.scoring,
+            routing_override=stashed.routing,
+            decompose_override=stashed.decompose,
             trust_document=stashed.trust_document,
         )
         self.store.begin(label=orch.name)
@@ -629,23 +633,25 @@ def _replay_inputs(stashed: LastRun) -> tuple[dict[str, Any] | None, Path | None
     """``(initial_state, state_path)`` for a replay, ranked as ``cof run`` ranks them.
 
     ``-e`` values win over a ``--state`` file, and the runtime reads only
-    one of the two — so when the stash has both, the file is merged here
-    exactly as the CLI merges it. An unreadable state file degrades to the
-    inline values rather than failing the replay.
+    one of the two — so when the stash has both, the file is merged here via
+    the same :func:`~circuitry.cli.state_merge.apply_inline_overrides` the
+    CLI uses, so an override lands under ``input`` (not the root) when the
+    state file is already namespaced — otherwise it would be unreachable via
+    ``{{input.<key>}}`` (#265 part 3). An unreadable state file degrades to
+    the inline values rather than failing the replay.
     """
     inline = stashed.initial_state()
     if not inline:
         return None, stashed.state_path
-    merged: dict[str, Any] = {}
+    loaded_state: dict[str, Any] = {}
     if stashed.state_path is not None:
         try:
             loaded = json.loads(stashed.state_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             loaded = None
         if isinstance(loaded, dict):
-            merged.update(loaded)
-    merged.update(inline)
-    return merged, None
+            loaded_state = loaded
+    return apply_inline_overrides(loaded_state, inline), None
 
 
 def _is_ancestor(parent: str, child: str) -> bool:

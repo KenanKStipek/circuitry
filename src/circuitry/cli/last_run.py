@@ -88,6 +88,21 @@ class LastRun:
         return bool(self.args.get("skip_preflight"))
 
     @property
+    def scoring(self) -> bool | None:
+        value = self.args.get("scoring")
+        return value if isinstance(value, bool) else None
+
+    @property
+    def routing(self) -> bool | None:
+        value = self.args.get("routing")
+        return value if isinstance(value, bool) else None
+
+    @property
+    def decompose(self) -> bool | None:
+        value = self.args.get("decompose")
+        return value if isinstance(value, bool) else None
+
+    @property
     def env_pairs(self) -> list[str]:
         pairs = self.args.get("env_vars")
         if not isinstance(pairs, list):

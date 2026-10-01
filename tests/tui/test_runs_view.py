@@ -411,6 +411,74 @@ def test_replay_merges_a_stashed_state_file_under_its_inline_values(
     assert seen["request"].initial_state == {"topic": "cats", "tone": "dry"}
 
 
+def test_replay_merges_inline_overrides_under_an_existing_input_namespace(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """A state file already namespaced under ``input`` (e.g. a prior --out)
+    must receive the ``-e`` override there too, or it's unreachable from any
+    template reading ``{{input.topic}}`` (#265 part 3)."""
+    orch = tmp_path / "demo.yml"
+    orch.write_text("effects: []\n", encoding="utf-8")
+    state_file = tmp_path / "in.json"
+    state_file.write_text(
+        json.dumps({"input": {"topic": "a", "tone": "dry"}}), encoding="utf-8"
+    )
+    seen: dict[str, Any] = {}
+
+    def runner(request: RunRequest) -> RunResult:
+        seen["request"] = request
+        return RunResult(ok=True, state={}, warnings=[])
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        screen = await _open(
+            pilot,
+            _screen(
+                last_run=_stash(orch, env_vars=["topic=b"], state=str(state_file)),
+                runner=runner,
+            ),
+        )
+        screen.action_replay()
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if "request" in seen:
+                break
+
+    run_app(scenario)
+    assert seen["request"].initial_state == {"input": {"topic": "b", "tone": "dry"}}
+
+
+def test_replay_carries_the_stashed_scoring_routing_decompose(
+    run_app: Any, tmp_path: Path
+) -> None:
+    orch = tmp_path / "demo.yml"
+    orch.write_text("effects: []\n", encoding="utf-8")
+    seen: dict[str, Any] = {}
+
+    def runner(request: RunRequest) -> RunResult:
+        seen["request"] = request
+        return RunResult(ok=True, state={}, warnings=[])
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        screen = await _open(
+            pilot,
+            _screen(
+                last_run=_stash(orch, scoring=True, routing=False, decompose=True),
+                runner=runner,
+            ),
+        )
+        screen.action_replay()
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if "request" in seen:
+                break
+
+    run_app(scenario)
+    request = seen["request"]
+    assert request.scoring_override is True
+    assert request.routing_override is False
+    assert request.decompose_override is True
+
+
 def test_replay_carries_the_stashed_adapter_and_model(run_app: Any, tmp_path: Path) -> None:
     orch = tmp_path / "demo.yml"
     orch.write_text("effects: []\n", encoding="utf-8")
