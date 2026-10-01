@@ -71,7 +71,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | Field | Type | Required | Default | Constraints |
 |-------|------|----------|---------|-------------|
 | `type` | `"prompt"` | yes | — | |
-| `name` | string | yes | — | Pattern `^[A-Za-z_][A-Za-z0-9_]*$`; `iter_<N>` reserved |
+| `name` | string | yes | — | Pattern `^[A-Za-z_][A-Za-z0-9_]*$`; `iter_<N>` reserved; `value`/`meta`/`input`/`prime`/`runtime` reserved |
 | `template` | string | one-of | — | Mustache template; mutually exclusive with `messages` |
 | `messages` | array | one-of | — | Role-based messages; mutually exclusive with `template` |
 | `prompt_type` | string | no | `text` | `text`, `json`, `boolean`, `number`, `array`, `object`, `tool`. `boolean`/`number` parse the reply leniently (`Yes.`, `**TRUE**`, `42.`, `1e3` all read correctly; wrapping quotes/markdown/punctuation stripped first) and raise — rather than decoding to `null` — on a reply that still doesn't parse, so `on_error`/`retries` apply. Raw reply kept on `meta.answer` |
@@ -242,7 +242,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 **State output paths (named each loop):**
 - Per-iteration: `prime.<name>.iter_0.<body_effect>.value`, `prime.<name>.iter_1.<body_effect>.value`, ...
 - Final pass (after the loop completes): `prime.<name>.last.<body_effect>.value` — the last *completed* iteration's node, same shape as `iter_<N>`. A pass that errored under `on_error: continue`/`break` is skipped in favor of the last one that finished; a zero-iteration loop writes no `last` key. Saved state writes it as a reference, `"last": {"$ref": "iter_<N>"}` — see [Loop Iteration Paths](#loop-iteration-paths).
-- Aggregated (when `collect` is set): `prime.<name>.collected.value` — array of every iteration's collected effect value
+- Aggregated (when `collect` is set): `prime.<name>.collected.value` — array of every iteration's collected effect value, in pass order. A pass that failed under `on_error: break`/`continue` is left out entirely (not a `null` placeholder), and its index is listed on `prime.<name>.meta.failed_passes`.
 - From *inside* the body: `prime.<body_effect>.value` — the current pass. See [Referencing a sibling within an iteration](#referencing-a-sibling-within-an-iteration).
 - Termination: `prime.<name>.value.termination.reason` — see [Loop termination](#loop-termination) below.
 
@@ -250,7 +250,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 |-------|------|----------|---------|-------------|
 | `type` | `"loop"` | yes | — | |
 | `name` | string | no | — | Optional; enables wrapper metadata recording and `collect` |
-| `collect` | string | no | — | Name of a body effect; aggregates its `.value` across all iterations into `prime.<name>.collected.value`. Requires a named loop. |
+| `collect` | string | no | — | Name of a body effect; aggregates its `.value` across all iterations into `prime.<name>.collected.value`. Requires a named loop — `cof check` rejects `collect` on an unnamed loop, naming the fix (give the loop a `name`). |
 | `flow` | `"chain"` \| `"tree"` | no | `chain` | `chain` = sequential (default). `tree` = all `each` iterations run in parallel via `ThreadPoolExecutor`. `while` loops always run sequentially. |
 | `max_concurrency` | integer | no | unbounded | Max parallel workers when `flow: tree`. |
 | `body` | array | yes | — | Non-empty list of effects to execute per iteration |
@@ -341,6 +341,10 @@ The condition is checked between passes and sees the pass that just finished
 under the same within-iteration names the body uses — so `{{prime.polish.value}}`
 above is the latest `polish` output, not the first one. Before the first pass
 there is nothing to see yet and the name falls through to the enclosing scope.
+In `mode: cel`, the condition also sees `state.iter.index`: the number of
+passes *completed* so far — `0` on the check before the first pass, `N`
+once N passes have run — so `state.iter.index < 3` caps a loop by pass
+count without a separate `max_iterations`.
 
 #### Loop termination
 
@@ -368,6 +372,10 @@ any iteration executes — with a message naming both numbers (`collection has
 144 items but max_iterations is 100`). Set `each.truncate: true` to opt into
 processing just the first `max_iterations` elements; the node then records
 `termination: max_iterations_reached` and `unvisited` instead of erroring.
+This bounds check is gated by the loop's own `on_error` exactly like a
+failed pass is: `break`/`continue` record `termination.reason: "error"` and
+`meta.error` and let the run continue past the loop (0 iterations) instead
+of raising; only `on_error: fail` (the default) stops the run.
 
 #### Referencing a sibling within an iteration
 
@@ -486,7 +494,7 @@ Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously
 | Field | Type | Required | Default | Constraints |
 |-------|------|----------|---------|-------------|
 | `type` | `"tool"` | yes | — | |
-| `name` | string | yes | — | Pattern `^[A-Za-z_][A-Za-z0-9_]*$`; `iter_<N>` reserved |
+| `name` | string | yes | — | Pattern `^[A-Za-z_][A-Za-z0-9_]*$`; `iter_<N>` reserved; `value`/`meta`/`input`/`prime`/`runtime` reserved |
 | `provider` | string | yes | — | Plugin name: `ffmpeg`, `comfyui` |
 | `prompt` | string | no | — | Primary input text. Mustache-rendered. For comfyui: the image generation prompt |
 | `model` | string | no | — | Model/checkpoint name. For comfyui: checkpoint filename |
@@ -969,7 +977,7 @@ in the effect tree:
 | Nesting level | Legal `state.<key>` roots |
 |---|---|
 | Anywhere | `input`, `prime`, `runtime` |
-| Inside a loop's own `body` (`each` or `while`) | + `iter` — loop metadata, currently just `iter.index` (0-based) |
+| Inside a loop's own `body` (`each` or `while`), or a `while` loop's own `expr` | + `iter` — loop metadata, currently just `iter.index` (0-based): the number of passes that have *completed* — 0 on the check before the first pass, N after N passes have run |
 | Inside an `each` loop's own `body` | + the loop's `each.as` name, bound to the current element |
 
 These loop-scoped names stack with nesting and are visible to *every*
@@ -1290,7 +1298,7 @@ The following rules are sufficient for generating structurally correct Circuitry
 11. `tool`: requires `name` and `provider`. Tool effects are for non-LLM side-effects only — generating images, processing video/audio, file conversion. Never use a tool effect for text summarization, analysis, writing, coding, or data extraction — those are `prompt` effects. Supported providers: `ffmpeg` (requires `params.input` and `params.output`), `comfyui` (requires `prompt` and `model` as top-level fields; `params` for sampler settings). Top-level `prompt` supports Mustache rendering. All string values in `params` also support Mustache rendering.
 
 **Naming:**
-12. All `name` values must match `^[A-Za-z_][A-Za-z0-9_]*$` — letters, digits, underscores; must start with letter or underscore; no spaces or dots. The pattern `iter_<N>` (e.g. `iter_0`) is reserved and must not be used as a name.
+12. All `name` values must match `^[A-Za-z_][A-Za-z0-9_]*$` — letters, digits, underscores; must start with letter or underscore; no spaces or dots. The pattern `iter_<N>` (e.g. `iter_0`) is reserved and must not be used as a name. `value`, `meta`, `input`, `prime` and `runtime` are also reserved — each collides with a structural slot the runtime itself writes.
 13. Effect names must be unique among siblings within the same scope.
 13a. Never name an effect after an effect type (`use`, `loop`, `if`, `dynamic`, `prompt`, `tool`, `reflector`). Name it after the job it does — `summarize_article`, not `prompt`. Generic names are what make two siblings collide; validation warns on them.
 
