@@ -556,6 +556,18 @@ Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously
 
 Tool providers reference a *tool plugin*, not an *adapter*, so the `prompt`-effect `on_error` reclassification above does not apply here: a missing tool-plugin dependency (e.g. `ffmpeg` not on `PATH`) always hard-fails preflight regardless of this effect's `on_error`.
 
+**Timeout:** `timeout_ms` on the effect wins, rounded up to the next whole second — a sub-second budget (e.g. `250`) never floors to a 0-second timeout, which some plugins would treat as "fail instantly" and others (curl-based ones) as "no limit at all". Unset, the tool's own default comes from `runtime.tools.timeout_seconds` in config (300s if that's unset too) — independent of `runtime.adapters.<name>.timeout_seconds`, the LLM adapter's socket timeout; a tool-only run, or one on the no-op adapter, still gets a real budget. See [Timeouts](./guidebook/04-configuration.md#timeouts).
+
+Not every plugin can actually be bounded by it:
+
+| How a plugin honors it | Plugins |
+|---|---|
+| Subprocess timeout (`subprocess.run(timeout=...)` or curl `--max-time`) | Every binary-wrapping plugin: `ffmpeg`, `shell`, `git`, `gh`, `ripgrep`, `sed`, `awk`, `pandoc`, `imagemagick`, `exiftool`, `gpg`, `docker`, `kubectl`, and the rest of that family. `comfyui` and `web_search`/`weather` apply it to their own curl calls |
+| Own network call | `web_fetch` (its own `params.timeout_ms`, when set, shortens it for that call — never extends past the effect's budget), `rss`, `wikipedia` (retries disabled so it can't multiply the budget), `whois`, `http`, `slack`, `notion`, `jira`, `github`, `gdrive`, `gcalendar`, `s3`, `linear`, `email_smtp`, `webhook`, `dns`, `mcp_client`, `playwright`, `screenshot`, `discord` (via a background thread with a deadline, since discord.py's webhook send has no timeout parameter of its own). These apply the timeout per socket operation (connect, each read, etc.), not to the whole call. |
+| Sandboxed child process, killed on overrun | `python_eval` |
+| Ignored — pure in-memory, nothing to bound | `json`, `xml`, `csv`, `regex`, `hash`, `hex`, `uuid`, `base64`, `gzip`, `zip`, `tar`, `fs`, `env_vars`, `validate_yaml`, `html_extract`, `pdf_extract`, `math`, `clock`, `system_info`, `process_list` |
+| Ignored — has its own, separate bound instead | `port_check` (`params.timeout_ms`, socket-level, default 2s), `surrealdb` (the SDK's own socket timeout), `embed`/`rerank`/`vector_search` (local inference; the first call per model can also trigger an unbounded download) |
+
 **Supported providers:**
 
 | Provider | Description | Required inputs | Result value |

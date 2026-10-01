@@ -244,6 +244,78 @@ def test_tool_runtime_on_error_fail_raises(monkeypatch: pytest.MonkeyPatch) -> N
         ToolRuntime(defn).execute(store=store, ctx={})
 
 
+def _capturing_timeout_plugin(captured):
+    def fake_build_plugin(**kw):
+        m = MagicMock()
+
+        def execute(*, params, timeout_seconds):
+            captured["timeout_seconds"] = timeout_seconds
+            return ToolResult(value="ok", raw={})
+
+        m.execute.side_effect = execute
+        return m
+
+    return fake_build_plugin
+
+
+class TestToolTimeoutResolution:
+    """issue 257: timeout_ms rounds up instead of flooring to 0, and a
+    tool's default timeout comes from runtime.tools.timeout_seconds, not
+    the run's LLM adapter timeout."""
+
+    def test_sub_second_timeout_ms_rounds_up_not_to_zero(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            "circuitry.plugins.factory.build_plugin", _capturing_timeout_plugin(captured)
+        )
+        defn = ToolDefinition(name="t", provider="shell", params={}, timeout_ms=500)
+        ToolRuntime(defn).execute(store=_make_store(), ctx={})
+        assert captured["timeout_seconds"] == 1
+
+    def test_timeout_ms_rounds_up_to_next_whole_second(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            "circuitry.plugins.factory.build_plugin", _capturing_timeout_plugin(captured)
+        )
+        defn = ToolDefinition(name="t", provider="shell", params={}, timeout_ms=1500)
+        ToolRuntime(defn).execute(store=_make_store(), ctx={})
+        assert captured["timeout_seconds"] == 2
+
+    def test_default_timeout_comes_from_runtime_tools_config(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            "circuitry.plugins.factory.build_plugin", _capturing_timeout_plugin(captured)
+        )
+        defn = ToolDefinition(name="t", provider="shell", params={})
+        ToolRuntime(defn, runtime_config={"tools": {"timeout_seconds": 900}}).execute(
+            store=_make_store(), ctx={}
+        )
+        assert captured["timeout_seconds"] == 900
+
+    def test_default_timeout_is_independent_of_llm_adapter_timeout(self, monkeypatch):
+        """The ctor's timeout_seconds (the LLM adapter's resolved timeout,
+        passed down unconditionally by dynamic/loop/conditional) must not
+        leak into the tool's own default budget."""
+        captured = {}
+        monkeypatch.setattr(
+            "circuitry.plugins.factory.build_plugin", _capturing_timeout_plugin(captured)
+        )
+        defn = ToolDefinition(name="t", provider="shell", params={})
+        ToolRuntime(defn, timeout_seconds=120).execute(store=_make_store(), ctx={})
+        assert captured["timeout_seconds"] == 300
+
+    def test_timeout_ms_overrides_configured_default(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            "circuitry.plugins.factory.build_plugin", _capturing_timeout_plugin(captured)
+        )
+        defn = ToolDefinition(name="t", provider="shell", params={}, timeout_ms=5000)
+        ToolRuntime(defn, runtime_config={"tools": {"timeout_seconds": 900}}).execute(
+            store=_make_store(), ctx={}
+        )
+        assert captured["timeout_seconds"] == 5
+
+
 def test_tool_runtime_mustache_renders_params(monkeypatch: pytest.MonkeyPatch) -> None:
     captured_params: dict[str, Any] = {}
 

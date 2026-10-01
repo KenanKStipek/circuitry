@@ -12,6 +12,14 @@ Params:
     ``"sections"`` returns a tree of section titles + text.
   - ``user_agent`` (optional, default identifies circuitry): Wikipedia
     requires a UA per their API policy.
+
+The effect's ``timeout_seconds`` is forwarded to the underlying ``httpx``
+client as its per-request timeout (its own default is 10s) — it bounds
+each socket operation, not the call as a whole. Retries are disabled
+(``max_retries=0``): wikipedia-api retries transient errors up to 3 times
+with exponential backoff by default, which would let a single effect take
+up to roughly 4x the budget plus backoff time; the effect's own
+``on_error``/retry handling is the place to re-run a failed lookup.
 """
 
 from __future__ import annotations
@@ -45,7 +53,6 @@ class WikipediaPlugin:
         params: dict[str, Any],
         timeout_seconds: int = 300,
     ) -> ToolResult:
-        del timeout_seconds
         try:
             import wikipediaapi  # type: ignore[import-not-found]
         except ImportError as exc:
@@ -61,7 +68,11 @@ class WikipediaPlugin:
         mode = str(params.get("mode") or "summary").lower()
         ua = str(params.get("user_agent") or "circuitry/0.1 (https://github.com/kenankstipek/circuitry)")
 
-        wiki = wikipediaapi.Wikipedia(user_agent=ua, language=language)
+        # Forwarded to the underlying httpx client; wikipedia-api defaults
+        # this to 10s on its own, which the effect's budget should control.
+        wiki = wikipediaapi.Wikipedia(
+            user_agent=ua, language=language, timeout=timeout_seconds, max_retries=0
+        )
         page = wiki.page(title.strip())
         if not page.exists():
             return ToolResult(

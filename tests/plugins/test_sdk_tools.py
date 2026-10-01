@@ -279,6 +279,35 @@ def test_discord_send_via_fake_webhook(monkeypatch: pytest.MonkeyPatch) -> None:
     assert captured["send_args"]["username"] == "BotName"
 
 
+def test_discord_send_honors_timeout_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """issue 257: discord.py's SyncWebhook.send has no timeout of its own
+    and used to ignore the effect's budget entirely."""
+    import time
+
+    fake_mod = types.ModuleType("discord")
+
+    class FakeWebhook:
+        @classmethod
+        def from_url(cls, url: str) -> FakeWebhook:
+            return cls()
+
+        def send(self, **kwargs: Any) -> Any:
+            time.sleep(5)
+            raise AssertionError("should have timed out before returning")
+
+    fake_mod.SyncWebhook = FakeWebhook
+    monkeypatch.setitem(sys.modules, "discord", fake_mod)
+
+    with pytest.raises(TimeoutError, match=r"exceeded timeout of 0\.2s"):
+        DiscordPlugin().execute(
+            params={
+                "webhook_url": "https://discord.com/api/webhooks/X/Y",
+                "content": "hi",
+            },
+            timeout_seconds=0.2,
+        )
+
+
 def test_github_get_repo_via_fake_pygithub(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
