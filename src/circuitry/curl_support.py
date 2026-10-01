@@ -136,6 +136,15 @@ def curl_failure_message(
     return _strip_url_userinfo(message)
 
 
+# Curl's config-file format is line-oriented: a bare CR or LF inside a
+# value ends that line early, letting the rest be read as a new option
+# (`output`, `upload-file`, `url`, ...). No header name or value in this
+# codebase is operator/document-controlled today, but `run_curl` is the
+# shared entry point for every curl call, so this is enforced rather than
+# assumed.
+_FORBIDDEN_HEADER_CHARS = ("\r", "\n", "\0")
+
+
 def _curl_config_file(headers: Sequence[tuple[str, str]]) -> str:
     """The ``--config`` file content for ``headers``.
 
@@ -145,6 +154,9 @@ def _curl_config_file(headers: Sequence[tuple[str, str]]) -> str:
     """
     lines = []
     for name, value in headers:
+        for part, label in ((name, "name"), (value, "value")):
+            if any(ch in part for ch in _FORBIDDEN_HEADER_CHARS):
+                raise ValueError(f"header {label} contains a forbidden control character")
         escaped = value.replace("\\", "\\\\").replace('"', '\\"')
         lines.append(f'header = "{name}: {escaped}"')
     return "\n".join(lines) + ("\n" if lines else "")
@@ -156,7 +168,6 @@ def run_curl(
     headers: Mapping[str, str] | Sequence[tuple[str, str]] = (),
     data: str | None = None,
     timeout_seconds: int,
-    extra_args: Sequence[str] = (),
 ) -> subprocess.CompletedProcess[str]:
     """Run curl with ``-q`` first, headers off argv, and ``data`` (if given)
     on stdin.
@@ -168,8 +179,17 @@ def run_curl(
     ``--data-binary @-``; headers can't use that channel too, since a
     request can have both. May raise ``FileNotFoundError`` if curl is not
     on PATH — callers translate that into their own error.
+
+    Windows' ``Popen`` rejects a non-empty ``pass_fds`` and has no
+    ``/dev/fd``, so a header-carrying call raises ``RuntimeError`` there
+    instead of silently losing the headers.
     """
     header_items = list(headers.items()) if isinstance(headers, Mapping) else list(headers)
+    if header_items and os.name == "nt":
+        raise RuntimeError(
+            "run_curl: sending headers via a pipe fd is not supported on Windows"
+        )
+    config_bytes = _curl_config_file(header_items).encode() if header_items else b""
     cmd = [
         "curl",
         "-q",
@@ -178,14 +198,13 @@ def run_curl(
         "--fail-with-body",
         "--max-time",
         str(int(timeout_seconds)),
-        *extra_args,
     ]
 
     read_fd: int | None = None
     try:
         if header_items:
             read_fd, write_fd = os.pipe()
-            os.write(write_fd, _curl_config_file(header_items).encode())
+            os.write(write_fd, config_bytes)
             os.close(write_fd)
             cmd += ["--config", f"/dev/fd/{read_fd}"]
         if data is not None:

@@ -102,16 +102,26 @@ line.** Every curl-based adapter (`openai`, `anthropic`, `ollama`,
 `replicate`, `watsonx` — including its IAM token exchange — and the ~20
 providers that share transport via
 [`adapters/_openai_compat.py`](../src/circuitry/adapters/_openai_compat.py))
-and curl-based tool plugin (`comfyui`, `web_search`, `weather`) shells out
-through [`circuitry/curl_support.py`](../src/circuitry/curl_support.py)'s
+and most of each curl-based tool plugin's calls (`comfyui`'s JSON calls,
+`web_search`, `weather`) shell out through
+[`circuitry/curl_support.py`](../src/circuitry/curl_support.py)'s
 `run_curl()`, which always passes `-q` first (so a local user's
 `~/.curlrc` can't silently redirect output or inject a proxy), sends the
-request body on stdin via `--data-binary @-` instead of `-d`/`-F` on argv
+JSON request body on stdin via `--data-binary @-` instead of `-d` on argv
 (this also removes Linux's 128 KiB-per-argument ceiling for a large prompt
 or base64 image), and sends every header — `Authorization`, `x-api-key`,
 any provider-specific credential header — through an inherited pipe file
-descriptor via `--config /dev/fd/<n>` rather than `-H`. None of this is
-ever visible in `ps` for the duration of the call.
+descriptor via `--config /dev/fd/<n>` rather than `-H`. Neither a secret
+nor a request body is ever visible in `ps` for the duration of the call.
+The target URL is the exception: it is still curl's final argument, so a
+credential a search API takes as a query parameter (`web_search`'s
+`extra_params`) or `user:pass@` in a configured `base_url` is visible in
+`ps`, though masked in any failure message (next mitigation). `comfyui`'s
+image fetch (`_curl_bytes`), its one multipart upload (`_upload_image`,
+`-F image=@<path>` — the local file path, not its contents, on argv) and
+its `check()` HEAD probe call curl directly rather than through
+`run_curl()`, since none of the three sends a JSON body or a header that
+needs to stay off argv; all three still pass `-q` first.
 
 **Mitigation — error masking.** Every curl failure raises through
 [`circuitry/curl_support.py`](../src/circuitry/curl_support.py)'s

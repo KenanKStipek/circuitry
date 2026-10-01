@@ -115,6 +115,40 @@ def test_non_credential_query_params_are_not_masked() -> None:
     assert "limit=5" in message
 
 
+def test_run_curl_rejects_header_value_with_embedded_newline() -> None:
+    """A `\n` in a header value would otherwise end that config-file line
+    early, letting the rest be read as a new curl option."""
+    with pytest.raises(ValueError):
+        run_curl(
+            url="https://example.test/x",
+            headers={"X-Thing": "a\nurl = http://attacker.test/"},
+            timeout_seconds=5,
+        )
+
+
+def test_run_curl_rejects_header_name_with_embedded_cr() -> None:
+    with pytest.raises(ValueError):
+        run_curl(
+            url="https://example.test/x",
+            headers={"X-Thing\r": "value"},
+            timeout_seconds=5,
+        )
+
+
+def test_run_curl_raises_clearly_on_windows_with_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`pass_fds` and `/dev/fd` don't exist on Windows; fail loudly rather
+    than silently drop the headers."""
+    monkeypatch.setattr(os, "name", "nt")
+    with pytest.raises(RuntimeError, match="Windows"):
+        run_curl(
+            url="https://example.test/x",
+            headers={"Authorization": "Bearer x"},
+            timeout_seconds=5,
+        )
+
+
 # ---------------------------------------------------------------------------
 # run_curl — end to end against a local HTTP server, never a live provider.
 # ---------------------------------------------------------------------------
@@ -185,10 +219,13 @@ def test_run_curl_ignores_curlrc(
     curlrc.write_text('header = "X-Injected: leaked"\n')
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("CURL_HOME", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    _RecordingHandler.captured_headers = {}
 
     with local_server(_RecordingHandler) as base_url:
-        run_curl(url=base_url + "/x", timeout_seconds=5)
+        proc = run_curl(url=base_url + "/x", timeout_seconds=5)
 
+    assert proc.returncode == 0
     assert "X-Injected" not in _RecordingHandler.captured_headers
 
 

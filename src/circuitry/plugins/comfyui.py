@@ -467,6 +467,7 @@ class ComfyUIPlugin:
                 proc = subprocess.run(
                     [
                         "curl",
+                        "-q",
                         "--silent",
                         "--max-time",
                         "2",

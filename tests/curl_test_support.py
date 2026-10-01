@@ -51,33 +51,6 @@ def assert_not_in_argv(cmd: list[str], *needles: str) -> None:
         assert needle not in joined, f"{needle!r} leaked into curl argv: {cmd!r}"
 
 
-class FakeProc:
-    """Drop-in stand-in for `subprocess.CompletedProcess` in adapter tests."""
-
-    def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
-        self.returncode = returncode
-        self.stdout = stdout
-        self.stderr = stderr
-
-
-def make_recording_run(responses: list[Any]) -> tuple[list[dict[str, Any]], Any]:
-    """A fake `subprocess.run` that records each call (cmd, headers, input)
-    and returns the next entry of `responses` in order."""
-    calls: list[dict[str, Any]] = []
-
-    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
-        calls.append(
-            {
-                "cmd": cmd,
-                "headers": read_config_headers(cmd),
-                "input": kwargs.get("input"),
-            }
-        )
-        return responses[len(calls) - 1]
-
-    return calls, fake_run
-
-
 class RecordingJSONHandler(http.server.BaseHTTPRequestHandler):
     """A local HTTP server that records the last request it received and
     replies with a fixed JSON body. Subclass and override `response_body`
