@@ -94,11 +94,13 @@ content) and never a list entry that is still a Mustache tag — both are a
 hard error rather than silently accepted. A host may additionally pin
 `runtime.plugins.shell.allowed_commands` in config; when set, the effective
 allowlist is that pin intersected with the effect's own list, so a *limited*
-document can only narrow it further, never widen it past the host's pin. A
-*trusted* document (see [§6](#6-host-settings-versus-orchestration-documents))
-keeps its whole `runtime:` block and can replace the pin outright — the pin
-only constrains documents that reach `cof` indirectly (library, `use` child,
-generated plan, REST, MCP).
+document can only narrow it further, never widen it past the host's pin. The
+pin is a ceiling even for a *trusted* document (see
+[Section 6](#6-host-settings-versus-orchestration-documents)): unlike every
+other `runtime.plugins`/`runtime.adapters` key, which a trusted document's
+own value overrides key by key, its `runtime.plugins.shell.allowed_commands`
+intersects with the host's pin rather than replacing it — the host's
+allowlist is the one thing no document, trusted or not, can widen.
 Implementation: [`src/circuitry/plugins/shell.py`](../src/circuitry/plugins/shell.py),
 [`src/circuitry/core/tool.py`](../src/circuitry/core/tool.py) (the
 `params_json`/templated rejection).
