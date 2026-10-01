@@ -127,6 +127,69 @@ def test_run_library_executes_retrieved_asset_and_records_metadata(tmp_path: Pat
     assert state["runtime"]["last_run"]["completed_at"] is not None
 
 
+def test_run_library_tail_can_be_piped(tmp_path: Path) -> None:
+    """``--tail`` is exempt from the auto-``--json`` pipe detection, the same
+    way ``cof run --tail`` is — its own help text says "Ideal for piping"
+    (#265 part 2)."""
+    lib_root = tmp_path / "library"
+    config_path = tmp_path / "config.json"
+    _write_library_asset(lib_root, "welcome", "1.0.0", "hello-tail")
+    _write_config(config_path, lib_root)
+
+    result = runner.invoke(
+        app,
+        [
+            "run-library", "welcome", "--version", "1.0.0",
+            "--config", str(config_path), "--dry-run", "--tail",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "mutually exclusive" not in result.output
+
+
+def test_run_library_accepts_skip_preflight_and_profile_flags(tmp_path: Path) -> None:
+    """Flag parity with `cof run` (#265 part 2): these must parse, not 'no such option'."""
+    lib_root = tmp_path / "library"
+    config_path = tmp_path / "config.json"
+    out_state = tmp_path / "out.json"
+    _write_library_asset(lib_root, "welcome", "1.0.0", "hello")
+    _write_config(config_path, lib_root)
+
+    result = runner.invoke(
+        app,
+        [
+            "run-library", "welcome", "--version", "1.0.0",
+            "--config", str(config_path), "--dry-run", "--out", str(out_state),
+            "--skip-preflight", "--no-scoring", "--no-routing", "--no-decompose",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+
+
+def test_run_library_stashes_for_last_with_no_trust(tmp_path: Path) -> None:
+    """A successful run-library invocation stashes for `cof run --last`, same
+    as `cof run` does — and a library asset is never a trusted document
+    (#265 part 2)."""
+    lib_root = tmp_path / "library"
+    config_path = tmp_path / "config.json"
+    _write_library_asset(lib_root, "welcome", "1.0.0", "hello-{{name}}")
+    _write_config(config_path, lib_root)
+
+    first = runner.invoke(
+        app,
+        [
+            "run-library", "welcome", "--version", "1.0.0",
+            "--config", str(config_path), "--dry-run", "-e", "name=world",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+
+    second = runner.invoke(app, ["run", "--last"])
+    assert second.exit_code == 0, second.output
+
+
 def _write_library_asset_json(lib_root: Path, asset_id: str, version: str) -> None:
     """Write a JSON orchestration asset (no metadata sidecar — would collide)."""
     orch = {

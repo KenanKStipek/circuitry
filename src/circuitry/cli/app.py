@@ -47,7 +47,6 @@ from .doctor import register_doctor
 from .effective_settings import resolve_effective_settings
 from .explain_routing import make_explain_routing_observer
 from .last_run import LAST_RUN_PATH
-from .state_merge import apply_inline_overrides
 from .library_sources import (
     Entry,
     LibraryFetchError,
@@ -68,6 +67,7 @@ from .shared_library import (
     fetch_shared_orchestration,
     resolve_service_profile,
 )
+from .state_merge import apply_inline_overrides
 from .trust import register_trust
 
 console = Console()
@@ -937,6 +937,17 @@ def run_library_cmd(
         False, "--tail",
         help="Print only the final effect's value as plain text. Ideal for piping.",
     ),
+    skip_preflight: bool = typer.Option(
+        False, "--skip-preflight",
+        help="Bypass dependency preflight; run even if check()s reported missing deps.",
+    ),
+    profile: str | None = typer.Option(
+        None, "--profile",
+        help=(
+            "Named profile to apply (profiles/<name>.yml, orchestration-scoped "
+            "wins over project-level). Precedence: CLI > profile > orchestration > config."
+        ),
+    ),
     adapter: str | None = typer.Option(
         None, "--adapter",
         help="Adapter to use for this run. Beats CIRCUITRY_ADAPTER and the orchestration.",
@@ -945,11 +956,47 @@ def run_library_cmd(
         None, "--model",
         help="Model to use for this run. Beats CIRCUITRY_MODEL and the orchestration.",
     ),
+    explain_routing: bool = typer.Option(
+        False, "--explain-routing",
+        help=(
+            "Print each prompt effect's complexity score, band, and model "
+            "choice as it dispatches. Needs runtime.complexity.scoring.enabled; "
+            "prints nothing if scoring is off. Suppressed by --quiet/--json."
+        ),
+    ),
+    scoring: bool | None = typer.Option(
+        None, "--scoring/--no-scoring",
+        help=(
+            "Force runtime.complexity.scoring on/off for this run. Beats "
+            "--profile and the orchestration/config; omit to leave it resolved "
+            "as configured."
+        ),
+    ),
+    routing: bool | None = typer.Option(
+        None, "--routing/--no-routing",
+        help=(
+            "Force runtime.complexity.routing on/off for this run. Beats "
+            "--profile and the orchestration/config; --no-routing also drops "
+            "any profile per-effect routing pin, since routing is off for the "
+            "whole run either way. Requires scoring (from this flag or "
+            "config) when turned on."
+        ),
+    ),
+    decompose: bool | None = typer.Option(
+        None, "--decompose/--no-decompose",
+        help=(
+            "Force runtime.complexity.decomposition on/off for this run. "
+            "Beats --profile and the orchestration/config. Requires scoring "
+            "(from this flag or config) when turned on."
+        ),
+    ),
 ):
     configure_cli_logging(verbose=verbose)
 
-    # Auto-pipe detection
-    if not sys.stdout.isatty():
+    # Auto-pipe detection (before mutual exclusivity check so --tail wins in
+    # pipes) — exactly as `cof run` does, so `run-library ... --tail | cat`
+    # works the same way `run ... --tail | cat` does (#265 part 2).
+    if not sys.stdout.isatty() and not tail:
         json_out = True
         quiet = True
 
@@ -961,16 +1008,16 @@ def run_library_cmd(
     token = auth_token or os.getenv("CIRCUITRY_LIBRARY_TOKEN")
 
     try:
-        profile = resolve_service_profile(cfg=cfg, profile_name=service_profile)
-        effective_cfg = apply_service_profile(cfg=cfg, profile=profile)
+        svc_profile = resolve_service_profile(cfg=cfg, profile_name=service_profile)
+        effective_cfg = apply_service_profile(cfg=cfg, profile=svc_profile)
         asset = fetch_shared_orchestration(
             cfg=effective_cfg,
             asset_id=asset_id,
             version=version,
             auth_token=token,
         )
-        if profile is not None:
-            asset.metadata["service_profile"] = profile.name
+        if svc_profile is not None:
+            asset.metadata["service_profile"] = svc_profile.name
     except Exception as e:
         _print_run_warnings(cfg.resolution_warnings())
         if json_out:
@@ -996,6 +1043,11 @@ def run_library_cmd(
             console.print(f"[bold]Adapter (override):[/bold] {adapter}")
         if model:
             console.print(f"[bold]Model (override):[/bold] {model}")
+        for label, value in (
+            ("Scoring", scoring), ("Routing", routing), ("Decomposition", decompose),
+        ):
+            if value is not None:
+                console.print(f"[bold]{label} (override):[/bold] {'on' if value else 'off'}")
         console.print(f"[bold]Dry run:[/bold] {dry_run}")
 
     # Build initial state from --state file + -e overrides
@@ -1013,6 +1065,12 @@ def run_library_cmd(
         else:
             initial_state = inline
 
+    effect_start_observer = (
+        make_explain_routing_observer(console.print)
+        if explain_routing and not (quiet or json_out)
+        else None
+    )
+
     req = RunRequest(
         orchestration_path=asset.file_path,
         state_path=state if initial_state is None else None,
@@ -1024,8 +1082,14 @@ def run_library_cmd(
         verbose=verbose,
         config=effective_cfg,
         live_state_path=live_state,
+        skip_preflight=skip_preflight,
+        profile_name=profile,
         adapter_override=adapter,
         model_override=model,
+        scoring_override=scoring,
+        routing_override=routing,
+        decompose_override=decompose,
+        effect_start_observer=effect_start_observer,
     )
 
     with (
@@ -1054,6 +1118,37 @@ def run_library_cmd(
             if out:
                 console.print(f"[bold]State written:[/bold] {out}")
         raise typer.Exit(code=1)
+
+    # Stash for --last, the same shape `cof run` writes — so `cof run --last`
+    # can replay a run-library run too. The resolved asset file (not the
+    # asset id) is what the stash reruns; a library asset is never a trusted
+    # document (#265 part 2).
+    _save_last_run({
+        "orchestration": str(asset.file_path),
+        "config": str(config) if config else None,
+        "state": str(state) if state else None,
+        "out": str(out) if out else None,
+        "pretty": pretty,
+        "print_state": print_state,
+        "dry_run": dry_run,
+        "json_out": json_out,
+        "quiet": quiet,
+        "verbose": verbose,
+        "live_state": str(live_state) if live_state else None,
+        "env_vars": redact_env_pairs(env_vars),
+        "tail": tail,
+        "skip_preflight": skip_preflight,
+        "profile": profile,
+        "profile_from_state": None,
+        "adapter": adapter,
+        "model": model,
+        "explain_routing": explain_routing,
+        "decompose_out": None,
+        "scoring": scoring,
+        "routing": routing,
+        "decompose": decompose,
+        "trust_document": False,
+    })
 
     if tail:
         val = _find_last_effect_value(result.state)
