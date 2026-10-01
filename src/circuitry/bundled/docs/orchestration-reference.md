@@ -29,7 +29,7 @@ Top-level fields of an orchestration YAML file:
 | `flow` | string | no | `chain` | Top-level flow for the implicit root dynamic |
 | `version` | string | no | — | Free-form version string for **this document**, e.g. `"1.2.0"`. Not a schema version and not a feature gate — the runtime reads it and ignores it. Omit unless you are versioning the file |
 
-Additional top-level keys are allowed. Two of them feed the run's configuration, and how much of them applies depends on how the document reached `cof`:
+Other top-level keys: `description` (free text for readers of the file) and two that feed the run's configuration, `runtime:` and `plugins:` (below). Any other key is ignored, and `cof check` says so — see [What `cof check` and `cof run` reject](#what-cof-check-and-cof-run-reject). How much of `runtime:` and `plugins:` applies depends on how the document reached `cof`:
 
 - **`runtime:`** — `runtime.complexity` and `runtime.state` (e.g. `record_children`) always apply. Every other key — `adapters`, `plugins`, `persistence`, `library`, `mcp`, anything else — is a host setting.
 - **`plugins:`** — runtime-plugin modules to load. An entry config.json already lists in `plugins` or `enabled_plugins` always loads; any other is a host setting too.
@@ -48,6 +48,19 @@ effects:
     name: greet
     template: "Say hello!"
 ```
+
+---
+
+## What `cof check` and `cof run` reject
+
+`cof check` and `cof run` apply one structural check to a document before anything in it runs — `cof run` does not start a document `cof check` rejects. A `use` child loaded by `path:` or `ref:` gets the same check when it loads, as an `inline:` child always has (`validate: false` on the `use` turns it off). Beyond the schema:
+
+- **A repeated key** in one mapping is an error naming both lines, in every YAML document the runtime loads. YAML on its own would keep only the last one.
+- **An unknown key** on an effect or at the top level is ignored, so it is reported. A near miss of a key that effect knows — `whlie:`, `max_iteration:`, `temlpate:`, or `adapter:` on a `prompt` where `provider:` belongs — is an **error** naming the key it meant; any other unknown key is a **warning**. Inside `each:`, `if:`/`while:` conditions, `retries:`, `messages:` and `assets:` entries, any other key is a schema error.
+- **A loop needs exactly one of `each` or `while`.**
+- **A malformed Mustache template** — an unclosed tag (`{{input.topic}`), a section closed under the wrong name — is an error naming the field, wherever a template is rendered. Were one to reach a run anyway, rendering it fails the effect under its `on_error`; the raw text is never sent on.
+
+`cof check` also **warns** when a tool's `params.args` holds a value YAML read as a number, boolean or null: the tool receives `str()` of it, so an unquoted `0x1` arrives as `1`, `off` as `False`, `-0` as `0`. Quote the argument.
 
 ---
 
@@ -284,7 +297,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `flow` | `"chain"` \| `"tree"` | no | `chain` | `chain` = sequential (default). `tree` = all `each` iterations run in parallel via `ThreadPoolExecutor`. `while` loops always run sequentially. |
 | `max_concurrency` | integer | no | unbounded | Max parallel workers when `flow: tree`. |
 | `body` | array | yes | — | Non-empty list of effects to execute per iteration |
-| `each` | object | one-of | — | Collection iteration; mutually exclusive with `while` |
+| `each` | object | one-of | — | Collection iteration; mutually exclusive with `while`. A loop with neither or both is an error |
 | `each.in` | string | yes (each) | — | State path to a JSON array (must be `prompt_type: json` output), or a binding of an enclosing loop (its `each.as` name) |
 | `each.as` | string | no | `item` | Variable name for current element in body templates |
 | `while` | object | one-of | — | Continuation condition; mutually exclusive with `each` |
@@ -484,7 +497,7 @@ Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously
 | `provider` | string | yes | — | Plugin name: `ffmpeg`, `comfyui` |
 | `prompt` | string | no | — | Primary input text. Mustache-rendered. For comfyui: the image generation prompt |
 | `model` | string | no | — | Model/checkpoint name. For comfyui: checkpoint filename |
-| `params` | object | no | `{}` | Plugin-specific parameters. All string values support Mustache rendering. Takes precedence over top-level `prompt`/`model` |
+| `params` | object | no | `{}` | Plugin-specific parameters. All string values support Mustache rendering. Takes precedence over top-level `prompt`/`model`. Quote every `args` entry: an unquoted `0x1`, `off` or `-0` reaches the tool as `1`, `False`, `0` (`cof check` warns) |
 | `timeout_ms` | integer | no | — | Per-effect timeout in milliseconds |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `description` | string | no | — | |
@@ -627,6 +640,7 @@ Templates use Mustache syntax (`{{...}}`). Two kinds of references:
 - Never use `{{<name>.value}}` or `{{<name>}}` alone for effect outputs — always include the `prime.` prefix
 - Never use a bare `{{<name>}}` for caller-supplied input — always include the `input.` prefix; a bare reference matching a declared `interface.inputs` name is a hard error from `cof check`
 - Nested effects always include their parent dynamic name in the path
+- A malformed tag (`{{input.topic}`, a section closed under the wrong name) is an error from `cof check` and `cof run`, never text sent on as written
 
 ### CEL Expressions
 
@@ -778,7 +792,7 @@ The state path in `each.in` must resolve to an array at runtime. This means it m
 The following rules are sufficient for generating structurally correct Circuitry orchestration YAML. Apply all of them exactly.
 
 **File structure:**
-1. Top-level fields: `adapter` (string), `model` (string), `effects` (array). Only `effects` is required. Additional top-level keys are allowed. A top-level `runtime:` block should set only `complexity` and `state`; never put `adapters`, `plugins`, `persistence`, `library` or credentials in it — those are host settings that belong in config.json. A document run by library name, fetched or generated has its copy ignored with a warning; a file run by path applies it with a notice.
+1. Top-level fields: `adapter` (string), `model` (string), `effects` (array). Only `effects` is required. `description`, `version`, `interface`, `flow`, `runtime` and `plugins` are the other keys the top level knows; anything else is ignored with a warning. A top-level `runtime:` block should set only `complexity` and `state`; never put `adapters`, `plugins`, `persistence`, `library` or credentials in it — those are host settings that belong in config.json. A document run by library name, fetched or generated has its copy ignored with a warning; a file run by path applies it with a notice.
 2. `adapter` and `model` are only required when the orchestration contains `prompt` or `reflector` effects. Tool-only orchestrations (`type: tool` effects only) do not need `adapter` or `model`.
 3. Valid `adapter` values: `ollama`, `openai`, `anthropic`, `litellm`.
 4. Valid `flow` values: `chain` (sequential) and `tree` (parallel). Write nothing else — `chain_of_thought`/`cot` and `tree_of_thought`/`tot` still parse but are deprecated and warned about.
@@ -797,6 +811,7 @@ The following rules are sufficient for generating structurally correct Circuitry
 13. Effect names must be unique among siblings within the same scope.
 13a. Never name an effect after an effect type (`use`, `loop`, `if`, `dynamic`, `prompt`, `tool`, `reflector`). Name it after the job it does — `summarize_article`, not `prompt`. Generic names are what make two siblings collide; validation warns on them.
 13b. Outputs — in `use.outputs` and `interface.outputs` alike — are objects: `summary: {path: prime.summarize.value, type: string}`. A bare path string is accepted as shorthand in both, but write the object form.
+13c. Write each key at most once, and only the keys the effect type lists. A repeated key, or a near miss of a known key (`whlie`, `max_iteration`, `adapter` on a prompt where `provider` belongs), fails validation; any other unknown key is ignored with a warning. Quote every tool `params.args` entry — unquoted, YAML reads `0x1` as `1`, `off` as `false`, `-0` as `0`.
 
 **State path addressing:**
 14. In templates (Mustache): use `{{input.<name>}}` for caller-supplied input (never bare `{{key}}` — that is a hard error when `key` matches a declared `interface.inputs` name); use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.

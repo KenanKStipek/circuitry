@@ -44,6 +44,7 @@ from ..cli.orchestration_loader import load_orchestration_file
 from ..cli.redaction import redact
 from ..core.compiler import compile_orchestration
 from ..core.cycle_check import detect_cycles
+from ..core.document_check import unknown_key_errors, unknown_key_warnings
 from ..core.lint import lint_orchestration
 from ..core.runtime_plugins import load_plugins
 from ..plugins.factory import PLUGIN_REGISTRY, build_plugin
@@ -439,6 +440,7 @@ def validate_report(
     warnings = (
         tuple(config.resolution_warnings() if config is not None else ())
         + tuple(lint_orchestration(orch))
+        + tuple(unknown_key_warnings(orch))
         + tuple(
             orchestration_host_setting_warnings(
                 orch,
@@ -448,6 +450,9 @@ def validate_report(
             )
         )
     )
+
+    # A near-miss key is the likelier cause of whatever the schema says next.
+    issues += [ValidationIssue("schema", message) for message in unknown_key_errors(orch)]
 
     schema = runtime_shim.load_schema()
     if schema is None:

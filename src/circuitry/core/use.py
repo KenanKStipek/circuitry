@@ -14,10 +14,13 @@ from typing import Any, Literal
 
 from ..adapters import Adapter
 from ..output import console as _console
+from .document_check import structural_errors
 from .interface_inputs import check_interface_inputs
 from .outputs import normalize_outputs
 from .store import Store
 from .store.store import replace_node
+from .templates import render_template
+from .yaml_load import load_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -182,18 +185,13 @@ def _render_inputs(inputs: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any
     deep-copied so the child can never alias parent state. Strings are
     Mustache-rendered; anything else passes through unchanged.
     """
-    try:
-        import chevron  # type: ignore
-    except ImportError:  # pragma: no cover - chevron is a core dependency
-        chevron = None
-
     rendered: dict[str, Any] = {}
     for key, value in inputs.items():
         path = reference_path(value)
         if path is not None:
             rendered[key] = copy.deepcopy(_resolve_reference(ctx, path))
-        elif isinstance(value, str) and chevron is not None:
-            rendered[key] = chevron.render(value, ctx)
+        elif isinstance(value, str):
+            rendered[key] = render_template(value, ctx, label=f"inputs.{key}")
         else:
             rendered[key] = value
     return rendered
@@ -229,18 +227,17 @@ def _graft_child_record(node: dict[str, Any], child_state: Mapping[str, Any]) ->
 
 
 def _validate_inline_yaml(yaml_text: str) -> tuple[bool, list[str]]:
-    """Validate an inline YAML string against the orchestration schema.
+    """Validate an inline YAML string the way ``cof check`` validates a file.
+
+    A repeated key, a near-miss unknown key, or a schema violation fails it
+    (see ``core.document_check``).
 
     Returns (ok, errors) where errors is a list of human-readable messages.
     """
-    import importlib.resources
-    import json
-
-    import jsonschema  # type: ignore[import-untyped]
     import yaml as _yaml  # type: ignore[import-untyped]
 
     try:
-        parsed = _yaml.safe_load(yaml_text)
+        parsed = load_yaml(yaml_text)
     except _yaml.YAMLError as e:
         return False, [f"YAML parse error: {e}"]
 
@@ -250,16 +247,8 @@ def _validate_inline_yaml(yaml_text: str) -> tuple[bool, list[str]]:
     if "effects" not in parsed:
         return False, ["Inline orchestration is missing required 'effects' key."]
 
-    try:
-        schema_path = importlib.resources.files("circuitry") / "schema" / "orchestration.schema.json"
-        schema = json.loads(Path(str(schema_path)).read_text(encoding="utf-8"))
-        validator = jsonschema.Draft7Validator(schema)
-        errors = [e.message for e in validator.iter_errors(parsed)]
-        return (len(errors) == 0), errors
-    except Exception as e:
-        # If schema loading fails, skip validation (best-effort)
-        logger.warning("Schema validation skipped: %s", e)
-        return True, []
+    errors = structural_errors(parsed)
+    return (len(errors) == 0), errors
 
 
 def _clean_yaml_fences(text: str) -> str:
@@ -494,13 +483,9 @@ class UseRuntime:
         For file-based: identity is the absolute resolved path; the digest is of the file's bytes.
         For inline: identity is 'inline:<sha256-of-cleaned-yaml>'; the digest is of that YAML.
         """
-        import yaml as _yaml  # type: ignore[import-untyped]
-
         if self.defn.inline is not None:
-            import chevron  # type: ignore
-
             # Render Mustache template against parent context
-            raw_yaml = chevron.render(self.defn.inline, ctx)
+            raw_yaml = render_template(self.defn.inline, ctx, label="inline")
             cleaned = _clean_yaml_fences(raw_yaml)
 
             # Validate against schema
@@ -512,7 +497,7 @@ class UseRuntime:
                         + "\n".join(f"  - {e}" for e in errors)
                     )
 
-            parsed = _yaml.safe_load(cleaned)
+            parsed = load_yaml(cleaned)
             if not isinstance(parsed, dict):
                 raise ValueError("Inline orchestration must be a YAML mapping with an 'effects' key.")
             digest = hashlib.sha256(cleaned.encode("utf-8")).hexdigest()
@@ -524,7 +509,18 @@ class UseRuntime:
         resolved_path = self._resolve_orchestration()
         identity = str(resolved_path.resolve())
         digest = hashlib.sha256(resolved_path.read_bytes()).hexdigest()
-        return load_orchestration_file(resolved_path), str(resolved_path), identity, digest
+        child_orch = load_orchestration_file(resolved_path)
+        # A path/ref child gets the same structural check `cof check` gives a
+        # file named on the command line — `cof check` on the parent never
+        # loads it, and nothing else would before it runs.
+        if self.defn.validate:
+            errors = structural_errors(child_orch)
+            if errors:
+                raise ValueError(
+                    f"Orchestration {resolved_path} validation failed:\n"
+                    + "\n".join(f"  - {e}" for e in errors)
+                )
+        return child_orch, str(resolved_path), identity, digest
 
     def _check_allowlists(self, child_orch: dict[str, Any], label: str) -> None:
         """Refuse a child that references an adapter or tool the run disallows.

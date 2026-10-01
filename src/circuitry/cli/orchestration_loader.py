@@ -6,6 +6,8 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
+from ..core.yaml_load import DuplicateKeyError, load_yaml
+
 try:
     from toon_format import decode as _toon_decode
     from toon_format import encode as _toon_encode
@@ -36,7 +38,10 @@ def load_orchestration_file(path: Path) -> dict[str, Any]:
     raw = path.read_text(encoding="utf-8")
 
     if suffix in {".yml", ".yaml"}:
-        data = yaml.safe_load(raw) or {}
+        try:
+            data = load_yaml(raw) or {}
+        except DuplicateKeyError as exc:
+            raise DuplicateKeyError(f"{path}: {exc}") from None
     elif suffix == ".json":
         data = json.loads(raw)
     elif suffix == ".toon":

@@ -44,6 +44,8 @@ The rule beneath the table: **the path is the full path from `prime`, one segmen
 {{{prime.patch.value}}}                  the same read, without HTML escaping
 ```
 
+A tag must be well-formed: an unclosed `{{input.issue}`, or a section closed under a different name than it opened with, is an error from `cof check`, never text sent on as written.
+
 **CEL**, inside any `expr:` — a `cel`-mode `if`, a `cel`-mode `while`. Here `state` is bound to the root, so every path gains that prefix:
 
 ```

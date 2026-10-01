@@ -25,6 +25,7 @@ from ..cli.redaction import redact
 from ..output import console as _console
 from .answers import parse_boolean_answer, parse_number_answer
 from .store import Store
+from .templates import render_template
 
 logger = logging.getLogger(__name__)
 
@@ -103,16 +104,6 @@ class _PromptSpinner:
             f" {self._name} [dim]{suffix}[/dim]"
         )
         return "\n".join(lines)
-
-
-def _render(template: str, ctx: dict[str, Any]) -> str:
-    try:
-        import chevron  # type: ignore
-
-        return chevron.render(template, ctx)
-    except Exception:
-        logger.warning("Chevron template rendering failed; returning raw template", exc_info=True)
-        return template
 
 
 _IMAGE_SIGNATURES = (
@@ -394,9 +385,33 @@ class PromptRuntime:
         if self.defn.inputs:
             effective_ctx.update(self.defn.inputs)
 
-        # Materialize prompt input
-        messages = self._render_messages(effective_ctx)
-        prompt_sent = self._materialize_input(effective_ctx, messages)
+        # Materialize prompt input. A template that fails to render is this
+        # effect's failure, under its own on_error — never the raw text sent
+        # to the model as if it had rendered.
+        try:
+            messages = self._render_messages(effective_ctx)
+            prompt_sent = self._materialize_input(effective_ctx, messages)
+        except Exception as e:
+            meta["created_at"] = _now_iso()
+            meta["error"] = redact(str(e))
+            meta["completed_at"] = _now_iso()
+            node["value"] = None
+            store.fire_effect_start(self.defn.name, node)
+            if self.verbose:
+                if self.cb_start is not None:
+                    self.cb_start()
+                line = (
+                    f"{'  ' * self.depth}[err]✗[/err] [cyan]◆[/cyan] {self.display_name}"
+                    " [dim]template did not render[/dim]"
+                )
+                if self.cb_error is not None:
+                    self.cb_error(line)
+                else:
+                    _console.print(line)
+            store.fire_effect_complete(self.defn.name, node)
+            if self.defn.on_error == "fail":
+                raise
+            return
 
         # Resolved once, ahead of the meta block that reports it: a per-effect
         # ``model:`` always wins over the run's default, and dispatch further
@@ -979,8 +994,8 @@ class PromptRuntime:
 
         images: list[ImageInput] = []
         asset_meta: list[dict[str, Any]] = []
-        for asset in self.defn.assets or ():
-            ref = _render(asset.ref, ctx).strip()
+        for index, asset in enumerate(self.defn.assets or ()):
+            ref = render_template(asset.ref, ctx, label=f"assets[{index}].ref").strip()
             if asset.kind != "image":
                 self._add_warnings(
                     meta,
@@ -1132,8 +1147,11 @@ class PromptRuntime:
         if self.defn.template or not self.defn.messages:
             return ()
         return tuple(
-            ChatMessage(role=msg.role, content=_render(msg.content, ctx))
-            for msg in self.defn.messages
+            ChatMessage(
+                role=msg.role,
+                content=render_template(msg.content, ctx, label=f"messages[{index}].content"),
+            )
+            for index, msg in enumerate(self.defn.messages)
         )
 
     def _materialize_input(
@@ -1147,7 +1165,7 @@ class PromptRuntime:
         ``messages`` themselves through :class:`GenerateOptions`.
         """
         if self.defn.template:
-            return _render(self.defn.template, ctx)
+            return render_template(self.defn.template, ctx, label="template")
 
         if messages:
             return "\n\n".join(f"{msg.role}: {msg.content}" for msg in messages)

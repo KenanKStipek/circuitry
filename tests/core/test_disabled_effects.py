@@ -438,7 +438,7 @@ def test_compiled_effects_default_to_enabled() -> None:
                 "if": {"mode": "cel", "expr": "true"},
                 "then": [],
             },
-            {"type": "loop", "name": "loop_it", "body": []},
+            {"type": "loop", "name": "loop_it", "each": {"in": "input.xs"}, "body": []},
             {"type": "reflector", "name": "r", "effects": []},
         ]
     }

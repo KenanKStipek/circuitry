@@ -362,7 +362,7 @@ def test_invalid_draft_is_revised_not_surfaced() -> None:
     repairs = adapter.prompts_matching(REPAIR_MARKER)
     assert len(repairs) == 1
     assert "1_bad_name" in repairs[0]
-    assert "$.effects[0].name" in repairs[0]
+    assert "effects[0].name: " in repairs[0]
     assert "template" in repairs[0]
 
 

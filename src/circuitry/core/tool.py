@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from ..output import console as _console
 from .store import Store
+from .templates import render_template
 
 logger = logging.getLogger(__name__)
 
@@ -73,23 +74,22 @@ def _format_output(value: Any) -> str:
 
 
 def _render_params(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
-    """Recursively Mustache-render all string values in params against ctx."""
-    try:
-        import chevron  # type: ignore
+    """Recursively Mustache-render all string values in params against ctx.
 
-        def _render_value(v: Any) -> Any:
-            if isinstance(v, str):
-                return chevron.render(v, ctx)
-            if isinstance(v, dict):
-                return {k: _render_value(vv) for k, vv in v.items()}
-            if isinstance(v, list):
-                return [_render_value(item) for item in v]
-            return v
+    A value that fails to render raises (naming its path) rather than handing
+    the tool unrendered text.
+    """
 
-        return {k: _render_value(v) for k, v in params.items()}
-    except Exception:
-        logger.warning("Tool param rendering failed; returning raw params", exc_info=True)
-        return params
+    def _render_value(v: Any, path: str) -> Any:
+        if isinstance(v, str):
+            return render_template(v, ctx, label=path)
+        if isinstance(v, dict):
+            return {k: _render_value(vv, f"{path}.{k}") for k, vv in v.items()}
+        if isinstance(v, list):
+            return [_render_value(item, f"{path}[{i}]") for i, item in enumerate(v)]
+        return v
+
+    return {k: _render_value(v, f"params.{k}") for k, v in params.items()}
 
 
 class _JsonAwareDict(dict):
@@ -130,15 +130,12 @@ def _json_aware_ctx(value: Any) -> Any:
 def _render_params_json(template: str, ctx: dict[str, Any]) -> dict[str, Any]:
     """Mustache-render params_json, then parse the result as a JSON object.
 
-    Unlike _render_params, this does not soft-fail: params_json exists so a
-    runtime-built array/object (e.g. a list of symbols from a prior step) can
-    reach a tool call. Silently ignoring a bad template or malformed JSON
-    would run the tool with a different params object than the author wrote,
-    which is worse than surfacing the error.
+    params_json exists so a runtime-built array/object (e.g. a list of symbols
+    from a prior step) can reach a tool call. Silently ignoring a bad template
+    or malformed JSON would run the tool with a different params object than
+    the author wrote, which is worse than surfacing the error.
     """
-    import chevron  # type: ignore
-
-    rendered_text = chevron.render(template, _json_aware_ctx(ctx))
+    rendered_text = render_template(template, _json_aware_ctx(ctx), label="params_json")
     try:
         parsed = json.loads(rendered_text)
     except json.JSONDecodeError as e:
@@ -354,12 +351,7 @@ class ToolRuntime:
             # Render top-level prompt/model, then merge with params (params take precedence)
             top_level: dict[str, Any] = {}
             if self.defn.prompt is not None:
-                try:
-                    import chevron  # type: ignore
-                    top_level["prompt"] = chevron.render(self.defn.prompt, ctx)
-                except Exception:
-                    logger.warning("Tool prompt template rendering failed; using raw prompt", exc_info=True)
-                    top_level["prompt"] = self.defn.prompt
+                top_level["prompt"] = render_template(self.defn.prompt, ctx, label="prompt")
             if self.defn.model is not None:
                 top_level["model"] = self.defn.model
 

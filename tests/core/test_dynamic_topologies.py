@@ -87,3 +87,13 @@ def test_chain_and_tree_have_different_sibling_context_semantics() -> None:
     # Chain sees prior sibling writes. Tree evaluates siblings against root snapshot.
     assert chain_store.get("prime.second.value") == "alpha"
     assert tree_store.get("prime.second.value") is None
+
+
+def test_empty_tree_runs_nothing_like_an_empty_chain() -> None:
+    """A root `flow: tree` with `effects: []` passes `cof check`; it used to
+    crash at run time on ThreadPoolExecutor(max_workers=0) (#261)."""
+    for flow in ("chain", "tree"):
+        root = compile_orchestration(orch={"flow": flow, "effects": []}, root_name="prime")
+        store = Store({})
+        DynamicRuntime(root, adapter=EchoAdapter(), model="m").execute(store=store)
+        assert store.state["prime"]["meta"]["error"] is None

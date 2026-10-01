@@ -113,6 +113,7 @@
       "type": "object",
       "description": "Condition definition for an if effect and for a loop's while.",
       "required": ["mode"],
+      "additionalProperties": false,
       "properties": {
         "mode": {
           "type": "string",
@@ -148,6 +149,7 @@
     "MessageDef": {
       "type": "object",
       "required": ["role", "content"],
+      "additionalProperties": false,
       "properties": {
         "role": {
           "type": "string",
@@ -160,6 +162,7 @@
     "AssetRefDef": {
       "type": "object",
       "required": ["kind", "ref"],
+      "additionalProperties": false,
       "properties": {
         "kind": { "type": "string", "description": "Asset type, e.g. image, file, audio." },
         "ref": { "type": "string", "description": "Mustache template rendering to a local path or an http(s) URL. Use {{{...}}}: {{...}} HTML-escapes the value." }
@@ -168,6 +171,7 @@
 
     "RetryPolicyDef": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "max_attempts": { "type": "integer", "minimum": 1 },
         "backoff_ms": { "type": "integer", "minimum": 0 }
@@ -339,7 +343,11 @@
     "LoopEffect": {
       "type": "object",
       "required": ["type", "body"],
-      "description": "Iterates over a collection (each) or repeats while a condition holds (while). Name is optional.",
+      "description": "Iterates over a collection (each) or repeats while a condition holds (while) — exactly one of the two. Name is optional.",
+      "oneOf": [
+        { "required": ["each"] },
+        { "required": ["while"] }
+      ],
       "properties": {
         "type": { "const": "loop" },
         "name": { "$ref": "#/$defs/NamePattern" },
@@ -366,6 +374,7 @@
         "each": {
           "type": "object",
           "required": ["in"],
+          "additionalProperties": false,
           "description": "Collection iteration config. each.in must point to a prompt_type: json effect whose output is an array.",
           "properties": {
             "in": {
@@ -511,7 +520,7 @@
         },
         "validate": {
           "type": "boolean",
-          "description": "Validate inline YAML against the orchestration schema before execution. Default true. Set false to skip validation for LLM-generated YAML that may use loose formatting.",
+          "description": "Check the child (inline, path or ref) the way cof check checks a file (schema, near-miss keys) before it runs. Default true. Set false to skip that, e.g. for LLM-generated YAML that may use loose formatting; a repeated key is still an error.",
           "default": true
         },
         "inputs": {

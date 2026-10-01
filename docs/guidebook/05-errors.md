@@ -75,11 +75,45 @@ The other half of the pattern is *not* to reach for `on_error` when what you wan
 
 ## Validation is the first error handler
 
-Most failures should never reach the runtime. `cof check` validates a document against the schema and the static rules — namespace-rooted paths, unique sibling names, required schemas, `use` cycles, unfetched library sources — and then runs *preflight*: every adapter and plugin the document references reports whether it can run (`check()`), so a missing API key or an uninstalled binary stops the run before the first model call rather than after the tenth. `cof doctor` runs the same checks against everything compiled in. `--skip-preflight` exists for the moments you know better.
+Most failures should never reach the runtime. `cof check` validates a document against the schema and the static rules — namespace-rooted paths, unique sibling names, required schemas, well-formed templates, `use` cycles, unfetched library sources — and then runs *preflight*: every adapter and plugin the document references reports whether it can run (`check()`), so a missing API key or an uninstalled binary stops the run before the first model call rather than after the tenth. `cof doctor` runs the same checks against everything compiled in. `--skip-preflight` exists for the moments you know better.
 
 Preflight reads `on_error` too. When every prompt that uses an adapter has its own `on_error: skip` or `continue`, that adapter is a *soft* dependency: a missing credential becomes a warning that names the effects that will skip, `cof check` passes, and the run goes on with those values `null`. One prompt on that adapter without the handling makes it a hard dependency again, and the error names that prompt. Only each prompt's own `on_error` counts, not an enclosing container's. An adapter name that does not exist is always a hard failure.
 
-Warnings are advisory: deprecated spellings and type-keyword names are reported and never change the exit code.
+`cof run` applies the same structural check before its first effect, so a document `cof check` rejects never starts — it cannot fail halfway with the earlier effects already done. A `use` child loaded by `path:` or `ref:` is checked the same way when it loads, as an `inline:` child always was; `validate: false` on the `use` turns that off.
+
+Three slips that YAML and Mustache would otherwise let through are errors. A key written twice in one mapping is rejected with both line numbers, where YAML alone keeps the last one and drops the first without a word. A key an effect does not know is ignored, so one that is a near miss of a key it does know is an error naming the key you meant:
+
+```yaml
+# ✗ whlie is not while: as written the loop has no condition, and cof check names the key you meant
+- type: loop
+  name: fix_until_green
+  whlie: {mode: cel, expr: "state.prime.test_run.value.exit_code != 0"}
+  max_iterations: 5
+  body:
+    - type: prompt
+      name: patch
+      template: "Write a patch that makes the failing tests pass: {{{prime.test_run.value.output}}}"
+```
+
+And a malformed Mustache tag — a brace short, a section closed under the wrong name — is an error naming the field:
+
+```yaml
+# ✗ {{input.issue} is a brace short: cof check rejects the template rather than send it as written
+- type: prompt
+  name: plan
+  template: "Plan the fix for this issue in at most three steps: {{input.issue}"
+```
+
+Warnings are advisory: deprecated spellings, type-keyword names, an unknown key that resembles no known one, and a tool argument YAML read as a number or a boolean (`-0` arrives as `0`, `off` as `False` — quote it) are reported and never change the exit code.
+
+```yaml
+# ⚠ owner is no key a tool knows: it is ignored, and cof check says so
+- type: tool
+  name: related
+  provider: shell
+  owner: triage
+  params: {command: gh, args: [issue, list, --search, "{{input.error}}"]}
+```
 
 ## Dry runs
 
