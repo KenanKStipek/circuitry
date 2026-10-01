@@ -14,7 +14,7 @@ fields:
   messages:
     type: array
     items: "{role: system|user|assistant|tool, content: string}"
-    note: "Role-based message array. Mutually exclusive with template."
+    note: "Role-based message array, sent as real conversation turns (system message included) where the adapter takes them. Mutually exclusive with template."
     conflicts_with: template
   prompt_type:
     type: string
@@ -37,17 +37,17 @@ fields:
     note: "Ordered list of fallback providers tried when the primary fails. Usually omitted — runner/config policy, not author-facing."
   params:
     type: object
-    note: "Provider-specific generation parameters (temperature, top_p, etc.)."
+    note: "Generation parameters. temperature, max_tokens and stop work on every adapter; other keys (top_p, num_ctx, ...) go to the provider as written."
   deterministic:
     type: boolean
-    note: "If true, use temperature=0."
+    note: "If true, temperature 0 (unless params sets one) and a fixed seed where the provider takes one."
   inputs:
     type: object
     note: "Prompt-local key/value pairs available to this template only. Prefer referencing shared state via {{prime.<name>.value}}; use inputs for constants scoped to this one call."
   assets:
     type: array
     items: "{kind: image|file|audio, ref: string}"
-    note: "Non-text attachments passed to the model. kind is the asset type, ref a resolvable identifier or path. Only for multimodal-capable models."
+    note: "Images for a vision model: kind image, ref a local path or http(s) URL (Mustache-rendered). Sent by ollama, the OpenAI-compatible adapters and anthropic; other kinds are skipped with a warning."
   retries:
     type: object
     properties:
@@ -56,6 +56,7 @@ fields:
     note: "Retry policy for this call. Usually omitted — runner/config policy, not author-facing."
   timeout_ms:
     type: integer
+    note: "Per-attempt budget, capped by the adapter's timeout_seconds; rounded up to whole seconds."
   on_error:
     enum: [fail, skip, continue]
     default: fail
