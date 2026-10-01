@@ -519,14 +519,25 @@ def test_a_failing_reflector_still_closes_its_pair() -> None:
     from circuitry.core.dynamic import DynamicRuntime
 
     events: list[str] = []
+    errors: dict[str, Any] = {}
+    store = Store(
+        {},
+        effect_start=lambda path, node: events.append(f"start:{path}"),
+        effect_complete=lambda path, node: (
+            events.append(f"complete:{path}"),
+            errors.__setitem__(path, node["meta"].get("error")),
+        ),
+    )
     with pytest.raises(RuntimeError):
         DynamicRuntime(
             compile_orchestration(orch=REFLECTOR),
             adapter=_plan_adapter("not yaml: [[["),
             model="m",
-        ).execute(store=_reflector_store(events))
+        ).execute(store=store)
 
     _assert_bracketed(events)
     planner = [e for e in events if "planner" in e]
     assert planner[0] == "start:prime.planner"
     assert planner[-1] == "complete:prime.planner"
+    # Persistence plugins and OpenTelemetry judge failure by ``meta.error``.
+    assert errors["prime.planner"]
