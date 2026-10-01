@@ -383,3 +383,161 @@ def test_a_run_without_scoring_carries_no_score(tmp_path: Path) -> None:
 
 def test_a_store_without_the_callback_still_fires_nothing(tmp_path: Path) -> None:
     Store({}).fire_effect_start("greet", {})  # must not raise
+
+
+# -- named if and reflector ----------------------------------------------------
+
+
+def test_a_named_if_fires_its_own_pair_around_its_branch(tmp_path: Path) -> None:
+    result = _run(tmp_path, MIXED, config=_lifecycle_cfg())
+
+    assert result.ok is True, result.error
+    events = _events(result.state)
+    _assert_bracketed(events)
+    gate = [e for e in events if e.endswith("prime.gate") or ".gate." in e]
+    assert gate == [
+        "start:prime.gate",
+        "start:prime.gate.taken",
+        "complete:prime.gate.taken",
+        "complete:prime.gate",
+    ]
+
+
+def test_an_if_whose_condition_fails_still_closes_its_pair(tmp_path: Path) -> None:
+    seen: list[tuple[str, str, Any]] = []
+    orch = {
+        "adapter": "echo",
+        "model": "echo-1",
+        "effects": [
+            {
+                "type": "conditional",
+                "name": "gate",
+                "if": {"mode": "cel", "expr": "1 / 0 == 1"},
+                "then": [{"type": "prompt", "name": "taken", "template": "yes"}],
+            }
+        ],
+    }
+    result = _run(
+        tmp_path,
+        orch,
+        config=CircuitryConfig(),
+        effect_start_observer=lambda path, node: seen.append(("start", path, None)),
+        effect_observer=lambda path, node: seen.append(
+            ("complete", path, node["meta"].get("error"))
+        ),
+    )
+
+    assert result.ok is False
+    gate = [(kind, error) for kind, path, error in seen if path == "prime.gate"]
+    assert [kind for kind, _ in gate] == ["start", "complete"]
+    # The completion carries the failure, as for every other effect.
+    assert gate[1][1]
+
+
+def test_an_if_skipped_by_on_error_still_closes_its_pair(tmp_path: Path) -> None:
+    orch = {
+        "adapter": "echo",
+        "model": "echo-1",
+        "effects": [
+            {
+                "type": "conditional",
+                "name": "gate",
+                "if": {"mode": "cel", "expr": "1 / 0 == 1"},
+                "on_error": "skip",
+                "then": [{"type": "prompt", "name": "taken", "template": "yes"}],
+            }
+        ],
+    }
+    result = _run(tmp_path, orch, config=_lifecycle_cfg())
+
+    assert result.ok is True, result.error
+    events = _events(result.state)
+    _assert_bracketed(events)
+    assert [e for e in events if "gate" in e] == [
+        "start:prime.gate",
+        "complete:prime.gate",
+    ]
+
+
+def _reflector_store(events: list[str]) -> Store:
+    return Store(
+        {},
+        effect_start=lambda path, node: events.append(f"start:{path}"),
+        effect_complete=lambda path, node: events.append(f"complete:{path}"),
+    )
+
+
+def _plan_adapter(text: str) -> Any:
+    @dataclass(frozen=True)
+    class PlanAdapter:
+        name: str = "echo"
+
+        def generate(
+            self, *, model: str, prompt: str, timeout_seconds: int = 120
+        ) -> GenerateResult:
+            return GenerateResult(text=text, raw={}, tokens_sent=1, tokens_received=1)
+
+    return PlanAdapter()
+
+
+REFLECTOR: dict[str, Any] = {
+    "effects": [
+        {
+            "type": "reflector",
+            "name": "planner",
+            "effects": [
+                {"type": "prompt", "name": "propose_steps", "template": "Plan."}
+            ],
+        }
+    ]
+}
+
+
+def test_a_reflector_fires_its_own_pair_around_its_effects() -> None:
+    from circuitry.core.compiler import compile_orchestration
+    from circuitry.core.dynamic import DynamicRuntime
+
+    plan = yaml.dump(
+        {"done": False, "effects": [{"type": "prompt", "name": "made", "template": "x"}]}
+    )
+    events: list[str] = []
+    DynamicRuntime(
+        compile_orchestration(orch=REFLECTOR), adapter=_plan_adapter(plan), model="m"
+    ).execute(store=_reflector_store(events))
+
+    _assert_bracketed(events)
+    planner = [e for e in events if "planner" in e]
+    assert planner[0] == "start:prime.planner"
+    assert planner[-1] == "complete:prime.planner"
+    assert "complete:prime.planner.generated.iter_0.made" in planner
+
+
+def test_a_failing_reflector_still_closes_its_pair() -> None:
+    import pytest
+
+    from circuitry.core.compiler import compile_orchestration
+    from circuitry.core.dynamic import DynamicRuntime
+
+    events: list[str] = []
+    errors: dict[str, Any] = {}
+    store = Store(
+        {},
+        effect_start=lambda path, node: events.append(f"start:{path}"),
+        effect_complete=lambda path, node: (
+            events.append(f"complete:{path}"),
+            errors.__setitem__(path, node["meta"].get("error")),
+        ),
+    )
+    with pytest.raises(RuntimeError):
+        DynamicRuntime(
+            compile_orchestration(orch=REFLECTOR),
+            adapter=_plan_adapter("not yaml: [[["),
+            model="m",
+        ).execute(store=store)
+
+    _assert_bracketed(events)
+    planner = [e for e in events if "planner" in e]
+    assert planner[0] == "start:prime.planner"
+    assert planner[-1] == "complete:prime.planner"
+    # Persistence plugins and OpenTelemetry judge failure by ``meta.error``.
+    assert errors["prime.planner"]
