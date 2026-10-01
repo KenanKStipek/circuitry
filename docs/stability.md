@@ -36,6 +36,8 @@ From [`src/circuitry/__init__.py`](../src/circuitry/__init__.py):
 - `inspect_orchestration`
 - `inspect_divergence_paths`
 - `CircuitryExecutionError`
+- `RunResult` — the dataclass `run_orchestration`/`run_shared_orchestration` return
+- `CircuitryConfig` — the dataclass `run_orchestration`'s `config=` accepts and `run_shared_orchestration`'s `config=` requires
 
 #### `circuitry.adapters`
 
@@ -49,7 +51,9 @@ From [`src/circuitry/adapters/__init__.py`](../src/circuitry/adapters/__init__.p
 - `AnthropicAdapter`
 - `LiteLLMAdapter`
 - `CyberdinerAdapter`
-- …one `<Provider>Adapter` class per entry in `ADAPTER_REGISTRY` (`cof list --extensions`)
+- `HostClaudeAdapter`, `HostPromptRequest`, `RunCancelled` — the MCP-only adapter (the host Claude session generates each prompt; see [`circuitry-mcp`](guidebook/12-surfaces.md)) and its request/cancellation types
+- …one `<Provider>Adapter` class per entry in `ADAPTER_REGISTRY` (`cof list --extensions`) — every compiled-in adapter, not a curated subset
+- `ModelLister`, `call_list_models`, `list_adapter_models` — model-listing helpers (`cof list --models`)
 - `validate_generate_result`
 
 #### `circuitry.plugins`
@@ -60,6 +64,16 @@ From [`src/circuitry/plugins/__init__.py`](../src/circuitry/plugins/__init__.py)
 - `ToolResult`
 - `validate_tool_result`
 - `build_plugin`
+- A curated subset of tool plugin classes — currently `Base64Plugin`,
+  `ClockPlugin`, `CsvPlugin`, `EmailSmtpPlugin`, `EnvVarsPlugin`, `FsPlugin`,
+  `GzipPlugin`, `HashPlugin`, `HexPlugin`, `HttpPlugin`, `JsonPlugin`,
+  `MathPlugin`, `PortCheckPlugin`, `RegexPlugin`, `TarPlugin`, `UuidPlugin`,
+  `ValidateYamlPlugin`, `ZipPlugin`. Unlike `circuitry.adapters` (every
+  compiled-in adapter), this is **not** the full list of ~70 bundled tool
+  plugins — see [`docs/runtime-plugins.md`](./runtime-plugins.md) and
+  `src/circuitry/plugins/` for the rest. `build_plugin(name=...)` reaches any
+  of them by name regardless of whether its class is exported here, and is
+  the stable way to construct one you don't see in this list.
 
 ### 2. The `cof` CLI
 
@@ -193,19 +207,26 @@ When something on the public surface needs to go away:
 
 ---
 
-## Adapter SDK versions
+## Adapter transport
 
-Circuitry depends on adapter SDKs (`ollama`, optionally `openai`,
-`anthropic`, `litellm`) with **lower-bound** version pins only. Upper
-bounds are not pinned; CI tests against the latest released versions.
-This means:
+Most bundled adapters (`ollama`, `openai`, `anthropic`, and every other
+`<Provider>Adapter` built on the shared curl transport) talk to the
+provider's HTTP API directly via `curl` (through `src/circuitry/curl_support.py`)—
+they do **not** depend on that provider's official Python SDK, and none of
+`ollama`, `openai`, `anthropic` is a Circuitry dependency. `shutil.which("curl")`
+failing is the only transport-level preflight failure this family can hit.
 
-- A breaking change in an upstream SDK can break Circuitry for users on
-  the latest version of that SDK without a Circuitry release.
-- We ship a fix as soon as the breakage is reported, generally as a patch
-  bump.
-- Users who need lockstep stability should pin both Circuitry and the
-  adapter SDK in their own environment.
+`LiteLLMAdapter` is the one exception: it imports the third-party `litellm`
+package at call time. `litellm` is **not** a Circuitry dependency either —
+it is optional, installed separately (`pip install litellm`), and its
+absence is reported as a missing-dependency preflight failure (`library:litellm`)
+rather than an import error, same as any other optional tool-plugin
+dependency. Circuitry does not pin a `litellm` version; whatever is
+installed is used as-is, so a breaking change in `litellm` can affect a run
+without a Circuitry release.
+
+Users who need lockstep stability for the `litellm` adapter should pin
+`litellm` themselves in their own environment.
 
 ---
 

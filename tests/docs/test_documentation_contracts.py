@@ -7,6 +7,10 @@ import circuitry.adapters as adapters
 
 README_PATH = Path("README.md")
 API_REFERENCE_PATH = Path("docs/api-reference.md")
+ORCHESTRATION_REFERENCE_PATH = Path("docs/orchestration-reference.md")
+BUNDLED_ORCHESTRATION_REFERENCE_PATH = Path(
+    "src/circuitry/bundled/docs/orchestration-reference.md"
+)
 
 
 def _read(path: Path) -> str:
@@ -23,7 +27,9 @@ def test_api_reference_symbols_match_public_exports() -> None:
     api_doc = _read(API_REFERENCE_PATH)
 
     top_level_symbols = [
+        "CircuitryConfig",
         "CircuitryExecutionError",
+        "RunResult",
         "inspect_divergence_paths",
         "inspect_orchestration",
         "run_orchestration",
@@ -36,3 +42,12 @@ def test_api_reference_symbols_match_public_exports() -> None:
 
     assert hasattr(adapters, "build_adapter")
     assert "`build_adapter`" in api_doc
+
+
+def test_bundled_orchestration_reference_matches_docs() -> None:
+    source = _read(ORCHESTRATION_REFERENCE_PATH)
+    bundled = _read(BUNDLED_ORCHESTRATION_REFERENCE_PATH)
+    assert bundled == source, (
+        "src/circuitry/bundled/docs/orchestration-reference.md is out of sync "
+        "with docs/orchestration-reference.md — run scripts/sync-bundled-docs.py"
+    )

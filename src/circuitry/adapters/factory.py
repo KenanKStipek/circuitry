@@ -362,10 +362,6 @@ def _supported_names() -> tuple[str, ...]:
     return tuple(sorted(ADAPTER_REGISTRY.keys()))
 
 
-# Back-compat alias. Preserves original insertion-order tuple shape so callers
-# that imported the constant still work; new code should use ADAPTER_REGISTRY.
-SUPPORTED_ADAPTERS = ("ollama", "openai", "anthropic", "litellm", "host_claude")
-
 
 def build_adapter(*, adapter_name: str, runtime: dict[str, Any]) -> Adapter:
     """

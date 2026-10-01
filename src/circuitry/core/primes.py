@@ -22,7 +22,7 @@ effects:
     effects: [ ... ]
   - type: use
     name: <snake_case>
-    orchestration: <name_or_path>
+    ref: <library_name>
     inputs: {{ ... }}
 
 HARD RULES:
@@ -36,7 +36,7 @@ HARD RULES:
     - dynamic: effects (a list), optional flow (chain|tree)
     - loop: body (a list of effects), plus each or while
     - if: if (condition), then (effects list)
-    - use: orchestration (name/path) or inline (YAML template)
+    - use: ref (library name) or path (filesystem) or inline (YAML template)
     - tool: provider (plugin name)
 - NEVER emit alternative schemas such as:
   - plan:

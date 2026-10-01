@@ -6,7 +6,9 @@ Import from top-level package:
 
 ```python
 from circuitry import (
+    CircuitryConfig,
     CircuitryExecutionError,
+    RunResult,
     inspect_divergence_paths,
     inspect_orchestration,
     run_orchestration,
@@ -94,6 +96,18 @@ Extracts deterministic divergence/failure-path records from runtime state.
 Runtime exception that includes the failed `RunResult` as `.result`.
 
 - Module: `src/circuitry/api.py`
+
+### `RunResult`
+
+The dataclass `run_orchestration` and `run_shared_orchestration` return (`ok`, `state`, `error`, `warnings`, `out_path`).
+
+- Module: `src/circuitry/cli/runtime_shim.py`
+
+### `CircuitryConfig`
+
+The resolved config dataclass `run_orchestration`'s `config=` parameter accepts and `run_shared_orchestration`'s `config=` requires.
+
+- Module: `src/circuitry/cli/config.py`
 
 ## Adapter Factory API
 
