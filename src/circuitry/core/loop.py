@@ -476,61 +476,68 @@ class LoopRuntime:
                     self.defn.max_iterations is None
                     or iteration_count < self.defn.max_iterations
                 ):
-                    # Check continuation condition. A CEL expression that
-                    # cannot be evaluated raises (see ``cel_eval``) rather
-                    # than answering False — a broken condition used to be
-                    # indistinguishable from an exhausted loop.
-                    # A per-check overlay, not a mutation of ctx: a while
-                    # loop must not leak its own _loop_index/iter onto the
-                    # caller's dict (see #260). The values match what the
-                    # old leaking mutation left behind for this same check,
-                    # on purpose — the condition sees the *last finished*
-                    # pass's index (-1 before the first pass), not the pass
-                    # about to run, because that is the spelling every
-                    # existing `+ 1`-compensated condition already assumes.
-                    # `iter.count` (0 before the first pass) is the
-                    # uncompensated equivalent for new conditions:
-                    # `state.iter.count < N` reads the same as
-                    # `state.iter.index + 1 < N`.
-                    cond_ctx = {
-                        **ctx,
-                        "iter": {"index": iteration_count - 1, "count": iteration_count},
-                    }
-                    try:
-                        should_continue = self._evaluate_condition(
-                            ctx=_scope_ctx(cond_ctx, last_writes)
-                        )
-                        if meta and self.defn.while_def.mode == "model":
-                            meta["answer"] = self._model_answer
-                            meta["adapter"] = getattr(self.adapter, "name", "unknown")
-                            meta["model"] = self.model
-                    except Exception as exc:
-                        if meta and self.defn.while_def.mode == "model":
-                            meta["answer"] = self._model_answer
-                            meta["adapter"] = getattr(self.adapter, "name", "unknown")
-                            meta["model"] = self.model
-                        if self.defn.on_error == "fail":
-                            termination_reason = "error"
-                            raise
-                        # break/continue: a condition we cannot evaluate can
-                        # never become false, so continuing would spin to
-                        # max_iterations. Both stop the loop, loudly.
-                        logger.warning(
-                            "Loop %r: while-condition failed (%s); on_error=%s, "
-                            "stopping the loop",
-                            self.defn.name or "<unnamed>",
-                            exc,
-                            self.defn.on_error,
-                        )
-                        termination_reason = "condition_error"
-                        if meta:
-                            meta["error"] = str(exc)
-                        break
+                    # A pass `min_iterations` already forces runs without
+                    # consulting the condition at all — not evaluating it and
+                    # discarding the answer, never evaluating it (#298). A
+                    # `mode: cel` condition that reads state only the body
+                    # itself sets would otherwise warn about an unset path on
+                    # every one of these passes; a `mode: model` condition
+                    # would otherwise make — and throw away — a model call.
+                    if iteration_count < self.defn.min_iterations:
+                        should_continue = True
+                    else:
+                        # Check continuation condition. A CEL expression that
+                        # cannot be evaluated raises (see ``cel_eval``) rather
+                        # than answering False — a broken condition used to be
+                        # indistinguishable from an exhausted loop.
+                        # A per-check overlay, not a mutation of ctx: a while
+                        # loop must not leak its own _loop_index/iter onto the
+                        # caller's dict (see #260). The values match what the
+                        # old leaking mutation left behind for this same check,
+                        # on purpose — the condition sees the *last finished*
+                        # pass's index (-1 before the first pass), not the pass
+                        # about to run, because that is the spelling every
+                        # existing `+ 1`-compensated condition already assumes.
+                        # `iter.count` (0 before the first pass) is the
+                        # uncompensated equivalent for new conditions:
+                        # `state.iter.count < N` reads the same as
+                        # `state.iter.index + 1 < N`.
+                        cond_ctx = {
+                            **ctx,
+                            "iter": {"index": iteration_count - 1, "count": iteration_count},
+                        }
+                        try:
+                            should_continue = self._evaluate_condition(
+                                ctx=_scope_ctx(cond_ctx, last_writes)
+                            )
+                            if meta and self.defn.while_def.mode == "model":
+                                meta["answer"] = self._model_answer
+                                meta["adapter"] = getattr(self.adapter, "name", "unknown")
+                                meta["model"] = self.model
+                        except Exception as exc:
+                            if meta and self.defn.while_def.mode == "model":
+                                meta["answer"] = self._model_answer
+                                meta["adapter"] = getattr(self.adapter, "name", "unknown")
+                                meta["model"] = self.model
+                            if self.defn.on_error == "fail":
+                                termination_reason = "error"
+                                raise
+                            # break/continue: a condition we cannot evaluate can
+                            # never become false, so continuing would spin to
+                            # max_iterations. Both stop the loop, loudly.
+                            logger.warning(
+                                "Loop %r: while-condition failed (%s); on_error=%s, "
+                                "stopping the loop",
+                                self.defn.name or "<unnamed>",
+                                exc,
+                                self.defn.on_error,
+                            )
+                            termination_reason = "condition_error"
+                            if meta:
+                                meta["error"] = str(exc)
+                            break
 
-                    if (
-                        not should_continue
-                        and iteration_count >= self.defn.min_iterations
-                    ):
+                    if not should_continue and iteration_count >= self.defn.min_iterations:
                         termination_reason = "condition_false"
                         break
 

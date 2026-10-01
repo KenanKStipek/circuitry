@@ -192,10 +192,10 @@ A named container that executes child effects sequentially (`chain`) or in paral
 | `flow` | string | no | `chain` | `chain` or `tree`. See [Deprecated spellings](#deprecated-spellings) |
 | `effects` | array | yes | — | Non-empty list of child effects |
 | `description` | string | no | — | |
-| `max_concurrency` | integer | no | — | Max parallel executions for tree flow |
-| `stop_on_error` | boolean | no | `false` | Stop all parallel effects on first error |
-| `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
-| `labels` | object | no | — | Arbitrary metadata annotations |
+| `max_concurrency` | integer | no | unbounded (every child at once) | Max parallel workers when `flow: tree`. No meaning on `flow: chain`, which always runs one child at a time. |
+| `stop_on_error` | boolean | no | `false` | `flow: tree` only. `true` cancels every child that has not started yet as soon as one fails; a child already running cannot be cancelled. No effect on `flow: chain`, where a failing child already stops the ones after it. |
+| `on_error` | string | no | `fail` | `fail`, `skip`, `continue` — same meaning as on a leaf effect (see [Errors](guidebook/05-errors.md)): governs whether a failure anywhere inside this dynamic propagates to *its own* parent (`fail`) or is recorded on this dynamic's own `meta.error` and swallowed there, letting the parent continue (`skip`/`continue`, the same degradation for both). |
+| `labels` | object | no | — | Arbitrary metadata annotations, recorded on `meta.labels` |
 
 **Flow semantics:**
 - `chain` — sequential: each effect executes after the previous, and sees all prior outputs in state
@@ -249,7 +249,7 @@ Evaluates a condition against state and executes exactly one branch (`then` or `
 | `if.strict` | bool | no | `false` | cel only. When true, an unset `state.` path raises instead of making the expression `False` |
 | `then` | array | yes | — | Effects when condition is true |
 | `else` | array | no | `[]` | Effects when condition is false |
-| `threshold` | number | no | `0.5` | Confidence threshold for model mode |
+| `threshold` | number | no | `0.5` | Deprecated, no effect: the built-in evaluator is a categorical yes/no with no confidence to cut. Still recorded on `meta.threshold`; `cof check` warns when set. |
 | `on_error` | string | no | `fail` | `fail`, `continue`, `skip` |
 | `labels` | object | no | — | |
 
@@ -320,7 +320,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `while.expr` | string | cel only | — | CEL expression against state |
 | `while.strict` | bool | no | `false` | cel only. When true, an unset `state.` path raises instead of making the expression `False` |
 | `max_iterations` | integer | no | — (no cap) | Hard cap on iterations. Unset means the loop runs until its collection is exhausted (`each`) or its condition is false (`while`). For `each`, when set, the collection must not be longer than it unless `each.truncate: true` is set — see [Loop termination](#loop-termination). |
-| `min_iterations` | integer | no | `0` | Minimum iterations before condition is checked |
+| `min_iterations` | integer | no | `0` | Minimum iterations to run before the condition is checked at all. A forced pass does not evaluate the condition and discard the answer — it never evaluates it. `while` loops only; on an `each` loop it has no effect and `cof check` warns. |
 | `on_error` | string | no | `fail` | `fail`, `break`, `continue` |
 | `labels` | object | no | — | |
 
@@ -395,10 +395,13 @@ Each iteration writes into its own isolated state, merged back in index order wh
       template: "Improve this text:\n{{prime.draft.value}}"
 ```
 
-The condition is checked between passes and sees the pass that just finished
+The condition is checked between passes, once the loop has run at least
+`min_iterations` passes — a pass `min_iterations` forces runs without the
+condition being evaluated at all, so it costs no model call and reads no
+state on that pass. Once checked, it sees the pass that just finished
 under the same within-iteration names the body uses — so `{{prime.polish.value}}`
-above is the latest `polish` output, not the first one. Before the first pass
-there is nothing to see yet and the name falls through to the enclosing scope.
+above is the latest `polish` output, not the first one. Before the first
+checked pass there is nothing to see yet and the name falls through to the enclosing scope.
 In `mode: cel`, the condition also sees `state.iter.index`: the index of the
 *last finished* pass — `-1` on the check before the first pass, `N - 1` once
 N passes have run (a pass that failed under `on_error: continue` still
@@ -523,7 +526,7 @@ The built-in prime constrains the plan's step descriptions and every generated e
 | `max_iterations` | integer | no | `1` | Maximum planning cycles |
 | `generated_key` | string | no | `generated` | State key for generated effects |
 | `stop_on_done` | boolean | no | `true` | Stop when plan signals completion |
-| `max_effects` | integer | no | `8` | Max effects per planning cycle |
+| `max_effects` | integer | no | `8` | Max top-level effects per planning cycle. Enforced: a generated plan over the cap is an invalid plan (same path as a plan that fails to parse), with an error naming the count and the cap. Never truncated. |
 | `max_steps` | integer | no | `8` | Alias for `max_effects` |
 | `prime_template` | string | no | built-in | Custom prime template for planning. The built-in prime enforces ASD-STE100 Simplified Technical English on generated plan text; supplying your own opts out |
 

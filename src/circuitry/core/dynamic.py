@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from copy import deepcopy
@@ -15,6 +16,8 @@ from ..output import console as _console
 from .disabled import is_enabled, write_disabled_node
 from .prompt import PromptDefinition, PromptRuntime
 from .store import Store
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     # Type-only imports to avoid circular imports at runtime
@@ -87,6 +90,26 @@ class DynamicDefinition:
     effects: Sequence[EffectDef]
     flow: Literal["chain", "tree"] = "chain"
 
+    # Tree flow only. None (default) runs every child at once, as before
+    # this field existed; set, it bounds the worker pool.
+    max_concurrency: int | None = None
+
+    # Tree flow only. True cancels children that have not yet started once
+    # one fails; chain flow already stops at the failing child (see
+    # ``execute``) so this has no effect there.
+    stop_on_error: bool = False
+
+    # Error behavior for a failure anywhere inside this dynamic that is not
+    # itself absorbed by a child's own on_error: 'fail' propagates to this
+    # dynamic's own parent (the default); 'skip'/'continue' record the error
+    # on this dynamic's own meta and let the parent carry on, the same
+    # degradation a leaf effect's on_error gives (see guidebook ch. 5).
+    on_error: Literal["fail", "skip", "continue"] = "fail"
+
+    # Free-form metadata, recorded on this dynamic's own meta. Observability
+    # tagging, not behavior.
+    labels: Mapping[str, Any] | None = None
+
     # False = skip execution (whole subtree) and write a disabled node.
     enabled: bool = True
 
@@ -147,6 +170,7 @@ class DynamicRuntime:
                 "error": None,
                 "flow": self.defn.flow,
                 "dry_run": self.dry_run,
+                "labels": dict(self.defn.labels) if self.defn.labels else None,
             }
         )
 
@@ -238,12 +262,19 @@ class DynamicRuntime:
                     len(self.defn.effects)
                 )
 
+                # An empty tree runs nothing, like an empty chain;
+                # ThreadPoolExecutor itself refuses max_workers=0. Unset
+                # max_concurrency keeps every child running at once, as
+                # before this field existed; set, it bounds the pool.
+                if self.defn.max_concurrency is None:
+                    max_workers = max(1, len(self.defn.effects))
+                else:
+                    max_workers = max(
+                        1, min(self.defn.max_concurrency, len(self.defn.effects))
+                    )
+
                 with live_ctx:
-                    # An empty tree runs nothing, like an empty chain;
-                    # ThreadPoolExecutor itself refuses max_workers=0.
-                    with ThreadPoolExecutor(
-                        max_workers=max(1, len(self.defn.effects))
-                    ) as executor:
+                    with ThreadPoolExecutor(max_workers=max_workers) as executor:
                         futures: dict = {
                             executor.submit(
                                 self._execute_branch,
@@ -255,10 +286,33 @@ class DynamicRuntime:
                             for idx, effect in enumerate(self.defn.effects)
                         }
                         for future in as_completed(futures):
+                            idx = futures[future]
                             try:
                                 future.result()
                             except Exception as e:
-                                tree_errors.append(e)
+                                # Name the failing child's path, same as chain
+                                # flow does (#289), so a tree container's own
+                                # meta.error is a breadcrumb into the child
+                                # either way.
+                                effect_path = self._effect_path(
+                                    effect=self.defn.effects[idx], index=idx
+                                )
+                                wrapped = RuntimeError(f"{effect_path}: {e}")
+                                wrapped.__cause__ = e
+                                tree_errors.append(wrapped)
+                                if self.defn.stop_on_error:
+                                    # Cancel every child that has not started
+                                    # yet (only possible when max_concurrency
+                                    # bounds the pool below the child count —
+                                    # an already-running thread cannot be
+                                    # killed). The executor's own shutdown,
+                                    # below, still waits for whatever was
+                                    # already running to finish before the
+                                    # isolated stores are merged.
+                                    for pending in futures:
+                                        if pending is not future:
+                                            pending.cancel()
+                                    break
 
                 # Merge isolated stores back into child_store sequentially
                 for idx in range(len(self.defn.effects)):
@@ -284,7 +338,18 @@ class DynamicRuntime:
             # Balances the start fired above: a container that failed still
             # closes its pair, carrying value False and meta.error.
             store.fire_effect_complete(self.defn.name, dyn)
-            raise
+            if self.defn.on_error == "fail":
+                raise
+            # skip/continue: the same degradation a leaf effect's on_error
+            # gives — the failure is recorded on this dynamic's own meta.error
+            # (above) and the exception stops here instead of propagating to
+            # this dynamic's parent, which runs its next effect normally.
+            logger.warning(
+                "Dynamic %r: %s; on_error=%s, continuing with the next effect",
+                self.defn.name,
+                e,
+                self.defn.on_error,
+            )
 
     def _execute_branch(
         self,

@@ -209,6 +209,15 @@ class ReflectorRuntime:
                 if not effects:
                     rec["stop"] = True
                     return rec
+                # A plan over the cap is invalid, same as one that fails to
+                # parse — never truncated silently (#251 part 2).
+                if len(effects) > self.defn.max_effects:
+                    rec["error"] = (
+                        f"invalid_plan: generated plan has {len(effects)} "
+                        f"top-level effects, exceeds max_effects "
+                        f"({self.defn.max_effects})"
+                    )
+                    return rec
             except Exception:
                 pass  # let use(inline) handle parse errors
 

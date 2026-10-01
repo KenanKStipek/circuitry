@@ -418,13 +418,14 @@ def test_while_model_condition_template_renders_the_last_pass() -> None:
         ]
     }
 
-    adapter, _ = _run(orch, {}, replies=["no", "draft-1", "no"])
+    # min_iterations: 1 forces pass 0 without evaluating the condition at all
+    # (#298), so the first model call is the body's own prompt, not the
+    # condition; only one condition check happens, after that pass.
+    adapter, _ = _run(orch, {}, replies=["draft-1", "no"])
 
     asks = [p for p in adapter.prompts if "Improve further?" in p]
-    # First check happens before any pass, so the name falls through to empty;
-    # the second sees pass 0's output.
-    assert "Improve further? []" in asks[0]
-    assert "Improve further? [draft-1]" in asks[1]
+    assert len(asks) == 1
+    assert "Improve further? [draft-1]" in asks[0]
 
 
 # --------------------------------------------------------------------------

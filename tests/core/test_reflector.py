@@ -166,6 +166,44 @@ def test_reflector_stop_on_empty_effects() -> None:
     assert iteration["stop"] is True
 
 
+def test_reflector_plan_over_max_effects_is_invalid_and_never_truncated() -> None:
+    """A generated plan with more top-level effects than max_effects is an
+    invalid plan: the reflector fails rather than silently running only the
+    first max_effects of them (#251 part 2)."""
+    plan_yaml = yaml.dump({
+        "done": True,
+        "effects": [
+            {"type": "prompt", "name": "a", "template": "a"},
+            {"type": "prompt", "name": "b", "template": "b"},
+            {"type": "prompt", "name": "c", "template": "c"},
+        ],
+    })
+    adapter = _mock_adapter(plan_yaml)
+
+    orch = {
+        "effects": [
+            {
+                "type": "reflector",
+                "name": "planner",
+                "max_effects": 2,
+                "effects": [
+                    {"type": "prompt", "name": "propose_steps", "template": "Plan."},
+                ],
+            }
+        ]
+    }
+
+    root = compile_orchestration(orch=orch)
+    store = Store(state={})
+
+    with pytest.raises(RuntimeError, match=r"3.*exceeds max_effects.*2"):
+        DynamicRuntime(root, adapter=adapter, model="test-model").execute(store=store)
+
+    planner = store.state["prime"]["planner"]
+    assert planner["value"] is False
+    assert "generated" not in planner or planner["generated"] == {}
+
+
 def test_reflector_invalid_plan_records_error() -> None:
     """Invalid YAML from LLM is caught and recorded as error."""
     adapter = _mock_adapter("This is not YAML at all: [[[invalid")

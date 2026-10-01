@@ -330,7 +330,7 @@
           "type": "number",
           "minimum": 0,
           "maximum": 1,
-          "description": "Confidence threshold for model-based evaluation. Default 0.5."
+          "description": "Deprecated, no effect: the built-in evaluator is a categorical yes/no with no calibrated confidence to cut. Still recorded on meta.threshold; cof check warns when set. Default 0.5."
         },
         "on_error": {
           "type": "string",

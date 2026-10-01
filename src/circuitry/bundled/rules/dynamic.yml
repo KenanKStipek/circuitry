@@ -18,13 +18,17 @@ fields:
   max_concurrency:
     type: integer
     min: 1
-    note: "Maximum parallel workers for tree flow."
+    note: "Maximum parallel workers for tree flow. Unset (default): every child runs at once. No meaning on chain flow, which always runs one child at a time."
   stop_on_error:
     type: boolean
-    note: "Halt remaining children when one fails. Usually omitted — prefer on_error, which covers the same intent per effect."
+    note: "Tree flow only. true cancels every child that has not started yet as soon as one fails; an already-running child cannot be cancelled. No effect on chain flow, where a failing child already stops the ones after it. Usually omitted — prefer on_error, which covers the same intent per effect."
   on_error:
     enum: [fail, skip, continue]
     default: fail
+    note: "Same meaning as on a leaf effect: governs whether a failure anywhere inside this dynamic propagates to this dynamic's own parent (fail) or is recorded on this dynamic's own meta.error and swallowed there, letting the parent continue (skip/continue — the same degradation for both)."
+  labels:
+    type: object
+    note: "Free-form metadata, recorded on meta.labels. Observability tagging, not behavior."
 state_paths:
   child_output: "prime.<dynamic_name>.<child_name>.value"
   template_ref: "{{prime.<dynamic_name>.<child_name>.value}}"
