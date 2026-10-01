@@ -134,6 +134,21 @@ def _key_paths(prefix: str, value: Any, depth: int) -> list[str]:
     ]
 
 
+def _ceiling_intersected_paths(cfg: CircuitryConfig) -> frozenset[str]:
+    """The `_CEILING_LIST_KEYS` notice paths for which the host actually has
+    a pin set — those are narrowed to an intersection, never applied
+    outright, so the notice says so (#316)."""
+    config_runtime = cfg.runtime or {}
+    paths: set[str] = set()
+    for top_key, name, leaf_key in _CEILING_LIST_KEYS:
+        host_block = config_runtime.get(top_key)
+        host_cfg = host_block.get(name) if isinstance(host_block, dict) else None
+        host_list = host_cfg.get(leaf_key) if isinstance(host_cfg, dict) else None
+        if isinstance(host_list, list):
+            paths.add(f"runtime.{top_key}.{name}.{leaf_key}")
+    return frozenset(paths)
+
+
 def _applied_host_settings_notice(
     orch_runtime: dict[str, Any],
     orch_plugins: list[Any],
@@ -146,10 +161,13 @@ def _applied_host_settings_notice(
     Dotted key paths for the `runtime:` keys outside
     ORCHESTRATION_RUNTIME_KEYS and the `plugins:` entries config does not
     list; no values, so a credential in the document never reaches it. Empty
-    when the document sets only author-level keys.
+    when the document sets only author-level keys. A `_CEILING_LIST_KEYS`
+    path is tagged to say it was narrowed to an intersection with the host's
+    pin, not applied as the document wrote it.
     """
+    ceiling_paths = _ceiling_intersected_paths(cfg)
     runtime_paths = [
-        path
+        f"{path} (intersected with host pin)" if path in ceiling_paths else path
         for key, value in orch_runtime.items()
         if key not in ORCHESTRATION_RUNTIME_KEYS
         for path in _key_paths(f"runtime.{_key_label(key)}", value, _NOTICE_KEY_DEPTH)
@@ -232,22 +250,33 @@ def _apply_ceiling_intersections(
 ) -> dict[str, Any]:
     """Re-narrow each `_CEILING_LIST_KEYS` entry to the host/document
     intersection after the deep merge, which would otherwise let a
-    document's own list replace the host's wholesale — the one leaf the
-    merge must not treat like every other overridable key."""
+    document's own list — or a `null`/non-dict value that erases the whole
+    block the deep merge would otherwise have preserved — drop the host's
+    pin instead of narrowing it. Whenever the host has a pin, it survives:
+    intersected against the document's own list if it gave one, or
+    untouched if the document's value for that leaf (or an ancestor block)
+    isn't a list at all. The one leaf the merge must not treat like every
+    other overridable key."""
     for top_key, name, leaf_key in _CEILING_LIST_KEYS:
         host_block = (config_runtime or {}).get(top_key)
         host_cfg = host_block.get(name) if isinstance(host_block, dict) else None
         host_list = host_cfg.get(leaf_key) if isinstance(host_cfg, dict) else None
+        if not isinstance(host_list, list):
+            continue
         orch_block = (orch_runtime or {}).get(top_key)
         orch_cfg = orch_block.get(name) if isinstance(orch_block, dict) else None
         orch_list = orch_cfg.get(leaf_key) if isinstance(orch_cfg, dict) else None
-        if not isinstance(host_list, list) or not isinstance(orch_list, list):
-            continue
-        intersected = [c for c in host_list if c in orch_list]
+        effective = (
+            [c for c in host_list if c in orch_list]
+            if isinstance(orch_list, list)
+            else host_list
+        )
         merged = dict(merged)
-        merged[top_key] = dict(merged.get(top_key) or {})
-        merged[top_key][name] = dict(merged[top_key].get(name) or {})
-        merged[top_key][name][leaf_key] = intersected
+        merged_top = merged.get(top_key)
+        merged[top_key] = dict(merged_top) if isinstance(merged_top, dict) else {}
+        merged_name = merged[top_key].get(name)
+        merged[top_key][name] = dict(merged_name) if isinstance(merged_name, dict) else {}
+        merged[top_key][name][leaf_key] = effective
     return merged
 
 
@@ -394,8 +423,10 @@ def resolve_effective_settings(
             else ("config" if cfg.plugins else "default")
         )
 
-    # runtime: shallow merge, orch overrides config — for the author-level
-    # keys only, unless the document is trusted (see ORCHESTRATION_RUNTIME_KEYS)
+    # runtime: orch overrides config, deep-merged under `plugins`/`adapters`
+    # (see _DEEP_MERGE_RUNTIME_KEYS), shallow everywhere else — for the
+    # author-level keys only, unless the document is trusted (see
+    # ORCHESTRATION_RUNTIME_KEYS)
     orch_runtime, runtime_warnings = _split_orchestration_runtime(
         orch_runtime, trusted=trusted
     )

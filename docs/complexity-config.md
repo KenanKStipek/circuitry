@@ -561,7 +561,8 @@ The runtime merge is shallow over top-level runtime keys, so an
 orchestration-level `complexity` block **replaces** the config-level one
 wholesale rather than merging into it. An orchestration that overrides the
 block must restate every value it still wants — including sub-blocks it does
-not change.
+not change. (`plugins`/`adapters` are the exception: those two merge one
+level deeper, key by key — see [Threat model](threat-model.md).)
 
 `resolve_effective_settings` records the winning layer under
 `sources["complexity"]`, plus `sources["complexity.scoring"]`,

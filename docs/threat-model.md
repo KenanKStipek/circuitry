@@ -254,7 +254,15 @@ host runs, including library names, MCP and REST callers and everything
 reachable through `use: ref:`. Enable it only on a host that runs nothing but
 documents its operator wrote or has reviewed. Within the boundary, a document
 still uses whatever config allows — the adapters, tools and plugins config
-enables — so the allowlists remain the way to narrow that.
+enables — so the allowlists remain the way to narrow that. Because
+`plugins`/`adapters` merge key by key rather than block by block, a trusted
+document that sets only one field deep inside a block — an MCP server's
+`command`/`url` under `plugins.mcp.servers.<name>`, say, or an adapter's
+`base_url` — inherits the rest of that block (`env`, headers, credentials)
+from the host rather than dropping it; this is the deep merge working as
+intended for a trusted document, not a leak, but it means a trusted
+document's endpoint choice can run against the host's existing credentials
+for that block.
 
 ### 7. Project config files
 

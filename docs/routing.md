@@ -135,6 +135,8 @@ config runtime.complexity          >   defaults
 The merge is shallow: an orchestration-level `complexity` block replaces the
 config-level one wholesale, so an override must restate every sub-block it
 still wants (see [Complexity Configuration §Precedence](complexity-config.md#precedence)).
+`complexity` is a shallow-replace key like most of `runtime`; `plugins`/
+`adapters` are the exception, merged one level deeper.
 
 **Model chain** — what actually dispatches, and where the router sits in it:
 

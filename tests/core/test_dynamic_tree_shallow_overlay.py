@@ -97,3 +97,45 @@ def test_tree_dynamic_children_share_a_nested_object_without_mutating_it() -> No
     # The shared object itself is untouched -- nothing wrote back into it.
     assert state["input"]["shared"] == original
     assert state["input"]["shared"] is shared
+
+
+def test_tree_dynamic_child_write_replaces_without_mutating_the_pre_run_node() -> None:
+    """A child that rewrites a path which already holds a nested object in
+    the pre-run state -- the same object the shallow `tree_ctx` overlay
+    shares by reference with every sibling -- only replaces it in its own
+    isolated store once the dynamic merges branch results back, after every
+    branch has already run. The pre-run object itself is never mutated in
+    place while branches run, so a sibling reading through the shared
+    reference during the run sees the pre-run value, never a half-written
+    one (#318)."""
+    writer_node = {"value": "old", "meta": {}}
+    state = {"prime": {"writer": writer_node}}
+
+    orch = {
+        "flow": "tree",
+        "effects": [
+            {
+                "type": "tool",
+                "name": "writer",
+                "provider": "json",
+                "params": {"mode": "stringify", "input": "new"},
+            },
+            {
+                "type": "prompt",
+                "name": "reader",
+                "template": "writer_value={{prime.writer.value}}",
+            },
+        ],
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store(state)
+    DynamicRuntime(root, adapter=EchoAdapter(), model="unit-test").execute(store=store)
+
+    # The sibling templated the dynamic-start snapshot, where "prime.writer"
+    # still held the pre-run value -- never the writer's concurrent rewrite.
+    assert store.get("prime.reader.value") == "writer_value=old"
+    assert store.get("prime.writer.value") == '"new"'
+    # The pre-run object is untouched: the merge replaced the "writer" key
+    # in the run state, it never mutated this object in place.
+    assert writer_node == {"value": "old", "meta": {}}
+    assert state["prime"]["writer"] is not writer_node
