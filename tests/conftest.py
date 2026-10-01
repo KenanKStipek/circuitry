@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -127,3 +128,24 @@ def _hermetic_global_config(
     monkeypatch.setattr(app_module, "_LAST_RUN_PATH", fake_last_run_path)
     monkeypatch.setattr(setup_module, "GLOBAL_CONFIG_DIR", fake_dir)
     monkeypatch.setattr(setup_module, "GLOBAL_CONFIG_PATH", fake_config_path)
+
+
+@pytest.fixture(autouse=True)
+def _reset_circuitry_logger() -> Any:
+    """Undo whatever a CLI invocation did to the ``circuitry`` logger.
+
+    ``cli.logging_setup.configure_cli_logging`` attaches a stderr handler and
+    sets a level on this logger for the lifetime of the process — exactly
+    what a real ``cof`` invocation wants, but a level set here is inherited
+    by every ``circuitry.*`` child logger for the rest of the suite unless
+    each test restores it, which is what tests exercising this logger
+    directly (e.g. ``tests/tui/test_logging.py``) assume.
+    """
+    logger = logging.getLogger("circuitry")
+    handlers = list(logger.handlers)
+    level = logger.level
+    try:
+        yield
+    finally:
+        logger.handlers[:] = handlers
+        logger.setLevel(level)

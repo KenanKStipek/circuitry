@@ -122,6 +122,15 @@ Three effects and no model call. `test_run` runs pytest with the caller's argume
 
 Two things happen when a `use` calls a document with an interface. **Required inputs are validated** — a caller that omits `repo` fails with *missing required input 'repo' declared in orchestration interface* before the child runs a single effect. And **outputs are auto-generated**: the caller's mapping is the child's `interface.outputs`, so callers do not repeat dot-paths, and the child can rename its internal effects without breaking anyone. The `use` in the first example could drop its `outputs:` block entirely.
 
+The same check runs when the document is the one you ran, not someone else's `use` child: `cof run`, the SDK's `run_orchestration`, the REST trigger, MCP's `run_orchestration`, and the scheduler all enforce `interface.inputs` through the same function, with the same messages. A declared `type` is checked too — `string`, `number`, `boolean`, `array`, `object` — and a CLI `-e` value or a `use` input rendered through Mustache (both cross as plain text) is coerced to it; an undeclared input always passes through untouched. `default:` fills in a value the caller omitted, at either level:
+
+```yaml
+interface:
+  inputs:
+    repo: {type: string, required: true}
+    verbose: {type: boolean, default: false}
+```
+
 The interface is also what `cof info` prints, what `cof list` shows as inputs, and what the [wizard](12-surfaces.md) reads when it composes library entries into a draft. Declare one on anything reusable-shaped.
 
 A declared input has one spelling inside the document — `{{input.repo}}` in templates, `state.input.repo` in CEL — and the compiler holds you to it:

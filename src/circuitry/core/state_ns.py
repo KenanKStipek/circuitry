@@ -75,7 +75,12 @@ def migrate_legacy_state(state: dict[str, Any]) -> dict[str, Any]:
         input_ns[key] = state.pop(key)
     state[INPUT_NS] = input_ns
     if lifted:
-        logger.info(
+        # DEBUG, not INFO: a bare `-e KEY=VALUE` run with no `--state` file
+        # lifts its own root keys exactly the same way a genuinely legacy
+        # (pre-namespace) snapshot does, so this fires on effectively every
+        # `-e` invocation — INFO-under-`--verbose` noise for completely
+        # ordinary use, not something worth flagging each time.
+        logger.debug(
             "Lifted legacy root state keys under 'input': %s",
             ", ".join(sorted(lifted)),
         )

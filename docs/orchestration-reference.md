@@ -878,15 +878,25 @@ Both spellings compile to the same `name → path` mapping and always have — t
 
 ### Interface
 
-An orchestration declares its contract with a top-level `interface:` block. `inputs` are validated when a `use` effect invokes it; `outputs` auto-generate the caller's output mapping, so callers don't repeat dot-paths:
+An orchestration declares its contract with a top-level `interface:` block, and it is enforced the same way everywhere the document runs: as a `use` effect's child, and at the top level — `cof run`, the SDK's `run_orchestration`, the REST trigger, MCP's `run_orchestration`, and the scheduler all share one enforcement path.
 
 ```yaml
 interface:
   inputs:
     article: {type: string, required: true, description: Text to summarize.}
+    style: {type: string, default: neutral, description: Tone for the summary.}
   outputs:
     summary: {path: prime.summarize.value, type: string}
 ```
+
+| Key | Required | Meaning |
+|-----|----------|---------|
+| `type` | no | `string`, `number`, `boolean`, `array`, `object` — checked, and used to coerce a CLI `-e` value or a `use` input rendered through Mustache (both cross as text) to the declared type |
+| `required` | no | Fails the run before anything executes if this input is missing. Default `false` |
+| `default` | no | Value used when the caller omits this input. Any JSON type; should match `type` when both are given |
+| `description` | no | Prose for humans and for library listings |
+
+An input `interface.inputs` doesn't declare is never rejected — undeclared extra inputs always pass through. A missing `--state` file is a hard error (`state file not found: ...`), not empty input.
 
 An explicit `outputs:` on the `use` effect takes precedence over the child's `interface.outputs`.
 
