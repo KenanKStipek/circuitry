@@ -939,10 +939,10 @@ def test_max_in_flight_caps_concurrent_submissions(
 _NOOP_ORCH = (
     """
 effects:
-  - type: dynamic
+  - type: tool
     name: noop
-    flow: chain
-    effects: []
+    provider: json
+    params: {mode: stringify, input: "noop"}
 """.strip()
     + "\n"
 )

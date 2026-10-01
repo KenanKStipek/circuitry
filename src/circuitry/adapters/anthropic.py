@@ -6,8 +6,8 @@ import shutil
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
+from ..curl_support import curl_failure_message, run_curl
 from ..preflight import CheckResult
-from ._curl_errors import curl_failure_message
 from ._retry import AdapterCallError, classify_curl_exit
 from .base import GenerateOptions, GenerateResult, ImageInput, last_user_index
 
@@ -117,8 +117,6 @@ class AnthropicAdapter:
         timeout_seconds: int = 120,
         options: GenerateOptions | None = None,
     ) -> GenerateResult:
-        import subprocess
-
         model = model or self.default_model
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
@@ -137,33 +135,16 @@ class AnthropicAdapter:
             options=options or GenerateOptions(),
         )
 
-        cmd = [
-            "curl",
-            "--silent",
-            "--show-error",
-            "--fail-with-body",
-            "--max-time",
-            str(int(timeout_seconds)),
-            "-H",
-            "Content-Type: application/json",
-            "-H",
-            f"x-api-key: {api_key}",
-            "-H",
-            "anthropic-version: 2023-06-01",
-            # The body goes on stdin: with base64 images it can outgrow the
-            # argv size limit (128 KiB per argument on Linux).
-            "--data-binary",
-            "@-",
-            url,
-        ]
-
         try:
-            proc = subprocess.run(
-                cmd,
-                input=json.dumps(payload),
-                capture_output=True,
-                text=True,
-                check=False,
+            proc = run_curl(
+                url=url,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                data=json.dumps(payload),
+                timeout_seconds=timeout_seconds,
             )
         except FileNotFoundError as e:
             raise RuntimeError("curl is not installed or not on PATH") from e
@@ -171,7 +152,7 @@ class AnthropicAdapter:
         if proc.returncode != 0:
             raise AdapterCallError(
                 curl_failure_message(
-                    adapter="anthropic",
+                    source="anthropic",
                     model=model,
                     url=url,
                     returncode=proc.returncode,

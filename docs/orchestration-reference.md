@@ -64,8 +64,9 @@ effects:
 
 `cof check` and `cof run` apply one structural check to a document before anything in it runs — `cof run` does not start a document `cof check` rejects, so it cannot fail halfway with earlier effects already done. A `use` child loaded by `path:` or `ref:` gets the same check when it loads, as an `inline:` child always has (`validate: false` on the `use` turns it off). Beyond the schema:
 
-- **A repeated key** in one mapping — two `template:` lines, two `effects:` blocks — is an error naming both lines, in every YAML document the runtime loads (a file, a library ref, a `use` child, `inline:` included). YAML on its own would keep only the last one.
+- **A repeated key** in one mapping — two `template:` lines, two `effects:` blocks — is an error naming the key and where it is, in every document the runtime loads, YAML or JSON (a file, a library ref, a `use` child, `inline:` included). YAML and JSON on their own would each keep only the last one. A YAML document names both lines; a JSON document names the key's path, since `json.loads` carries no line numbers of its own.
 - **An unknown key** on an effect or at the top level is ignored, so it is reported. One that is a near miss of a key that effect knows — `whlie:`, `max_iteration:`, `temlpate:`, or `adapter:` on a `prompt` where `provider:` belongs — is an **error** naming the key it meant. Any other unknown key is a **warning**. Inside `each:`, `if:`/`while:` conditions, `retries:`, `messages:` and `assets:` entries, every key is known, so any other key is a schema error.
+- **An `interface.inputs` default that doesn't match its declared `type`** is an error naming the input, the type and the value — the same rule a caller-supplied value is checked against once it's filled in, but without that check's string coercion: a YAML/JSON default is already a typed value, not a CLI `-e`/`use:` value crossing as text, so a quoted numeral (`default: "3"` for an `integer` input) is flagged with a hint to remove the quotes rather than silently accepted.
 - **A loop needs exactly one of `each` or `while`.** One with neither would run zero passes and report a clean termination.
 - **A malformed Mustache template** — an unclosed tag (`{{input.topic}`), a section closed under the wrong name — is an error naming the field, wherever a template is rendered: a prompt's `template` or `messages`, a tool's `prompt`, `params` and `params_json`, a model-mode `if`/`while` template, a `use` effect's `inline` and string `inputs`. Were one to reach a run anyway, rendering it fails the effect under its `on_error`; the raw text is never sent on.
 
@@ -710,6 +711,16 @@ other than a JSON object, is a hard error (not silently ignored) — it is
 treated like any other tool-effect failure and follows the effect's
 `on_error` policy.
 
+A handful of keys are security boundaries a plugin enforces — today, only
+`shell`'s `allowed_commands` — and `params_json` may never set one: setting
+it there is a hard error even when the rest of the rendered JSON is valid,
+because `params_json` is runtime-built and can carry model-generated content
+(an LLM's own output feeding back into what commands it is allowed to run).
+The same key is also rejected in `params:` itself when any of its string
+entries is still a Mustache tag (e.g. `allowed_commands: ["{{cmd}}"]`)
+rather than a plain, written-down value — only a literal list counts. See
+[Tools and persistence](guidebook/13-tools-and-persistence.md).
+
 ---
 
 ### `use`
@@ -928,7 +939,7 @@ interface:
 
 | Key | Required | Meaning |
 |-----|----------|---------|
-| `type` | no | `string`, `number`, `boolean`, `array`, `object` — checked, and used to coerce a CLI `-e` value or a `use` input rendered through Mustache (both cross as text) to the declared type |
+| `type` | no | `string`, `number`, `integer`, `boolean`, `array`, `object` — checked, and used to coerce a CLI `-e` value or a `use` input rendered through Mustache (both cross as text) to the declared type. `cof check` also checks a `default:` against this — see [What `cof check` and `cof run` reject](#what-cof-check-and-cof-run-reject) |
 | `required` | no | Fails the run before anything executes if this input is missing. Default `false` |
 | `default` | no | Value used when the caller omits this input. Any JSON type; should match `type` when both are given |
 | `description` | no | Prose for humans and for library listings |

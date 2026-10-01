@@ -172,13 +172,49 @@ def _walk_effects_usages(
         elif etype == "dynamic":
             _walk_effects_usages(effect.get("effects"), default_adapter, usages)
         elif etype in ("if", "conditional"):
+            # `mode: model` (the compiler's default, see core/compiler.py) calls
+            # generate() itself on the document's default adapter — there's no
+            # per-condition `provider:` — so it's a usage of its own, the same
+            # as a `prompt` effect's (#254).
+            if _condition_mode(effect.get("if")) == "model" and default_adapter:
+                on_error = effect.get("on_error")
+                if on_error not in ("fail", "skip", "continue"):
+                    on_error = "fail"
+                usages.setdefault(default_adapter, []).append(
+                    AdapterUsage(effect_name, on_error)
+                )
             _walk_effects_usages(effect.get("then"), default_adapter, usages)
             _walk_effects_usages(effect.get("else"), default_adapter, usages)
         elif etype == "loop":
+            while_def = effect.get("while")
+            if (
+                while_def is not None
+                and _condition_mode(while_def) == "model"
+                and default_adapter
+            ):
+                # Loop's own error policy (fail/break/continue) rather than
+                # a prompt/if's (fail/skip/continue) — only "fail" is hard
+                # either way, so it's enough to default an unrecognized value
+                # to "fail" rather than share the prompt/if validity set.
+                on_error = effect.get("on_error")
+                if on_error not in ("fail", "break", "continue"):
+                    on_error = "fail"
+                usages.setdefault(default_adapter, []).append(
+                    AdapterUsage(effect_name, on_error)
+                )
             _walk_effects_usages(effect.get("body"), default_adapter, usages)
         elif etype == "reflector":
             _walk_effects_usages(effect.get("effects"), default_adapter, usages)
         # `use` effects expand at compile time; not walked here either.
+
+
+def _condition_mode(condition: Any) -> str:
+    """A `ConditionDef`'s `mode`, defaulting to `model` as the compiler does
+    (core/compiler.py) when the field is omitted."""
+    if not isinstance(condition, dict):
+        return "model"
+    mode = str(condition.get("mode") or "model").strip().lower()
+    return "cel" if mode == "cel" else "model"
 
 
 def is_hard_adapter_dependency(

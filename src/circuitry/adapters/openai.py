@@ -6,8 +6,8 @@ import shutil
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
+from ..curl_support import curl_failure_message, run_curl
 from ..preflight import CheckResult
-from ._curl_errors import curl_failure_message
 from ._openai_compat import chat_messages, parse_chat_response, sampling_fields
 from ._retry import AdapterCallError, classify_curl_exit
 from .base import DETERMINISTIC_SEED, GenerateOptions, GenerateResult
@@ -39,8 +39,6 @@ class OpenAIAdapter:
         timeout_seconds: int = 120,
         options: GenerateOptions | None = None,
     ) -> GenerateResult:
-        import subprocess
-
         options = options or GenerateOptions()
         model = model or self.default_model
         api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -62,31 +60,15 @@ class OpenAIAdapter:
         if options.deterministic:
             payload.setdefault("seed", DETERMINISTIC_SEED)
 
-        cmd = [
-            "curl",
-            "--silent",
-            "--show-error",
-            "--fail-with-body",
-            "--max-time",
-            str(int(timeout_seconds)),
-            "-H",
-            "Content-Type: application/json",
-            "-H",
-            f"Authorization: Bearer {api_key}",
-            # The body goes on stdin: with base64 images it can outgrow the
-            # argv size limit (128 KiB per argument on Linux).
-            "--data-binary",
-            "@-",
-            url,
-        ]
-
         try:
-            proc = subprocess.run(
-                cmd,
-                input=json.dumps(payload),
-                capture_output=True,
-                text=True,
-                check=False,
+            proc = run_curl(
+                url=url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                },
+                data=json.dumps(payload),
+                timeout_seconds=timeout_seconds,
             )
         except FileNotFoundError as e:
             raise RuntimeError("curl is not installed or not on PATH") from e
@@ -94,7 +76,7 @@ class OpenAIAdapter:
         if proc.returncode != 0:
             raise AdapterCallError(
                 curl_failure_message(
-                    adapter="openai",
+                    source="openai",
                     model=model,
                     url=url,
                     returncode=proc.returncode,

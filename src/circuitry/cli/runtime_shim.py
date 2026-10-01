@@ -392,23 +392,20 @@ def run(req: RunRequest) -> RunResult:
                 **persistence.describe(),
             }
 
-        if req.validate_only:
-            state["runtime"]["last_run"]["completed_at"] = _now_iso()
-            return RunResult(ok=True, state=state, warnings=warnings, out_path=resolved_out)
-
-        start_events = invoke_plugins(
-            plugins=plugins,
-            hook_name="on_run_start",
-            state=state,
-            context=PluginContext(
-                run_id=run_id,
-                orchestration_path=req.orchestration_path,
-                dry_run=req.dry_run,
-                validate_only=req.validate_only,
-                runtime_config=effective.runtime,
-            ),
-        )
-        state["runtime"]["plugins"]["events"].extend(start_events)
+        if not req.validate_only:
+            start_events = invoke_plugins(
+                plugins=plugins,
+                hook_name="on_run_start",
+                state=state,
+                context=PluginContext(
+                    run_id=run_id,
+                    orchestration_path=req.orchestration_path,
+                    dry_run=req.dry_run,
+                    validate_only=req.validate_only,
+                    runtime_config=effective.runtime,
+                ),
+            )
+            state["runtime"]["plugins"]["events"].extend(start_events)
 
         # The structural gate `cof check` applies, then compile YAML -> core
         # definitions, both before adapter/model initialization and before
@@ -421,6 +418,18 @@ def run(req: RunRequest) -> RunResult:
                 + "\n".join(f"  - {error}" for error in document_errors)
             )
         root_def = compile_orchestration(orch=orch, root_name="prime")
+
+        # A `use:` cycle is otherwise only caught mid-execution (core/use.py);
+        # `validate()`/`cof check` already reject it here, so `validate_only`
+        # must too rather than returning ok for a document `cof check` rejects.
+        from ..core.cycle_check import detect_cycles
+
+        cycle = detect_cycles(
+            orch, root_path=req.orchestration_path, runtime=effective.runtime
+        )
+        if cycle is not None:
+            raise ValueError(f"Cycle: {' → '.join(cycle)}")
+
         if profile is not None and profile.effects:
             effect_overrides = {
                 path: {
@@ -447,40 +456,41 @@ def run(req: RunRequest) -> RunResult:
 
         adapter: Adapter
         timeout_seconds = 120
-        if _has_prompt_effects(root_def):
+        # Resolve the adapter/model *names* first; the actual adapter object
+        # (the factory call that raises on an unknown name) isn't built until
+        # after preflight below, so an unknown default adapter fails with
+        # preflight's structured message, not the factory's raw ValueError
+        # (#235).
+        #
+        # Before `validate_only` can return, only a *name* is needed (for the
+        # image-asset warning below) — `cof check`/`validate_orchestration`
+        # never require a resolved adapter to say ok, so this stays as lenient
+        # as `effective.adapter` itself; the strict "no adapter resolved"
+        # error (`_require_resolved_settings`) is deferred past the
+        # `validate_only` return, right before the adapter is actually built.
+        needs_real_adapter = _has_prompt_effects(root_def)
+        if needs_real_adapter:
             if req.adapter is not None:
                 # Caller supplied a fully-constructed adapter (e.g. circuitry-mcp
                 # injecting a HostClaudeAdapter wired to per-prompt queues).
                 # Skip factory dispatch but still resolve a model — the adapter
                 # may pin its own, in which case effective.model can be empty.
-                adapter = req.adapter
                 resolved_adapter = req.adapter.name
                 resolved_model = effective.model or ""
             else:
-                resolved_adapter, resolved_model = _require_resolved_settings(
-                    effective=effective, orchestration_path=req.orchestration_path
-                )
-                # `--adapter` and the config's `default_adapter` resolve
-                # here, after the document check — gate them at the build.
-                require_adapter(resolved_adapter, cfg.enabled_adapters)
-                adapter = build_adapter(
-                    adapter_name=resolved_adapter, runtime=effective.runtime or {}
-                )
-            timeout_seconds = (
-                configured_timeout_seconds(resolved_adapter, effective.runtime) or 120
-            )
+                resolved_adapter = effective.adapter or ""
+                resolved_model = effective.model or ""
         else:
             resolved_adapter = "_noop"
             resolved_model = effective.model or ""
-            adapter = _NoOpAdapter()
 
-        # Preflight (Story 1). After adapter resolution, before any LLM /
-        # tool effect runs. ``--skip-preflight`` opts out for advanced use;
-        # ``--dry-run`` also skips it since the whole point of dry-run is
-        # to avoid touching the world. Only runs when a config was
-        # supplied (programmatic callers without a config keep default-
-        # open behavior). When the caller injected an adapter via
-        # RunRequest.adapter we trust them — the adapter may not be
+        # Preflight (Story 1). Resolved but before the run-default adapter is
+        # actually built, before any LLM / tool effect runs. ``--skip-preflight``
+        # opts out for advanced use; ``--dry-run`` also skips it since the
+        # whole point of dry-run is to avoid touching the world. Only runs
+        # when a config was supplied (programmatic callers without a config
+        # keep default-open behavior). When the caller injected an adapter
+        # via RunRequest.adapter we trust them — the adapter may not be
         # buildable from config (host_claude).
         if (
             not req.skip_preflight
@@ -507,6 +517,42 @@ def run(req: RunRequest) -> RunResult:
                     runtime_cfg=effective.runtime,
                 )
             )
+
+        if req.validate_only:
+            # The same checks `cof check` / api.validate_orchestration run by
+            # default have all already passed above — structural check,
+            # compile, preflight — plus the same lint warnings; stop here
+            # instead of building the adapter or dispatching any effect
+            # (#302).
+            from ..core.lint import lint_orchestration
+
+            warnings.extend(lint_orchestration(orch))
+            warnings.extend(unknown_key_warnings(orch))
+            state["runtime"]["last_run"]["completed_at"] = _now_iso()
+            return RunResult(ok=True, state=state, warnings=warnings, out_path=resolved_out)
+
+        if needs_real_adapter:
+            if req.adapter is not None:
+                adapter = req.adapter
+            else:
+                # The strict "no adapter resolved" check, deferred from
+                # above so `validate_only` isn't rejected for a document
+                # `cof check` accepts (neither requires one to say ok).
+                resolved_adapter, resolved_model = _require_resolved_settings(
+                    effective=effective, orchestration_path=req.orchestration_path
+                )
+                # `--adapter` and the config's `default_adapter` resolve
+                # here, after the document check and preflight — gate them
+                # at the build.
+                require_adapter(resolved_adapter, cfg.enabled_adapters)
+                adapter = build_adapter(
+                    adapter_name=resolved_adapter, runtime=effective.runtime or {}
+                )
+            timeout_seconds = (
+                configured_timeout_seconds(resolved_adapter, effective.runtime) or 120
+            )
+        else:
+            adapter = _NoOpAdapter()
 
         # Execute using core runtime against Store
         callbacks: list[Callable[[dict[str, Any]], None]] = []
@@ -1162,10 +1208,18 @@ def _has_prompt_effects(defn: Any) -> bool:
     if isinstance(defn, DynamicDefinition):
         return any(_has_prompt_effects(e) for e in defn.effects)
     if isinstance(defn, ConditionalDefinition):
+        # `mode: model` is the compiler's default for an `if` condition
+        # (core/compiler.py) — it calls generate() itself even when neither
+        # branch has its own prompt effect, so it needs a real adapter too
+        # (#254).
+        if defn.condition.mode == "model":
+            return True
         return any(_has_prompt_effects(e) for e in defn.then_effects) or any(
             _has_prompt_effects(e) for e in defn.else_effects
         )
     if isinstance(defn, LoopDefinition):
+        if defn.while_def is not None and defn.while_def.mode == "model":
+            return True
         return any(_has_prompt_effects(e) for e in defn.body)
     if isinstance(defn, ReflectorDefinition):
         return _has_prompt_effects(defn.inner)

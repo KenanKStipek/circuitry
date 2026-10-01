@@ -159,6 +159,48 @@ def _deep_merge_params(base: dict[str, Any], overlay: dict[str, Any]) -> dict[st
     return merged
 
 
+#: Params a tool plugin treats as a security boundary (today: the ``shell``
+#: plugin's allowlist). Honoured only from a document's literal, unrendered
+#: ``params`` block — never ``params_json`` (runtime-built, can carry
+#: model-generated content) and never a templated value within the literal
+#: block, so neither can widen what a document is allowed to run.
+_SECURITY_SENSITIVE_PARAM_KEYS: frozenset[str] = frozenset({"allowed_commands"})
+
+
+def _reject_templated_security_params(raw_params: dict[str, Any]) -> None:
+    """Raise if a security-sensitive param's literal value is templated.
+
+    A list value is templated when any string element contains a Mustache
+    tag (``{{``) — its real content isn't known until render time, which
+    defeats the point of a boundary the document author is meant to write
+    down plainly.
+    """
+    for key in _SECURITY_SENSITIVE_PARAM_KEYS:
+        value = raw_params.get(key)
+        if not isinstance(value, list):
+            continue
+        if any(isinstance(item, str) and "{{" in item for item in value):
+            raise ValueError(
+                f"params.{key} must be a literal list of strings; a templated "
+                "value is not honoured for this security-sensitive setting."
+            )
+
+
+def _reject_params_json_security_overrides(overlay: dict[str, Any]) -> None:
+    """Raise if a rendered ``params_json`` tries to set a security-sensitive key.
+
+    ``params_json`` is a runtime-built JSON object — it can carry
+    model-generated content (#203) — so it must never be the source of a
+    plugin's own allowlist; only a document's literal ``params`` block is.
+    """
+    overridden = _SECURITY_SENSITIVE_PARAM_KEYS & overlay.keys()
+    if overridden:
+        raise ValueError(
+            f"params_json must not set {sorted(overridden)}: security-sensitive "
+            "settings are only honoured from a document's literal params block."
+        )
+
+
 class _ToolSpinner:
     """Animated single-line spinner for a tool effect running in sequential mode."""
 
@@ -355,9 +397,12 @@ class ToolRuntime:
             if self.defn.model is not None:
                 top_level["model"] = self.defn.model
 
+            _reject_templated_security_params(self.defn.params)
             params = _render_params(self.defn.params, ctx)
             if self.defn.params_json is not None:
-                params = _deep_merge_params(params, _render_params_json(self.defn.params_json, ctx))
+                params_json_overlay = _render_params_json(self.defn.params_json, ctx)
+                _reject_params_json_security_overrides(params_json_overlay)
+                params = _deep_merge_params(params, params_json_overlay)
 
             rendered = {**top_level, **params}
             meta["params_rendered"] = rendered

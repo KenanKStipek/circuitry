@@ -505,6 +505,50 @@ def test_tool_runtime_params_json_wins_on_key_conflict(
     assert captured_params["arguments"] == {"symbols": ["AAPL"], "keep": "me"}
 
 
+def test_tool_runtime_rejects_params_json_allowed_commands_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """allowed_commands is only honoured from a document's literal params
+    block — never params_json, which can carry model-generated content.
+
+    ``subprocess.run`` is monkeypatched to fail the test rather than run
+    ``rm -rf /`` for real if this rejection ever regressed."""
+
+    def _fail_if_called(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("shell plugin must not run when allowed_commands is rejected")
+
+    monkeypatch.setattr(
+        "circuitry.plugins._subprocess.subprocess.run", _fail_if_called
+    )
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={"command": "echo"},
+        params_json='{"command": "rm", "allowed_commands": ["rm"], "args": ["-rf", "/"]}',
+    )
+    store = _make_store()
+
+    with pytest.raises(ValueError, match="allowed_commands"):
+        ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert store.state["x"]["value"] is None
+    assert "allowed_commands" in store.state["x"]["meta"]["error"]
+
+
+def test_tool_runtime_rejects_templated_allowed_commands() -> None:
+    """A templated allowed_commands entry is not honoured even in the
+    literal params block — only a plain, written-down list is."""
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={"command": "echo", "allowed_commands": ["{{cmd}}"]},
+    )
+    store = _make_store()
+
+    with pytest.raises(ValueError, match="allowed_commands"):
+        ToolRuntime(defn).execute(store=store, ctx={"cmd": "echo"})
+
+
 def test_tool_runtime_params_json_invalid_json_fail_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -643,6 +687,72 @@ def test_has_prompt_effects_returns_true_for_prompt() -> None:
         }
     )
     assert _has_prompt_effects(root) is True
+
+
+def test_has_prompt_effects_returns_true_for_model_mode_if_with_no_prompt_effect() -> None:
+    """Model mode is the compiler's own default for `if` (#254) — a document
+    whose only model use is a model-mode condition still needs a real
+    adapter, not the no-op one, even with zero separate `prompt` effects."""
+    from circuitry.cli.runtime_shim import _has_prompt_effects
+
+    root = compile_orchestration(
+        orch={
+            "effects": [
+                {"type": "tool", "name": "n", "provider": "json", "params": {"input": "3"}},
+                {
+                    "type": "if",
+                    "name": "big",
+                    "if": {"mode": "model", "template": "Is it big?"},
+                    "then": [
+                        {"type": "tool", "name": "yes", "provider": "json", "params": {"input": "1"}}
+                    ],
+                },
+            ]
+        }
+    )
+    assert _has_prompt_effects(root) is True
+
+
+def test_has_prompt_effects_returns_true_for_model_mode_while_with_no_prompt_effect() -> None:
+    from circuitry.cli.runtime_shim import _has_prompt_effects
+
+    root = compile_orchestration(
+        orch={
+            "effects": [
+                {
+                    "type": "loop",
+                    "name": "poll",
+                    "while": {"mode": "model", "template": "Keep going?"},
+                    "body": [
+                        {"type": "tool", "name": "t", "provider": "json", "params": {"input": "1"}}
+                    ],
+                }
+            ]
+        }
+    )
+    assert _has_prompt_effects(root) is True
+
+
+def test_has_prompt_effects_returns_false_for_cel_mode_if() -> None:
+    """A CEL-mode condition never calls generate(); the no-op adapter is
+    still correct for a document whose only control flow is CEL-based."""
+    from circuitry.cli.runtime_shim import _has_prompt_effects
+
+    root = compile_orchestration(
+        orch={
+            "effects": [
+                {
+                    "type": "if",
+                    "name": "ok",
+                    "if": {"mode": "cel", "expr": "true"},
+                    "then": [
+                        {"type": "tool", "name": "yes", "provider": "json", "params": {"input": "1"}}
+                    ],
+                }
+            ]
+        }
+    )
+    assert _has_prompt_effects(root) is False
 
 
 # ---------------------------------------------------------------------------

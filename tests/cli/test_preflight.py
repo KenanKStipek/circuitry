@@ -458,6 +458,66 @@ def test_run_aborts_when_mixed_hard_effect_present(tmp_path: Path) -> None:
     assert "decide" in (result.error or "")
 
 
+def test_validate_fails_for_if_condition_on_unavailable_adapter(tmp_path: Path) -> None:
+    """A model-mode `if` condition is a usage of the default adapter just
+    like a `prompt` effect (#254): no `on_error` means hard, naming the
+    condition's own effect name."""
+    p = _write(
+        tmp_path,
+        "orch.yml",
+        "adapter: cyberdiner\nmodel: cheap\n"
+        "effects:\n"
+        "  - {type: if, name: gate, if: {mode: model, template: x}, "
+        "then: [{type: tool, name: t, provider: json, params: {input: '1'}}]}\n",
+    )
+    result = validate(p, config=CircuitryConfig())
+    assert result["ok"] is False
+    assert any("gate" in e for e in result["errors"])
+
+
+def test_validate_passes_with_warning_for_skippable_if_condition(tmp_path: Path) -> None:
+    """The same condition with `on_error: skip` degrades to a warning, the
+    same as a skippable `prompt` effect's dependency."""
+    p = _write(
+        tmp_path,
+        "orch.yml",
+        "adapter: cyberdiner\nmodel: cheap\n"
+        "effects:\n"
+        "  - {type: if, name: gate, if: {mode: model, template: x}, on_error: skip, "
+        "then: [{type: tool, name: t, provider: json, params: {input: '1'}}]}\n",
+    )
+    result = validate(p, config=CircuitryConfig())
+    assert result["ok"] is True
+    assert any("cyberdiner" in w and "gate" in w for w in result["warnings"])
+
+
+def test_run_with_unknown_default_adapter_fails_with_preflight_message(tmp_path: Path) -> None:
+    """A typo'd default adapter (#235): `cof run`'s preflight gate now runs before the run-default adapter is built, so this fails with the same structured preflight message `cof check` gives, not the factory's raw `ValueError`."""
+    p = _write(
+        tmp_path,
+        "orch.yml",
+        "adapter: opneai\nmodel: gpt-4\neffects:\n  - {type: prompt, name: greet, template: x}\n",
+    )
+    cfg = CircuitryConfig()
+    check_result = validate(p, config=cfg)
+    assert check_result["ok"] is False
+    assert any("opneai" in e for e in check_result["errors"])
+
+    run_result = run(
+        RunRequest(
+            orchestration_path=p,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            config=cfg,
+        )
+    )
+    assert run_result.ok is False
+    assert run_result.error is not None and run_result.error.startswith("Preflight failed")
+    assert "opneai" in run_result.error
+
+
 def test_optional_inference_example_passes_preflight_with_warning() -> None:
     """The curation example this feature ships (learn/optional_inference)
     actually exercises preflight — smoke-curation.sh always passes
@@ -482,3 +542,42 @@ def test_doctor_exits_nonzero_on_missing_deps(monkeypatch: pytest.MonkeyPatch) -
     runner = typer.testing.CliRunner()
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 1
+
+
+def test_doctor_warns_on_group_world_readable_secrets_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#264 part 4 — cof doctor flags a loosely-permissioned config.json/.env."""
+    from circuitry.cli import config as config_module
+
+    config_module.GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    config_module.GLOBAL_CONFIG_PATH.write_text("{}", encoding="utf-8")
+    config_module.GLOBAL_CONFIG_PATH.chmod(0o644)
+
+    monkeypatch.setenv("CIRCUITRY_ENABLED_ADAPTERS", "")
+    monkeypatch.setenv("CIRCUITRY_ENABLED_TOOLS", "")
+    monkeypatch.setenv("CIRCUITRY_ENABLED_PLUGINS", "")
+    runner = typer.testing.CliRunner()
+    result = runner.invoke(app, ["doctor"])
+
+    assert "WARN" in result.output
+    assert "chmod 600" in result.output
+    assert "config.json" in result.output
+
+
+def test_doctor_does_not_warn_on_private_secrets_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from circuitry.cli import config as config_module
+
+    config_module.GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    config_module.GLOBAL_CONFIG_PATH.write_text("{}", encoding="utf-8")
+    config_module.GLOBAL_CONFIG_PATH.chmod(0o600)
+
+    monkeypatch.setenv("CIRCUITRY_ENABLED_ADAPTERS", "")
+    monkeypatch.setenv("CIRCUITRY_ENABLED_TOOLS", "")
+    monkeypatch.setenv("CIRCUITRY_ENABLED_PLUGINS", "")
+    runner = typer.testing.CliRunner()
+    result = runner.invoke(app, ["doctor"])
+
+    assert "Secrets file mode" not in result.output

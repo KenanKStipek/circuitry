@@ -314,8 +314,14 @@ def _build_ocr(cfg: dict[str, Any]) -> ToolPlugin:
 
 
 def _build_shell(cfg: dict[str, Any]) -> ToolPlugin:
-    del cfg
-    return ShellPlugin()
+    pinned = cfg.get("allowed_commands")
+    if pinned is not None:
+        if not isinstance(pinned, list) or not all(isinstance(c, str) for c in pinned):
+            raise ValueError(
+                "runtime.plugins.shell.allowed_commands must be a list of strings."
+            )
+        pinned = tuple(pinned)
+    return ShellPlugin(pinned_allowed_commands=pinned)
 
 
 def _build_gpg(cfg: dict[str, Any]) -> ToolPlugin:

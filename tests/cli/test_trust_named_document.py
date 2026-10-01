@@ -456,7 +456,9 @@ def test_rest_trigger_stays_limited(
     results = _capture_runs(monkeypatch, rest_module)
     orch = _tool_orch(tmp_path, runtime=_document_runtime())
 
-    response = RestTriggerService(auth_token=None, config=_cfg()).handle_http_request(
+    response = RestTriggerService(
+        allow_unauthenticated=True, config=_cfg(), orchestration_root=tmp_path
+    ).handle_http_request(
         method="POST",
         path="/v1/triggers/run",
         headers={},

@@ -114,6 +114,7 @@ def _hermetic_global_config(
 
     from circuitry.cli import app as app_module
     from circuitry.cli import config as config_module
+    from circuitry.cli import doctor as doctor_module
     from circuitry.cli import last_run as last_run_module
     from circuitry.cli import setup as setup_module
 
@@ -128,6 +129,8 @@ def _hermetic_global_config(
     monkeypatch.setattr(app_module, "_LAST_RUN_PATH", fake_last_run_path)
     monkeypatch.setattr(setup_module, "GLOBAL_CONFIG_DIR", fake_dir)
     monkeypatch.setattr(setup_module, "GLOBAL_CONFIG_PATH", fake_config_path)
+    monkeypatch.setattr(doctor_module, "GLOBAL_CONFIG_DIR", fake_dir)
+    monkeypatch.setattr(doctor_module, "GLOBAL_CONFIG_PATH", fake_config_path)
 
 
 @pytest.fixture(autouse=True)

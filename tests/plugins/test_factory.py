@@ -5,6 +5,7 @@ import pytest
 from circuitry.plugins.comfyui import ComfyUIPlugin
 from circuitry.plugins.factory import build_plugin
 from circuitry.plugins.ffmpeg import FfmpegPlugin
+from circuitry.plugins.shell import ShellPlugin
 
 # ---------------------------------------------------------------------------
 # Unknown plugin name
@@ -84,3 +85,27 @@ def test_plugin_name_is_case_insensitive() -> None:
 def test_plugin_name_strips_whitespace() -> None:
     plugin = build_plugin(plugin_name="  comfyui  ", runtime={})
     assert isinstance(plugin, ComfyUIPlugin)
+
+
+# ---------------------------------------------------------------------------
+# shell — host-level allowlist pin (runtime.plugins.shell.allowed_commands)
+# ---------------------------------------------------------------------------
+
+
+def test_build_shell_no_pin_by_default() -> None:
+    plugin = build_plugin(plugin_name="shell", runtime={})
+    assert isinstance(plugin, ShellPlugin)
+    assert plugin.pinned_allowed_commands is None
+
+
+def test_build_shell_reads_pin_from_config() -> None:
+    runtime = {"plugins": {"shell": {"allowed_commands": ["ls", "cat"]}}}
+    plugin = build_plugin(plugin_name="shell", runtime=runtime)
+    assert isinstance(plugin, ShellPlugin)
+    assert plugin.pinned_allowed_commands == ("ls", "cat")
+
+
+def test_build_shell_rejects_non_list_pin() -> None:
+    runtime = {"plugins": {"shell": {"allowed_commands": "ls"}}}
+    with pytest.raises(ValueError, match="allowed_commands"):
+        build_plugin(plugin_name="shell", runtime=runtime)

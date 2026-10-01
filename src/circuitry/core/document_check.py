@@ -2,7 +2,7 @@
 
 ``cof check`` (``runtime_shim.validate``), ``cof run`` (``runtime_shim.run``)
 and a ``use`` effect loading its child all call :func:`structural_errors`, so
-a document one of them rejects the others reject too. Two parts:
+a document one of them rejects the others reject too. Three parts:
 
 * the JSON schema (``schema/orchestration.schema.json``), reported with the
   path of the offending node;
@@ -11,7 +11,12 @@ a document one of them rejects the others reject too. Two parts:
   near miss of a key the effect type knows (``whlie``, ``max_iteration``,
   ``adapter`` on a prompt) is an error — the author meant the known key and
   it is not being applied. Any other unknown key is a warning
-  (:func:`unknown_key_warnings`): it is ignored, and may be deliberate.
+  (:func:`unknown_key_warnings`): it is ignored, and may be deliberate;
+* an ``interface.inputs`` default that doesn't match its declared ``type``
+  (:func:`interface_default_type_errors`) — see #301. Unlike a CLI ``-e``
+  value or a ``use:`` child input, a YAML/JSON default is already a typed
+  value, not text to coerce: a quoted ``"3"`` for an ``integer`` input is
+  the author's own mistake, so it is an error, not a silent coercion.
 """
 
 from __future__ import annotations
@@ -23,7 +28,11 @@ from functools import cache, lru_cache
 from pathlib import Path
 from typing import Any
 
+from .interface_inputs import _TYPE_NAMES, _matches_type
+
 __all__ = [
+    "interface_default_type_errors",
+    "interface_unknown_type_errors",
     "orchestration_schema",
     "schema_errors",
     "structural_errors",
@@ -188,6 +197,103 @@ def unknown_key_warnings(orch: Any) -> list[str]:
     return _unknown_keys(orch)[1]
 
 
+def _unquote_hint(value: str, declared_type: str) -> str:
+    """A hint if *value*, unquoted, would itself satisfy *declared_type*.
+
+    Checked against how YAML itself would read the unquoted text — not
+    ``_coerce``'s lenient CLI word list (``y``/``t``/``1`` for ``boolean``):
+    those stay a string or become an int when actually unquoted in YAML, so
+    the hint would tell the author to make a change that doesn't fix
+    anything.
+    """
+    import yaml
+
+    try:
+        coerced = yaml.safe_load(value)
+    except yaml.YAMLError:
+        return ""
+    if not _matches_type(coerced, declared_type):
+        return ""
+    return f" — quoting it makes it a string; remove the quotes to declare it as {declared_type}"
+
+
+def interface_unknown_type_errors(orch: Any) -> list[str]:
+    """An ``interface.inputs`` declared ``type`` that isn't one of the six
+    recognized names (#301 note 7).
+
+    An unrecognized ``type`` is otherwise silently unchecked — not by the
+    schema (``type`` is a free string there) and not by
+    :func:`interface_default_type_errors` or ``check_interface_inputs``,
+    which both skip a type they don't recognize rather than reject it.
+    """
+    if not isinstance(orch, Mapping):
+        return []
+    interface = orch.get("interface")
+    if not isinstance(interface, Mapping):
+        return []
+    iface_inputs = interface.get("inputs")
+    if not isinstance(iface_inputs, Mapping):
+        return []
+
+    errors: list[str] = []
+    allowed = ", ".join(_TYPE_NAMES)
+    for key, spec in iface_inputs.items():
+        if not isinstance(spec, Mapping) or "type" not in spec:
+            continue
+        declared_type = spec["type"]
+        if isinstance(declared_type, str) and declared_type in _TYPE_NAMES:
+            continue
+        errors.append(
+            f"interface.inputs.{key}.type: {declared_type!r} is not a recognized "
+            f"type — expected one of {allowed}."
+        )
+    return errors
+
+
+def interface_default_type_errors(orch: Any) -> list[str]:
+    """An ``interface.inputs`` default that doesn't match its declared ``type``.
+
+    Applies the same ``_matches_type`` rules :func:`interface_inputs.check_interface_inputs`
+    applies at run time, but without its string coercion: a default is
+    already a real YAML/JSON value, not a CLI ``-e``/``use:`` value crossing
+    as text, so a string default for a non-string type is always wrong — a
+    quoted numeral gets a hint to unquote it, naming the input, the type and
+    the value either way.
+    """
+    if not isinstance(orch, Mapping):
+        return []
+    interface = orch.get("interface")
+    if not isinstance(interface, Mapping):
+        return []
+    iface_inputs = interface.get("inputs")
+    if not isinstance(iface_inputs, Mapping):
+        return []
+
+    errors: list[str] = []
+    for key, spec in iface_inputs.items():
+        if not isinstance(spec, Mapping) or "default" not in spec:
+            continue
+        declared_type = spec.get("type")
+        if not isinstance(declared_type, str) or declared_type not in _TYPE_NAMES:
+            continue
+        value = spec["default"]
+        if _matches_type(value, declared_type):
+            continue
+        hint = _unquote_hint(value, declared_type) if isinstance(value, str) else ""
+        errors.append(
+            f"interface.inputs.{key}.default: declared type {declared_type!r} "
+            f"but {value!r} is {type(value).__name__}{hint}."
+        )
+    return errors
+
+
 def structural_errors(orch: Any) -> list[str]:
-    """Near-miss unknown keys first (the likelier cause), then schema errors."""
-    return [*unknown_key_errors(orch), *schema_errors(orch)]
+    """Near-miss unknown keys first (the likelier cause), then schema errors,
+    then an ``interface.inputs`` unrecognized type, then a default that
+    doesn't match its (recognized) type."""
+    return [
+        *unknown_key_errors(orch),
+        *schema_errors(orch),
+        *interface_unknown_type_errors(orch),
+        *interface_default_type_errors(orch),
+    ]

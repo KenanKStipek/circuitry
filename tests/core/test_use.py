@@ -566,6 +566,41 @@ def test_use_inline_with_mustache_rendering() -> None:
     assert store.state["run_plan"]["step"]["value"] == "Rendered!"
 
 
+def test_use_inline_shell_tool_literal_allowed_commands_runs() -> None:
+    """A generated-plan-shaped inline document whose tool effect carries a
+    literal ``allowed_commands`` (the way a reflector's model writes one
+    into the plan YAML it produces) still runs — the restriction added for
+    #264 only rejects params_json and templated values, not this.
+
+    ``uname`` is outside the shell plugin's default allowlist
+    (``ls cat head tail wc echo pwd date``), so this only passes if the
+    plan's literal ``allowed_commands`` is actually honoured — unlike
+    ``echo``, which the default list would run anyway. The plan is rendered
+    from ``prime.plan.value`` via Mustache, the same shape the film
+    reflector's generated plans use (``inline: "{{{prime.plan.value}}}"``),
+    not passed as a fixed string."""
+    plan_yaml = yaml.dump({
+        "effects": [
+            {
+                "type": "tool",
+                "name": "generated_step",
+                "provider": "shell",
+                "params": {
+                    "command": "uname",
+                    "allowed_commands": ["uname"],
+                    "args": ["-s"],
+                },
+            }
+        ]
+    })
+
+    defn = UseDefinition(name="run_plan", inline="{{{prime.plan.value}}}")
+    store = Store(state={"prime": {"plan": {"value": plan_yaml}}})
+    UseRuntime(defn, adapter=None, model=None).execute(store=store, ctx=store.state)
+
+    assert store.state["run_plan"]["generated_step"]["value"].strip()
+
+
 def test_use_inline_with_output_mapping() -> None:
     """Output mapping works with inline orchestrations."""
     inline_yaml = yaml.dump({
