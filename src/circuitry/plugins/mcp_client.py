@@ -51,8 +51,14 @@ Params:
     from a plain string. ``json`` force-parses the
     text content; on an ``isError`` response it returns ``value: None``
     instead of raising when the text isn't JSON (the error is still
-    surfaced via ``stderr``/``exit_code``). ``text`` always returns the raw
+    surfaced via ``stderr``/``ok``). ``text`` always returns the raw
     joined text.
+  - ``fail_on_error`` (optional, bool, default ``True``): the server
+    flagging ``isError`` sets ``ToolResult.ok = False``, which fails the
+    effect (``meta.error``, ``on_error`` applies) exactly like a raised
+    exception. Set ``false`` to restore the old behaviour of always
+    succeeding and letting the orchestration branch on ``raw.is_error``
+    itself.
 
 ToolResult shape:
   - ``value``: structured content, parsed JSON, or text per ``parse``; for
@@ -62,7 +68,9 @@ ToolResult shape:
   - ``stdout``: ``None``. ``stderr``: the error text when the server flags
     ``isError`` (surfaced rather than raised — let the orchestration decide,
     mirroring the http plugin's 4xx/5xx policy).
-  - ``exit_code``: 0 on success, 1 when the server flags ``isError``.
+  - ``exit_code``: always ``None`` — this plugin spawns no process (stdio
+    MCP servers are a session, not a one-shot exec). The ``isError`` signal
+    lands on ``ToolResult.ok``, not here.
 
 Lifecycle: one fresh connection per call (subprocess spawn for stdio).
 Deliberately simple — it is correct and thread-safe under tree flow, where
@@ -82,7 +90,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 _TRANSPORTS = ("stdio", "http", "sse")
 
@@ -223,6 +231,7 @@ class McpPlugin:
             raise ValueError(
                 f"Unknown parse mode: {parse!r}. Supported: auto, json, text."
             )
+        fail_on_error = _as_bool(params.get("fail_on_error"), default=True)
 
         async def _go() -> dict[str, Any]:
             async with self._open_session(cfg) as session:
@@ -258,7 +267,7 @@ class McpPlugin:
                 },
                 stdout=None,
                 stderr=None,
-                exit_code=0,
+                exit_code=None,
             )
 
         result = outcome["result"]
@@ -308,7 +317,8 @@ class McpPlugin:
             },
             stdout=None,
             stderr=(text or "MCP tool reported an error.") if is_error else None,
-            exit_code=1 if is_error else 0,
+            exit_code=None,
+            ok=not (fail_on_error and is_error),
         )
 
     @asynccontextmanager

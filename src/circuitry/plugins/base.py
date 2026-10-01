@@ -14,6 +14,35 @@ class ToolResult:
     stdout: str | None = None
     stderr: str | None = None
     exit_code: int | None = None
+    #: Whether the tool call itself succeeded. ``False`` is the one signal
+    #: ToolRuntime treats as a failure without an exception: it sets
+    #: ``meta.error`` and applies the effect's ``on_error`` exactly as it
+    #: would for a raised exception. Plugins that can detect a genuine
+    #: failure without raising (e.g. an HTTP-family plugin surfacing a
+    #: 4xx/5xx response instead of raising on it) set this; everything else
+    #: defaults to ``True`` and keeps raising for real errors.
+    ok: bool = True
+
+
+def _as_bool(value: Any, *, default: bool = False) -> bool:
+    """String-aware boolean coercion for a tool param.
+
+    Mustache renders a templated ``false`` as the literal string
+    ``"False"``, and Python's ``bool("False")`` is ``True`` — plain
+    ``bool(params.get(...))`` silently inverts a templated-false boolean
+    param. ``None`` (the key absent) returns *default*; an actual ``bool``
+    passes through; a string is false when it (case-insensitively, after
+    stripping whitespace) is one of ``"false"``, ``"0"``, ``"no"``,
+    ``"off"``, ``"n"`` or empty, true otherwise; anything else falls back to
+    Python's own ``bool()``.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in ("false", "0", "no", "off", "n", "")
+    return bool(value)
 
 
 class ToolPlugin(Protocol):
@@ -63,5 +92,10 @@ def validate_tool_result(result: ToolResult, *, plugin_name: str) -> list[str]:
             diagnostics.append(
                 f"{plugin_name}: 'exit_code' must be >= 0, got {result.exit_code}"
             )
+
+    if not isinstance(result.ok, bool):
+        diagnostics.append(
+            f"{plugin_name}: 'ok' must be bool, got {type(result.ok).__name__}"
+        )
 
     return diagnostics

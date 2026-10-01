@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from typing import Any, TypeVar
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 _T = TypeVar("_T")
 
@@ -94,7 +94,7 @@ class DiscordPlugin:
             kwargs["username"] = params["username"]
         if isinstance(params.get("avatar_url"), str):
             kwargs["avatar_url"] = params["avatar_url"]
-        if params.get("tts"):
+        if _as_bool(params.get("tts")):
             kwargs["tts"] = True
 
         message = _run_with_deadline(

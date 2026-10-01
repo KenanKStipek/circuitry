@@ -24,7 +24,7 @@ from typing import Any
 
 from ..preflight import CheckResult
 from ._subprocess import resolve_binary
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 _CANDIDATES = ("weasyprint", "wkhtmltopdf")
 
@@ -48,7 +48,7 @@ class PdfRenderPlugin:
                 f"pdf_render: none of {list(_CANDIDATES)} on PATH."
             )
 
-        from_path = bool(params.get("from_path"))
+        from_path = _as_bool(params.get("from_path"))
         src_payload = params.get("input")
         if not isinstance(src_payload, str):
             raise ValueError("pdf_render: params['input'] must be a string.")

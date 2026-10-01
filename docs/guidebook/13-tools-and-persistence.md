@@ -26,6 +26,8 @@ A tool effect is a plugin call. Reading a file, fetching a URL, querying SQL, se
 
 `provider` names the plugin. `params` is the plugin's own vocabulary — every string value is a Mustache template — and for the two media plugins that predate `params`, `prompt` and `model` are top-level shorthand (`params` wins when both are given). The result lands at `prime.<name>.value` in whatever shape the plugin documents: a path, a parsed document, a list of records. A plugin that runs a program returns its standard output, and records `stdout`, `stderr` and `exit_code` in `meta`. A non-zero exit fails the step unless `allow_nonzero: true` is set — `rg` exits 1 when nothing matches, and `pytest` exits 1 when a test fails, and an agent wants to read both answers rather than stop on them.
 
+One failure contract covers every plugin: a tool effect fails — `meta.error` set, `on_error` applies — exactly when the plugin raises or returns a result with `ok: false`, with no other way to signal it. `meta.exit_code` means a process exit code and nothing else; it is `null` for every plugin that doesn't wrap a binary. `http`/`web_fetch`/`webhook`/`linear` fail on a 4xx/5xx response by default (the status lands on `meta.status_code`, not `exit_code`) — pass `fail_on_error: false` on the effect to get the old always-succeeds behaviour back. `wikipedia`/`dns`/`port_check`/`validate_yaml` treat a negative result (page not found, NXDOMAIN, closed port, invalid document) as information, not a tool failure: they stay `ok: true` and report it on `value`/`raw` instead. Every tool effect also gets `meta.raw` — the plugin's own raw response, redacted and size-capped — reachable on an `ok: false` failure (the plugin still returned a result); a plugin that raises leaves `meta.raw` unset, since there's no result to read it from. A prompt effect never sets it.
+
 A value rendered into `params` is always a string, so a list from an earlier step arrives as its string form. When a tool needs a real array or object built at run time, write `params_json`: a template that renders to a JSON object, which is parsed and deep-merged over `params` (its keys win). A list or object from state renders into it as JSON:
 
 ```yaml
@@ -184,7 +186,7 @@ class MyPlugin:
     def on_effect_complete(self, *, state, context, effect_path, effect_result): ... # optional
 ```
 
-`context` carries `run_id`, `orchestration_path`, `dry_run`, `validate_only`, and `runtime_config`. The per-effect pair is balanced — an effect that fires one fires the other, failure included — and namespaced through `use` children. Plugins register in config (`"plugins": ["my_package.plugins:make_plugin"]`, a `module:attr` that may be a zero-argument factory); a plugin that raises is recorded under `runtime.plugins.events` and never fails the run. The contract version is reported at `runtime.plugins.contract_version`.
+`context` carries `run_id`, `orchestration_path`, `dry_run`, `validate_only`, `runtime_config`, and `environment` (`CircuitryConfig.environment`, feeding the persistence plugins' `store_raw` default). The per-effect pair is balanced — an effect that fires one fires the other, failure included — and namespaced through `use` children. Plugins register in config (`"plugins": ["my_package.plugins:make_plugin"]`, a `module:attr` that may be a zero-argument factory); a plugin that raises is recorded under `runtime.plugins.events` and never fails the run. The contract version is reported at `runtime.plugins.contract_version`.
 
 Thirty-one ship in-tree, behind the one protocol:
 

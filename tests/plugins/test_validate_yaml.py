@@ -40,7 +40,8 @@ def test_check_is_satisfied_by_core_dependencies() -> None:
 def test_result_conforms_to_the_tool_contract() -> None:
     result = ValidateYamlPlugin().execute(params={"yaml": VALID})
     assert validate_tool_result(result, plugin_name="validate_yaml") == []
-    assert result.exit_code == 0
+    assert result.exit_code is None
+    assert result.ok is True
 
 
 def test_valid_orchestration_passes() -> None:

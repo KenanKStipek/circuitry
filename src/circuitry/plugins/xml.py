@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 
 def _node_to_dict(node: Any) -> dict[str, Any]:
@@ -57,7 +57,7 @@ class XmlPlugin:
             ) from exc
 
         mode = str(params.get("mode") or "parse").lower()
-        from_path = bool(params.get("from_path"))
+        from_path = _as_bool(params.get("from_path"))
         text = params.get("input")
         if not isinstance(text, str):
             raise ValueError("xml requires params['input'] as a string.")
@@ -89,7 +89,7 @@ class XmlPlugin:
                 else:
                     value.append(str(r))
         elif mode == "to_string":
-            pretty = bool(params.get("pretty"))
+            pretty = _as_bool(params.get("pretty"))
             value = etree.tostring(tree, pretty_print=pretty).decode("utf-8")
         else:
             raise ValueError(f"xml: unknown mode {mode!r}")

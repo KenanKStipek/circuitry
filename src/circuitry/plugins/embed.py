@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 _DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
@@ -83,7 +83,7 @@ class EmbedPlugin:
                 "embed: params['input'] must be a string or list of strings."
             )
         model_name = str(params.get("model") or _DEFAULT_MODEL)
-        normalize = bool(params.get("normalize", True))
+        normalize = _as_bool(params.get("normalize"), default=True)
         device = params.get("device")
 
         model = _resolve_model(

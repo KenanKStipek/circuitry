@@ -182,7 +182,8 @@ def test_dns_execute_with_fake_resolver(monkeypatch: pytest.MonkeyPatch) -> None
     assert captured["domain"] == "example.com"
     assert captured["rdtype"] == "A"
     assert captured["nameservers"] == ["1.1.1.1"]
-    assert r.exit_code == 0
+    assert r.exit_code is None
+    assert r.ok is True
 
 
 def test_dns_execute_nxdomain(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -212,7 +213,9 @@ def test_dns_execute_nxdomain(monkeypatch: pytest.MonkeyPatch) -> None:
 
     r = DnsPlugin().execute(params={"domain": "nonexistent.test", "type": "A"})
     assert r.value == []
-    assert r.exit_code == 1
+    assert r.exit_code is None
+    assert r.ok is True
+    assert r.raw["error"] == "NXDOMAIN"
 
 
 def test_whois_execute_normalises_dates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -411,7 +414,9 @@ def test_wikipedia_missing_page(monkeypatch: pytest.MonkeyPatch) -> None:
 
     r = WikipediaPlugin().execute(params={"title": "DefinitelyNotAnArticle"})
     assert r.value is None
-    assert r.exit_code == 1
+    assert r.exit_code is None
+    assert r.ok is True
+    assert r.raw["exists"] is False
 
 
 def test_rss_parses_feed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -539,7 +544,9 @@ def test_webhook_posts_json_with_mocked_requests(
         }
     )
     assert r.value == {"ok": True}
-    assert r.exit_code == 200
+    assert r.exit_code is None
+    assert r.raw["status"] == 200
+    assert r.ok is True
     assert captured["method"] == "POST"
     assert captured["json"] == {"a": 1}
     assert captured["headers"] == {"X-Token": "y"}
@@ -574,8 +581,56 @@ def test_webhook_5xx_retry_then_succeed(monkeypatch: pytest.MonkeyPatch) -> None
     r = WebhookPlugin().execute(
         params={"url": "https://x.test", "retries": 2}
     )
-    assert r.exit_code == 200
+    assert r.exit_code is None
+    assert r.raw["status"] == 200
+    assert r.ok is True
     assert calls == [500, 502, 200]
+
+
+def test_webhook_4xx_sets_ok_false_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_mod = types.ModuleType("requests")
+    fake_exc_mod = types.ModuleType("requests.exceptions")
+    fake_exc_mod.RequestException = type("RequestException", (Exception,), {})
+    fake_mod.exceptions = fake_exc_mod
+
+    class R:
+        def __init__(self) -> None:
+            self.status_code = 404
+            self.text = "not found"
+            self.headers = {"Content-Type": "text/plain"}
+
+    fake_mod.request = lambda **kwargs: R()
+    monkeypatch.setitem(sys.modules, "requests", fake_mod)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_exc_mod)
+
+    r = WebhookPlugin().execute(params={"url": "https://x.test"})
+    assert r.ok is False
+    assert r.raw["status"] == 404
+
+
+def test_webhook_fail_on_error_false_keeps_ok_true_on_4xx(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_mod = types.ModuleType("requests")
+    fake_exc_mod = types.ModuleType("requests.exceptions")
+    fake_exc_mod.RequestException = type("RequestException", (Exception,), {})
+    fake_mod.exceptions = fake_exc_mod
+
+    class R:
+        def __init__(self) -> None:
+            self.status_code = 404
+            self.text = "not found"
+            self.headers = {"Content-Type": "text/plain"}
+
+    fake_mod.request = lambda **kwargs: R()
+    monkeypatch.setitem(sys.modules, "requests", fake_mod)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_exc_mod)
+
+    r = WebhookPlugin().execute(
+        params={"url": "https://x.test", "fail_on_error": False}
+    )
+    assert r.ok is True
+    assert r.raw["status"] == 404
 
 
 def test_web_fetch_html_mode(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -597,7 +652,36 @@ def test_web_fetch_html_mode(monkeypatch: pytest.MonkeyPatch) -> None:
         params={"url": "https://x.test", "mode": "html"}
     )
     assert r.value == "<html><body>raw</body></html>"
-    assert r.exit_code == 200
+    assert r.exit_code is None
+    assert r.raw["status"] == 200
+    assert r.ok is True
+
+
+def test_web_fetch_4xx_sets_ok_false_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_mod = types.ModuleType("requests")
+    fake_exc_mod = types.ModuleType("requests.exceptions")
+    fake_exc_mod.RequestException = type("RequestException", (Exception,), {})
+    fake_mod.exceptions = fake_exc_mod
+
+    class FakeResponse:
+        status_code = 404
+        text = "<html>not found</html>"
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "text/html"}
+
+    fake_mod.get = lambda *a, **k: FakeResponse()
+    monkeypatch.setitem(sys.modules, "requests", fake_mod)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_exc_mod)
+
+    r = WebFetchPlugin().execute(params={"url": "https://x.test", "mode": "html"})
+    assert r.ok is False
+    assert r.raw["status"] == 404
+
+    r2 = WebFetchPlugin().execute(
+        params={"url": "https://x.test", "mode": "html", "fail_on_error": "False"}
+    )
+    assert r2.ok is True
 
 
 def test_web_fetch_defaults_timeout_to_the_effect_budget(

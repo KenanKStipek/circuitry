@@ -244,6 +244,285 @@ def test_tool_runtime_on_error_fail_raises(monkeypatch: pytest.MonkeyPatch) -> N
         ToolRuntime(defn).execute(store=store, ctx={})
 
 
+# ---------------------------------------------------------------------------
+# #262 part 1: one failure contract — ToolResult.ok, not just exceptions.
+# ---------------------------------------------------------------------------
+
+
+def test_tool_runtime_ok_false_sets_meta_error_without_an_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plugin that returns ok=False (no exception) must still fail the
+    effect under on_error: fail, exactly like a raised exception."""
+    fake_result = ToolResult(
+        value=None, raw={"status": 500}, stderr="HTTP 500", exit_code=None, ok=False
+    )
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = fake_result
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin)
+
+    defn = ToolDefinition(name="call", provider="http", params={}, on_error="fail")
+    store = _make_store()
+
+    with pytest.raises(RuntimeError, match="HTTP 500"):
+        ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert store.state["call"]["meta"]["error"] == "HTTP 500"
+
+
+def test_tool_runtime_ok_false_on_error_skip_does_not_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_result = ToolResult(
+        value="body", raw={"status": 404}, stderr="HTTP 404", exit_code=None, ok=False
+    )
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = fake_result
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin)
+
+    defn = ToolDefinition(name="call", provider="http", params={}, on_error="skip")
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={})  # should not raise
+
+    assert store.state["call"]["value"] is None
+    assert store.state["call"]["meta"]["error"] == "HTTP 404"
+
+
+def test_tool_runtime_ok_true_leaves_meta_error_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_result = ToolResult(value="fine", raw={"status": 200}, exit_code=None, ok=True)
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = fake_result
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin)
+
+    defn = ToolDefinition(name="call", provider="http", params={})
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert store.state["call"]["meta"]["error"] is None
+
+
+def test_tool_runtime_sets_meta_status_code_from_raw_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_result = ToolResult(value="x", raw={"status": 204}, exit_code=None, ok=True)
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = fake_result
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin)
+
+    defn = ToolDefinition(name="call", provider="http", params={})
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert store.state["call"]["meta"]["status_code"] == 204
+
+
+def test_tool_runtime_does_not_set_status_code_for_non_http_family_providers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unrelated int raw['status'] from a non-HTTP-family plugin must not
+    be mistaken for an HTTP status."""
+    fake_result = ToolResult(value="x", raw={"status": 204}, exit_code=None, ok=True)
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = fake_result
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin)
+
+    defn = ToolDefinition(name="call", provider="shell", params={})
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert "status_code" not in store.state["call"]["meta"]
+
+
+def test_tool_runtime_meta_exit_code_is_the_process_exit_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A process-backed plugin's exit_code lands verbatim on meta.exit_code —
+    the owner's orchestrations read state.prime.probe.meta.exit_code on
+    shell tools and that must keep working."""
+    fake_result = ToolResult(value="out", raw={}, exit_code=2)
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = fake_result
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin)
+
+    defn = ToolDefinition(name="probe", provider="shell", params={})
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert store.state["probe"]["meta"]["exit_code"] == 2
+
+
+# ---------------------------------------------------------------------------
+# #262 part 1 raw + #264 part 5: meta.raw — redacted, size-capped.
+# ---------------------------------------------------------------------------
+
+
+def test_tool_runtime_records_meta_raw_from_tool_result_raw(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_result = ToolResult(
+        value="x", raw={"status": 200, "headers": {"content-type": "text/plain"}}
+    )
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = fake_result
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin)
+
+    defn = ToolDefinition(name="call", provider="http", params={})
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert store.state["call"]["meta"]["raw"] == {
+        "status": 200,
+        "headers": {"content-type": "text/plain"},
+    }
+
+
+def test_tool_runtime_redacts_credential_like_values_in_meta_raw(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_result = ToolResult(
+        value="x",
+        raw={"headers": {"Authorization": "Bearer sk-abcdefghijklmnopqrstuvwxyz0123"}},
+    )
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = fake_result
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin)
+
+    defn = ToolDefinition(name="call", provider="http", params={})
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert store.state["call"]["meta"]["raw"]["headers"]["Authorization"] == "***REDACTED***"
+
+
+def test_tool_runtime_caps_oversized_meta_raw(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from circuitry.core.tool import _RAW_META_MAX_BYTES
+
+    huge = "x" * (_RAW_META_MAX_BYTES * 2)
+    fake_result = ToolResult(value="x", raw={"body": huge})
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = fake_result
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin)
+
+    defn = ToolDefinition(name="call", provider="http", params={})
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    raw_meta = store.state["call"]["meta"]["raw"]
+    assert raw_meta["_truncated"] is True
+    assert raw_meta["_original_bytes"] > _RAW_META_MAX_BYTES
+
+
+def test_tool_runtime_meta_raw_is_json_safe_for_non_json_native_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plugin raw with e.g. bytes/datetime must survive a plain json.dumps
+    later (--out, the SQL stores use no default=), not just the capping
+    pass's own json.dumps(..., default=str)."""
+    import datetime as _dt
+    import json as _json
+
+    fake_result = ToolResult(
+        value="x",
+        raw={
+            "when": _dt.datetime(2024, 1, 1, tzinfo=_dt.timezone.utc),
+            "blob": b"\x00\x01",
+        },
+    )
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = fake_result
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin)
+
+    defn = ToolDefinition(name="call", provider="http", params={})
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    raw_meta = store.state["call"]["meta"]["raw"]
+    assert raw_meta == {
+        "when": "2024-01-01 00:00:00+00:00",
+        "blob": "b'\\x00\\x01'",
+    }
+    _json.dumps(raw_meta)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# #238: meta.params_rendered is redacted; the plugin still sees real values.
+# ---------------------------------------------------------------------------
+
+
+def test_tool_runtime_redacts_params_rendered_but_plugin_sees_real_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_params: dict[str, Any] = {}
+
+    def capturing_plugin(**kw: Any) -> Any:
+        m = MagicMock()
+
+        def execute(*, params: dict[str, Any], timeout_seconds: int) -> ToolResult:
+            captured_params.update(params)
+            return ToolResult(value="ok", raw={})
+
+        m.execute.side_effect = execute
+        return m
+
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", capturing_plugin)
+
+    defn = ToolDefinition(
+        name="call",
+        provider="http",
+        params={"url": "https://x.test", "api_key": "{{secret}}"},
+    )
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={"secret": "sk-abcdefghijklmnopqrstuvwxyz0123"})
+
+    # The plugin receives the real, unredacted value.
+    assert captured_params["api_key"] == "sk-abcdefghijklmnopqrstuvwxyz0123"
+    # The stored run record does not.
+    assert store.state["call"]["meta"]["params_rendered"]["api_key"] == "***REDACTED***"
+
+
+def test_tool_runtime_redacts_url_userinfo_in_params_rendered_but_plugin_sees_real_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_params: dict[str, Any] = {}
+
+    def capturing_plugin(**kw: Any) -> Any:
+        m = MagicMock()
+
+        def execute(*, params: dict[str, Any], timeout_seconds: int) -> ToolResult:
+            captured_params.update(params)
+            return ToolResult(value="ok", raw={})
+
+        m.execute.side_effect = execute
+        return m
+
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", capturing_plugin)
+
+    url = "https://{{creds}}@x.test/"
+    defn = ToolDefinition(name="call", provider="http", params={"url": url})
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={"creds": "user:pass"})
+
+    # The plugin receives the real, unredacted URL.
+    assert captured_params["url"] == "https://user:pass@x.test/"
+    # The stored run record strips the userinfo.
+    assert store.state["call"]["meta"]["params_rendered"]["url"] == "https://***REDACTED***@x.test/"
+
+
 def _capturing_timeout_plugin(captured):
     def fake_build_plugin(**kw):
         m = MagicMock()

@@ -26,11 +26,15 @@ _SENSITIVE_KEY_RE = re.compile(
     r"|auth[_\-]?token|access[_\-]?token|bearer[_\-]?token|id[_\-]?token"
     r"|refresh[_\-]?token|session[_\-]?token|csrf[_\-]?token"
     r"|authorization|password|passphrase|client[_\-]?secret"
+    r"|set[_\-]?cookie|cookie"
     r"|secret|token|credentials?)$"
 )
 
-# Standalone JWT (three base64url segments separated by dots).
-_JWT_RE = re.compile(r"^[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+$")
+# Standalone JWT (three base64url segments separated by dots). Every real
+# JWT header starts with "eyJ" (base64url of the JSON header's leading
+# '{"'), so requiring it keeps plain dotted names (www.example.com,
+# a.tar.gz, 1.2.3) from matching.
+_JWT_RE = re.compile(r"^eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+$")
 
 # Common API-key shapes — long base64url-ish or hex strings, often with a
 # vendor prefix. Conservative: require at least 32 chars to avoid false

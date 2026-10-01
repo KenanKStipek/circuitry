@@ -16,6 +16,15 @@ Params:
   - ``team`` (list_issues, optional str): team key (e.g. ``"ENG"``).
   - ``state`` (list_issues, optional str): state name (e.g. ``"In Progress"``).
   - ``limit`` (list_issues, int, default 50).
+  - ``fail_on_error`` (optional, bool, default ``True``): an HTTP 4xx/5xx or
+    a GraphQL-level error sets ``ToolResult.ok = False``, which fails the
+    effect (``meta.error``, ``on_error`` applies). Set ``false`` to
+    surface the failure on ``meta.status_code``/``value`` instead of
+    failing the effect.
+
+ToolResult's ``exit_code`` is always ``None`` — this plugin issues no
+process. The HTTP status lands on ``meta.status_code`` (from
+``raw["status"]``), not ``exit_code``.
 """
 
 from __future__ import annotations
@@ -26,7 +35,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 _LINEAR_ENDPOINT = "https://api.linear.app/graphql"
 
@@ -88,6 +97,8 @@ class LinearPlugin:
         else:
             raise ValueError(f"linear: unknown mode {mode!r}")
 
+        fail_on_error = _as_bool(params.get("fail_on_error"), default=True)
+
         try:
             resp = requests.post(
                 _LINEAR_ENDPOINT,
@@ -102,12 +113,22 @@ class LinearPlugin:
             raise RuntimeError(f"linear request failed: {exc}") from exc
 
         if resp.status_code >= 400:
-            raise RuntimeError(
-                f"linear HTTP {resp.status_code}: {resp.text[:500]}"
+            error = f"linear HTTP {resp.status_code}: {resp.text[:500]}"
+            return ToolResult(
+                value=None,
+                raw={"mode": mode, "status": resp.status_code},
+                stdout=None, stderr=error, exit_code=None,
+                ok=not fail_on_error,
             )
         body = resp.json()
         if isinstance(body, dict) and body.get("errors"):
-            raise RuntimeError(f"linear GraphQL errors: {body['errors']}")
+            error = f"linear GraphQL errors: {body['errors']}"
+            return ToolResult(
+                value=None,
+                raw={"mode": mode, "status": resp.status_code, "errors": body["errors"]},
+                stdout=None, stderr=error, exit_code=None,
+                ok=not fail_on_error,
+            )
         data = (body or {}).get("data")
 
         if mode == "list_issues":
@@ -119,7 +140,7 @@ class LinearPlugin:
         return ToolResult(
             value=value,
             raw={"mode": mode, "status": resp.status_code},
-            stdout=None, stderr=None, exit_code=resp.status_code,
+            stdout=None, stderr=None, exit_code=None,
         )
 
     def check(self) -> CheckResult:

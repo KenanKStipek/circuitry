@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 _SUPPORTED_ALGORITHMS = {
     "md5", "sha1", "sha224", "sha256", "sha384", "sha512",
@@ -55,7 +55,7 @@ class HashPlugin:
         except ValueError as exc:
             raise ValueError(f"hash: hashlib refused {algorithm!r}: {exc}") from exc
 
-        if params.get("from_path"):
+        if _as_bool(params.get("from_path")):
             src = params.get("input")
             if not isinstance(src, str) or not src:
                 raise ValueError("hash: from_path=True requires params['input'] path.")

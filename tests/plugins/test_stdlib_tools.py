@@ -256,6 +256,31 @@ def test_fs_delete_recursive(tmp_path: Path) -> None:
     assert not sub.exists()
 
 
+def test_fs_delete_templated_false_recursive_still_refuses(tmp_path: Path) -> None:
+    """A Mustache-rendered recursive=false arrives as the string "False"."""
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "x.txt").write_text("hi")
+    with pytest.raises(IsADirectoryError):
+        FsPlugin().execute(
+            params={"mode": "delete", "path": str(sub), "recursive": "False"}
+        )
+    assert sub.exists()
+
+
+def test_fs_write_templated_false_create_dirs_skips_mkdir(tmp_path: Path) -> None:
+    target = tmp_path / "missing-dir" / "f.txt"
+    with pytest.raises(FileNotFoundError):
+        FsPlugin().execute(
+            params={
+                "mode": "write",
+                "path": str(target),
+                "content": "hi",
+                "create_dirs": "False",
+            }
+        )
+
+
 def test_fs_rejects_null_byte() -> None:
     with pytest.raises(ValueError, match="null byte"):
         FsPlugin().execute(params={"mode": "read", "path": "a\x00b"})
@@ -510,7 +535,8 @@ def test_port_check_returns_true_for_open_port() -> None:
             params={"host": "127.0.0.1", "port": port, "timeout_ms": 1000}
         )
         assert r.value is True
-        assert r.exit_code == 0
+        assert r.exit_code is None
+        assert r.ok is True
     finally:
         listener.close()
 
@@ -527,7 +553,8 @@ def test_port_check_returns_false_for_closed_port() -> None:
         params={"host": "127.0.0.1", "port": closed_port, "timeout_ms": 500}
     )
     assert r.value is False
-    assert r.exit_code == 1
+    assert r.exit_code is None
+    assert r.ok is True
 
 
 def test_port_check_invalid_port_raises() -> None:
@@ -578,6 +605,21 @@ def test_env_vars_list_can_include_secrets(monkeypatch: pytest.MonkeyPatch) -> N
         }
     )
     assert r.value["CIRCUITRY_TEST_TOKEN"] == "real-token"
+
+
+def test_env_vars_list_templated_false_include_secrets_still_redacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Mustache-rendered include_secrets=false arrives as the string "False"."""
+    monkeypatch.setenv("CIRCUITRY_TEST_TOKEN", "real-token")
+    r = EnvVarsPlugin().execute(
+        params={
+            "mode": "list",
+            "prefix": "CIRCUITRY_TEST_",
+            "include_secrets": "False",
+        }
+    )
+    assert r.value["CIRCUITRY_TEST_TOKEN"] == "***"
 
 
 # ---------- hash ----------

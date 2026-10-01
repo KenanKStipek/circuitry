@@ -137,7 +137,8 @@ def test_call_tool_returns_text_value(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert validate_tool_result(result, plugin_name="mcp") == []
     assert result.value == "hello"
-    assert result.exit_code == 0
+    assert result.exit_code is None
+    assert result.ok is True
     assert result.stderr is None
     assert result.raw["server"] == "local"
     assert result.raw["tool"] == "greet"
@@ -249,7 +250,7 @@ def test_parse_json_on_is_error_with_non_json_text_does_not_raise(
 ) -> None:
     """isError text is conventionally a plain error message, not JSON —
     parse='json' must honor the error contract (value None, stderr set,
-    exit_code 1) instead of crashing the effect."""
+    ok False) instead of crashing the effect."""
     session = _FakeSession(
         call_result=_call_result(text="rate limited", is_error=True)
     )
@@ -260,7 +261,8 @@ def test_parse_json_on_is_error_with_non_json_text_does_not_raise(
     )
     assert result.value is None
     assert result.stderr == "rate limited"
-    assert result.exit_code == 1
+    assert result.exit_code is None
+    assert result.ok is False
     assert validate_tool_result(result, plugin_name="mcp") == []
 
 
@@ -276,14 +278,15 @@ def test_parse_json_on_is_error_with_json_text_still_parses(
         params={"server": "local", "tool": "t", "parse": "json"}
     )
     assert result.value == {"code": 429}
-    assert result.exit_code == 1
+    assert result.exit_code is None
+    assert result.ok is False
 
 
 def test_auto_parses_json_text_on_is_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """auto's JSON-in-text fallback applies to isError responses too — the
-    parsed value and the raw error text/exit_code are independent."""
+    parsed value and the raw error text/ok are independent."""
     session = _FakeSession(
         call_result=_call_result(text='{"code": 429}', is_error=True)
     )
@@ -294,7 +297,8 @@ def test_auto_parses_json_text_on_is_error(
     )
     assert result.value == {"code": 429}
     assert result.stderr == '{"code": 429}'
-    assert result.exit_code == 1
+    assert result.exit_code is None
+    assert result.ok is False
 
 
 def test_is_error_surfaces_in_stderr_and_exit_code(
@@ -309,7 +313,8 @@ def test_is_error_surfaces_in_stderr_and_exit_code(
         params={"server": "local", "tool": "t"}
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code is None
+    assert result.ok is False
     assert result.stderr == "boom"
     assert result.value == "boom"
     assert result.raw["is_error"] is True
@@ -325,8 +330,23 @@ def test_is_error_without_text_gets_fallback_stderr(
     result = McpPlugin(servers=_SERVERS).execute(
         params={"server": "local", "tool": "t"}
     )
-    assert result.exit_code == 1
+    assert result.exit_code is None
+    assert result.ok is False
     assert "error" in (result.stderr or "").lower()
+
+
+def test_is_error_with_fail_on_error_false_keeps_ok_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeSession(call_result=_call_result(text="boom", is_error=True))
+    _install_fake_session(monkeypatch, session)
+
+    result = McpPlugin(servers=_SERVERS).execute(
+        params={"server": "local", "tool": "t", "fail_on_error": False}
+    )
+    assert result.ok is True
+    assert result.exit_code is None
+    assert result.raw["is_error"] is True
 
 
 def test_multiple_text_blocks_joined(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -384,7 +404,8 @@ def test_list_tools_returns_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
             "input_schema": {"type": "object"},
         }
     ]
-    assert result.exit_code == 0
+    assert result.exit_code is None
+    assert result.ok is True
     assert result.raw["operation"] == "list_tools"
     assert validate_tool_result(result, plugin_name="mcp") == []
 

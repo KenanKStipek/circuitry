@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 _SECRET_PATTERN = re.compile(
     r"(?:API[_-]?KEY|TOKEN|PASSWORD|PASSWD|SECRET|CREDENTIAL|PRIVATE[_-]?KEY)",
@@ -57,7 +57,7 @@ class EnvVarsPlugin:
 
         if mode == "list":
             prefix = params.get("prefix")
-            include_secrets = bool(params.get("include_secrets", False))
+            include_secrets = _as_bool(params.get("include_secrets"), default=False)
             items: dict[str, str] = {}
             for k, v in os.environ.items():
                 if isinstance(prefix, str) and prefix and not k.startswith(prefix):

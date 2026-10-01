@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 
 def _validate_args(args: Sequence[Any]) -> list[str]:
@@ -268,7 +268,7 @@ class GenericSubprocessTool:
             stdin=params.get("stdin"),
             env=merged_env(self.env),
             timeout_seconds=timeout_seconds,
-            allow_nonzero=bool(params.get("allow_nonzero")),
+            allow_nonzero=_as_bool(params.get("allow_nonzero")),
             not_found_hint=f"set runtime.plugins.{self.name}.binary",
         )
 

@@ -21,6 +21,16 @@ Params:
     (connect, then each read), not to the request as a whole.
   - ``user_agent`` (optional): override the default UA.
   - ``include_images`` (markdown mode, bool, default False).
+  - ``fail_on_error`` (optional, bool, default ``True``): a 4xx/5xx response
+    sets ``ToolResult.ok = False``, which fails the effect (``meta.error``,
+    ``on_error`` applies). Set ``false`` to restore the old behaviour of
+    always succeeding and letting the orchestration branch on
+    ``meta.status_code`` itself (the 404 case's extracted body, often an
+    error page, still lands on ``value``).
+
+ToolResult's ``exit_code`` is always ``None`` — this plugin issues no
+process. The HTTP status lands on ``meta.status_code`` (from
+``raw["status"]``), not ``exit_code``.
 """
 
 from __future__ import annotations
@@ -30,7 +40,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 _DEFAULT_UA = "circuitry/0.1 (+https://github.com/kenankstipek/circuitry)"
 
@@ -68,6 +78,7 @@ class WebFetchPlugin:
             else int(timeout_seconds * 1000)
         )
         ua = str(params.get("user_agent") or _DEFAULT_UA)
+        fail_on_error = _as_bool(params.get("fail_on_error"), default=True)
 
         try:
             resp = requests.get(
@@ -84,10 +95,12 @@ class WebFetchPlugin:
             "url": url, "status": status, "mode": mode,
             "content_type": resp.headers.get("Content-Type", ""),
         }
+        ok = not (fail_on_error and status >= 400)
+        stderr = None if status < 400 else f"HTTP {status}"
 
         if mode == "html":
             return ToolResult(
-                value=text, raw=raw, stdout=None, stderr=None, exit_code=status
+                value=text, raw=raw, stdout=None, stderr=stderr, exit_code=None, ok=ok
             )
         if mode == "json":
             try:
@@ -98,7 +111,7 @@ class WebFetchPlugin:
                     f"web_fetch: response is not JSON: {exc}"
                 ) from exc
             return ToolResult(
-                value=value, raw=raw, stdout=None, stderr=None, exit_code=status
+                value=value, raw=raw, stdout=None, stderr=stderr, exit_code=None, ok=ok
             )
 
         # text / markdown — needs trafilatura.
@@ -114,11 +127,11 @@ class WebFetchPlugin:
         extracted = trafilatura.extract(
             text,
             output_format=output_format,
-            include_images=bool(params.get("include_images")),
+            include_images=_as_bool(params.get("include_images")),
             url=url,
         ) or ""
         return ToolResult(
-            value=extracted, raw=raw, stdout=None, stderr=None, exit_code=status
+            value=extracted, raw=raw, stdout=None, stderr=stderr, exit_code=None, ok=ok
         )
 
     def check(self) -> CheckResult:

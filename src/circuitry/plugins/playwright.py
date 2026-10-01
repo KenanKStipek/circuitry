@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 _VALID_BROWSERS = ("chromium", "firefox", "webkit")
 
@@ -108,7 +108,7 @@ class PlaywrightPlugin:
             raise ValueError(
                 f"playwright: browser must be {_VALID_BROWSERS}, got {browser_name!r}"
             )
-        headless = bool(params.get("headless", True))
+        headless = _as_bool(params.get("headless"), default=True)
         user_agent = params.get("user_agent")
 
         with sync_playwright() as pw:

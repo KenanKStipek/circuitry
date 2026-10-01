@@ -15,7 +15,7 @@ from datetime import datetime, timezone, tzinfo
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 
 @dataclass(frozen=True)
@@ -29,7 +29,7 @@ class ClockPlugin:
         timeout_seconds: int = 300,
     ) -> ToolResult:
         del timeout_seconds
-        epoch_mode = bool(params.get("epoch"))
+        epoch_mode = _as_bool(params.get("epoch"))
         tz_name = params.get("timezone")
         tz: tzinfo
         if tz_name:

@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 
 @dataclass(frozen=True)
@@ -56,7 +56,7 @@ class ScreenshotPlugin:
             raise ValueError("screenshot requires params['url'].")
         if not isinstance(output, str) or not output.strip():
             raise ValueError("screenshot requires params['output'].")
-        full_page = bool(params.get("full_page", True))
+        full_page = _as_bool(params.get("full_page"), default=True)
         viewport = params.get("viewport")
         wait_for = params.get("wait_for")
 

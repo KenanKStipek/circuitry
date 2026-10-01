@@ -28,7 +28,7 @@ from typing import Any
 
 from ..preflight import CheckResult
 from ._subprocess import resolve_binary
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 _PATCH_CANDIDATES = ("patch",)
 
@@ -61,10 +61,10 @@ class DiffPatchPlugin:
     @staticmethod
     def _diff(params: dict[str, Any]) -> ToolResult:
         a = _read_or_str(
-            params.get("from"), is_path=bool(params.get("from_path")), field="from"
+            params.get("from"), is_path=_as_bool(params.get("from_path")), field="from"
         )
         b = _read_or_str(
-            params.get("to"), is_path=bool(params.get("to_path")), field="to"
+            params.get("to"), is_path=_as_bool(params.get("to_path")), field="to"
         )
         ctx = int(params.get("context", 3))
         diff_text = "".join(

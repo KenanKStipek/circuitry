@@ -10,7 +10,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from ..cli.redaction import redact
 from ..output import console as _console
+from ..plugins.base import ToolResult
 from .store import Store
 from .templates import render_template
 
@@ -19,6 +21,41 @@ logger = logging.getLogger(__name__)
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+#: Providers whose raw["status"] is an HTTP status code, not some other
+#: plugin's unrelated int field that happens to be named "status".
+_HTTP_FAMILY_PROVIDERS = frozenset({"http", "web_fetch", "webhook", "linear"})
+
+#: Cap on meta.raw's serialized size, in bytes, after redaction. Protects
+#: state (and anything that mirrors it: --out, --live-state, persisted
+#: snapshots) from a provider response ToolResult.raw is large enough to
+#: carry (e.g. a big HTTP body echoed verbatim) — see orchestration-reference.md.
+_RAW_META_MAX_BYTES = 64 * 1024
+
+
+def _capped_raw(raw: dict[str, Any]) -> dict[str, Any]:
+    """Redact *raw*, then replace it with a truncation marker if it's still
+    too big to store safely in state.
+
+    Returns the JSON round-tripped copy, not *redacted* itself: callers
+    that serialize state (``--out``, the SQL/Postgres stores) use plain
+    ``json.dumps`` with no ``default=``, so a plugin ``raw`` containing
+    e.g. ``bytes`` or a ``datetime`` would otherwise crash them later.
+    """
+    redacted = redact(raw)
+    try:
+        encoded = json.dumps(redacted, ensure_ascii=False, default=str).encode("utf-8")
+    except (TypeError, ValueError):
+        return redacted
+    if len(encoded) <= _RAW_META_MAX_BYTES:
+        result: dict[str, Any] = json.loads(encoded)
+        return result
+    return {
+        "_truncated": True,
+        "_original_bytes": len(encoded),
+        "_preview": encoded[:_RAW_META_MAX_BYTES].decode("utf-8", errors="ignore"),
+    }
 
 
 def _elapsed_str(seconds: float) -> str:
@@ -268,6 +305,25 @@ class ToolRuntime:
       <name>.value
       <name>.meta{created_at, completed_at, provider, params_rendered, stdout, stderr, exit_code, error}
 
+      ``meta.params_rendered`` is redacted (``cli.redaction.redact``) before
+      storage; the plugin itself still receives the unredacted values (#238).
+
+      ``meta.exit_code`` means a process exit code only (binary/shell/other
+      process-backed plugins) — it is ``None`` for every other plugin. A
+      tool fails — ``meta.error`` is set and ``on_error`` applies — whenever
+      the plugin raises, or returns a ``ToolResult`` with ``ok=False``. HTTP-
+      family plugins (``http``, ``web_fetch``, ``webhook``, ``linear``) fail
+      this way on a 4xx/5xx response by default and set ``meta.status_code``
+      to the HTTP status; each has a per-effect opt-out param (see each
+      plugin's docstring) that restores the old always-succeeds behaviour.
+      Soft-failure plugins (``wikipedia``, ``dns``, ``port_check``,
+      ``validate_yaml``) report their own outcome via ``value``/``raw``
+      fields with ``ok`` staying ``True`` — see orchestration-reference.md.
+
+      ``meta.raw`` is the plugin's ``ToolResult.raw``, redacted and
+      size-capped (``_RAW_META_MAX_BYTES``); always set for a tool effect
+      that returned a result. Prompt effects never set it.
+
       ``meta.binary`` is also set for binary-wrapping tool plugins
       (the resolved absolute executable path), when the plugin's result
       carries one.
@@ -362,6 +418,8 @@ class ToolRuntime:
         meta["stderr"] = None
         meta["exit_code"] = None
         meta.pop("binary", None)
+        meta.pop("status_code", None)
+        meta.pop("raw", None)
 
         if self.verbose and self.cb_start is not None:
             self.cb_start()
@@ -389,6 +447,7 @@ class ToolRuntime:
         store.fire_effect_start(self.defn.name, node)
 
         target = self.defn.provider  # fallback if build_plugin fails before we can compute it
+        result: ToolResult | None = None
         try:
             # Render top-level prompt/model, then merge with params (params take precedence)
             top_level: dict[str, Any] = {}
@@ -405,7 +464,7 @@ class ToolRuntime:
                 params = _deep_merge_params(params, params_json_overlay)
 
             rendered = {**top_level, **params}
-            meta["params_rendered"] = rendered
+            meta["params_rendered"] = redact(rendered)
             mtag = _model_tag(rendered)
 
             # Build plugin early so we can use its target string in the spinner
@@ -440,31 +499,6 @@ class ToolRuntime:
             with live_cm:
                 result = plugin.execute(params=rendered, timeout_seconds=timeout_seconds)
 
-            node["value"] = result.value
-            meta["stdout"] = result.stdout
-            meta["stderr"] = result.stderr
-            meta["exit_code"] = result.exit_code
-            if "binary" in result.raw:
-                meta["binary"] = result.raw["binary"]
-            meta["completed_at"] = _now_iso()
-
-            if self.verbose:
-                elapsed = time.monotonic() - t0
-                suffix = _elapsed_str(elapsed)
-                out = _format_output(result.value)
-                if out:
-                    suffix += f" → {out}"
-                line = (
-                    f"{indent}[ok]✓[/ok] [white]⚙[/white] {self.display_name}"
-                    f" [dim]{target} | {suffix}[/dim]"
-                )
-                if self.cb_done is not None:
-                    self.cb_done(line)
-                else:
-                    _console.print(line)
-
-            store.fire_effect_complete(self.defn.name, node)
-
         except Exception as e:
             if self.verbose:
                 elapsed = time.monotonic() - t0
@@ -486,3 +520,56 @@ class ToolRuntime:
             store.fire_effect_complete(self.defn.name, node)
             if self.defn.on_error == "fail":
                 raise
+            return
+
+        assert result is not None
+
+        node["value"] = result.value
+        meta["stdout"] = result.stdout
+        meta["stderr"] = result.stderr
+        meta["exit_code"] = result.exit_code
+        if self.defn.provider in _HTTP_FAMILY_PROVIDERS and isinstance(
+            result.raw.get("status"), int
+        ):
+            meta["status_code"] = result.raw["status"]
+        if "binary" in result.raw:
+            meta["binary"] = result.raw["binary"]
+        meta["raw"] = _capped_raw(result.raw)
+        meta["completed_at"] = _now_iso()
+
+        if not result.ok:
+            error_message = result.stderr or f"{self.defn.provider} tool reported failure (ok=False)"
+            meta["error"] = error_message
+            if self.verbose:
+                elapsed = time.monotonic() - t0
+                line = (
+                    f"{indent}[err]✗[/err] [white]⚙[/white] {self.display_name}"
+                    f" [dim]{target} | {_elapsed_str(elapsed)}[/dim]"
+                )
+                if self.cb_error is not None:
+                    self.cb_error(line)
+                else:
+                    _console.print(line)
+            if self.defn.on_error in ("skip", "continue"):
+                node["value"] = None
+            store.fire_effect_complete(self.defn.name, node)
+            if self.defn.on_error == "fail":
+                raise RuntimeError(error_message)
+            return
+
+        if self.verbose:
+            elapsed = time.monotonic() - t0
+            suffix = _elapsed_str(elapsed)
+            out = _format_output(result.value)
+            if out:
+                suffix += f" → {out}"
+            line = (
+                f"{indent}[ok]✓[/ok] [white]⚙[/white] {self.display_name}"
+                f" [dim]{target} | {suffix}[/dim]"
+            )
+            if self.cb_done is not None:
+                self.cb_done(line)
+            else:
+                _console.print(line)
+
+        store.fire_effect_complete(self.defn.name, node)
