@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 import yaml as _yaml  # type: ignore[import-untyped]
@@ -23,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .dynamic import DynamicDefinition
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _store_root(store: Store) -> dict[str, Any]:
@@ -93,20 +98,39 @@ class ReflectorRuntime:
 
         reflector_store = store.child(self.defn.name)
 
-        iterations = max(1, int(self.defn.max_iterations or 1))
-        for i in range(iterations):
-            rec = self._run_iteration(i=i, store=store, reflector_store=reflector_store)
-            meta["iterations"].append(rec)
+        # Before planning, so the reflector's own start brackets every
+        # start/complete pair its inner dynamic and generated effects produce.
+        store.fire_effect_start(self.defn.name, node)
+        try:
+            iterations = max(1, int(self.defn.max_iterations or 1))
+            for i in range(iterations):
+                rec = self._run_iteration(
+                    i=i, store=store, reflector_store=reflector_store
+                )
+                meta["iterations"].append(rec)
 
-            if rec.get("error"):
-                node["value"] = False
-                raise RuntimeError(rec["error"])
+                if rec.get("error"):
+                    node["value"] = False
+                    # Lifecycle observers judge a completion failed by
+                    # ``meta.error``; the iteration record alone is invisible
+                    # to them.
+                    meta["error"] = rec["error"]
+                    meta["completed_at"] = _now_iso()
+                    raise RuntimeError(rec["error"])
 
-            if rec.get("stop", False):
-                node["value"] = True
-                return
+                if rec.get("stop", False):
+                    node["value"] = True
+                    return
 
-        node["value"] = True
+            node["value"] = True
+        except Exception as e:
+            node["value"] = False
+            meta.setdefault("error", str(e))
+            meta.setdefault("completed_at", _now_iso())
+            raise
+        finally:
+            # Balances the start on every exit, a failed iteration included.
+            store.fire_effect_complete(self.defn.name, node)
 
     def _run_iteration(
         self, *, i: int, store: Store, reflector_store: Store

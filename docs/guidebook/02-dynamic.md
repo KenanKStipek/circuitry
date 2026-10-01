@@ -77,7 +77,7 @@ Before an agent changes anything it looks around: it searches the code for the e
       params: {args: [issue, list, --search, "{{input.error}}"], cwd: "{{input.repo}}"}
 ```
 
-`tree` is parallel: every child launches against the *same* snapshot of state, taken when the dynamic begins. This is the applicative shape — independent computations over shared input — and it is the shape of tree-of-thought: several branches explored at once, joined afterwards. `max_concurrency` bounds the worker pool; leave it unset and every child runs at once.
+`tree` is parallel: every child launches against the *same* snapshot of state, taken when the dynamic begins. This is the applicative shape — independent computations over shared input — and it is the shape of tree-of-thought: several branches explored at once, joined afterwards. `max_concurrency` bounds the worker pool; leave it unset and every child runs at once. Each child reports to observers as it starts and lands — `--live-state`, the TUI, runtime plugins — so a fan-out shows its progress while the slow branches are still running.
 
 The consequence of the shared snapshot is the rule that defines `tree`: **siblings cannot read each other.** `history` cannot see `search`, because when `history` was launched `search` had not written anything yet. A template that tries renders empty, exactly like the wrong-root example above. If the history should cover the files the search found, the two are not siblings in a tree — they are steps in a chain.
 

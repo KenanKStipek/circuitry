@@ -2,11 +2,45 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ..saved_state import dumps_saved_state
+
+#: ``Store.effect_start`` / ``Store.effect_complete``.
+_EffectCallback = Callable[[str, dict[str, Any]], None]
+
+
+def replace_node(
+    state: dict[str, Any], parts: list[str], replacement: dict[str, Any]
+) -> dict[str, Any]:
+    """A shallow copy of *state* with the node at *parts* swapped out.
+
+    Only the dicts along the path are copied; everything else stays a live
+    reference, which is all a snapshot consumer (JSON dump, deepcopy) needs.
+    """
+    head, rest = parts[0], parts[1:]
+    if not rest:
+        return {**state, head: replacement}
+    inner = state.get(head)
+    if not isinstance(inner, dict):
+        return state
+    return {**state, head: replace_node(inner, rest, replacement)}
+
+
+def _prefixed_effect_cb(
+    callback: _EffectCallback | None, prefix: str
+) -> _EffectCallback | None:
+    """Wrap a lifecycle callback so branch-relative paths nest under *prefix*."""
+    if callback is None or not prefix:
+        return callback
+
+    def _forward(path: str, payload: dict[str, Any]) -> None:
+        callback(f"{prefix}.{path}", payload)
+
+    return _forward
 
 
 @dataclass
@@ -95,6 +129,57 @@ class Store:
             _lock=self._lock,
             _root_state=self.root_state,
         )
+
+    def parallel_branches(self, count: int) -> list[Store]:
+        """One isolated store per parallel branch of this store's node.
+
+        Isolated state, shared observation — the bargain a ``use`` child
+        strikes, made per branch of a ``flow: tree`` loop or dynamic. Each
+        branch writes into its own fresh state dict, so concurrent branches
+        never touch shared dicts and never read each other's writes; the
+        caller merges them back into this store's node, in index order, once
+        every branch has finished.
+
+        What a branch inherits is everything an observer needs to see it
+        while it runs: the shared lock, the effect lifecycle callbacks with
+        paths nested under this store's own (``prime.lp`` + ``iter_3.step``),
+        and an ``on_write`` that republishes the whole run with every
+        branch's latest snapshot laid over this node. A branch hands over a
+        deep copy taken on its own thread — the only thread that writes it —
+        so a snapshot never shares a dict another branch is still mutating.
+        """
+        latest: list[dict[str, Any] | None] = [None] * count
+        on_write = self.on_write
+        parts = self._path_prefix.split(".") if self._path_prefix else []
+
+        def _publisher(index: int) -> Callable[[dict[str, Any]], None]:
+            def _publish(branch_snapshot: dict[str, Any]) -> None:
+                assert on_write is not None
+                frozen = deepcopy(branch_snapshot)
+                with self._lock:
+                    latest[index] = frozen
+                    node = dict(self.state)
+                    for snapshot in latest:
+                        if snapshot is not None:
+                            node.update(snapshot)
+                    on_write(
+                        replace_node(self.root_state, parts, node) if parts else node
+                    )
+
+            return _publish
+
+        return [
+            Store(
+                state={},
+                on_write=None if on_write is None else _publisher(index),
+                effect_complete=_prefixed_effect_cb(
+                    self.effect_complete, self._path_prefix
+                ),
+                effect_start=_prefixed_effect_cb(self.effect_start, self._path_prefix),
+                _lock=self._lock,
+            )
+            for index in range(count)
+        ]
 
     def effect_path(self, name: str) -> str:
         """The canonical dotted path of the effect *name* in this store."""
