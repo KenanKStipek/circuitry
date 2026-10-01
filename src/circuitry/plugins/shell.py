@@ -23,6 +23,13 @@ Default allowlist is intentionally tiny and read-only:
 ``("ls", "cat", "head", "tail", "wc", "echo", "pwd", "date")``.
 Anything mutating the filesystem must be added explicitly per-effect.
 
+A host may additionally pin ``runtime.plugins.shell.allowed_commands`` in
+config; when set, the effective allowlist is the intersection of the pin
+and the effect's own list (or the default), so a document can only narrow
+the allowlist further, never widen it past the host's pin. Only honoured
+from config — a document's own ``runtime:`` block cannot set it (see
+``cli.effective_settings.ORCHESTRATION_RUNTIME_KEYS``).
+
 AC C.5: a non-allowlisted command must be rejected before any side
 effect — the binary is never invoked when the command isn't allowed.
 """
@@ -46,6 +53,10 @@ _DANGEROUS_ARG_CHARS: tuple[str, ...] = ("\x00", "\n")
 @dataclass(frozen=True)
 class ShellPlugin:
     name: str = "shell"
+    #: Host-level pin from ``runtime.plugins.shell.allowed_commands``.
+    #: ``None`` means no pin (today's behaviour); otherwise the effective
+    #: allowlist is this set intersected with the effect's own list.
+    pinned_allowed_commands: tuple[str, ...] | None = None
 
     def execute(
         self,
@@ -80,6 +91,9 @@ class ShellPlugin:
                     "shell: params['allowed_commands'] must be a list of strings."
                 )
             allowed_set = set(allowed)
+
+        if self.pinned_allowed_commands is not None:
+            allowed_set &= set(self.pinned_allowed_commands)
 
         if command not in allowed_set:
             raise PermissionError(

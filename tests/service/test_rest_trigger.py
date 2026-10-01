@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from circuitry.service import RestTriggerService
 
 
@@ -26,7 +28,7 @@ def test_rest_trigger_success_returns_request_tracking_metadata(tmp_path: Path) 
     orch_path = tmp_path / "hello.yml"
     _write_orchestration(orch_path)
 
-    svc = RestTriggerService(auth_token="secret")
+    svc = RestTriggerService(auth_token="secret", orchestration_root=tmp_path)
     response = svc.handle_http_request(
         method="POST",
         path="/v1/triggers/run",
@@ -60,6 +62,15 @@ def test_rest_trigger_success_returns_request_tracking_metadata(tmp_path: Path) 
     assert last_run["orchestration_path"] == str(orch_path)
 
 
+def test_rest_trigger_requires_auth_token_or_explicit_opt_out() -> None:
+    with pytest.raises(ValueError, match="allow_unauthenticated"):
+        RestTriggerService()
+
+
+def test_rest_trigger_allow_unauthenticated_opt_out_constructs() -> None:
+    RestTriggerService(allow_unauthenticated=True)
+
+
 def test_rest_trigger_rejects_missing_or_invalid_token() -> None:
     svc = RestTriggerService(auth_token="secret")
     response = svc.handle_http_request(
@@ -75,7 +86,7 @@ def test_rest_trigger_rejects_missing_or_invalid_token() -> None:
 
 
 def test_rest_trigger_rejects_invalid_payload_shape() -> None:
-    svc = RestTriggerService(auth_token=None)
+    svc = RestTriggerService(allow_unauthenticated=True)
     response = svc.handle_http_request(
         method="POST",
         path="/v1/triggers/run",
@@ -88,8 +99,67 @@ def test_rest_trigger_rejects_invalid_payload_shape() -> None:
     assert "orchestration_path" in response.body["error"]
 
 
+def test_rest_trigger_rejects_orchestration_path_outside_root(tmp_path: Path) -> None:
+    svc = RestTriggerService(allow_unauthenticated=True, orchestration_root=tmp_path / "root")
+    (tmp_path / "root").mkdir()
+    outside = tmp_path / "outside.yml"
+    _write_orchestration(outside)
+
+    response = svc.handle_http_request(
+        method="POST",
+        path="/v1/triggers/run",
+        headers={},
+        body=json.dumps({"orchestration_path": str(outside)}),
+    )
+
+    assert response.status_code == 400
+    assert response.body["ok"] is False
+    assert "orchestration_path" in response.body["error"]
+    assert "orchestration root" in response.body["error"]
+
+
+def test_rest_trigger_rejects_out_path_outside_root(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    orch_path = root / "hello.yml"
+    _write_orchestration(orch_path)
+    svc = RestTriggerService(allow_unauthenticated=True, orchestration_root=root)
+
+    response = svc.handle_http_request(
+        method="POST",
+        path="/v1/triggers/run",
+        headers={},
+        body=json.dumps(
+            {
+                "orchestration_path": str(orch_path),
+                "out_path": str(tmp_path / "escape.json"),
+            }
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.body["ok"] is False
+    assert "out_path" in response.body["error"]
+    assert "orchestration root" in response.body["error"]
+
+
+def test_rest_trigger_accepts_relative_path_inside_root(tmp_path: Path) -> None:
+    orch_path = tmp_path / "hello.yml"
+    _write_orchestration(orch_path)
+    svc = RestTriggerService(allow_unauthenticated=True, orchestration_root=tmp_path)
+
+    response = svc.handle_http_request(
+        method="POST",
+        path="/v1/triggers/run",
+        headers={},
+        body=json.dumps({"orchestration_path": "hello.yml", "dry_run": True}),
+    )
+
+    assert response.status_code == 200, response.body
+
+
 def test_rest_trigger_returns_runtime_failure_details(tmp_path: Path) -> None:
-    svc = RestTriggerService(auth_token=None)
+    svc = RestTriggerService(allow_unauthenticated=True, orchestration_root=tmp_path)
     response = svc.handle_http_request(
         method="POST",
         path="/v1/triggers/run",

@@ -566,6 +566,33 @@ def test_use_inline_with_mustache_rendering() -> None:
     assert store.state["run_plan"]["step"]["value"] == "Rendered!"
 
 
+def test_use_inline_shell_tool_literal_allowed_commands_runs() -> None:
+    """A generated-plan-shaped inline document whose tool effect carries a
+    literal ``allowed_commands`` (the way a reflector's model writes one
+    into the plan YAML it produces) still runs — the restriction added for
+    #264 only rejects params_json and templated values, not this."""
+    plan_yaml = yaml.dump({
+        "effects": [
+            {
+                "type": "tool",
+                "name": "generated_step",
+                "provider": "shell",
+                "params": {
+                    "command": "echo",
+                    "allowed_commands": ["echo"],
+                    "args": ["hi"],
+                },
+            }
+        ]
+    })
+
+    defn = UseDefinition(name="run_plan", inline=plan_yaml)
+    store = Store(state={})
+    UseRuntime(defn, adapter=None, model=None).execute(store=store, ctx=store.state)
+
+    assert store.state["run_plan"]["generated_step"]["value"] == "hi\n"
+
+
 def test_use_inline_with_output_mapping() -> None:
     """Output mapping works with inline orchestrations."""
     inline_yaml = yaml.dump({

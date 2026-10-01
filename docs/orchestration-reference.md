@@ -689,6 +689,16 @@ other than a JSON object, is a hard error (not silently ignored) — it is
 treated like any other tool-effect failure and follows the effect's
 `on_error` policy.
 
+A handful of keys are security boundaries a plugin enforces — today, only
+`shell`'s `allowed_commands` — and `params_json` may never set one: setting
+it there is a hard error even when the rest of the rendered JSON is valid,
+because `params_json` is runtime-built and can carry model-generated content
+(an LLM's own output feeding back into what commands it is allowed to run).
+The same key is also rejected in `params:` itself when any of its string
+entries is still a Mustache tag (e.g. `allowed_commands: ["{{cmd}}"]`)
+rather than a plain, written-down value — only a literal list counts. See
+[Tools and persistence](guidebook/13-tools-and-persistence.md).
+
 ---
 
 ### `use`

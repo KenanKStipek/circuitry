@@ -482,3 +482,42 @@ def test_doctor_exits_nonzero_on_missing_deps(monkeypatch: pytest.MonkeyPatch) -
     runner = typer.testing.CliRunner()
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 1
+
+
+def test_doctor_warns_on_group_world_readable_secrets_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#264 part 4 — cof doctor flags a loosely-permissioned config.json/.env."""
+    from circuitry.cli import config as config_module
+
+    config_module.GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    config_module.GLOBAL_CONFIG_PATH.write_text("{}", encoding="utf-8")
+    config_module.GLOBAL_CONFIG_PATH.chmod(0o644)
+
+    monkeypatch.setenv("CIRCUITRY_ENABLED_ADAPTERS", "")
+    monkeypatch.setenv("CIRCUITRY_ENABLED_TOOLS", "")
+    monkeypatch.setenv("CIRCUITRY_ENABLED_PLUGINS", "")
+    runner = typer.testing.CliRunner()
+    result = runner.invoke(app, ["doctor"])
+
+    assert "WARN" in result.output
+    assert "chmod 600" in result.output
+    assert "config.json" in result.output
+
+
+def test_doctor_does_not_warn_on_private_secrets_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from circuitry.cli import config as config_module
+
+    config_module.GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    config_module.GLOBAL_CONFIG_PATH.write_text("{}", encoding="utf-8")
+    config_module.GLOBAL_CONFIG_PATH.chmod(0o600)
+
+    monkeypatch.setenv("CIRCUITRY_ENABLED_ADAPTERS", "")
+    monkeypatch.setenv("CIRCUITRY_ENABLED_TOOLS", "")
+    monkeypatch.setenv("CIRCUITRY_ENABLED_PLUGINS", "")
+    runner = typer.testing.CliRunner()
+    result = runner.invoke(app, ["doctor"])
+
+    assert "Secrets file mode" not in result.output

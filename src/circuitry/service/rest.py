@@ -27,11 +27,22 @@ class RestTriggerService:
     def __init__(
         self,
         *,
-        auth_token: str | None,
+        auth_token: str | None = None,
+        allow_unauthenticated: bool = False,
         config: CircuitryConfig | None = None,
+        orchestration_root: Path | str | None = None,
     ) -> None:
+        if not auth_token and not allow_unauthenticated:
+            raise ValueError(
+                "RestTriggerService requires auth_token, or "
+                "allow_unauthenticated=True to explicitly opt into running "
+                "without one."
+            )
         self._auth_token = auth_token
         self._config = config
+        self._orchestration_root = (
+            Path(orchestration_root) if orchestration_root is not None else Path.cwd()
+        ).resolve()
 
     def handle_http_request(
         self,
@@ -80,9 +91,13 @@ class RestTriggerService:
         )
 
         req = RunRequest(
-            orchestration_path=Path(payload["orchestration_path"]),
+            orchestration_path=self._resolve_under_root(payload["orchestration_path"]),
             state_path=None,
-            out_path=Path(payload["out_path"]) if payload.get("out_path") else None,
+            out_path=(
+                self._resolve_under_root(payload["out_path"])
+                if payload.get("out_path")
+                else None
+            ),
             dry_run=bool(payload.get("dry_run", False)),
             validate_only=bool(payload.get("validate_only", False)),
             initial_state=initial_state,
@@ -160,6 +175,11 @@ class RestTriggerService:
         orch_path = payload.get("orchestration_path")
         if not isinstance(orch_path, str) or not orch_path.strip():
             return "Field 'orchestration_path' is required and must be a non-empty string."
+        if not self._is_confined(self._resolve_under_root(orch_path)):
+            return (
+                "Field 'orchestration_path' must resolve inside the service's "
+                f"orchestration root ({self._orchestration_root})."
+            )
 
         if "state" in payload and not isinstance(payload["state"], dict):
             return "Field 'state' must be a JSON object when provided."
@@ -168,10 +188,29 @@ class RestTriggerService:
             if bool_field in payload and not isinstance(payload[bool_field], bool):
                 return f"Field '{bool_field}' must be a boolean when provided."
 
-        if "out_path" in payload and not isinstance(payload["out_path"], str):
-            return "Field 'out_path' must be a string when provided."
+        if "out_path" in payload:
+            out_path = payload["out_path"]
+            if not isinstance(out_path, str):
+                return "Field 'out_path' must be a string when provided."
+            if not self._is_confined(self._resolve_under_root(out_path)):
+                return (
+                    "Field 'out_path' must resolve inside the service's "
+                    f"orchestration root ({self._orchestration_root})."
+                )
 
         return None
+
+    def _resolve_under_root(self, raw: str) -> Path:
+        """Resolve *raw* against ``orchestration_root`` when relative; absolute
+        paths are resolved as given. Either way, confinement is checked
+        separately via :meth:`_is_confined`."""
+        candidate = Path(raw)
+        if candidate.is_absolute():
+            return candidate.resolve()
+        return (self._orchestration_root / candidate).resolve()
+
+    def _is_confined(self, resolved: Path) -> bool:
+        return resolved.is_relative_to(self._orchestration_root)
 
     def _state_with_trigger_metadata(
         self, *, payload: dict[str, Any], request_id: str, path: str

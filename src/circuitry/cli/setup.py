@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import typer
@@ -171,12 +172,25 @@ def _build_config(
     return config
 
 
+def _write_private_file(path: Path, content: str) -> None:
+    """Write *content* to *path*, mode 0600 — may hold API keys.
+
+    ``os.open``'s mode only applies when the file is newly created, so an
+    existing file (e.g. from a `cof setup` that predates this) gets an
+    explicit ``chmod`` too, tightening whatever mode it already had.
+    """
+    fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, content.encode("utf-8"))
+    finally:
+        os.close(fd)
+    os.chmod(path, 0o600)
+
+
 def _write_config(config: dict) -> Path:
     """Write config to the global config directory."""
-    GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    GLOBAL_CONFIG_PATH.write_text(
-        json.dumps(config, indent=2) + "\n", encoding="utf-8"
-    )
+    GLOBAL_CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _write_private_file(GLOBAL_CONFIG_PATH, json.dumps(config, indent=2) + "\n")
     return GLOBAL_CONFIG_PATH
 
 
@@ -204,13 +218,13 @@ def _write_env_file(result: DetectionResult) -> Path | None:
     if not lines:
         return None
 
-    GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    GLOBAL_CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     # Append to existing .env if present
     if env_path.exists():
         existing = env_path.read_text(encoding="utf-8")
         lines = [existing.rstrip(), *lines]
 
-    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _write_private_file(env_path, "\n".join(lines) + "\n")
     return env_path
 
 

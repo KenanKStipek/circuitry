@@ -118,7 +118,7 @@ Underneath is the `host_claude` adapter, which is why the plain `cof run` is unc
 
 ## REST and scheduling
 
-`circuitry.service` carries a minimal REST trigger — `POST /v1/triggers/run` with a `state` payload, bearer-token gated — and a scheduler, both calling the same runtime. They are building blocks for embedding rather than a deployment; a service that needs them wires them into its own HTTP stack. A REST caller names the document over the network, so it runs limited to `runtime.complexity` and `runtime.state`; a scheduler job's path is the operator's own, so it is trusted like `cof run ./file.yml` unless the job sets `trust_document=False`.
+`circuitry.service` carries a minimal REST trigger — `POST /v1/triggers/run` with a `state` payload — and a scheduler, both calling the same runtime. They are building blocks for embedding rather than a deployment; a service that needs them wires them into its own HTTP stack. `RestTriggerService(auth_token=...)` requires a bearer token by default; the embedder must pass `allow_unauthenticated=True` explicitly to run without one, so there is no accidental open trigger from an unset env var. Every request's `orchestration_path` (and `out_path`, if given) is resolved and must stay inside `orchestration_root` (the service's working directory at construction, or an explicit path) — a request naming a path outside it is refused before anything runs. A REST caller names the document over the network, so it runs limited to `runtime.complexity` and `runtime.state`; a scheduler job's path is the operator's own, so it is trusted like `cof run ./file.yml` unless the job sets `trust_document=False`.
 
 ## Observability
 

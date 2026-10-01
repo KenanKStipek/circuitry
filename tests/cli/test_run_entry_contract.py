@@ -469,7 +469,7 @@ def test_rest_trigger_enforces_required_input(tmp_path: Path) -> None:
         tmp_path / "echo.yml", {"value": {"type": "string", "required": True}}
     )
 
-    svc = RestTriggerService(auth_token=None)
+    svc = RestTriggerService(allow_unauthenticated=True, orchestration_root=tmp_path)
     response = svc.handle_http_request(
         method="POST",
         path="/v1/triggers/run",
