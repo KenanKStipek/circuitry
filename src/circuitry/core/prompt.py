@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import math
-import mimetypes
 import time
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
@@ -124,14 +123,15 @@ _IMAGE_SIGNATURES = (
 )
 
 
-def _image_media_type(data: bytes, path: str) -> str | None:
+def _image_media_type(data: bytes) -> str | None:
     for signature, media_type in _IMAGE_SIGNATURES:
         if data.startswith(signature):
             return media_type
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
-    guessed, _ = mimetypes.guess_type(path)
-    return guessed if guessed and guessed.startswith("image/") else None
+    # Only the bytes decide, never the file name: a non-image named x.png must not
+    # be sent, and these four formats are all the providers take.
+    return None
 
 
 def _load_image(ref: str) -> tuple[ImageInput, dict[str, Any]]:
@@ -149,7 +149,7 @@ def _load_image(ref: str) -> tuple[ImageInput, dict[str, Any]]:
         data = path.read_bytes()
     except OSError as e:
         raise ValueError(f"image asset {ref!r} could not be read: {e}") from e
-    media_type = _image_media_type(data, ref)
+    media_type = _image_media_type(data)
     if media_type is None:
         raise ValueError(f"image asset {ref!r} is not a PNG, JPEG, GIF or WebP image")
     record = {

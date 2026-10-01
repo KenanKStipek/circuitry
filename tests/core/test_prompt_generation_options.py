@@ -215,6 +215,22 @@ def test_a_missing_image_fails_the_effect(tmp_path: Path) -> None:
     assert adapter.calls == []
 
 
+def test_a_file_named_like_an_image_is_not_sent_unless_it_is_one(tmp_path: Path) -> None:
+    fake = tmp_path / "notes.svg"
+    fake.write_text("not an image: a private note")
+    adapter = RecordingAdapter()
+    node = _run(
+        {
+            "template": "What is this?",
+            "assets": [{"kind": "image", "ref": str(fake)}],
+            "on_error": "continue",
+        },
+        adapter,
+    )
+    assert "is not a PNG, JPEG, GIF or WebP image" in node["meta"]["error"]
+    assert adapter.calls == []
+
+
 def test_a_non_image_asset_is_skipped_with_a_warning(tmp_path: Path) -> None:
     adapter = RecordingAdapter()
     node = _run(
