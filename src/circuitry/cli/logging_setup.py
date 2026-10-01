@@ -33,3 +33,20 @@ def configure_cli_logging(*, verbose: bool = False) -> None:
     _handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
     logger.addHandler(_handler)
     logger.setLevel(logging.INFO if verbose else logging.WARNING)
+
+
+def reset_cli_logging() -> None:
+    """Undo `configure_cli_logging`: for a command (`cof mcp`) that wires up
+    its own logging via `logging.basicConfig` on the root logger.
+
+    Without this, a `circuitry.*` warning reaches both this handler and the
+    root logger's (since `circuitry` still propagates) and prints twice; and
+    the `circuitry` logger's own WARNING level, left in place, blocks an INFO
+    record from ever being created, let alone reaching the root handler.
+    """
+    global _handler
+    logger = logging.getLogger(_LOGGER_NAME)
+    if _handler is not None:
+        logger.removeHandler(_handler)
+        _handler = None
+    logger.setLevel(logging.NOTSET)

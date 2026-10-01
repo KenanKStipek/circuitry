@@ -162,6 +162,20 @@ def _read_state_file(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _print_missing_state_file_error(exc: FileNotFoundError, *, json_out: bool) -> None:
+    """Report a missing `--state` file the same way a failed run does, so
+    `--json` output stays valid JSON on this (`--state ... -e ...`) early-exit
+    path too, not just the one `run()` itself reaches."""
+    if json_out:
+        console.print_json(
+            json.dumps(
+                {"ok": False, "error": str(exc), "warnings": [], "state_out": None}
+            )
+        )
+    else:
+        console.print(f"[red]Error:[/red] {exc}")
+
+
 def _parse_env_vars(env_vars: list[str] | None) -> dict[str, Any]:
     """Parse -e KEY=VALUE entries into a state dict."""
     if not env_vars:
@@ -178,6 +192,45 @@ def _parse_env_vars(env_vars: list[str] | None) -> dict[str, Any]:
         except (json.JSONDecodeError, ValueError):
             result[key] = value
     return result
+
+
+def _raw_env_var_text(env_vars: list[str] | None) -> dict[str, str]:
+    """Each `-e KEY=VALUE`'s exact text, keyed by KEY — what `_parse_env_vars`
+    sees before JSON-sniffing it into a number/boolean/structured value.
+    """
+    if not env_vars:
+        return {}
+    return dict(entry.split("=", 1) for entry in env_vars if "=" in entry)
+
+
+def _restore_raw_text_for_string_inputs(
+    inline: dict[str, Any], raw: dict[str, str], orch_path: Path
+) -> None:
+    """Give back the exact `-e` text for any key `interface.inputs` declares
+    `type: string`, undoing `_parse_env_vars`'s JSON-sniffing for it — so
+    `-e start=06` keeps "06", `-e x=1.50` keeps its trailing zero, and
+    `-e drawn=true` keeps its exact case, instead of round-tripping through
+    a parsed int/float/bool first.
+
+    Best-effort: an orchestration that fails to load here still runs (and
+    fails, with its own error) through the normal path below — this peek
+    only restores fidelity, it never blocks the run.
+    """
+    try:
+        doc = load_orchestration_file(orch_path)
+    except Exception:
+        return
+    if not isinstance(doc, dict):
+        return
+    iface = doc.get("interface")
+    if not isinstance(iface, dict):
+        return
+    iface_inputs = iface.get("inputs")
+    if not isinstance(iface_inputs, dict):
+        return
+    for key, spec in iface_inputs.items():
+        if isinstance(spec, dict) and spec.get("type") == "string" and key in raw:
+            inline[key] = raw[key]
 
 
 def _apply_inline_overrides(
@@ -676,11 +729,12 @@ def run_cmd(
     initial_state: dict[str, Any] | None = None
     inline = _parse_env_vars(env_vars)
     if inline:
+        _restore_raw_text_for_string_inputs(inline, _raw_env_var_text(env_vars), orch_path)
         if state:
             try:
                 initial_state = _read_state_file(state)
             except FileNotFoundError as exc:
-                console.print(f"[red]Error:[/red] {exc}")
+                _print_missing_state_file_error(exc, json_out=json_out)
                 raise typer.Exit(code=1) from exc
             initial_state = _apply_inline_overrides(initial_state, inline)
         else:
@@ -963,11 +1017,12 @@ def run_library_cmd(
     initial_state: dict[str, Any] | None = None
     inline = _parse_env_vars(env_vars)
     if inline:
+        _restore_raw_text_for_string_inputs(inline, _raw_env_var_text(env_vars), asset.file_path)
         if state:
             try:
                 initial_state = _read_state_file(state)
             except FileNotFoundError as exc:
-                console.print(f"[red]Error:[/red] {exc}")
+                _print_missing_state_file_error(exc, json_out=json_out)
                 raise typer.Exit(code=1) from exc
             initial_state = _apply_inline_overrides(initial_state, inline)
         else:
@@ -2026,7 +2081,13 @@ def mcp_cmd():
     chat session. See `.claude/commands/cof.md` for the full tool-loop docs.
     """
     from ..mcp.server import main as _mcp_main
+    from .logging_setup import reset_cli_logging
 
+    # The MCP server configures its own root-logger handler (stdout is MCP
+    # framing) — undo this command's own `circuitry` logger handler/level
+    # first, or a warning prints twice and INFO never reaches it (see
+    # `reset_cli_logging`).
+    reset_cli_logging()
     _mcp_main()
 
 

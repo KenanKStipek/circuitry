@@ -338,6 +338,14 @@ def run(req: RunRequest) -> RunResult:
 
         state.setdefault("runtime", {})
         run_id = str(uuid4())
+        # Assigned here, immediately, rather than right before execution:
+        # `on_run_start` plugins and preflight both run before that point, and
+        # a run that fails before then (preflight, adapter resolution) still
+        # writes `--out` — every one of those should see this run's own fresh
+        # id/timestamp next to `runtime.last_run.run_id`, not the previous
+        # run's (`--state`/persistence carryover).
+        state["_run_id"] = run_id
+        state["_timestamp"] = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         state["runtime"]["last_run"] = {
             "run_id": run_id,
             "orchestration_path": str(req.orchestration_path),
@@ -487,13 +495,6 @@ def run(req: RunRequest) -> RunResult:
                     + ". Re-run with --skip-preflight to bypass."
                 )
             warnings.extend(format_preflight_warnings(soft_results))
-
-        # Inject built-in template variables available in all orchestrations.
-        # Assigned unconditionally (not setdefault): a run started from a
-        # previous run's saved state (--state, or a persisted snapshot) must
-        # get its own fresh id/timestamp, not inherit the first run's.
-        state["_run_id"] = run_id
-        state["_timestamp"] = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
         # Execute using core runtime against Store
         callbacks: list[Callable[[dict[str, Any]], None]] = []

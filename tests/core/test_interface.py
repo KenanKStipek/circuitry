@@ -185,6 +185,95 @@ def test_interface_no_interface_works_normally(tmp_path: Path) -> None:
     assert store.state["sub"]["step"]["value"] is not None
 
 
+# ── Interface: default:, type coercion for a use: child's own inputs ───────
+
+
+def test_interface_child_default_applied_when_input_omitted(tmp_path: Path) -> None:
+    """A declared `default:` fills in a use: child input the caller omits."""
+    child_orch = {
+        "interface": {"inputs": {"max_words": {"type": "number", "default": 42}}},
+        "effects": [
+            {
+                "type": "tool",
+                "name": "echo",
+                "provider": "json",
+                "params": {"mode": "stringify", "input": "{{input.max_words}}"},
+            }
+        ],
+    }
+    child_path = _write_orch(tmp_path, "child.yml", child_orch)
+
+    defn = UseDefinition(name="sub", orchestration=str(child_path), inputs={})
+    store = Store(state={})
+    UseRuntime(defn, adapter=_mock_adapter(), model="test-model").execute(
+        store=store, ctx=store.state
+    )
+
+    assert store.state["sub"]["echo"]["value"] == '"42"'
+
+
+def test_interface_child_rendered_string_coerced_to_declared_number(tmp_path: Path) -> None:
+    """A use: input renders as text even when it's meant to be a number —
+    the declared `type` still coerces it, same as a top-level run's `-e`."""
+    child_orch = {
+        "interface": {"inputs": {"max_words": {"type": "number"}}},
+        "effects": [
+            {
+                "type": "tool",
+                "name": "echo",
+                "provider": "json",
+                "params": {"mode": "stringify", "input": "{{input.max_words}}"},
+            }
+        ],
+    }
+    child_path = _write_orch(tmp_path, "child.yml", child_orch)
+
+    defn = UseDefinition(name="sub", orchestration=str(child_path), inputs={"max_words": "7"})
+    store = Store(state={})
+    UseRuntime(defn, adapter=_mock_adapter(), model="test-model").execute(
+        store=store, ctx=store.state
+    )
+
+    # A value truly coerced to int 7 stringifies to "7"; left as text "7" it
+    # would render identically here, so this alone isn't conclusive — the
+    # top-level `-e` test (test_cli_dash_e_string_coerced_to_declared_number)
+    # checks the leading-zero case that does distinguish them. This test's
+    # job is only to confirm the child path doesn't reject a declared-number
+    # input that crosses as text.
+    assert store.state["sub"]["echo"]["value"] == '"7"'
+
+
+def test_interface_child_array_input_rendered_as_mustache_string_fails_conversion(
+    tmp_path: Path,
+) -> None:
+    """A plain (non-`{from:}`) Mustache value for a declared `array` input
+    renders via Python repr, not JSON, so the declared-type coercion fails
+    with a clear error rather than silently passing the child a malformed
+    string."""
+    child_orch = {
+        "interface": {"inputs": {"items": {"type": "array"}}},
+        "effects": [
+            {
+                "type": "tool",
+                "name": "echo",
+                "provider": "json",
+                "params": {"mode": "stringify", "input": "{{input.items}}"},
+            }
+        ],
+    }
+    child_path = _write_orch(tmp_path, "child.yml", child_orch)
+
+    defn = UseDefinition(
+        name="sub", orchestration=str(child_path), inputs={"items": "{{parent_list}}"}
+    )
+    store = Store(state={"parent_list": ["a", "b"]})
+
+    with pytest.raises(RuntimeError, match=r"input 'items'.*could not be converted"):
+        UseRuntime(defn, adapter=_mock_adapter(), model="test-model").execute(
+            store=store, ctx=store.state
+        )
+
+
 # ── Schema validation ────────────────────────────────────────────────────────
 
 

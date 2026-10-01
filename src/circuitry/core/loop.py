@@ -509,21 +509,26 @@ class LoopRuntime:
                     # (iteration_count reached the cap) without any break
                     # setting a different reason — the cap stopped the loop,
                     # not the while-condition converging. Distinguishable from
-                    # a converged run only here, so surface it loudly.
-                    logger.warning(
-                        "Loop %r: stopped after %d iterations because "
-                        "max_iterations (%d) was reached, not because the "
-                        "while-condition became false",
-                        self.defn.name or "<unnamed>",
-                        iteration_count,
-                        self.defn.max_iterations,
-                    )
+                    # a converged run only here, so surface it loudly — via
+                    # the console under --verbose (nicer formatting, already
+                    # the user-facing channel for this flag), or `logger`
+                    # otherwise so it still reaches the CLI's stderr handler;
+                    # never both, or the same message doubles up on screen.
                     if self.verbose:
                         _console.print(
                             f"[warn]⚠[/warn] Loop {self.defn.name or '<unnamed>'!r} "
                             f"stopped after {iteration_count} iterations: "
                             f"max_iterations ({self.defn.max_iterations}) reached "
                             f"without the while-condition becoming false"
+                        )
+                    else:
+                        logger.warning(
+                            "Loop %r: stopped after %d iterations because "
+                            "max_iterations (%d) was reached, not because the "
+                            "while-condition became false",
+                            self.defn.name or "<unnamed>",
+                            iteration_count,
+                            self.defn.max_iterations,
                         )
 
             if node:

@@ -81,6 +81,32 @@ def test_run_id_and_timestamp_fresh_across_state_carryover(tmp_path: Path) -> No
     assert second.state["prime"]["stamp"]["value"] != first.state["prime"]["stamp"]["value"]
 
 
+def test_cli_run_id_and_timestamp_fresh_across_real_state_file(tmp_path: Path) -> None:
+    """Same as above but through the CLI's actual `--state <file>` path
+    (`runtime_shim._load_state` reading JSON off disk), not `initial_state=`
+    handed to `run()` in-process directly."""
+    orch_path = _stamp_orch(tmp_path / "stamp.yml")
+    state_path = tmp_path / "first-out.json"
+
+    first_result = runner.invoke(app, ["run", str(orch_path), "--out", str(state_path)])
+    assert first_result.exit_code == 0, first_result.output
+    first_payload = json.loads(state_path.read_text(encoding="utf-8"))
+
+    second_out = tmp_path / "second-out.json"
+    second_result = runner.invoke(
+        app,
+        ["run", str(orch_path), "--state", str(state_path), "--out", str(second_out)],
+    )
+    assert second_result.exit_code == 0, second_result.output
+    second_payload = json.loads(second_out.read_text(encoding="utf-8"))
+
+    assert second_payload["_run_id"] != first_payload["_run_id"]
+    assert (
+        second_payload["prime"]["stamp"]["value"]
+        != first_payload["prime"]["stamp"]["value"]
+    )
+
+
 def test_run_id_and_timestamp_fresh_on_persistence_resume(tmp_path: Path) -> None:
     orch_path = _stamp_orch(tmp_path / "stamp.yml")
     log_path = tmp_path / "runs.jsonl"
@@ -96,9 +122,10 @@ def test_run_id_and_timestamp_fresh_on_persistence_resume(tmp_path: Path) -> Non
     assert second.state["runtime"]["persistence"]["loaded_from_persistence"] is True
 
     assert second.state["_run_id"] != first.state["_run_id"]
-    assert second.state["_timestamp"] != first.state["_timestamp"] or (
-        second.state["_run_id"] != first.state["_run_id"]
-    )
+    # `_timestamp` has second granularity (`%Y%m%d_%H%M%S`): two runs this
+    # close together can legitimately land on the same second, so it isn't
+    # asserted to differ on its own — `_run_id` already proves this run's
+    # values are freshly assigned, not carried over from persistence.
     assert second.state["prime"]["stamp"]["value"] != first.state["prime"]["stamp"]["value"]
 
 
@@ -146,6 +173,25 @@ def test_cli_missing_state_file_with_inline_override_is_also_a_clean_error(
     assert result.exit_code == 1
     assert "Traceback" not in result.output
     assert "state file not found" in result.output
+
+
+def test_cli_missing_state_file_with_inline_override_is_clean_json_under_dash_json(
+    tmp_path: Path,
+) -> None:
+    """Same combined `--state missing.json -e k=v` path, but with `--json`:
+    the error must still land in a valid JSON payload on stdout, not a plain
+    `[red]Error:[/red]` line that would break a `--json` caller's parser."""
+    orch_path = _stamp_orch(tmp_path / "stamp.yml")
+    missing = tmp_path / "does_not_exist.json"
+
+    result = runner.invoke(
+        app, ["run", str(orch_path), "--state", str(missing), "-e", "k=v", "--json"]
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert "state file not found" in payload["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +246,106 @@ def test_type_mismatch_rejected_at_top_level_run(tmp_path: Path) -> None:
     assert result.ok is False
     assert "input 'value'" in (result.error or "")
     assert "number" in (result.error or "")
+
+
+def _process_style_orch(path: Path) -> Path:
+    """A fixture with `process.yml`'s own string-typed optional inputs
+    (start/duration/drawn) — not the owner's file itself — for exercising
+    the exact `cof run circuits/process.yml -e file=<video> -e start=<s>
+    -e duration=<s> -e drawn=true|false` command shape from its README."""
+    import yaml
+
+    doc = {
+        "interface": {
+            "inputs": {
+                "start": {"type": "string", "required": False},
+                "duration": {"type": "string", "required": False},
+                "drawn": {"type": "string", "required": False},
+            }
+        },
+        "effects": [
+            {
+                "type": "tool",
+                "name": "echo",
+                "provider": "json",
+                "params": {
+                    "mode": "stringify",
+                    "input": "{{input.start}}|{{input.duration}}|{{input.drawn}}",
+                },
+            }
+        ],
+    }
+    path.write_text(yaml.dump(doc), encoding="utf-8")
+    return path
+
+
+def test_cli_process_yml_style_string_inputs_keep_exact_typed_text(tmp_path: Path) -> None:
+    """The owner's documented command keeps working exactly as typed: a
+    declared `type: string` input given a number- or boolean-looking `-e`
+    value (`start=6`, `duration=0.24`, `drawn=true`) gets back precisely
+    what was typed, not a value round-tripped through `_parse_env_vars`'s
+    JSON-sniffing and re-stringified."""
+    orch_path = _process_style_orch(tmp_path / "process_style.yml")
+
+    result = runner.invoke(
+        app,
+        [
+            "run", str(orch_path),
+            "-e", "start=6",
+            "-e", "duration=0.24",
+            "-e", "drawn=true",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["input"]["start"] == "6"
+    assert payload["input"]["duration"] == "0.24"
+    assert payload["input"]["drawn"] == "true"
+
+
+def test_cli_dash_e_string_input_keeps_leading_and_trailing_zeros(tmp_path: Path) -> None:
+    """The fidelity case JSON-sniffing-then-coerce loses and raw-text
+    restoration doesn't: a leading zero (`06`) and a trailing zero (`1.50`)
+    both survive only if the CLI kept the exact typed text rather than
+    parsing to int/float first."""
+    orch_path = _process_style_orch(tmp_path / "process_style.yml")
+
+    result = runner.invoke(
+        app,
+        ["run", str(orch_path), "-e", "start=06", "-e", "duration=1.50", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["input"]["start"] == "06"
+    assert payload["input"]["duration"] == "1.50"
+
+
+def test_optional_input_resolved_to_null_treated_as_absent(tmp_path: Path) -> None:
+    """A present-but-null value (e.g. an unresolved `{from:}` reference, or
+    `-e x=null`) on an optional input is treated the same as a missing key:
+    the `default:` fills in rather than failing the type check."""
+    orch_path = _echo_orch(
+        tmp_path / "echo.yml", {"value": {"type": "array", "default": [1, 2]}}
+    )
+
+    result = _run(orch_path, initial_state={"input": {"value": None}})
+
+    assert result.ok is True, result.error
+    assert result.state["input"]["value"] == [1, 2]
+
+
+def test_optional_input_resolved_to_null_without_default_is_dropped(tmp_path: Path) -> None:
+    """Same, but with no `default:` — the null key is dropped rather than
+    failing the type check with 'got NoneType'."""
+    orch_path = _echo_orch(tmp_path / "echo.yml", {"value": {"type": "array"}})
+
+    result = _run(orch_path, initial_state={"input": {"value": None}})
+
+    assert result.ok is True, result.error
+    assert "value" not in result.state["input"]
 
 
 def test_cli_dash_e_string_coerced_to_declared_number(tmp_path: Path) -> None:
@@ -388,3 +534,34 @@ def test_warning_on_stderr_does_not_dirty_json_stdout(tmp_path: Path) -> None:
     assert "Skipping malformed global config" in result.stderr
     payload = json.loads(result.stdout)  # raises if stdout isn't clean JSON
     assert payload["prime"]["stamp"]["value"]
+
+
+def test_mcp_command_resets_cli_logging_before_launching_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`cof mcp` wires its own root-logger handler (`mcp/server.py`'s
+    `logging.basicConfig`) — the CLI's own stderr handler and WARNING level
+    on the `circuitry` logger (set by `_root` before every command) must be
+    gone by the time it runs, or a `circuitry.*` warning prints twice (once
+    via each handler) and an INFO record never gets created in the first
+    place."""
+    import logging
+
+    import circuitry.mcp.server as mcp_server_module
+
+    logger = logging.getLogger("circuitry")
+    seen: dict[str, bool] = {}
+
+    def fake_main() -> None:
+        seen["ran"] = True
+        assert logger.level == logging.NOTSET
+        # The module-level `NullHandler` from `circuitry/__init__.py` stays
+        # — only the CLI's own stderr `StreamHandler` must be gone.
+        assert not any(isinstance(h, logging.StreamHandler) for h in logger.handlers)
+
+    monkeypatch.setattr(mcp_server_module, "main", fake_main)
+
+    result = runner.invoke(app, ["mcp"])
+
+    assert result.exit_code == 0, result.output
+    assert seen.get("ran") is True

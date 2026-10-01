@@ -14,6 +14,11 @@ from typing import Any
 
 _TYPE_NAMES = ("string", "number", "boolean", "array", "object")
 
+# Matches tui/launch.py's _TRUE_WORDS/_FALSE_WORDS so a boolean input reads
+# the same lenient words (CLI -e, use: child) wherever it's declared.
+_TRUE_WORDS = frozenset({"true", "t", "yes", "y", "on", "1"})
+_FALSE_WORDS = frozenset({"false", "f", "no", "n", "off", "0"})
+
 
 def _matches_type(value: Any, declared_type: str) -> bool:
     if declared_type == "string":
@@ -45,9 +50,9 @@ def _coerce(raw: str, declared_type: str) -> Any:
             return float(raw)
     if declared_type == "boolean":
         lowered = raw.strip().lower()
-        if lowered in ("true", "1"):
+        if lowered in _TRUE_WORDS:
             return True
-        if lowered in ("false", "0"):
+        if lowered in _FALSE_WORDS:
             return False
         raise ValueError(f"{raw!r} is not a boolean")
     if declared_type in ("array", "object"):
@@ -80,21 +85,37 @@ def check_interface_inputs(
     for key, spec in iface_inputs.items():
         if not isinstance(spec, dict):
             continue
-        if key not in inputs:
+        # A present-but-null value (an unresolved `{from: ...}` reference, a
+        # `-e x=null`, a state file's `"x": null`) is treated the same as an
+        # absent key: the default fills in, or the key is dropped so an
+        # optional input goes back to not being passed at all.
+        absent = key not in inputs or inputs[key] is None
+        if absent:
             if "default" in spec:
+                # Falls through to the type check below rather than
+                # `continue`-ing past it, so a default that doesn't match
+                # its own declared `type` is still caught.
                 inputs[key] = deepcopy(spec["default"])
             elif spec.get("required"):
                 raise ValueError(
                     f"{label}missing required input '{key}' declared in "
                     "orchestration interface."
                 )
-            continue
+            else:
+                inputs.pop(key, None)
+                continue
 
         declared_type = spec.get("type")
         if not isinstance(declared_type, str) or declared_type not in _TYPE_NAMES:
             continue
         value = inputs[key]
         if _matches_type(value, declared_type):
+            continue
+        # A declared `string` input commonly arrives as a CLI `-e`/Mustache
+        # value JSON parsed into a number or boolean (`-e start=10`,
+        # `-e drawn=true`) — convert it back to text rather than rejecting it.
+        if declared_type == "string" and isinstance(value, (int, float, bool)):
+            inputs[key] = json.dumps(value)
             continue
         if isinstance(value, str):
             try:
