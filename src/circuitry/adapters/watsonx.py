@@ -32,7 +32,7 @@ from typing import Any
 
 from ..preflight import CheckResult
 from ._curl_errors import curl_failure_message
-from .base import GenerateResult
+from .base import GenerateOptions, GenerateResult, ignored_options_warning
 
 # Module-level token cache: api_key -> (token, expires_at_epoch_seconds).
 # A 5-minute buffer is subtracted from the IAM-reported lifetime so we
@@ -114,7 +114,12 @@ class WatsonXAdapter:
         return f"https://{region}.ml.cloud.ibm.com"
 
     def generate(
-        self, *, model: str, prompt: str, timeout_seconds: int = 120
+        self,
+        *,
+        model: str,
+        prompt: str,
+        timeout_seconds: int = 120,
+        options: GenerateOptions | None = None,
     ) -> GenerateResult:
         api_key = os.environ.get("WATSONX_API_KEY", "")
         if not api_key:
@@ -197,6 +202,7 @@ class WatsonXAdapter:
             tokens_received=int(tokens_received)
             if isinstance(tokens_received, int)
             else None,
+            warnings=ignored_options_warning(self.name, options),
         )
 
     def check(self) -> CheckResult:

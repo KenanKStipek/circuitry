@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import ClassVar
 
 from ..preflight import CheckResult
 from ._openai_compat import (
@@ -29,11 +30,12 @@ from ._openai_compat import (
     chat_completion,
     check_dependencies,
 )
-from .base import GenerateResult
+from .base import GenerateOptions, GenerateResult
 
 
 @dataclass(frozen=True)
 class AzureOpenAIAdapter:
+    accepts_images: ClassVar[bool] = True
     name: str = "azure-openai"
     endpoint: str = ""  # e.g. "https://my-resource.openai.azure.com"
     api_version: str = "2024-10-21"
@@ -58,7 +60,12 @@ class AzureOpenAIAdapter:
         )
 
     def generate(
-        self, *, model: str, prompt: str, timeout_seconds: int = 120
+        self,
+        *,
+        model: str,
+        prompt: str,
+        timeout_seconds: int = 120,
+        options: GenerateOptions | None = None,
     ) -> GenerateResult:
         cfg = self._cfg()
         if not cfg.base_url:
@@ -76,6 +83,7 @@ class AzureOpenAIAdapter:
             model=model,
             prompt=prompt,
             timeout_seconds=timeout_seconds,
+            options=options,
             extra_headers={"api-key": api_key},
         )
 

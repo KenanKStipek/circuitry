@@ -49,6 +49,7 @@ def test_chat_completion_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         captured["cmd"] = cmd
+        captured["input"] = kwargs.get("input")
         return FakeProc(returncode=0, stdout=_ok_payload("hi from gemini"))
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -68,7 +69,7 @@ def test_chat_completion_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     # endpoint + auth + JSON body all built correctly
     assert cmd[-1] == "https://example.test/v1/chat/completions"
     assert "Authorization: Bearer test-key" in cmd
-    assert any("gemini-2.5-pro" in c for c in cmd if c.startswith("{"))
+    assert json.loads(captured["input"])["model"] == "gemini-2.5-pro"
 
 
 def test_chat_completion_missing_api_key_raises(
