@@ -4,7 +4,6 @@ import base64
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import time
@@ -15,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..curl_support import curl_failure_message, run_curl
 from ..preflight import CheckResult
 from .base import ToolResult
 
@@ -113,35 +113,28 @@ class ComfyUIPlugin:
         payload: dict[str, Any] | None = None,
         timeout_seconds: int = 30,
     ) -> dict[str, Any]:
-        cmd = [
-            "curl",
-            "--silent",
-            "--show-error",
-            "--fail-with-body",
-            "--max-time",
-            str(int(timeout_seconds)),
-        ]
-
+        headers: dict[str, str] = {}
+        body: str | None = None
         if method.upper() == "POST":
-            cmd += [
-                "-H",
-                "Content-Type: application/json",
-                "-d",
-                json.dumps(payload or {}),
-            ]
-
-        cmd.append(url)
+            headers["Content-Type"] = "application/json"
+            body = json.dumps(payload or {})
 
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            proc = run_curl(
+                url=url, headers=headers, data=body, timeout_seconds=timeout_seconds
+            )
         except FileNotFoundError as e:
             raise RuntimeError("curl is not installed or not on PATH") from e
 
         if proc.returncode != 0:
-            cmd_str = " ".join(shlex.quote(c) for c in cmd)
-            err = (proc.stderr or proc.stdout or "").strip()
             raise RuntimeError(
-                f"curl failed (exit {proc.returncode}). cmd={cmd_str}. error={err}"
+                curl_failure_message(
+                    source="comfyui",
+                    url=url,
+                    returncode=proc.returncode,
+                    stdout=proc.stdout,
+                    stderr=proc.stderr,
+                )
             )
 
         try:
@@ -154,6 +147,7 @@ class ComfyUIPlugin:
     def _curl_bytes(self, *, url: str, timeout_seconds: int = 60) -> bytes:
         cmd = [
             "curl",
+            "-q",
             "--silent",
             "--show-error",
             "--fail-with-body",
@@ -168,10 +162,14 @@ class ComfyUIPlugin:
             raise RuntimeError("curl is not installed or not on PATH") from e
 
         if proc.returncode != 0:
-            cmd_str = " ".join(shlex.quote(c) for c in cmd)
-            err = (proc.stderr or b"").decode(errors="replace").strip()
             raise RuntimeError(
-                f"curl failed (exit {proc.returncode}). cmd={cmd_str}. error={err}"
+                curl_failure_message(
+                    source="comfyui",
+                    url=url,
+                    returncode=proc.returncode,
+                    stdout="",
+                    stderr=(proc.stderr or b"").decode(errors="replace"),
+                )
             )
 
         return proc.stdout
@@ -186,8 +184,10 @@ class ComfyUIPlugin:
         """Upload a local image to ComfyUI's input folder. Returns the uploaded filename."""
         resolved_path = _validate_image_path(image_path)
         base = self.base_url.rstrip("/")
+        url = f"{base}/upload/image"
         cmd = [
             "curl",
+            "-q",
             "--silent",
             "--show-error",
             "--fail-with-body",
@@ -197,7 +197,7 @@ class ComfyUIPlugin:
             "-F", f"image=@{resolved_path}",
             "-F", "type=input",
             "-F", "overwrite=true",
-            f"{base}/upload/image",
+            url,
         ]
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -205,10 +205,15 @@ class ComfyUIPlugin:
             raise RuntimeError("curl is not installed or not on PATH") from e
 
         if proc.returncode != 0:
-            cmd_str = " ".join(shlex.quote(c) for c in cmd)
-            err = (proc.stderr or proc.stdout or "").strip()
             raise RuntimeError(
-                f"curl failed uploading image (exit {proc.returncode}). cmd={cmd_str}. error={err}"
+                curl_failure_message(
+                    source="comfyui",
+                    url=url,
+                    returncode=proc.returncode,
+                    stdout=proc.stdout,
+                    stderr=proc.stderr,
+                    hint="(uploading image)",
+                )
             )
 
         try:

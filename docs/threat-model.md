@@ -80,9 +80,10 @@ because no shell layer interprets them.
 and image-directory parameters go through `_validate_image_dir()` at
 [`comfyui.py:59`](../src/circuitry/plugins/comfyui.py). These reject paths
 escaping the configured working area. The HTTP transport uses standard
-`subprocess.run(list_args)` shape at
-[`comfyui.py:135, 165, 202`](../src/circuitry/plugins/comfyui.py) — no
-shell.
+`subprocess.run(list_args)` shape — no shell — and goes through the same
+[`circuitry/curl_support.py`](../src/circuitry/curl_support.py) plumbing
+described below, so its workflow payload (which embeds the rendered prompt)
+never lands on the curl command line either.
 
 **Residual risk.** A user-authored plugin not bundled with Circuitry has no
 forced sandbox and can do whatever Python lets it do. The `ToolPlugin`
@@ -96,21 +97,34 @@ from the process environment by each adapter. The reads happen at adapter
 instantiation, so a missing key fails loudly with a hint instead of silently
 sending an unauthenticated request.
 
-**Mitigation — error masking.** Every curl-based adapter (`openai`,
-`anthropic`, `ollama`, `replicate`, `watsonx`, and the ~20 providers that
-share transport via
+**Mitigation — curl never puts a secret or a body on its own command
+line.** Every curl-based adapter (`openai`, `anthropic`, `ollama`,
+`replicate`, `watsonx` — including its IAM token exchange — and the ~20
+providers that share transport via
 [`adapters/_openai_compat.py`](../src/circuitry/adapters/_openai_compat.py))
-raises through
-[`adapters/_curl_errors.py`](../src/circuitry/adapters/_curl_errors.py),
-which never echoes the curl command line — the one place an
-`Authorization`/`api-key`/Bearer header value could leak — and instead
-reports the adapter, model, target URL (credential-free) and a parsed form
-of the provider's error body. Credential values passed on the request are
-also stripped from that body/stderr text as a second layer, in case a
-provider ever echoes back what it was sent. `meta.error` and
-`meta.fallback_attempts[].error`, which land in run state on every prompt
-failure, are additionally passed through the redaction helper (below)
-before being stored.
+and curl-based tool plugin (`comfyui`, `web_search`, `weather`) shells out
+through [`circuitry/curl_support.py`](../src/circuitry/curl_support.py)'s
+`run_curl()`, which always passes `-q` first (so a local user's
+`~/.curlrc` can't silently redirect output or inject a proxy), sends the
+request body on stdin via `--data-binary @-` instead of `-d`/`-F` on argv
+(this also removes Linux's 128 KiB-per-argument ceiling for a large prompt
+or base64 image), and sends every header — `Authorization`, `x-api-key`,
+any provider-specific credential header — through an inherited pipe file
+descriptor via `--config /dev/fd/<n>` rather than `-H`. None of this is
+ever visible in `ps` for the duration of the call.
+
+**Mitigation — error masking.** Every curl failure raises through
+[`circuitry/curl_support.py`](../src/circuitry/curl_support.py)'s
+`curl_failure_message()`, which never echoes the curl command line — the
+one place a secret could otherwise have leaked before the mitigation
+above — and instead reports the adapter/plugin name, model (adapters
+only), target URL (userinfo stripped, credential-like query parameters
+such as a search API key masked) and a parsed form of the provider's error
+body. Credential values passed on the request are also stripped from that
+body/stderr text as a second layer, in case a provider ever echoes back
+what it was sent. `meta.error` and `meta.fallback_attempts[].error`, which
+land in run state on every prompt failure, are additionally passed through
+the redaction helper (below) before being stored.
 
 **Mitigation — state serialization.** The `runtime.effective_settings`
 snapshot embedded in run state (and surfaced via `--out`, `--json`,

@@ -23,11 +23,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 from dataclasses import dataclass
 
+from ..curl_support import curl_failure_message, run_curl
 from ..preflight import CheckResult
-from ._curl_errors import curl_failure_message
 from .base import GenerateOptions, GenerateResult, ignored_options_warning
 
 
@@ -62,33 +61,24 @@ class ReplicateAdapter:
         url = f"{self.base_url.rstrip('/')}/models/{target_model}/predictions"
         payload = {"input": {"prompt": prompt}}
 
-        cmd = [
-            "curl",
-            "--silent",
-            "--show-error",
-            "--fail-with-body",
-            "--max-time",
-            str(int(timeout_seconds)),
-            "-H",
-            "Content-Type: application/json",
-            "-H",
-            f"Authorization: Bearer {api_token}",
-            "-H",
-            f"Prefer: wait={wait}",
-            "-d",
-            json.dumps(payload),
-            url,
-        ]
-
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            proc = run_curl(
+                url=url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_token}",
+                    "Prefer": f"wait={wait}",
+                },
+                data=json.dumps(payload),
+                timeout_seconds=timeout_seconds,
+            )
         except FileNotFoundError as exc:
             raise RuntimeError("curl is not installed or not on PATH") from exc
 
         if proc.returncode != 0:
             raise RuntimeError(
                 curl_failure_message(
-                    adapter="replicate",
+                    source="replicate",
                     model=target_model,
                     url=url,
                     returncode=proc.returncode,

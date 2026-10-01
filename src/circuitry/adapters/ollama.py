@@ -7,8 +7,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
+from ..curl_support import curl_failure_message, parse_error_body, run_curl
 from ..preflight import CheckResult
-from ._curl_errors import curl_failure_message, parse_error_body
 from .base import (
     DETERMINISTIC_SEED,
     GenerateOptions,
@@ -87,27 +87,15 @@ class OllamaAdapter:
         timeout_seconds: int = 120,
         model: str | None = None,
     ) -> dict[str, Any]:
-        cmd = [
-            "curl",
-            "--silent",
-            "--show-error",
-            "--fail-with-body",
-            "--max-time",
-            str(int(timeout_seconds)),
-        ]
-
-        # The body goes on stdin: with base64 images it can outgrow the
-        # argv size limit (128 KiB per argument on Linux).
+        headers: dict[str, str] = {}
         body: str | None = None
         if method.upper() == "POST":
             body = json.dumps(payload or {})
-            cmd += ["-H", "Content-Type: application/json", "--data-binary", "@-"]
-
-        cmd.append(url)
+            headers["Content-Type"] = "application/json"
 
         try:
-            proc = subprocess.run(
-                cmd, input=body, capture_output=True, text=True, check=False
+            proc = run_curl(
+                url=url, headers=headers, data=body, timeout_seconds=timeout_seconds
             )
         except FileNotFoundError as e:
             raise RuntimeError("curl is not installed or not on PATH") from e
@@ -141,7 +129,7 @@ class OllamaAdapter:
                     hint = f"Try `ollama pull {model}` first."
             raise RuntimeError(
                 curl_failure_message(
-                    adapter="ollama",
+                    source="ollama",
                     model=model,
                     url=url,
                     returncode=proc.returncode,
@@ -238,6 +226,7 @@ class OllamaAdapter:
                 proc = subprocess.run(
                     [
                         "curl",
+                        "-q",
                         "--silent",
                         "--max-time",
                         "2",
