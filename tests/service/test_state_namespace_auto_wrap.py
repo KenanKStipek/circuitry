@@ -37,7 +37,7 @@ effects:
 
 
 def test_rest_state_with_trigger_metadata_wraps_bare_root_keys() -> None:
-    svc = RestTriggerService(auth_token=None)
+    svc = RestTriggerService(allow_unauthenticated=True)
 
     initial_state = svc._state_with_trigger_metadata(
         payload={"state": {"name": "Elena"}},
@@ -51,7 +51,7 @@ def test_rest_state_with_trigger_metadata_wraps_bare_root_keys() -> None:
 
 
 def test_rest_state_with_trigger_metadata_leaves_namespaced_payload_alone() -> None:
-    svc = RestTriggerService(auth_token=None)
+    svc = RestTriggerService(allow_unauthenticated=True)
 
     initial_state = svc._state_with_trigger_metadata(
         payload={"state": {"input": {"name": "Elena"}}},
@@ -66,7 +66,7 @@ def test_rest_trigger_end_to_end_with_bare_state_payload(tmp_path: Path) -> None
     orch_path = tmp_path / "hello.yml"
     _write_orchestration(orch_path)
 
-    svc = RestTriggerService(auth_token=None)
+    svc = RestTriggerService(allow_unauthenticated=True, orchestration_root=tmp_path)
     response = svc.handle_http_request(
         method="POST",
         path="/v1/triggers/run",

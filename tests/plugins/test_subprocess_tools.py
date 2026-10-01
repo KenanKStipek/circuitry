@@ -477,6 +477,34 @@ def test_shell_check_always_ok() -> None:
     assert ShellPlugin().check().ok is True
 
 
+def test_shell_host_pin_narrows_default_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A host pin intersects with the default allowlist, not replaces it."""
+    monkeypatch.setattr(shutil, "which", lambda n: f"/bin/{n}" if n == "ls" else None)
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        captured["cmd"] = cmd
+        return FakeProc(returncode=0, stdout="a\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    plugin = ShellPlugin(pinned_allowed_commands=("ls",))
+    r = plugin.execute(params={"command": "ls"})
+    assert r.value == "a\n"
+
+    with pytest.raises(PermissionError, match="blocked by the host's"):
+        plugin.execute(params={"command": "cat"})
+
+
+def test_shell_host_pin_narrows_effect_override() -> None:
+    """A document's per-effect allowlist can only narrow a host pin, never widen it."""
+    plugin = ShellPlugin(pinned_allowed_commands=("ls",))
+    with pytest.raises(PermissionError, match="blocked by the host's"):
+        plugin.execute(
+            params={"command": "curl", "allowed_commands": ["curl"], "args": ["http://x"]}
+        )
+
+
 # ---------------------------------------------------------------------------
 # gpg — multi-mode
 # ---------------------------------------------------------------------------

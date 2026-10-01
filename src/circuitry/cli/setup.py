@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 
 import typer
@@ -171,12 +173,31 @@ def _build_config(
     return config
 
 
+def _write_private_file(path: Path, content: str) -> None:
+    """Write *content* to *path*, mode 0600 — may hold API keys.
+
+    Written to a sibling temp file (``mkstemp``, 0600 from creation) and
+    ``os.replace``d into place, so a pre-existing looser-mode file (e.g.
+    from a `cof setup` that predates this) is never truncated and rewritten
+    in place at its old mode — the replacement is atomic and always 0600,
+    with no window where the new content is readable under the old mode.
+    """
+    fd, tmp_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(tmp_name, path)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+
+
 def _write_config(config: dict) -> Path:
     """Write config to the global config directory."""
-    GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    GLOBAL_CONFIG_PATH.write_text(
-        json.dumps(config, indent=2) + "\n", encoding="utf-8"
-    )
+    GLOBAL_CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _write_private_file(GLOBAL_CONFIG_PATH, json.dumps(config, indent=2) + "\n")
     return GLOBAL_CONFIG_PATH
 
 
@@ -204,13 +225,13 @@ def _write_env_file(result: DetectionResult) -> Path | None:
     if not lines:
         return None
 
-    GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    GLOBAL_CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     # Append to existing .env if present
     if env_path.exists():
         existing = env_path.read_text(encoding="utf-8")
         lines = [existing.rstrip(), *lines]
 
-    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _write_private_file(env_path, "\n".join(lines) + "\n")
     return env_path
 
 

@@ -505,6 +505,50 @@ def test_tool_runtime_params_json_wins_on_key_conflict(
     assert captured_params["arguments"] == {"symbols": ["AAPL"], "keep": "me"}
 
 
+def test_tool_runtime_rejects_params_json_allowed_commands_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """allowed_commands is only honoured from a document's literal params
+    block — never params_json, which can carry model-generated content.
+
+    ``subprocess.run`` is monkeypatched to fail the test rather than run
+    ``rm -rf /`` for real if this rejection ever regressed."""
+
+    def _fail_if_called(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("shell plugin must not run when allowed_commands is rejected")
+
+    monkeypatch.setattr(
+        "circuitry.plugins._subprocess.subprocess.run", _fail_if_called
+    )
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={"command": "echo"},
+        params_json='{"command": "rm", "allowed_commands": ["rm"], "args": ["-rf", "/"]}',
+    )
+    store = _make_store()
+
+    with pytest.raises(ValueError, match="allowed_commands"):
+        ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert store.state["x"]["value"] is None
+    assert "allowed_commands" in store.state["x"]["meta"]["error"]
+
+
+def test_tool_runtime_rejects_templated_allowed_commands() -> None:
+    """A templated allowed_commands entry is not honoured even in the
+    literal params block — only a plain, written-down list is."""
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={"command": "echo", "allowed_commands": ["{{cmd}}"]},
+    )
+    store = _make_store()
+
+    with pytest.raises(ValueError, match="allowed_commands"):
+        ToolRuntime(defn).execute(store=store, ctx={"cmd": "echo"})
+
+
 def test_tool_runtime_params_json_invalid_json_fail_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

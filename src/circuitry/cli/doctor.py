@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import stat
 from pathlib import Path
 
 import typer
@@ -12,6 +13,8 @@ from ..core.runtime_plugins import load_plugins
 from ..plugins.factory import PLUGIN_REGISTRY, build_plugin
 from ..preflight import call_check
 from .config import (
+    GLOBAL_CONFIG_DIR,
+    GLOBAL_CONFIG_PATH,
     describe_config_sources,
     find_config_path,
     load_config,
@@ -73,6 +76,10 @@ def register_doctor(app: typer.Typer) -> None:
             "Effective model",
             f"{effective.model} (source: {effective.sources.get('model')})",
         )
+        for secret_path in (GLOBAL_CONFIG_PATH, GLOBAL_CONFIG_DIR / ".env"):
+            warning = _insecure_mode_warning(secret_path)
+            if warning:
+                table.add_row("Secrets file mode", f"[yellow]WARN[/yellow] {warning}")
 
         # Backend detection
         ollama_url = resolved_cfg.runtime.get("adapters", {}).get("ollama", {}).get("base_url", "http://localhost:11434")
@@ -120,6 +127,17 @@ def register_doctor(app: typer.Typer) -> None:
         any_failed = _check_extensions(resolved_cfg)
         if any_failed:
             raise typer.Exit(code=1)
+
+
+def _insecure_mode_warning(path: Path) -> str | None:
+    """A warning if *path* exists and is group/world-readable, else None."""
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        return None
+    if mode & 0o077:
+        return f"{path} is mode {oct(mode)} (group/world-readable); run 'chmod 600 {path}'."
+    return None
 
 
 def _check_extensions(cfg) -> bool:  # type: ignore[no-untyped-def]

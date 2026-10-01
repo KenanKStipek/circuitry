@@ -85,6 +85,24 @@ escaping the configured working area. The HTTP transport uses standard
 described below, so its workflow payload (which embeds the rendered prompt)
 never lands on the curl command line either.
 
+**Mitigation — shell.** The `shell` plugin runs one binary from an allowlist
+(tiny and read-only by default) with no shell layer (`shell=False`,
+shell-meta characters rejected in args). A document's own `params` may
+widen the allowlist per-effect, but only from a literal, unrendered list —
+never `params_json` (runtime-built via `#203`, can carry model-generated
+content) and never a list entry that is still a Mustache tag — both are a
+hard error rather than silently accepted. A host may additionally pin
+`runtime.plugins.shell.allowed_commands` in config; when set, the effective
+allowlist is that pin intersected with the effect's own list, so a *limited*
+document can only narrow it further, never widen it past the host's pin. A
+*trusted* document (see [§6](#6-host-settings-versus-orchestration-documents))
+keeps its whole `runtime:` block and can replace the pin outright — the pin
+only constrains documents that reach `cof` indirectly (library, `use` child,
+generated plan, REST, MCP).
+Implementation: [`src/circuitry/plugins/shell.py`](../src/circuitry/plugins/shell.py),
+[`src/circuitry/core/tool.py`](../src/circuitry/core/tool.py) (the
+`params_json`/templated rejection).
+
 **Residual risk.** A user-authored plugin not bundled with Circuitry has no
 forced sandbox and can do whatever Python lets it do. The `ToolPlugin`
 Protocol is contract, not enforcement. Users who load third-party plugins
@@ -267,6 +285,44 @@ user's own, never in a shell profile. Trust is by content, not by review:
 `cof trust --yes` records a file nobody read. Nothing stops a *trusted* file's
 directory from also containing hostile orchestrations; trust covers the config
 file only.
+
+The global config and `.env` `cof setup` writes carry the same credential risk
+on a shared machine: both are created mode `0600` in a `0700`
+`~/.config/circuitry/` (tightening either file's mode if it already existed
+looser from before this), and `cof doctor` warns if either is still group- or
+world-readable. Implementation:
+[`src/circuitry/cli/setup.py`](../src/circuitry/cli/setup.py).
+
+### 8. The REST trigger service
+
+`circuitry.service.RestTriggerService` is a building block for embedding a
+network-reachable trigger into a host's own HTTP stack ([Surfaces](guidebook/12-surfaces.md#rest-and-scheduling)) — it is not a deployment
+by itself, but a host that wires it up is exposing `orchestration_path` (and
+optionally `out_path`) to whoever can reach the endpoint.
+
+**Mitigation.** A falsy `auth_token` no longer means "no check": construction
+raises unless the embedder passes a token or explicitly opts out with
+`allow_unauthenticated=True`, so there is no accidental open trigger from an
+unset env var. Every request's `orchestration_path`/`out_path` is resolved
+(relative paths against `orchestration_root`, absolute paths as given) and
+must land inside `orchestration_root` — the service's working directory at
+construction, or an explicit path — or the request is refused with a 400
+before anything runs. `config=`, when the embedder omits it, is no longer a
+bare, allowlist-open `CircuitryConfig()`: the service resolves the host
+config the same way `cof run` would for a document under
+`orchestration_root` (global config, then a project config discovered there
+if trusted — §7's trust rules — then environment variables), so a host's
+allowlists, `runtime.plugins.shell.allowed_commands` pin, and every other
+host setting apply, and preflight — gated on a non-`None` config — always
+runs for a non-dry-run request. An embedder that passes an explicit `config`
+has that win outright. Implementation:
+[`src/circuitry/service/rest.py`](../src/circuitry/service/rest.py).
+
+**Residual risk.** `orchestration_root` confines *which file* a request can
+name; the document it points to is otherwise limited the same way any
+REST/MCP-reached document is (see §6 above). A host that wires this up still
+needs to choose its own transport-level protections (TLS, network ACLs) —
+this class has none.
 
 ---
 
