@@ -15,7 +15,6 @@ from typing import Any, Literal
 
 from ..adapters import Adapter, build_adapter
 from ..adapters._retry import RetryInfo, classify_exception
-from ..adapters.factory import configured_timeout_seconds
 from ..adapters.base import (
     TRUNCATED_FINISH_REASONS,
     ChatMessage,
@@ -24,7 +23,8 @@ from ..adapters.base import (
     ImageInput,
     call_generate,
 )
-from ..allowlist_gate import allowed_adapters, require_adapter
+from ..adapters.factory import configured_timeout_seconds
+from ..allowlist_gate import AllowlistError, allowed_adapters, require_adapter
 from ..cli.redaction import redact
 from ..output import console as _console
 from .answers import AnswerParseError, parse_boolean_answer, parse_number_answer
@@ -1234,6 +1234,15 @@ class PromptRuntime:
         ``finish_reason``/warnings/``answer`` land on the node exactly as a
         single-attempt dispatch always has; a losing attempt never touches
         them beyond its own ``attempts_meta`` entry.
+
+        Resolving the adapter (``_resolve_adapter``) happens inside this same
+        per-attempt ``try`` so a bad fallback name is logged like any other
+        failed attempt instead of escaping raw and dropping whatever the
+        chain had already recorded — except an :class:`AllowlistError`,
+        which always propagates immediately: a ``provider:``/fallback outside
+        the installed allowlist is a denial, not a transient failure, and
+        must not silently fall through to the next adapter in the chain
+        (often the run default).
         """
         attempts_meta: list[dict[str, Any]] = []
         last_error: Exception | None = None
@@ -1248,6 +1257,14 @@ class PromptRuntime:
                     timeout_seconds=self._attempt_timeout_seconds(adapter_name),
                     options=options,
                 )
+            except AllowlistError:
+                # A security boundary, not a dispatch failure: an adapter
+                # outside the installed allowlist must fail this effect
+                # outright, never logged as a merely-failed attempt and
+                # fallen through past — that would let a denied `provider:`
+                # silently resolve to whatever adapter happens to be next in
+                # the chain (often the run default) instead of refusing.
+                raise
             except Exception as e:
                 last_error = e
                 attempts_meta.append(

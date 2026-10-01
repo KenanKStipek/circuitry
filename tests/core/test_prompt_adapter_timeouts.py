@@ -143,3 +143,93 @@ def test_timeout_ms_still_caps_the_dispatched_adapters_own_timeout(
     ).execute(store=store)
 
     assert recorder.calls == [3]  # ceil(2500 / 1000)
+
+
+def test_litellm_timeout_alias_reaches_the_per_attempt_dispatch(
+    monkeypatch,
+) -> None:
+    """#263 part 1: ``runtime.adapters.litellm.timeout`` (the deprecated
+    alias) must reach a per-attempt dispatch resolved through
+    ``_attempt_timeout_seconds``, not just the adapter instance's own
+    default — the same lookup a run-default litellm adapter goes through
+    (see test_adapter_timeout_config.py for that path)."""
+    orch = {
+        "effects": [
+            {"type": "prompt", "name": "task", "template": "hi", "provider": "litellm"}
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+
+    recorder = RecordingAdapter(name="litellm")
+    monkeypatch.setattr(
+        "circuitry.core.prompt.build_adapter",
+        lambda *, adapter_name, runtime: recorder,
+    )
+
+    store = Store({})
+    DynamicRuntime(
+        root,
+        adapter=recorder,
+        model="m",
+        runtime_config={"adapters": {"litellm": {"timeout": 45}}},
+        timeout_seconds=120,
+    ).execute(store=store)
+
+    assert recorder.calls == [45]
+
+
+def test_adapter_name_lookup_is_normalised_to_lower_case(monkeypatch) -> None:
+    """``build_adapter`` normalises an adapter name to ``.strip().lower()``
+    before reading its config; the timeout lookup must match, or
+    ``provider: Ollama`` silently misses ``runtime.adapters.ollama``."""
+    orch = {
+        "effects": [
+            {"type": "prompt", "name": "task", "template": "hi", "provider": "Secondary"}
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+
+    recorder = RecordingAdapter()
+    monkeypatch.setattr(
+        "circuitry.core.prompt.build_adapter",
+        lambda *, adapter_name, runtime: recorder,
+    )
+
+    store = Store({})
+    DynamicRuntime(
+        root,
+        adapter=recorder,
+        model="m",
+        runtime_config={"adapters": {"secondary": {"timeout_seconds": 5}}},
+        timeout_seconds=120,
+    ).execute(store=store)
+
+    assert recorder.calls == [5]
+
+
+def test_a_zero_or_negative_configured_timeout_falls_back_to_the_run_default(
+    monkeypatch,
+) -> None:
+    orch = {
+        "effects": [
+            {"type": "prompt", "name": "task", "template": "hi", "provider": "secondary"}
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+
+    recorder = RecordingAdapter()
+    monkeypatch.setattr(
+        "circuitry.core.prompt.build_adapter",
+        lambda *, adapter_name, runtime: recorder,
+    )
+
+    store = Store({})
+    DynamicRuntime(
+        root,
+        adapter=recorder,
+        model="m",
+        runtime_config={"adapters": {"secondary": {"timeout_seconds": 0}}},
+        timeout_seconds=99,
+    ).execute(store=store)
+
+    assert recorder.calls == [99]

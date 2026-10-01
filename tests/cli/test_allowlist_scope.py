@@ -338,6 +338,43 @@ def test_prompt_runtime_refuses_an_adapter_outside_the_installed_allowlist(
     assert adapter.calls == []
 
 
+def test_prompt_runtime_refuses_a_denied_fallback_without_falling_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``provider_fallbacks`` entry outside the allowlist must fail the
+    effect outright, the same as a denied ``provider:`` — not be logged as a
+    merely-failed attempt and silently fallen through past to a later
+    fallback that *is* allowed (#263's fallback-chain attempt-resolve fix
+    must not reopen the allowlist gate it closed)."""
+    allowed_fallback = RecordingAdapter(name="also-allowed")
+    monkeypatch.setattr(
+        "circuitry.core.prompt.build_adapter",
+        lambda *, adapter_name, runtime: allowed_fallback,
+    )
+    runtime_config: dict[str, Any] = {}
+    install_allowlists(
+        runtime_config, enabled_adapters=["primary", "also-allowed"], enabled_tools=None
+    )
+    adapter = RecordingAdapter(name="primary")
+    runtime = PromptRuntime(
+        PromptDefinition(
+            name="p",
+            template="hi",
+            provider="openai:gpt-4o",
+            provider_fallbacks=["also-allowed:m2"],
+        ),
+        adapter=adapter,
+        model="m",
+        runtime_config=runtime_config,
+    )
+
+    with pytest.raises(AllowlistError, match="adapter 'openai' not in enabled_adapters"):
+        runtime.execute(store=Store({}), ctx={})
+
+    assert adapter.calls == []
+    assert allowed_fallback.calls == []
+
+
 def test_reflector_generated_plan_is_refused(tmp_path: Path) -> None:
     """A reflector's plan runs as an inline `use` child — same gate."""
     plan = yaml.safe_dump(

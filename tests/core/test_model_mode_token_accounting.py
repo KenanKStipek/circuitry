@@ -5,7 +5,7 @@ tokens at all anywhere in state.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from circuitry.adapters.base import GenerateResult
 from circuitry.core.compiler import compile_orchestration
@@ -102,3 +102,52 @@ def test_model_mode_while_records_the_last_checks_tokens() -> None:
 
     assert store.get("prime.spin.meta.tokens_sent") == 6
     assert store.get("prime.spin.meta.tokens_received") == 3
+
+
+def test_model_mode_while_accumulates_tokens_across_every_check() -> None:
+    """A ``while`` that checks its condition more than once must not report
+    only the final check's cost — ``tokens_sent``/``tokens_received`` stay
+    the last check's own count, but ``tokens_sent_total``/
+    ``tokens_received_total`` sum every check this loop made."""
+
+    @dataclass
+    class ScriptedWhileAdapter:
+        name: str = "scripted"
+        replies: list[tuple[str, int, int]] = field(default_factory=list)
+        calls: int = 0
+
+        def generate(
+            self, *, model: str, prompt: str, timeout_seconds: int = 120
+        ) -> GenerateResult:
+            text, sent, received = self.replies[self.calls]
+            self.calls += 1
+            return GenerateResult(
+                text=text, raw={}, tokens_sent=sent, tokens_received=received
+            )
+
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "spin",
+                "while": {"mode": "model", "template": "keep going?"},
+                "max_iterations": 5,
+                "body": [
+                    {"type": "tool", "name": "noop", "provider": "json", "params": {"input": "1"}}
+                ],
+            }
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({})
+
+    adapter = ScriptedWhileAdapter(
+        replies=[("yes", 3, 1), ("yes", 4, 2), ("no", 5, 1)]
+    )
+    DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
+
+    assert adapter.calls == 3
+    assert store.get("prime.spin.meta.tokens_sent") == 5
+    assert store.get("prime.spin.meta.tokens_received") == 1
+    assert store.get("prime.spin.meta.tokens_sent_total") == 3 + 4 + 5
+    assert store.get("prime.spin.meta.tokens_received_total") == 1 + 2 + 1

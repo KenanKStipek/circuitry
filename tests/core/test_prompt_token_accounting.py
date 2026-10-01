@@ -168,3 +168,55 @@ def test_node_totals_include_a_failed_decode_attempts_tokens() -> None:
     # Total includes the first (decode-failed) pass's 7/2 plus the winner's 3/1.
     assert store.get("prime.task.meta.tokens_sent_total") == 10
     assert store.get("prime.task.meta.tokens_received_total") == 3
+
+
+def test_dry_run_still_writes_the_token_total_fields_as_none() -> None:
+    """The docstring lists ``tokens_sent_total``/``tokens_received_total`` as
+    always present (no ``?``), unlike ``complexity?``/``finish_reason?``. A
+    dry run never dispatches, so both must still be ``None``, not absent."""
+    orch = {
+        "effects": [{"type": "prompt", "name": "task", "template": "hi"}]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({})
+
+    DynamicRuntime(
+        root, adapter=EchoAdapter(name="primary"), model="m", dry_run=True
+    ).execute(store=store)
+
+    meta = store.get("prime.task.meta") or {}
+    assert "tokens_sent_total" in meta
+    assert meta["tokens_sent_total"] is None
+    assert "tokens_received_total" in meta
+    assert meta["tokens_received_total"] is None
+
+
+def test_a_pre_dispatch_failure_writes_the_token_total_fields_as_none() -> None:
+    """A failure before any adapter attempt runs (here: an invalid
+    ``params.max_tokens``) must not leave the totals fields missing —
+    they're part of the node's regular meta shape, just ``None`` because
+    nothing was dispatched."""
+    orch = {
+        "effects": [
+            {
+                "type": "prompt",
+                "name": "task",
+                "template": "hi",
+                "params": {"max_tokens": -1},
+                "on_error": "continue",
+            }
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({})
+
+    DynamicRuntime(root, adapter=EchoAdapter(name="primary"), model="m").execute(
+        store=store
+    )
+
+    meta = store.get("prime.task.meta") or {}
+    assert meta.get("error") is not None
+    assert "tokens_sent_total" in meta
+    assert meta["tokens_sent_total"] is None
+    assert "tokens_received_total" in meta
+    assert meta["tokens_received_total"] is None

@@ -130,6 +130,35 @@ def test_backoff_without_retry_after_grows_and_is_capped(
     assert sleeps == [1.0, 2.0]
 
 
+def test_backoff_at_a_large_attempt_index_stays_at_the_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exponential curve would blow past any sane wait by attempt 10
+    (``backoff_ms * 2**9`` from a 1s base is over 8 minutes); the cap must
+    hold regardless of how many attempts preceded it."""
+    from circuitry.core import prompt as prompt_mod
+
+    monkeypatch.setattr(prompt_mod.random, "uniform", lambda lo, hi: hi)
+
+    root = compile_orchestration(
+        orch=_retries_orch(max_attempts=10, backoff_ms=1000), root_name="prime"
+    )
+    adapter = ScriptedRetryAdapter(
+        failures=[RetryInfo(retryable=True, status=503) for _ in range(9)]
+    )
+    store = Store({})
+
+    sleeps: list[float] = []
+    monkeypatch.setattr("circuitry.core.prompt.time.sleep", sleeps.append)
+
+    DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
+
+    # _RETRY_BACKOFF_CAP_MS is 60s; by the 7th retry the uncapped exponential
+    # curve (1000 * 2**6 = 64000ms) would already exceed it.
+    assert max(sleeps) == 60.0
+    assert sleeps[-1] == 60.0
+
+
 def test_an_unclassified_error_is_not_retried() -> None:
     """An adapter that doesn't classify its own failure (a bare
     ``RuntimeError``) is treated as not retryable \u2014 the conservative
