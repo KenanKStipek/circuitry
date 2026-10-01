@@ -17,7 +17,6 @@ from .config import (
     GLOBAL_CONFIG_PATH,
     describe_config_sources,
     find_config_path,
-    load_config,
     resolve_config,
 )
 from .detect import detect_all
@@ -46,7 +45,10 @@ def register_doctor(app: typer.Typer) -> None:
         ),
     ) -> None:
         cfg_path = find_config_path(explicit_path=config)
-        cfg = load_config(cfg_path)
+        # Layered the same way `cof run` resolves config (SANE_DEFAULTS under
+        # whatever config file exists), not the bare `load_config` — otherwise
+        # `doctor` reports `None`/`None` for a fresh install where `run` would
+        # actually dispatch to the `ollama`/`llama3.1:8b` defaults (#265).
         resolved_cfg = resolve_config(explicit_path=config)
 
         orch_obj = {}
@@ -55,7 +57,7 @@ def register_doctor(app: typer.Typer) -> None:
 
         # `--orch` names a file by path: resolved as `cof run` would run it.
         effective = resolve_effective_settings(
-            cfg=cfg, orch=orch_obj, trust_document=orchestration is not None
+            cfg=resolved_cfg, orch=orch_obj, trust_document=orchestration is not None
         )
 
         table = Table(title="Circuitry · Doctor", show_lines=True)
