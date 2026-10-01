@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 
 @dataclass(frozen=True)
@@ -51,7 +51,7 @@ class HtmlExtractPlugin:
         text = params.get("input")
         if not isinstance(text, str):
             raise ValueError("html_extract requires params['input'] as a string.")
-        if params.get("from_path"):
+        if _as_bool(params.get("from_path")):
             text = Path(text).expanduser().read_text(encoding="utf-8")
         selector = params.get("selector")
         if not isinstance(selector, str) or not selector.strip():

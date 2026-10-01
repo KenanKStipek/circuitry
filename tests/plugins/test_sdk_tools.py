@@ -216,6 +216,92 @@ def test_linear_list_issues_via_fake_requests(
     assert captured["body"]["variables"]["filter"]["team"]["key"]["eq"] == "ENG"
 
 
+def _fake_linear_requests(
+    monkeypatch: pytest.MonkeyPatch, response: Any
+) -> None:
+    fake_mod = types.ModuleType("requests")
+    fake_exc_mod = types.ModuleType("requests.exceptions")
+    fake_exc_mod.RequestException = type("RequestException", (Exception,), {})
+    fake_mod.exceptions = fake_exc_mod
+    fake_mod.post = lambda url, **kwargs: response
+    monkeypatch.setitem(sys.modules, "requests", fake_mod)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_exc_mod)
+
+
+def test_linear_http_error_returns_ok_false_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY", "lin_key")
+
+    class FakeResponse:
+        status_code = 401
+        text = "unauthorized"
+
+    _fake_linear_requests(monkeypatch, FakeResponse())
+
+    r = LinearPlugin().execute(params={"mode": "query", "query": "{ x }"})
+    assert r.ok is False
+    assert r.raw["status"] == 401
+
+
+def test_linear_http_error_with_fail_on_error_false_returns_ok_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY", "lin_key")
+
+    class FakeResponse:
+        status_code = 401
+        text = "unauthorized"
+
+    _fake_linear_requests(monkeypatch, FakeResponse())
+
+    r = LinearPlugin().execute(
+        params={"mode": "query", "query": "{ x }", "fail_on_error": False}
+    )
+    assert r.ok is True
+    assert r.raw["status"] == 401
+
+
+def test_linear_graphql_error_returns_ok_false_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY", "lin_key")
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self) -> dict[str, Any]:
+            return {"errors": [{"message": "bad query"}]}
+
+    _fake_linear_requests(monkeypatch, FakeResponse())
+
+    r = LinearPlugin().execute(params={"mode": "query", "query": "{ x }"})
+    assert r.ok is False
+    assert r.raw["errors"] == [{"message": "bad query"}]
+
+
+def test_linear_graphql_error_with_fail_on_error_false_returns_ok_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LINEAR_API_KEY", "lin_key")
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self) -> dict[str, Any]:
+            return {"errors": [{"message": "bad query"}]}
+
+    _fake_linear_requests(monkeypatch, FakeResponse())
+
+    r = LinearPlugin().execute(
+        params={"mode": "query", "query": "{ x }", "fail_on_error": False}
+    )
+    assert r.ok is True
+    assert r.raw["errors"] == [{"message": "bad query"}]
+
+
 def test_slack_post_message_with_fake_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

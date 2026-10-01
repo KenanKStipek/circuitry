@@ -11,7 +11,9 @@ from circuitry.plugins.base import ToolResult, _as_bool, validate_tool_result
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("value", ["false", "False", "FALSE", "0", "no", "No", ""])
+@pytest.mark.parametrize(
+    "value", ["false", "False", "FALSE", "0", "no", "No", "off", "Off", "n", "N", ""]
+)
 def test_as_bool_recognizes_false_strings(value: str) -> None:
     assert _as_bool(value) is False
 

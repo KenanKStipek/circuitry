@@ -321,6 +321,24 @@ def test_tool_runtime_sets_meta_status_code_from_raw_status(
     assert store.state["call"]["meta"]["status_code"] == 204
 
 
+def test_tool_runtime_does_not_set_status_code_for_non_http_family_providers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unrelated int raw['status'] from a non-HTTP-family plugin must not
+    be mistaken for an HTTP status."""
+    fake_result = ToolResult(value="x", raw={"status": 204}, exit_code=None, ok=True)
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = fake_result
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin)
+
+    defn = ToolDefinition(name="call", provider="shell", params={})
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert "status_code" not in store.state["call"]["meta"]
+
+
 def test_tool_runtime_meta_exit_code_is_the_process_exit_code(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -406,6 +424,39 @@ def test_tool_runtime_caps_oversized_meta_raw(
     assert raw_meta["_original_bytes"] > _RAW_META_MAX_BYTES
 
 
+def test_tool_runtime_meta_raw_is_json_safe_for_non_json_native_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plugin raw with e.g. bytes/datetime must survive a plain json.dumps
+    later (--out, the SQL stores use no default=), not just the capping
+    pass's own json.dumps(..., default=str)."""
+    import datetime as _dt
+    import json as _json
+
+    fake_result = ToolResult(
+        value="x",
+        raw={
+            "when": _dt.datetime(2024, 1, 1, tzinfo=_dt.timezone.utc),
+            "blob": b"\x00\x01",
+        },
+    )
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = fake_result
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin)
+
+    defn = ToolDefinition(name="call", provider="http", params={})
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    raw_meta = store.state["call"]["meta"]["raw"]
+    assert raw_meta == {
+        "when": "2024-01-01 00:00:00+00:00",
+        "blob": "b'\\x00\\x01'",
+    }
+    _json.dumps(raw_meta)  # must not raise
+
+
 # ---------------------------------------------------------------------------
 # #238: meta.params_rendered is redacted; the plugin still sees real values.
 # ---------------------------------------------------------------------------
@@ -441,6 +492,35 @@ def test_tool_runtime_redacts_params_rendered_but_plugin_sees_real_values(
     assert captured_params["api_key"] == "sk-abcdefghijklmnopqrstuvwxyz0123"
     # The stored run record does not.
     assert store.state["call"]["meta"]["params_rendered"]["api_key"] == "***REDACTED***"
+
+
+def test_tool_runtime_redacts_url_userinfo_in_params_rendered_but_plugin_sees_real_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_params: dict[str, Any] = {}
+
+    def capturing_plugin(**kw: Any) -> Any:
+        m = MagicMock()
+
+        def execute(*, params: dict[str, Any], timeout_seconds: int) -> ToolResult:
+            captured_params.update(params)
+            return ToolResult(value="ok", raw={})
+
+        m.execute.side_effect = execute
+        return m
+
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", capturing_plugin)
+
+    url = "https://{{creds}}@x.test/"
+    defn = ToolDefinition(name="call", provider="http", params={"url": url})
+    store = _make_store()
+
+    ToolRuntime(defn).execute(store=store, ctx={"creds": "user:pass"})
+
+    # The plugin receives the real, unredacted URL.
+    assert captured_params["url"] == "https://user:pass@x.test/"
+    # The stored run record strips the userinfo.
+    assert store.state["call"]["meta"]["params_rendered"]["url"] == "https://***REDACTED***@x.test/"
 
 
 def _capturing_timeout_plugin(captured):

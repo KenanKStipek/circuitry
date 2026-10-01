@@ -52,7 +52,7 @@ class CsvPlugin:
         text = params.get("input")
         if not isinstance(text, str):
             raise ValueError("csv: parse requires params['input'] as a string.")
-        if params.get("from_path"):
+        if _as_bool(params.get("from_path")):
             text = Path(text).expanduser().read_text(encoding="utf-8")
         has_header = _as_bool(params.get("has_header"), default=True)
         reader = _csv.reader(io.StringIO(text), delimiter=delimiter)

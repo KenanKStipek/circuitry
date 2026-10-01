@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 
 def _validate_path(raw: Any) -> Path:
@@ -73,7 +73,7 @@ class FsPlugin:
             content = params.get("content")
             if not isinstance(content, str):
                 raise ValueError("fs: write/append requires params['content'] as str.")
-            if params.get("create_dirs", True):
+            if _as_bool(params.get("create_dirs"), default=True):
                 path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "a" if mode == "append" else "w", encoding=encoding) as fh:
                 fh.write(content)
@@ -99,7 +99,7 @@ class FsPlugin:
                 # Idempotent — deleting absent files is not an error.
                 value = False
             elif path.is_dir():
-                if not params.get("recursive", False):
+                if not _as_bool(params.get("recursive"), default=False):
                     raise IsADirectoryError(
                         f"fs: refusing to delete directory without recursive=True: {path}"
                     )

@@ -32,15 +32,16 @@ def _as_bool(value: Any, *, default: bool = False) -> bool:
     ``bool(params.get(...))`` silently inverts a templated-false boolean
     param. ``None`` (the key absent) returns *default*; an actual ``bool``
     passes through; a string is false when it (case-insensitively, after
-    stripping whitespace) is one of ``"false"``, ``"0"``, ``"no"`` or empty,
-    true otherwise; anything else falls back to Python's own ``bool()``.
+    stripping whitespace) is one of ``"false"``, ``"0"``, ``"no"``,
+    ``"off"``, ``"n"`` or empty, true otherwise; anything else falls back to
+    Python's own ``bool()``.
     """
     if value is None:
         return default
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
-        return value.strip().lower() not in ("false", "0", "no", "")
+        return value.strip().lower() not in ("false", "0", "no", "off", "n", "")
     return bool(value)
 
 

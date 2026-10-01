@@ -587,6 +587,52 @@ def test_webhook_5xx_retry_then_succeed(monkeypatch: pytest.MonkeyPatch) -> None
     assert calls == [500, 502, 200]
 
 
+def test_webhook_4xx_sets_ok_false_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_mod = types.ModuleType("requests")
+    fake_exc_mod = types.ModuleType("requests.exceptions")
+    fake_exc_mod.RequestException = type("RequestException", (Exception,), {})
+    fake_mod.exceptions = fake_exc_mod
+
+    class R:
+        def __init__(self) -> None:
+            self.status_code = 404
+            self.text = "not found"
+            self.headers = {"Content-Type": "text/plain"}
+
+    fake_mod.request = lambda **kwargs: R()
+    monkeypatch.setitem(sys.modules, "requests", fake_mod)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_exc_mod)
+
+    r = WebhookPlugin().execute(params={"url": "https://x.test"})
+    assert r.ok is False
+    assert r.raw["status"] == 404
+
+
+def test_webhook_fail_on_error_false_keeps_ok_true_on_4xx(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_mod = types.ModuleType("requests")
+    fake_exc_mod = types.ModuleType("requests.exceptions")
+    fake_exc_mod.RequestException = type("RequestException", (Exception,), {})
+    fake_mod.exceptions = fake_exc_mod
+
+    class R:
+        def __init__(self) -> None:
+            self.status_code = 404
+            self.text = "not found"
+            self.headers = {"Content-Type": "text/plain"}
+
+    fake_mod.request = lambda **kwargs: R()
+    monkeypatch.setitem(sys.modules, "requests", fake_mod)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_exc_mod)
+
+    r = WebhookPlugin().execute(
+        params={"url": "https://x.test", "fail_on_error": False}
+    )
+    assert r.ok is True
+    assert r.raw["status"] == 404
+
+
 def test_web_fetch_html_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_mod = types.ModuleType("requests")
     fake_exc_mod = types.ModuleType("requests.exceptions")

@@ -403,6 +403,38 @@ def test_config_environment_sets_store_raw_default_without_env_var(
     assert raw_rows[0][0] is None
 
 
+def test_env_var_beats_config_environment_in_store_raw_cascade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#264 part 5: CIRCUITRY_ENV still wins over CircuitryConfig.environment
+    per the documented cascade (env > config > environment-default)."""
+    db = tmp_path / "runs.db"
+    monkeypatch.setenv("CIRCUITRY_SQLITE_PATH", str(db))
+    monkeypatch.setenv("CIRCUITRY_ENV", "dev")
+    monkeypatch.delenv("CIRCUITRY_SQLITE_STORE_RAW", raising=False)
+
+    orch = _write(tmp_path, "orch.yml", _orch_with_one_tool())
+    cfg = CircuitryConfig(
+        plugins=["circuitry.runtime_plugins.sqlite"], environment="prod"
+    )
+    result = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            initial_state={},
+            config=cfg,
+        )
+    )
+    assert result.ok is True
+    raw_rows = _query_rows(
+        db, "SELECT raw FROM effect_results WHERE effect_name = 'now'"
+    )
+    assert raw_rows[0][0] is not None
+
+
 def test_resume_keys_off_run_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

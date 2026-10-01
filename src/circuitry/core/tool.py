@@ -23,6 +23,10 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+#: Providers whose raw["status"] is an HTTP status code, not some other
+#: plugin's unrelated int field that happens to be named "status".
+_HTTP_FAMILY_PROVIDERS = frozenset({"http", "web_fetch", "webhook", "linear"})
+
 #: Cap on meta.raw's serialized size, in bytes, after redaction. Protects
 #: state (and anything that mirrors it: --out, --live-state, persisted
 #: snapshots) from a provider response ToolResult.raw is large enough to
@@ -32,14 +36,21 @@ _RAW_META_MAX_BYTES = 64 * 1024
 
 def _capped_raw(raw: dict[str, Any]) -> dict[str, Any]:
     """Redact *raw*, then replace it with a truncation marker if it's still
-    too big to store safely in state."""
+    too big to store safely in state.
+
+    Returns the JSON round-tripped copy, not *redacted* itself: callers
+    that serialize state (``--out``, the SQL/Postgres stores) use plain
+    ``json.dumps`` with no ``default=``, so a plugin ``raw`` containing
+    e.g. ``bytes`` or a ``datetime`` would otherwise crash them later.
+    """
     redacted = redact(raw)
     try:
         encoded = json.dumps(redacted, ensure_ascii=False, default=str).encode("utf-8")
     except (TypeError, ValueError):
         return redacted
     if len(encoded) <= _RAW_META_MAX_BYTES:
-        return redacted
+        result: dict[str, Any] = json.loads(encoded)
+        return result
     return {
         "_truncated": True,
         "_original_bytes": len(encoded),
@@ -472,7 +483,9 @@ class ToolRuntime:
         meta["stdout"] = result.stdout
         meta["stderr"] = result.stderr
         meta["exit_code"] = result.exit_code
-        if isinstance(result.raw.get("status"), int):
+        if self.defn.provider in _HTTP_FAMILY_PROVIDERS and isinstance(
+            result.raw.get("status"), int
+        ):
             meta["status_code"] = result.raw["status"]
         if "binary" in result.raw:
             meta["binary"] = result.raw["binary"]

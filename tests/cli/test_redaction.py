@@ -47,3 +47,11 @@ def test_walks_nested_dicts_and_lists() -> None:
 def test_redacts_jwt_shaped_string_value_regardless_of_key() -> None:
     jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dQw4w9WgXcQ"
     assert redact({"note": jwt}) == {"note": REDACTED}
+
+
+def test_does_not_redact_plain_dotted_names_shaped_like_three_segments() -> None:
+    """A three-segment dotted string that doesn't start with a JWT header's
+    eyJ prefix is a plain name (hostname, filename, version), not a JWT."""
+    assert redact({"note": "www.example.com"}) == {"note": "www.example.com"}
+    assert redact({"note": "a.tar.gz"}) == {"note": "a.tar.gz"}
+    assert redact({"note": "1.2.3"}) == {"note": "1.2.3"}

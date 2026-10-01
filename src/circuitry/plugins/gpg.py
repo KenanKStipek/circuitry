@@ -63,7 +63,7 @@ class GpgPlugin:
         cmd: list[str] = [binary, "--batch", "--yes", "--quiet"]
         if passphrase:
             cmd += ["--pinentry-mode", "loopback", "--passphrase", str(passphrase)]
-        if params.get("armor", True) and mode in ("encrypt", "sign"):
+        if _as_bool(params.get("armor"), default=True) and mode in ("encrypt", "sign"):
             cmd.append("--armor")
 
         if mode == "encrypt":
@@ -77,7 +77,7 @@ class GpgPlugin:
             signer = params.get("signer")
             if isinstance(signer, str) and signer:
                 cmd += ["--local-user", signer]
-            cmd += ["--detach-sign"] if params.get("detached") else ["--sign"]
+            cmd += ["--detach-sign"] if _as_bool(params.get("detached")) else ["--sign"]
         else:  # verify
             sig = params.get("signature")
             if not isinstance(sig, str) or not sig:

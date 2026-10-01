@@ -256,6 +256,31 @@ def test_fs_delete_recursive(tmp_path: Path) -> None:
     assert not sub.exists()
 
 
+def test_fs_delete_templated_false_recursive_still_refuses(tmp_path: Path) -> None:
+    """A Mustache-rendered recursive=false arrives as the string "False"."""
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "x.txt").write_text("hi")
+    with pytest.raises(IsADirectoryError):
+        FsPlugin().execute(
+            params={"mode": "delete", "path": str(sub), "recursive": "False"}
+        )
+    assert sub.exists()
+
+
+def test_fs_write_templated_false_create_dirs_skips_mkdir(tmp_path: Path) -> None:
+    target = tmp_path / "missing-dir" / "f.txt"
+    with pytest.raises(FileNotFoundError):
+        FsPlugin().execute(
+            params={
+                "mode": "write",
+                "path": str(target),
+                "content": "hi",
+                "create_dirs": "False",
+            }
+        )
+
+
 def test_fs_rejects_null_byte() -> None:
     with pytest.raises(ValueError, match="null byte"):
         FsPlugin().execute(params={"mode": "read", "path": "a\x00b"})
@@ -580,6 +605,21 @@ def test_env_vars_list_can_include_secrets(monkeypatch: pytest.MonkeyPatch) -> N
         }
     )
     assert r.value["CIRCUITRY_TEST_TOKEN"] == "real-token"
+
+
+def test_env_vars_list_templated_false_include_secrets_still_redacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Mustache-rendered include_secrets=false arrives as the string "False"."""
+    monkeypatch.setenv("CIRCUITRY_TEST_TOKEN", "real-token")
+    r = EnvVarsPlugin().execute(
+        params={
+            "mode": "list",
+            "prefix": "CIRCUITRY_TEST_",
+            "include_secrets": "False",
+        }
+    )
+    assert r.value["CIRCUITRY_TEST_TOKEN"] == "***"
 
 
 # ---------- hash ----------

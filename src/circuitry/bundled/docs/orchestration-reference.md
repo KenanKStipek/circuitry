@@ -523,12 +523,13 @@ or when it returns a result with `ok: false` without raising. Both paths
 are equivalent; `on_error: fail` (the default) re-raises either way,
 `skip`/`continue` record the error and leave `value: null`.
 
-- **`meta.exit_code`** means a process exit code, and only that — it is
-  `None` for every plugin that doesn't wrap a binary/subprocess (`ffmpeg`,
-  `shell`, `git`, `gh`, `ripgrep`, and the rest of that family; a non-zero
-  exit fails the step unless `allow_nonzero: true`). Every other plugin
-  always leaves it `None`, including the HTTP-family and soft-outcome ones
-  below — it is never an HTTP status or a soft 0/1/2 flag.
+- **`meta.exit_code`** means a process exit code, and only that. For the
+  plugins that wrap a binary/subprocess (`ffmpeg`, `shell`, `git`, `gh`,
+  `ripgrep`, and the rest of that family) it's that process's exit code,
+  and a non-zero exit fails the step unless `allow_nonzero: true`. Every
+  other plugin — including the HTTP-family, `mcp_client`, and the
+  soft-outcome ones below — always leaves it `None`: it is never an HTTP
+  status or a soft 0/1/2 flag.
 - **HTTP-family plugins** (`http`, `web_fetch`, `webhook`, `linear`) fail
   (`ok: false`) on a 4xx/5xx response by default, with the status recorded
   on **`meta.status_code`**. Each has a `fail_on_error: false` param that
