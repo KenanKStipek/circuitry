@@ -69,6 +69,32 @@ def test_curl_unknown_nonzero_exit_is_not_retryable() -> None:
     assert info.retryable is False
 
 
+def test_curl_exit_22_with_a_429_status_line_and_retry_after_is_captured() -> None:
+    """Regression for #319: the Retry-After value `run_curl` captures via
+    `--write-out` on stderr (`circuitry-retry-after:<value>`) must reach
+    `RetryInfo.retry_after` alongside the classification, without disturbing
+    the exit-code status line this function already parses."""
+    stderr = (
+        "curl: (22) The requested URL returned error: 429\n"
+        "circuitry-retry-after:2\n"
+    )
+    info = classify_curl_exit(22, stderr)
+    assert info.retryable is True
+    assert info.status == 429
+    assert info.retry_after == "2"
+
+
+def test_curl_connection_level_exit_also_captures_retry_after() -> None:
+    info = classify_curl_exit(7, "circuitry-retry-after:5\n")
+    assert info.retryable is True
+    assert info.retry_after == "5"
+
+
+def test_curl_exit_with_no_retry_after_marker_leaves_it_none() -> None:
+    info = classify_curl_exit(22, "curl: (22) The requested URL returned error: 429\n")
+    assert info.retry_after is None
+
+
 # ---------------------------------------------------------------------------
 # classify_litellm_exception
 # ---------------------------------------------------------------------------

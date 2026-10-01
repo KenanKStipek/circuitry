@@ -19,7 +19,12 @@ from typing import Any
 import pytest
 from curl_test_support import RecordingJSONHandler, assert_not_in_argv, local_server
 
-from circuitry.curl_support import curl_failure_message, extract_retry_after, run_curl
+from circuitry.curl_support import (
+    _curl_supports_retry_after_header,
+    curl_failure_message,
+    extract_retry_after,
+    run_curl,
+)
 
 
 def test_url_userinfo_is_stripped() -> None:
@@ -155,6 +160,20 @@ def test_run_curl_rejects_url_with_embedded_nul() -> None:
         run_curl(url="https://example.test/x\0", timeout_seconds=5)
 
 
+def test_run_curl_rejects_an_oversized_config_instead_of_blocking_forever() -> None:
+    """The config (URL + headers) is written to an unread pipe before curl
+    starts on POSIX; a write past the kernel's pipe buffer would block
+    forever with no timeout in effect yet, so this is rejected up front
+    instead."""
+    huge_header_value = "x" * 100_000
+    with pytest.raises(ValueError, match="over the"):
+        run_curl(
+            url="https://example.test/x",
+            headers={"X-Big": huge_header_value},
+            timeout_seconds=5,
+        )
+
+
 # ---------------------------------------------------------------------------
 # run_curl — end to end against a local HTTP server, never a live provider.
 # ---------------------------------------------------------------------------
@@ -180,6 +199,19 @@ def test_run_curl_on_windows_sends_the_config_via_a_temp_file_and_removes_it(
     before = set(glob.glob(pattern))
 
     monkeypatch.setattr(os, "name", "nt")
+    real_run = subprocess.run
+    seen_config_paths: list[str] = []
+
+    def spying_run(cmd: list[str], **kwargs: Any) -> Any:
+        config_path = cmd[cmd.index("--config") + 1]
+        seen_config_paths.append(config_path)
+        # The windows branch must actually have run: the config is a real
+        # file under the temp dir, not `/dev/fd/<n>` (the POSIX path).
+        assert os.path.isfile(config_path)
+        assert os.path.dirname(config_path) == tempfile.gettempdir()
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr("subprocess.run", spying_run)
     with local_server(_RecordingHandler) as base_url:
         proc = run_curl(
             url=base_url + "/x",
@@ -189,6 +221,7 @@ def test_run_curl_on_windows_sends_the_config_via_a_temp_file_and_removes_it(
 
     assert proc.returncode == 0
     assert _RecordingHandler.captured_headers["Authorization"] == "Bearer winsecret"
+    assert seen_config_paths and "/dev/fd/" not in seen_config_paths[0]
     after = set(glob.glob(pattern))
     assert after == before
 
@@ -202,13 +235,20 @@ def test_run_curl_on_windows_removes_the_temp_file_even_when_curl_is_missing(
     before = set(glob.glob(pattern))
 
     monkeypatch.setattr(os, "name", "nt")
+    seen_config_paths: list[str] = []
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        config_path = cmd[cmd.index("--config") + 1]
+        seen_config_paths.append(config_path)
+        # Prove the Windows branch (and not the POSIX one) actually ran
+        # before raising: the config file must exist right now.
+        assert os.path.isfile(config_path)
         raise FileNotFoundError("curl")
 
     monkeypatch.setattr("subprocess.run", fake_run)
     with pytest.raises(FileNotFoundError):
         run_curl(url="https://example.test/x", timeout_seconds=5)
+    assert seen_config_paths and "/dev/fd/" not in seen_config_paths[0]
     after = set(glob.glob(pattern))
     assert after == before
 
@@ -378,7 +418,10 @@ class _RetryAfterHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
-@pytest.mark.skipif(shutil.which("curl") is None, reason="curl not on PATH")
+@pytest.mark.skipif(
+    shutil.which("curl") is None or not _curl_supports_retry_after_header(),
+    reason="curl not on PATH or too old for %header{retry-after}",
+)
 def test_run_curl_captures_retry_after_header() -> None:
     """Regression for #319: a 429's `Retry-After` must reach the caller on
     stderr (never argv, never a temp file), and the exit-code status line
@@ -389,6 +432,70 @@ def test_run_curl_captures_retry_after_header() -> None:
     assert proc.returncode == 22
     assert "curl: (22) The requested URL returned error: 429" in proc.stderr
     assert extract_retry_after(proc.stderr) == "2"
+
+
+def test_curl_failure_message_never_includes_the_retry_after_marker() -> None:
+    """The `circuitry-retry-after:` line `run_curl` writes to stderr on
+    every call must never leak into a rendered failure message."""
+    stderr = (
+        "curl: (22) The requested URL returned error: 429\n"
+        "circuitry-retry-after:2\n"
+    )
+    message = curl_failure_message(
+        source="openai",
+        url="https://example.test/v1/chat",
+        returncode=22,
+        stdout="",
+        stderr=stderr,
+    )
+    assert "circuitry-retry-after" not in message
+
+
+def test_curl_supports_retry_after_header_true_on_modern_curl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _curl_supports_retry_after_header.cache_clear()
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        return subprocess.CompletedProcess(cmd, 0, stdout="curl 7.84.0 (x86_64)\n", stderr="")
+
+    monkeypatch.setattr("circuitry.curl_support._real_subprocess_run", fake_run)
+    try:
+        assert _curl_supports_retry_after_header() is True
+    finally:
+        _curl_supports_retry_after_header.cache_clear()
+
+
+def test_curl_supports_retry_after_header_false_on_older_curl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _curl_supports_retry_after_header.cache_clear()
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        return subprocess.CompletedProcess(cmd, 0, stdout="curl 7.83.1 (x86_64)\n", stderr="")
+
+    monkeypatch.setattr("circuitry.curl_support._real_subprocess_run", fake_run)
+    try:
+        assert _curl_supports_retry_after_header() is False
+    finally:
+        _curl_supports_retry_after_header.cache_clear()
+
+
+def test_curl_supports_retry_after_header_false_when_probe_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hung `curl --version` (SubprocessError, e.g. TimeoutExpired) must
+    not escape the probe and break `run_curl` for every caller."""
+    _curl_supports_retry_after_header.cache_clear()
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        raise subprocess.TimeoutExpired(cmd, 5)
+
+    monkeypatch.setattr("circuitry.curl_support._real_subprocess_run", fake_run)
+    try:
+        assert _curl_supports_retry_after_header() is False
+    finally:
+        _curl_supports_retry_after_header.cache_clear()
 
 
 @pytest.mark.skipif(shutil.which("curl") is None, reason="curl not on PATH")

@@ -149,6 +149,13 @@ def curl_failure_message(
 # enforced rather than assumed.
 _FORBIDDEN_HEADER_CHARS = ("\r", "\n", "\0")
 
+# A write to _run_curl_posix's pipe blocks once its kernel buffer fills
+# (64 KiB on Linux, 16-64 KiB on macOS), before curl has even started, so
+# --max-time can't save it; an oversized config would hang the call
+# forever instead of failing. Comfortably under the smallest common
+# buffer size.
+_MAX_CONFIG_BYTES = 60_000
+
 
 def _validate_no_control_chars(value: str, label: str) -> None:
     if any(ch in value for ch in _FORBIDDEN_HEADER_CHARS):
@@ -210,7 +217,7 @@ def _curl_supports_retry_after_header() -> bool:
         proc = _real_subprocess_run(
             ["curl", "--version"], capture_output=True, text=True, check=False, timeout=5
         )
-    except OSError:
+    except (OSError, subprocess.SubprocessError):
         return False
     match = re.match(r"curl (\d+)\.(\d+)\.(\d+)", proc.stdout or "")
     if not match:
@@ -303,12 +310,20 @@ def run_curl(
     in a ``finally`` (:func:`_run_curl_windows`), since Windows' `Popen`
     has neither `pass_fds` nor `/dev/fd`. The body, when present, travels
     on the *actual* stdin via ``--data-binary @-``; the config can't use
-    that channel too, since a request can have both. May raise
-    ``FileNotFoundError`` if curl is not on PATH — callers translate that
+    that channel too, since a request can have both. Raises ``ValueError``
+    if ``url`` plus ``headers`` exceed ``_MAX_CONFIG_BYTES`` (that config is
+    written to a pipe before curl starts on POSIX, and an oversized write
+    would block forever instead of respecting ``timeout_seconds``). May
+    raise ``FileNotFoundError`` if curl is not on PATH — callers translate that
     into their own error.
     """
     header_items = list(headers.items()) if isinstance(headers, Mapping) else list(headers)
     config_bytes = _curl_config_file(url, header_items).encode()
+    if len(config_bytes) > _MAX_CONFIG_BYTES:
+        raise ValueError(
+            f"url + headers are {len(config_bytes)} bytes, over the "
+            f"{_MAX_CONFIG_BYTES}-byte limit for a single curl --config write"
+        )
     cmd = [
         "curl",
         "-q",

@@ -51,6 +51,17 @@ def http_error_excerpt(body: str, *, max_chars: int = _ERROR_EXCERPT_MAX_CHARS) 
                 value = redacted.get(key)
                 if isinstance(value, str) and value:
                     return value[:max_chars]
+        # No recognized reason field (e.g. GraphQL-style `errors: [...]` or a
+        # validation body with its own shape): fall back to the whole body,
+        # but the *redacted* copy, never the raw `text` — a sibling
+        # credential-shaped field (e.g. an echoed `api_key`) must not reach
+        # the failure message just because it wasn't under `error`/`message`/
+        # `detail`. `redact(text)` on the raw string only matches when the
+        # whole string is itself a JWT/key/URL, so it would let this through.
+        return json.dumps(redacted, ensure_ascii=False)[:max_chars]
+    if isinstance(parsed, list):
+        redacted_list = redact(parsed)
+        return json.dumps(redacted_list, ensure_ascii=False)[:max_chars]
     redacted_text = redact(text)
     return redacted_text[:max_chars] if isinstance(redacted_text, str) else text[:max_chars]
 

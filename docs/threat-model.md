@@ -140,9 +140,12 @@ source is ever visible in `ps` for the duration of the call. `comfyui`'s
 image fetch (`_curl_bytes`), its one multipart upload (`_upload_image`,
 `-F image=@<path>` — the local file path, not its contents, on argv) and
 its `check()` HEAD probe call curl directly rather than through
-`run_curl()`, since none of the three sends a JSON body or a header/URL
-that needs to stay off argv and their target URL is never credential-
-bearing; all three still pass `-q` first.
+`run_curl()`, since none of the three sends a JSON body or a header that
+needs to stay off argv; all three still pass `-q` first. Their target URL
+is built from `base_url`, which is operator-configured (ComfyUI behind an
+authenticating proxy, say) and so can itself carry `user:pass@` — unlike
+the other curl-based adapters/plugins above, these three calls don't route
+that case off argv.
 
 **Mitigation — error masking.** Every curl failure raises through
 [`circuitry/curl_support.py`](../src/circuitry/curl_support.py)'s
