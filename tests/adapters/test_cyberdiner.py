@@ -638,6 +638,107 @@ def test_connection_error_wrapped_in_runtime_error(
     assert exc.value.__cause__ is not None
 
 
+def test_a_500_from_cyberdiner_retries_through_the_prompt_retry_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#263 part 2 regression: cyberdiner raises a plain ``RuntimeError``
+    (not :class:`AdapterCallError`), but its HTTP 500 must still classify as
+    retryable via ``classify_exception``'s ``__cause__`` walk — before that
+    fix, only adapters raising ``AdapterCallError`` ever retried."""
+    from circuitry.core.compiler import compile_orchestration
+    from circuitry.core.dynamic import DynamicRuntime
+    from circuitry.core.store import Store
+
+    calls = {"n": 0}
+
+    def fake_urlopen(req: Any, timeout: float = 0) -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise HTTPError(
+                url=req.full_url,
+                code=500,
+                msg="Internal Server Error",
+                hdrs=None,  # type: ignore[arg-type]
+                fp=io.BytesIO(b"boom"),
+            )
+        return _FakeResponse(
+            status=200,
+            body=_json.dumps(
+                {
+                    "data": {
+                        "jobId": "job-1",
+                        "status": "complete",
+                        "result": "ok",
+                    }
+                }
+            ).encode("utf-8"),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    adapter = _adapter()
+    orch = {
+        "effects": [
+            {
+                "type": "prompt",
+                "name": "task",
+                "template": "hi",
+                "retries": {"max_attempts": 2, "backoff_ms": 0},
+            }
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({})
+
+    DynamicRuntime(root, adapter=adapter, model="cheap").execute(store=store)
+
+    assert store.get("prime.task.value") == "ok"
+    assert store.get("prime.task.meta.retries_used") == 1
+    assert calls["n"] == 2
+
+
+def test_a_400_from_cyberdiner_does_not_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A permanent client error must not spend the retry budget."""
+    from circuitry.core.compiler import compile_orchestration
+    from circuitry.core.dynamic import DynamicRuntime
+    from circuitry.core.store import Store
+
+    calls = {"n": 0}
+
+    def fake_urlopen(req: Any, timeout: float = 0) -> Any:
+        calls["n"] += 1
+        raise HTTPError(
+            url=req.full_url,
+            code=400,
+            msg="Bad Request",
+            hdrs=None,  # type: ignore[arg-type]
+            fp=io.BytesIO(b"bad tier"),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    adapter = _adapter()
+    orch = {
+        "effects": [
+            {
+                "type": "prompt",
+                "name": "task",
+                "template": "hi",
+                "retries": {"max_attempts": 3, "backoff_ms": 0},
+            }
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({})
+
+    with pytest.raises(RuntimeError):
+        DynamicRuntime(root, adapter=adapter, model="cheap").execute(store=store)
+
+    assert calls["n"] == 1
+
+
 # ---------------------------------------------------------------------------
 # check()
 # ---------------------------------------------------------------------------

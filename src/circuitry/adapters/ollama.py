@@ -9,6 +9,7 @@ from typing import Any, ClassVar
 
 from ..curl_support import curl_failure_message, parse_error_body, run_curl
 from ..preflight import CheckResult
+from ._retry import AdapterCallError, classify_curl_exit
 from .base import (
     DETERMINISTIC_SEED,
     GenerateOptions,
@@ -127,7 +128,7 @@ class OllamaAdapter:
                 body_message = parse_error_body(proc.stdout) or ""
                 if model and "not found" in body_message.lower():
                     hint = f"Try `ollama pull {model}` first."
-            raise RuntimeError(
+            raise AdapterCallError(
                 curl_failure_message(
                     source="ollama",
                     model=model,
@@ -136,7 +137,8 @@ class OllamaAdapter:
                     stdout=proc.stdout,
                     stderr=proc.stderr,
                     hint=hint,
-                )
+                ),
+                retry_info=classify_curl_exit(proc.returncode, proc.stderr),
             )
 
         try:

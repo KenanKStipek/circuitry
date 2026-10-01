@@ -136,3 +136,58 @@ def test_effective_settings_records_default_timeout_provenance(
     assert result.ok, result.error
     sources = result.state["runtime"]["effective_settings"]["sources"]
     assert sources["adapters.ollama.timeout_seconds"] == "default"
+
+
+def test_litellm_timeout_alias_reaches_the_run_default(
+    tmp_path: Path, caplog: Any
+) -> None:
+    """#263 part 1 regression: ``runtime.adapters.litellm.timeout`` (the
+    deprecated alias) must reach the actual dispatch, not just the
+    ``LiteLLMAdapter`` instance's own unused default."""
+    adapter = RecordingAdapter(name="litellm")
+    cfg = CircuitryConfig(
+        default_adapter="litellm",
+        runtime={"adapters": {"litellm": {"timeout": 45}}},
+    )
+    with caplog.at_level("WARNING"):
+        result = run(
+            RunRequest(
+                orchestration_path=_write_prompt_orch(tmp_path),
+                state_path=None,
+                out_path=None,
+                dry_run=False,
+                validate_only=False,
+                initial_state={},
+                adapter=adapter,
+                skip_preflight=True,
+                config=cfg,
+            )
+        )
+    assert result.ok, result.error
+    assert adapter.calls == [("some-model", 45)]
+    assert any("deprecated" in r.message for r in caplog.records)
+
+
+def test_litellm_timeout_seconds_wins_over_the_deprecated_alias(
+    tmp_path: Path,
+) -> None:
+    adapter = RecordingAdapter(name="litellm")
+    cfg = CircuitryConfig(
+        default_adapter="litellm",
+        runtime={"adapters": {"litellm": {"timeout_seconds": 90, "timeout": 45}}},
+    )
+    result = run(
+        RunRequest(
+            orchestration_path=_write_prompt_orch(tmp_path),
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            initial_state={},
+            adapter=adapter,
+            skip_preflight=True,
+            config=cfg,
+        )
+    )
+    assert result.ok, result.error
+    assert adapter.calls == [("some-model", 90)]

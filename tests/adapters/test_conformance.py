@@ -206,6 +206,35 @@ def test_direct_provider_curl_failure_masks_api_key(
     assert "Incorrect API key provided" in message
 
 
+@pytest.mark.parametrize(
+    ("adapter", "env_var"),
+    [
+        (OpenAIAdapter(), "OPENAI_API_KEY"),
+        (AnthropicAdapter(), "ANTHROPIC_API_KEY"),
+    ],
+    ids=["openai", "anthropic"],
+)
+def test_missing_api_key_error_does_not_point_at_a_dead_config_key(
+    monkeypatch: pytest.MonkeyPatch, adapter: Any, env_var: str
+) -> None:
+    """Issue #263 part 1: no adapter builder ever read an ``api_key`` config
+    key (``factory.py``'s builders only take ``base_url``/``default_model``/
+    etc.), so the hint pointing at ``runtime.adapters.<name>.api_key`` was
+    dead advice — removed; the environment variable is the one documented
+    path for a key (GHSA-vgm9-f98v-6pjx — keys/endpoints aren't steerable
+    from document layers).
+    """
+    monkeypatch.delenv(env_var, raising=False)
+
+    with pytest.raises(RuntimeError) as exc:
+        adapter.generate(model="model", prompt="ping")
+
+    message = str(exc.value)
+    assert env_var in message
+    assert "api_key" not in message
+    assert "runtime.adapters" not in message
+
+
 def test_litellm_errors_are_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_completion(**kwargs: Any) -> Any:
         del kwargs
@@ -220,6 +249,115 @@ def test_litellm_errors_are_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert "LiteLLM request failed" in str(exc.value)
     assert "provider mismatch" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "adapter",
+    [OpenAIAdapter(), AnthropicAdapter()],
+    ids=["openai", "anthropic"],
+)
+def test_a_429_response_raises_a_retryable_adapter_call_error(
+    monkeypatch: pytest.MonkeyPatch, adapter: Any
+) -> None:
+    """Issue #263 part 2: a curl-based adapter's 429 must classify as
+    retryable for core.prompt's retry loop. ``--fail-with-body`` collapses
+    every HTTP 4xx/5xx into exit 22 with no status in ``proc.returncode`` —
+    the status is read from curl's own stderr line instead (verified
+    against curl 8.7.1; see adapters/_retry.py).
+    """
+    from circuitry.adapters._retry import AdapterCallError
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(
+            returncode=22,
+            stdout=json.dumps({"error": {"message": "rate limited"}}),
+            stderr="curl: (22) The requested URL returned error: 429",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    with pytest.raises(AdapterCallError) as exc:
+        adapter.generate(model="model", prompt="ping")
+
+    assert exc.value.retry_info.retryable is True
+    assert exc.value.retry_info.status == 429
+
+
+@pytest.mark.parametrize(
+    "adapter",
+    [OpenAIAdapter(), AnthropicAdapter()],
+    ids=["openai", "anthropic"],
+)
+def test_a_404_response_raises_a_non_retryable_adapter_call_error(
+    monkeypatch: pytest.MonkeyPatch, adapter: Any
+) -> None:
+    from circuitry.adapters._retry import AdapterCallError
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(
+            returncode=22,
+            stdout=json.dumps({"error": {"message": "not found"}}),
+            stderr="curl: (22) The requested URL returned error: 404",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    with pytest.raises(AdapterCallError) as exc:
+        adapter.generate(model="model", prompt="ping")
+
+    assert exc.value.retry_info.retryable is False
+    assert exc.value.retry_info.status == 404
+
+
+def test_ollama_a_connection_failure_raises_a_retryable_adapter_call_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """curl exit 7 (couldn't connect) is retryable without needing a status
+    at all — the daemon never answered."""
+    from circuitry.adapters._retry import AdapterCallError
+    from circuitry.adapters.ollama import OllamaAdapter
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=7, stderr="curl: (7) Failed to connect")
+
+    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+
+    with pytest.raises(AdapterCallError) as exc:
+        OllamaAdapter().generate(model="model", prompt="ping")
+
+    assert exc.value.retry_info.retryable is True
+
+
+def test_litellm_a_status_code_429_exception_raises_a_retryable_adapter_call_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from circuitry.adapters._retry import AdapterCallError
+
+    class _RateLimitError(Exception):
+        status_code = 429
+
+    def fake_completion(**kwargs: Any) -> Any:
+        del kwargs
+        raise _RateLimitError("rate limited")
+
+    fake_module = SimpleNamespace(completion=fake_completion)
+    monkeypatch.setitem(sys.modules, "litellm", fake_module)
+
+    adapter = LiteLLMAdapter(default_model="openai/gpt-4o-mini")
+    with pytest.raises(AdapterCallError) as exc:
+        adapter.generate(model="", prompt="ping")
+
+    assert exc.value.retry_info.retryable is True
+    assert exc.value.retry_info.status == 429
 
 
 # ---------------------------------------------------------------------------

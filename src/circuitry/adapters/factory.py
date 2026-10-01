@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -55,12 +56,61 @@ def _build_anthropic(cfg: dict[str, Any]) -> Adapter:
     )
 
 
+def _litellm_timeout_raw(cfg: dict[str, Any]) -> Any:
+    """``cfg["timeout_seconds"]``, falling back to the deprecated ``timeout``
+    alias (warns once per call site) so an existing config keeps working.
+    Shared between :func:`_build_litellm` and
+    :func:`configured_timeout_seconds` — a per-attempt dispatch
+    (``core.prompt._attempt_timeout_seconds``) and the run default
+    (``cli.runtime_shim``) both need the same alias resolved, not just the
+    adapter instance's own default.
+    """
+    raw = cfg.get("timeout_seconds")
+    if raw is None and cfg.get("timeout") is not None:
+        raw = cfg.get("timeout")
+        logging.getLogger(__name__).warning(
+            "runtime.adapters.litellm.timeout is deprecated; use "
+            "runtime.adapters.litellm.timeout_seconds instead."
+        )
+    return raw
+
+
 def _build_litellm(cfg: dict[str, Any]) -> Adapter:
+    timeout_raw = _litellm_timeout_raw(cfg)
     return LiteLLMAdapter(
         default_model=cfg.get("default_model") or "openai/gpt-4o-mini",
         api_base=cfg.get("api_base") or "",
-        timeout=int(cfg.get("timeout") or 120),
+        timeout=int(timeout_raw or 120),
     )
+
+
+def configured_timeout_seconds(adapter_name: str, runtime: dict[str, Any] | None) -> int | None:
+    """``runtime.adapters.<adapter_name>.timeout_seconds`` for one adapter,
+    or ``None`` when nothing usable is configured.
+
+    Normalises ``adapter_name`` the same way :func:`build_adapter` does
+    (``.strip().lower()``) so a ``provider: Ollama`` in an orchestration
+    still finds a ``runtime.adapters.ollama`` block written in the
+    conventional lower-case. Falls back to litellm's deprecated ``timeout``
+    alias via :func:`_litellm_timeout_raw`. ``0`` or a negative value counts
+    as unset, not "no limit" — callers (the per-attempt dispatch timeout,
+    the run default) treat ``None`` as "use the next fallback in the
+    precedence chain", and a stray ``0`` must fall through the same way
+    rather than being read as unlimited.
+    """
+    name = (adapter_name or "").strip().lower()
+    adapters_cfg = (runtime or {}).get("adapters") or {}
+    cfg = adapters_cfg.get(name) or {}
+    raw = cfg.get("timeout_seconds")
+    if raw is None and name == "litellm":
+        raw = _litellm_timeout_raw(cfg)
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
 
 def _build_gemini(cfg: dict[str, Any]) -> Adapter:

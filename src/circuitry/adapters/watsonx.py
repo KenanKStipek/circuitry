@@ -31,6 +31,7 @@ from typing import Any
 
 from ..curl_support import curl_failure_message, run_curl
 from ..preflight import CheckResult
+from ._retry import AdapterCallError, classify_curl_exit
 from .base import GenerateOptions, GenerateResult, ignored_options_warning
 
 # Module-level token cache: api_key -> (token, expires_at_epoch_seconds).
@@ -56,7 +57,7 @@ def _exchange_iam_token(api_key: str, *, timeout_seconds: int) -> tuple[str, flo
     except FileNotFoundError as exc:
         raise RuntimeError("curl is not installed or not on PATH") from exc
     if proc.returncode != 0:
-        raise RuntimeError(
+        raise AdapterCallError(
             curl_failure_message(
                 source="watsonx-iam",
                 model=None,
@@ -65,7 +66,8 @@ def _exchange_iam_token(api_key: str, *, timeout_seconds: int) -> tuple[str, flo
                 stdout=proc.stdout,
                 stderr=proc.stderr,
                 secrets=[api_key],
-            )
+            ),
+            retry_info=classify_curl_exit(proc.returncode, proc.stderr),
         )
     try:
         raw = json.loads(proc.stdout)
@@ -151,7 +153,7 @@ class WatsonXAdapter:
             raise RuntimeError("curl is not installed or not on PATH") from exc
 
         if proc.returncode != 0:
-            raise RuntimeError(
+            raise AdapterCallError(
                 curl_failure_message(
                     source="watsonx",
                     model=target_model,
@@ -160,7 +162,8 @@ class WatsonXAdapter:
                     stdout=proc.stdout,
                     stderr=proc.stderr,
                     secrets=[api_key, token],
-                )
+                ),
+                retry_info=classify_curl_exit(proc.returncode, proc.stderr),
             )
 
         try:

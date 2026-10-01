@@ -4,7 +4,8 @@ inference server with an OpenAI-compatible chat completions endpoint.
 No authentication by default (TGI deployments behind a reverse proxy may
 add auth at the network layer, in which case set ``runtime.adapters.tgi.
 api_key_env`` and the bearer token will be added). Override ``base_url``
-or set ``TGI_BASE_URL`` to point at the deployed instance.
+via ``runtime.adapters.tgi.base_url`` in config.json to point at the
+deployed instance.
 """
 
 from __future__ import annotations

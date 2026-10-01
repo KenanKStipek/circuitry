@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
+from ._retry import AdapterCallError, classify_litellm_exception
 from .base import GenerateOptions, GenerateResult, ignored_options_warning
 
 
@@ -36,7 +37,11 @@ class LiteLLMAdapter:
     Config options (in config.json under runtime.adapters.litellm):
       - default_model: Default model if not specified (defaults to openai/gpt-4o-mini)
       - api_base: Optional API base URL override
-      - timeout: Request timeout in seconds
+      - timeout_seconds: Request timeout in seconds (``timeout`` is accepted
+        as a deprecated alias and logs a warning; every other adapter's
+        config uses ``timeout_seconds``, and a per-attempt dispatch always
+        passes one explicitly, so this is only the default for a direct
+        caller that doesn't)
     """
 
     name: str = "litellm"
@@ -75,7 +80,9 @@ class LiteLLMAdapter:
         try:
             response = litellm.completion(**kwargs)
         except Exception as e:
-            raise RuntimeError(f"LiteLLM request failed: {e}") from e
+            raise AdapterCallError(
+                f"LiteLLM request failed: {e}", retry_info=classify_litellm_exception(e)
+            ) from e
 
         # Extract response - litellm returns OpenAI-compatible format
         raw = (

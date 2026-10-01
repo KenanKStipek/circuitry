@@ -665,3 +665,88 @@ def test_watsonx_generation_end_to_end_against_local_server(
     for cmd in calls:
         assert_q_first(cmd)
         assert_not_in_argv(cmd, secret, "canary-iam-token", large_prompt[:200])
+
+
+def test_watsonx_iam_429_classifies_as_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#263 part 2 regression: the IAM token exchange previously raised a
+    bare ``RuntimeError`` that never retried; it now raises
+    :class:`AdapterCallError` classified from curl's exit/stderr, the same
+    way the main generation request already was."""
+    from circuitry.adapters._retry import AdapterCallError
+
+    monkeypatch.setenv("WATSONX_API_KEY", "k")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "p")
+    from circuitry.adapters import watsonx as watsonx_mod
+
+    watsonx_mod._TOKEN_CACHE.clear()
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(
+            returncode=22,
+            stderr="curl: (22) The requested URL returned error: 429",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    adapter = build_adapter(adapter_name="watsonx", runtime={})
+    with pytest.raises(AdapterCallError) as exc:
+        adapter.generate(model="m", prompt="p")
+    assert exc.value.retry_info.retryable is True
+    assert exc.value.retry_info.status == 429
+
+
+def test_watsonx_iam_failure_retries_through_the_prompt_retry_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WATSONX_API_KEY", "k")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "p")
+    from circuitry.adapters import watsonx as watsonx_mod
+    from circuitry.core.compiler import compile_orchestration
+    from circuitry.core.dynamic import DynamicRuntime
+    from circuitry.core.store import Store
+
+    watsonx_mod._TOKEN_CACHE.clear()
+
+    calls = {"n": 0}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        joined = " ".join(cmd)
+        if "iam.cloud.ibm.com" in joined:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return FakeProc(
+                    returncode=22,
+                    stderr="curl: (22) The requested URL returned error: 503",
+                )
+            return FakeProc(
+                returncode=0,
+                stdout=json.dumps({"access_token": "tok", "expires_in": 3600}),
+            )
+        return FakeProc(
+            returncode=0,
+            stdout=json.dumps({"results": [{"generated_text": "ok"}]}),
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    adapter = build_adapter(adapter_name="watsonx", runtime={})
+    orch = {
+        "effects": [
+            {
+                "type": "prompt",
+                "name": "task",
+                "template": "hi",
+                "retries": {"max_attempts": 2, "backoff_ms": 0},
+            }
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({})
+
+    DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
+
+    assert store.get("prime.task.value") == "ok"
+    assert store.get("prime.task.meta.retries_used") == 1
+    assert calls["n"] == 2

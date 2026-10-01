@@ -174,9 +174,30 @@ class LoopRuntime:
         # Raw reply from the last `mode: model` while-condition evaluation,
         # success or failure — set inside _evaluate_model and read back in
         # execute() to record meta["answer"] alongside the parsed result.
+        # Token counts ride the same path: this call bypasses PromptRuntime
+        # entirely, so nowhere else ever sees what it spent. `_tokens_sent`/
+        # `_tokens_received` are the last check's own count (what meta's
+        # `tokens_sent`/`tokens_received` always mean); `_..._total` sum
+        # every check a `while` made before it stopped — a ten-pass loop's
+        # condition doesn't cost one check's worth of tokens, it costs ten.
+        # Reset in execute(), not here: this same Loop instance re-executes
+        # once per outer pass when it sits inside another loop's body or a
+        # --state resume (see completed_indices's comment below), and a
+        # prior pass's total must not bleed into this one's (#260).
         self._model_answer: str | None = None
+        self._model_tokens_sent: int | None = None
+        self._model_tokens_received: int | None = None
+        self._model_tokens_sent_total: int | None = None
+        self._model_tokens_received_total: int | None = None
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
+        # Reset at the top of every execute() call, not just __init__: this
+        # same Loop instance re-executes once per outer pass when it sits
+        # inside another loop's body or a --state resume, and a prior pass's
+        # while-condition token total must not bleed into this one's (#260).
+        self._model_tokens_sent_total = None
+        self._model_tokens_received_total = None
+
         # Named loop: create a node for this loop
         # Transparent control: effects merge directly into parent
         is_named = bool(self.defn.name)
@@ -557,11 +578,19 @@ class LoopRuntime:
                                 meta["answer"] = self._model_answer
                                 meta["adapter"] = getattr(self.adapter, "name", "unknown")
                                 meta["model"] = self.model
+                                meta["tokens_sent"] = self._model_tokens_sent
+                                meta["tokens_received"] = self._model_tokens_received
+                                meta["tokens_sent_total"] = self._model_tokens_sent_total
+                                meta["tokens_received_total"] = self._model_tokens_received_total
                         except Exception as exc:
                             if meta and self.defn.while_def.mode == "model":
                                 meta["answer"] = self._model_answer
                                 meta["adapter"] = getattr(self.adapter, "name", "unknown")
                                 meta["model"] = self.model
+                                meta["tokens_sent"] = self._model_tokens_sent
+                                meta["tokens_received"] = self._model_tokens_received
+                                meta["tokens_sent_total"] = self._model_tokens_sent_total
+                                meta["tokens_received_total"] = self._model_tokens_received_total
                             if self.defn.on_error == "fail":
                                 termination_reason = "error"
                                 raise
@@ -810,6 +839,8 @@ class LoopRuntime:
     def _evaluate_model(self, *, ctx: dict[str, Any]) -> bool:
         """Cybernetic evaluation: invoke model with rendered template."""
         self._model_answer = None
+        self._model_tokens_sent = None
+        self._model_tokens_received = None
         if self.dry_run:
             return False  # Stop loop in dry run after first iteration
 
@@ -832,6 +863,16 @@ Should the loop continue? Answer (yes/no):"""
             timeout_seconds=self.timeout_seconds,
         )
         self._model_answer = res.text
+        self._model_tokens_sent = res.tokens_sent
+        self._model_tokens_received = res.tokens_received
+        if res.tokens_sent is not None:
+            self._model_tokens_sent_total = (
+                self._model_tokens_sent_total or 0
+            ) + res.tokens_sent
+        if res.tokens_received is not None:
+            self._model_tokens_received_total = (
+                self._model_tokens_received_total or 0
+            ) + res.tokens_received
 
         # Parse response as a lenient yes/no; raises on an answer that
         # doesn't unambiguously read as one (see core.answers).

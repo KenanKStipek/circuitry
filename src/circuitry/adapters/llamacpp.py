@@ -2,8 +2,9 @@
 inference for GGUF models with an OpenAI-compatible chat completions
 endpoint at ``/v1``.
 
-No authentication by default. Override ``base_url`` (or set
-``LLAMACPP_BASE_URL``) to point at the running server.
+No authentication by default. Override ``base_url`` via
+``runtime.adapters.llamacpp.base_url`` in config.json to point at the
+running server.
 """
 
 from __future__ import annotations

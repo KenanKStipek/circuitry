@@ -79,18 +79,18 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `name` | string | yes | — | Pattern `^[A-Za-z_][A-Za-z0-9_]*$`; `iter_<N>` reserved; `value`/`meta`/`input`/`prime`/`runtime` reserved |
 | `template` | string | one-of | — | Mustache template; mutually exclusive with `messages` |
 | `messages` | array | one-of | — | Role-based messages; mutually exclusive with `template`. Sent as real conversation turns (a system message, then user/assistant turns) to adapters that take them — see [Generation options](#generation-options-messages-and-images) |
-| `prompt_type` | string | no | `text` | `text`, `json`, `boolean`, `number`, `array`, `object`, `tool`. `boolean`/`number` parse the reply leniently (`Yes.`, `**TRUE**`, `42.`, `1e3` all read correctly) and raise — rather than decoding to `null` — on a reply that still doesn't parse. Raw reply kept on `meta.answer` |
+| `prompt_type` | string | no | `text` | `text`, `json`, `boolean`, `number`, `array`, `object`, `tool`. `boolean`/`number` parse the reply leniently (`Yes.`, `**TRUE**`, `42.`, `1e3` all read correctly) and raise — rather than decoding to `null` — on a reply that still doesn't parse; `provider_fallbacks`, when configured, is tried before `on_error`/`retries` apply. Raw reply kept on `meta.answer` |
 | `schema` | object | no | — | JSON Schema for validating structured output |
 | `description` | string | no | — | Human-readable description |
 | `model` | string | no | — | Per-effect model override |
 | `provider` | string | no | — | Per-effect provider override |
-| `provider_fallbacks` | array | no | — | Ordered fallback providers |
+| `provider_fallbacks` | array | no | — | Ordered fallback providers. Tried on a dispatch failure *and* on a reply this effect can't use (an unreadable boolean/number, schema-invalid JSON) — either moves to the next provider before a retry is counted. Each attempt lands in `meta.fallback_attempts` with its own `tokens_sent`/`tokens_received` and, for an unusable reply, a size-capped `raw_reply` and a `decode_failed`/`schema_invalid` status |
 | `params` | object | no | — | Generation parameters. `temperature`, `max_tokens` and `stop` are mapped to each provider's own names; every other key goes to the provider unchanged (e.g. ollama `num_ctx`, OpenAI `top_p`) — see [Generation options](#generation-options-messages-and-images) |
-| `timeout_ms` | integer | no | — | Per-attempt timeout in milliseconds, capped by the adapter's `timeout_seconds`; rounded up to whole seconds. `0` or absent: the adapter's timeout |
+| `timeout_ms` | integer | no | — | Per-attempt timeout in milliseconds, capped by the timeout of whichever adapter that attempt actually dispatches to (`runtime.adapters.<name>.timeout_seconds` for *that* adapter — not necessarily the run default's, if `provider:`/`provider_fallbacks` sends the attempt elsewhere); rounded up to whole seconds. `0` or absent: the adapter's timeout |
 | `deterministic` | boolean | no | `false` | Temperature 0 unless `params.temperature` is set, plus a fixed seed on ollama and openai unless `params.seed` is set |
 | `inputs` | object | no | — | Prompt-local key/value pairs for template rendering |
 | `assets` | array | no | — | Images for a vision model: `[{kind: "image", ref: "path/to/img"}]`. `ref` is a Mustache template rendering to a local path or an `http(s)` URL. Other kinds are skipped with a warning |
-| `retries` | object | no | — | `{max_attempts: N, backoff_ms: M}` |
+| `retries` | object | no | — | `{max_attempts: N, backoff_ms: M}`. A dispatch failure retries only if classified retryable (429, 408, 5xx, a timeout, a dropped connection); 400/401/403/404/422 and a missing key fail the attempt loop immediately. A reply that came back but failed to decode/validate (see `provider_fallbacks` below) always retries, same as before classification existed. Wait is exponential backoff with jitter from `backoff_ms`, capped at 60s; a provider's `Retry-After` header overrides the computed wait when the adapter can read one |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 
 **Example — text output:**
@@ -145,6 +145,7 @@ What lands in `meta` beyond the usual keys, each only when it has something to s
 - `meta.assets` — one `{kind, ref, media_type, size, sha256}` per local image (`{kind, ref}` for a URL). The image bytes never enter state.
 - `meta.finish_reason` — the provider's stop reason (`stop`, `length`, `end_turn`, `max_tokens`, ...) when it reports one.
 - `meta.warnings` — a reply cut off at the length limit (`finish_reason` `length`/`max_tokens`), options an adapter ignored, an asset kind no adapter sends.
+- `meta.tokens_sent_total` / `meta.tokens_received_total` — every attempt this dispatch made, failed/retried/fallen-back-from included, summed across all of them; `meta.tokens_sent`/`meta.tokens_received` stay the winning attempt's own count, unchanged in meaning.
 
 **Example — an image to a local vision model:**
 ```yaml
@@ -165,7 +166,7 @@ What lands in `meta` beyond the usual keys, each only when it has something to s
   template: "List the distinct regions of this image. Return ONLY a JSON object with \"regions\"."
 ```
 
-A slow model needs a longer adapter timeout, `runtime.adapters.ollama.timeout_seconds: 1800` in config: a prompt's `timeout_ms` is capped by the adapter's `timeout_seconds`, so it can only shorten the wait. Write `ref` with triple braces (`{{{...}}}`): double braces HTML-escape the value, which breaks a URL with `&` in its query string.
+A slow model needs a longer adapter timeout, `runtime.adapters.ollama.timeout_seconds: 1800` in config: a prompt's `timeout_ms` is capped by the timeout of whichever adapter the attempt actually dispatches to, so it can only shorten the wait — that's `ollama`'s own configured timeout here even when `ollama` isn't the run's default adapter, as long as this prompt's `provider:` (or a fallback) names it. Write `ref` with triple braces (`{{{...}}}`): double braces HTML-escape the value, which breaks a URL with `&` in its query string.
 
 ---
 
@@ -304,7 +305,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `each.as` | string | no | `item` | Variable name for current element in body templates |
 | `while` | object | one-of | — | Continuation condition; mutually exclusive with `each` |
 | `while.mode` | string | no | `model` | `model` or `cel` |
-| `while.template` | string | model only | — | LLM returns boolean for continuation decision, parsed the same lenient way as `if.template`. Raw reply on `meta.answer` on each check |
+| `while.template` | string | model only | — | LLM returns boolean for continuation decision, parsed the same lenient way as `if.template`. Raw reply on `meta.answer` on each check, plus `meta.tokens_sent`/`meta.tokens_received` for the last check and `meta.tokens_sent_total`/`meta.tokens_received_total` summed across every check this loop made |
 | `while.expr` | string | cel only | — | CEL expression against state |
 | `max_iterations` | integer | no | — (no cap) | Hard cap on iterations. Unset means the loop runs until its collection is exhausted (`each`) or its condition is false (`while`) |
 | `min_iterations` | integer | no | `0` | Minimum iterations to run before the condition is checked at all. A forced pass does not evaluate the condition and discard the answer — it never evaluates it. `while` loops only; on an `each` loop it has no effect and `cof check` warns. |

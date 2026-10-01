@@ -12,7 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..adapters import Adapter, build_adapter
-from ..adapters.factory import ADAPTER_REGISTRY
+from ..adapters.factory import ADAPTER_REGISTRY, configured_timeout_seconds
 from ..allowlist_gate import AllowlistError, install_allowlists, require_adapter
 from ..core.compiler import apply_effect_overrides, compile_orchestration
 from ..core.document_check import structural_errors, unknown_key_warnings
@@ -549,13 +549,9 @@ def run(req: RunRequest) -> RunResult:
                 adapter = build_adapter(
                     adapter_name=resolved_adapter, runtime=effective.runtime or {}
                 )
-            try:
-                adapters_cfg = (effective.runtime or {}).get("adapters") or {}
-                this_cfg = adapters_cfg.get(resolved_adapter) or {}
-                timeout_seconds = int(this_cfg.get("timeout_seconds") or 120)
-            except (ValueError, TypeError) as exc:
-                logger.warning("Failed to parse timeout_seconds, defaulting to 120: %s", exc)
-                timeout_seconds = 120
+            timeout_seconds = (
+                configured_timeout_seconds(resolved_adapter, effective.runtime) or 120
+            )
         else:
             adapter = _NoOpAdapter()
 
