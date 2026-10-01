@@ -31,7 +31,8 @@ from circuitry.core.store import Store
 
 #: Same interface output names as the bundled planner; the runtime reads the
 #: plan through the interface, so this stands in for `agents/decompose.yml`
-#: with a single scripted model call.
+#: with a single scripted model call. It reads the source prompt where the
+#: bundled planner does, under ``input``.
 STUB_PLANNER = """
 interface:
   outputs:
@@ -53,7 +54,7 @@ effects:
         done: {type: boolean}
         result_path: {type: string}
       required: [say, chunks, yaml]
-    template: "PLANNER {{source_template}}"
+    template: "PLANNER {{{input.source_template}}}"
 """
 
 #: What the planner emits for the source effect: two chunks and a merge, per
@@ -755,8 +756,8 @@ def test_decomposition_planner_prompt_never_declares_runtime_as_an_input(
     planner_path = tmp_path / "stub_planner_with_interface.yml"
     planner_path.write_text(
         STUB_PLANNER.replace(
-            'template: "PLANNER {{source_template}}"',
-            'template: "PLANNER {{source_template}} :: {{source_interface}}"',
+            'template: "PLANNER {{{input.source_template}}}"',
+            'template: "PLANNER {{{input.source_template}}} :: {{{input.source_interface}}}"',
         ),
         encoding="utf-8",
     )
@@ -772,7 +773,8 @@ def test_decomposition_planner_prompt_never_declares_runtime_as_an_input(
 
     assert store.get("prime.task.meta.decomposition.outcome") == "decomposed"
     [planner_prompt] = adapter.planner_calls()
-    assert "topic" in planner_prompt
+    assert " :: " in planner_prompt  # the interface description reached the planner
+    assert "topic" in planner_prompt.split(" :: ", 1)[1]
     assert "runtime" not in planner_prompt
 
 
@@ -788,3 +790,20 @@ def test_the_bundled_planner_is_the_default(planner: Path) -> None:
     assert bundled.is_file()
     assert bundled.name == "decompose.yml"
     assert _planner_path({"_decomposition_planner_path": str(planner)}) == planner
+
+
+def test_bundled_planner_receives_the_source_prompt() -> None:
+    """The real planner (agents/decompose.yml), not a stub: its first prompt
+    must carry the source template and the chunk budget. Seeded at the state
+    root, the planner saw an empty prompt, so every runtime decomposition fell
+    back to routing up while the stub-planner tests above passed."""
+    adapter = ScriptedAdapter()
+    config = _config(Path("unused"))
+    del config["_decomposition_planner_path"]  # the bundled planner
+    store = _run(_orch(), adapter=adapter, runtime_config=config)
+    planning = [p for _, p in adapter.calls if "Decompose the prompt below" in p]
+    assert planning, "the bundled planner never ran"
+    assert "TASK analyze {{topic}}" in planning[0]
+    assert "at most 8 chunks" in planning[0]
+    # the scripted answers are not a plan, so the run routes up and still ends well
+    assert store.state["prime"]["task"]["value"].startswith("gen[")
