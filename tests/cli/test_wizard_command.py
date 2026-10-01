@@ -207,6 +207,31 @@ def test_wizard_library_save_refuses_an_invalid_draft(tmp_path: Path) -> None:
     assert not (tmp_path / "manifest.json").exists()
 
 
+def test_wizard_turn_failure_prints_clean_error_not_a_traceback() -> None:
+    """A `CircuitryExecutionError` from a turn's run (e.g. a small model
+    returning non-JSON for a schema'd prompt effect) must become a clean
+    `[red]Error:[/red]` line and exit 1, not an unhandled traceback (#258
+    part 2)."""
+    from circuitry.api import CircuitryExecutionError
+    from circuitry.cli.runtime_shim import RunResult
+
+    def _raise(*args, **kwargs):
+        raise CircuitryExecutionError(
+            "prime.turn: turn.decide: JSON schema validation failed",
+            result=RunResult(ok=False, state={}, warnings=[], error="schema validation failed"),
+        )
+
+    with patch("circuitry.cli.app.drive_conversation", _raise), patch(
+        "circuitry.cli.app.resolve_config", return_value=CircuitryConfig()
+    ):
+        result = runner.invoke(app, ["wizard", "--goal", "Greet someone"])
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert "Error:" in result.output
+    assert "JSON schema validation failed" in result.output
+
+
 def test_wizard_help_mentions_it_is_not_gen() -> None:
     result = runner.invoke(app, ["wizard", "--help"])
     assert result.exit_code == 0

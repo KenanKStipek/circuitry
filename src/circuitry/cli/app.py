@@ -289,6 +289,37 @@ def _find_deepest_value(node: dict[str, Any]) -> Any:
     return last_val
 
 
+def _extract_generated_orchestration(yaml_text: str) -> dict[str, Any] | None:
+    """Pull the orchestration mapping out of `cof gen`'s raw model output.
+
+    Tries the whole (fence/separator-stripped) text first, which handles a
+    bare document. Models imitating the bundled examples' own house style
+    often open with a `#`-commented header (e.g. `# effects:\\n  - type: ...`)
+    before the real content, so if that fails, drop comment-only lines and
+    look for the first effects:/adapter:/interface: line to find the real
+    document's start.
+    """
+    import yaml as _yaml  # type: ignore[import-untyped]
+
+    try:
+        parsed = _yaml.safe_load(yaml_text)
+    except _yaml.YAMLError:
+        parsed = None
+    if isinstance(parsed, dict):
+        return parsed
+
+    lines = [line for line in yaml_text.splitlines() if not line.strip().startswith("#")]
+    for i, line in enumerate(lines):
+        if line.startswith(("effects:", "adapter:", "interface:")):
+            candidate = "\n".join(lines[i:]).strip()
+            try:
+                parsed = _yaml.safe_load(candidate)
+            except _yaml.YAMLError:
+                return None
+            return parsed if isinstance(parsed, dict) else None
+    return None
+
+
 def _save_last_run(args: dict[str, Any]) -> None:
     """Stash the current run args for --last replay."""
     try:
@@ -1733,7 +1764,13 @@ def gen_cmd(
         ..., help="Natural language description of the orchestration to generate."
     ),
     out: Path | None = typer.Option(
-        None, "--out", "-o", help="Write resulting state JSON to this file (live-updated during run)."
+        None, "--out", "-o",
+        help="Write the generated orchestration here (default: ./<name>.<ext>).",
+    ),
+    live_state: Path | None = typer.Option(
+        None, "--live-state",
+        help="Mirror the generation run's state JSON to this file while it goes. "
+        "For live monitoring — not the generated orchestration.",
     ),
     config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config JSON."
@@ -1807,15 +1844,9 @@ def gen_cmd(
     except Exception:
         pass  # Best-effort
 
-    # Determine orchestration output path from name + format
+    # Determine orchestration output path from --out, or name + format
     _ext = {"yaml": ".yml", "json": ".json", "toon": ".toon"}
-    orch_out = Path(f"{name}{_ext.get(output_format, '.yml')}")
-
-    # --out is for live state / resulting state JSON
-    live_state_path = None
-    if out:
-        out.parent.mkdir(parents=True, exist_ok=True)
-        live_state_path = out
+    orch_out = out if out is not None else Path(f"{name}{_ext.get(output_format, '.yml')}")
 
     req = RunRequest(
         orchestration_path=meta_orch_path,
@@ -1826,11 +1857,11 @@ def gen_cmd(
         validate_only=False,
         verbose=verbose,
         config=cfg,
-        live_state_path=live_state_path,
+        live_state_path=live_state,
     )
 
-    if live_state_path:
-        console.print(f"[bold]Live state:[/bold] {live_state_path}")
+    if live_state:
+        console.print(f"[bold]Live state:[/bold] {live_state}")
 
     if not verbose:
         with console.status("[cyan]Generating orchestration…[/cyan]"):
@@ -1839,10 +1870,6 @@ def gen_cmd(
         result = run(req)
 
     _print_run_warnings(result.warnings)
-
-    # Write resulting state to --out
-    if out:
-        _write_state_json(out=out, state=result.state, pretty=False)
 
     if not result.ok:
         console.print(f"[red]Generation failed:[/red] {result.error}")
@@ -1856,7 +1883,7 @@ def gen_cmd(
 
     yaml_text = str(generated)
 
-    # Clean up LLM output: strip fences, preamble, and document separators
+    # Clean up LLM output: strip fences and document separators
     _clean = []
     for _line in yaml_text.splitlines():
         if _line.strip().startswith("```"):
@@ -1866,22 +1893,33 @@ def gen_cmd(
         _clean.append(_line)
     yaml_text = "\n".join(_clean).strip()
 
-    # Strip preamble text before the first effects: or adapter: line
-    _clean_lines = yaml_text.splitlines()
-    for _i, _line in enumerate(_clean_lines):
-        if _line.startswith(("effects:", "adapter:")):
-            yaml_text = "\n".join(_clean_lines[_i:]).strip()
-            break
+    parsed = _extract_generated_orchestration(yaml_text)
+    if parsed is None:
+        console.print(
+            "[red]Error:[/red] The model's response did not contain a "
+            "parseable orchestration document. Nothing was written."
+        )
+        raise typer.Exit(code=1)
 
-    import yaml as _yaml  # type: ignore[import-untyped]
-    parsed = _yaml.safe_load(yaml_text)
-    if not isinstance(parsed, dict):
-        parsed = {"raw": yaml_text}
-    output_text = serialize_orchestration(parsed, output_format).rstrip("\n")
+    output_text = serialize_orchestration(parsed, output_format).rstrip("\n") + "\n"
 
+    # Check the generated document exactly as `cof check` would, before
+    # writing it anywhere the user's own path might already exist.
     orch_out.parent.mkdir(parents=True, exist_ok=True)
-    orch_out.write_text(output_text + "\n", encoding="utf-8")
-    console.print(f"[green]Generated:[/green] {orch_out}")
+    tmp_out = orch_out.with_name(orch_out.stem + ".tmp" + orch_out.suffix)
+    tmp_out.write_text(output_text, encoding="utf-8")
+    report = validate(tmp_out, config=cfg, skip_preflight=False, trust_document=True)
+    if not report["ok"]:
+        tmp_out.unlink(missing_ok=True)
+        console.print(
+            "[red]Error:[/red] The generated orchestration failed `cof check`; nothing was written:"
+        )
+        for err in report["errors"]:
+            console.print(f"  - {err}")
+        raise typer.Exit(code=1)
+
+    tmp_out.replace(orch_out)
+    console.print(f"[green]Generated:[/green] {orch_out} (checked: Valid)")
 
 
 WIZARD_EPILOG = """
@@ -1983,7 +2021,13 @@ def wizard_cmd(
         console.print(f"[bold]you[/bold]     {escape(next_reply)}")
         return next_reply
 
-    conversation = drive_conversation(seed, runner=_runner, respond=_respond, max_turns=max_turns)
+    from ..api import CircuitryExecutionError
+
+    try:
+        conversation = drive_conversation(seed, runner=_runner, respond=_respond, max_turns=max_turns)
+    except CircuitryExecutionError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
 
     if not conversation.can_save:
         if not conversation.draft:
@@ -2017,7 +2061,22 @@ def wizard_cmd(
 
 
 @app.command("init", help="Initialize a new circuitry project in the current directory.")
-def init_cmd():
+def init_cmd(
+    yes: bool = typer.Option(
+        False, "--yes", "-y",
+        help="Non-interactive: accept defaults (or --adapter/--adapter-url/--model) "
+        "without prompting.",
+    ),
+    adapter: str | None = typer.Option(
+        None, "--adapter", help="Adapter to configure (default: ollama).",
+    ),
+    adapter_url: str | None = typer.Option(
+        None, "--adapter-url", help="Adapter base URL (default: http://localhost:11434).",
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="Default model (default: llama3.1:8b).",
+    ),
+):
     config_path = Path.cwd() / "circuitry.config.json"
     hello_path = Path.cwd() / "hello.yml"
 
@@ -2025,9 +2084,14 @@ def init_cmd():
         console.print(f"[yellow]Warning:[/yellow] {config_path} already exists. Aborting.")
         raise typer.Exit(code=1)
 
-    adapter = typer.prompt("Adapter", default="ollama")
-    adapter_url = typer.prompt("Adapter URL", default="http://localhost:11434")
-    model = typer.prompt("Model", default="llama3.1:8b")
+    if yes:
+        adapter = adapter or "ollama"
+        adapter_url = adapter_url or "http://localhost:11434"
+        model = model or "llama3.1:8b"
+    else:
+        adapter = adapter or typer.prompt("Adapter", default="ollama")
+        adapter_url = adapter_url or typer.prompt("Adapter URL", default="http://localhost:11434")
+        model = model or typer.prompt("Model", default="llama3.1:8b")
 
     config_data = {
         "default_model": model,
@@ -2056,11 +2120,25 @@ def init_cmd():
             f"Run `cof trust {config_path.name}` once this is fixed."
         )
 
-    hello_yaml = """effects:
-  - type: prompt
+    # No model, no network, no API key: `regex` is a bundled zero-dependency
+    # plugin, so this runs immediately regardless of what adapter/model was
+    # just configured above. See docs/guidebook/04-configuration.md.
+    hello_yaml = """interface:
+  inputs:
+    name:
+      type: string
+      required: true
+      description: Who to greet.
+
+effects:
+  - type: tool
     name: greet
-    template: "Say hello to {{name}} in a creative way."
-    format: text
+    provider: regex
+    params:
+      pattern: "^(.*)$"
+      input: "{{input.name}}"
+      mode: sub
+      replacement: "Hello, \\\\1! Welcome to circuitry."
 """
     hello_path.write_text(hello_yaml, encoding="utf-8")
 

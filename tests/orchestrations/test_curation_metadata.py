@@ -73,3 +73,12 @@ def test_manifest_entry_name_matches_file_stem(manifest: dict) -> None:
             f"Entry name {entry['name']!r} doesn't match file path {entry['file']!r} "
             f"(expected {expected!r})"
         )
+
+
+def test_learn_hello_header_names_the_real_invocation_path() -> None:
+    """learn/hello.yml's own header comment must name a runnable command
+    (`cof run learn/hello`), not the nonexistent `orchestrations/hello.yml`
+    (#269 item 4)."""
+    text = (CURATION_DIR / "learn" / "hello.yml").read_text(encoding="utf-8")
+    assert "orchestrations/hello.yml" not in text
+    assert "cof run learn/hello" in text

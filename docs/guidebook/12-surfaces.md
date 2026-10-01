@@ -7,7 +7,7 @@ Everything the world reaches Circuitry through. One runtime sits under all of th
 | Command | What it does |
 | --- | --- |
 | `cof setup` | Interactive first-run: detect local backends, pick a model, write the global config. |
-| `cof init` | Write a project config and a `hello.yml` in the current directory, and trust the config. |
+| `cof init` | Write a project config and a `hello.yml` in the current directory, and trust the config. `--yes` skips every prompt (scripted use). |
 | `cof trust [path]` | Show what a project config sets, flag the host-sensitive settings, and — after you confirm (`--yes` to skip) — trust it so runs apply it. `--list` shows every trusted file and whether it still matches. See [Configuration](04-configuration.md#trusting-a-project-config). |
 | `cof untrust [path]` | Stop applying a project config you trusted. |
 | `cof doctor` | Run every extension's preflight `check()` and report, including the project config and its trust state; `--generate` also makes a live model call. Non-zero exit when anything fails. |
@@ -54,7 +54,7 @@ A `--state` path that doesn't exist is an error (`state file not found: ...`), n
 
 ### `cof gen` and `cof wizard`
 
-Two ways to write an orchestration without writing YAML, and they are different artifacts. `cof gen` is single-shot: one goal in, one document out, driven by the `meta_orchestrator` agent with the full authoring ruleset injected. `cof wizard` is a conversation: the `wizard` agent handles one turn at a time — *interpret → ask-or-draft → validate → revise → gate* — and hands back either a question or a validated draft, with `done` true only when it is finished *and* the draft passed validation, so it cannot finish on invalid YAML. `--reply answers.txt` drives it headlessly. [The Wizard](../wizard.md) documents the turn contract.
+Two ways to write an orchestration without writing YAML, and they are different artifacts. `cof gen` is single-shot: one goal in, one document out, driven by the `meta_orchestrator` agent with the full authoring ruleset injected. Its output is checked exactly as `cof check` would before anything is written — a model response that fails validation prints the errors and exits non-zero, writing nothing; `--out` names where the generated orchestration lands (default `./<name>.<ext>`), and `--live-state` separately mirrors the generation run's own state JSON while it's in progress. `cof wizard` is a conversation: the `wizard` agent handles one turn at a time — *interpret → ask-or-draft → validate → revise → gate* — and hands back either a question or a validated draft, with `done` true only when it is finished *and* the draft passed validation, so it cannot finish on invalid YAML. A turn whose own orchestration run fails (e.g. a small model returning non-JSON) prints a clean `Error:` line and exits 1, not a traceback. `--reply answers.txt` drives it headlessly. [The Wizard](../wizard.md) documents the turn contract.
 
 ## The TUI
 
