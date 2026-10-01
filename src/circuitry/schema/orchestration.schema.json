@@ -28,7 +28,7 @@
     },
     "interface": {
       "type": "object",
-      "description": "Declares typed inputs and outputs for this orchestration. Used by `use` effects for validation and auto-wiring.",
+      "description": "Declares typed inputs and outputs for this orchestration. Enforced (required/type/default) at every run entry — cof run, the SDK, REST, MCP, the scheduler — and again by a 'use' effect calling this document as a child, for auto-wiring its outputs.",
       "properties": {
         "inputs": {
           "type": "object",
@@ -38,6 +38,7 @@
             "properties": {
               "type": { "type": "string", "description": "Expected type: string, number, boolean, array, object." },
               "required": { "type": "boolean", "description": "Whether this input is required. Default false." },
+              "default": { "description": "Value used when the caller omits this input (top-level run or use: child). Any JSON type; should match 'type' when both are given." },
               "description": { "type": "string" }
             }
           }

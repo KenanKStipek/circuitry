@@ -48,7 +48,9 @@ cof run issue_to_pr.yml --skip-preflight                # run even if a check() 
 
 When stdout is not a terminal, `cof run` switches to `--json` with quiet output on its own, so it composes with `jq` and with scripts without flags. `--tail` overrides that when you want the raw final value. `--quiet` suppresses prose; `--config <path>` (or `CIRCUITRY_CONFIG`) points at a specific config file.
 
-`--verbose` prints one start line and one result line per effect. A step inside a loop carries its pass as `[N]`, and a child effect of a `use` is labelled with the `use` that called it. The adapter on a prompt's line is the one the call actually went to, with a failed primary shown before the fallback that answered. The same run also warns when a `while` loop stops at `max_iterations` rather than on its condition.
+A `--state` path that doesn't exist is an error (`state file not found: ...`), not empty input, and the document's own `interface.inputs` are checked before anything runs: a missing `required: true` input fails the same way it would as a `use` child's input, a declared `type` is checked (and a `-e`/`--state` string coerced to it), and a `default:` fills in an omitted input. [Composition](09-composition.md#use--the-composition-effect) covers the full contract — it applies the same way here as it does to a `use` child.
+
+`--verbose` prints one start line and one result line per effect. A step inside a loop carries its pass as `[N]`, and a child effect of a `use` is labelled with the `use` that called it. The adapter on a prompt's line is the one the call actually went to, with a failed primary shown before the fallback that answered. The same run also warns when a `while` loop stops at `max_iterations` rather than on its condition. Library warnings — a malformed config, a failed template render, a plugin hook failure — print on stderr at `WARNING`, `INFO` under `--verbose` where a command has it; stdout stays clean for `--json`/`--print`.
 
 ### `cof gen` and `cof wizard`
 

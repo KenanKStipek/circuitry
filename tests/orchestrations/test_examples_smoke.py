@@ -30,7 +30,11 @@ CURATED_EXAMPLES = [str(p.relative_to(EXAMPLES_DIR)) for p in _curated_files()]
 # path by design — the dry-run smoke test needs `input.role` set so that gate
 # evaluates instead of exercising the strict-failure path it's meant to show off.
 _STATE_OVERRIDES: dict[str, dict] = {
-    "learn/cel_showcase.yml": {"input": {"role": "guest"}},
+    # `scores` feeds numeric CEL comparisons (`s >= 0`); the generic
+    # synthetic-input builder below fills array inputs with a one-element
+    # list of a marker string, which is right for the render-only check but
+    # not for a document that actually evaluates its contents.
+    "learn/cel_showcase.yml": {"input": {"role": "guest", "scores": [1, 2, 3]}},
 }
 
 
@@ -168,9 +172,20 @@ def test_examples_inspect(rel: str) -> None:
 
 @pytest.mark.parametrize("rel", CURATED_EXAMPLES)
 def test_examples_dry_run_smoke(rel: str) -> None:
+    # A dry run still enforces `interface.inputs` (#255): every declared
+    # `required: true` input needs a value, same synthetic namespace
+    # `test_examples_render_declared_inputs` uses, with any file-specific
+    # override (e.g. cel_showcase.yml's strict-mode gate) layered on top.
+    synthetic_input = _synthetic_input_namespace(_declared_inputs(rel))
+    state = {"input": synthetic_input}
+    override = _STATE_OVERRIDES.get(rel, {})
+    if "input" in override:
+        synthetic_input.update(override["input"])
+    state.update({key: value for key, value in override.items() if key != "input"})
+
     result = run_orchestration(
         orchestration_path=EXAMPLES_DIR / rel,
-        state=_STATE_OVERRIDES.get(rel, {}),
+        state=state,
         dry_run=True,
         config=CircuitryConfig(default_adapter="ollama", default_model="phi3:mini"),
     )

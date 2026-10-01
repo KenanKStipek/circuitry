@@ -1,10 +1,10 @@
 section: interface
-summary: Optional top-level typed input/output contract for an orchestration. Makes it composable via use with validated inputs and auto-generated output mappings.
+summary: "Optional top-level typed input/output contract for an orchestration. Enforced (required/type/default) at every run entry — cof run, the SDK, REST, MCP, the scheduler — and again when called as a use child, which also gets validated inputs and auto-generated output mappings from it."
 placement: "Top-level key, sibling of effects: (interface: then effects:)."
 fields:
   inputs:
     type: object
-    note: "Map of input-name -> {type, required, description}. OBJECT form per input, e.g. article_text: {type: string, required: true, description: ...}."
+    note: "Map of input-name -> {type, required, description, default}. OBJECT form per input, e.g. article_text: {type: string, required: true, description: ...}. default: fills the value in whenever the caller omits it (top-level run or use: child); should match the declared type."
   outputs:
     type: object
     note: "Map of output-name -> {path, type?, description?}. Same canonical shape as a use effect's outputs — path points at an effect output in THIS document (e.g. path: prime.summarize.value). The bare string form (summary: prime.summarize.value) is accepted shorthand for {path: ...}; write the object form."
