@@ -91,6 +91,44 @@ class RecordingAdapter:
         return GenerateResult(text=prompt, raw={"model": model})
 
 
+def test_prompt_continue_clears_both_retry_meta_and_generation_option_meta() -> None:
+    """Pass 0 needs a retry (sets ``meta.retries_used``, #260) and gets a
+    truncated reply (sets ``meta.finish_reason``/``meta.warnings``, #250);
+    pass 1 fails outright. Both groups of pre-dispatch resets must survive
+    being merged together — pass 1's error must not sit next to any of
+    pass 0's leftovers."""
+
+    @dataclass
+    class FlakyTruncatedThenFailAdapter:
+        name: str = "flaky"
+        calls: int = 0
+
+        def generate(
+            self, *, model: str, prompt: str, timeout_seconds: int = 120
+        ) -> GenerateResult:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("transient failure, pass 0 attempt 0")
+            if self.calls == 2:
+                return GenerateResult(text="OK", raw={}, finish_reason="length")
+            raise RuntimeError("permanent failure, pass 1")
+
+    orch = _unnamed_each_loop_orch(on_error="continue")
+    root = compile_orchestration(orch=orch, root_name="prime")
+    state = {"input": {"items": ["a", "b"]}}
+
+    DynamicRuntime(root, adapter=FlakyTruncatedThenFailAdapter(), model="unit-test").execute(
+        store=Store(state)
+    )
+
+    node = state["prime"]["step"]
+    assert node["value"] is None
+    assert node["meta"]["error"] is not None
+    assert "retries_used" not in node["meta"]
+    assert "finish_reason" not in node["meta"]
+    assert "warnings" not in node["meta"]
+
+
 def test_prompt_skip_and_continue_both_null_the_value() -> None:
     """The guidebook documents `skip` and `continue` as the same leaf-effect
     degradation (05-errors.md) \u2014 pin that `continue` actually does it too."""
