@@ -500,6 +500,14 @@ has a project config, the first row names it with its trust state — `trusted`,
 or `not trusted — skipped` / `changed since trusted — skipped` with the
 `cof trust` hint — so a file whose values are missing below says why.
 
+Both screens resolve config the same way `cof doctor` does (`resolve_config`):
+a *discovered* config that is missing or malformed (a stale or typo'd
+`CIRCUITRY_CONFIG`, an unreadable global/project file) degrades to its usual
+`cof run`-style warning rather than failing, so the screen still mounts and
+renders. Only a config a caller named explicitly can still fail outright, and
+that failure renders as an `Error: ...` line in the panel — the same message
+`cof doctor` prints — instead of taking down the whole app (#259).
+
 ## Validate (`7`)
 
 Type a path, press Enter. `cof check` returns at the first gate that trips,

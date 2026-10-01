@@ -331,3 +331,73 @@ def test_settings_snapshot(run_app: Any, capture_frame: Any, snapshot: Any) -> N
     snapshot.assert_match(
         run_app(scenario, app=ViewApp(screen), size=(100, 30)), "settings-100x30"
     )
+
+
+# -- a missing/broken config degrades to a warning, never a crash (#259) -------
+
+
+def test_doctor_mount_does_not_crash_on_a_stale_circuitry_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact repro from #259: a stale/typo'd ``CIRCUITRY_CONFIG`` pointing
+    at a file that does not exist used to take out the whole app via an
+    unhandled ``ConfigError`` when the Doctor screen mounted. A *discovered*
+    broken config degrades gracefully (``resolve_config`` itself tolerates
+    it, same as ``cof run``/``cof doctor``), so the real Doctor screen — not
+    a fixture one — must mount and render normally.
+    """
+    monkeypatch.setenv("CIRCUITRY_CONFIG", "/tmp/does-not-exist/config.json")
+
+    async def _drive() -> tuple[bool, str]:
+        app = CircuitryApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("5")  # Doctor
+            await pilot.pause()
+            running = app.is_running
+            await pilot.press("q")
+            await pilot.pause()
+            return running, app.screen_stack[-1].__class__.__name__ if running else ""
+
+    running, _ = asyncio.run(_drive())
+    assert running is True
+
+
+def test_settings_mount_does_not_crash_on_a_stale_circuitry_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CIRCUITRY_CONFIG", "/tmp/does-not-exist/config.json")
+
+    async def _drive() -> bool:
+        app = CircuitryApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("6")  # Settings
+            await pilot.pause()
+            return app.is_running
+
+    assert asyncio.run(_drive()) is True
+
+
+def test_doctor_screen_shows_an_error_for_a_broken_explicit_config(
+    run_app: Any, capture_frame: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An *explicitly* named broken config is a `ConfigError` `resolve_config`
+    does not degrade — the screen must catch it and show it, not crash."""
+    import circuitry.tui.doctor as doctor_module
+    from circuitry.cli.config import ConfigError
+
+    def _raise() -> None:
+        raise ConfigError("Config file not found: /no/such/config.json")
+
+    monkeypatch.setattr(doctor_module, "load_diagnostics", _raise)
+
+    screen = DoctorScreen(spec_for("doctor"))
+
+    async def scenario(pilot: Pilot[Any]) -> str:
+        await pilot.pause()
+        return capture_frame(pilot.app)
+
+    frame = run_app(scenario, app=ViewApp(screen), size=(100, 30))
+    assert "Error:" in frame
+    assert "Config file not found" in frame

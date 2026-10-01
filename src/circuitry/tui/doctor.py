@@ -27,6 +27,7 @@ from textual.binding import Binding, BindingType
 from textual.containers import Vertical
 from textual.widgets import Static
 
+from ..cli.config import ConfigError
 from .diagnostics import (
     CATEGORIES,
     STATE_LABELS,
@@ -141,6 +142,11 @@ class _DiagnosticsScreen(ViewScreen):
     ) -> None:
         super().__init__(spec)
         self._diagnostics = diagnostics
+        #: Set when loading the real environment hit a broken, *explicitly
+        #: named* config (``ConfigError``); empty otherwise. A *discovered*
+        #: broken config degrades to a warning inside ``resolve_config()``
+        #: itself and never reaches here — see ``load_diagnostics``.
+        self.config_error: str = ""
 
     @property
     def diagnostics(self) -> DiagnosticsSource:
@@ -149,6 +155,19 @@ class _DiagnosticsScreen(ViewScreen):
             self._diagnostics = load_diagnostics()
         return self._diagnostics
 
+    def _safe_diagnostics(self) -> DiagnosticsSource | None:
+        """``diagnostics``, catching a broken config instead of letting it
+        propagate into Textual's message pump and kill the whole app — the
+        same message ``cof doctor`` prints after ``Error:`` is shown in the
+        view instead (#259). Returns ``None`` (with ``config_error`` set) on
+        failure; every caller must check for that before using the result.
+        """
+        try:
+            return self.diagnostics
+        except ConfigError as exc:
+            self.config_error = str(exc)
+            return None
+
 
 class DoctorScreen(_DiagnosticsScreen):
     """Preflight dashboard: per-extension checks over the effective settings."""
@@ -156,6 +175,7 @@ class DoctorScreen(_DiagnosticsScreen):
     DEFAULT_CSS = """
     DoctorScreen .panel-title { text-style: bold; margin-top: 1; }
     DoctorScreen #doctor-summary { color: $text-muted; }
+    DoctorScreen #doctor-summary.-error { color: $error; }
     DoctorScreen #doctor-checks { height: auto; }
     """
 
@@ -187,8 +207,12 @@ class DoctorScreen(_DiagnosticsScreen):
 
     def _on_mount(self, event: Mount) -> None:
         super()._on_mount(event)
+        diagnostics = self._safe_diagnostics()
+        if diagnostics is None:
+            self._show_config_error()
+            return
         self.query_one("#doctor-settings", EffectiveSettingsPanel).show(
-            self.diagnostics.rows()
+            diagnostics.rows()
         )
         self.action_recheck()
 
@@ -196,11 +220,20 @@ class DoctorScreen(_DiagnosticsScreen):
         """Stop results from being posted into a screen that is going away."""
         self._closing = True
 
+    def _show_config_error(self) -> None:
+        summary = self.query_one("#doctor-summary", Static)
+        summary.add_class("-error")
+        summary.update(f"Error: {self.config_error}")
+
     # -- checks --------------------------------------------------------------
 
     def action_recheck(self) -> None:
         """Repaint every row as pending and run the whole walk again."""
-        targets = self.diagnostics.targets()
+        diagnostics = self._safe_diagnostics()
+        if diagnostics is None:
+            self._show_config_error()
+            return
+        targets = diagnostics.targets()
         self._results.clear()
         container = self.query_one("#doctor-checks", Vertical)
         if not self._rows:
@@ -283,6 +316,7 @@ class SettingsScreen(_DiagnosticsScreen):
 
     DEFAULT_CSS = """
     SettingsScreen .panel-title { text-style: bold; margin-top: 1; }
+    SettingsScreen #settings-error { color: $error; }
     """
 
     def compose_body(self) -> ComposeResult:
@@ -292,10 +326,17 @@ class SettingsScreen(_DiagnosticsScreen):
             "Credentials are redacted before they reach the screen.",
             classes="view-note",
         )
+        yield Static("", id="settings-error", markup=False)
         yield EffectiveSettingsPanel(id="settings-panel")
 
     def _on_mount(self, event: Mount) -> None:
         super()._on_mount(event)
+        diagnostics = self._safe_diagnostics()
+        if diagnostics is None:
+            self.query_one("#settings-error", Static).update(
+                f"Error: {self.config_error}"
+            )
+            return
         self.query_one("#settings-panel", EffectiveSettingsPanel).show(
-            self.diagnostics.rows()
+            diagnostics.rows()
         )
