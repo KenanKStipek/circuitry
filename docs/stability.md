@@ -70,8 +70,9 @@ From [`src/circuitry/plugins/__init__.py`](../src/circuitry/plugins/__init__.py)
   `MathPlugin`, `PortCheckPlugin`, `RegexPlugin`, `TarPlugin`, `UuidPlugin`,
   `ValidateYamlPlugin`, `ZipPlugin`. Unlike `circuitry.adapters` (every
   compiled-in adapter), this is **not** the full list of ~70 bundled tool
-  plugins — see [`docs/runtime-plugins.md`](./runtime-plugins.md) and
-  `src/circuitry/plugins/` for the rest. `build_plugin(name=...)` reaches any
+  plugins — see [`docs/plugins/`](./plugins/) and `cof list --extensions`
+  for the rest (runtime plugins are a separate registry, documented in
+  [`docs/runtime-plugins.md`](./runtime-plugins.md)). `build_plugin(name=...)` reaches any
   of them by name regardless of whether its class is exported here, and is
   the stable way to construct one you don't see in this list.
 

@@ -362,7 +362,6 @@ def _supported_names() -> tuple[str, ...]:
     return tuple(sorted(ADAPTER_REGISTRY.keys()))
 
 
-
 def build_adapter(*, adapter_name: str, runtime: dict[str, Any]) -> Adapter:
     """
     Build an adapter instance from configuration.

@@ -52,7 +52,7 @@ postgres or mysql.
 
 ## SQL family (`postgres`, `mysql`, `mssql`, `cockroachdb`, `duckdb`, `clickhouse`, `sqlite`)
 
-These seven plugins (plus `sqlite` above) all persist the same **B-prime**
+These seven plugins (including `sqlite` above) all persist the same **B-prime**
 shape — a `runs` row per run and one `effect_results` row per effect —
 defined once in `_sql_schema.py`. Six of them (`postgres`, `mysql`, `mssql`,
 `cockroachdb`, `duckdb`, `sqlite`) extend the shared `SqlPersistenceBase`
@@ -83,8 +83,8 @@ below), `tokens_sent`/`tokens_received`, `started_at`/`ended_at`, `status`,
 | `clickhouse` | `clickhouse-connect` (`[clickhouse]`) | `CLICKHOUSE_URL`, else `CLICKHOUSE_HOST`+`CLICKHOUSE_USER`+`CLICKHOUSE_PASSWORD`+`CLICKHOUSE_DATABASE`+`CLICKHOUSE_PORT` | `runtime.runtime_plugins.clickhouse.{url,host,...}` |
 | `sqlite` | stdlib | — (local file) | see [above](#sqlite) |
 
-Each of `postgres`/`mysql`/`mssql`/`cockroachdb`/`sqlite` also reads a
-`store_raw` setting (env `CIRCUITRY_<NAME>_STORE_RAW`, or
+All seven SQL plugins (`postgres`, `mysql`, `mssql`, `cockroachdb`, `duckdb`,
+`clickhouse`, `sqlite`) also read a `store_raw` setting (env `CIRCUITRY_<NAME>_STORE_RAW`, or
 `runtime.runtime_plugins.<name>.store_raw`) with the same
 [prod-redaction](#prod-redaction-sql-and-surrealdb) default as `sqlite`.
 
@@ -190,7 +190,7 @@ SELECT * FROM effects WHERE run_id = $run_id;
 
 ## Document / KV / object-storage family
 
-These eleven plugins all extend `SnapshotPersistenceBase`: each writes (or
+These twelve plugins all extend `SnapshotPersistenceBase`: each writes (or
 overwrites) one whole-state JSON snapshot per run — keyed, indexed, or
 named by `run_id` — rather than a row per effect. There is no cross-run
 query surface built in; each store's own tooling (a `SELECT`, a `scan`, a

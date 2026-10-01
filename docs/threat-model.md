@@ -23,6 +23,12 @@ to:
 - the shared-library service when `cof fetch`/`cof run-library` is invoked
   with a configured library URL
 - the configured persistence backend (`jsonl-file`, `mongodb`, `postgres`, or `sqlite`) when configured
+- any runtime plugin you enable (observability exporters such as Sentry, Datadog,
+  Honeycomb, Loki or CloudWatch, and the persistence and pub/sub plugins such as
+  S3, GCS or Redis): each sends run data to the service it names, and only once
+  enabled. See [`runtime-plugins.md`](./runtime-plugins.md)
+- the library sources you configure, when `cof library refresh` fetches them
+  (for example a GitHub source)
 
 Users can audit this themselves with a sniffer; the framework itself adds no
 hidden network calls.

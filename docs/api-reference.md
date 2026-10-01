@@ -107,6 +107,8 @@ The dataclass `run_orchestration` and `run_shared_orchestration` return (`ok`, `
 
 The resolved config dataclass `run_orchestration`'s `config=` parameter accepts and `run_shared_orchestration`'s `config=` requires.
 
+Build one with `CircuitryConfig()` (built-in defaults) or `CircuitryConfig.from_dict({...})` (the same keys as `config.json`). Neither reads config files or environment variables: `from_dict` takes exactly the dict you pass, with no global/project layering or env merging.
+
 - Module: `src/circuitry/cli/config.py`
 
 ## Adapter Factory API
