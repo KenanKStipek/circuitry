@@ -404,7 +404,7 @@
         "min_iterations": {
           "type": "integer",
           "minimum": 0,
-          "description": "Minimum iterations before condition is checked."
+          "description": "Minimum iterations before condition is checked. While loops only; on an each loop it has no effect and cof check warns."
         },
         "on_error": { "$ref": "#/$defs/OnErrorLoop" },
         "labels": { "type": "object" }

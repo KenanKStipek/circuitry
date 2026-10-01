@@ -169,9 +169,11 @@ def test_reflector_stop_on_empty_effects() -> None:
 def test_reflector_plan_over_max_effects_is_invalid_and_never_truncated() -> None:
     """A generated plan with more top-level effects than max_effects is an
     invalid plan: the reflector fails rather than silently running only the
-    first max_effects of them (#251 part 2)."""
+    first max_effects of them (#251 part 2). ``done: False`` so this plan
+    actually reaches the cap check (see the ``done: True`` case below, which
+    stops before ever running and so is exempt from it)."""
     plan_yaml = yaml.dump({
-        "done": True,
+        "done": False,
         "effects": [
             {"type": "prompt", "name": "a", "template": "a"},
             {"type": "prompt", "name": "b", "template": "b"},
@@ -202,6 +204,73 @@ def test_reflector_plan_over_max_effects_is_invalid_and_never_truncated() -> Non
     planner = store.state["prime"]["planner"]
     assert planner["value"] is False
     assert "generated" not in planner or planner["generated"] == {}
+
+
+def test_reflector_done_plan_over_max_effects_stops_cleanly_without_running() -> None:
+    """A plan over the cap that also says ``done: True`` is never executed
+    at all (``stop_on_done``'s normal early return), so the cap — which only
+    matters for a plan that will actually run — does not fail the run."""
+    plan_yaml = yaml.dump({
+        "done": True,
+        "effects": [
+            {"type": "prompt", "name": "a", "template": "a"},
+            {"type": "prompt", "name": "b", "template": "b"},
+            {"type": "prompt", "name": "c", "template": "c"},
+        ],
+    })
+    adapter = _mock_adapter(plan_yaml)
+
+    orch = {
+        "effects": [
+            {
+                "type": "reflector",
+                "name": "planner",
+                "max_effects": 2,
+                "effects": [
+                    {"type": "prompt", "name": "propose_steps", "template": "Plan."},
+                ],
+            }
+        ]
+    }
+
+    root = compile_orchestration(orch=orch)
+    store = Store(state={})
+
+    DynamicRuntime(root, adapter=adapter, model="test-model").execute(store=store)
+
+    planner = store.state["prime"]["planner"]
+    assert planner["value"] is True
+    assert planner["meta"]["iterations"][0]["stop"] is True
+    assert "generated" not in planner or planner["generated"] == {}
+
+
+def test_reflector_non_list_effects_does_not_give_a_misleading_count() -> None:
+    """``effects`` as a string, not a list, must not be ``len()``-ed into a
+    misleading 'exceeds max_effects' count — it is a type error, not a
+    count-over-cap one, so it falls through to use(inline)'s own validation."""
+    plan_yaml = yaml.dump({"done": False, "effects": "not-a-list"})
+    adapter = _mock_adapter(plan_yaml)
+
+    orch = {
+        "effects": [
+            {
+                "type": "reflector",
+                "name": "planner",
+                "max_effects": 2,
+                "effects": [
+                    {"type": "prompt", "name": "propose_steps", "template": "Plan."},
+                ],
+            }
+        ]
+    }
+
+    root = compile_orchestration(orch=orch)
+    store = Store(state={})
+
+    with pytest.raises(RuntimeError) as exc_info:
+        DynamicRuntime(root, adapter=adapter, model="test-model").execute(store=store)
+
+    assert "exceeds max_effects" not in str(exc_info.value)
 
 
 def test_reflector_invalid_plan_records_error() -> None:

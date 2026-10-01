@@ -16,7 +16,7 @@ Loop ::= { type: 'loop', body: Effect+,
            collect?: NAME,                               — a body step; needs a named loop
            flow?: 'chain' | 'tree', max_concurrency?: INT≥1,   — each loops only
            max_iterations?: INT≥1,                       — no default; an each collection may not exceed it
-           min_iterations?: INT,
+           min_iterations?: INT,                        — while loops only; each: no effect, cof check warns
            on_error?: 'fail'|'break'|'continue',
            labels?: MAP, description?: STRING }
 ```

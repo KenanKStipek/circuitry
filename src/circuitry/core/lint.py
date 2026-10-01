@@ -277,8 +277,8 @@ def _check_effect(
             f"{where}: 'threshold' has no effect — the built-in evaluator "
             "reads a categorical yes/no with no calibrated confidence to cut, "
             "so it is recorded on meta.threshold and never consulted. "
-            "Deprecated: kept schema-valid only so a future evaluator that "
-            "returns a confidence score could honour it without a schema change."
+            "Deprecated: kept schema-valid only so existing documents that "
+            "set it keep passing; new documents should not set it."
         )
 
 

@@ -40,7 +40,12 @@ class TreeExecutionError(RuntimeError):
             return str(self.errors[0])
         parts = [f"{len(self.errors)} effects failed in parallel:"]
         for i, err in enumerate(self.errors, 1):
-            parts.append(f"  [{i}] {type(err).__name__}: {err}")
+            # Each entry is wrapped in a RuntimeError to carry the failing
+            # child's path (#289); show the original error's own type,
+            # which is what the author's exception handling actually cares
+            # about, not the wrapper's.
+            original = err.__cause__ or err
+            parts.append(f"  [{i}] {type(original).__name__}: {err}")
         return "\n".join(parts)
 
 
@@ -273,6 +278,15 @@ class DynamicRuntime:
                         1, min(self.defn.max_concurrency, len(self.defn.effects))
                     )
 
+                # Set by a worker that just failed, before it re-raises
+                # (see _execute_branch), so the *same* worker thread checks
+                # it before taking its next queued child — no race against
+                # the main thread's own cancellation below, which only
+                # reaches children a free worker hasn't already started.
+                stop_event = (
+                    threading.Event() if self.defn.stop_on_error else None
+                )
+
                 with live_ctx:
                     with ThreadPoolExecutor(max_workers=max_workers) as executor:
                         futures: dict = {
@@ -281,6 +295,7 @@ class DynamicRuntime:
                                 effect,
                                 store=isolated_stores[idx],
                                 ctx=tree_ctx,
+                                stop_event=stop_event,
                                 tracker=tree_tracker,
                             ): idx
                             for idx, effect in enumerate(self.defn.effects)
@@ -301,14 +316,16 @@ class DynamicRuntime:
                                 wrapped.__cause__ = e
                                 tree_errors.append(wrapped)
                                 if self.defn.stop_on_error:
-                                    # Cancel every child that has not started
-                                    # yet (only possible when max_concurrency
-                                    # bounds the pool below the child count —
-                                    # an already-running thread cannot be
-                                    # killed). The executor's own shutdown,
-                                    # below, still waits for whatever was
-                                    # already running to finish before the
-                                    # isolated stores are merged.
+                                    # stop_event (set in _execute_branch) is
+                                    # what actually keeps a freed worker from
+                                    # picking up the next queued child; this
+                                    # cancel() is a second line of defense
+                                    # for a future the pool hasn't dequeued
+                                    # at all yet. Neither can kill an
+                                    # already-running thread — the executor's
+                                    # own shutdown, below, still waits for
+                                    # whatever was already running to finish
+                                    # before the isolated stores are merged.
                                     for pending in futures:
                                         if pending is not future:
                                             pending.cancel()
@@ -357,6 +374,7 @@ class DynamicRuntime:
         *,
         store: Store,
         ctx: dict[str, Any],
+        stop_event: threading.Event | None = None,
         tracker: _TreeStatus | None = None,
     ) -> None:
         """Run one tree branch, then republish its isolated store.
@@ -364,9 +382,20 @@ class DynamicRuntime:
         The branch's writes stay in its own store until the dynamic merges
         them, so it publishes them itself — how ``--live-state`` shows a
         parallel branch that landed while its siblings still run.
+
+        ``stop_event`` is set once ``stop_on_error`` sees a sibling fail; a
+        branch that has not started yet when it checks returns without
+        running at all, rather than racing the main thread's own
+        cancellation of futures a free worker hasn't picked up yet.
         """
+        if stop_event is not None and stop_event.is_set():
+            return
         try:
             self._execute_effect(effect, store=store, ctx=ctx, tracker=tracker)
+        except Exception:
+            if stop_event is not None:
+                stop_event.set()
+            raise
         finally:
             if store.on_write:
                 store.on_write(store.root_state)
@@ -548,18 +577,37 @@ class DynamicRuntime:
             if self.verbose and not is_prompt and not is_tool and not is_use:
                 elapsed = time.monotonic() - t0
                 suffix = _elapsed_str(elapsed)
+                # A dynamic with on_error: skip/continue absorbs its own
+                # failure and returns normally (no exception reaches here),
+                # the same degradation a leaf effect's on_error gives — so
+                # it is reported the same way a leaf effect's own failure
+                # is, not as a success.
+                absorbed_error = None
                 if isinstance(effect, DynamicDefinition):
-                    sent, recv = _sum_tokens(store.state.get(name, {}))
+                    node = store.state.get(name, {})
+                    sent, recv = _sum_tokens(node)
                     if sent or recv:
                         suffix += f" | ↑{_fmt_tokens(sent)} ↓{_fmt_tokens(recv)} tok"
-                line = (
-                    f"{indent}[ok]✓[/ok] [{color}]{icon}[/{color}]"
-                    f" {name} [dim]{suffix}[/dim]"
-                )
-                if cb_done is not None:
-                    cb_done(line)
+                    if isinstance(node, dict):
+                        absorbed_error = node.get("meta", {}).get("error")
+                if absorbed_error is not None:
+                    line = (
+                        f"{indent}[err]✗[/err] [{color}]{icon}[/{color}]"
+                        f" {name} [dim]{suffix}[/dim]"
+                    )
+                    if cb_error is not None:
+                        cb_error(line)
+                    else:
+                        _console.print(line)
                 else:
-                    _console.print(line)
+                    line = (
+                        f"{indent}[ok]✓[/ok] [{color}]{icon}[/{color}]"
+                        f" {name} [dim]{suffix}[/dim]"
+                    )
+                    if cb_done is not None:
+                        cb_done(line)
+                    else:
+                        _console.print(line)
 
         except Exception:
             if self.verbose and not is_prompt and not is_tool and not is_use:

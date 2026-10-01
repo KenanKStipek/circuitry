@@ -29,6 +29,27 @@ class EchoAdapter:
 
 
 @dataclass
+class SlowFailAdapter:
+    """Sleeps, then raises, for one named prompt; answers every other prompt
+    immediately. Used to make ``stop_on_error`` timing-independent: the
+    failing child takes real time to fail, so a correct implementation
+    must not depend on it failing before its siblings are even submitted.
+    """
+
+    failing_prompt: str
+    delay: float = 0.05
+    name: str = "slowfail"
+
+    def generate(
+        self, *, model: str, prompt: str, timeout_seconds: int = 120
+    ) -> GenerateResult:
+        if prompt == self.failing_prompt:
+            time.sleep(self.delay)
+            raise RuntimeError("boom")
+        return GenerateResult(text=prompt, raw={"model": model})
+
+
+@dataclass
 class SleepingAdapter:
     """Records how many calls are in flight at once, sleeping `delay` each."""
 
@@ -190,7 +211,13 @@ def test_dynamic_on_error_skip_in_tree_flow_also_isolates_the_failure() -> None:
 
 def test_stop_on_error_cancels_children_not_yet_started() -> None:
     """max_concurrency: 1 plus stop_on_error: true means only the first
-    (failing) child ever starts; the rest are cancelled before they run."""
+    (failing) child ever starts; the rest are cancelled before they run.
+
+    The failing child sleeps before it raises, so this is deterministic
+    rather than depending on it failing before its siblings are even
+    submitted: the one worker thread must not pick up ``never_a`` until
+    after ``bad``'s failure is recorded, however long ``bad`` takes.
+    """
     d = {
         "type": "dynamic",
         "name": "d",
@@ -199,19 +226,14 @@ def test_stop_on_error_cancels_children_not_yet_started() -> None:
         "stop_on_error": True,
         "on_error": "skip",
         "effects": [
-            {
-                "type": "tool",
-                "name": "bad",
-                "provider": "json",
-                "params": {"mode": "parse", "input": "not json"},
-            },
+            {"type": "prompt", "name": "bad", "template": "bad"},
             {"type": "prompt", "name": "never_a", "template": "a"},
             {"type": "prompt", "name": "never_b", "template": "b"},
         ],
     }
     orch = {"effects": [d]}
     root = compile_orchestration(orch=orch, root_name="prime")
-    adapter = EchoAdapter()
+    adapter = SlowFailAdapter(failing_prompt="bad")
     state: dict = {}
 
     DynamicRuntime(root, adapter=adapter, model="m").execute(store=Store(state))
@@ -335,3 +357,44 @@ def test_tree_flow_error_names_the_failing_child_path_like_chain_does() -> None:
 
     assert chain_error.startswith("context.search:")
     assert tree_error.startswith("context.search:")
+
+
+# ── several tree failures: each keeps its own error type in the listing ────
+
+
+def test_tree_flow_several_failures_keep_their_own_error_type() -> None:
+    """TreeExecutionError's listing names each failure's own error type
+    (ValueError, from the json tool's parse failure here), not the
+    RuntimeError every entry is wrapped in to carry its child's path."""
+    d = {
+        "type": "dynamic",
+        "name": "d",
+        "flow": "tree",
+        "effects": [
+            {
+                "type": "tool",
+                "name": "bad1",
+                "provider": "json",
+                "params": {"mode": "parse", "input": "not json"},
+            },
+            {
+                "type": "tool",
+                "name": "bad2",
+                "provider": "json",
+                "params": {"mode": "parse", "input": "also not json"},
+            },
+        ],
+    }
+    orch = {"effects": [d]}
+    root = compile_orchestration(orch=orch, root_name="prime")
+    state: dict = {}
+
+    with pytest.raises(RuntimeError) as exc_info:
+        DynamicRuntime(root, adapter=EchoAdapter(), model="m").execute(
+            store=Store(state)
+        )
+
+    message = str(exc_info.value)
+    assert "2 effects failed in parallel" in message
+    assert message.count("ValueError") == 2
+    assert "RuntimeError" not in message

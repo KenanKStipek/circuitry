@@ -83,7 +83,7 @@ Dynamic ::= { type: 'dynamic', name: NAME, effects: Effect+,
 If        ::= { type: 'if', if: Condition, then: Effect*,
                 else?: Effect*, name?: NAME,             — named ⇒ nested paths + decision meta;
                                                            unnamed ⇒ branch effects merge into parent scope
-                threshold?: NUMBER∈[0,1],                — model-mode confidence, default 0.5
+                threshold?: NUMBER∈[0,1],                — deprecated, no effect: see If
                 on_error?: OnError, labels?: MAP, description?: STRING }
 
 Condition ::= { mode: 'model', template: TEMPLATE }      — LLM answers yes/no
@@ -105,7 +105,7 @@ Loop ::= { type: 'loop', body: Effect+,
            flow?: Flow, max_concurrency?: INT≥1,         — each-loops only
            max_iterations?: INT≥1,                       — no default (uncapped); each: a longer collection
                                                            fails at start unless each.truncate
-           min_iterations?: INT,
+           min_iterations?: INT,                        — while loops only
            on_error?: OnErrorLoop, labels?: MAP, description?: STRING }
 ```
 
