@@ -99,7 +99,10 @@ class SurrealdbPlugin:
         with self._lock:
             self._client = self._open_client(context.runtime_config or {})
             self._ensure_schema()
-            self._store_raw = self._resolve_store_raw(context.runtime_config or {})
+            self._store_raw = self._resolve_store_raw(
+                context.runtime_config or {},
+                config_environment=getattr(context, "environment", None),
+            )
             self._run_id = context.run_id
             self._client.query(
                 "CREATE runs CONTENT $data",
@@ -216,8 +219,10 @@ class SurrealdbPlugin:
             "DEFINE INDEX IF NOT EXISTS idx_effects_run_id ON TABLE effects COLUMNS run_id"
         )
 
-    def _resolve_store_raw(self, runtime_config: dict[str, Any]) -> bool:
-        env = resolve_environment()
+    def _resolve_store_raw(
+        self, runtime_config: dict[str, Any], *, config_environment: str | None = None
+    ) -> bool:
+        env = resolve_environment(config_environment)
         env_raw = os.environ.get("CIRCUITRY_SURREALDB_STORE_RAW")
         cfg_section = (
             (runtime_config or {}).get("runtime_plugins", {}).get("surrealdb", {})

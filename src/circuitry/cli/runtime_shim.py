@@ -406,6 +406,7 @@ def run(req: RunRequest) -> RunResult:
                 dry_run=req.dry_run,
                 validate_only=req.validate_only,
                 runtime_config=effective.runtime,
+                environment=cfg.environment,
             ),
         )
         state["runtime"]["plugins"]["events"].extend(start_events)
@@ -550,6 +551,7 @@ def run(req: RunRequest) -> RunResult:
                 dry_run=req.dry_run,
                 validate_only=req.validate_only,
                 runtime_config=effective.runtime,
+                environment=cfg.environment,
             )
 
             def _notify_plugins_start(
@@ -626,6 +628,7 @@ def run(req: RunRequest) -> RunResult:
                 dry_run=req.dry_run,
                 validate_only=req.validate_only,
                 runtime_config=effective.runtime,
+                environment=cfg.environment,
             ),
         )
         state["runtime"]["plugins"]["events"].extend(success_events)
@@ -676,6 +679,9 @@ def run(req: RunRequest) -> RunResult:
                         dry_run=req.dry_run,
                         validate_only=req.validate_only,
                         runtime_config=runtime_config,
+                        environment=(
+                            req.config.environment if req.config is not None else "dev"
+                        ),
                     ),
                     error=str(e),
                 )

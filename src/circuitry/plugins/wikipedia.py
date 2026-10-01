@@ -20,6 +20,10 @@ each socket operation, not the call as a whole. Retries are disabled
 with exponential backoff by default, which would let a single effect take
 up to roughly 4x the budget plus backoff time; the effect's own
 ``on_error``/retry handling is the place to re-run a failed lookup.
+
+A missing page is not a tool failure: ``ok`` stays ``True``, ``value`` is
+``None``, and ``raw["exists"]`` is ``False`` — check that, not ``on_error``.
+``exit_code`` is always ``None``; this plugin issues no process.
 """
 
 from __future__ import annotations
@@ -78,7 +82,7 @@ class WikipediaPlugin:
             return ToolResult(
                 value=None,
                 raw={"title": title, "language": language, "exists": False},
-                stdout=None, stderr=f"page not found: {title}", exit_code=1,
+                stdout=None, stderr=f"page not found: {title}", exit_code=None,
             )
 
         if mode == "summary":
@@ -98,7 +102,7 @@ class WikipediaPlugin:
                 "mode": mode,
                 "url": page.fullurl,
             },
-            stdout=None, stderr=None, exit_code=0,
+            stdout=None, stderr=None, exit_code=None,
         )
 
     def check(self) -> CheckResult:

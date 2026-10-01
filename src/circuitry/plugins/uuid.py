@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 _NAMED_NAMESPACES: dict[str, _uuid.UUID] = {
     "dns": _uuid.NAMESPACE_DNS,
@@ -44,7 +44,7 @@ class UuidPlugin:
         count = int(params.get("count") or 1)
         if count < 1:
             raise ValueError("uuid: count must be >= 1.")
-        as_hex = bool(params.get("hex"))
+        as_hex = _as_bool(params.get("hex"))
 
         ids: list[str] = []
         for _ in range(count):

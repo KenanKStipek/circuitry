@@ -83,7 +83,8 @@ def test_get_returns_json_when_content_type_says_json(
 
     assert validate_tool_result(result, plugin_name="http") == []
     assert result.value == {"hello": "world"}
-    assert result.exit_code == 200
+    assert result.exit_code is None
+    assert result.ok is True
     assert result.stderr is None
     assert result.raw["status"] == 200
     assert capture["method"] == "GET"
@@ -102,7 +103,8 @@ def test_get_text_when_content_type_is_html(
     result = HttpPlugin().execute(params={"url": "https://example.test/page"})
 
     assert result.value == "<html>hi</html>"
-    assert result.exit_code == 200
+    assert result.exit_code is None
+    assert result.raw["status"] == 200
     assert validate_tool_result(result, plugin_name="http") == []
 
 
@@ -131,7 +133,9 @@ def test_post_with_json_body(monkeypatch: pytest.MonkeyPatch) -> None:
     hdrs = {k.lower(): v for k, v in capture["headers"].items()}
     assert hdrs.get("content-type") == "application/json"
     assert result.value == {"created": True}
-    assert result.exit_code == 201
+    assert result.exit_code is None
+    assert result.raw["status"] == 201
+    assert result.ok is True
 
 
 def test_query_params_are_appended(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -187,27 +191,57 @@ def test_explicit_parse_text_keeps_string_for_json_content(
 # ---------------------------------------------------------------------------
 
 
-def test_http_4xx_returns_status_in_exit_code_not_raise(
+def _fake_urlopen_404(req: Any, timeout: int = 0) -> Any:
+    raise HTTPError(
+        url=req.full_url,
+        code=404,
+        msg="Not Found",
+        hdrs={"Content-Type": "application/json"},  # type: ignore[arg-type]
+        fp=io.BytesIO(b'{"error":"not found"}'),
+    )
+
+
+def test_http_4xx_sets_ok_false_and_status_in_raw_not_exit_code(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """4xx/5xx must surface to caller, not raise — orchestration decides."""
-
-    def fake_urlopen(req: Any, timeout: int = 0) -> Any:
-        raise HTTPError(
-            url=req.full_url,
-            code=404,
-            msg="Not Found",
-            hdrs={"Content-Type": "application/json"},  # type: ignore[arg-type]
-            fp=io.BytesIO(b'{"error":"not found"}'),
-        )
-
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    """4xx/5xx fails the tool by default (ok=False); exit_code stays None."""
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen_404)
 
     result = HttpPlugin().execute(params={"url": "https://example.test/missing"})
 
-    assert result.exit_code == 404
+    assert result.exit_code is None
+    assert result.raw["status"] == 404
+    assert result.ok is False
     assert "HTTP 404" in (result.stderr or "")
     assert result.value == {"error": "not found"}
+
+
+def test_http_4xx_with_fail_on_error_false_stays_ok(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The opt-out param restores the old always-succeeds behaviour."""
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen_404)
+
+    result = HttpPlugin().execute(
+        params={"url": "https://example.test/missing", "fail_on_error": False}
+    )
+
+    assert result.ok is True
+    assert result.raw["status"] == 404
+    assert result.value == {"error": "not found"}
+
+
+def test_http_4xx_fail_on_error_templated_false_string_stays_ok(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Mustache-rendered 'False' string must coerce to boolean False too."""
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen_404)
+
+    result = HttpPlugin().execute(
+        params={"url": "https://example.test/missing", "fail_on_error": "False"}
+    )
+
+    assert result.ok is True
 
 
 def test_url_error_raises_actionable_runtime_error(

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 
 @dataclass(frozen=True)
@@ -35,7 +35,7 @@ class Base64Plugin:
         text = params.get("input")
         if not isinstance(text, str):
             raise ValueError("base64 requires params['input'] as a string.")
-        urlsafe = bool(params.get("urlsafe"))
+        urlsafe = _as_bool(params.get("urlsafe"))
         encoding = str(params.get("encoding") or "utf-8")
 
         if mode == "encode":

@@ -16,9 +16,16 @@ Params:
   - ``params`` (optional, dict[str, str]): query string params.
   - ``retries`` (optional, int, default 0): retry on 5xx and connection
     errors with exponential backoff.
+  - ``fail_on_error`` (optional, bool, default ``True``): a 4xx/5xx response
+    (after retries are exhausted) sets ``ToolResult.ok = False``, which
+    fails the effect (``meta.error``, ``on_error`` applies). Set ``false``
+    to restore the old behaviour of always succeeding and letting the
+    orchestration branch on ``meta.status_code`` itself.
 
 Returns ``value`` = parsed JSON body if Content-Type is JSON, else text.
-``exit_code`` = HTTP status; ``stderr`` carries the reason on non-2xx.
+``exit_code`` is always ``None`` — this plugin issues no process; the HTTP
+status lands on ``meta.status_code`` (from ``raw["status"]``). ``stderr``
+carries the reason on non-2xx.
 """
 
 from __future__ import annotations
@@ -29,7 +36,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 
 @dataclass(frozen=True)
@@ -63,6 +70,7 @@ class WebhookPlugin:
             )
         query = params.get("params")
         retries = int(params.get("retries") or 0)
+        fail_on_error = _as_bool(params.get("fail_on_error"), default=True)
 
         last_error: Exception | None = None
         last_status: int | None = None
@@ -125,7 +133,8 @@ class WebhookPlugin:
             },
             stdout=None,
             stderr=stderr,
-            exit_code=last_status,
+            exit_code=None,
+            ok=not (fail_on_error and last_status >= 400),
         )
 
     def check(self) -> CheckResult:

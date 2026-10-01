@@ -510,7 +510,8 @@ def test_port_check_returns_true_for_open_port() -> None:
             params={"host": "127.0.0.1", "port": port, "timeout_ms": 1000}
         )
         assert r.value is True
-        assert r.exit_code == 0
+        assert r.exit_code is None
+        assert r.ok is True
     finally:
         listener.close()
 
@@ -527,7 +528,8 @@ def test_port_check_returns_false_for_closed_port() -> None:
         params={"host": "127.0.0.1", "port": closed_port, "timeout_ms": 500}
     )
     assert r.value is False
-    assert r.exit_code == 1
+    assert r.exit_code is None
+    assert r.ok is True
 
 
 def test_port_check_invalid_port_raises() -> None:

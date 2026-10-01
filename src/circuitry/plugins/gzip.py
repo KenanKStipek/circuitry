@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ class GzipPlugin:
         mode = str(params.get("mode") or "compress").lower()
         if mode not in ("compress", "decompress"):
             raise ValueError(f"gzip: unknown mode {mode!r}")
-        from_path = bool(params.get("from_path"))
+        from_path = _as_bool(params.get("from_path"))
         output_param = params.get("output")
         encoding = str(params.get("encoding") or "utf-8")
 

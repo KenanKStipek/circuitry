@@ -59,10 +59,14 @@ def coerce_bool(val: Any, default: bool) -> bool:
     return bool(val)
 
 
-def resolve_environment() -> str:
+def resolve_environment(config_environment: str | None = None) -> str:
+    """Resolve the deployment environment: env vars win, then
+    ``CircuitryConfig.environment`` (passed in via ``PluginContext.environment``),
+    then ``"dev"``."""
     return (
         os.environ.get("CIRCUITRY_ENV")
         or os.environ.get("CIRCUITRY_ENVIRONMENT")
+        or config_environment
         or "dev"
     )
 
@@ -130,12 +134,16 @@ class SqlPersistenceBase:
     # Configuration
     # ------------------------------------------------------------------
 
-    def _resolve_store_raw(self, runtime_config: dict[str, Any]) -> bool:
+    def _resolve_store_raw(
+        self, runtime_config: dict[str, Any], *, config_environment: str | None = None
+    ) -> bool:
         """Resolve store_raw with the standard cascade:
         ``CIRCUITRY_<NAME>_STORE_RAW`` env > runtime_plugins.<name>.store_raw
-        > environment default (dev=true, prod/test=false).
+        > environment default (dev=true, prod/test=false), where the
+        environment itself is ``CIRCUITRY_ENV``/``CIRCUITRY_ENVIRONMENT`` >
+        ``config_environment`` (``CircuitryConfig.environment``) > ``"dev"``.
         """
-        env = resolve_environment()
+        env = resolve_environment(config_environment)
         env_var = f"CIRCUITRY_{self.name.upper()}_STORE_RAW"
         env_raw = os.environ.get(env_var)
         cfg_section = (
@@ -155,7 +163,10 @@ class SqlPersistenceBase:
             self._conn = self._open_connection(context.runtime_config or {})
             self._setup_connection(self._conn)
             self._ensure_schema()
-            self._store_raw = self._resolve_store_raw(context.runtime_config or {})
+            self._store_raw = self._resolve_store_raw(
+                context.runtime_config or {},
+                config_environment=getattr(context, "environment", None),
+            )
             self._run_id = context.run_id
             inputs_json = json.dumps(extract_inputs(state), default=str)
             ph = self.dialect.placeholder

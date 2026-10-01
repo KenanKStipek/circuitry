@@ -26,6 +26,7 @@ _SENSITIVE_KEY_RE = re.compile(
     r"|auth[_\-]?token|access[_\-]?token|bearer[_\-]?token|id[_\-]?token"
     r"|refresh[_\-]?token|session[_\-]?token|csrf[_\-]?token"
     r"|authorization|password|passphrase|client[_\-]?secret"
+    r"|set[_\-]?cookie|cookie"
     r"|secret|token|credentials?)$"
 )
 

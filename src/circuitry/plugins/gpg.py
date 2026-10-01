@@ -32,7 +32,7 @@ from typing import Any
 
 from ..preflight import CheckResult
 from ._subprocess import check_binary, resolve_binary
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 _GPG_CANDIDATES = ("gpg", "gpg2")
 _VALID_MODES = ("encrypt", "decrypt", "sign", "verify")
@@ -58,7 +58,7 @@ class GpgPlugin:
         if binary is None:
             raise RuntimeError("gpg: binary not found on PATH.")
 
-        from_path = bool(params.get("from_path"))
+        from_path = _as_bool(params.get("from_path"))
         passphrase = params.get("passphrase")
         cmd: list[str] = [binary, "--batch", "--yes", "--quiet"]
         if passphrase:

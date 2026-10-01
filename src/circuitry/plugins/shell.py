@@ -34,7 +34,7 @@ from typing import Any
 
 from ..preflight import CheckResult
 from ._subprocess import resolve_binary, run_binary
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 _DEFAULT_ALLOWED: tuple[str, ...] = (
     "ls", "cat", "head", "tail", "wc", "echo", "pwd", "date",
@@ -109,7 +109,7 @@ class ShellPlugin:
             cwd=params.get("cwd"),
             stdin=params.get("stdin"),
             timeout_seconds=timeout_seconds,
-            allow_nonzero=bool(params.get("allow_nonzero")),
+            allow_nonzero=_as_bool(params.get("allow_nonzero")),
         )
 
     def check(self) -> CheckResult:

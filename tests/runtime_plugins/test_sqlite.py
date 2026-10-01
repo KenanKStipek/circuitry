@@ -335,6 +335,74 @@ def test_store_raw_disabled_in_prod_writes_null(
     assert all(r[0] is None for r in raw_rows)
 
 
+def _orch_with_one_tool() -> str:
+    return "effects:\n  - {type: tool, name: now, provider: clock}\n"
+
+
+def test_tool_effects_populate_meta_raw_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#264 part 5: meta.raw is actually written for a tool effect now, so
+    store_raw's column has something real to gate."""
+    db = tmp_path / "runs.db"
+    monkeypatch.setenv("CIRCUITRY_SQLITE_PATH", str(db))
+    monkeypatch.setenv("CIRCUITRY_ENV", "dev")
+
+    orch = _write(tmp_path, "orch.yml", _orch_with_one_tool())
+    cfg = CircuitryConfig(plugins=["circuitry.runtime_plugins.sqlite"])
+    result = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            initial_state={},
+            config=cfg,
+        )
+    )
+    assert result.ok is True
+    raw_rows = _query_rows(
+        db, "SELECT raw FROM effect_results WHERE effect_name = 'now'"
+    )
+    assert len(raw_rows) == 1
+    stored = json.loads(raw_rows[0][0])
+    assert "iso" in stored
+
+
+def test_config_environment_sets_store_raw_default_without_env_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#264 part 5: CircuitryConfig.environment feeds the store_raw cascade
+    when no CIRCUITRY_ENV/CIRCUITRY_ENVIRONMENT env var is set."""
+    db = tmp_path / "runs.db"
+    monkeypatch.setenv("CIRCUITRY_SQLITE_PATH", str(db))
+    monkeypatch.delenv("CIRCUITRY_ENV", raising=False)
+    monkeypatch.delenv("CIRCUITRY_ENVIRONMENT", raising=False)
+    monkeypatch.delenv("CIRCUITRY_SQLITE_STORE_RAW", raising=False)
+
+    orch = _write(tmp_path, "orch.yml", _orch_with_one_tool())
+    cfg = CircuitryConfig(
+        plugins=["circuitry.runtime_plugins.sqlite"], environment="prod"
+    )
+    result = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            initial_state={},
+            config=cfg,
+        )
+    )
+    assert result.ok is True
+    raw_rows = _query_rows(
+        db, "SELECT raw FROM effect_results WHERE effect_name = 'now'"
+    )
+    assert raw_rows[0][0] is None
+
+
 def test_resume_keys_off_run_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

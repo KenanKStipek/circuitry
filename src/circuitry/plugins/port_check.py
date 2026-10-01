@@ -5,8 +5,9 @@ Params:
   - ``port`` (required, int)
   - ``timeout_ms`` (optional, default 2000)
 
-Returns ``value`` = bool (open/closed), ``exit_code`` 0 when open and
-1 when closed for shell-style routing.
+Returns ``value`` = bool (open/closed). A closed port is not a tool
+failure — ``ok`` stays ``True`` regardless of open/closed; check ``value``.
+``exit_code`` is always ``None``; this plugin issues no process.
 """
 
 from __future__ import annotations
@@ -67,7 +68,7 @@ class PortCheckPlugin:
             },
             stdout=None,
             stderr=None,
-            exit_code=0 if open_state else 1,
+            exit_code=None,
         )
 
     def check(self) -> CheckResult:

@@ -28,7 +28,7 @@ from email.mime.text import MIMEText
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 
 def _coerce_addr_list(value: Any, *, field: str) -> list[str]:
@@ -87,7 +87,7 @@ class EmailSmtpPlugin:
         all_recipients = to_list + cc_list + bcc_list
         username = params.get("username")
         password = params.get("password")
-        use_tls = bool(params.get("use_tls", True))
+        use_tls = _as_bool(params.get("use_tls"), default=True)
 
         # smtplib accepts a single timeout for connect; honour the
         # tool's timeout_seconds budget there.

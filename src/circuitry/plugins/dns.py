@@ -11,6 +11,10 @@ Params:
 
 Returns ``value`` = list of records as strings (preserving native
 representation: A → IPv4, MX → "10 mail.example.com", etc.).
+
+NXDOMAIN / no-answer is not a tool failure: ``ok`` stays ``True``, ``value``
+is ``[]``, and ``raw["error"]`` names which — check that, not ``on_error``.
+``exit_code`` is always ``None``; this plugin issues no process.
 """
 
 from __future__ import annotations
@@ -58,13 +62,13 @@ class DnsPlugin:
             return ToolResult(
                 value=[],
                 raw={"domain": domain, "type": rdtype, "error": "NXDOMAIN"},
-                stdout=None, stderr="NXDOMAIN", exit_code=1,
+                stdout=None, stderr="NXDOMAIN", exit_code=None,
             )
         except dns.resolver.NoAnswer:
             return ToolResult(
                 value=[],
                 raw={"domain": domain, "type": rdtype, "error": "NoAnswer"},
-                stdout=None, stderr="NoAnswer", exit_code=2,
+                stdout=None, stderr="NoAnswer", exit_code=None,
             )
 
         records = [str(r) for r in answer]
@@ -75,7 +79,7 @@ class DnsPlugin:
                 "type": rdtype,
                 "ttl": int(answer.rrset.ttl) if answer.rrset is not None else None,
             },
-            stdout=None, stderr=None, exit_code=0,
+            stdout=None, stderr=None, exit_code=None,
         )
 
     def check(self) -> CheckResult:

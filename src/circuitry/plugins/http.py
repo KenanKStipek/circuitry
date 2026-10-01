@@ -20,13 +20,19 @@ Params:
     ``"auto"``): controls how the response body becomes ``ToolResult.value``.
     ``auto`` parses JSON when the response Content-Type advertises it,
     otherwise returns text.
+  - ``fail_on_error`` (optional, bool, default ``True``): a 4xx/5xx response
+    sets ``ToolResult.ok = False``, which fails the effect (``meta.error``,
+    ``on_error`` applies) exactly like a raised exception. Set ``false`` to
+    restore the old behaviour of always succeeding and letting the
+    orchestration branch on ``meta.status_code`` itself.
 
 ToolResult shape:
   - ``value``: parsed body per ``parse`` (dict/list for JSON, str for text).
   - ``raw``: ``{"status": int, "headers": {...}, "url": str, "body": str}``.
-  - ``stdout``: ``None``. ``stderr``: error message on non-2xx (since 4xx/5xx
-    are surfaced rather than raised — let the orchestration decide).
-  - ``exit_code``: HTTP status code so YAML callers can route on it.
+  - ``stdout``: ``None``. ``stderr``: error message on non-2xx.
+  - ``exit_code``: always ``None`` — this plugin issues no process. The HTTP
+    status lands on ``meta.status_code`` (from ``raw["status"]``), not here.
+  - ``ok``: ``False`` on a 4xx/5xx response, unless ``fail_on_error: false``.
 """
 
 from __future__ import annotations
@@ -40,7 +46,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 
 @dataclass(frozen=True)
@@ -64,6 +70,7 @@ class HttpPlugin:
         json_body = params.get("json")
         raw_body = params.get("body")
         parse = str(params.get("parse", "auto")).lower()
+        fail_on_error = _as_bool(params.get("fail_on_error"), default=True)
 
         if json_body is not None and raw_body is not None:
             raise ValueError(
@@ -136,7 +143,8 @@ class HttpPlugin:
             },
             stdout=None,
             stderr=stderr,
-            exit_code=status,
+            exit_code=None,
+            ok=not (fail_on_error and status >= 400),
         )
 
     def check(self) -> CheckResult:

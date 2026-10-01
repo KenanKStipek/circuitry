@@ -29,6 +29,11 @@ Params:
 ``yaml`` echoes the cleaned document that was actually validated, so a
 revision step can feed the exact text back to the model alongside the errors
 without having to re-derive it.
+
+``ToolResult.ok`` (distinct from ``value["ok"]``) stays ``True`` whenever
+the plugin itself ran — an invalid document is a successful validation, not
+a tool failure, so ``on_error`` never fires for one. Check ``value["ok"]``.
+``exit_code`` is always ``None``; this plugin issues no process.
 """
 
 from __future__ import annotations
@@ -39,19 +44,9 @@ from typing import Any
 from ..core.document_check import structural_errors
 from ..core.yaml_load import load_yaml
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 _DEFAULT_MAX_ERRORS = 20
-
-
-def _as_bool(value: Any, *, default: bool) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "on")
-    return bool(value)
 
 
 def _validate_document(document: str, *, run_compile: bool) -> list[str]:
@@ -148,7 +143,7 @@ class ValidateYamlPlugin:
             raw=dict(value),
             stdout=None,
             stderr="\n".join(errors) or None,
-            exit_code=0 if not errors else 1,
+            exit_code=None,
         )
 
     def check(self) -> CheckResult:

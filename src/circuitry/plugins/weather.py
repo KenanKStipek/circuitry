@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 
 @dataclass(frozen=True)
@@ -39,7 +39,7 @@ class WeatherPlugin:
     ) -> ToolResult:
         location = str(params.get("location") or "").strip()
         format_str = params.get("format")
-        as_json = bool(params.get("json"))
+        as_json = _as_bool(params.get("json"))
         if format_str and as_json:
             raise ValueError(
                 "weather: pass either params['format'] or params['json'], not both."

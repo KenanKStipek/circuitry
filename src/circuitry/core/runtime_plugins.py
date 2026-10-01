@@ -20,6 +20,10 @@ class PluginContext:
     dry_run: bool
     validate_only: bool
     runtime_config: dict[str, Any]
+    #: CircuitryConfig.environment ("dev"/"prod"/"test") for this run — the
+    #: config-level half of the store_raw cascade's environment default (see
+    #: _sql_persistence.resolve_environment); env vars still win over it.
+    environment: str = "dev"
 
 
 class RuntimePlugin(Protocol):

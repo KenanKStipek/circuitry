@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import ToolResult, _as_bool
 
 
 @dataclass(frozen=True)
@@ -54,7 +54,7 @@ class CsvPlugin:
             raise ValueError("csv: parse requires params['input'] as a string.")
         if params.get("from_path"):
             text = Path(text).expanduser().read_text(encoding="utf-8")
-        has_header = bool(params.get("has_header", True))
+        has_header = _as_bool(params.get("has_header"), default=True)
         reader = _csv.reader(io.StringIO(text), delimiter=delimiter)
         rows = list(reader)
         if has_header and rows:
