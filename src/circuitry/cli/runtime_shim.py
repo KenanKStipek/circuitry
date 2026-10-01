@@ -16,6 +16,7 @@ from ..adapters.factory import ADAPTER_REGISTRY
 from ..allowlist_gate import AllowlistError, install_allowlists, require_adapter
 from ..core.compiler import apply_effect_overrides, compile_orchestration
 from ..core.dynamic import DynamicRuntime
+from ..core.interface_inputs import check_interface_inputs
 from ..core.runtime_plugins import (
     PLUGIN_CONTRACT_VERSION,
     PluginContext,
@@ -163,15 +164,17 @@ def _load_state(
     if initial_state is not None:
         # Isolate runtime mutations from caller-owned dictionaries.
         return link_last_refs(migrate_legacy_state(deepcopy(initial_state)))
-    if not path or not path.exists():
+    if path is None:
         return migrate_legacy_state({})
+    if not path.exists():
+        raise FileNotFoundError(f"state file not found: {path}")
     return link_last_refs(
         migrate_legacy_state(json.loads(path.read_text(encoding="utf-8")))
     )
 
 
 def run(req: RunRequest) -> RunResult:
-    state = _load_state(req.state_path, req.initial_state)
+    state: dict[str, Any] = {}
     warnings: list[str] = []
     plugins: list[RuntimePlugin] = []
     run_id: str | None = None
@@ -186,6 +189,7 @@ def run(req: RunRequest) -> RunResult:
     live_mirror: LiveStateMirror | None = None
 
     try:
+        state = _load_state(req.state_path, req.initial_state)
         cfg = req.config or CircuitryConfig()
         # A skipped (untrusted) project config, first, so a failing run
         # still says which settings it ran without.
@@ -316,6 +320,21 @@ def run(req: RunRequest) -> RunResult:
                     "error": str(e),
                 }
                 raise RuntimeError(f"Failed to load persisted state: {e}") from e
+
+        # Top-level `interface.inputs`: the same required/type contract
+        # `use:` children get, enforced here once so every surface that
+        # reaches `run()` (cof run, the SDK, REST, MCP, the scheduler)
+        # behaves the same way. Fills in declared `default:`s and coerces
+        # declared-typed `-e`/`--state` string values before anything runs.
+        input_ns = state.get("input")
+        if not isinstance(input_ns, dict):
+            input_ns = {}
+            state["input"] = input_ns
+        check_interface_inputs(
+            orch.get("interface") if isinstance(orch, dict) else None,
+            input_ns,
+            label="",
+        )
 
         state.setdefault("runtime", {})
         run_id = str(uuid4())
@@ -470,8 +489,11 @@ def run(req: RunRequest) -> RunResult:
             warnings.extend(format_preflight_warnings(soft_results))
 
         # Inject built-in template variables available in all orchestrations.
-        state.setdefault("_run_id", run_id)
-        state.setdefault("_timestamp", datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"))
+        # Assigned unconditionally (not setdefault): a run started from a
+        # previous run's saved state (--state, or a persisted snapshot) must
+        # get its own fresh id/timestamp, not inherit the first run's.
+        state["_run_id"] = run_id
+        state["_timestamp"] = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
         # Execute using core runtime against Store
         callbacks: list[Callable[[dict[str, Any]], None]] = []

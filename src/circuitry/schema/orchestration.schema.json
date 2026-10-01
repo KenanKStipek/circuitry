@@ -38,6 +38,7 @@
             "properties": {
               "type": { "type": "string", "description": "Expected type: string, number, boolean, array, object." },
               "required": { "type": "boolean", "description": "Whether this input is required. Default false." },
+              "default": { "description": "Value used when the caller omits this input (top-level run or use: child). Any JSON type; should match 'type' when both are given." },
               "description": { "type": "string" }
             }
           }

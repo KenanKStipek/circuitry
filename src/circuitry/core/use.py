@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 from ..adapters import Adapter
 from ..output import console as _console
+from .interface_inputs import check_interface_inputs
 from .outputs import normalize_outputs
 from .store import Store
 
@@ -469,22 +470,23 @@ class UseRuntime:
         if not isinstance(interface, dict):
             return None
 
-        # Validate required inputs
+        # A by-reference input (`{from: path}`) that resolved to nothing is a
+        # distinct failure from a plain missing input — name the path it came
+        # from. Checked first: `rendered_inputs` always carries the key in
+        # this case (as `None`), so the shared required-input check below
+        # never sees it as missing.
         iface_inputs = interface.get("inputs")
-        if isinstance(iface_inputs, dict):
+        if isinstance(iface_inputs, dict) and unresolved:
             for key, spec in iface_inputs.items():
-                if not isinstance(spec, dict):
-                    continue
-                if spec.get("required") and key not in rendered_inputs:
-                    raise ValueError(
-                        f"Use effect '{self.defn.name}': missing required input '{key}' "
-                        f"declared in orchestration interface."
-                    )
-                if spec.get("required") and unresolved and key in unresolved:
+                if isinstance(spec, dict) and spec.get("required") and key in unresolved:
                     raise ValueError(
                         f"Use effect '{self.defn.name}': required input '{key}' "
                         f"resolved to nothing from '{unresolved[key]}'."
                     )
+
+        check_interface_inputs(
+            interface, rendered_inputs, label=f"Use effect '{self.defn.name}': "
+        )
 
         # Auto-generate output mapping if not explicitly provided
         if self.defn.outputs is not None:
@@ -711,11 +713,13 @@ class UseRuntime:
             if self.defn.inputs:
                 child_inputs = _render_inputs(self.defn.inputs, ctx)
                 unresolved = _unresolved_references(self.defn.inputs, child_inputs)
+            # Check interface first — it fills in declared `default:`s and
+            # coerces declared-typed values — so `meta["inputs"]` below
+            # records what the child actually ran with, not the pre-check
+            # rendering.
+            auto_outputs = self._check_interface(child_orch, child_inputs, unresolved)
             meta["inputs"] = copy.deepcopy(child_inputs)
             child_state: dict[str, Any] = {"input": child_inputs}
-
-            # Check interface: validate required inputs, auto-generate output mapping
-            auto_outputs = self._check_interface(child_orch, child_inputs, unresolved)
 
             # Isolated state, shared observation: the child keeps its own
             # state dict (and its explicit inputs/outputs mapping) but

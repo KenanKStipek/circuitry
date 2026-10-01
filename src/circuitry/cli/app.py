@@ -54,6 +54,7 @@ from .library_sources import (
     LibrarySourceError,
     build_registry,
 )
+from .logging_setup import configure_cli_logging
 from .orchestration_loader import load_orchestration_file, serialize_orchestration
 from .profiles import ProfileError, ProfileSettings, load_profile
 from .redaction import REDACTED, redact_env_pairs
@@ -107,6 +108,9 @@ app = typer.Typer(
 def _root(ctx: typer.Context) -> None:
     # No docstring/help here on purpose: the group's help text comes from
     # ``Typer(help=...)`` above and must stay byte-identical.
+    # Baseline WARNING on every invocation; a command with its own
+    # --verbose/-v bumps this to INFO once its own options are parsed.
+    configure_cli_logging()
     if ctx.invoked_subcommand is not None:
         return
     from ..tui import run_tui, should_launch_tui
@@ -149,6 +153,13 @@ def _print_run_warnings(warnings: list[str]) -> None:
         err_console.print(
             f"[yellow]Warning:[/yellow] {escape(w)}", highlight=False, soft_wrap=True
         )
+
+
+def _read_state_file(path: Path) -> dict[str, Any]:
+    """Read a --state JSON file, failing loudly when it doesn't exist."""
+    if not path.exists():
+        raise FileNotFoundError(f"state file not found: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _parse_env_vars(env_vars: list[str] | None) -> dict[str, Any]:
@@ -575,6 +586,8 @@ def run_cmd(
             )
             raise typer.Exit(code=1)
 
+    configure_cli_logging(verbose=verbose)
+
     if orchestration is None:
         console.print("[red]Error:[/red] Missing orchestration. Use --last or provide a path/name.")
         console.print("[dim]Tip: run [bold]cof list[/bold] to see available orchestrations.[/dim]")
@@ -664,7 +677,11 @@ def run_cmd(
     inline = _parse_env_vars(env_vars)
     if inline:
         if state:
-            initial_state = json.loads(state.read_text(encoding="utf-8"))
+            try:
+                initial_state = _read_state_file(state)
+            except FileNotFoundError as exc:
+                console.print(f"[red]Error:[/red] {exc}")
+                raise typer.Exit(code=1) from exc
             initial_state = _apply_inline_overrides(initial_state, inline)
         else:
             initial_state = inline
@@ -890,6 +907,8 @@ def run_library_cmd(
         help="Model to use for this run. Beats CIRCUITRY_MODEL and the orchestration.",
     ),
 ):
+    configure_cli_logging(verbose=verbose)
+
     # Auto-pipe detection
     if not sys.stdout.isatty():
         json_out = True
@@ -945,7 +964,11 @@ def run_library_cmd(
     inline = _parse_env_vars(env_vars)
     if inline:
         if state:
-            initial_state = json.loads(state.read_text(encoding="utf-8"))
+            try:
+                initial_state = _read_state_file(state)
+            except FileNotFoundError as exc:
+                console.print(f"[red]Error:[/red] {exc}")
+                raise typer.Exit(code=1) from exc
             initial_state = _apply_inline_overrides(initial_state, inline)
         else:
             initial_state = inline
@@ -1668,6 +1691,8 @@ def gen_cmd(
         3, "--retries", "-r", help="Max retry attempts per prompt on failure.",
     ),
 ):
+    configure_cli_logging(verbose=verbose)
+
     _VALID_FORMATS = {"yaml", "json", "toon"}
     if output_format not in _VALID_FORMATS:
         console.print(
@@ -1861,6 +1886,8 @@ def wizard_cmd(
     config: Path | None = typer.Option(None, "--config", "-c", help="Path to config JSON."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show orchestration execution logs."),
 ) -> None:
+    configure_cli_logging(verbose=verbose)
+
     seed = Seed(
         name=name or " ".join(goal.split()[:6]),
         category=category.strip().lower() or WIZARD_DEFAULT_CATEGORY,
