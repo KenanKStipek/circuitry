@@ -7,6 +7,7 @@ assignment (issue #208), and the comprehension-scope fix for ``inputs``.
 
 from __future__ import annotations
 
+import os
 import time
 import types
 from dataclasses import dataclass
@@ -96,7 +97,11 @@ class TestWriteGuard:
         acc = Accumulator()
         with pytest.raises(TypeError):
             _run("a += 99", mode="exec", inputs={"a": acc})
-        assert acc.total == 0
+        # Not `assert acc.total == 0`: `a` runs in the forked child's copy
+        # of memory, so the parent's `acc` is untouched regardless of what
+        # happens in the child -- that would pass even with no guard at
+        # all. The `pytest.raises(TypeError)` above is what actually
+        # proves the bypass is blocked.
 
     def test_subscript_augmented_assignment_rejected_at_compile_time(self):
         # RestrictedPython forbids augmented assignment of subscripts
@@ -162,3 +167,27 @@ class TestTimeout:
     def test_fast_code_within_budget_still_succeeds(self):
         result = _run("1 + 1", timeout_seconds=1)
         assert result.value == 2
+
+    def test_child_exit_without_result_raises_instead_of_hanging(self):
+        # A child that dies without ever sending a result (crash, killed,
+        # or `os._exit`) must not hang the parent's read forever: the
+        # parent closes its own copy of the pipe's write end right after
+        # start(), so EOF is reachable once the child's copy closes too.
+        start = time.monotonic()
+        with pytest.raises(RuntimeError, match="exited unexpectedly"):
+            _run(
+                "die(1)",
+                mode="exec",
+                inputs={"die": os._exit},
+                timeout_seconds=5,
+            )
+        assert time.monotonic() - start < 5
+
+    def test_result_larger_than_pipe_buffer_does_not_deadlock(self):
+        # Regression: reading only after join() let a child's write block
+        # on a full OS pipe buffer (tens of KiB) for the whole budget,
+        # turning a real result into a false timeout.
+        start = time.monotonic()
+        result = _run("'x' * 2_000_000", timeout_seconds=10)
+        assert result.value == "x" * 2_000_000
+        assert time.monotonic() - start < 10
