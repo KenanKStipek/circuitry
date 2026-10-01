@@ -563,8 +563,13 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
   status or a soft 0/1/2 flag.
 - **HTTP-family plugins** (`http`, `web_fetch`, `webhook`, `linear`) fail
   (`ok: false`) on a 4xx/5xx response by default, with the status recorded
-  on **`meta.status_code`**. Each has a `fail_on_error: false` param that
-  restores the old always-succeeds behaviour — the response still lands on
+  on **`meta.status_code`**. The failure message (`meta.error`, and
+  `meta.stderr`) includes a bounded, redacted excerpt of the response body
+  when one is available — the JSON `error`/`message`/`detail` field, or
+  the first ~500 characters otherwise — so a validation reason a provider
+  sent back is visible without having to read `meta.raw.body` separately.
+  Each has a `fail_on_error: false` param that restores the old
+  always-succeeds behaviour — the response still lands on
   `value`/`meta.status_code`, it just doesn't fail the effect.
 - **Soft-outcome plugins** (`wikipedia`, `dns`, `port_check`,
   `validate_yaml`) keep `ok: true` regardless of outcome and report it on

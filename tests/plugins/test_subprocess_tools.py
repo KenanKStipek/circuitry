@@ -23,7 +23,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from curl_test_support import assert_not_in_argv, assert_q_first, read_config_headers
+from curl_test_support import (
+    assert_not_in_argv,
+    assert_q_first,
+    read_config_headers,
+    read_config_url,
+)
 
 from circuitry.plugins import build_plugin
 from circuitry.plugins._subprocess import (
@@ -649,6 +654,7 @@ def test_web_search_calls_duckduckgo_with_format_json(
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         captured["cmd"] = cmd
+        captured["url"] = read_config_url(cmd)
         return FakeProc(
             returncode=0,
             stdout=_json.dumps({"AbstractText": "Yaml is a data language"}),
@@ -658,7 +664,8 @@ def test_web_search_calls_duckduckgo_with_format_json(
 
     r = WebSearchPlugin().execute(params={"query": "yaml"})
     assert r.value["AbstractText"] == "Yaml is a data language"
-    url = captured["cmd"][-1]
+    url = captured["url"]
+    assert url is not None
     assert "duckduckgo.com" in url
     assert "format=json" in url
     assert "q=yaml" in url
@@ -760,12 +767,14 @@ def test_weather_default_returns_text(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         captured["cmd"] = cmd
+        captured["url"] = read_config_url(cmd)
         return FakeProc(returncode=0, stdout="Boston: ☀ +60°F\n")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     r = WeatherPlugin().execute(params={"location": "Boston"})
     assert "Boston" in r.value
-    url = captured["cmd"][-1]
+    url = captured["url"]
+    assert url is not None
     assert "wttr.in/Boston" in url
 
 
@@ -798,11 +807,13 @@ def test_weather_format_string_appended_to_url(
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         captured["cmd"] = cmd
+        captured["url"] = read_config_url(cmd)
         return FakeProc(returncode=0, stdout="Cloudy")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     WeatherPlugin().execute(params={"location": "Boston", "format": "%C"})
-    assert "format=%25C" in captured["cmd"][-1] or "format=%C" in captured["cmd"][-1]
+    url = captured["url"] or ""
+    assert "format=%25C" in url or "format=%C" in url
 
 
 def test_weather_uses_q_first_and_header_off_argv(

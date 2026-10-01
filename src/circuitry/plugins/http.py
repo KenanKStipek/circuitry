@@ -29,7 +29,10 @@ Params:
 ToolResult shape:
   - ``value``: parsed body per ``parse`` (dict/list for JSON, str for text).
   - ``raw``: ``{"status": int, "headers": {...}, "url": str, "body": str}``.
-  - ``stdout``: ``None``. ``stderr``: error message on non-2xx.
+  - ``stdout``: ``None``. ``stderr``: error message on non-2xx, including a
+    bounded, redacted excerpt of the response body when one is available
+    (the JSON ``error``/``message``/``detail`` field, or the first ~500
+    characters).
   - ``exit_code``: always ``None`` — this plugin issues no process. The HTTP
     status lands on ``meta.status_code`` (from ``raw["status"]``), not here.
   - ``ok``: ``False`` on a 4xx/5xx response, unless ``fail_on_error: false``.
@@ -46,7 +49,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult, _as_bool
+from .base import ToolResult, _as_bool, http_error_excerpt
 
 
 @dataclass(frozen=True)
@@ -113,6 +116,9 @@ class HttpPlugin:
             except Exception:
                 text = ""
             stderr = f"HTTP {status}: {exc.reason}"
+            excerpt = http_error_excerpt(text)
+            if excerpt:
+                stderr = f"{stderr}: {excerpt}"
         except urllib.error.URLError as exc:
             # DNS / connection failure — true execution error.
             raise RuntimeError(f"HTTP request to {url} failed: {exc.reason}") from exc

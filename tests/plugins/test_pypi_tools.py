@@ -608,6 +608,38 @@ def test_webhook_4xx_sets_ok_false_by_default(monkeypatch: pytest.MonkeyPatch) -
     assert r.raw["status"] == 404
 
 
+def test_webhook_4xx_stderr_includes_reason_but_not_a_canary_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #317: a bounded, redacted excerpt of the response
+    body makes it into the failure message — a reason makes it in, a
+    sibling credential-shaped field does not."""
+    fake_mod = types.ModuleType("requests")
+    fake_exc_mod = types.ModuleType("requests.exceptions")
+    fake_exc_mod.RequestException = type("RequestException", (Exception,), {})
+    fake_mod.exceptions = fake_exc_mod
+
+    class R:
+        def __init__(self) -> None:
+            self.status_code = 400
+            self.text = _json.dumps(
+                {
+                    "error": "Validation failed: missing field 'amount'",
+                    "api_key": "sk-canary-DO-NOT-LEAK-0123456789",
+                }
+            )
+            self.headers = {"Content-Type": "application/json"}
+
+    fake_mod.request = lambda **kwargs: R()
+    monkeypatch.setitem(sys.modules, "requests", fake_mod)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_exc_mod)
+
+    r = WebhookPlugin().execute(params={"url": "https://x.test"})
+    assert r.ok is False
+    assert "Validation failed" in (r.stderr or "")
+    assert "canary" not in (r.stderr or "")
+
+
 def test_webhook_fail_on_error_false_keeps_ok_true_on_4xx(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -682,6 +714,37 @@ def test_web_fetch_4xx_sets_ok_false_by_default(
         params={"url": "https://x.test", "mode": "html", "fail_on_error": "False"}
     )
     assert r2.ok is True
+
+
+def test_web_fetch_4xx_stderr_includes_reason_but_not_a_canary_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #317: a bounded, redacted excerpt of the response
+    body makes it into the failure message — a reason makes it in, a
+    sibling credential-shaped field does not."""
+    fake_mod = types.ModuleType("requests")
+    fake_exc_mod = types.ModuleType("requests.exceptions")
+    fake_exc_mod.RequestException = type("RequestException", (Exception,), {})
+    fake_mod.exceptions = fake_exc_mod
+
+    class FakeResponse:
+        status_code = 400
+        text = _json.dumps(
+            {
+                "error": "Validation failed: missing field 'amount'",
+                "api_key": "sk-canary-DO-NOT-LEAK-0123456789",
+            }
+        )
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "application/json"}
+
+    fake_mod.get = lambda *a, **k: FakeResponse()
+    monkeypatch.setitem(sys.modules, "requests", fake_mod)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_exc_mod)
+
+    r = WebFetchPlugin().execute(params={"url": "https://x.test", "mode": "json"})
+    assert r.ok is False
+    assert "Validation failed" in (r.stderr or "")
+    assert "canary" not in (r.stderr or "")
 
 
 def test_web_fetch_defaults_timeout_to_the_effect_budget(

@@ -117,8 +117,8 @@ from the process environment by each adapter. The reads happen at adapter
 instantiation, so a missing key fails loudly with a hint instead of silently
 sending an unauthenticated request.
 
-**Mitigation — curl never puts a secret or a body on its own command
-line.** Every curl-based adapter (`openai`, `anthropic`, `ollama`,
+**Mitigation — curl never puts a secret, a URL, or a body on its own
+command line.** Every curl-based adapter (`openai`, `anthropic`, `ollama`,
 `replicate`, `watsonx` — including its IAM token exchange — and the ~20
 providers that share transport via
 [`adapters/_openai_compat.py`](../src/circuitry/adapters/_openai_compat.py))
@@ -129,19 +129,25 @@ and most of each curl-based tool plugin's calls (`comfyui`'s JSON calls,
 `~/.curlrc` can't silently redirect output or inject a proxy), sends the
 JSON request body on stdin via `--data-binary @-` instead of `-d` on argv
 (this also removes Linux's 128 KiB-per-argument ceiling for a large prompt
-or base64 image), and sends every header — `Authorization`, `x-api-key`,
-any provider-specific credential header — through an inherited pipe file
-descriptor via `--config /dev/fd/<n>` rather than `-H`. Neither a secret
-nor a request body is ever visible in `ps` for the duration of the call.
-The target URL is the exception: it is still curl's final argument, so a
-credential a search API takes as a query parameter (`web_search`'s
-`extra_params`) or `user:pass@` in a configured `base_url` is visible in
-`ps`, though masked in any failure message (next mitigation). `comfyui`'s
+or base64 image), and sends the URL and every header — `Authorization`,
+`x-api-key`, any provider-specific credential header, a query-string
+credential such as `web_search`'s `extra_params`, `user:pass@` in a
+configured `base_url` — through a `--config` file rather than argv or
+`-H`. On POSIX that file travels through an inherited pipe file descriptor
+(`--config /dev/fd/<n>`), never a temp file; Windows has no such fd, so
+there it's a file written to the per-user temp directory (`%TEMP%`,
+private to the user by default ACL) and removed in a `finally` once curl
+is done with it. Argv carries no request data at all, so nothing from this
+source is ever visible in `ps` for the duration of the call. `comfyui`'s
 image fetch (`_curl_bytes`), its one multipart upload (`_upload_image`,
 `-F image=@<path>` — the local file path, not its contents, on argv) and
 its `check()` HEAD probe call curl directly rather than through
 `run_curl()`, since none of the three sends a JSON body or a header that
-needs to stay off argv; all three still pass `-q` first.
+needs to stay off argv; all three still pass `-q` first. Their target URL
+is built from `base_url`, which is operator-configured (ComfyUI behind an
+authenticating proxy, say) and so can itself carry `user:pass@` — unlike
+the other curl-based adapters/plugins above, these three calls don't route
+that case off argv.
 
 **Mitigation — error masking.** Every curl failure raises through
 [`circuitry/curl_support.py`](../src/circuitry/curl_support.py)'s
