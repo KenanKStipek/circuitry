@@ -7,7 +7,7 @@ from re import Pattern
 from typing import Any, ClassVar
 
 from ..preflight import CheckResult
-from .base import GenerateResult
+from .base import GenerateOptions, GenerateResult, ignored_options_warning
 
 
 class RunCancelled(BaseException):
@@ -63,7 +63,12 @@ class HostClaudeAdapter:
     _claude_model_pattern: ClassVar[Pattern[str]] = _CLAUDE_MODEL_PATTERN
 
     def generate(
-        self, *, model: str, prompt: str, timeout_seconds: int = 120
+        self,
+        *,
+        model: str,
+        prompt: str,
+        timeout_seconds: int = 120,
+        options: GenerateOptions | None = None,
     ) -> GenerateResult:
         requested_model = model or self.default_model
         is_claude = bool(self._claude_model_pattern.match(requested_model or ""))
@@ -100,6 +105,7 @@ class HostClaudeAdapter:
             raw=raw,
             tokens_sent=None,
             tokens_received=None,
+            warnings=ignored_options_warning(self.name, options),
         )
 
     def check(self) -> CheckResult:

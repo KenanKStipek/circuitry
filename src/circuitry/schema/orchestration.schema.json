@@ -157,7 +157,7 @@
       "required": ["kind", "ref"],
       "properties": {
         "kind": { "type": "string", "description": "Asset type, e.g. image, file, audio." },
-        "ref": { "type": "string", "description": "Resolvable identifier or path." }
+        "ref": { "type": "string", "description": "Mustache template rendering to a local path or an http(s) URL. Use {{{...}}}: {{...}} HTML-escapes the value." }
       }
     },
 
@@ -251,9 +251,9 @@
           "items": { "type": "string" },
           "description": "Ordered list of fallback providers."
         },
-        "params": { "type": "object", "description": "Provider-specific generation parameters." },
+        "params": { "type": "object", "description": "Generation parameters. temperature, max_tokens and stop are mapped to each provider's names; other keys go to the provider unchanged." },
         "timeout_ms": { "type": "integer", "minimum": 0 },
-        "deterministic": { "type": "boolean", "description": "If true, use temperature=0 or equivalent." },
+        "deterministic": { "type": "boolean", "description": "If true, temperature 0 (unless params sets one) and a fixed seed where the provider takes one." },
         "inputs": { "type": "object", "description": "Prompt-local key/value pairs available in template rendering." },
         "assets": {
           "type": "array",

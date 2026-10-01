@@ -66,11 +66,11 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import GenerateResult
+from .base import GenerateOptions, GenerateResult, ignored_options_warning
 
 #: Terminal success. Both spellings are real: cookd's client polls for
 #: ``complete``, expo's ``ReportResultRequest`` writes ``completed``.
@@ -244,20 +244,28 @@ class CyberdinerAdapter:
             ) from exc
 
     def generate(
-        self, *, model: str, prompt: str, timeout_seconds: int = 120
+        self,
+        *,
+        model: str,
+        prompt: str,
+        timeout_seconds: int = 120,
+        options: GenerateOptions | None = None,
     ) -> GenerateResult:
         sem = self._in_flight
         if sem is None:
-            return self._generate(
+            result = self._generate(
                 model=model, prompt=prompt, timeout_seconds=timeout_seconds
             )
-        sem.acquire()
-        try:
-            return self._generate(
-                model=model, prompt=prompt, timeout_seconds=timeout_seconds
-            )
-        finally:
-            sem.release()
+        else:
+            sem.acquire()
+            try:
+                result = self._generate(
+                    model=model, prompt=prompt, timeout_seconds=timeout_seconds
+                )
+            finally:
+                sem.release()
+        # A job carries only a prompt and a tier.
+        return replace(result, warnings=ignored_options_warning(self.name, options))
 
     def _generate(
         self, *, model: str, prompt: str, timeout_seconds: int = 120

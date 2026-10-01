@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import ClassVar
 
 from ..preflight import CheckResult
 from ._openai_compat import (
@@ -22,7 +23,7 @@ from ._openai_compat import (
     chat_completion,
     check_dependencies,
 )
-from .base import GenerateResult
+from .base import GenerateOptions, GenerateResult
 
 
 def _resolve_base_url(explicit: str) -> str:
@@ -38,6 +39,7 @@ def _resolve_base_url(explicit: str) -> str:
 
 @dataclass(frozen=True)
 class DatabricksAdapter:
+    accepts_images: ClassVar[bool] = True
     name: str = "databricks"
     base_url: str = ""
     default_model: str = "databricks-meta-llama-3-3-70b-instruct"
@@ -50,7 +52,12 @@ class DatabricksAdapter:
         )
 
     def generate(
-        self, *, model: str, prompt: str, timeout_seconds: int = 120
+        self,
+        *,
+        model: str,
+        prompt: str,
+        timeout_seconds: int = 120,
+        options: GenerateOptions | None = None,
     ) -> GenerateResult:
         cfg = self._cfg()
         if not cfg.base_url:
@@ -59,7 +66,11 @@ class DatabricksAdapter:
                 "or runtime.adapters.databricks.base_url to your workspace URL."
             )
         return chat_completion(
-            cfg=cfg, model=model, prompt=prompt, timeout_seconds=timeout_seconds
+            cfg=cfg,
+            model=model,
+            prompt=prompt,
+            timeout_seconds=timeout_seconds,
+            options=options,
         )
 
     def check(self) -> CheckResult:

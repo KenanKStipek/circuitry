@@ -28,7 +28,7 @@ from dataclasses import dataclass
 
 from ..preflight import CheckResult
 from ._curl_errors import curl_failure_message
-from .base import GenerateResult
+from .base import GenerateOptions, GenerateResult, ignored_options_warning
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,12 @@ class ReplicateAdapter:
     default_model: str = "meta/meta-llama-3-70b-instruct"
 
     def generate(
-        self, *, model: str, prompt: str, timeout_seconds: int = 120
+        self,
+        *,
+        model: str,
+        prompt: str,
+        timeout_seconds: int = 120,
+        options: GenerateOptions | None = None,
     ) -> GenerateResult:
         api_token = os.environ.get("REPLICATE_API_TOKEN", "")
         if not api_token:
@@ -123,6 +128,7 @@ class ReplicateAdapter:
             raw=raw,
             tokens_sent=None,
             tokens_received=None,
+            warnings=ignored_options_warning(self.name, options),
         )
 
     def check(self) -> CheckResult:

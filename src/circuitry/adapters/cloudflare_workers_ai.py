@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import ClassVar
 
 from ..preflight import CheckResult
 from ._openai_compat import (
@@ -18,7 +19,7 @@ from ._openai_compat import (
     chat_completion,
     check_dependencies,
 )
-from .base import GenerateResult
+from .base import GenerateOptions, GenerateResult
 
 
 def _resolve_base_url(explicit: str, account_id: str) -> str:
@@ -31,6 +32,7 @@ def _resolve_base_url(explicit: str, account_id: str) -> str:
 
 @dataclass(frozen=True)
 class CloudflareWorkersAIAdapter:
+    accepts_images: ClassVar[bool] = True
     name: str = "cloudflare-workers-ai"
     base_url: str = ""
     account_id: str = ""
@@ -45,7 +47,12 @@ class CloudflareWorkersAIAdapter:
         )
 
     def generate(
-        self, *, model: str, prompt: str, timeout_seconds: int = 120
+        self,
+        *,
+        model: str,
+        prompt: str,
+        timeout_seconds: int = 120,
+        options: GenerateOptions | None = None,
     ) -> GenerateResult:
         cfg = self._cfg()
         if not cfg.base_url:
@@ -55,7 +62,11 @@ class CloudflareWorkersAIAdapter:
                 "account_id (or supply a fully-formed base_url)."
             )
         return chat_completion(
-            cfg=cfg, model=model, prompt=prompt, timeout_seconds=timeout_seconds
+            cfg=cfg,
+            model=model,
+            prompt=prompt,
+            timeout_seconds=timeout_seconds,
+            options=options,
         )
 
     def check(self) -> CheckResult:

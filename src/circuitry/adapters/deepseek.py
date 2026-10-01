@@ -7,6 +7,7 @@ Authentication: ``DEEPSEEK_API_KEY`` (https://platform.deepseek.com/api_keys).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 from ..preflight import CheckResult
 from ._openai_compat import (
@@ -14,11 +15,12 @@ from ._openai_compat import (
     chat_completion,
     check_dependencies,
 )
-from .base import GenerateResult
+from .base import GenerateOptions, GenerateResult
 
 
 @dataclass(frozen=True)
 class DeepSeekAdapter:
+    accepts_images: ClassVar[bool] = True
     name: str = "deepseek"
     base_url: str = "https://api.deepseek.com/v1"
     default_model: str = "deepseek-chat"
@@ -31,13 +33,19 @@ class DeepSeekAdapter:
         )
 
     def generate(
-        self, *, model: str, prompt: str, timeout_seconds: int = 120
+        self,
+        *,
+        model: str,
+        prompt: str,
+        timeout_seconds: int = 120,
+        options: GenerateOptions | None = None,
     ) -> GenerateResult:
         return chat_completion(
             cfg=self._cfg(),
             model=model,
             prompt=prompt,
             timeout_seconds=timeout_seconds,
+            options=options,
         )
 
     def check(self) -> CheckResult:

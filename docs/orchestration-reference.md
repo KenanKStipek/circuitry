@@ -73,18 +73,18 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `type` | `"prompt"` | yes | — | |
 | `name` | string | yes | — | Pattern `^[A-Za-z_][A-Za-z0-9_]*$`; `iter_<N>` reserved |
 | `template` | string | one-of | — | Mustache template; mutually exclusive with `messages` |
-| `messages` | array | one-of | — | Role-based messages; mutually exclusive with `template` |
+| `messages` | array | one-of | — | Role-based messages; mutually exclusive with `template`. Sent as real conversation turns (a system message, then user/assistant turns) to adapters that take them — see [Generation options](#generation-options-messages-and-images) |
 | `prompt_type` | string | no | `text` | `text`, `json`, `boolean`, `number`, `array`, `object`, `tool`. `boolean`/`number` parse the reply leniently (`Yes.`, `**TRUE**`, `42.`, `1e3` all read correctly; wrapping quotes/markdown/punctuation stripped first) and raise — rather than decoding to `null` — on a reply that still doesn't parse, so `on_error`/`retries` apply. Raw reply kept on `meta.answer` |
 | `schema` | object | no | — | JSON Schema for validating structured output |
 | `description` | string | no | — | Human-readable description |
 | `model` | string | no | — | Per-effect model override |
 | `provider` | string | no | — | Per-effect provider override |
 | `provider_fallbacks` | array | no | — | Ordered fallback providers |
-| `params` | object | no | — | Provider-specific generation params (e.g. temperature) |
-| `timeout_ms` | integer | no | — | Per-effect timeout in milliseconds |
-| `deterministic` | boolean | no | `false` | Use temperature=0 or equivalent |
+| `params` | object | no | — | Generation parameters. `temperature`, `max_tokens` and `stop` are mapped to each provider's own names; every other key goes to the provider unchanged (e.g. ollama `num_ctx`, OpenAI `top_p`) — see [Generation options](#generation-options-messages-and-images) |
+| `timeout_ms` | integer | no | — | Per-attempt timeout in milliseconds, capped by the adapter's `timeout_seconds`; rounded up to whole seconds. `0` or absent: the adapter's timeout |
+| `deterministic` | boolean | no | `false` | Temperature 0 unless `params.temperature` is set, plus a fixed seed on ollama and openai unless `params.seed` is set |
 | `inputs` | object | no | — | Prompt-local key/value pairs for template rendering |
-| `assets` | array | no | — | Non-text inputs: `[{kind: "image", ref: "path/to/img"}]` |
+| `assets` | array | no | — | Images for a vision model: `[{kind: "image", ref: "path/to/img"}]`. `ref` is a Mustache template rendering to a local path or an `http(s)` URL. Other kinds are skipped with a warning |
 | `retries` | object | no | — | `{max_attempts: N, backoff_ms: M}` |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 
@@ -118,6 +118,49 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
     - role: user
       content: "Is this text positive? {{text}}"
 ```
+
+#### Generation options, messages and images
+
+`params`, `deterministic`, `timeout_ms`, `messages` and `assets` reach the adapter on every call:
+
+| | ollama | OpenAI-compatible family, `openai` | `anthropic` |
+|---|---|---|---|
+| `params.temperature` | `options.temperature` | `temperature` | `temperature` |
+| `params.max_tokens` | `options.num_predict` | `max_tokens` (`openai`: `max_completion_tokens`) | `max_tokens` (else the adapter's configured `max_tokens`) |
+| `params.stop` (string or list) | `options.stop` | `stop` | `stop_sequences` |
+| any other `params` key | `options.<key>`; `format`, `keep_alive` and `think` go top level | request body | request body |
+| `deterministic: true` seed | `options.seed: 0` | `openai` only: `seed: 0` | — |
+| `messages` | `/api/chat` turns | `messages` turns | `system` field + turns |
+| image assets | base64 `images` (local files only) | `image_url` parts (`data:` URL for a local file) | `image` blocks (base64 or `url`) |
+
+A `tool` turn has no standalone form in the OpenAI-compatible or Anthropic APIs, so those adapters send it as a user turn prefixed `tool:`. Images go with the last user turn. Every other adapter (`litellm`, `replicate`, `watsonx`, `cyberdiner`, `host_claude`, and an out-of-tree adapter whose `generate()` has no `options` keyword) runs the prompt as before, with `messages` flattened into one `role: content` string, and records one warning naming what it ignored. `cof check` and run preflight warn when a prompt's image assets go to an adapter that cannot send images.
+
+What lands in `meta` beyond the usual keys, each only when it has something to say:
+
+- `meta.assets` — one `{kind, ref, media_type, size, sha256}` per local image (`{kind, ref}` for a URL). The image bytes never enter state.
+- `meta.finish_reason` — the provider's stop reason (`stop`, `length`, `end_turn`, `max_tokens`, ...) when it reports one.
+- `meta.warnings` — a reply cut off at the length limit (`finish_reason` `length`/`max_tokens`), options an adapter ignored, an asset kind no adapter sends.
+
+**Example — an image to a local vision model:**
+```yaml
+- type: prompt
+  name: regions
+  provider: ollama
+  model: qwen3.8:27b
+  deterministic: true
+  params: {max_tokens: 4096, keep_alive: 0, think: false}
+  assets:
+    - {kind: image, ref: "{{{input.run}}}/see/view.png"}
+  prompt_type: json
+  schema:
+    type: object
+    properties:
+      regions: {type: array, items: {type: string}}
+    required: [regions]
+  template: "List the distinct regions of this image. Return ONLY a JSON object with \"regions\"."
+```
+
+A slow model needs a longer adapter timeout, `runtime.adapters.ollama.timeout_seconds: 1800` in config: a prompt's `timeout_ms` is capped by the adapter's `timeout_seconds`, so it can only shorten the wait. Write `ref` with triple braces (`{{{...}}}`): double braces HTML-escape the value, which breaks a URL with `&` in its query string.
 
 **`on_error` and preflight — optional adapters:** `cof check`/`cof run` walk every `adapter`/`provider` an orchestration references and probe its credentials before anything runs (`check()`, see the plugins pages). By default that's a **hard** dependency: a missing credential fails preflight for the whole file, even if only one effect needs it. Set `on_error: skip` (or `continue`) on every `prompt` effect that uses a given adapter and preflight reclassifies it as **soft** — a missing credential downgrades to a warning naming the effects that will skip, and the run proceeds, leaving those effects' `value` as `null`. An adapter is soft only when *every* effect referencing it tolerates failure; one effect without `on_error` handling makes the whole adapter a hard dependency again, and preflight's error names that effect specifically. This looks at each `prompt` effect's own `on_error`, not an enclosing `dynamic`/`loop`/`if` container's — a `prompt` effect nested in a container that tolerates failure still needs its own `on_error: skip`/`continue` to be classified as soft. `cof run --skip-preflight` bypasses preflight entirely (hard and soft alike) — unrelated to this classification.
 
