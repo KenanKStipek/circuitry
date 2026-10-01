@@ -11,6 +11,8 @@ authored orchestrations) converge on one spelling per construct:
 * effects named after an effect *type* (``use``, ``loop``, ``if``, ``dynamic``)
   — generic names read as structure rather than intent, and duplicates of them
   collide in sibling scope
+* tool ``params.args`` entries YAML read as a number, boolean or null —
+  the tool receives ``str()`` of that value, not the text the author wrote
 * loop-body references that do not mean what they look like: a fixed
   ``iter_<N>`` path (stale data, not an error), ``prime.<loop>.last`` (written
   only when the loop completes, so inside the body it is the previous full
@@ -259,6 +261,32 @@ def _check_effect(
         )
 
     _check_loop_references(effect, where=where, warnings=warnings, loops=loops)
+
+    if effect_type == "tool":
+        _check_tool_args(effect.get("params"), where=where, warnings=warnings)
+
+
+def _check_tool_args(params: Any, *, where: str, warnings: list[str]) -> None:
+    """Flag ``params.args`` entries YAML turned into something other than text.
+
+    A tool passes every argument on as ``str(value)``, so an unquoted ``0x1``
+    arrives as ``1``, ``off`` as ``False`` and ``-0`` as ``0`` — the run
+    works, with an argument the author never wrote.
+    """
+    if not isinstance(params, Mapping):
+        return
+    args = params.get("args")
+    if not isinstance(args, list):
+        return
+    for index, arg in enumerate(args):
+        if arg is None or isinstance(arg, (bool, int, float)):
+            kind = "null" if arg is None else type(arg).__name__
+            warnings.append(
+                f"{where}: params.args[{index}] is not a string — YAML read it "
+                f"as the {kind} {arg!r}, so the tool receives the text "
+                f"'{arg}'. Quote it to pass exactly what you wrote (unquoted, "
+                "YAML turns 0x1 into 1, off into false and -0 into 0)."
+            )
 
 
 def _check_flow(flow: Any, *, where: str, warnings: list[str]) -> None:

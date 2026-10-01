@@ -16,6 +16,7 @@ from ..cli.redaction import redact
 from ..output import console as _console
 from .answers import parse_boolean_answer, parse_number_answer
 from .store import Store
+from .templates import render_template
 
 logger = logging.getLogger(__name__)
 
@@ -94,16 +95,6 @@ class _PromptSpinner:
             f" {self._name} [dim]{suffix}[/dim]"
         )
         return "\n".join(lines)
-
-
-def _render(template: str, ctx: dict[str, Any]) -> str:
-    try:
-        import chevron  # type: ignore
-
-        return chevron.render(template, ctx)
-    except Exception:
-        logger.warning("Chevron template rendering failed; returning raw template", exc_info=True)
-        return template
 
 
 # Prompt types per the spec
@@ -331,8 +322,21 @@ class PromptRuntime:
         if self.defn.inputs:
             effective_ctx.update(self.defn.inputs)
 
-        # Materialize prompt input
-        prompt_sent = self._materialize_input(effective_ctx)
+        # Materialize prompt input. A template that fails to render is this
+        # effect's failure, under its own on_error — never the raw text sent
+        # to the model as if it had rendered.
+        try:
+            prompt_sent = self._materialize_input(effective_ctx)
+        except Exception as e:
+            meta["created_at"] = _now_iso()
+            meta["error"] = redact(str(e))
+            meta["completed_at"] = _now_iso()
+            node["value"] = None
+            store.fire_effect_start(self.defn.name, node)
+            store.fire_effect_complete(self.defn.name, node)
+            if self.defn.on_error == "fail":
+                raise
+            return
 
         # Resolved once, ahead of the meta block that reports it: a per-effect
         # ``model:`` always wins over the run's default, and dispatch further
@@ -928,14 +932,16 @@ class PromptRuntime:
     def _materialize_input(self, ctx: dict[str, Any]) -> str:
         """Materialize the prompt input from template or messages."""
         if self.defn.template:
-            return _render(self.defn.template, ctx)
+            return render_template(self.defn.template, ctx, label="template")
 
         if self.defn.messages:
             # Format messages into a prompt string
             # For more sophisticated handling, this would be adapter-specific
             lines = []
-            for msg in self.defn.messages:
-                content = _render(msg.content, ctx)
+            for index, msg in enumerate(self.defn.messages):
+                content = render_template(
+                    msg.content, ctx, label=f"messages[{index}].content"
+                )
                 lines.append(f"{msg.role}: {content}")
             return "\n\n".join(lines)
 

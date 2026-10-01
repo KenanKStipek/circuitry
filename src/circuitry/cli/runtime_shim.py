@@ -15,6 +15,7 @@ from ..adapters import Adapter, build_adapter
 from ..adapters.factory import ADAPTER_REGISTRY
 from ..allowlist_gate import AllowlistError, install_allowlists, require_adapter
 from ..core.compiler import apply_effect_overrides, compile_orchestration
+from ..core.document_check import structural_errors, unknown_key_warnings
 from ..core.dynamic import DynamicRuntime
 from ..core.runtime_plugins import (
     PLUGIN_CONTRACT_VERSION,
@@ -191,6 +192,16 @@ def run(req: RunRequest) -> RunResult:
         # still says which settings it ran without.
         warnings.extend(cfg.resolution_warnings())
         orch = load_orchestration_file(req.orchestration_path)
+
+        # The same structural gate `cof check` applies, before anything
+        # resolves, compiles or runs: a document `validate` rejects must not
+        # get as far as its first effect.
+        document_errors = structural_errors(orch)
+        if document_errors:
+            raise ValueError(
+                "Orchestration validation failed:\n"
+                + "\n".join(f"  - {error}" for error in document_errors)
+            )
 
         allowlist_errors = check_allowlist(
             orch=orch, config=cfg, root_path=req.orchestration_path
@@ -722,7 +733,11 @@ def validate(
         orch = load_orchestration_file(orchestration_path)
 
         from ..core.lint import lint_orchestration
-        lint_warnings = [*config_warnings, *lint_orchestration(orch)]
+        lint_warnings = [
+            *config_warnings,
+            *lint_orchestration(orch),
+            *unknown_key_warnings(orch),
+        ]
         # Host settings the document sets are dropped at run time, or applied
         # with a notice when it is trusted; say which here too, whether or not
         # the rest of the file is valid.
@@ -733,16 +748,13 @@ def validate(
             document_name=orchestration_path.name,
         )
 
-        schema = _load_schema()
-        if schema is not None:
-            validator = _jsonschema.Draft7Validator(schema)
-            schema_errors = sorted(validator.iter_errors(orch), key=str)
-            if schema_errors:
-                return {
-                    "ok": False,
-                    "errors": [e.message for e in schema_errors],
-                    "warnings": lint_warnings,
-                }
+        document_errors = structural_errors(orch)
+        if document_errors:
+            return {
+                "ok": False,
+                "errors": document_errors,
+                "warnings": lint_warnings,
+            }
 
         # Allowlist gate. Skipped when caller supplies no config — keeps
         # programmatic callers (tests, MCP server, internal scripts)

@@ -18,6 +18,7 @@ from .disabled import is_disabled_node, is_enabled
 from .scope import local_writes as _local_writes_state
 from .scope import scope_ctx as _scope_ctx
 from .store import Store
+from .templates import render_template
 
 logger = logging.getLogger(__name__)
 
@@ -675,14 +676,9 @@ class LoopRuntime:
 
         template = self.defn.while_def.template if self.defn.while_def else ""
 
-        # Render template against context
-        try:
-            import chevron  # type: ignore[import-untyped]
-
-            rendered = chevron.render(template, ctx)
-        except Exception:
-            logger.warning("Loop while-template rendering failed; using raw template", exc_info=True)
-            rendered = template
+        # Render template against context; a failure raises into the
+        # caller's on_error handling rather than asking about raw text.
+        rendered = render_template(template, ctx, label="while.template")
 
         # Invoke model to get yes/no decision
         prompt = f"""Evaluate the following condition and respond with ONLY 'yes' or 'no':

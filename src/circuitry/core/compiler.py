@@ -24,6 +24,7 @@ from .state_ns import (
     validate_each_in_path,
     validate_reference_path,
 )
+from .templates import template_syntax_error
 from .tool import ToolDefinition
 from .use import UseDefinition, reference_path
 
@@ -94,6 +95,26 @@ def _validate_name(
     # `scope_path` is included so callers can report deterministic addressing context.
     _ = scope_path
     return name
+
+
+def _check_templates(value: Any, *, effect_path: str, field: str) -> None:
+    """Reject a malformed Mustache template (in *value*, walked recursively).
+
+    Every string a tool's ``params`` holds is rendered, so nested mappings and
+    lists are walked; non-string leaves are not templates.
+    """
+    if isinstance(value, str):
+        reason = template_syntax_error(value)
+        if reason is not None:
+            raise ValueError(
+                f"{effect_path}.{field}: malformed Mustache template: {reason}"
+            )
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _check_templates(item, effect_path=effect_path, field=f"{field}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _check_templates(item, effect_path=effect_path, field=f"{field}[{index}]")
 
 
 def _compile_effects_in_scope(
@@ -333,7 +354,7 @@ def _compile_effect(
             scope_path=scope_path,
             effect_path=effect_path,
         )
-        return _compile_prompt(effect)
+        return _compile_prompt(effect, effect_path=effect_path)
 
     if effect_type == "dynamic":
         if name is None:
@@ -494,6 +515,10 @@ def _compile_conditional(
         raise ValueError(
             f"Conditional at '{effect_path}': mode 'model' requires a 'template' field."
         )
+    if mode == "model":
+        _check_templates(
+            if_def.get("template"), effect_path=effect_path, field="if.template"
+        )
     if mode == "cel" and not if_def.get("expr"):
         raise ValueError(
             f"Conditional at '{effect_path}': mode 'cel' requires an 'expr' field."
@@ -570,6 +595,20 @@ def _compile_loop(
             effect_path=effect_path,
         )
 
+    # Exactly one mode. With neither — say a misspelled `whlie:` — the loop
+    # would run zero passes and still report a clean termination.
+    modes = [key for key in ("while", "each") if key in effect]
+    if len(modes) != 1:
+        found = "both" if modes else "neither"
+        raise ValueError(
+            f"Loop at '{effect_path}' must set exactly one of 'while' or 'each' "
+            f"(found {found})."
+        )
+    if not isinstance(effect[modes[0]], dict):
+        raise ValueError(
+            f"Loop at '{effect_path}': '{modes[0]}' must be a mapping."
+        )
+
     # This loop's own CEL-visible bindings, added to whatever an enclosing
     # loop already contributed, so a nested loop's body sees both — the
     # inner loop's `iter`/`as` shadow the outer's at runtime (see loop.py),
@@ -608,6 +647,12 @@ def _compile_loop(
             if mode == "model" and not while_config.get("template"):
                 raise ValueError(
                     f"Loop while at '{effect_path}': mode 'model' requires a 'template' field."
+                )
+            if mode == "model":
+                _check_templates(
+                    while_config.get("template"),
+                    effect_path=effect_path,
+                    field="while.template",
                 )
             if mode == "cel" and not while_config.get("expr"):
                 raise ValueError(
@@ -715,6 +760,10 @@ def _compile_tool(
     if prompt is not None and not isinstance(prompt, str):
         prompt = None
 
+    _check_templates(prompt, effect_path=effect_path, field="prompt")
+    _check_templates(params, effect_path=effect_path, field="params")
+    _check_templates(params_json, effect_path=effect_path, field="params_json")
+
     model = effect.get("model")
     if model is not None and not isinstance(model, str):
         model = None
@@ -806,6 +855,14 @@ def _compile_use(
     if inputs is not None and not isinstance(inputs, dict):
         inputs = None
 
+    _check_templates(inline, effect_path=effect_path, field="inline")
+    for input_name, value in (inputs or {}).items():
+        # Only string inputs render; a `{from: <path>}` reference does not.
+        if isinstance(value, str):
+            _check_templates(
+                value, effect_path=effect_path, field=f"inputs.{input_name}"
+            )
+
     # By-reference inputs (`name: {from: <path>}`) pass the resolved value
     # itself; their paths follow the same rooting rules as `each.in`, plus the
     # bindings of enclosing loops, so a bad root fails at `cof check` time.
@@ -854,7 +911,7 @@ def _compile_use(
     )
 
 
-def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
+def _compile_prompt(effect: dict[str, Any], *, effect_path: str) -> PromptDefinition:
     """Compile a prompt effect with full spec support."""
     name = effect.get("name")
     if not name:
@@ -887,6 +944,11 @@ def _compile_prompt(effect: dict[str, Any]) -> PromptDefinition:
 
     if not template and not messages:
         raise ValueError(f"Prompt '{name}' must have 'template' or 'messages'.")
+    _check_templates(template, effect_path=effect_path, field="template")
+    for index, message in enumerate(messages or ()):
+        _check_templates(
+            message.content, effect_path=effect_path, field=f"messages[{index}].content"
+        )
     if prompt_type_raw not in (
         "text",
         "json",
