@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import GenerateResult
+from .base import GenerateOptions, GenerateResult, ignored_options_warning
 
 
 @dataclass(frozen=True)
@@ -45,7 +45,12 @@ class LiteLLMAdapter:
     timeout: int = 120
 
     def generate(
-        self, *, model: str, prompt: str, timeout_seconds: int = 120
+        self,
+        *,
+        model: str,
+        prompt: str,
+        timeout_seconds: int = 120,
+        options: GenerateOptions | None = None,
     ) -> GenerateResult:
         try:
             import litellm  # type: ignore[import-not-found]
@@ -100,6 +105,7 @@ class LiteLLMAdapter:
             tokens_received=int(tokens_received)
             if tokens_received is not None
             else None,
+            warnings=ignored_options_warning(self.name, options),
         )
 
     def check(self) -> CheckResult:

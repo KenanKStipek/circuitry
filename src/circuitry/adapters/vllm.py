@@ -10,6 +10,7 @@ by the factory) to point at the deployed instance.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 from ..preflight import CheckResult
 from ._openai_compat import (
@@ -17,11 +18,12 @@ from ._openai_compat import (
     chat_completion,
     check_dependencies,
 )
-from .base import GenerateResult
+from .base import GenerateOptions, GenerateResult
 
 
 @dataclass(frozen=True)
 class VllmAdapter:
+    accepts_images: ClassVar[bool] = True
     name: str = "vllm"
     base_url: str = "http://localhost:8000/v1"
     default_model: str = ""
@@ -34,13 +36,19 @@ class VllmAdapter:
         )
 
     def generate(
-        self, *, model: str, prompt: str, timeout_seconds: int = 120
+        self,
+        *,
+        model: str,
+        prompt: str,
+        timeout_seconds: int = 120,
+        options: GenerateOptions | None = None,
     ) -> GenerateResult:
         return chat_completion(
             cfg=self._cfg(),
             model=model,
             prompt=prompt,
             timeout_seconds=timeout_seconds,
+            options=options,
         )
 
     def check(self) -> CheckResult:

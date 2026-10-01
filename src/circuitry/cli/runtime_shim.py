@@ -468,6 +468,13 @@ def run(req: RunRequest) -> RunResult:
                     + ". Re-run with --skip-preflight to bypass."
                 )
             warnings.extend(format_preflight_warnings(soft_results))
+            warnings.extend(
+                image_asset_warnings(
+                    orch,
+                    default_adapter=resolved_adapter,
+                    runtime_cfg=effective.runtime,
+                )
+            )
 
         # Inject built-in template variables available in all orchestrations.
         state.setdefault("_run_id", run_id)
@@ -761,6 +768,17 @@ def validate(
 
         compile_orchestration(orch=orch, root_name="prime")
 
+        document_adapter = orch.get("adapter")
+        lint_warnings += image_asset_warnings(
+            orch,
+            default_adapter=(
+                document_adapter.strip()
+                if isinstance(document_adapter, str) and document_adapter.strip()
+                else (config.default_adapter if config is not None else None)
+            ),
+            runtime_cfg=config.runtime if config is not None else None,
+        )
+
         from ..core.cycle_check import detect_cycles
         cycle = detect_cycles(
             orch,
@@ -888,6 +906,77 @@ def preflight(
             )
 
     return results
+
+
+def image_asset_warnings(
+    orch: dict[str, Any],
+    *,
+    default_adapter: str | None,
+    runtime_cfg: dict[str, Any] | None = None,
+) -> list[str]:
+    """One warning per prompt whose image ``assets`` go to an adapter that
+    cannot send images (see :func:`circuitry.adapters.base.adapter_accepts_images`).
+
+    An effect's adapters are its ``provider:`` (else ``default_adapter``) and
+    each of its ``provider_fallbacks``. Walks the same containers as
+    :func:`walk_orchestration_refs` and, like it, not into ``use`` children.
+    An unknown adapter name is left to the checks that report it.
+    """
+    from ..adapters.base import adapter_accepts_images
+    from .allowlist import _provider_token_to_adapter
+
+    warnings: list[str] = []
+
+    def takes_images(adapter_name: str) -> bool | None:
+        try:
+            adapter = build_adapter(adapter_name=adapter_name, runtime=runtime_cfg or {})
+        except ValueError:
+            return None
+        except RuntimeError:
+            # Runtime-injected (host_claude): it relays text only.
+            return False
+        return adapter_accepts_images(adapter)
+
+    def walk(effects: Any) -> None:
+        if not isinstance(effects, list):
+            return
+        for effect in effects:
+            if not isinstance(effect, dict):
+                continue
+            etype = effect.get("type")
+            if etype == "prompt":
+                assets = effect.get("assets")
+                if not isinstance(assets, list) or not any(
+                    isinstance(a, dict) and a.get("kind") == "image" for a in assets
+                ):
+                    continue
+                primary = effect.get("provider")
+                names = [
+                    (_provider_token_to_adapter(primary) if isinstance(primary, str) else None)
+                    or default_adapter,
+                    *(
+                        _provider_token_to_adapter(tok)
+                        for tok in effect.get("provider_fallbacks") or []
+                        if isinstance(tok, str)
+                    ),
+                ]
+                warnings.extend(
+                    f"prompt '{effect.get('name')}' has image assets, but adapter "
+                    f"'{adapter_name}' cannot send images; it will run without them"
+                    for adapter_name in dict.fromkeys(n for n in names if n)
+                    if takes_images(adapter_name) is False
+                )
+            elif etype in ("dynamic", "reflector"):
+                walk(effect.get("effects"))
+            elif etype in ("if", "conditional"):
+                walk(effect.get("then"))
+                walk(effect.get("else"))
+            elif etype == "loop":
+                walk(effect.get("body"))
+
+    if isinstance(orch, dict):
+        walk(orch.get("effects"))
+    return warnings
 
 
 def format_preflight_errors(

@@ -21,10 +21,11 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass
+from typing import Any
 
 from ..preflight import CheckResult
 from ._curl_errors import curl_failure_message
-from .base import GenerateResult
+from .base import GenerateOptions, GenerateResult, last_user_index
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,65 @@ class OpenAICompatibleConfig:
     chat_completions_path: str = "/chat/completions"
 
 
+def chat_messages(prompt: str, options: GenerateOptions) -> list[dict[str, Any]]:
+    """The ``messages`` array for ``prompt`` and ``options``.
+
+    Role-tagged turns go through as they are, except ``tool``: the Chat
+    Completions API only accepts a tool turn that answers a ``tool_call_id``,
+    so a bare one is sent as a user turn prefixed ``tool:``. Images become
+    ``image_url`` parts (a ``data:`` URL for a local file) on the last user
+    turn, which is added if the conversation has none.
+    """
+    messages: list[dict[str, Any]] = [
+        {"role": "user", "content": f"tool: {m.content}"}
+        if m.role == "tool"
+        else {"role": m.role, "content": m.content}
+        for m in options.messages
+    ] or [{"role": "user", "content": prompt}]
+    if options.images:
+        index = last_user_index(messages)
+        if index is None:
+            messages.append({"role": "user", "content": ""})
+            index = len(messages) - 1
+        text = messages[index]["content"]
+        messages[index]["content"] = [
+            *([{"type": "text", "text": text}] if text else []),
+            *(
+                {"type": "image_url", "image_url": {"url": image.data_url()}}
+                for image in options.images
+            ),
+        ]
+    return messages
+
+
+def sampling_fields(
+    options: GenerateOptions, *, max_tokens_key: str = "max_tokens"
+) -> dict[str, Any]:
+    """Request-body fields for the portable knobs, then ``params`` verbatim."""
+    fields: dict[str, Any] = {}
+    if options.temperature is not None:
+        fields["temperature"] = options.temperature
+    if options.max_tokens is not None:
+        fields[max_tokens_key] = options.max_tokens
+    if options.stop:
+        fields["stop"] = list(options.stop)
+    fields.update(options.params)
+    return fields
+
+
+def parse_chat_response(raw: dict[str, Any]) -> tuple[str, str | None]:
+    """``(text, finish_reason)`` from a Chat Completions response."""
+    text = ""
+    finish_reason = None
+    choices = raw.get("choices") or []
+    if choices and isinstance(choices, list) and isinstance(choices[0], dict):
+        message = choices[0].get("message") or {}
+        text = message.get("content") or ""
+        reason = choices[0].get("finish_reason")
+        finish_reason = reason if isinstance(reason, str) else None
+    return (text.strip() if isinstance(text, str) else "", finish_reason)
+
+
 def chat_completion(
     *,
     cfg: OpenAICompatibleConfig,
@@ -55,12 +115,17 @@ def chat_completion(
     timeout_seconds: int = 120,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, object] | None = None,
+    options: GenerateOptions | None = None,
 ) -> GenerateResult:
     """Issue a single chat-completion request.
 
     ``extra_headers`` / ``extra_body`` cover provider-specific quirks
-    (e.g. anthropic-version header, Azure deployment routing).
+    (e.g. anthropic-version header, Azure deployment routing). ``options``
+    carries the prompt effect's generation settings, turns and images; no
+    seed is added for ``deterministic`` because not every provider in the
+    family accepts one (``params: {seed: ...}`` sends one explicitly).
     """
+    options = options or GenerateOptions()
     model = model or cfg.default_model
     api_key = os.environ.get(cfg.api_key_env, "") if cfg.api_key_env else ""
 
@@ -79,10 +144,11 @@ def chat_completion(
 
     payload: dict[str, object] = {
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": chat_messages(prompt, options),
     }
     if extra_body:
         payload.update(extra_body)
+    payload.update(sampling_fields(options))
 
     cmd = [
         "curl",
@@ -98,10 +164,14 @@ def chat_completion(
         cmd += ["-H", f"Authorization: Bearer {api_key}"]
     for k, v in (extra_headers or {}).items():
         cmd += ["-H", f"{k}: {v}"]
-    cmd += ["-d", json.dumps(payload), url]
+    # The body goes on stdin: with base64 images it can outgrow the argv size
+    # limit (128 KiB per argument on Linux).
+    cmd += ["--data-binary", "@-", url]
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        proc = subprocess.run(
+            cmd, input=json.dumps(payload), capture_output=True, text=True, check=False
+        )
     except FileNotFoundError as e:
         raise RuntimeError("curl is not installed or not on PATH") from e
 
@@ -131,23 +201,20 @@ def chat_completion(
             f"Provider returned non-JSON response: {proc.stdout[:200]}"
         ) from e
 
-    text = ""
-    choices = raw.get("choices") or []
-    if choices and isinstance(choices, list):
-        message = choices[0].get("message") or {}
-        text = message.get("content") or ""
+    text, finish_reason = parse_chat_response(raw)
 
     usage = raw.get("usage") or {}
     tokens_sent = usage.get("prompt_tokens")
     tokens_received = usage.get("completion_tokens")
 
     return GenerateResult(
-        text=text.strip() if isinstance(text, str) else "",
+        text=text,
         raw=raw,
         tokens_sent=int(tokens_sent) if isinstance(tokens_sent, int) else None,
         tokens_received=int(tokens_received)
         if isinstance(tokens_received, int)
         else None,
+        finish_reason=finish_reason,
     )
 
 

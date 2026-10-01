@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import math
 import time
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
@@ -10,7 +12,14 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from ..adapters import Adapter, build_adapter
-from ..adapters.base import GenerateResult
+from ..adapters.base import (
+    TRUNCATED_FINISH_REASONS,
+    ChatMessage,
+    GenerateOptions,
+    GenerateResult,
+    ImageInput,
+    call_generate,
+)
 from ..allowlist_gate import allowed_adapters, require_adapter
 from ..cli.redaction import redact
 from ..output import console as _console
@@ -104,6 +113,53 @@ def _render(template: str, ctx: dict[str, Any]) -> str:
     except Exception:
         logger.warning("Chevron template rendering failed; returning raw template", exc_info=True)
         return template
+
+
+_IMAGE_SIGNATURES = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+
+def _image_media_type(data: bytes) -> str | None:
+    for signature, media_type in _IMAGE_SIGNATURES:
+        if data.startswith(signature):
+            return media_type
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    # Only the bytes decide, never the file name: a non-image named x.png must not
+    # be sent, and these four formats are all the providers take.
+    return None
+
+
+def _load_image(ref: str) -> tuple[ImageInput, dict[str, Any]]:
+    """An image asset and its state record: path, size and sha256, never bytes.
+
+    ``http(s)://`` refs pass through as URLs; anything else is a local path
+    (``~`` expanded, relative to the working directory) read here.
+    """
+    from pathlib import Path
+
+    if ref.startswith(("http://", "https://")):
+        return ImageInput(url=ref), {"kind": "image", "ref": ref}
+    path = Path(ref).expanduser()
+    try:
+        data = path.read_bytes()
+    except OSError as e:
+        raise ValueError(f"image asset {ref!r} could not be read: {e}") from e
+    media_type = _image_media_type(data)
+    if media_type is None:
+        raise ValueError(f"image asset {ref!r} is not a PNG, JPEG, GIF or WebP image")
+    record = {
+        "kind": "image",
+        "ref": ref,
+        "media_type": media_type,
+        "size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+    return ImageInput(data=data, media_type=media_type), record
 
 
 # Prompt types per the spec
@@ -235,7 +291,14 @@ class PromptRuntime:
       <name>.meta{created_at, completed_at, adapter, model, model_reason,
                   prompt_type, prompt_sent, tokens_sent, tokens_received,
                   error, dry_run, fallback_attempts, fallback_recovered,
-                  retries_used?, complexity?}
+                  retries_used?, complexity?, assets?, finish_reason?,
+                  warnings?}
+
+    ``assets`` (one ``{kind, ref, size?, sha256?, media_type?}`` per image
+    sent — never the bytes), ``finish_reason`` (when the provider reports
+    one) and ``warnings`` (a reply cut off at the length limit, options an
+    adapter ignored, an asset kind no adapter sends) appear only when they
+    have something to say.
 
     ``model`` is the resolved model and ``model_reason`` says who chose it:
     ``"explicit"`` when the definition names its own ``model:`` (which is also
@@ -332,7 +395,8 @@ class PromptRuntime:
             effective_ctx.update(self.defn.inputs)
 
         # Materialize prompt input
-        prompt_sent = self._materialize_input(effective_ctx)
+        messages = self._render_messages(effective_ctx)
+        prompt_sent = self._materialize_input(effective_ctx, messages)
 
         # Resolved once, ahead of the meta block that reports it: a per-effect
         # ``model:`` always wins over the run's default, and dispatch further
@@ -361,12 +425,16 @@ class PromptRuntime:
         meta["fallback_recovered"] = False
         # Reset on every pass/attempt rather than only on success — otherwise
         # a reused node (an unnamed loop's repeated pass, a --state resume)
-        # keeps a prior pass's retry count or decomposition record sitting
-        # next to this pass's error, misrepresenting what actually happened
-        # on this pass (#260).
+        # keeps a prior pass's retry count, decomposition record, or
+        # generation-option metadata sitting next to this pass's error,
+        # misrepresenting what actually happened on this pass (#260).
         meta.pop("retries_used", None)
         meta.pop("decomposition", None)
         meta.pop("answer", None)
+        # Written only when they have content, so clear what an earlier
+        # iteration of an unnamed loop (same store) left behind.
+        for key in ("finish_reason", "warnings", "assets"):
+            meta.pop(key, None)
 
         # Scored here, alongside the rest of the pre-dispatch meta, so the
         # score is on the node before anything can go wrong. A post-success
@@ -473,6 +541,10 @@ class PromptRuntime:
                 if decomposition.fallback_model:
                     dispatch_model = decomposition.fallback_model
 
+            options = self._generation_options(
+                ctx=effective_ctx, messages=messages, meta=meta
+            )
+            option_warnings = list(meta.get("warnings", []))
             attempts = self._build_attempts(default_model=dispatch_model)
 
             for _attempt in range(max_attempts):
@@ -509,12 +581,15 @@ class PromptRuntime:
                         live_cm = nullcontext()
                     with live_cm:
                         res, attempts_meta, generation_error = self._generate_with_fallbacks(
-                            prompt=prompt_sent, attempts=attempts
+                            prompt=prompt_sent, attempts=attempts, options=options
                         )
                     if generation_error is not None or res is None:
                         raise RuntimeError(
                             f"All adapter attempts failed: {attempts_meta}"
                         ) from generation_error
+                    # Before decoding: a reply cut off mid-JSON fails to
+                    # parse, and the truncation warning is what explains it.
+                    self._record_reply(meta, res, option_warnings)
 
                     # Decode and validate output based on prompt_type
                     if self.defn.prompt_type in ("boolean", "number"):
@@ -846,8 +921,123 @@ class PromptRuntime:
         model_name = model_name.strip() or default_model
         return (adapter_name, model_name)
 
+    def _attempt_timeout_seconds(self) -> int:
+        """One attempt's budget: the effect's ``timeout_ms`` capped by the adapter's.
+
+        Adapters take whole seconds, so a sub-second ``timeout_ms`` rounds up
+        to one. ``0`` or absent leaves the adapter's timeout alone.
+        """
+        if not self.defn.timeout_ms:
+            return self.timeout_seconds
+        effect_seconds = max(1, math.ceil(self.defn.timeout_ms / 1000))
+        return min(effect_seconds, self.timeout_seconds)
+
+    def _generation_options(
+        self,
+        *,
+        ctx: dict[str, Any],
+        messages: tuple[ChatMessage, ...],
+        meta: dict[str, Any],
+    ) -> GenerateOptions:
+        """Build the adapter's options from ``params``, ``deterministic``,
+        ``messages`` and ``assets``, recording each image in ``meta.assets``.
+
+        ``temperature``, ``max_tokens`` and ``stop`` are lifted out of
+        ``params`` so every adapter can map them to its provider's names; the
+        rest of ``params`` passes through untouched. ``deterministic`` means
+        temperature 0 unless ``params`` sets one.
+        """
+        params = dict(self.defn.params or {})
+        temperature = params.pop("temperature", None)
+        max_tokens = params.pop("max_tokens", None)
+        stop = params.pop("stop", None)
+        if self.defn.deterministic and temperature is None:
+            temperature = 0
+        if temperature is not None and (
+            isinstance(temperature, bool) or not isinstance(temperature, (int, float))
+        ):
+            raise ValueError(
+                f"Prompt '{self.defn.name}': params.temperature must be a number, "
+                f"got {temperature!r}"
+            )
+        if max_tokens is not None and (
+            isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 1
+        ):
+            raise ValueError(
+                f"Prompt '{self.defn.name}': params.max_tokens must be a positive "
+                f"integer, got {max_tokens!r}"
+            )
+        if isinstance(stop, str):
+            stop = [stop]
+        if stop is not None and (
+            not isinstance(stop, list) or not all(isinstance(s, str) for s in stop)
+        ):
+            raise ValueError(
+                f"Prompt '{self.defn.name}': params.stop must be a string or a list "
+                f"of strings, got {stop!r}"
+            )
+
+        images: list[ImageInput] = []
+        asset_meta: list[dict[str, Any]] = []
+        for asset in self.defn.assets or ():
+            ref = _render(asset.ref, ctx).strip()
+            if asset.kind != "image":
+                self._add_warnings(
+                    meta,
+                    [f"asset kind {asset.kind!r} is not sent to any adapter; only images are ({ref})"],
+                )
+                continue
+            image, record = _load_image(ref)
+            images.append(image)
+            asset_meta.append(record)
+        if asset_meta:
+            meta["assets"] = asset_meta
+
+        return GenerateOptions(
+            temperature=float(temperature) if temperature is not None else None,
+            max_tokens=max_tokens,
+            stop=tuple(stop or ()),
+            params=params,
+            deterministic=self.defn.deterministic,
+            messages=messages,
+            images=tuple(images),
+        )
+
+    def _record_reply(
+        self, meta: dict[str, Any], res: GenerateResult, option_warnings: list[str]
+    ) -> None:
+        """``finish_reason`` and the reply's warnings, including truncation.
+
+        Runs once per retry attempt, so it replaces the previous attempt's
+        reply warnings and finish_reason rather than adding to them.
+        """
+        finish_reason = getattr(res, "finish_reason", None)
+        warnings = list(getattr(res, "warnings", ()) or ())
+        meta.pop("finish_reason", None)
+        if finish_reason is not None:
+            meta["finish_reason"] = finish_reason
+            if finish_reason in TRUNCATED_FINISH_REASONS:
+                warnings.append(
+                    f"the reply was cut off by the length limit "
+                    f"(finish_reason: {finish_reason}); raise params.max_tokens"
+                )
+        if option_warnings:
+            meta["warnings"] = list(option_warnings)
+        else:
+            meta.pop("warnings", None)
+        self._add_warnings(meta, warnings)
+
+    def _add_warnings(self, meta: dict[str, Any], warnings: list[str]) -> None:
+        for warning in warnings:
+            logger.warning("prompt %r: %s", self.defn.name, warning)
+            meta.setdefault("warnings", []).append(warning)
+
     def _generate_with_fallbacks(
-        self, *, prompt: str, attempts: list[tuple[str, str]]
+        self,
+        *,
+        prompt: str,
+        attempts: list[tuple[str, str]],
+        options: GenerateOptions | None = None,
     ) -> tuple[GenerateResult | None, list[dict[str, Any]], Exception | None]:
         attempts_meta: list[dict[str, Any]] = []
         last_error: Exception | None = None
@@ -855,10 +1045,12 @@ class PromptRuntime:
         for adapter_name, model_name in attempts:
             adapter = self._resolve_adapter(adapter_name)
             try:
-                res = adapter.generate(
+                res = call_generate(
+                    adapter,
                     model=model_name,
                     prompt=prompt,
-                    timeout_seconds=self.timeout_seconds,
+                    timeout_seconds=self._attempt_timeout_seconds(),
+                    options=options,
                 )
                 attempts_meta.append(
                     {
@@ -935,19 +1127,30 @@ class PromptRuntime:
         parts.append(label)
         return " → ".join(parts)
 
-    def _materialize_input(self, ctx: dict[str, Any]) -> str:
-        """Materialize the prompt input from template or messages."""
+    def _render_messages(self, ctx: dict[str, Any]) -> tuple[ChatMessage, ...]:
+        """The effect's ``messages`` with each ``content`` rendered; ``()`` for a template."""
+        if self.defn.template or not self.defn.messages:
+            return ()
+        return tuple(
+            ChatMessage(role=msg.role, content=_render(msg.content, ctx))
+            for msg in self.defn.messages
+        )
+
+    def _materialize_input(
+        self, ctx: dict[str, Any], messages: tuple[ChatMessage, ...] = ()
+    ) -> str:
+        """The prompt as one string: the rendered template, or the turns
+        flattened as ``role: content``.
+
+        The flattened form is ``meta.prompt_sent`` and what an adapter that
+        cannot take role-tagged turns receives; chat-capable adapters get
+        ``messages`` themselves through :class:`GenerateOptions`.
+        """
         if self.defn.template:
             return _render(self.defn.template, ctx)
 
-        if self.defn.messages:
-            # Format messages into a prompt string
-            # For more sophisticated handling, this would be adapter-specific
-            lines = []
-            for msg in self.defn.messages:
-                content = _render(msg.content, ctx)
-                lines.append(f"{msg.role}: {content}")
-            return "\n\n".join(lines)
+        if messages:
+            return "\n\n".join(f"{msg.role}: {msg.content}" for msg in messages)
 
         return ""
 

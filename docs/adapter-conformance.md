@@ -12,6 +12,36 @@ All adapters must implement:
 - `raw`: `dict`
 - `tokens_sent`: `int | None` and non-negative when present
 - `tokens_received`: `int | None` and non-negative when present
+- `finish_reason`: `str | None` — the provider's own stop reason (`stop`,
+  `length`, `end_turn`, `max_tokens`, ...) when it reports one. The runtime
+  records it as `meta.finish_reason` and warns on `length`/`max_tokens`.
+- `warnings`: `tuple[str, ...]`, default empty — what the adapter could not
+  honour, recorded on `meta.warnings`.
+
+### Generation options
+
+`generate()` may also take `options: GenerateOptions | None = None`
+(`circuitry.adapters.base`). The runtime calls every adapter through
+`call_generate`, which passes `options` only to a `generate()` that has an
+`options` (or `**kwargs`) parameter. Older adapters keep working unchanged,
+and their result carries one warning naming what they never received.
+
+`GenerateOptions` carries:
+- `temperature`, `max_tokens`, `stop` — portable knobs; map them to the
+  provider's names (ollama `num_predict`, anthropic `stop_sequences`, ...).
+- `params` — the rest of the effect's `params:`, for the provider as written.
+- `deterministic` — add a fixed seed (`DETERMINISTIC_SEED`) where the provider
+  takes one and `params` names none. Temperature 0 is already set.
+- `messages` — role-tagged `ChatMessage` turns; when present, send them
+  instead of the flattened `prompt`, with `system` in the provider's system slot.
+- `images` — `ImageInput`s (bytes plus `media_type`, or a `url`) for the last
+  user turn.
+
+An adapter that accepts `options` but cannot use some of them returns
+`ignored_options_warning(self.name, options, used=...)` as its `warnings`. An
+adapter that can send images declares `accepts_images: ClassVar[bool] = True`;
+`cof check` and run preflight warn when an effect's image assets go to an
+adapter without it.
 
 Error behavior requirements:
 - Transport/provider failures must raise `RuntimeError` with actionable context.
