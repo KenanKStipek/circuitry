@@ -5,15 +5,76 @@ import shutil
 import subprocess
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 from ..preflight import CheckResult
 from ._curl_errors import curl_failure_message, parse_error_body
-from .base import GenerateResult
+from .base import (
+    DETERMINISTIC_SEED,
+    GenerateOptions,
+    GenerateResult,
+    ImageInput,
+    last_user_index,
+)
+
+#: ``params`` keys that are request fields in Ollama's API; every other key
+#: is a model option and goes under ``options``.
+_REQUEST_FIELDS = frozenset({"format", "keep_alive", "think"})
+
+
+def _image_base64(image: ImageInput) -> str:
+    if image.data is None:
+        raise RuntimeError(
+            f"ollama cannot fetch an image URL ({image.url}); "
+            "download it and give the asset a local path."
+        )
+    return image.base64_data()
+
+
+def _request(*, model: str, prompt: str, options: GenerateOptions) -> tuple[str, dict[str, Any]]:
+    """``(endpoint, body)``: ``/api/chat`` for role-tagged turns, else ``/api/generate``."""
+    payload: dict[str, Any] = {"model": model, "stream": False}
+    images = [_image_base64(image) for image in options.images]
+    if options.messages:
+        endpoint = "/api/chat"
+        messages: list[dict[str, Any]] = [
+            {"role": m.role, "content": m.content} for m in options.messages
+        ]
+        if images:
+            index = last_user_index(messages)
+            if index is None:
+                messages.append({"role": "user", "content": ""})
+                index = len(messages) - 1
+            messages[index]["images"] = images
+        payload["messages"] = messages
+    else:
+        endpoint = "/api/generate"
+        payload["prompt"] = prompt
+        if images:
+            payload["images"] = images
+
+    model_options: dict[str, Any] = {}
+    if options.temperature is not None:
+        model_options["temperature"] = options.temperature
+    if options.max_tokens is not None:
+        model_options["num_predict"] = options.max_tokens
+    if options.stop:
+        model_options["stop"] = list(options.stop)
+    for key, value in options.params.items():
+        if key in _REQUEST_FIELDS:
+            payload[key] = value
+        else:
+            model_options[key] = value
+    if options.deterministic:
+        model_options.setdefault("seed", DETERMINISTIC_SEED)
+    if model_options:
+        payload["options"] = model_options
+    return endpoint, payload
 
 
 @dataclass(frozen=True)
 class OllamaAdapter:
+    accepts_images: ClassVar[bool] = True
     name: str = "ollama"
     base_url: str = "http://localhost:11434"
 
@@ -124,10 +185,17 @@ class OllamaAdapter:
         return sorted(names)
 
     def generate(
-        self, *, model: str, prompt: str, timeout_seconds: int = 120
+        self,
+        *,
+        model: str,
+        prompt: str,
+        timeout_seconds: int = 120,
+        options: GenerateOptions | None = None,
     ) -> GenerateResult:
-        url = self.base_url.rstrip("/") + "/api/generate"
-        payload = {"model": model, "prompt": prompt, "stream": False}
+        endpoint, payload = _request(
+            model=model, prompt=prompt, options=options or GenerateOptions()
+        )
+        url = self.base_url.rstrip("/") + endpoint
         raw = self._curl_json(
             url=url,
             method="POST",
@@ -141,14 +209,20 @@ class OllamaAdapter:
         # - eval_count (tokens generated)
         tokens_sent = raw.get("prompt_eval_count")
         tokens_received = raw.get("eval_count")
+        done_reason = raw.get("done_reason")
+        message = raw.get("message")
+        text = (
+            message.get("content") if isinstance(message, dict) else raw.get("response")
+        )
 
         return GenerateResult(
-            text=(raw.get("response") or "").strip(),
+            text=(text or "").strip(),
             raw=raw,
             tokens_sent=int(tokens_sent) if isinstance(tokens_sent, int) else None,
             tokens_received=int(tokens_received)
             if isinstance(tokens_received, int)
             else None,
+            finish_reason=done_reason if isinstance(done_reason, str) else None,
         )
 
     def check(self) -> CheckResult:

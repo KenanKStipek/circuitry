@@ -38,4 +38,15 @@ def validate_generate_result(result: GenerateResult, *, adapter_name: str) -> li
                 f"{adapter_name}: '{field_name}' must be >= 0, got {value}"
             )
 
+    if result.finish_reason is not None and not isinstance(result.finish_reason, str):
+        diagnostics.append(
+            f"{adapter_name}: 'finish_reason' must be str|None, "
+            f"got {type(result.finish_reason).__name__}"
+        )
+
+    if not isinstance(result.warnings, tuple) or not all(
+        isinstance(w, str) for w in result.warnings
+    ):
+        diagnostics.append(f"{adapter_name}: 'warnings' must be a tuple of str")
+
     return diagnostics

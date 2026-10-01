@@ -4,11 +4,69 @@ import json
 import os
 import shutil
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from ..preflight import CheckResult
 from ._curl_errors import curl_failure_message
-from .base import GenerateResult
+from .base import GenerateOptions, GenerateResult, ImageInput, last_user_index
+
+
+def _image_block(image: ImageInput) -> dict[str, Any]:
+    if image.url is not None:
+        return {"type": "image", "source": {"type": "url", "url": image.url}}
+    return {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": image.media_type,
+            "data": image.base64_data(),
+        },
+    }
+
+
+def _request_body(
+    *, model: str, prompt: str, max_tokens: int, options: GenerateOptions
+) -> dict[str, Any]:
+    """The Messages API body: system turns in ``system``, the rest as turns.
+
+    The API has no ``tool`` role outside tool-use blocks, so a bare tool turn
+    is sent as a user turn prefixed ``tool:``. Images become image blocks
+    ahead of the text of the last user turn, which is added if there is none.
+    """
+    system = "\n\n".join(m.content for m in options.messages if m.role == "system")
+    turns: list[dict[str, Any]] = [
+        {"role": "user", "content": f"tool: {m.content}"}
+        if m.role == "tool"
+        else {"role": m.role, "content": m.content}
+        for m in options.messages
+        if m.role != "system"
+    ]
+    if not options.messages:
+        turns = [{"role": "user", "content": prompt}]
+    if options.images:
+        index = last_user_index(turns)
+        if index is None:
+            turns.append({"role": "user", "content": ""})
+            index = len(turns) - 1
+        text = turns[index]["content"]
+        turns[index]["content"] = [
+            *(_image_block(image) for image in options.images),
+            *([{"type": "text", "text": text}] if text else []),
+        ]
+
+    body: dict[str, Any] = {
+        "model": model,
+        "max_tokens": options.max_tokens if options.max_tokens is not None else max_tokens,
+        "messages": turns,
+    }
+    if system:
+        body["system"] = system
+    if options.temperature is not None:
+        body["temperature"] = options.temperature
+    if options.stop:
+        body["stop_sequences"] = list(options.stop)
+    body.update(options.params)
+    return body
 
 
 @dataclass(frozen=True)
@@ -35,6 +93,7 @@ class AnthropicAdapter:
         "claude-haiku-4-5",
     )
 
+    accepts_images: ClassVar[bool] = True
     name: str = "anthropic"
     base_url: str = "https://api.anthropic.com"
     default_model: str = "claude-sonnet-5"
@@ -45,7 +104,12 @@ class AnthropicAdapter:
         return list(self.KNOWN_MODELS)
 
     def generate(
-        self, *, model: str, prompt: str, timeout_seconds: int = 120
+        self,
+        *,
+        model: str,
+        prompt: str,
+        timeout_seconds: int = 120,
+        options: GenerateOptions | None = None,
     ) -> GenerateResult:
         import subprocess
 
@@ -62,11 +126,12 @@ class AnthropicAdapter:
 
         url = f"{self.base_url.rstrip('/')}/v1/messages"
 
-        payload = {
-            "model": model,
-            "max_tokens": self.max_tokens,
-            "messages": [{"role": "user", "content": prompt}],
-        }
+        payload = _request_body(
+            model=model,
+            prompt=prompt,
+            max_tokens=self.max_tokens,
+            options=options or GenerateOptions(),
+        )
 
         cmd = [
             "curl",
@@ -126,6 +191,7 @@ class AnthropicAdapter:
         usage = raw.get("usage", {})
         tokens_sent = usage.get("input_tokens")
         tokens_received = usage.get("output_tokens")
+        stop_reason = raw.get("stop_reason")
 
         return GenerateResult(
             text=text.strip() if text else "",
@@ -134,6 +200,7 @@ class AnthropicAdapter:
             tokens_received=int(tokens_received)
             if tokens_received is not None
             else None,
+            finish_reason=stop_reason if isinstance(stop_reason, str) else None,
         )
 
     def check(self) -> CheckResult:
