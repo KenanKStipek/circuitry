@@ -46,7 +46,7 @@ effects:
         done: {type: boolean}
         result_path: {type: string}
       required: [say, chunks, yaml]
-    template: "PLANNER {{source_template}}"
+    template: "PLANNER {{{input.source_template}}}"
 """
 
 EMITTED_YAML = """\
