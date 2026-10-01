@@ -75,7 +75,17 @@ def test_parse_fragment_name_accepts_every_section_type() -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["README.md", "42.md", "42.nonsense.md", ".42.added.md", "notes.txt", ".added.md"],
+    [
+        "README.md",
+        "42.md",
+        "42.nonsense.md",
+        ".42.added.md",
+        "notes.txt",
+        ".added.md",
+        ".changed.md",
+        "some-pr.changed.md",
+        "258b.fixed.md",
+    ],
 )
 def test_parse_fragment_name_rejects_non_fragments(name: str) -> None:
     assert build_changelog.parse_fragment_name(name) is None
@@ -103,6 +113,36 @@ def test_unknown_fragment_files_flags_typos(fragments_dir: Path) -> None:
     unknown = [path.name for path in build_changelog.unknown_fragment_files(fragments_dir)]
 
     assert unknown == ["42.add.md"]
+
+
+def test_unknown_fragment_files_flags_a_missing_identifier(fragments_dir: Path) -> None:
+    """A dot-prefixed, id-less fragment (``.changed.md``) used to be silently
+    waved through as "not a fragment" (same treatment as a real dotfile like
+    ``.DS_Store``) — --check passed without ever looking at it. It must be
+    flagged like any other bad name."""
+    _write(fragments_dir, ".changed.md", "- no id at all\n")
+
+    unknown = [path.name for path in build_changelog.unknown_fragment_files(fragments_dir)]
+
+    assert unknown == [".changed.md"]
+
+
+def test_unknown_fragment_files_flags_a_non_numeric_identifier(fragments_dir: Path) -> None:
+    _write(fragments_dir, "some-pr.changed.md", "- not a bare issue/PR number\n")
+
+    unknown = [path.name for path in build_changelog.unknown_fragment_files(fragments_dir)]
+
+    assert unknown == ["some-pr.changed.md"]
+
+
+def test_unknown_fragment_files_ignores_non_markdown_dotfiles(fragments_dir: Path) -> None:
+    """A real dotfile with no ``.md`` suffix (``.DS_Store``, ``.gitkeep``) is
+    not a fragment candidate at all and stays invisible to --check."""
+    _write(fragments_dir, ".DS_Store", "junk\n")
+
+    unknown = [path.name for path in build_changelog.unknown_fragment_files(fragments_dir)]
+
+    assert unknown == []
 
 
 # --------------------------------------------------------------------------
