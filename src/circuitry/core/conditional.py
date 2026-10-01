@@ -388,13 +388,20 @@ class ConditionalRuntime:
                             f" {name} [dim]{_elapsed_str(elapsed)}[/dim]"
                         )
 
-                except Exception:
+                except Exception as _branch_exc:
                     if self.verbose and not is_prompt:
                         elapsed = time.monotonic() - t0
                         _console.print(
                             f"{branch_indent}[err]✗[/err] [{color}]{icon}[/{color}]"
                             f" {name} [dim]{_elapsed_str(elapsed)}[/dim]"
                         )
+                    # Name the failing branch effect, the same way
+                    # loop.py's body loop does — without this, a prompt's
+                    # own error (which carries no name of its own) surfaces
+                    # with nothing saying which effect in the branch failed.
+                    effect_name = getattr(effect, "name", None)
+                    if isinstance(effect_name, str) and effect_name:
+                        raise RuntimeError(f"{effect_name}: {_branch_exc}") from _branch_exc
                     raise
 
                 executed_effects.append(effect_record)

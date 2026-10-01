@@ -1,4 +1,4 @@
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 __all__ = [
     "DynamicDefinition",
@@ -13,6 +13,17 @@ __all__ = [
     "UseRuntime",
     "find_divergence_paths",
 ]
+
+if TYPE_CHECKING:
+    # Re-imported only for static types; `__getattr__` below resolves these
+    # names lazily at runtime so `import circuitry.core` doesn't pull in
+    # `core.dynamic`'s CEL grammar parser at package-init time.
+    from .diagnostics import find_divergence_paths
+    from .dynamic import DynamicDefinition, DynamicRuntime, TreeExecutionError
+    from .prompt import PromptDefinition, PromptRuntime
+    from .reflector import ReflectorDefinition, ReflectorRuntime
+    from .store import Store
+    from .use import UseDefinition, UseRuntime
 
 #: Which submodule each re-exported name actually lives in.
 _SOURCE_MODULES: dict[str, str] = {

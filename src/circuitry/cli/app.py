@@ -4,6 +4,7 @@ import importlib.resources
 import json
 import os
 import sys
+import tempfile
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
@@ -354,19 +355,25 @@ def _extract_generated_orchestration(yaml_text: str) -> dict[str, Any] | None:
     """Pull the orchestration mapping out of `cof gen`'s raw model output.
 
     Tries the whole (fence/separator-stripped) text first, which handles a
-    bare document. Models imitating the bundled examples' own house style
-    often open with a `#`-commented header (e.g. `# effects:\\n  - type: ...`)
-    before the real content, so if that fails, drop comment-only lines and
-    look for the first effects:/adapter:/interface: line to find the real
-    document's start.
+    bare document — but only if every top-level key is one the schema
+    recognizes. A model reply with a prose preamble line (e.g. "Here's the
+    YAML:") parses as a *valid* mapping once fences are stripped, with the
+    preamble as a bogus key, so that key is the only signal left that this
+    wasn't a bare document. Models imitating the bundled examples' own house
+    style often open with a `#`-commented header (e.g. `# effects:\\n  - type:
+    ...`) before the real content; either case falls through to: drop
+    comment-only lines and look for the first effects:/adapter:/interface:
+    line to find the real document's start.
     """
     import yaml as _yaml  # type: ignore[import-untyped]
+
+    from ..core.document_check import _known_top_level_keys
 
     try:
         parsed = _yaml.safe_load(yaml_text)
     except _yaml.YAMLError:
         parsed = None
-    if isinstance(parsed, dict):
+    if isinstance(parsed, dict) and set(parsed).issubset(_known_top_level_keys()):
         return parsed
 
     lines = [line for line in yaml_text.splitlines() if not line.strip().startswith("#")]
@@ -1965,21 +1972,34 @@ def gen_cmd(
     output_text = serialize_orchestration(parsed, output_format).rstrip("\n") + "\n"
 
     # Check the generated document exactly as `cof check` would, before
-    # writing it anywhere the user's own path might already exist.
+    # writing it anywhere the user's own path might already exist. mkstemp
+    # (not a predictable "<stem>.tmp<suffix>" name) avoids a symlink planted
+    # at that path, and the suffix matches --format rather than --out, so the
+    # temp file's own extension is always one `serialize_orchestration` wrote.
     orch_out.parent.mkdir(parents=True, exist_ok=True)
-    tmp_out = orch_out.with_name(orch_out.stem + ".tmp" + orch_out.suffix)
-    tmp_out.write_text(output_text, encoding="utf-8")
-    report = validate(tmp_out, config=cfg, skip_preflight=False, trust_document=True)
-    if not report["ok"]:
-        tmp_out.unlink(missing_ok=True)
-        console.print(
-            "[red]Error:[/red] The generated orchestration failed `cof check`; nothing was written:"
-        )
-        for err in report["errors"]:
-            console.print(f"  - {err}")
-        raise typer.Exit(code=1)
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        dir=orch_out.parent, suffix=_ext.get(output_format, ".yml")
+    )
+    tmp_out = Path(tmp_name)
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            fh.write(output_text)
+        report = validate(tmp_out, config=cfg, skip_preflight=False, trust_document=True)
+        if not report["ok"]:
+            console.print(
+                "[red]Error:[/red] The generated orchestration failed `cof check`; nothing was written:"
+            )
+            for err in report["errors"]:
+                console.print(f"  - {escape(str(err))}")
+            for warn in report.get("warnings", []):
+                console.print(f"[yellow]Warning:[/yellow] {escape(str(warn))}")
+            raise typer.Exit(code=1)
 
-    tmp_out.replace(orch_out)
+        for warn in report.get("warnings", []):
+            console.print(f"[yellow]Warning:[/yellow] {escape(str(warn))}")
+        tmp_out.replace(orch_out)
+    finally:
+        tmp_out.unlink(missing_ok=True)
     console.print(f"[green]Generated:[/green] {orch_out} (checked: Valid)")
 
 

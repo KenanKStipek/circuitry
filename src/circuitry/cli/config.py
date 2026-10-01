@@ -455,9 +455,9 @@ def resolve_config(
 
     1. Sane defaults (lowest priority)
     2. Global config (~/.config/circuitry/config.json)
-    3. Project-local config (circuitry.config.json / config.json in cwd, or
-       the file CIRCUITRY_CONFIG names)
-    4. Explicit --config path (if provided — replaces #2 and #3)
+    3. Project-local config (circuitry.config.json / config.json in cwd)
+    4. Explicit --config path, or CIRCUITRY_CONFIG (if either is set —
+       replaces #2 and #3 entirely, does not layer on top of them)
     5. Environment variables (CIRCUITRY_MODEL, CIRCUITRY_ADAPTER,
        CIRCUITRY_ADAPTER_URL, CIRCUITRY_COMFYUI_URL, CIRCUITRY_ENABLED_*,
        CIRCUITRY_ENVIRONMENT)

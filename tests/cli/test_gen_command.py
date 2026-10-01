@@ -344,6 +344,47 @@ def test_gen_handles_hash_commented_preamble(tmp_path: Path):
     assert "name: hello" in content
 
 
+def test_extract_generated_orchestration_falls_back_to_the_boundary_scan_on_a_parse_error():
+    """A malformed, non-comment preamble (e.g. stray markdown) before a
+    document whose real top-level key is ``interface:`` — not ``effects:``/
+    ``adapter:`` — must not become ``{"raw": ...}``. The boundary scan used
+    to only look for an ``effects:``/``adapter:`` line, so it never found the
+    real document's start here and kept the whole (unparseable) text as raw.
+    """
+    from circuitry.cli.app import _extract_generated_orchestration
+
+    text = (
+        "**Here's your orchestration:**\n"
+        "\n"
+        "interface:\n"
+        "  cli:\n"
+        "    enabled: true\n"
+    )
+    assert _extract_generated_orchestration(text) == {
+        "interface": {"cli": {"enabled": True}}
+    }
+
+
+def test_extract_generated_orchestration_rejects_a_prose_preamble_as_a_junk_key():
+    """A reply like ``Here's the YAML:`` followed by a fenced document parses,
+    once fences are stripped, as a *valid* mapping with the prose line as a
+    bogus top-level key (#258 part 1 follow-up). Trying the whole text first
+    must not accept that: it has to fall back to the boundary scan, which
+    drops the preamble line entirely."""
+    from circuitry.cli.app import _extract_generated_orchestration
+
+    text = (
+        "Here's the YAML:\n"
+        "effects:\n"
+        "  - type: prompt\n"
+        "    name: hello\n"
+        "    template: Hi\n"
+    )
+    assert _extract_generated_orchestration(text) == {
+        "effects": [{"type": "prompt", "name": "hello", "template": "Hi"}]
+    }
+
+
 def test_gen_rejects_unparseable_output_and_writes_nothing(tmp_path: Path):
     """When the model's response has no recoverable YAML document, gen must
     error out and must not fall back to writing `{raw: ...}` (#258 part 1)."""
@@ -378,4 +419,4 @@ def test_gen_rejects_structurally_invalid_output_and_writes_nothing(tmp_path: Pa
     assert result.exit_code == 1
     assert "failed" in result.output.lower() or "error" in result.output.lower()
     assert not Path(f"{orch_name}.yml").exists()
-    assert not Path(f"{orch_name}.yml.tmp").exists()
+    assert list(tmp_path.iterdir()) == []

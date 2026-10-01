@@ -222,6 +222,7 @@ def _walk(
     but the effects they *would* have produced at runtime do, as unscoreable
     rows.
     """
+    _load_compiler_chain()
     name = getattr(node, "name", None)
     own_path = _join(scope, name) if name else scope
     # A disabled container never executes its subtree (see ``core.disabled``),
@@ -414,6 +415,7 @@ def score_orchestration(
     preview reflects the model/provider overrides and disabled effects that run
     would see.
     """
+    _load_compiler_chain()
     root = compile_orchestration(orch=orch)
     if profile is not None and profile.effects:
         root, _matched = apply_effect_overrides(root, profile.effects)

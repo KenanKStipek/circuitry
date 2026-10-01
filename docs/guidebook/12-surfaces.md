@@ -24,7 +24,7 @@ Everything the world reaches Circuitry through. One runtime sits under all of th
 | `cof fetch` / `cof run-library` | Retrieve and run a shared-library asset by id and version. |
 | `cof mcp` | Run the MCP server on stdio (also `circuitry-mcp`). |
 | `cof tui` | Launch the terminal UI (needs the `tui` extra). |
-| `cof version` | |
+| `cof version` | Also `cof --version`, at the root command. |
 
 ### `cof run`
 
