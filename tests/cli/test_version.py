@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 pytest.importorskip("typer")
@@ -10,6 +12,11 @@ from typer.testing import CliRunner
 from circuitry.cli.app import app
 
 runner = CliRunner()
+
+#: Rich force-colors its own help rendering under CI=true regardless of
+#: CliRunner's color=False, so a substring check on raw output needs ANSI
+#: stripped first.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def test_version_flag_prints_version_and_exits_zero() -> None:
@@ -33,4 +40,4 @@ def test_version_flag_and_subcommand_agree() -> None:
 def test_help_mentions_version_flag() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    assert "--version" in result.output
+    assert "--version" in _ANSI_RE.sub("", result.output)
