@@ -25,7 +25,7 @@ fields:
     type: number
     range: "0-1"
     default: 0.5
-    note: "Confidence threshold for model-based evaluation."
+    note: "Deprecated, no effect. The built-in evaluator reads a categorical yes/no with no calibrated confidence to cut, so this is recorded on meta.threshold and never consulted. cof check warns when set; omit it."
   on_error:
     enum: [fail, continue, skip]
     default: fail

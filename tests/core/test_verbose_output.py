@@ -105,6 +105,33 @@ def test_nested_dynamic_emits_start_and_done() -> None:
     assert any("✓" in m and "step" in m for m in msgs), msgs
 
 
+def test_dynamic_on_error_skip_prints_failure_not_success() -> None:
+    """A dynamic with on_error: skip/continue absorbs its own child's
+    failure and returns normally — the same degradation a leaf effect's
+    on_error gives — so its own line reports a failure, not a success."""
+    orch = {
+        "effects": [
+            {
+                "type": "dynamic",
+                "name": "flaky_group",
+                "on_error": "skip",
+                "effects": [
+                    {
+                        "type": "tool",
+                        "name": "bad_step",
+                        "provider": "json",
+                        "params": {"mode": "parse", "input": "not json"},
+                    },
+                ],
+            },
+        ]
+    }
+    msgs = _run(orch, verbose=True, dry_run=False)
+    group_lines = [m for m in msgs if "flaky_group" in m]
+    assert any("✗" in m for m in group_lines), group_lines
+    assert not any("✓" in m for m in group_lines), group_lines
+
+
 # ---------------------------------------------------------------------------
 # loop primitive — each
 # ---------------------------------------------------------------------------

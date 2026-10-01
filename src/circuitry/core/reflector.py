@@ -201,6 +201,13 @@ class ReflectorRuntime:
                 rec["stop"] = True
                 return rec
 
+            # A plan that stops the reflector here (done, with
+            # stop_on_done) is never executed via use(inline), so the cap
+            # below — which only matters for a plan that will actually run
+            # — does not apply to it; it still gets parsed so rec["parsed"]
+            # is recorded the same way for every plan.
+            stopping = done and self.defn.stop_on_done
+
             # Check for empty effects list — nothing to execute
             try:
                 parsed_check = _yaml.safe_load(plan_yaml)
@@ -209,10 +216,23 @@ class ReflectorRuntime:
                 if not effects:
                     rec["stop"] = True
                     return rec
+                # A plan over the cap is invalid, same as one that fails to
+                # parse — never truncated silently (#251 part 2).
+                if (
+                    not stopping
+                    and isinstance(effects, list)
+                    and len(effects) > self.defn.max_effects
+                ):
+                    rec["error"] = (
+                        f"invalid_plan: generated plan has {len(effects)} "
+                        f"top-level effects, exceeds max_effects "
+                        f"({self.defn.max_effects})"
+                    )
+                    return rec
             except Exception:
                 pass  # let use(inline) handle parse errors
 
-            if done and self.defn.stop_on_done:
+            if stopping:
                 rec["stop"] = True
                 return rec
 

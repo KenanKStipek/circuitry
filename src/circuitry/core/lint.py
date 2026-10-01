@@ -265,6 +265,22 @@ def _check_effect(
     if effect_type == "tool":
         _check_tool_args(effect.get("params"), where=where, warnings=warnings)
 
+    if effect_type == "loop" and "min_iterations" in effect and isinstance(effect.get("each"), Mapping):
+        warnings.append(
+            f"{where}: 'min_iterations' has no effect on an 'each' loop; it "
+            "only forces extra passes before a 'while' loop's condition is "
+            "checked. An 'each' loop always runs once per collection element."
+        )
+
+    if effect_type in ("if", "conditional") and "threshold" in effect:
+        warnings.append(
+            f"{where}: 'threshold' has no effect — the built-in evaluator "
+            "reads a categorical yes/no with no calibrated confidence to cut, "
+            "so it is recorded on meta.threshold and never consulted. "
+            "Deprecated: kept schema-valid only so existing documents that "
+            "set it keep passing; new documents should not set it."
+        )
+
 
 def _check_tool_args(params: Any, *, where: str, warnings: list[str]) -> None:
     """Flag ``params.args`` entries YAML turned into something other than text.

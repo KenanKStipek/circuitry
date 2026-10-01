@@ -281,14 +281,16 @@ effects:
 
                 2) dynamic — a named container. Writes prime.<name>.<child>.value.
                    Required: type, name, effects (non-empty list).
-                   Optional: flow, max_concurrency, stop_on_error, on_error, description.
+                   Optional: flow, max_concurrency (tree flow only; bounds the parallel
+                   worker pool), stop_on_error (tree flow only; halt remaining children on
+                   the first failure), on_error (fail | skip | continue), labels, description.
                      - type: dynamic
                        name: pipeline
                        flow: chain
                        effects: [ ... ]
 
                 3) if — evaluates a condition, runs exactly ONE branch. Always `type: if`.
-                   Required: type, if, then. Optional: name, else, threshold, on_error.
+                   Required: type, if, then. Optional: name, else, on_error.
                    The `if` block is a condition: mode: model needs `template`;
                    mode: cel needs `expr`.
                    Give `then` and `else` the SAME inner effect names so the downstream state
@@ -311,7 +313,8 @@ effects:
                 4) loop — repeats a body. Required: type, body (non-empty), plus `each` OR
                    `while`. Optional: name, collect, flow, max_concurrency, max_iterations
                    (no default — unset runs until the collection/condition ends it),
-                   min_iterations, on_error (fail | break | continue).
+                   min_iterations (while loops only — has no effect on an each loop),
+                   on_error (fail | break | continue).
                    - each.in is a state path resolving to an ARRAY; each.as names the element
                      (default `item`), available in the body as {{item}}.
                    - each + max_iterations: when max_iterations is set on an each loop, a

@@ -393,10 +393,32 @@ def _compile_effect(
             loop_names=loop_names,
         )
 
+        # Max parallel workers (only meaningful when flow="tree")
+        max_concurrency_raw = effect.get("max_concurrency")
+        max_concurrency: int | None = (
+            int(max_concurrency_raw) if max_concurrency_raw is not None else None
+        )
+
+        stop_on_error = bool(effect.get("stop_on_error", False))
+
+        dyn_on_error_raw = str(effect.get("on_error") or "fail").strip().lower()
+        dyn_on_error: Literal["fail", "skip", "continue"] = (
+            cast(Literal["fail", "skip", "continue"], dyn_on_error_raw)
+            if dyn_on_error_raw in ("fail", "skip", "continue")
+            else "fail"
+        )
+
+        labels_raw = effect.get("labels")
+        labels = dict(labels_raw) if isinstance(labels_raw, dict) else None
+
         return DynamicDefinition(
             name=valid_name,
             effects=compiled_children,
             flow=flow,
+            max_concurrency=max_concurrency,
+            stop_on_error=stop_on_error,
+            on_error=dyn_on_error,
+            labels=labels,
         )
 
     if effect_type in ("conditional", "if"):

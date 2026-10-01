@@ -32,7 +32,7 @@ Dynamic ::= { type: 'dynamic', name: NAME, effects: Effect+,
       template: "Name the most likely cause of this error, in one sentence: {{prime.investigate.error.value}}"
 ```
 
-`chain` is sequential: each effect runs after the previous one and sees everything it wrote. This is monadic bind, and it is the shape of chain-of-thought — each step conditioned on the last. It is the default flow, so `flow: chain` can be omitted; writing it is a courtesy to the reader.
+`chain` is sequential: each effect runs after the previous one and sees everything it wrote. This is monadic bind, and it is the shape of chain-of-thought — each step conditioned on the last. It is the default flow, so `flow: chain` can be omitted; writing it is a courtesy to the reader. A chain always runs one child at a time, by construction — `max_concurrency` is a tree-flow setting and has no meaning here.
 
 Inside the container, the children's paths gain the container's name: `cause` writes to `prime.investigate.cause.value`, not `prime.cause.value`. Two spellings reach a sibling from inside the same dynamic — the absolute path, `{{prime.investigate.error.value}}`, and the container-relative short form, `{{investigate.error.value}}`. Write the absolute one; it is the same spelling a reader outside the container uses, and it never depends on where the template sits.
 
@@ -131,14 +131,16 @@ effects:
 
 ## Errors inside a container
 
-A dynamic has its own `on_error`, and one field the leaf effects do not: `stop_on_error`. In a tree, `stop_on_error: true` halts the remaining children when one fails; by default the others run to completion and the failures are collected. Per-effect `on_error` covers the same intent one effect at a time and is usually the better tool — see [Errors](05-errors.md).
+A dynamic has its own `on_error`, with the same three values and the same meaning a leaf effect's does (see [Errors](05-errors.md)): a child's failure that nothing inside absorbed makes this dynamic itself fail, and `on_error` decides whether that propagates to *this dynamic's own* parent (`fail`, the default) or is recorded and swallowed there, letting the parent carry on to its next effect (`skip`/`continue` — the two are the same degradation for a dynamic, exactly as they are for a leaf effect).
+
+`stop_on_error` is the one field the leaf effects do not have, and it is tree-only: by default a tree runs every child to completion and collects whichever failed; `stop_on_error: true` instead cancels every child that has not started yet as soon as one fails. A child already running when that happens cannot be stopped — no thread can be killed from outside — so `stop_on_error` only cuts work that `max_concurrency` was holding back from starting. Any child that was already running when the cancellation happened still finishes, but its own failure (if it has one) is not added to the dynamic's own `meta.error`, and a cancelled child leaves no node and fires no hooks at all — only the triggering failure is recorded. In a chain, a failing child already stops the ones after it (it is sequential), so `stop_on_error` does nothing there. Per-effect `on_error` on the children themselves covers the same intent one effect at a time and is usually the better tool.
 
 ## What lands in the shadow state
 
 ```
 prime.<dynamic>.value                 # true when the container completed
 prime.<dynamic>.meta.flow             # "chain" | "tree"
-prime.<dynamic>.meta.error            # null, or the failure (a chain names the failing child)
+prime.<dynamic>.meta.error            # null, or the failure, naming the failing child's path in both flows
 prime.<dynamic>.<child>.value         # each child, one segment deeper
 ```
 

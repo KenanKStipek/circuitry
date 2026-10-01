@@ -25,7 +25,7 @@ fields:
     type: integer
     min: 1
     default: 8
-    note: "Maximum effects the reflector can generate per cycle. Alias: max_steps."
+    note: "Maximum top-level effects the reflector can generate per cycle. Alias: max_steps. Enforced: a plan over the cap is an invalid plan (same path as one that fails to parse), naming the count and the cap. Never truncated."
   stop_on_done:
     type: boolean
     default: true

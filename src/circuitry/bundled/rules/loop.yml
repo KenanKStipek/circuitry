@@ -49,7 +49,7 @@ fields:
   min_iterations:
     type: integer
     min: 0
-    note: "Minimum iterations to run before the while condition is checked. Only meaningful for while-loops."
+    note: "Minimum iterations to run before the while condition is checked at all — a forced pass never evaluates the condition, rather than evaluating it and discarding the answer. Only meaningful for while-loops; cof check warns when it is set on an each loop, where it has no effect."
   on_error:
     enum: [fail, break, continue]
     default: fail

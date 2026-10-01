@@ -68,7 +68,7 @@ effects:
         template: "Write a regular expression that matches one or more pairs of a number and a unit."
 ```
 
-Every generated effect is an ordinary effect — the plan is a Circuitry orchestration, and it passes the same gate as one you wrote. `max_effects` caps the number of top-level effects per cycle (`8` by default; the alias `max_steps` is accepted).
+Every generated effect is an ordinary effect — the plan is a Circuitry orchestration, and it passes the same gate as one you wrote. `max_effects` caps the number of top-level effects per cycle (`8` by default; the alias `max_steps` is accepted) and is enforced, not just suggested to the model: a plan over the cap is an invalid plan, handled the same way a plan that fails to parse is — the cycle's `error` names the count and the cap, and no plan is ever truncated to fit.
 
 The directive also fixes the plan's *language*: [ASD-STE100 Simplified Technical English](https://www.asd-ste100.org/) — one instruction per sentence, active voice, imperative mood, a twenty-word ceiling on procedural sentences, one meaning per word, no vague verbs, articles never dropped — applied to the plan's step descriptions and to every generated `template`. A narrowed output distribution is what makes generated plans predictable to validate and small planner models sufficient to write them. `prime_template:` replaces the directive wholesale, and with it the constraint; it is the author's choice to keep it.
 
