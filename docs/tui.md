@@ -288,9 +288,11 @@ Two event sources feed it:
   plugins see as `on_effect_complete`, carrying `(effect_path, effect_node)`.
   Its counterpart `effect_start_observer` (`on_effect_start`) fires the same
   payload before an effect dispatches.
-  Tree flow merges its children's state back only once the last sibling
-  finishes, so these notifications are what let a parallel sibling be marked
-  off as soon as *it* is done.
+  Parallel work shows up through both sources while it runs: a `flow: tree`
+  loop's iterations and a parallel dynamic's branches fire these hooks from
+  their worker threads at their full path, and each state snapshot overlays
+  the branches' progress so far, so a parallel sibling is marked off as soon
+  as *it* is done rather than when the last sibling finishes.
 
 #### The complexity column
 
