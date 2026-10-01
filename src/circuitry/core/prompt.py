@@ -423,6 +423,10 @@ class PromptRuntime:
         meta["dry_run"] = self.dry_run
         meta["fallback_attempts"] = []
         meta["fallback_recovered"] = False
+        # Written only when they have content, so clear what an earlier
+        # iteration of an unnamed loop (same store) left behind.
+        for key in ("finish_reason", "warnings", "assets"):
+            meta.pop(key, None)
 
         # Scored here, alongside the rest of the pre-dispatch meta, so the
         # score is on the node before anything can go wrong. A post-success
@@ -532,6 +536,7 @@ class PromptRuntime:
             options = self._generation_options(
                 ctx=effective_ctx, messages=messages, meta=meta
             )
+            option_warnings = list(meta.get("warnings", []))
             attempts = self._build_attempts(default_model=dispatch_model)
 
             for _attempt in range(max_attempts):
@@ -576,7 +581,7 @@ class PromptRuntime:
                         ) from generation_error
                     # Before decoding: a reply cut off mid-JSON fails to
                     # parse, and the truncation warning is what explains it.
-                    self._record_reply(meta, res)
+                    self._record_reply(meta, res, option_warnings)
 
                     # Decode and validate output based on prompt_type
                     if self.defn.prompt_type in ("boolean", "number"):
@@ -988,10 +993,17 @@ class PromptRuntime:
             images=tuple(images),
         )
 
-    def _record_reply(self, meta: dict[str, Any], res: GenerateResult) -> None:
-        """``finish_reason`` and the reply's warnings, including truncation."""
+    def _record_reply(
+        self, meta: dict[str, Any], res: GenerateResult, option_warnings: list[str]
+    ) -> None:
+        """``finish_reason`` and the reply's warnings, including truncation.
+
+        Runs once per retry attempt, so it replaces the previous attempt's
+        reply warnings and finish_reason rather than adding to them.
+        """
         finish_reason = getattr(res, "finish_reason", None)
         warnings = list(getattr(res, "warnings", ()) or ())
+        meta.pop("finish_reason", None)
         if finish_reason is not None:
             meta["finish_reason"] = finish_reason
             if finish_reason in TRUNCATED_FINISH_REASONS:
@@ -999,6 +1011,10 @@ class PromptRuntime:
                     f"the reply was cut off by the length limit "
                     f"(finish_reason: {finish_reason}); raise params.max_tokens"
                 )
+        if option_warnings:
+            meta["warnings"] = list(option_warnings)
+        else:
+            meta.pop("warnings", None)
         self._add_warnings(meta, warnings)
 
     def _add_warnings(self, meta: dict[str, Any], warnings: list[str]) -> None:

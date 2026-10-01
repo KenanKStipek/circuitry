@@ -272,3 +272,62 @@ def test_a_legacy_adapter_runs_and_the_ignored_options_are_named() -> None:
     assert node["meta"]["warnings"] == [
         "adapter 'legacy' ignored: temperature; params (num_ctx)"
     ]
+
+
+@dataclass
+class ScriptedAdapter:
+    """Replies with each ``(text, finish_reason)`` in turn, one per call."""
+
+    replies: list[tuple[str, str | None]]
+    name: str = "scripted"
+
+    def generate(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        timeout_seconds: int = 120,
+        options: GenerateOptions | None = None,
+    ) -> GenerateResult:
+        text, finish_reason = self.replies.pop(0)
+        return GenerateResult(text=text, raw={}, finish_reason=finish_reason)
+
+
+JSON_RETRIES = {
+    "template": "hi",
+    "prompt_type": "json",
+    "schema": {"type": "object"},
+    "retries": {"max_attempts": 3, "backoff_ms": 0},
+}
+
+
+def test_a_retry_that_finishes_drops_the_earlier_truncation_warning() -> None:
+    node = _run(
+        JSON_RETRIES,
+        ScriptedAdapter(replies=[('{"a": ', "length"), ('{"a": 1}', "stop")]),
+    )
+    assert node["value"] == {"a": 1}
+    assert node["meta"]["finish_reason"] == "stop"
+    assert "warnings" not in node["meta"]
+
+
+def test_retries_on_a_legacy_adapter_name_the_ignored_options_once() -> None:
+    node = _run(
+        {**JSON_RETRIES, "deterministic": True, "on_error": "continue"},
+        LegacyAdapter(),
+    )
+    assert node["meta"]["error"]
+    assert node["meta"]["warnings"] == ["adapter 'legacy' ignored: temperature"]
+
+
+def test_a_rerun_in_the_same_store_clears_the_previous_reply_meta() -> None:
+    """An unnamed loop re-runs its body in the same store."""
+    stale = {"finish_reason": "length", "warnings": ["old"], "assets": [{"ref": "old.png"}]}
+    node = _run(
+        {"template": "hi"},
+        RecordingAdapter(finish_reason=None),
+        state={"prime": {"ask": {"value": "x", "meta": stale}}},
+    )
+    assert node["value"] == "ok"
+    for key in ("finish_reason", "warnings", "assets"):
+        assert key not in node["meta"]
