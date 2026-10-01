@@ -119,6 +119,24 @@ def test_rest_trigger_rejects_orchestration_path_outside_root(tmp_path: Path) ->
     assert "orchestration root" in response.body["error"]
 
 
+def test_rest_trigger_rejects_nonexistent_orchestration_path_as_400(tmp_path: Path) -> None:
+    """A caller-supplied path that doesn't resolve is a 400 caller error, the
+    same as the missing-field case — not the 500 a FileNotFoundError used to
+    surface through the generic run-failure path (#265 part 5)."""
+    svc = RestTriggerService(allow_unauthenticated=True, orchestration_root=tmp_path)
+
+    response = svc.handle_http_request(
+        method="POST",
+        path="/v1/triggers/run",
+        headers={},
+        body=json.dumps({"orchestration_path": "does/not/exist.yaml"}),
+    )
+
+    assert response.status_code == 400
+    assert response.body["ok"] is False
+    assert "does not exist" in response.body["error"]
+
+
 def test_rest_trigger_rejects_out_path_outside_root(tmp_path: Path) -> None:
     root = tmp_path / "root"
     root.mkdir()
@@ -255,7 +273,15 @@ def test_rest_trigger_rejects_nul_byte_path_as_400_not_raise(tmp_path: Path) -> 
     assert "orchestration_path" in response.body["error"]
 
 
-def test_rest_trigger_returns_runtime_failure_details(tmp_path: Path) -> None:
+def test_rest_trigger_returns_runtime_failure_details(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A path that exists but fails at run time (here: preflight, missing
+    adapter credentials) is still a 500 — only a caller-supplied nonexistent
+    path is a 400 (#265 part 5)."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    orch_path = tmp_path / "hello.yml"
+    _write_orchestration(orch_path)
     svc = RestTriggerService(allow_unauthenticated=True, orchestration_root=tmp_path)
     response = svc.handle_http_request(
         method="POST",
@@ -263,8 +289,8 @@ def test_rest_trigger_returns_runtime_failure_details(tmp_path: Path) -> None:
         headers={"X-Request-ID": "req-fail"},
         body=json.dumps(
             {
-                "orchestration_path": str(tmp_path / "missing.yml"),
-                "dry_run": True,
+                "orchestration_path": str(orch_path),
+                "dry_run": False,
             }
         ),
     )

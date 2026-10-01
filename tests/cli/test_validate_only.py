@@ -111,6 +111,25 @@ def test_api_validate_only_matches_api_validate_orchestration(tmp_path: Path) ->
     assert "did you mean 'while'?" in check_result["errors"][0]
 
 
+def test_api_validate_orchestration_accepts_config_for_allowlist_preflight(
+    tmp_path: Path,
+) -> None:
+    """The public SDK's `validate_orchestration` had no `config` parameter at
+    all, so a caller could never get the allowlist/preflight checks
+    `run_orchestration(config=...)` runs for the equivalent real run —
+    'valid' and 'runnable' could silently disagree (#265 part 4)."""
+    path = _write(
+        tmp_path,
+        "locked.yml",
+        "effects:\n"
+        "  - {type: tool, name: t, provider: ffmpeg, params: {}}\n",
+    )
+    cfg = CircuitryConfig(enabled_tools=[])
+    result = validate_orchestration(orchestration_path=path, config=cfg)
+    assert result["ok"] is False
+    assert any("ffmpeg" in e for e in result["errors"])
+
+
 def test_validate_only_does_not_require_a_resolved_adapter_cof_check_allows(
     tmp_path: Path,
 ) -> None:

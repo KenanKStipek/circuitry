@@ -58,7 +58,7 @@ from .logging_setup import configure_cli_logging
 from .orchestration_loader import load_orchestration_file, serialize_orchestration
 from .profiles import ProfileError, ProfileSettings, load_profile
 from .redaction import REDACTED, redact_env_pairs
-from .registry import eject_destination, resolve_bundled, write_ejected
+from .registry import eject_destination, load_index, resolve_bundled, write_ejected
 from .runtime_shim import RunRequest, inspect_orchestration, run, validate
 from .score import register_score
 from .setup import register_setup
@@ -1163,6 +1163,14 @@ def run_library_cmd(
         console.print_json(dumps_saved_state(result.state, pretty=pretty))
 
 
+def _curation_category_names() -> str:
+    """Real `category:` values in the bundled curation index, so the
+    `--category` help text can't drift from them again (#265 part 5) — it
+    used to name five categories that matched none of the real ones."""
+    names = sorted({e["category"] for e in load_index() if e.get("category")})
+    return ", ".join(names)
+
+
 @app.command(
     "list",
     help=(
@@ -1172,7 +1180,8 @@ def run_library_cmd(
 )
 def list_cmd(
     category: str | None = typer.Option(
-        None, "--category", "-C", help="Filter by category (example, utility, creative, tooling, template)."
+        None, "--category", "-C",
+        help=f"Filter by category ({_curation_category_names()}).",
     ),
     json_out: bool = typer.Option(
         False, "--json", help="Output machine-readable JSON only."

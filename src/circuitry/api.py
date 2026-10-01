@@ -28,6 +28,22 @@ from .cli.shared_library import (
     resolve_service_profile as _resolve_service_profile,
 )
 from .core.diagnostics import find_divergence_paths as _find_divergence_paths
+from .core.saved_state import dumps_saved_state as _dumps_saved_state
+
+
+def _write_out_path(result: RunResult, *, pretty: bool) -> None:
+    """Write ``result.out_path`` (the CLI flag or a profile's ``out:``), the
+    same as `cof run` writes `--out` — for both a successful and a failed
+    run, since a failed run's state still carries runtime metadata. Embedded
+    callers otherwise saw `out_path` silently do nothing, unlike the CLI
+    (#265, found while rewriting the guidebook/#286).
+    """
+    if result.out_path is None:
+        return
+    result.out_path.parent.mkdir(parents=True, exist_ok=True)
+    result.out_path.write_text(
+        _dumps_saved_state(result.state, pretty=pretty) + "\n", encoding="utf-8"
+    )
 
 
 class CircuitryExecutionError(RuntimeError):
@@ -52,6 +68,7 @@ def run_orchestration(
     live_state_path: str | Path | None = None,
     adapter: Adapter | None = None,
     trust_document: bool = True,
+    pretty: bool = False,
 ) -> RunResult:
     """
     Execute an orchestration from embedded Python.
@@ -77,6 +94,10 @@ def run_orchestration(
     generated, or picked by a tool or network caller): the document may then
     only set ``runtime.complexity`` and ``runtime.state``, and anything else
     is ignored with a warning.
+
+    *out_path* (the CLI flag, or a profile's own ``out:``) is written to disk
+    the same way ``cof run --out`` writes it, for both a successful and a
+    failed run — *pretty* matches ``--pretty``.
     """
     if state is not None and state_path is not None:
         raise ValueError("Provide either 'state' or 'state_path', not both.")
@@ -95,6 +116,7 @@ def run_orchestration(
         trust_document=trust_document,
     )
     result = _run(req)
+    _write_out_path(result, pretty=pretty)
 
     if not result.ok and raise_on_error:
         raise CircuitryExecutionError(
@@ -120,12 +142,16 @@ def run_shared_orchestration(
     verbose: bool = False,
     raise_on_error: bool = True,
     live_state_path: str | Path | None = None,
+    pretty: bool = False,
 ) -> RunResult:
     """Fetch and run a shared-library orchestration using embedded API.
 
     A fetched document is someone else's, so it stays limited: it may only set
     ``runtime.complexity`` and ``runtime.state`` (unless config sets
     ``trust_orchestration_runtime``).
+
+    *out_path* is written to disk the same way ``cof run --out`` writes it,
+    for both a successful and a failed run — *pretty* matches ``--pretty``.
     """
     if state is not None and state_path is not None:
         raise ValueError("Provide either 'state' or 'state_path', not both.")
@@ -154,6 +180,7 @@ def run_shared_orchestration(
         live_state_path=Path(live_state_path) if live_state_path is not None else None,
     )
     result = _run(req)
+    _write_out_path(result, pretty=pretty)
 
     if not result.ok and raise_on_error:
         raise CircuitryExecutionError(
@@ -164,15 +191,26 @@ def run_shared_orchestration(
 
 
 def validate_orchestration(
-    *, orchestration_path: str | Path, trust_document: bool = True
+    *,
+    orchestration_path: str | Path,
+    trust_document: bool = True,
+    config: CircuitryConfig | None = None,
 ) -> dict[str, Any]:
     """Validate orchestration structure using compiler-backed validation.
 
     *trust_document* matches :func:`run_orchestration`: by default the report's
     ``warnings`` carry the notice naming the host settings the file would
     apply; with ``False`` they name the ones a run would ignore.
+
+    Pass the same *config* the corresponding :func:`run_orchestration` call
+    would use so "valid" reliably predicts "runnable": without one, the
+    allowlist and preflight gates are skipped here exactly as they are in
+    ``run_orchestration(config=None)``, so a document can validate ok and
+    then fail preflight at run time (#265 part 4).
     """
-    return _validate(Path(orchestration_path), trust_document=trust_document)
+    return _validate(
+        Path(orchestration_path), config=config, trust_document=trust_document
+    )
 
 
 def inspect_orchestration(*, orchestration_path: str | Path) -> dict[str, Any]:

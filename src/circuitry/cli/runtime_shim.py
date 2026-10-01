@@ -490,16 +490,15 @@ def run(req: RunRequest) -> RunResult:
         # opts out for advanced use; ``--dry-run`` also skips it since the
         # whole point of dry-run is to avoid touching the world. Only runs
         # when a config was supplied (programmatic callers without a config
-        # keep default-open behavior). When the caller injected an adapter
-        # via RunRequest.adapter we trust them — the adapter may not be
-        # buildable from config (host_claude).
-        if (
-            not req.skip_preflight
-            and not req.dry_run
-            and req.config is not None
-            and req.adapter is None
-        ):
-            preflight_results = preflight(req.orchestration_path, req.config)
+        # keep default-open behavior). When the caller injected an adapter via
+        # RunRequest.adapter we trust them for *that* check only — the adapter
+        # may not be buildable from config (host_claude) — but tool and
+        # library-ref preflight still run; an injected adapter is not a
+        # license to skip everything else (#265 part 4).
+        if not req.skip_preflight and not req.dry_run and req.config is not None:
+            preflight_results = preflight(
+                req.orchestration_path, req.config, skip_adapter_check=req.adapter is not None
+            )
             hard_results, soft_results = classify_preflight_results(
                 req.orchestration_path, preflight_results
             )
@@ -900,6 +899,8 @@ def validate(
 def preflight(
     orchestration_path: Path,
     config: CircuitryConfig,
+    *,
+    skip_adapter_check: bool = False,
 ) -> list[tuple[str, CheckResult]]:
     """Walk an orchestration's referenced extensions and call ``check()`` on
     each. Returns an ordered list of ``(label, CheckResult)`` tuples.
@@ -913,6 +914,12 @@ def preflight(
     Adapters that can only be built at runtime (host_claude needs a
     request_handler) are reported as ok with a deferred message; preflight
     cannot exercise them outside the MCP context.
+
+    *skip_adapter_check*: the caller injected an already-built adapter (e.g.
+    MCP's ``HostClaudeAdapter``), which may not be buildable from config at
+    all — only the ``adapter:<name>`` checks are skipped; tool and
+    library-ref preflight still run, so a broken tool config or a bad
+    library ref is still caught before any effect runs (#265 part 4).
     """
     orch = load_orchestration_file(orchestration_path)
     adapter_refs, tool_refs = walk_orchestration_refs(orch)
@@ -931,7 +938,7 @@ def preflight(
             (f"library_ref:{ref}", CheckResult(ok=False, missing=[], message=message))
         )
 
-    for adapter_name in sorted(adapter_refs):
+    for adapter_name in ([] if skip_adapter_check else sorted(adapter_refs)):
         try:
             adapter = build_adapter(adapter_name=adapter_name, runtime=runtime_cfg)
         except RuntimeError as exc:

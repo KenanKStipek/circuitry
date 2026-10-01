@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 
 import typer
@@ -242,12 +243,20 @@ def register_setup(app: typer.Typer) -> None:
             False, "--json", help="Output detection results as JSON (non-interactive)."
         ),
     ) -> None:
-        console.print(Panel.fit("Circuitry · Setup", border_style="cyan"))
-        console.print()
+        # The banner prints only in interactive mode — `--json` must emit
+        # parseable JSON on stdout and nothing else, the same pattern
+        # `check --json`/`run --json` already use (#265 part 5).
+        if not json_out:
+            console.print(Panel.fit("Circuitry · Setup", border_style="cyan"))
+            console.print()
 
         # Detect
         ollama_url, comfyui_url = _detect_urls_from_existing_config()
-        with console.status("[cyan]Detecting backends…[/cyan]"):
+        with (
+            nullcontext()
+            if json_out
+            else console.status("[cyan]Detecting backends…[/cyan]")
+        ):
             result = detect_all(ollama_url=ollama_url, comfyui_url=comfyui_url)
 
         if json_out:

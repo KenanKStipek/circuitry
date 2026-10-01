@@ -129,6 +129,28 @@ def test_validate_orchestration_unknown_path() -> None:
     assert "not found" in result["errors"][0]
 
 
+def test_validate_orchestration_uses_the_resolved_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MCP's `validate_orchestration` must use the same resolved config the
+    real `run_orchestration` tool uses (`resolve_config()`), so a tool
+    outside the allowlist fails validation here too — not just at run time
+    (#265 part 4)."""
+    monkeypatch.setenv("CIRCUITRY_ENABLED_TOOLS", "")  # lock every tool out
+    p = _write_yml(tmp_path, "locked.yml", """
+        adapter: host_claude
+        model: claude-sonnet-4
+        effects:
+          - type: tool
+            name: t
+            provider: ffmpeg
+            params: {}
+    """)
+    result = srv._validate_orchestration_impl(str(p))
+    assert result["ok"] is False
+    assert any("ffmpeg" in e for e in result["errors"])
+
+
 # ---------------------------------------------------------------------------
 # 4-5. run_orchestration + submit_response (single-prompt)
 # ---------------------------------------------------------------------------
