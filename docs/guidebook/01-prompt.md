@@ -146,11 +146,11 @@ Prefer shared state for anything another effect might want; use `inputs` for gen
 - type: prompt
   name: screenshot
   assets:
-    - {kind: image, ref: "{{input.screenshot}}"}
+    - {kind: image, ref: "{{{input.screenshot}}}"}
   template: "What error does this screenshot show? Issue: {{input.issue}}"
 ```
 
-`ref` is a template that renders to a local path (read and sent as the image's bytes) or an `http(s)` URL (passed through where the provider accepts one; ollama does not). The bytes never land in state: `meta.assets` records each image's path, size and sha256. ollama, the OpenAI-compatible adapters and anthropic send images; `cof check` warns when the effect's adapter cannot, and other `kind`s are skipped with a warning.
+`ref` is a template that renders to a local path (read and sent as the image's bytes) or an `http(s)` URL (passed through where the provider accepts one; ollama does not). Triple braces keep the value unescaped; double braces HTML-escape it, which breaks a URL with `&` in its query string. The bytes never land in state: `meta.assets` records each image's path, size and sha256. ollama, the OpenAI-compatible adapters and anthropic send images; `cof check` warns when the effect's adapter cannot, and other `kind`s are skipped with a warning.
 
 ## Errors, retries, timeouts
 

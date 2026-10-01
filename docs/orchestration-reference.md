@@ -148,10 +148,9 @@ What lands in `meta` beyond the usual keys, each only when it has something to s
   provider: ollama
   model: qwen3.8:27b
   deterministic: true
-  timeout_ms: 1800000
   params: {max_tokens: 4096, keep_alive: 0, think: false}
   assets:
-    - {kind: image, ref: "{{input.run}}/see/view.png"}
+    - {kind: image, ref: "{{{input.run}}}/see/view.png"}
   prompt_type: json
   schema:
     type: object
@@ -160,6 +159,8 @@ What lands in `meta` beyond the usual keys, each only when it has something to s
     required: [regions]
   template: "List the distinct regions of this image. Return ONLY a JSON object with \"regions\"."
 ```
+
+A slow model needs a longer adapter timeout, `runtime.adapters.ollama.timeout_seconds: 1800` in config: a prompt's `timeout_ms` is capped by the adapter's `timeout_seconds`, so it can only shorten the wait. Write `ref` with triple braces (`{{{...}}}`): double braces HTML-escape the value, which breaks a URL with `&` in its query string.
 
 **`on_error` and preflight — optional adapters:** `cof check`/`cof run` walk every `adapter`/`provider` an orchestration references and probe its credentials before anything runs (`check()`, see the plugins pages). By default that's a **hard** dependency: a missing credential fails preflight for the whole file, even if only one effect needs it. Set `on_error: skip` (or `continue`) on every `prompt` effect that uses a given adapter and preflight reclassifies it as **soft** — a missing credential downgrades to a warning naming the effects that will skip, and the run proceeds, leaving those effects' `value` as `null`. An adapter is soft only when *every* effect referencing it tolerates failure; one effect without `on_error` handling makes the whole adapter a hard dependency again, and preflight's error names that effect specifically. This looks at each `prompt` effect's own `on_error`, not an enclosing `dynamic`/`loop`/`if` container's — a `prompt` effect nested in a container that tolerates failure still needs its own `on_error: skip`/`continue` to be classified as soft. `cof run --skip-preflight` bypasses preflight entirely (hard and soft alike) — unrelated to this classification.
 

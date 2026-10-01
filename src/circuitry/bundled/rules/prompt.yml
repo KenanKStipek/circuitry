@@ -47,7 +47,7 @@ fields:
   assets:
     type: array
     items: "{kind: image|file|audio, ref: string}"
-    note: "Images for a vision model: kind image, ref a local path or http(s) URL (Mustache-rendered). Sent by ollama, the OpenAI-compatible adapters and anthropic; other kinds are skipped with a warning."
+    note: "Images for a vision model: kind image, ref a local path or http(s) URL (Mustache-rendered; use {{{...}}} so a URL's & is not HTML-escaped). Sent by ollama, the OpenAI-compatible adapters and anthropic; other kinds are skipped with a warning."
   retries:
     type: object
     properties:

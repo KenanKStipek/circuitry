@@ -157,7 +157,7 @@
       "required": ["kind", "ref"],
       "properties": {
         "kind": { "type": "string", "description": "Asset type, e.g. image, file, audio." },
-        "ref": { "type": "string", "description": "Mustache template rendering to a local path or an http(s) URL." }
+        "ref": { "type": "string", "description": "Mustache template rendering to a local path or an http(s) URL. Use {{{...}}}: {{...}} HTML-escapes the value." }
       }
     },
 
