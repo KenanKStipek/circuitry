@@ -14,10 +14,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from circuitry.adapters._retry import AdapterCallError, RetryInfo
 from circuitry.adapters.base import GenerateResult
 from circuitry.core.compiler import compile_orchestration
 from circuitry.core.dynamic import DynamicRuntime
 from circuitry.core.store import Store
+
+#: These fixtures simulate a transient failure a retry can recover from, so
+#: they raise a classified-retryable error rather than a bare ``RuntimeError``
+#: (which the retry loop now treats as not worth retrying — see #263).
+_RETRYABLE = RetryInfo(retryable=True)
 
 
 @dataclass
@@ -33,10 +39,10 @@ class FlakyThenFailAdapter:
     ) -> GenerateResult:
         self.calls += 1
         if self.calls == 1:
-            raise RuntimeError("transient failure, pass 0 attempt 0")
+            raise AdapterCallError("transient failure, pass 0 attempt 0", retry_info=_RETRYABLE)
         if self.calls == 2:
             return GenerateResult(text="OK", raw={})
-        raise RuntimeError("permanent failure, pass 1")
+        raise AdapterCallError("permanent failure, pass 1", retry_info=_RETRYABLE)
 
 
 def _unnamed_each_loop_orch(*, on_error: str) -> dict:
@@ -108,10 +114,12 @@ def test_prompt_continue_clears_both_retry_meta_and_generation_option_meta() -> 
         ) -> GenerateResult:
             self.calls += 1
             if self.calls == 1:
-                raise RuntimeError("transient failure, pass 0 attempt 0")
+                raise AdapterCallError(
+                    "transient failure, pass 0 attempt 0", retry_info=_RETRYABLE
+                )
             if self.calls == 2:
                 return GenerateResult(text="OK", raw={}, finish_reason="length")
-            raise RuntimeError("permanent failure, pass 1")
+            raise AdapterCallError("permanent failure, pass 1", retry_info=_RETRYABLE)
 
     orch = _unnamed_each_loop_orch(on_error="continue")
     root = compile_orchestration(orch=orch, root_name="prime")

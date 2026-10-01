@@ -4,14 +4,17 @@ import hashlib
 import json
 import logging
 import math
+import random
 import time
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Literal
 
 from ..adapters import Adapter, build_adapter
+from ..adapters._retry import RetryInfo, classify_exception
 from ..adapters.base import (
     TRUNCATED_FINISH_REASONS,
     ChatMessage,
@@ -23,11 +26,23 @@ from ..adapters.base import (
 from ..allowlist_gate import allowed_adapters, require_adapter
 from ..cli.redaction import redact
 from ..output import console as _console
-from .answers import parse_boolean_answer, parse_number_answer
+from .answers import AnswerParseError, parse_boolean_answer, parse_number_answer
 from .store import Store
 from .templates import render_template
 
 logger = logging.getLogger(__name__)
+
+#: Exponential-backoff ceiling for a retryable failure's wait, including one
+#: driven by a provider's own ``Retry-After`` — a provider asking for longer
+#: than this is still only waited out this long, so a single effect's
+#: retries can't stall a run indefinitely.
+_RETRY_BACKOFF_CAP_MS = 60_000
+
+#: A decode/schema-validation failure's raw reply is capped before it goes
+#: into ``meta.fallback_attempts`` — state is serialized to ``--out``,
+#: ``--json``, ``--live-state``, and a model's wall of "maybe" is only useful
+#: as a diagnostic, not reproduced in full.
+_RAW_REPLY_CAP_CHARS = 2000
 
 
 class SchemaValidationError(ValueError):
@@ -64,6 +79,79 @@ def _adapter_target(adapter: Any, model: str) -> str:
         host = urlparse(str(base_url)).hostname or str(base_url)
         return f"{adapter_name} · {model} @ {host}"
     return f"{adapter_name} · {model}"
+
+
+def _decode_failure_status(exc: Exception) -> str:
+    """The ``attempts_meta`` status for a decode/validation-stage failure."""
+    if isinstance(exc, AnswerParseError):
+        return "decode_failed"
+    if isinstance(exc, SchemaValidationError):
+        return "schema_invalid"
+    return "failed"
+
+
+def _cap_reply_text(text: str) -> str:
+    """``text``, capped at :data:`_RAW_REPLY_CAP_CHARS` with a note of how much was cut."""
+    if len(text) <= _RAW_REPLY_CAP_CHARS:
+        return text
+    return f"{text[:_RAW_REPLY_CAP_CHARS]}... [truncated, {len(text)} chars total]"
+
+
+def _parse_retry_after_seconds(value: str) -> float | None:
+    """A ``Retry-After`` header value (seconds, or an HTTP-date) as seconds from now.
+
+    ``None`` when ``value`` is neither — a header present but unparseable
+    must not be read as "wait forever" or crash the retry loop.
+    """
+    value = (value or "").strip()
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
+def _retry_info_for(exc: Exception | None) -> RetryInfo:
+    """``RetryInfo`` for the error that ended a dispatch pass.
+
+    A decode/schema-validation failure (an unreadable boolean/number, JSON
+    that failed its schema) is always retryable here — it isn't an
+    HTTP-classified adapter-call failure at all, retrying is what might get a
+    better reply out of the same model, and treating it otherwise would
+    change behaviour for an effect with no fallbacks configured, which #281
+    requires stay exactly as it was. Everything else defers to
+    :func:`classify_exception` (429/408/5xx/connection failures retry;
+    400/401/403/404/422 and a missing key do not).
+    """
+    if isinstance(exc, (AnswerParseError, SchemaValidationError)):
+        return RetryInfo(retryable=True)
+    return classify_exception(exc)
+
+
+def _next_backoff_delay_ms(retry_info: RetryInfo, *, attempt_index: int, base_ms: int) -> int:
+    """How long to wait before the next retry: exponential backoff with full
+    jitter, starting from ``base_ms`` and capped at :data:`_RETRY_BACKOFF_CAP_MS`.
+
+    ``attempt_index`` is the 0-based attempt that just failed, so the first
+    retry's ceiling is ``base_ms`` and each subsequent one roughly doubles.
+    A provider's own ``Retry-After`` (when the failing adapter could supply
+    one) overrides the computed wait outright, still capped — the provider
+    knows its own rate limit better than a generic curve does.
+    """
+    if retry_info.retry_after:
+        retry_after_seconds = _parse_retry_after_seconds(retry_info.retry_after)
+        if retry_after_seconds is not None:
+            return min(_RETRY_BACKOFF_CAP_MS, int(retry_after_seconds * 1000))
+    ceiling = min(_RETRY_BACKOFF_CAP_MS, base_ms * (2**attempt_index))
+    return int(random.uniform(0, ceiling))
 
 
 class _PromptSpinner:
@@ -281,15 +369,39 @@ class PromptRuntime:
       <name>.value
       <name>.meta{created_at, completed_at, adapter, model, model_reason,
                   prompt_type, prompt_sent, tokens_sent, tokens_received,
-                  error, dry_run, fallback_attempts, fallback_recovered,
-                  retries_used?, complexity?, assets?, finish_reason?,
-                  warnings?}
+                  tokens_sent_total, tokens_received_total, error, dry_run,
+                  fallback_attempts, fallback_recovered, retries_used?,
+                  complexity?, assets?, finish_reason?, warnings?}
 
     ``assets`` (one ``{kind, ref, size?, sha256?, media_type?}`` per image
     sent — never the bytes), ``finish_reason`` (when the provider reports
     one) and ``warnings`` (a reply cut off at the length limit, options an
     adapter ignored, an asset kind no adapter sends) appear only when they
     have something to say.
+
+    ``tokens_sent``/``tokens_received`` are the winning attempt's own count,
+    unchanged in meaning from before; ``tokens_sent_total``/
+    ``tokens_received_total`` sum every attempt this execution made —
+    failed, retried and fallen-back-from alike, across every retry pass, not
+    just the chain that finally answered. Each entry in ``fallback_attempts``
+    (the chain from the pass that decided the outcome) carries its own
+    ``tokens_sent``/``tokens_received`` too, ``None`` for an attempt that
+    never got a reply. An attempt whose reply couldn't be used — an
+    unreadable boolean/number, or JSON that failed its schema — gets
+    ``status: "decode_failed"``/``"schema_invalid"`` and a size-capped
+    ``raw_reply``, and the chain moves to the next provider before the retry
+    loop ever sees it (#281); a plain adapter-call failure keeps
+    ``status: "failed"``, no ``raw_reply``.
+
+    A failed pass only retries when the dispatch's last error classifies as
+    retryable (429, 408, 5xx, a timeout, a dropped connection — see
+    ``adapters/_retry.py``); anything else (400/401/403/404/422, a missing
+    key) fails the effect immediately rather than spending the rest of the
+    retry budget on something that cannot succeed. A retry's wait is
+    exponential backoff with full jitter from ``retries.backoff_ms``, capped
+    at 60s, overridden outright by a provider's own ``Retry-After`` when the
+    failing adapter can supply one (litellm; curl-based adapters cannot yet —
+    see the adapter docs).
 
     ``model`` is the resolved model and ``model_reason`` says who chose it:
     ``"explicit"`` when the definition names its own ``model:`` (which is also
@@ -512,6 +624,8 @@ class PromptRuntime:
             backoff_ms = 1000
 
         attempts_meta: list[dict[str, Any]] = []
+        total_tokens_sent: int | None = None
+        total_tokens_received: int | None = None
         try:
             # Decomposition sits right at the dispatch seam: it either replaces
             # the model call entirely (the merged child result lands at this
@@ -562,9 +676,10 @@ class PromptRuntime:
             option_warnings = list(meta.get("warnings", []))
             attempts = self._build_attempts(default_model=dispatch_model)
 
+            next_delay_ms = backoff_ms
             for _attempt in range(max_attempts):
                 if _attempt > 0:
-                    time.sleep(backoff_ms / 1000)
+                    time.sleep(next_delay_ms / 1000)
                     t0 = time.monotonic()
                     if self.verbose:
                         retry_line = (
@@ -576,49 +691,49 @@ class PromptRuntime:
                         else:
                             _console.print(retry_line)
 
-                try:
-                    if self.verbose and self.cb_start is None:
-                        from rich.live import Live
+                if self.verbose and self.cb_start is None:
+                    from rich.live import Live
 
-                        live_cm = Live(
-                            _PromptSpinner(
-                                name=self.display_name,
-                                target=target,
-                                token_hint=f"~{estimated_out}tok ↑",
-                                indent=indent,
-                                ancestors=self._ancestors,
-                            ),
-                            refresh_per_second=10,
-                            transient=True,
-                            console=_console,
+                    live_cm = Live(
+                        _PromptSpinner(
+                            name=self.display_name,
+                            target=target,
+                            token_hint=f"~{estimated_out}tok ↑",
+                            indent=indent,
+                            ancestors=self._ancestors,
+                        ),
+                        refresh_per_second=10,
+                        transient=True,
+                        console=_console,
+                    )
+                else:
+                    live_cm = nullcontext()
+                with live_cm:
+                    res, decoded_value, attempts_meta, generation_error = (
+                        self._generate_with_fallbacks(
+                            prompt=prompt_sent,
+                            attempts=attempts,
+                            options=options,
+                            meta=meta,
+                            option_warnings=option_warnings,
                         )
-                    else:
-                        live_cm = nullcontext()
-                    with live_cm:
-                        res, attempts_meta, generation_error = self._generate_with_fallbacks(
-                            prompt=prompt_sent, attempts=attempts, options=options
-                        )
-                    if generation_error is not None or res is None:
-                        raise RuntimeError(
-                            f"All adapter attempts failed: {attempts_meta}"
-                        ) from generation_error
-                    # Before decoding: a reply cut off mid-JSON fails to
-                    # parse, and the truncation warning is what explains it.
-                    self._record_reply(meta, res, option_warnings)
+                    )
 
-                    # Decode and validate output based on prompt_type
-                    if self.defn.prompt_type in ("boolean", "number"):
-                        meta["answer"] = res.text
-                    decoded_value = self._decode_output(res.text)
+                # Every attempt this pass made, win or lose, spent tokens —
+                # accumulated across passes so a retried or fallen-back-from
+                # attempt's cost isn't lost when this loop overwrites
+                # `attempts_meta` with the next pass's chain.
+                for attempt_entry in attempts_meta:
+                    sent = attempt_entry.get("tokens_sent")
+                    if sent is not None:
+                        total_tokens_sent = (total_tokens_sent or 0) + sent
+                    received = attempt_entry.get("tokens_received")
+                    if received is not None:
+                        total_tokens_received = (total_tokens_received or 0) + received
+                meta["tokens_sent_total"] = total_tokens_sent
+                meta["tokens_received_total"] = total_tokens_received
 
-                    # Validate against schema if provided
-                    if self.defn.schema and self.defn.prompt_type in (
-                        "json",
-                        "object",
-                        "array",
-                    ):
-                        self._validate_schema(decoded_value, raw_response_text=res.text)
-
+                if generation_error is None and res is not None:
                     # Success
                     node["value"] = decoded_value
                     meta["tokens_sent"] = res.tokens_sent
@@ -653,22 +768,45 @@ class PromptRuntime:
                     store.fire_effect_complete(self.defn.name, node)
                     return
 
-                except Exception:
-                    if _attempt < max_attempts - 1:
-                        # Show failure for this attempt, then retry
-                        if self.verbose:
-                            elapsed = time.monotonic() - t0
-                            failure_target = self._attempts_target(attempts_meta) or target
-                            line = (
-                                f"{indent}[err]✗[/err] [cyan]◆[/cyan] {self.display_name}"
-                                f" [dim]{failure_target} | {_elapsed_str(elapsed)}[/dim]"
-                            )
-                            if self.cb_error is not None:
-                                self.cb_error(line)
-                            else:
-                                _console.print(line)
-                        continue
-                    raise  # Last attempt — propagate to outer handler
+                # Every attempt in this pass's chain failed. Retry only if
+                # the chain's last failure is a classified-retryable one
+                # (429/408/5xx, a timeout, a dropped connection, or a
+                # decode/schema failure — see _retry_info_for) and attempts
+                # remain; anything else (400/401/403/404/422, a missing key,
+                # an unclassified failure) fails the effect now rather than
+                # spending the rest of the retry budget on something that
+                # can't succeed.
+                retry_info = _retry_info_for(generation_error)
+                if not retry_info.retryable or _attempt >= max_attempts - 1:
+                    last_status = attempts_meta[-1]["status"] if attempts_meta else ""
+                    if generation_error is not None and last_status in (
+                        "decode_failed",
+                        "schema_invalid",
+                    ):
+                        # A decode/schema failure is already the one concrete
+                        # thing wrong with the reply — raise it as-is rather
+                        # than wrapping it in the generic chain-exhaustion
+                        # message, exactly as it propagated before this
+                        # failure mode moved inside the fallback chain (#281).
+                        raise generation_error
+                    raise RuntimeError(
+                        f"All adapter attempts failed: {attempts_meta}"
+                    ) from generation_error
+
+                if self.verbose:
+                    elapsed = time.monotonic() - t0
+                    failure_target = self._attempts_target(attempts_meta) or target
+                    line = (
+                        f"{indent}[err]✗[/err] [cyan]◆[/cyan] {self.display_name}"
+                        f" [dim]{failure_target} | {_elapsed_str(elapsed)}[/dim]"
+                    )
+                    if self.cb_error is not None:
+                        self.cb_error(line)
+                    else:
+                        _console.print(line)
+                next_delay_ms = _next_backoff_delay_ms(
+                    retry_info, attempt_index=_attempt, base_ms=backoff_ms
+                )
 
         except Exception as e:
             if self.verbose:
@@ -936,16 +1074,37 @@ class PromptRuntime:
         model_name = model_name.strip() or default_model
         return (adapter_name, model_name)
 
-    def _attempt_timeout_seconds(self) -> int:
-        """One attempt's budget: the effect's ``timeout_ms`` capped by the adapter's.
+    def _adapter_configured_timeout_seconds(self, adapter_name: str) -> int | None:
+        """``runtime.adapters.<adapter_name>.timeout_seconds``, or ``None`` if unset/invalid."""
+        adapters_cfg = (self.runtime_config or {}).get("adapters") or {}
+        cfg = adapters_cfg.get(adapter_name) or {}
+        raw = cfg.get("timeout_seconds")
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
 
-        Adapters take whole seconds, so a sub-second ``timeout_ms`` rounds up
-        to one. ``0`` or absent leaves the adapter's timeout alone.
+    def _attempt_timeout_seconds(self, adapter_name: str) -> int:
+        """One attempt's budget: the effect's ``timeout_ms``, capped by the
+        timeout of the adapter this attempt actually dispatches to.
+
+        Precedence: this effect's ``timeout_ms`` (rounded up to whole
+        seconds) first; then ``runtime.adapters.<adapter_name>.timeout_seconds``
+        for *this* attempt's adapter — not the run default's, which can be a
+        different adapter entirely once a ``provider:``/fallback sends this
+        attempt elsewhere; then the run's own default timeout. Adapters take
+        whole seconds, so a sub-second ``timeout_ms`` rounds up to one. ``0``
+        or absent ``timeout_ms`` leaves the adapter's timeout alone.
         """
+        adapter_budget = self._adapter_configured_timeout_seconds(adapter_name)
+        if adapter_budget is None:
+            adapter_budget = self.timeout_seconds
         if not self.defn.timeout_ms:
-            return self.timeout_seconds
+            return adapter_budget
         effect_seconds = max(1, math.ceil(self.defn.timeout_ms / 1000))
-        return min(effect_seconds, self.timeout_seconds)
+        return min(effect_seconds, adapter_budget)
 
     def _generation_options(
         self,
@@ -1052,8 +1211,25 @@ class PromptRuntime:
         *,
         prompt: str,
         attempts: list[tuple[str, str]],
+        meta: dict[str, Any],
+        option_warnings: list[str],
         options: GenerateOptions | None = None,
-    ) -> tuple[GenerateResult | None, list[dict[str, Any]], Exception | None]:
+    ) -> tuple[GenerateResult | None, Any, list[dict[str, Any]], Exception | None]:
+        """Try each ``(adapter, model)`` in order; the first reply that both
+        the adapter call and decoding/schema validation accept wins:
+        ``(result, decoded value, attempt log, the last error if none did)``.
+
+        A reply a provider actually returned but this effect can't use — an
+        unreadable boolean/number, or JSON that fails its schema — is treated
+        exactly like a failed adapter call: logged here and the next provider
+        in the chain is tried, rather than bubbling out to ``execute``'s
+        retry loop, which would restart the whole chain from the primary
+        instead of continuing down the fallback list (#281). ``meta`` and
+        ``option_warnings`` are threaded through so the winning attempt's
+        ``finish_reason``/warnings/``answer`` land on the node exactly as a
+        single-attempt dispatch always has; a losing attempt never touches
+        them beyond its own ``attempts_meta`` entry.
+        """
         attempts_meta: list[dict[str, Any]] = []
         last_error: Exception | None = None
 
@@ -1064,18 +1240,9 @@ class PromptRuntime:
                     adapter,
                     model=model_name,
                     prompt=prompt,
-                    timeout_seconds=self._attempt_timeout_seconds(),
+                    timeout_seconds=self._attempt_timeout_seconds(adapter_name),
                     options=options,
                 )
-                attempts_meta.append(
-                    {
-                        "adapter": adapter_name,
-                        "model": model_name,
-                        "status": "succeeded",
-                        "error": None,
-                    }
-                )
-                return (res, attempts_meta, None)
             except Exception as e:
                 last_error = e
                 attempts_meta.append(
@@ -1084,10 +1251,61 @@ class PromptRuntime:
                         "model": model_name,
                         "status": "failed",
                         "error": redact(str(e)),
+                        "tokens_sent": None,
+                        "tokens_received": None,
                     }
                 )
+                continue
 
-        return (None, attempts_meta, last_error)
+            # Before decoding: a reply cut off mid-JSON fails to parse, and
+            # the truncation warning is what explains it.
+            self._record_reply(meta, res, option_warnings)
+            try:
+                decoded_value = self._decode_and_validate(res, meta=meta)
+            except Exception as e:
+                last_error = e
+                attempts_meta.append(
+                    {
+                        "adapter": adapter_name,
+                        "model": model_name,
+                        "status": _decode_failure_status(e),
+                        "error": redact(str(e)),
+                        "tokens_sent": res.tokens_sent,
+                        "tokens_received": res.tokens_received,
+                        "raw_reply": _cap_reply_text(res.text),
+                    }
+                )
+                continue
+
+            attempts_meta.append(
+                {
+                    "adapter": adapter_name,
+                    "model": model_name,
+                    "status": "succeeded",
+                    "error": None,
+                    "tokens_sent": res.tokens_sent,
+                    "tokens_received": res.tokens_received,
+                }
+            )
+            return (res, decoded_value, attempts_meta, None)
+
+        return (None, None, attempts_meta, last_error)
+
+    def _decode_and_validate(self, res: GenerateResult, *, meta: dict[str, Any]) -> Any:
+        """Decode ``res.text`` per ``prompt_type`` and validate it against
+        ``schema`` when one is set, recording ``meta.answer`` along the way.
+
+        Raises :class:`~circuitry.core.answers.AnswerParseError` on an
+        unreadable boolean/number and :class:`SchemaValidationError` on a
+        schema failure — the two decode-stage failures a fallback chain
+        treats like a failed adapter call (#281).
+        """
+        if self.defn.prompt_type in ("boolean", "number"):
+            meta["answer"] = res.text
+        decoded_value = self._decode_output(res.text)
+        if self.defn.schema and self.defn.prompt_type in ("json", "object", "array"):
+            self._validate_schema(decoded_value, raw_response_text=res.text)
+        return decoded_value
 
     def _resolve_adapter(self, adapter_name: str) -> Adapter:
         default_name = getattr(self.adapter, "name", "")
@@ -1137,7 +1355,7 @@ class PromptRuntime:
             label = _adapter_target(adapter, last["model"])
         except Exception:
             label = f"{last['adapter']} · {last['model']}"
-        if last.get("status") == "failed":
+        if last.get("status") != "succeeded":
             label += " ✗"
         parts.append(label)
         return " → ".join(parts)

@@ -2,8 +2,8 @@
 OpenAI-compatible inference server. No auth by default.
 
 LM Studio's server runs on ``http://localhost:1234/v1`` by default;
-override via ``runtime.adapters.lmstudio.base_url`` (or
-``LMSTUDIO_BASE_URL``) for non-default ports.
+override via ``runtime.adapters.lmstudio.base_url`` in config.json for
+non-default ports.
 """
 
 from __future__ import annotations

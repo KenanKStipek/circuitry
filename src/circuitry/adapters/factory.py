@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -56,10 +57,20 @@ def _build_anthropic(cfg: dict[str, Any]) -> Adapter:
 
 
 def _build_litellm(cfg: dict[str, Any]) -> Adapter:
+    # `timeout_seconds` is the one spelling every other adapter's config
+    # uses; `timeout` is accepted as a deprecated alias so an existing
+    # config keeps working, with a warning pointing at the current key.
+    timeout_raw = cfg.get("timeout_seconds")
+    if timeout_raw is None and cfg.get("timeout") is not None:
+        timeout_raw = cfg.get("timeout")
+        logging.getLogger(__name__).warning(
+            "runtime.adapters.litellm.timeout is deprecated; use "
+            "runtime.adapters.litellm.timeout_seconds instead."
+        )
     return LiteLLMAdapter(
         default_model=cfg.get("default_model") or "openai/gpt-4o-mini",
         api_base=cfg.get("api_base") or "",
-        timeout=int(cfg.get("timeout") or 120),
+        timeout=int(timeout_raw or 120),
     )
 
 

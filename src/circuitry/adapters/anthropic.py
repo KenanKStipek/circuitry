@@ -8,6 +8,7 @@ from typing import Any, ClassVar
 
 from ..preflight import CheckResult
 from ._curl_errors import curl_failure_message
+from ._retry import AdapterCallError, classify_curl_exit
 from .base import GenerateOptions, GenerateResult, ImageInput, last_user_index
 
 
@@ -124,9 +125,7 @@ class AnthropicAdapter:
         if not api_key:
             raise RuntimeError(
                 "Anthropic API key not found. Set ANTHROPIC_API_KEY in the environment "
-                "(recommended: ~/.config/circuitry/.env), or set "
-                "`runtime.adapters.anthropic.api_key` in your config. "
-                "Run `cof doctor` to verify."
+                "(recommended: ~/.config/circuitry/.env). Run `cof doctor` to verify."
             )
 
         url = f"{self.base_url.rstrip('/')}/v1/messages"
@@ -170,7 +169,7 @@ class AnthropicAdapter:
             raise RuntimeError("curl is not installed or not on PATH") from e
 
         if proc.returncode != 0:
-            raise RuntimeError(
+            raise AdapterCallError(
                 curl_failure_message(
                     adapter="anthropic",
                     model=model,
@@ -179,7 +178,8 @@ class AnthropicAdapter:
                     stdout=proc.stdout,
                     stderr=proc.stderr,
                     secrets=[api_key],
-                )
+                ),
+                retry_info=classify_curl_exit(proc.returncode, proc.stderr),
             )
 
         try:

@@ -102,7 +102,7 @@ def test_litellm_config_passthrough() -> None:
             "litellm": {
                 "default_model": "anthropic/claude-3-haiku",
                 "api_base": "https://proxy.example.com",
-                "timeout": 60,
+                "timeout_seconds": 60,
             }
         }
     }
@@ -111,6 +111,29 @@ def test_litellm_config_passthrough() -> None:
     assert adapter.default_model == "anthropic/claude-3-haiku"
     assert adapter.api_base == "https://proxy.example.com"
     assert adapter.timeout == 60
+
+
+def test_litellm_deprecated_timeout_key_still_works_and_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Issue #263: ``runtime.adapters.litellm.timeout`` never took effect
+    (the caller always passed an explicit ``timeout_seconds`` to
+    ``generate()``, so ``timeout_seconds or self.timeout`` never fell
+    through); it is now a deprecated, working alias for ``timeout_seconds``.
+    """
+    runtime = {"adapters": {"litellm": {"timeout": 45}}}
+    with caplog.at_level("WARNING"):
+        adapter = build_adapter(adapter_name="litellm", runtime=runtime)
+    assert isinstance(adapter, LiteLLMAdapter)
+    assert adapter.timeout == 45
+    assert any("deprecated" in record.message for record in caplog.records)
+
+
+def test_litellm_timeout_seconds_wins_over_deprecated_timeout() -> None:
+    runtime = {"adapters": {"litellm": {"timeout_seconds": 90, "timeout": 45}}}
+    adapter = build_adapter(adapter_name="litellm", runtime=runtime)
+    assert isinstance(adapter, LiteLLMAdapter)
+    assert adapter.timeout == 90
 
 
 # ---------------------------------------------------------------------------

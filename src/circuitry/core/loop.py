@@ -170,7 +170,11 @@ class LoopRuntime:
         # Raw reply from the last `mode: model` while-condition evaluation,
         # success or failure — set inside _evaluate_model and read back in
         # execute() to record meta["answer"] alongside the parsed result.
+        # Token counts ride the same path: this call bypasses PromptRuntime
+        # entirely, so nowhere else ever sees what it spent.
         self._model_answer: str | None = None
+        self._model_tokens_sent: int | None = None
+        self._model_tokens_received: int | None = None
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         # Named loop: create a node for this loop
@@ -514,11 +518,15 @@ class LoopRuntime:
                                 meta["answer"] = self._model_answer
                                 meta["adapter"] = getattr(self.adapter, "name", "unknown")
                                 meta["model"] = self.model
+                                meta["tokens_sent"] = self._model_tokens_sent
+                                meta["tokens_received"] = self._model_tokens_received
                         except Exception as exc:
                             if meta and self.defn.while_def.mode == "model":
                                 meta["answer"] = self._model_answer
                                 meta["adapter"] = getattr(self.adapter, "name", "unknown")
                                 meta["model"] = self.model
+                                meta["tokens_sent"] = self._model_tokens_sent
+                                meta["tokens_received"] = self._model_tokens_received
                             if self.defn.on_error == "fail":
                                 termination_reason = "error"
                                 raise
@@ -759,6 +767,8 @@ class LoopRuntime:
     def _evaluate_model(self, *, ctx: dict[str, Any]) -> bool:
         """Cybernetic evaluation: invoke model with rendered template."""
         self._model_answer = None
+        self._model_tokens_sent = None
+        self._model_tokens_received = None
         if self.dry_run:
             return False  # Stop loop in dry run after first iteration
 
@@ -781,6 +791,8 @@ Should the loop continue? Answer (yes/no):"""
             timeout_seconds=self.timeout_seconds,
         )
         self._model_answer = res.text
+        self._model_tokens_sent = res.tokens_sent
+        self._model_tokens_received = res.tokens_received
 
         # Parse response as a lenient yes/no; raises on an answer that
         # doesn't unambiguously read as one (see core.answers).

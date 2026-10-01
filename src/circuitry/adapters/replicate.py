@@ -28,6 +28,7 @@ from dataclasses import dataclass
 
 from ..preflight import CheckResult
 from ._curl_errors import curl_failure_message
+from ._retry import AdapterCallError, classify_curl_exit
 from .base import GenerateOptions, GenerateResult, ignored_options_warning
 
 
@@ -86,7 +87,7 @@ class ReplicateAdapter:
             raise RuntimeError("curl is not installed or not on PATH") from exc
 
         if proc.returncode != 0:
-            raise RuntimeError(
+            raise AdapterCallError(
                 curl_failure_message(
                     adapter="replicate",
                     model=target_model,
@@ -95,7 +96,8 @@ class ReplicateAdapter:
                     stdout=proc.stdout,
                     stderr=proc.stderr,
                     secrets=[api_token],
-                )
+                ),
+                retry_info=classify_curl_exit(proc.returncode, proc.stderr),
             )
         try:
             raw = json.loads(proc.stdout)

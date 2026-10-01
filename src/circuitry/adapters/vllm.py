@@ -3,8 +3,8 @@ self-hosted inference server with OpenAI-compatible chat completions.
 
 No authentication by default. The caller specifies the model name
 (matches whatever vLLM was launched with). Override ``base_url`` via
-``runtime.adapters.vllm.base_url`` (or ``VLLM_BASE_URL`` env var, read
-by the factory) to point at the deployed instance.
+``runtime.adapters.vllm.base_url`` in config.json to point at the deployed
+instance.
 """
 
 from __future__ import annotations

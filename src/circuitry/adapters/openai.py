@@ -9,6 +9,7 @@ from typing import Any, ClassVar
 from ..preflight import CheckResult
 from ._curl_errors import curl_failure_message
 from ._openai_compat import chat_messages, parse_chat_response, sampling_fields
+from ._retry import AdapterCallError, classify_curl_exit
 from .base import DETERMINISTIC_SEED, GenerateOptions, GenerateResult
 
 
@@ -47,9 +48,7 @@ class OpenAIAdapter:
         if not api_key:
             raise RuntimeError(
                 "OpenAI API key not found. Set OPENAI_API_KEY in the environment "
-                "(recommended: ~/.config/circuitry/.env), or set "
-                "`runtime.adapters.openai.api_key` in your config. "
-                "Run `cof doctor` to verify."
+                "(recommended: ~/.config/circuitry/.env). Run `cof doctor` to verify."
             )
 
         url = f"{self.base_url.rstrip('/')}/chat/completions"
@@ -93,7 +92,7 @@ class OpenAIAdapter:
             raise RuntimeError("curl is not installed or not on PATH") from e
 
         if proc.returncode != 0:
-            raise RuntimeError(
+            raise AdapterCallError(
                 curl_failure_message(
                     adapter="openai",
                     model=model,
@@ -102,7 +101,8 @@ class OpenAIAdapter:
                     stdout=proc.stdout,
                     stderr=proc.stderr,
                     secrets=[api_key],
-                )
+                ),
+                retry_info=classify_curl_exit(proc.returncode, proc.stderr),
             )
 
         try:

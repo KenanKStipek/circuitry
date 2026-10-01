@@ -32,6 +32,7 @@ from typing import Any
 
 from ..preflight import CheckResult
 from ._curl_errors import curl_failure_message
+from ._retry import AdapterCallError, classify_curl_exit
 from .base import GenerateOptions, GenerateResult, ignored_options_warning
 
 # Module-level token cache: api_key -> (token, expires_at_epoch_seconds).
@@ -166,7 +167,7 @@ class WatsonXAdapter:
             raise RuntimeError("curl is not installed or not on PATH") from exc
 
         if proc.returncode != 0:
-            raise RuntimeError(
+            raise AdapterCallError(
                 curl_failure_message(
                     adapter="watsonx",
                     model=target_model,
@@ -175,7 +176,8 @@ class WatsonXAdapter:
                     stdout=proc.stdout,
                     stderr=proc.stderr,
                     secrets=[api_key, token],
-                )
+                ),
+                retry_info=classify_curl_exit(proc.returncode, proc.stderr),
             )
 
         try:
