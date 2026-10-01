@@ -550,6 +550,26 @@ A reflector is the effect most worth switching off for a single run: a profile
 with `effects.goal.enabled: false` turns agentic planning off while leaving the
 rest of the orchestration intact — see [Disabling Effects](#disabling-effects).
 
+**The `{goal}` and `{context}` prime slots.** The built-in prime (and any custom
+`prime_template` that keeps these placeholders) is rendered with two values
+read from the run's root state, not from the reflector's own node:
+
+- `{goal}` — the value of a top-level effect named `goal` (commonly a
+  `prompt`), i.e. `prime.goal.value` at the run root. Empty when the
+  orchestration has no such effect, or it hasn't produced a value yet.
+- `{context}` — a concise, redacted summary of `runtime.effective_settings`:
+  the run's `model`, `adapter`, and enabled `plugins`, as JSON. It is passed
+  through the same redaction `runtime.effective_settings` itself gets before
+  being embedded in state, and capped at 2000 characters, so it stays a
+  planning hint rather than a full settings dump and never carries a secret.
+  Empty when `runtime.effective_settings` hasn't been recorded yet.
+
+Both are best-effort: a reflector nested under a loop, dynamic, or
+conditional still reads the run's true root, not its immediate container —
+including a reflector that is a branch of a `flow: tree` dynamic or a
+parallel loop, where the branch's own state is otherwise isolated from the
+rest of the run.
+
 ---
 
 ### `tool`

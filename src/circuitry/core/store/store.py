@@ -70,11 +70,29 @@ class Store:
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     #: The top-level state dict this store is a view into; None for a root.
     _root_state: dict[str, Any] | None = field(default=None, repr=False)
+    #: The true run-root state dict, preserved through the isolation a
+    #: parallel/tree branch applies to ``root_state``. None means this
+    #: store's own ``root_state`` already is the true root.
+    _true_root: dict[str, Any] | None = field(default=None, repr=False)
 
     @property
     def root_state(self) -> dict[str, Any]:
         """The whole-run state dict — this store's own state if it is a root."""
         return self.state if self._root_state is None else self._root_state
+
+    @property
+    def true_root_state(self) -> dict[str, Any]:
+        """The whole-run state dict, even inside an isolated parallel/tree branch.
+
+        ``root_state`` is deliberately reset to a branch's own isolated
+        snapshot by :meth:`parallel_branches`, so each branch's ``on_write``
+        publishes its own data rather than the whole run. This reference
+        survives that isolation, so code that needs the actual run root
+        regardless of nesting — e.g. a reflector reading a top-level
+        ``goal`` effect — can still reach it from inside a ``flow: tree``
+        dynamic or a parallel loop branch.
+        """
+        return self.root_state if self._true_root is None else self._true_root
 
     def get(self, path: str, default: Any = None) -> Any:
         cur: Any = self.state
@@ -128,6 +146,7 @@ class Store:
             _path_prefix=new_prefix,
             _lock=self._lock,
             _root_state=self.root_state,
+            _true_root=self.true_root_state,
         )
 
     def parallel_branches(self, count: int) -> list[Store]:
@@ -147,6 +166,11 @@ class Store:
         branch's latest snapshot laid over this node. A branch hands over a
         deep copy taken on its own thread — the only thread that writes it —
         so a snapshot never shares a dict another branch is still mutating.
+
+        A branch's own ``root_state`` is reset to its isolated snapshot (so
+        the ``on_write`` above publishes the right thing), but it still
+        carries ``true_root_state`` through to the real run root, unaffected
+        by the isolation.
         """
         latest: list[dict[str, Any] | None] = [None] * count
         on_write = self.on_write
@@ -177,6 +201,7 @@ class Store:
                 ),
                 effect_start=_prefixed_effect_cb(self.effect_start, self._path_prefix),
                 _lock=self._lock,
+                _true_root=self.true_root_state,
             )
             for index in range(count)
         ]
