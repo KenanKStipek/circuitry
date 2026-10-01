@@ -559,7 +559,7 @@ def test_invalid_first_draft_is_revised_not_surfaced() -> None:
     repairs = adapter.prompts_matching(REPAIR_MARKER)
     assert len(repairs) == 1
     assert "1_bad_name" in repairs[0]
-    assert "$.effects[0].name" in repairs[0]
+    assert "effects[0].name: " in repairs[0]
 
 
 def test_revision_loop_is_bounded_and_refuses_to_finish() -> None:

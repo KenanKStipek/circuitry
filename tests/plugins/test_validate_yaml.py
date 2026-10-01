@@ -103,8 +103,34 @@ def test_schema_errors_carry_a_json_path_and_the_underlying_cause() -> None:
     verdict = _verdict(yaml="effects:\n  - type: prompt\n    name: no_body\n")
     assert verdict["ok"] is False
     (error,) = verdict["errors"]
-    assert error.startswith("$.effects[0]")
+    assert error.startswith("effects[0]")
     assert "'template' is a required property" in error
+
+
+def test_duplicate_keys_are_rejected_with_their_line() -> None:
+    """The runtime refuses a repeated key, so the draft must fail here too —
+    otherwise a repair loop stops on a document ``use: inline`` rejects."""
+    verdict = _verdict(
+        yaml='effects:\n  - type: prompt\n    name: a\n    template: "x"\n    template: "y"\n'
+    )
+    assert verdict["ok"] is False
+    (error,) = verdict["errors"]
+    assert "duplicate key 'template' at line 5" in error
+
+
+def test_near_miss_keys_are_rejected_as_cof_check_rejects_them() -> None:
+    verdict = _verdict(
+        yaml=(
+            "effects:\n"
+            "  - type: loop\n    name: l\n    while: \"true\"\n    max_iteration: 3\n"
+            '    body:\n      - type: prompt\n        name: p\n        template: "x"\n'
+        )
+    )
+    assert verdict["ok"] is False
+    assert any(
+        "'max_iteration'" in error and "did you mean 'max_iterations'" in error
+        for error in verdict["errors"]
+    )
 
 
 def test_reserved_iteration_names_are_rejected() -> None:

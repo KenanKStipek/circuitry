@@ -333,6 +333,17 @@ class PromptRuntime:
             meta["completed_at"] = _now_iso()
             node["value"] = None
             store.fire_effect_start(self.defn.name, node)
+            if self.verbose:
+                if self.cb_start is not None:
+                    self.cb_start()
+                line = (
+                    f"{'  ' * self.depth}[err]✗[/err] [cyan]◆[/cyan] {self.display_name}"
+                    " [dim]template did not render[/dim]"
+                )
+                if self.cb_error is not None:
+                    self.cb_error(line)
+                else:
+                    _console.print(line)
             store.fire_effect_complete(self.defn.name, node)
             if self.defn.on_error == "fail":
                 raise

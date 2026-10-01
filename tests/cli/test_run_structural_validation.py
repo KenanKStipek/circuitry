@@ -39,7 +39,7 @@ class StubAdapter:
         raise AssertionError("no prompt effect should run")
 
 
-def _run(path: Path) -> RunResult:
+def _run(path: Path, config: CircuitryConfig | None = None) -> RunResult:
     return run(
         RunRequest(
             orchestration_path=path,
@@ -47,7 +47,7 @@ def _run(path: Path) -> RunResult:
             out_path=None,
             dry_run=False,
             validate_only=False,
-            config=CircuitryConfig(),
+            config=config or CircuitryConfig(),
             skip_preflight=True,
             adapter=StubAdapter(),
         )
@@ -148,3 +148,31 @@ def test_path_child_with_duplicate_key_fails_to_load(tmp_path: Path) -> None:
     assert result.ok is True, result.error
     error = result.state["prime"]["child"]["meta"]["error"]
     assert "child.yml: duplicate key 'name' at line 6" in error
+
+
+def test_ref_child_is_schema_validated_when_loaded(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "local" / "helpers" / "child.yml",
+        "effects:\n" + FIRST_EFFECT + "    timeout_ms: -1\n",
+    )
+    parent = _write(
+        tmp_path / "parent.yml",
+        "effects:\n"
+        "  - type: use\n"
+        "    name: child\n"
+        "    ref: local:helpers/child\n"
+        "    on_error: continue\n",
+    )
+    config = CircuitryConfig(
+        runtime={
+            "library": {
+                "sources": [{"type": "folder", "name": "local", "path": str(tmp_path / "local")}]
+            }
+        }
+    )
+    result = _run(parent, config)
+    assert result.ok is True, result.error
+    meta = result.state["prime"]["child"]["meta"]
+    assert "child.yml validation failed" in meta["error"]
+    assert "effects[0].timeout_ms: -1 is less than the minimum of 0" in meta["error"]
+    assert "first" not in result.state["prime"]["child"]

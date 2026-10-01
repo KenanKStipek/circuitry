@@ -20,6 +20,7 @@ from circuitry.cli.runtime_shim import validate
 from circuitry.core import compiler
 from circuitry.core.compiler import compile_orchestration
 from circuitry.core.dynamic import DynamicRuntime
+from circuitry.core.prompt import PromptRuntime
 from circuitry.core.store import Store
 from circuitry.core.templates import (
     TemplateError,
@@ -211,3 +212,61 @@ def test_while_model_template_that_fails_to_render_raises() -> None:
             adapter,
         )
     assert adapter.prompts == []
+
+
+@pytest.mark.usefixtures("unchecked_templates")
+def test_prompt_that_fails_to_render_still_reports_its_failure_line() -> None:
+    lines: list[str] = []
+    PromptRuntime(
+        compile_orchestration(
+            orch={"effects": [{"type": "prompt", "name": "p", "template": BROKEN, "on_error": "skip"}]}
+        ).effects[0],
+        adapter=RecordingAdapter(),
+        model="m",
+        verbose=True,
+        cb_error=lines.append,
+    ).execute(store=Store({}), ctx={})
+    (line,) = lines
+    assert "✗" in line and " p " in line
+
+
+@pytest.mark.usefixtures("unchecked_templates")
+def test_tool_prompt_that_fails_to_render_honours_on_error_continue() -> None:
+    store = _run(
+        {"effects": [{**_tool(mode="stringify", input="1"), "prompt": BROKEN, "on_error": "continue"}]}
+    )
+    assert store.get("prime.t.value") is None
+    assert "prompt: malformed Mustache template" in store.get("prime.t.meta.error")
+
+
+CHILD_INLINE = "effects: [{type: tool, name: c, provider: json, params: {input: '1'}}]"
+
+
+@pytest.mark.usefixtures("unchecked_templates")
+def test_use_input_that_fails_to_render_honours_on_error_continue() -> None:
+    store = _run(
+        {
+            "effects": [
+                {
+                    "type": "use",
+                    "name": "u",
+                    "inline": CHILD_INLINE,
+                    "inputs": {"topic": BROKEN},
+                    "on_error": "continue",
+                },
+                {**_tool(mode="stringify", input="after"), "name": "after"},
+            ]
+        }
+    )
+    assert "inputs.topic: malformed Mustache template" in store.get("prime.u.meta.error")
+    assert store.get("prime.u.c") is None
+    assert store.get("prime.after.value") == '"after"'
+
+
+@pytest.mark.usefixtures("unchecked_templates")
+def test_use_inline_that_fails_to_render_honours_on_error_skip() -> None:
+    store = _run(
+        {"effects": [{"type": "use", "name": "u", "inline": CHILD_INLINE + BROKEN, "on_error": "skip"}]}
+    )
+    assert store.get("prime.u.value") is None
+    assert "inline: malformed Mustache template" in store.get("prime.u.meta.error")

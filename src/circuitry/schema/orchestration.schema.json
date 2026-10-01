@@ -515,7 +515,7 @@
         },
         "validate": {
           "type": "boolean",
-          "description": "Validate inline YAML against the orchestration schema before execution. Default true. Set false to skip validation for LLM-generated YAML that may use loose formatting.",
+          "description": "Check the child (inline, path or ref) the way cof check checks a file (schema, near-miss keys) before it runs. Default true. Set false to skip that, e.g. for LLM-generated YAML that may use loose formatting; a repeated key is still an error.",
           "default": true
         },
         "inputs": {

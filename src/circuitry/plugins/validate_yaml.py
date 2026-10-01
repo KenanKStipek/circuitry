@@ -1,4 +1,4 @@
-"""Validate Circuitry orchestration YAML — schema + compiler, no LLM.
+"""Validate Circuitry orchestration YAML — structural checks + compiler, no LLM.
 
 This is the deterministic half of any orchestration that *writes*
 orchestrations (see ``curation/agents/wizard.yml``): a model drafts YAML,
@@ -14,8 +14,10 @@ Params:
     arrives fenced often enough that the default is lenient; set ``false``
     to hold the model to a strictly fence-free contract.
   - ``compile`` (optional, bool, default ``True``): run the compiler after the
-    JSON Schema pass to surface semantic errors the schema cannot express
-    (duplicate sibling names, reserved ``iter_N`` names, unknown effect types).
+    structural pass (repeated keys, near-miss unknown keys, JSON Schema — the
+    checks ``cof check`` runs) to surface semantic errors the schema cannot
+    express (duplicate sibling names, reserved ``iter_N`` names, unknown
+    effect types).
   - ``max_errors`` (optional, int, default ``20``): cap on reported errors.
     Schema violations cascade through the ``EffectDef`` if/then chain, and an
     uncapped list can swamp the revision prompt it is meant to inform.
@@ -31,12 +33,11 @@ without having to re-derive it.
 
 from __future__ import annotations
 
-import importlib.resources
-import json
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
+from ..core.document_check import structural_errors
+from ..core.yaml_load import load_yaml
 from ..preflight import CheckResult
 from .base import ToolResult
 
@@ -53,43 +54,15 @@ def _as_bool(value: Any, *, default: bool) -> bool:
     return bool(value)
 
 
-def _load_schema() -> dict[str, Any]:
-    ref = (
-        importlib.resources.files("circuitry")
-        / "schema"
-        / "orchestration.schema.json"
-    )
-    return json.loads(Path(str(ref)).read_text(encoding="utf-8"))
-
-
-def _describe(err: Any) -> str:
-    """Render one schema error as ``<json path>: <message>``.
-
-    ``EffectDef`` discriminates on ``type`` through nested if/then and
-    ``PromptEffect`` requires ``template`` or ``messages`` via ``oneOf``, so the
-    top-level message is often the useless "is not valid under any of the given
-    schemas". The deepest sub-error carries the actionable detail — append it.
-    """
-    import jsonschema  # type: ignore[import-untyped]
-
-    message = err.message
-    if err.context:
-        sub = jsonschema.exceptions.best_match(err.context)
-        if sub is not None and sub.message != err.message:
-            message = f"{message} ({sub.message})"
-    return f"{err.json_path}: {message}"
-
-
 def _validate_document(document: str, *, run_compile: bool) -> list[str]:
     """Return human-readable errors for *document*. Empty list means valid."""
-    import jsonschema  # type: ignore[import-untyped]
     import yaml as _yaml
 
     if not document.strip():
         return ["Empty document — expected a Circuitry orchestration YAML."]
 
     try:
-        parsed = _yaml.safe_load(document)
+        parsed = load_yaml(document)
     except _yaml.YAMLError as exc:
         return [f"YAML parse error: {exc}"]
 
@@ -103,10 +76,9 @@ def _validate_document(document: str, *, run_compile: bool) -> list[str]:
     if "effects" not in parsed:
         return ["Orchestration is missing the required top-level 'effects' key."]
 
-    validator = jsonschema.Draft7Validator(_load_schema())
-    errors = [
-        _describe(err) for err in sorted(validator.iter_errors(parsed), key=str)
-    ]
+    # The same gate ``cof check``, ``cof run`` and ``use: inline`` apply, so a
+    # draft this tool passes is one the runtime will load.
+    errors = structural_errors(parsed)
     if errors:
         return errors
 

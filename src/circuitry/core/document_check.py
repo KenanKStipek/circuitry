@@ -49,9 +49,9 @@ _EFFECT_DEFS = {
 #: ``steps``/``strategy`` spellings of ``effects``/``flow``.
 _LEGACY_CONTAINER_KEYS = frozenset({"steps", "strategy"})
 
-#: Top-level keys the runtime reads besides the schema's own properties —
-#: ``description`` is read by library listings, ``runtime``/``plugins`` feed
-#: the run's configuration (see the reference's File Structure section).
+#: Top-level keys a document may carry besides the schema's own properties —
+#: ``description`` is free text, ``runtime``/``plugins`` feed the run's
+#: configuration (see the reference's File Structure section).
 _EXTRA_TOP_LEVEL_KEYS = frozenset({"description", "runtime", "plugins"}) | _LEGACY_CONTAINER_KEYS
 
 #: Keys that are not misspellings but are still a mistake for a known one.

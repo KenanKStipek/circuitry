@@ -94,7 +94,8 @@ interpret → decide: ask or draft → [draft branch] validate → revise (≤3)
 3. **Question branch** — emits the question. Its schema pins `yaml` to `null`
    and `done` to `false`, so a question turn cannot end the session.
 4. **Draft branch** — emits `{say, yaml, done}`, then validates the YAML with the
-   `validate_yaml` tool (YAML parse → JSON Schema → compiler).
+   `validate_yaml` tool (YAML parse → the structural checks `cof check` runs →
+   compiler).
 5. **Revision loop** — while the draft is invalid, feed the errors and the exact
    rejected document back for repair and re-validate. Bounded at 3 passes. The
    human never sees the rejected drafts.
