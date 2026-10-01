@@ -479,11 +479,18 @@ def resolve_config(
     sources: list[ConfigSource] = []
     project_config: ProjectConfigStatus | None = None
 
-    if explicit_path:
-        # Explicit path skips global/project discovery — use only that file
-        file_config = _load_json_file(explicit_path)
+    env = os.getenv("CIRCUITRY_CONFIG") if not explicit_path else None
+
+    if explicit_path or env:
+        # An explicit file — --config or CIRCUITRY_CONFIG — skips global/
+        # project discovery entirely and replaces them, same as
+        # find_config_path's own resolution order; it does not layer on top
+        # of the global config (#269 item 13 follow-up).
+        local_path = explicit_path or Path(env)  # type: ignore[arg-type]
+        local_kind: ConfigSourceKind = "--config" if explicit_path else "CIRCUITRY_CONFIG"
+        file_config = _load_json_file(local_path)
         merged = _deep_merge(merged, file_config)
-        sources.append(ConfigSource("--config", str(explicit_path)))
+        sources.append(ConfigSource(local_kind, str(local_path)))
     else:
         # Layer global config
         global_config: dict[str, Any] = {}
@@ -495,44 +502,33 @@ def resolve_config(
             except (json.JSONDecodeError, ValueError, OSError) as exc:
                 logger.warning("Skipping malformed global config %s: %s", GLOBAL_CONFIG_PATH, exc)
 
-        # Layer project-local config
-        env = os.getenv("CIRCUITRY_CONFIG")
-        local_kind: ConfigSourceKind
-        discovered = not env
-        if env:
-            local_path: Path | None = Path(env)
-            local_kind = "CIRCUITRY_CONFIG"
-        else:
-            local_path = discover_project_config(cwd)
-            local_kind = "project"
+        # Layer project-local config (discovered, not named by --config/
+        # CIRCUITRY_CONFIG — those are handled above, before global layers)
+        discovered_path = discover_project_config(cwd)
 
-        if local_path and local_path.exists():
+        if discovered_path and discovered_path.exists():
             try:
-                data = read_config_bytes(local_path)
-                note: str | None = None
-                applied = True
-                if discovered:
-                    project_config = ProjectConfigStatus(
-                        local_path,
-                        check_trust(local_path, data, store_path=trust_store_path()),
-                    )
-                    applied = project_config.applied
-                    note = TRUST_STATE_LABELS[project_config.trust]
+                data = read_config_bytes(discovered_path)
+                project_config = ProjectConfigStatus(
+                    discovered_path,
+                    check_trust(discovered_path, data, store_path=trust_store_path()),
+                )
+                applied = project_config.applied
+                note = TRUST_STATE_LABELS[project_config.trust]
                 if applied:
-                    local_config = parse_config_bytes(local_path, data)
+                    local_config = parse_config_bytes(discovered_path, data)
                     merged = _deep_merge(merged, local_config)
-                    if local_kind == "project":
-                        merged = _narrow_allowlists(
-                            merged,
-                            global_config=global_config,
-                            project_config=local_config,
-                            project_path=local_path,
-                        )
+                    merged = _narrow_allowlists(
+                        merged,
+                        global_config=global_config,
+                        project_config=local_config,
+                        project_path=discovered_path,
+                    )
                 # Listed even when skipped: a discovered-but-untrusted file
                 # explains its own absence on the `Config:` line.
-                sources.append(ConfigSource(local_kind, str(local_path), note))
+                sources.append(ConfigSource("project", str(discovered_path), note))
             except (json.JSONDecodeError, ValueError, OSError) as exc:
-                logger.warning("Skipping malformed project config %s: %s", local_path, exc)
+                logger.warning("Skipping malformed project config %s: %s", discovered_path, exc)
 
     # Environment variables always overlay on top
     merged = _apply_env_vars(merged)

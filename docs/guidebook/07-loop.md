@@ -73,7 +73,7 @@ The fix is upstream: `prompt_type: array` with a schema, so the producing prompt
 
 With `truncate: true` the loop diagnoses the first eight failing tests and records why it stopped: termination reason `max_iterations_reached`, plus `termination.unvisited`, the count of tests it never reached. A shorter list is not truncated; the list can end before the cap.
 
-**In parallel.** An `each` loop is a chain by default. `flow: tree` runs every pass concurrently — the loop's *iterations* fan out, while the steps inside one pass still run in order — and `max_concurrency` bounds the pool. Results are assembled in the original order whatever order they finished in:
+**In parallel.** An `each` loop is a chain by default. `flow: tree` runs every pass concurrently — the loop's *iterations* fan out, while the steps inside one pass still run in order — and `max_concurrency` bounds the pool. Left unset, it falls back to `ThreadPoolExecutor`'s own `min(32, cpu_count + 4)` — not "every iteration at once": `each.in` has no default bound on collection size, unlike a `dynamic` tree's fixed, author-declared effect list, so an unset pool size here is deliberately capped. Results are assembled in the original order whatever order they finished in:
 
 ```yaml
 - type: loop

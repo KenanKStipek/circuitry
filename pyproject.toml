@@ -41,7 +41,11 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "typer[all]>=0.12",
+    # `rich`/`shellingham` are typer's own direct dependencies as of the
+    # versions we support; the `[all]` extra that used to pull them in was
+    # dropped upstream and raises a "typer[all] does not provide extra
+    # 'all'" warning on every install.
+    "typer>=0.12",
     "rich>=13.7",
     "pyyaml>=6.0",
     "jsonschema>=4.0",
