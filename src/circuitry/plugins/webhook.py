@@ -25,7 +25,8 @@ Params:
 Returns ``value`` = parsed JSON body if Content-Type is JSON, else text.
 ``exit_code`` is always ``None`` — this plugin issues no process; the HTTP
 status lands on ``meta.status_code`` (from ``raw["status"]``). ``stderr``
-carries the reason on non-2xx.
+carries the status and, when available, a bounded redacted excerpt of the
+response body on non-2xx.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult, _as_bool
+from .base import ToolResult, _as_bool, http_error_excerpt
 
 
 @dataclass(frozen=True)
@@ -118,11 +119,10 @@ class WebhookPlugin:
         else:
             value = last_text
 
-        stderr = (
-            None
-            if 200 <= last_status < 300
-            else f"HTTP {last_status}"
-        )
+        stderr = None
+        if not (200 <= last_status < 300):
+            excerpt = http_error_excerpt(last_text)
+            stderr = f"HTTP {last_status}: {excerpt}" if excerpt else f"HTTP {last_status}"
         return ToolResult(
             value=value,
             raw={

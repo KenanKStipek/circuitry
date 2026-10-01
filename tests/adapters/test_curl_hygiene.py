@@ -9,6 +9,7 @@ adapters (replicate, watsonx, azure, comfyui) have their own coverage in
 
 from __future__ import annotations
 
+import http.server
 import json
 import shutil
 import subprocess
@@ -24,9 +25,11 @@ from curl_test_support import (
     read_config_headers,
 )
 
+from circuitry.adapters._retry import AdapterCallError
 from circuitry.adapters.anthropic import AnthropicAdapter
 from circuitry.adapters.ollama import OllamaAdapter
 from circuitry.adapters.openai import OpenAIAdapter
+from circuitry.curl_support import _curl_supports_retry_after_header
 
 
 @dataclass(frozen=True)
@@ -209,3 +212,36 @@ def test_openai_end_to_end_against_local_server(monkeypatch: pytest.MonkeyPatch)
     for cmd in calls:
         assert_q_first(cmd)
         assert_not_in_argv(cmd, secret, canary_prompt[:200])
+
+
+class _RetryAfter429Handler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", 0))
+        self.rfile.read(length)
+        self.send_response(429)
+        self.send_header("Retry-After", "2")
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, *args: Any) -> None:  # quiet test output
+        pass
+
+
+@pytest.mark.skipif(
+    shutil.which("curl") is None or not _curl_supports_retry_after_header(),
+    reason="curl not on PATH or too old for %header{retry-after}",
+)
+def test_ollama_429_retry_after_reaches_adapter_call_error() -> None:
+    """Regression for #319: a curl-based adapter's `Retry-After` must reach
+    `AdapterCallError.retry_info.retry_after`, end to end through real curl
+    against a local server (never a live provider) — not just unit-tested
+    at the `classify_curl_exit`/`extract_retry_after` level."""
+    with local_server(_RetryAfter429Handler) as base_url:
+        with pytest.raises(AdapterCallError) as exc:
+            OllamaAdapter(base_url=base_url).generate(model="phi3", prompt="x")
+
+    assert exc.value.retry_info.retryable is True
+    assert exc.value.retry_info.status == 429
+    assert exc.value.retry_info.retry_after == "2"

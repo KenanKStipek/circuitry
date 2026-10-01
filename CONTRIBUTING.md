@@ -48,6 +48,14 @@ Integration tests (real model/persistence backends) are opt-in and skipped by de
 CIRCUITRY_RUN_INTEGRATION=1 CIRCUITRY_INTEGRATION_MODEL=smollm2:135m pytest -m integration tests/integration/
 ```
 
+This command stays bounded to local/offline-reachable backends (Ollama,
+SurrealDB, ...). It does **not** reach a live, metered third-party network,
+even if credentials for one happen to be set in your shell: the
+`cyberdiner`-adapter live tests (`tests/integration/test_cyberdiner_live.py`)
+need a third, distinct opt-in, `CIRCUITRY_LIVE_TESTS=1`, before they do
+anything but skip — see the module docstring for the full command. Mere
+credential presence is deliberately never enough (#266).
+
 ## Changelog fragments
 
 Do **not** edit `CHANGELOG.md`'s `## [Unreleased]` section. With several PRs in

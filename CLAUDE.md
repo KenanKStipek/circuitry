@@ -29,6 +29,16 @@ intentionally exercises config discovery tiers opts out with
 `@pytest.mark.real_config_discovery` and constructs its own layering
 explicitly.
 
+No test can reach a live, metered third-party API by accident. Ordinary
+integration tests (local/offline-reachable backends — Ollama, SurrealDB, a
+test Postgres, ...) stay gated behind `CIRCUITRY_RUN_INTEGRATION=1` plus
+`-m integration` as before. `tests/integration/test_cyberdiner_live.py`
+(the only tests that spend a real request against a live production service)
+need a further, distinct `CIRCUITRY_LIVE_TESTS=1` — credentials
+(`CYBERDINER_TOKEN`/`CYBERDINER_EXPO_URL`) being present in the environment
+is deliberately never enough on its own to run them (#266). Never set
+`CIRCUITRY_LIVE_TESTS` for a routine test run.
+
 ## Changelog — write a fragment, never edit `CHANGELOG.md`
 Every change ships its release note as a **new file**, `changelog.d/<issue-or-pr>.<type>.md`
 (`type` ∈ added / changed / deprecated / removed / fixed / security), containing

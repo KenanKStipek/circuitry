@@ -22,6 +22,11 @@ def test_postgres_persistence_rejects_insecure_sslmode_by_default() -> None:
     assert "Insecure postgres sslmode" in str(exc.value)
 
 
+def test_postgres_persistence_rejects_whitespace_only_table_name() -> None:
+    with pytest.raises(ValueError, match="non-empty string"):
+        PostgresStatePersistence.from_config({"dsn": "postgres://demo", "table": "   "})
+
+
 def test_postgres_persistence_rejects_invalid_table_name() -> None:
     with pytest.raises(ValueError):
         PostgresStatePersistence.from_config(

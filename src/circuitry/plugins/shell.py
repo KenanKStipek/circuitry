@@ -28,10 +28,13 @@ config; when set, the effective allowlist is the intersection of the pin
 and the effect's own list (or the default), so a *limited* document (a
 library, a ``use`` child, a generated plan, or one reached through REST/MCP)
 can only narrow the allowlist further, never widen it past the host's pin
-(see ``cli.effective_settings.ORCHESTRATION_RUNTIME_KEYS``). A *trusted*
-document keeps its whole ``runtime:`` block and can replace the pin outright
-— the pin does not constrain ``cof run ./f.yml`` or
-``trust_orchestration_runtime``.
+(see ``cli.effective_settings.ORCHESTRATION_RUNTIME_KEYS``). The pin is a
+ceiling even for a *trusted* document (``cof run ./f.yml`` or
+``trust_orchestration_runtime``): its own
+``runtime.plugins.shell.allowed_commands`` intersects with the host's pin
+rather than replacing it — the one ``runtime:`` leaf a trusted document
+cannot simply overwrite (see
+``cli.effective_settings._CEILING_LIST_KEYS``).
 
 AC C.5: a non-allowlisted command must be rejected before any side
 effect — the binary is never invoked when the command isn't allowed.

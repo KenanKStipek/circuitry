@@ -34,8 +34,9 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+from ..cli.redaction import redact
 from ..preflight import CheckResult
-from .base import ToolResult, _as_bool
+from .base import ToolResult, _as_bool, http_error_excerpt
 
 _LINEAR_ENDPOINT = "https://api.linear.app/graphql"
 
@@ -113,7 +114,8 @@ class LinearPlugin:
             raise RuntimeError(f"linear request failed: {exc}") from exc
 
         if resp.status_code >= 400:
-            error = f"linear HTTP {resp.status_code}: {resp.text[:500]}"
+            excerpt = http_error_excerpt(resp.text)
+            error = f"linear HTTP {resp.status_code}" + (f": {excerpt}" if excerpt else "")
             return ToolResult(
                 value=None,
                 raw={"mode": mode, "status": resp.status_code},
@@ -122,7 +124,8 @@ class LinearPlugin:
             )
         body = resp.json()
         if isinstance(body, dict) and body.get("errors"):
-            error = f"linear GraphQL errors: {body['errors']}"
+            redacted_errors = redact(body["errors"])
+            error = f"linear GraphQL errors: {redacted_errors}"[:500]
             return ToolResult(
                 value=None,
                 raw={"mode": mode, "status": resp.status_code, "errors": body["errors"]},

@@ -6,7 +6,6 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
-from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal, Union
@@ -226,8 +225,19 @@ class DynamicRuntime:
                             store.on_write(store.root_state)
             else:
                 # Tree semantics: all effects run concurrently against the same
-                # deterministic snapshot from dynamic start, not sibling writes.
-                tree_ctx = deepcopy(ctx)
+                # deterministic snapshot from dynamic start, not sibling
+                # writes. A shallow overlay (`dict(ctx)`), not a per-run
+                # deepcopy(ctx) — cheap regardless of how large the run
+                # state is (#318), for the same reason the tree each loop's
+                # overlay is safe (#268): every write lands in a branch's own
+                # isolated Store (below), never in ctx itself, and every
+                # value a branch reads out of ctx and hands to a tool/prompt
+                # is already a fresh copy by the time it leaves this process
+                # (template rendering stringifies it; params_json
+                # round-trips it through json.loads). See
+                # tests/core/test_dynamic_tree_shallow_overlay.py for the
+                # isolation this relies on.
+                tree_ctx = dict(ctx)
 
                 tree_errors: list[Exception] = []
 

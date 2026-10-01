@@ -34,7 +34,7 @@ Other top-level keys: `description` (free text for readers of the file) and two 
 - **`runtime:`** — `runtime.complexity` and `runtime.state` (e.g. `record_children`) always apply. Every other key — `adapters`, `plugins`, `persistence`, `library`, `mcp`, anything else — is a host setting.
 - **`plugins:`** — runtime-plugin modules to load. An entry config.json already lists in `plugins` or `enabled_plugins` always loads; any other is a host setting too.
 
-A file you run by path (`cof run ./my.yml`, `cof check` / `cof score` on a path, the SDK's `run_orchestration`) is trusted: its whole `runtime:` block and `plugins:` list apply, and `cof run` / `cof check` print one line naming the host settings among them (keys only, never values). A document that arrives any other way — a library name, `cof run-library`, MCP, the REST trigger, a generated plan — is limited to `runtime.complexity` and `runtime.state`; its host settings are ignored with a warning naming each key. `use:` children never contribute their own `runtime:` or `plugins:`.
+A file you run by path (`cof run ./my.yml`, `cof check` / `cof score` on a path, the SDK's `run_orchestration`) is trusted: its whole `runtime:` block and `plugins:` list apply, and `cof run` / `cof check` print one line naming the host settings among them (keys only, never values). `runtime.plugins.<name>` and `runtime.adapters.<name>` merge into the host's config key by key, not whole-block replace, except `runtime.plugins.shell.allowed_commands`: when the host pins it, the effective list is always the intersection of the host's and the document's, never the document's outright. A document that arrives any other way — a library name, `cof run-library`, MCP, the REST trigger, a generated plan — is limited to `runtime.complexity` and `runtime.state`; its host settings are ignored with a warning naming each key. `use:` children never contribute their own `runtime:` or `plugins:`.
 
 A host that only ever runs its own documents can trust every document with `trust_orchestration_runtime: true` in config.json (or `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME=1`).
 
@@ -563,8 +563,13 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
   status or a soft 0/1/2 flag.
 - **HTTP-family plugins** (`http`, `web_fetch`, `webhook`, `linear`) fail
   (`ok: false`) on a 4xx/5xx response by default, with the status recorded
-  on **`meta.status_code`**. Each has a `fail_on_error: false` param that
-  restores the old always-succeeds behaviour — the response still lands on
+  on **`meta.status_code`**. The failure message (`meta.error`, and
+  `meta.stderr`) includes a bounded, redacted excerpt of the response body
+  when one is available — the JSON `error`/`message`/`detail` field, or
+  the first ~500 characters otherwise — so a validation reason a provider
+  sent back is visible without having to read `meta.raw.body` separately.
+  Each has a `fail_on_error: false` param that restores the old
+  always-succeeds behaviour — the response still lands on
   `value`/`meta.status_code`, it just doesn't fail the effect.
 - **Soft-outcome plugins** (`wikipedia`, `dns`, `port_check`,
   `validate_yaml`) keep `ok: true` regardless of outcome and report it on

@@ -94,11 +94,13 @@ content) and never a list entry that is still a Mustache tag — both are a
 hard error rather than silently accepted. A host may additionally pin
 `runtime.plugins.shell.allowed_commands` in config; when set, the effective
 allowlist is that pin intersected with the effect's own list, so a *limited*
-document can only narrow it further, never widen it past the host's pin. A
-*trusted* document (see [§6](#6-host-settings-versus-orchestration-documents))
-keeps its whole `runtime:` block and can replace the pin outright — the pin
-only constrains documents that reach `cof` indirectly (library, `use` child,
-generated plan, REST, MCP).
+document can only narrow it further, never widen it past the host's pin. The
+pin is a ceiling even for a *trusted* document (see
+[Section 6](#6-host-settings-versus-orchestration-documents)): unlike every
+other `runtime.plugins`/`runtime.adapters` key, which a trusted document's
+own value overrides key by key, its `runtime.plugins.shell.allowed_commands`
+intersects with the host's pin rather than replacing it — the host's
+allowlist is the one thing no document, trusted or not, can widen.
 Implementation: [`src/circuitry/plugins/shell.py`](../src/circuitry/plugins/shell.py),
 [`src/circuitry/core/tool.py`](../src/circuitry/core/tool.py) (the
 `params_json`/templated rejection).
@@ -115,8 +117,8 @@ from the process environment by each adapter. The reads happen at adapter
 instantiation, so a missing key fails loudly with a hint instead of silently
 sending an unauthenticated request.
 
-**Mitigation — curl never puts a secret or a body on its own command
-line.** Every curl-based adapter (`openai`, `anthropic`, `ollama`,
+**Mitigation — curl never puts a secret, a URL, or a body on its own
+command line.** Every curl-based adapter (`openai`, `anthropic`, `ollama`,
 `replicate`, `watsonx` — including its IAM token exchange — and the ~20
 providers that share transport via
 [`adapters/_openai_compat.py`](../src/circuitry/adapters/_openai_compat.py))
@@ -127,19 +129,25 @@ and most of each curl-based tool plugin's calls (`comfyui`'s JSON calls,
 `~/.curlrc` can't silently redirect output or inject a proxy), sends the
 JSON request body on stdin via `--data-binary @-` instead of `-d` on argv
 (this also removes Linux's 128 KiB-per-argument ceiling for a large prompt
-or base64 image), and sends every header — `Authorization`, `x-api-key`,
-any provider-specific credential header — through an inherited pipe file
-descriptor via `--config /dev/fd/<n>` rather than `-H`. Neither a secret
-nor a request body is ever visible in `ps` for the duration of the call.
-The target URL is the exception: it is still curl's final argument, so a
-credential a search API takes as a query parameter (`web_search`'s
-`extra_params`) or `user:pass@` in a configured `base_url` is visible in
-`ps`, though masked in any failure message (next mitigation). `comfyui`'s
+or base64 image), and sends the URL and every header — `Authorization`,
+`x-api-key`, any provider-specific credential header, a query-string
+credential such as `web_search`'s `extra_params`, `user:pass@` in a
+configured `base_url` — through a `--config` file rather than argv or
+`-H`. On POSIX that file travels through an inherited pipe file descriptor
+(`--config /dev/fd/<n>`), never a temp file; Windows has no such fd, so
+there it's a file written to the per-user temp directory (`%TEMP%`,
+private to the user by default ACL) and removed in a `finally` once curl
+is done with it. Argv carries no request data at all, so nothing from this
+source is ever visible in `ps` for the duration of the call. `comfyui`'s
 image fetch (`_curl_bytes`), its one multipart upload (`_upload_image`,
 `-F image=@<path>` — the local file path, not its contents, on argv) and
 its `check()` HEAD probe call curl directly rather than through
 `run_curl()`, since none of the three sends a JSON body or a header that
-needs to stay off argv; all three still pass `-q` first.
+needs to stay off argv; all three still pass `-q` first. Their target URL
+is built from `base_url`, which is operator-configured (ComfyUI behind an
+authenticating proxy, say) and so can itself carry `user:pass@` — unlike
+the other curl-based adapters/plugins above, these three calls don't route
+that case off argv.
 
 **Mitigation — error masking.** Every curl failure raises through
 [`circuitry/curl_support.py`](../src/circuitry/curl_support.py)'s
@@ -252,7 +260,15 @@ host runs, including library names, MCP and REST callers and everything
 reachable through `use: ref:`. Enable it only on a host that runs nothing but
 documents its operator wrote or has reviewed. Within the boundary, a document
 still uses whatever config allows — the adapters, tools and plugins config
-enables — so the allowlists remain the way to narrow that.
+enables — so the allowlists remain the way to narrow that. Because
+`plugins`/`adapters` merge key by key rather than block by block, a trusted
+document that sets only one field deep inside a block — an MCP server's
+`command`/`url` under `plugins.mcp.servers.<name>`, say, or an adapter's
+`base_url` — inherits the rest of that block (`env`, headers, credentials)
+from the host rather than dropping it; this is the deep merge working as
+intended for a trusted document, not a leak, but it means a trusted
+document's endpoint choice can run against the host's existing credentials
+for that block.
 
 ### 7. Project config files
 

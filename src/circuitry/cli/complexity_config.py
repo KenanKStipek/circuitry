@@ -21,9 +21,11 @@ all three are each valid.
 
 The block flows through the normal ``runtime.*`` precedence — an
 orchestration-level ``runtime.complexity`` *replaces* the config-level one
-wholesale (:func:`circuitry.cli.effective_settings._merge_runtime` is a shallow
-merge over top-level runtime keys), so an orchestration that overrides the
-block must restate every value it still wants.
+wholesale (:func:`circuitry.cli.effective_settings._merge_runtime` merges
+most top-level runtime keys, including this one, as a shallow replace;
+``plugins``/``adapters`` are the exception, merged one level deeper), so an
+orchestration that overrides the block must restate every value it still
+wants.
 """
 
 from __future__ import annotations

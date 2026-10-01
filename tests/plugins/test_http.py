@@ -244,6 +244,42 @@ def test_http_4xx_fail_on_error_templated_false_string_stays_ok(
     assert result.ok is True
 
 
+def _fake_urlopen_400_with_reason_and_secret(req: Any, timeout: int = 0) -> Any:
+    raise HTTPError(
+        url=req.full_url,
+        code=400,
+        msg="Bad Request",
+        hdrs={"Content-Type": "application/json"},  # type: ignore[arg-type]
+        fp=io.BytesIO(
+            _json.dumps(
+                {
+                    "error": {
+                        "message": "Validation failed: 'amount' is required",
+                        "api_key": "sk-canary-DO-NOT-LEAK-0123456789",
+                    }
+                }
+            ).encode()
+        ),
+    )
+
+
+def test_http_4xx_stderr_includes_reason_but_not_a_canary_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #317: the failure message now includes a bounded,
+    redacted excerpt of the response body (the JSON error/message/detail
+    field) — a validation reason makes it in, a sibling credential-shaped
+    field does not."""
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen_400_with_reason_and_secret)
+
+    result = HttpPlugin().execute(params={"url": "https://example.test/items"})
+
+    assert result.ok is False
+    assert "HTTP 400" in (result.stderr or "")
+    assert "Validation failed" in (result.stderr or "")
+    assert "canary" not in (result.stderr or "")
+
+
 def test_url_error_raises_actionable_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

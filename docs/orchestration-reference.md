@@ -41,6 +41,8 @@ Other top-level keys: `description` (free text for readers of the file) and two 
 Warning: Applied host settings from my.yml: runtime.adapters.openai.base_url, plugins: acme.telemetry
 ```
 
+`runtime.plugins.<name>` and `runtime.adapters.<name>` merge into the host's config key by key, not whole-block replace: a document setting `runtime.plugins.sqlite.*` does not drop the host's `runtime.plugins.shell.*`, and one setting `runtime.adapters.ollama.timeout_seconds` does not drop another adapter's config. The one exception is `runtime.plugins.shell.allowed_commands`: when the host pins it, the effective list is always the intersection of the host's and the document's, never the document's outright — the only `runtime:` key a trusted document cannot simply override (see [Host settings versus orchestration documents](./threat-model.md#6-host-settings-versus-orchestration-documents)).
+
 **A document that arrives any other way is limited** to `runtime.complexity` and `runtime.state`: `cof run <library name>` (bundled, folder and github sources), `cof run-library` and `run_shared_orchestration`, the MCP `run_orchestration` / `validate_orchestration` tools, the REST trigger, and plans a model generates. The TUI's Library view's "run this entry" is limited the same way whatever the source, and its Chat view's "run it now" is limited too — saving a model-generated draft to disk does not make it a file you named by path. Run that saved file with `cof run f.yml`, or pick it from the Run view's own local-file list, to trust it like any other local file. Every limited document's host settings are ignored, with a warning from `cof run` (on stderr) and `cof check` naming each key, and an unlisted `plugins:` entry is skipped. `use:` children never contribute their own `runtime:` or `plugins:` — they run on the parent's settings.
 
 This is the trust boundary for someone else's orchestration: the document decides what the run does, never where an adapter sends prompts and credentials, which binaries a tool runs, or where state is stored. `cof fetch` followed by `cof run ./fetched.yml` is running the file by path, so read a fetched file before you run it that way. A host that only ever runs its own documents can trust every document with `trust_orchestration_runtime: true` in config.json (or `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME=1`) — see [Configuration](./guidebook/04-configuration.md) for what that exposes. See the [threat model](./threat-model.md) for the risk.
@@ -630,8 +632,13 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
   status or a soft 0/1/2 flag.
 - **HTTP-family plugins** (`http`, `web_fetch`, `webhook`, `linear`) fail
   (`ok: false`) on a 4xx/5xx response by default, with the status recorded
-  on **`meta.status_code`**. Each has a `fail_on_error: false` param that
-  restores the old always-succeeds behaviour — the response still lands on
+  on **`meta.status_code`**. The failure message (`meta.error`, and
+  `meta.stderr`) includes a bounded, redacted excerpt of the response body
+  when one is available — the JSON `error`/`message`/`detail` field, or
+  the first ~500 characters otherwise — so a validation reason a provider
+  sent back is visible without having to read `meta.raw.body` separately.
+  Each has a `fail_on_error: false` param that restores the old
+  always-succeeds behaviour — the response still lands on
   `value`/`meta.status_code`, it just doesn't fail the effect.
 - **Soft-outcome plugins** (`wikipedia`, `dns`, `port_check`,
   `validate_yaml`) keep `ok: true` regardless of outcome and report it on

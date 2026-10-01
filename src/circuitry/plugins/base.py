@@ -1,10 +1,69 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
+from ..cli.redaction import redact
+
 if TYPE_CHECKING:
     from ..preflight import CheckResult
+
+#: Cap on the response-body excerpt `http_error_excerpt` returns — enough
+#: to carry a validation reason without turning a failure message into the
+#: whole body (see `_RAW_META_MAX_BYTES` in `core/tool.py` for the same
+#: concern on `meta.raw`).
+_ERROR_EXCERPT_MAX_CHARS = 500
+
+
+def http_error_excerpt(body: str, *, max_chars: int = _ERROR_EXCERPT_MAX_CHARS) -> str:
+    """A bounded, redacted explanation of an HTTP error response body, for
+    the http-family tool plugins (`http`, `web_fetch`, `webhook`, `linear`).
+
+    Prefers the JSON `error`/`message`/`detail` field when the body parses
+    as one (ComfyUI-shaped bodies nest it under `error.message`; most APIs
+    use one of the three flat), falling back to the first `max_chars`
+    characters of the raw body otherwise. Unlike `meta.raw` (redacted
+    centrally by `core/tool.py`'s `_capped_raw`), a plugin's own `stderr`/
+    error string is never redacted downstream, so this redacts the body
+    itself, the same `cli/redaction.redact` deny-list `meta.raw` uses,
+    before any of it reaches a failure message.
+    """
+    text = (body or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed: Any = json.loads(text)
+    except json.JSONDecodeError:
+        redacted_text = redact(text)
+        return redacted_text[:max_chars] if isinstance(redacted_text, str) else text[:max_chars]
+    if isinstance(parsed, dict):
+        redacted = redact(parsed)
+        if isinstance(redacted, dict):
+            error = redacted.get("error")
+            if isinstance(error, dict):
+                message = error.get("message")
+                if isinstance(message, str) and message:
+                    return message[:max_chars]
+            if isinstance(error, str) and error:
+                return error[:max_chars]
+            for key in ("message", "detail"):
+                value = redacted.get(key)
+                if isinstance(value, str) and value:
+                    return value[:max_chars]
+        # No recognized reason field (e.g. GraphQL-style `errors: [...]` or a
+        # validation body with its own shape): fall back to the whole body,
+        # but the *redacted* copy, never the raw `text` — a sibling
+        # credential-shaped field (e.g. an echoed `api_key`) must not reach
+        # the failure message just because it wasn't under `error`/`message`/
+        # `detail`. `redact(text)` on the raw string only matches when the
+        # whole string is itself a JWT/key/URL, so it would let this through.
+        return json.dumps(redacted, ensure_ascii=False)[:max_chars]
+    if isinstance(parsed, list):
+        redacted_list = redact(parsed)
+        return json.dumps(redacted_list, ensure_ascii=False)[:max_chars]
+    redacted_text = redact(text)
+    return redacted_text[:max_chars] if isinstance(redacted_text, str) else text[:max_chars]
 
 
 @dataclass(frozen=True)

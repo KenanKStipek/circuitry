@@ -21,7 +21,8 @@ from curl_test_support import (
     assert_not_in_argv,
     assert_q_first,
     local_server,
-    read_config_headers,
+    read_config,
+    read_config_url,
 )
 
 from circuitry.adapters import build_adapter
@@ -66,7 +67,7 @@ def test_azure_url_includes_deployment_and_api_version(
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         captured["cmd"] = cmd
-        captured["headers"] = read_config_headers(cmd)
+        captured["url"], captured["headers"] = read_config(cmd)
         return FakeProc(returncode=0, stdout=_ok_chat_payload("azure"))
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -76,7 +77,7 @@ def test_azure_url_includes_deployment_and_api_version(
     assert result.text == "azure"
     assert validate_generate_result(result, adapter_name="azure-openai") == []
 
-    url = captured["cmd"][-1]
+    url = captured["url"]
     assert (
         url
         == "https://my-resource.openai.azure.com/openai/deployments/"
@@ -143,6 +144,7 @@ def test_azure_runtime_overrides_api_version(
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         captured["cmd"] = cmd
+        captured["url"] = read_config_url(cmd)
         return FakeProc(returncode=0, stdout=_ok_chat_payload())
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -159,7 +161,7 @@ def test_azure_runtime_overrides_api_version(
         },
     )
     adapter.generate(model="dep", prompt="ping")
-    assert "2024-08-01-preview" in captured["cmd"][-1]
+    assert "2024-08-01-preview" in captured["url"]
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +179,7 @@ def test_cloudflare_resolves_account_id_from_env(
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         captured["cmd"] = cmd
+        captured["url"] = read_config_url(cmd)
         return FakeProc(returncode=0, stdout=_ok_chat_payload("cf"))
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -184,7 +187,7 @@ def test_cloudflare_resolves_account_id_from_env(
     adapter = build_adapter(adapter_name="cloudflare-workers-ai", runtime={})
     result = adapter.generate(model="@cf/meta/llama-3.3", prompt="ping")
     assert result.text == "cf"
-    url = captured["cmd"][-1]
+    url = captured["url"]
     assert (
         url
         == "https://api.cloudflare.com/client/v4/accounts/abc123/ai/v1/chat/completions"
@@ -212,6 +215,7 @@ def test_cloudflare_runtime_account_id_overrides_env(
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         captured["cmd"] = cmd
+        captured["url"] = read_config_url(cmd)
         return FakeProc(returncode=0, stdout=_ok_chat_payload())
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -225,8 +229,8 @@ def test_cloudflare_runtime_account_id_overrides_env(
         },
     )
     adapter.generate(model="@cf/m", prompt="ping")
-    assert "from-config" in captured["cmd"][-1]
-    assert "from-env" not in captured["cmd"][-1]
+    assert "from-config" in captured["url"]
+    assert "from-env" not in captured["url"]
 
 
 # ---------------------------------------------------------------------------
@@ -244,13 +248,14 @@ def test_databricks_resolves_host_from_env(
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         captured["cmd"] = cmd
+        captured["url"] = read_config_url(cmd)
         return FakeProc(returncode=0, stdout=_ok_chat_payload("db"))
 
     monkeypatch.setattr("subprocess.run", fake_run)
     adapter = build_adapter(adapter_name="databricks", runtime={})
     adapter.generate(model="endpoint-name", prompt="p")
     assert (
-        captured["cmd"][-1]
+        captured["url"]
         == "https://adb-1234.5.azuredatabricks.net/serving-endpoints/chat/completions"
     )
 
@@ -286,7 +291,7 @@ def test_replicate_synchronous_succeeded(
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         captured["cmd"] = cmd
-        captured["headers"] = read_config_headers(cmd)
+        captured["url"], captured["headers"] = read_config(cmd)
         return FakeProc(returncode=0, stdout=json.dumps(payload))
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -301,7 +306,7 @@ def test_replicate_synchronous_succeeded(
     # And model in URL.
     assert (
         "/v1/models/meta/meta-llama-3-70b-instruct/predictions"
-        in captured["cmd"][-1]
+        in captured["url"]
     )
     assert_q_first(captured["cmd"])
     assert_not_in_argv(captured["cmd"], "r-tok", "hi")
@@ -449,10 +454,14 @@ def test_watsonx_two_step_iam_then_generate(
     calls: list[list[str]] = []
     headers_by_call: list[dict[str, str]] = []
 
+    urls_by_call: list[str | None] = []
+
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         calls.append(list(cmd))
-        headers_by_call.append(read_config_headers(cmd))
-        if "iam.cloud.ibm.com" in " ".join(cmd):
+        url, headers = read_config(cmd)
+        headers_by_call.append(headers)
+        urls_by_call.append(url)
+        if url and "iam.cloud.ibm.com" in url:
             return FakeProc(
                 returncode=0,
                 stdout=json.dumps(
@@ -484,9 +493,8 @@ def test_watsonx_two_step_iam_then_generate(
     assert validate_generate_result(result, adapter_name="watsonx") == []
 
     # IAM call first, generation second.
-    assert "iam.cloud.ibm.com" in " ".join(calls[0])
-    gen_cmd = " ".join(calls[1])
-    assert "ml/v1/text/generation" in gen_cmd
+    assert "iam.cloud.ibm.com" in (urls_by_call[0] or "")
+    assert "ml/v1/text/generation" in (urls_by_call[1] or "")
     assert headers_by_call[1]["Authorization"] == "Bearer iam-token-xyz"
     assert_q_first(calls[0])
     assert_q_first(calls[1])
@@ -502,9 +510,9 @@ def test_watsonx_token_cache_avoids_second_iam_call(
     calls: list[str] = []
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        joined = " ".join(cmd)
-        calls.append(joined)
-        if "iam.cloud.ibm.com" in joined:
+        url = read_config_url(cmd) or ""
+        calls.append(url)
+        if "iam.cloud.ibm.com" in url:
             return FakeProc(
                 returncode=0,
                 stdout=json.dumps(
@@ -598,7 +606,8 @@ def test_watsonx_large_prompt_over_200kib_sent_on_stdin_not_argv(
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         calls.append({"cmd": cmd, "input": kwargs.get("input")})
-        if "iam.cloud.ibm.com" in " ".join(cmd):
+        url = read_config_url(cmd) or ""
+        if "iam.cloud.ibm.com" in url:
             return FakeProc(
                 returncode=0,
                 stdout=json.dumps({"access_token": "tok", "expires_in": 3600}),
@@ -712,8 +721,8 @@ def test_watsonx_iam_failure_retries_through_the_prompt_retry_loop(
     calls = {"n": 0}
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        joined = " ".join(cmd)
-        if "iam.cloud.ibm.com" in joined:
+        url = read_config_url(cmd) or ""
+        if "iam.cloud.ibm.com" in url:
             calls["n"] += 1
             if calls["n"] == 1:
                 return FakeProc(
