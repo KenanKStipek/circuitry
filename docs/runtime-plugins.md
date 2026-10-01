@@ -65,12 +65,21 @@ managed `id` column — SurrealDB assigns its own record id per `CREATE`.
 
 ### Prod redaction
 
-`environment: prod` (`CIRCUITRY_ENV=prod` or `CIRCUITRY_ENVIRONMENT=prod`)
-omits `effects.raw` — the same `store_raw` cascade as the SQL plugins:
+`environment: prod` omits `effects.raw` — the same `store_raw` cascade as
+the SQL plugins:
 
 1. Env var `CIRCUITRY_SURREALDB_STORE_RAW` (truthy: `1`, `true`, `yes`, `y`, `on`).
 2. `runtime.runtime_plugins.surrealdb.store_raw` in config.json.
-3. Environment default: `true` in `dev`, `false` otherwise.
+3. Environment default: `true` in `dev`, `false` otherwise — the environment
+   itself is `CIRCUITRY_ENV`/`CIRCUITRY_ENVIRONMENT`, then `"environment"` in
+   config.json (`CircuitryConfig.environment`), then `"dev"`. Either env var,
+   when set, wins over config.json's `environment` key.
+
+`effects.raw` (and the SQL plugins' `raw` column) is the tool plugin's own
+`ToolResult.raw` for a tool effect — redacted and size-capped the same way
+as `meta.raw` in state (see [Errors](guidebook/05-errors.md) /
+[orchestration-reference.md](orchestration-reference.md#tool)). It is
+always absent for a prompt effect.
 
 ### Connection / auth
 

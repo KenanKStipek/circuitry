@@ -31,6 +31,10 @@ Context fields:
 - `dry_run`
 - `validate_only`
 - `runtime_config`
+- `environment` — `CircuitryConfig.environment` (`"dev"`/`"prod"`/`"test"`); the
+  config-level half of the SQL/`surrealdb`/`clickhouse` persistence plugins'
+  `store_raw` cascade (env vars still win — see
+  [Runtime Plugin Catalog](runtime-plugins.md))
 
 ## Per-effect hooks (optional)
 

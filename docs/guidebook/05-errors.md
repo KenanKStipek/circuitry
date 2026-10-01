@@ -34,6 +34,14 @@ For a leaf effect — prompt, tool, use — `skip` and `continue` are the same d
 
 Loops have their own vocabulary — `fail` / `break` / `continue` — because a failed *pass* is a different thing from a failed effect. [Loop](07-loop.md) covers it; the short form is that `break` ends the loop at the failed pass and `continue` drops that pass and goes on, and neither a dropped pass nor a broken one counts toward `last`.
 
+A tool effect fails the same way whether the plugin raised or just reported
+it: `on_error` reacts identically to an exception and to a result the
+plugin marks failed without one (an HTTP-family tool's 4xx/5xx response, by
+default). `meta.exit_code` means a process exit code only — never an HTTP
+status or a plugin-specific soft flag; see the `tool` effect's [result
+contract](../orchestration-reference.md#tool) for the full breakdown,
+including `meta.status_code` and `meta.raw`.
+
 ## Where failure lands
 
 ```

@@ -584,6 +584,41 @@ Not every plugin can actually be bounded by it:
 | Ignored — pure in-memory, nothing to bound | `json`, `xml`, `csv`, `regex`, `hash`, `hex`, `uuid`, `base64`, `gzip`, `zip`, `tar`, `fs`, `env_vars`, `validate_yaml`, `html_extract`, `pdf_extract`, `math`, `clock`, `system_info`, `process_list` |
 | Ignored — has its own, separate bound instead | `port_check` (`params.timeout_ms`, socket-level, default 2s), `surrealdb` (the SDK's own socket timeout), `embed`/`rerank`/`vector_search` (local inference; the first call per model can also trigger an unbounded download) |
 
+**Result contract — one meaning for "this tool failed":** a tool effect
+fails (`meta.error` set, `on_error` applies) exactly when the plugin raises,
+or when it returns a result with `ok: false` without raising. Both paths
+are equivalent; `on_error: fail` (the default) re-raises either way,
+`skip`/`continue` record the error and leave `value: null`.
+
+- **`meta.exit_code`** means a process exit code, and only that — it is
+  `None` for every plugin that doesn't wrap a binary/subprocess (`ffmpeg`,
+  `shell`, `git`, `gh`, `ripgrep`, and the rest of that family; a non-zero
+  exit fails the step unless `allow_nonzero: true`). Every other plugin
+  always leaves it `None`, including the HTTP-family and soft-outcome ones
+  below — it is never an HTTP status or a soft 0/1/2 flag.
+- **HTTP-family plugins** (`http`, `web_fetch`, `webhook`, `linear`) fail
+  (`ok: false`) on a 4xx/5xx response by default, with the status recorded
+  on **`meta.status_code`**. Each has a `fail_on_error: false` param that
+  restores the old always-succeeds behaviour — the response still lands on
+  `value`/`meta.status_code`, it just doesn't fail the effect.
+- **Soft-outcome plugins** (`wikipedia`, `dns`, `port_check`,
+  `validate_yaml`) keep `ok: true` regardless of outcome and report it on
+  their own fields instead: a missing Wikipedia page or an NXDOMAIN lookup
+  is `value: null`/`[]` plus a `raw` field naming why; a closed port is
+  `value: false`; an invalid document from `validate_yaml` is
+  `value.ok: false` (the document's validity, not the tool call's). None of
+  these are tool failures — check the field, not `on_error`.
+- **`meta.raw`** is the plugin's own `ToolResult.raw` (the fields each
+  plugin's own docs describe, e.g. `http`'s `raw.headers`, `web_fetch`'s
+  `content_type`), redacted (`cli.redaction.redact` — credential-like keys,
+  JWT/API-key-shaped strings, URL userinfo) and capped at 64 KiB serialized;
+  an oversized `raw` is replaced with a `{_truncated, _original_bytes,
+  _preview}` marker. Set for every tool effect that returned a result.
+  **Prompt effects never set `meta.raw`** — only tool effects do.
+- **`meta.params_rendered`** (the effect's rendered `params`, merged with
+  any `params_json`) is redacted the same way before storage; the plugin
+  itself still receives the real, unredacted values.
+
 **Supported providers:**
 
 | Provider | Description | Required inputs | Result value |
