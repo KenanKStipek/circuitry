@@ -286,6 +286,7 @@ def placeholder_for(field: InputField) -> str:
         return field.description
     return {
         "number": "a number",
+        "integer": "a whole number",
         "boolean": "true or false",
         "array": "JSON array, e.g. [1, 2]",
         "object": 'JSON object, e.g. {"k": "v"}',
@@ -315,6 +316,11 @@ def coerce_input(field: InputField, raw: str) -> Any:
             return float(text)
         except ValueError:
             raise InputError(f"{field.name}: expected a number, got {raw!r}") from None
+    if field.type == "integer":
+        try:
+            return int(text)
+        except ValueError:
+            raise InputError(f"{field.name}: expected a whole number, got {raw!r}") from None
     if field.type == "boolean":
         lowered = text.lower()
         if lowered in _TRUE_WORDS:

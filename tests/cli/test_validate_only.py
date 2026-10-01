@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from circuitry.api import run_orchestration
+from circuitry.api import run_orchestration, validate_orchestration
 from circuitry.cli.config import CircuitryConfig
-from circuitry.cli.runtime_shim import RunRequest, run
+from circuitry.cli.runtime_shim import RunRequest, run, validate
 
 
 def _write(tmp_path: Path, name: str, content: str) -> Path:
@@ -101,8 +101,66 @@ def test_api_validate_only_matches_api_validate_orchestration(tmp_path: Path) ->
         "    whlie: {mode: cel, expr: 'true'}\n"
         "    body: [{type: tool, name: t, provider: json, params: {input: '1'}}]\n",
     )
-    result = run_orchestration(
+    run_result = run_orchestration(
         orchestration_path=path, validate_only=True, raise_on_error=False
     )
+    check_result = validate_orchestration(orchestration_path=path)
+    assert run_result.ok is False
+    assert check_result["ok"] is False
+    assert "did you mean 'while'?" in (run_result.error or "")
+    assert "did you mean 'while'?" in check_result["errors"][0]
+
+
+def test_validate_only_does_not_require_a_resolved_adapter_cof_check_allows(
+    tmp_path: Path,
+) -> None:
+    """Neither `cof check` nor `validate_only` requires a buildable adapter
+    to say ok — that's a build-time concern, checked again right before the
+    adapter is actually built for a real run."""
+    path = _write(
+        tmp_path,
+        "valid.yml",
+        "effects:\n  - {type: prompt, name: greet, template: 'hi'}\n",
+    )
+    check_result = validate(path, config=CircuitryConfig())
+    assert check_result["ok"] is True, check_result["errors"]
+
+    result = run(
+        RunRequest(
+            orchestration_path=path,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=True,
+            config=CircuitryConfig(),
+        )
+    )
+    assert result.ok is True, result.error
+
+
+def test_validate_only_rejects_a_use_cycle(tmp_path: Path) -> None:
+    a_path = _write(
+        tmp_path,
+        "a.yml",
+        "effects:\n"
+        "  - {type: use, name: call_b, path: " + repr(str(tmp_path / "b.yml")) + "}\n",
+    )
+    _write(
+        tmp_path,
+        "b.yml",
+        "effects:\n"
+        "  - {type: use, name: call_a, path: " + repr(str(a_path)) + "}\n",
+    )
+    result = run(
+        RunRequest(
+            orchestration_path=a_path,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=True,
+            config=CircuitryConfig(),
+        )
+    )
     assert result.ok is False
-    assert "did you mean 'while'?" in (result.error or "")
+    assert "cycle" in (result.error or "").lower()
+    assert "a.yml" in (result.error or "") and "b.yml" in (result.error or "")

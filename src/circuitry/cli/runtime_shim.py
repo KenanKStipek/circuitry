@@ -418,6 +418,18 @@ def run(req: RunRequest) -> RunResult:
                 + "\n".join(f"  - {error}" for error in document_errors)
             )
         root_def = compile_orchestration(orch=orch, root_name="prime")
+
+        # A `use:` cycle is otherwise only caught mid-execution (core/use.py);
+        # `validate()`/`cof check` already reject it here, so `validate_only`
+        # must too rather than returning ok for a document `cof check` rejects.
+        from ..core.cycle_check import detect_cycles
+
+        cycle = detect_cycles(
+            orch, root_path=req.orchestration_path, runtime=effective.runtime
+        )
+        if cycle is not None:
+            raise ValueError(f"Cycle: {' → '.join(cycle)}")
+
         if profile is not None and profile.effects:
             effect_overrides = {
                 path: {
@@ -449,6 +461,13 @@ def run(req: RunRequest) -> RunResult:
         # after preflight below, so an unknown default adapter fails with
         # preflight's structured message, not the factory's raw ValueError
         # (#235).
+        #
+        # Before `validate_only` can return, only a *name* is needed (for the
+        # image-asset warning below) — `cof check`/`validate_orchestration`
+        # never require a resolved adapter to say ok, so this stays as lenient
+        # as `effective.adapter` itself; the strict "no adapter resolved"
+        # error (`_require_resolved_settings`) is deferred past the
+        # `validate_only` return, right before the adapter is actually built.
         needs_real_adapter = _has_prompt_effects(root_def)
         if needs_real_adapter:
             if req.adapter is not None:
@@ -459,9 +478,8 @@ def run(req: RunRequest) -> RunResult:
                 resolved_adapter = req.adapter.name
                 resolved_model = effective.model or ""
             else:
-                resolved_adapter, resolved_model = _require_resolved_settings(
-                    effective=effective, orchestration_path=req.orchestration_path
-                )
+                resolved_adapter = effective.adapter or ""
+                resolved_model = effective.model or ""
         else:
             resolved_adapter = "_noop"
             resolved_model = effective.model or ""
@@ -517,6 +535,12 @@ def run(req: RunRequest) -> RunResult:
             if req.adapter is not None:
                 adapter = req.adapter
             else:
+                # The strict "no adapter resolved" check, deferred from
+                # above so `validate_only` isn't rejected for a document
+                # `cof check` accepts (neither requires one to say ok).
+                resolved_adapter, resolved_model = _require_resolved_settings(
+                    effective=effective, orchestration_path=req.orchestration_path
+                )
                 # `--adapter` and the config's `default_adapter` resolve
                 # here, after the document check and preflight — gate them
                 # at the build.

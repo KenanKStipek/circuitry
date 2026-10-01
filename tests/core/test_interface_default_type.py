@@ -17,7 +17,10 @@ import pytest
 
 from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.runtime_shim import RunRequest, run, validate
-from circuitry.core.document_check import interface_default_type_errors
+from circuitry.core.document_check import (
+    interface_default_type_errors,
+    interface_unknown_type_errors,
+)
 from circuitry.core.interface_inputs import check_interface_inputs
 
 
@@ -53,6 +56,100 @@ def test_matching_default_is_not_an_error() -> None:
         }
     }
     assert interface_default_type_errors({"interface": interface, "effects": []}) == []
+
+
+def test_unknown_declared_type_is_an_error() -> None:
+    interface = {"inputs": {"count": {"type": "int", "default": "three"}}}
+    errors = interface_unknown_type_errors({"interface": interface, "effects": []})
+    assert len(errors) == 1
+    assert "interface.inputs.count.type" in errors[0]
+    assert "'int'" in errors[0]
+    for name in ("string", "number", "integer", "boolean", "array", "object"):
+        assert name in errors[0]
+
+
+def test_unknown_declared_type_is_an_error_even_without_a_default() -> None:
+    interface = {"inputs": {"count": {"type": "int"}}}
+    errors = interface_unknown_type_errors({"interface": interface, "effects": []})
+    assert len(errors) == 1
+    assert "interface.inputs.count.type" in errors[0]
+
+
+def test_known_declared_type_is_not_an_error() -> None:
+    interface = {
+        "inputs": {
+            name: {"type": name}
+            for name in ("string", "number", "integer", "boolean", "array", "object")
+        }
+    }
+    assert interface_unknown_type_errors({"interface": interface, "effects": []}) == []
+
+
+def test_unquote_hint_omitted_for_boolean_words_yaml_does_not_resolve() -> None:
+    """`1`, `y`, `t` stay a string or become an int when actually unquoted in
+    YAML (PyYAML's bool resolver only accepts yes/no/on/off/true/false) —
+    the hint would send the author to make a change that doesn't fix
+    anything, so it must not appear for these."""
+    for value in ("1", "y", "t", "0", "n", "f"):
+        interface = {"inputs": {"flag": {"type": "boolean", "default": value}}}
+        errors = interface_default_type_errors({"interface": interface, "effects": []})
+        assert len(errors) == 1
+        assert "remove the quotes" not in errors[0], (value, errors[0])
+
+
+def test_unquote_hint_present_for_a_boolean_word_yaml_does_resolve() -> None:
+    interface = {"inputs": {"flag": {"type": "boolean", "default": "yes"}}}
+    errors = interface_default_type_errors({"interface": interface, "effects": []})
+    assert len(errors) == 1
+    assert "remove the quotes" in errors[0]
+
+
+def test_cof_check_rejects_an_unrecognized_input_type(tmp_path: Path) -> None:
+    path = tmp_path / "doc.yml"
+    path.write_text(
+        "interface:\n"
+        "  inputs:\n"
+        "    count: {type: int}\n"
+        "effects:\n"
+        "  - {type: tool, name: echo, provider: json, params: {mode: parse, input: "
+        '"{{input.count}}"}}\n',
+        encoding="utf-8",
+    )
+    result = validate(path)
+    assert result["ok"] is False
+    assert "interface.inputs.count.type" in result["errors"][0]
+
+
+def test_integer_default_rejects_a_float() -> None:
+    interface = {"inputs": {"count": {"type": "integer", "default": 3.5}}}
+    errors = interface_default_type_errors({"interface": interface, "effects": []})
+    assert len(errors) == 1
+    assert "interface.inputs.count.default" in errors[0]
+
+
+def test_integer_default_rejects_a_boolean() -> None:
+    interface = {"inputs": {"count": {"type": "integer", "default": True}}}
+    errors = interface_default_type_errors({"interface": interface, "effects": []})
+    assert len(errors) == 1
+    assert "interface.inputs.count.default" in errors[0]
+
+
+def test_integer_input_rejects_a_float_value() -> None:
+    interface = {"inputs": {"count": {"type": "integer"}}}
+    with pytest.raises(ValueError, match="declared type 'integer'"):
+        check_interface_inputs(interface, {"count": 3.5}, label="")
+
+
+def test_integer_input_rejects_a_boolean_value() -> None:
+    interface = {"inputs": {"count": {"type": "integer"}}}
+    with pytest.raises(ValueError, match="declared type 'integer'"):
+        check_interface_inputs(interface, {"count": True}, label="")
+
+
+def test_integer_input_rejects_a_cli_float_string() -> None:
+    interface = {"inputs": {"count": {"type": "integer"}}}
+    with pytest.raises(ValueError, match="could not be converted"):
+        check_interface_inputs(interface, {"count": "3.5"}, label="")
 
 
 def test_cof_check_rejects_a_default_that_does_not_match_its_type(tmp_path: Path) -> None:
