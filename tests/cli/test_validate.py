@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from circuitry.cli.runtime_shim import validate
 
 
@@ -226,13 +228,14 @@ def test_validate_rejects_each_truncate_wrong_type(tmp_path: Path) -> None:
     assert len(result["errors"]) >= 1
 
 
-def test_validate_rejects_reserved_effect_name(tmp_path: Path) -> None:
+@pytest.mark.parametrize("reserved", ["value", "meta", "input", "prime", "runtime"])
+def test_validate_rejects_reserved_effect_name(tmp_path: Path, reserved: str) -> None:
     """#260: 'value'/'meta'/'input'/'prime'/'runtime' collide with structural
     slots the runtime writes — a schema error, not silent data loss."""
     path = _write(
         tmp_path,
-        "reserved_name.yml",
-        "effects:\n  - type: tool\n    name: value\n    provider: json\n    params: {}\n",
+        f"reserved_name_{reserved}.yml",
+        f"effects:\n  - type: tool\n    name: {reserved}\n    provider: json\n    params: {{}}\n",
     )
     result = validate(path)
     assert result["ok"] is False

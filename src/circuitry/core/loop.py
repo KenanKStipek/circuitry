@@ -221,6 +221,15 @@ class LoopRuntime:
         # pass's later failure, and surfaced on the node as
         # meta.failed_passes — see #239.
         failed_passes: list[int] = []
+        # Indices (pass order) of every pass THIS execute() call actually
+        # completed. Collection reads only from this list, never from the
+        # iter_<N> keys left on *node* — a named loop's node is reused
+        # across outer passes (it sits inside an unnamed outer loop) or
+        # across a --state/persistence resume, so a prior run's iter_<N>
+        # keys can still be sitting on the node when this run starts.
+        # Walking those keys collected stale passes alongside this run's
+        # own; this list can't, since it only ever grows during this call.
+        completed_indices: list[int] = []
 
         # Build ancestor context for children (this loop is now a parent)
         from .dynamic import _EFFECT_STYLE as _ES
@@ -276,6 +285,15 @@ class LoopRuntime:
                     # is (see below) — the loop never starts a pass, same as
                     # collection_unresolved, but the bound violation is still
                     # recorded since there is no per-pass node to carry it.
+                    # An unnamed loop has no node (meta is None) to carry
+                    # that record at all, so log loudly here or the failure
+                    # leaves no trace anywhere.
+                    logger.warning(
+                        "Loop %r: %s; on_error=%s, stopping the loop",
+                        self.defn.name or "<unnamed>",
+                        bounds_error,
+                        self.defn.on_error,
+                    )
                     termination_reason = "error"
                     if meta:
                         meta["error"] = str(bounds_error)
@@ -374,6 +392,7 @@ class LoopRuntime:
                             iterations_effects.append(results[idx])
                             iteration_count += 1
                             last_completed = idx
+                            completed_indices.append(idx)
 
                     # Truncation status is independent of whether any
                     # iteration errored — an on_error: continue run with
@@ -427,6 +446,7 @@ class LoopRuntime:
                             iterations_effects.append(iter_effects)
                             iteration_count += 1
                             last_completed = idx
+                            completed_indices.append(idx)
                         except Exception:
                             failed_passes.append(idx)
                             if self.defn.on_error == "fail":
@@ -522,6 +542,7 @@ class LoopRuntime:
                         )
                         iterations_effects.append(iter_effects)
                         last_completed = iteration_count
+                        completed_indices.append(iteration_count)
                         iteration_count += 1
                     except Exception:
                         failed_passes.append(iteration_count)
@@ -573,7 +594,7 @@ class LoopRuntime:
                 # collect: aggregate the named body effect's .value across all iterations
                 if self.defn.collect:
                     node["collected"] = {
-                        "value": self._collect_values(node, failed_passes)
+                        "value": self._collect_values(node, completed_indices)
                     }
 
                 self._link_last(node, last_completed)
@@ -598,7 +619,7 @@ class LoopRuntime:
                     meta["failed_passes"] = list(failed_passes)
                 if self.defn.collect:
                     node["collected"] = {
-                        "value": self._collect_values(node, failed_passes)
+                        "value": self._collect_values(node, completed_indices)
                     }
                 self._link_last(node, last_completed)
             if is_named and self.defn.name:
@@ -628,36 +649,31 @@ class LoopRuntime:
             node["last"] = iter_node
 
     def _collect_values(
-        self, node: dict[str, Any], failed_passes: list[int]
+        self, node: dict[str, Any], completed_indices: list[int]
     ) -> list[Any]:
         """Aggregate the ``collect`` target's value across every pass that
         produced one, in pass order.
 
-        Reads the ``iter_<N>`` keys actually written onto *node* rather than
-        assuming a contiguous ``range(iteration_count)`` — a pass dropped
-        under ``on_error: continue``/``break`` still carries its own
-        ``iter_<N>`` key (whatever body effects ran before the failure), and
-        counting completed passes instead of reading real pass indices used
-        to both misalign the array against later passes and drop the final
-        one (#239). A failed pass is left out entirely — the same contract a
-        disabled collect target already has (its node exists, value
-        ``None``, ``meta.disabled``, elided here rather than surfacing as a
-        run of ``None`` entries) — even if the collect target itself
-        produced a value before a later body effect in that pass failed.
+        Reads *completed_indices* — the passes this ``execute()`` call
+        itself completed, tracked as they happen — rather than scanning
+        ``node`` for ``iter_<N>`` keys. A named loop's node is reused across
+        calls (the loop sits inside an unnamed outer loop, so every outer
+        pass writes to the same node; or the run was seeded with
+        ``--state``/a persistence resume), so an *older* run's ``iter_<N>``
+        keys can already be sitting on the node when this call starts —
+        scanning the node's keys would collect those stale passes alongside
+        this run's own (#239 follow-up). A failed pass is left out entirely
+        — the same contract a disabled collect target already has (its node
+        exists, value ``None``, ``meta.disabled``, elided here rather than
+        surfacing as a run of ``None`` entries) — even if the collect target
+        itself produced a value before a later body effect in that pass
+        failed.
         """
         key = self.defn.collect
         if not key:
             return []
-        failed = set(failed_passes)
-        indices = sorted(
-            int(k[len("iter_") :])
-            for k in node
-            if k.startswith("iter_") and k[len("iter_") :].isdigit()
-        )
         collected: list[Any] = []
-        for i in indices:
-            if i in failed:
-                continue
+        for i in completed_indices:
             iter_node = node.get(f"iter_{i}")
             if not isinstance(iter_node, dict):
                 continue

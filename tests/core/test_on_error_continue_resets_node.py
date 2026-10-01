@@ -159,6 +159,11 @@ def test_tool_continue_nulls_value_on_a_reused_node() -> None:
 
 
 def test_tool_continue_clears_stdout_and_exit_code_from_a_prior_successful_pass() -> None:
+    """Uses ``shell`` rather than ``json``: the ``json`` plugin reports
+    ``stdout``/``exit_code`` as ``None`` even on success, so a test built on
+    it would pass whether or not the reset actually happened. ``shell echo``
+    sets real values on pass 0, so clearing them on pass 1's failure is
+    actually exercised."""
     orch = {
         "effects": [
             {
@@ -167,29 +172,37 @@ def test_tool_continue_clears_stdout_and_exit_code_from_a_prior_successful_pass(
                 "body": [
                     {
                         "type": "tool",
-                        "name": "parse_item",
-                        "provider": "json",
+                        "name": "run",
+                        "provider": "shell",
                         "on_error": "continue",
-                        "params": {"input": "{{item}}"},
+                        "params": {"command": "{{item.command}}", "args": ["{{item.arg}}"]},
                     }
                 ],
             }
         ]
     }
     root = compile_orchestration(orch=orch, root_name="prime")
-    # Pass 0 parses fine (exit_code lands on meta via the json plugin's
-    # ToolResult, which reports None here, but a successful pass still
-    # writes a value); pass 1 fails to parse.
-    state = {"input": {"items": ["1", "oops"]}}
+    # Pass 0: `echo hi` succeeds with real stdout/exit_code on the node.
+    # Pass 1: `cat` of a file that doesn't exist exits nonzero and raises,
+    # reusing the same node (unnamed loop).
+    state = {
+        "input": {
+            "items": [
+                {"command": "echo", "arg": "hi"},
+                {"command": "cat", "arg": "/no/such/file-297"},
+            ]
+        }
+    }
 
     DynamicRuntime(root, adapter=RecordingAdapter(), model="unit-test").execute(
         store=Store(state)
     )
 
-    node = state["prime"]["parse_item"]
+    node = state["prime"]["run"]
     assert node["value"] is None
-    assert "stdout" in node["meta"] and node["meta"]["stdout"] is None
-    assert "exit_code" in node["meta"] and node["meta"]["exit_code"] is None
+    assert node["meta"]["error"] is not None
+    assert node["meta"]["stdout"] is None
+    assert node["meta"]["exit_code"] is None
 
 
 def test_use_continue_nulls_value_on_a_reused_node() -> None:

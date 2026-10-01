@@ -342,9 +342,11 @@ under the same within-iteration names the body uses — so `{{prime.polish.value
 above is the latest `polish` output, not the first one. Before the first pass
 there is nothing to see yet and the name falls through to the enclosing scope.
 In `mode: cel`, the condition also sees `state.iter.index`: the number of
-passes *completed* so far — `0` on the check before the first pass, `N`
-once N passes have run — so `state.iter.index < 3` caps a loop by pass
-count without a separate `max_iterations`.
+passes that have *run* so far — `0` on the check before the first pass, `N`
+once N passes have run (a pass that failed under `on_error: continue` still
+counts, since the condition only knows a pass started) — so
+`state.iter.index < 3` caps a loop by pass count without a separate
+`max_iterations`.
 
 #### Loop termination
 
@@ -977,7 +979,7 @@ in the effect tree:
 | Nesting level | Legal `state.<key>` roots |
 |---|---|
 | Anywhere | `input`, `prime`, `runtime` |
-| Inside a loop's own `body` (`each` or `while`), or a `while` loop's own `expr` | + `iter` — loop metadata, currently just `iter.index` (0-based): the number of passes that have *completed* — 0 on the check before the first pass, N after N passes have run |
+| Inside a loop's own `body` (`each` or `while`), or a `while` loop's own `expr` | + `iter` — loop metadata, currently just `iter.index` (0-based): in `each.body`, the current element's position; in `while.expr`/`while.body`, the number of passes that have run — 0 on the check before the first pass, N after N passes have run (a pass failed under `on_error: continue` still counts) |
 | Inside an `each` loop's own `body` | + the loop's `each.as` name, bound to the current element |
 
 These loop-scoped names stack with nesting and are visible to *every*

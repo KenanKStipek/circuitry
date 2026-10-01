@@ -132,7 +132,7 @@ Model mode wraps the template the way `if` does — *"… Should the loop contin
 
 `git apply --check` only asks whether the patch would apply; `check` records the answer as its exit code, and the loop drafts another patch until one applies, three times at most. After the loop, `prime.candidates.last.patch.value` is the patch that passed the check. Before the first pass there is no `check` yet, which makes the condition false, so `min_iterations: 1` starts the loop.
 
-A `mode: cel` condition also sees `state.iter.index`: the number of passes that have *completed* so far — `0` on the check before the first pass, `N` once N passes have run. `state.iter.index < 3` caps a loop by pass count the way `max_iterations` does, but as a condition you can combine with other state (`state.iter.index < 3 && state.prime.check.meta.exit_code != 0`).
+A `mode: cel` condition also sees `state.iter.index`: the number of passes that have *run* so far — `0` on the check before the first pass, `N` once N passes have run (a pass that failed under `on_error: continue` still counts here, since the condition only knows a pass started, not whether it finished). `state.iter.index < 3` caps a loop by pass count the way `max_iterations` does, but as a condition you can combine with other state (`state.iter.index < 3 && state.prime.check.meta.exit_code != 0`).
 
 One thing a CEL condition cannot do is read the loop's own `collected` or `last` — both are written when the loop *completes*, so from inside the loop the path is missing, and an expression that reads a missing path is `false`. A `while` written that way runs zero passes and terminates `condition_false`. *Where* you read loop state matters as much as *what* you read; the next section is the map.
 

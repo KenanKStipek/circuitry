@@ -327,8 +327,9 @@ under the same within-iteration names the body uses — so `{{prime.polish.value
 above is the latest `polish` output, not the first one. Before the first pass
 there is nothing to see yet and the name falls through to the enclosing scope.
 In `mode: cel`, the condition also sees `state.iter.index`: the number of
-passes *completed* so far — `0` on the check before the first pass, `N`
-once N passes have run.
+passes that have *run* so far — `0` on the check before the first pass, `N`
+once N passes have run (a pass that failed under `on_error: continue` still
+counts, since the condition only knows a pass started).
 
 #### Referencing a sibling within an iteration
 
