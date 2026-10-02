@@ -486,7 +486,7 @@
         },
         "params": {
           "type": "object",
-          "description": "Plugin-specific parameters. All string values support Mustache rendering against current state. Takes precedence over top-level prompt/model."
+          "description": "Plugin-specific parameters. All string values support Mustache rendering against current state. A leaf anywhere in params (any depth, in objects and lists), {from: <path>}, passes the value at that path unchanged (array, object, number or boolean) instead of rendering it, the same contract as a use effect's inputs; a path that doesn't resolve -- including one that resolves to null -- is an error naming the param's own path, unless the leaf also carries default: <value>. A mapping with any other key is passed through literally -- use params_json to pass a literal one-key {from: ...} object. Takes precedence over top-level prompt/model."
         },
         "params_json": {
           "type": "string",
