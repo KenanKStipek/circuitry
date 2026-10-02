@@ -32,6 +32,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 
+from ..core.saved_state import compact_last_aliases
 from ..preflight import CheckResult
 
 logger = logging.getLogger(__name__)
@@ -163,5 +164,7 @@ class SnapshotPersistenceBase:
             "started_at": self._started_at or now_iso(),
             "ended_at": ended_at,
             "error": error,
-            "state": state,
+            # Each loop's `last` as a `{"$ref": "iter_N"}` sibling reference,
+            # not a full copy of its final pass (#236, mirroring `--out`).
+            "state": compact_last_aliases(state),
         }

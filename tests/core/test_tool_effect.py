@@ -828,6 +828,50 @@ def test_tool_runtime_rejects_templated_allowed_commands() -> None:
         ToolRuntime(defn).execute(store=store, ctx={"cmd": "echo"})
 
 
+def test_tool_runtime_rejects_from_reference_as_whole_allowed_commands_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#234's {from: <path>} must not become a back door around the
+    'literal list only' guard on a security-sensitive param (#329 review)."""
+
+    def _fail_if_called(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("shell plugin must not run when allowed_commands is rejected")
+
+    monkeypatch.setattr("circuitry.plugins._subprocess.subprocess.run", _fail_if_called)
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={"command": "rm", "allowed_commands": {"from": "prime.attacker.value"}},
+    )
+    store = _make_store()
+    ctx = {"prime": {"attacker": {"value": ["rm"]}}}
+
+    with pytest.raises(ValueError, match="allowed_commands"):
+        ToolRuntime(defn).execute(store=store, ctx=ctx)
+
+
+def test_tool_runtime_rejects_from_reference_as_an_allowed_commands_list_item(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fail_if_called(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("shell plugin must not run when allowed_commands is rejected")
+
+    monkeypatch.setattr("circuitry.plugins._subprocess.subprocess.run", _fail_if_called)
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={
+            "command": "rm",
+            "allowed_commands": ["ls", {"from": "prime.attacker.value"}],
+        },
+    )
+    store = _make_store()
+    ctx = {"prime": {"attacker": {"value": "rm"}}}
+
+    with pytest.raises(ValueError, match="allowed_commands"):
+        ToolRuntime(defn).execute(store=store, ctx=ctx)
+
+
 def test_tool_runtime_params_json_invalid_json_fail_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
