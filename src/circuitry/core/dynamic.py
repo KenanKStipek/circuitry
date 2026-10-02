@@ -94,6 +94,13 @@ class DynamicDefinition:
     effects: Sequence[EffectDef]
     flow: Literal["chain", "tree"] = "chain"
 
+    # Cleanup effects run after ``effects`` completes, win or lose, and on a
+    # Ctrl-C/cancellation (best effort, then the cancellation still
+    # propagates). Always sequential, regardless of this dynamic's own
+    # ``flow``. Only legal here and on the document root (``compiler``
+    # raises on any other effect type) — see guidebook ch. 5.
+    finally_effects: Sequence[EffectDef] = ()
+
     # Tree flow only. None (default) runs every child at once, as before
     # this field existed; set, it bounds the worker pool.
     max_concurrency: int | None = None
@@ -212,17 +219,10 @@ class DynamicRuntime:
                 indent="  " * (self.depth - 1),
             ))
 
+        body_exc: BaseException | None = None
         try:
             if self.defn.flow == "chain":
-                for idx, effect in enumerate(self.defn.effects):
-                    effect_path = self._effect_path(effect=effect, index=idx)
-                    try:
-                        self._execute_effect(effect, store=child_store, ctx=ctx)
-                    except Exception as e:
-                        raise RuntimeError(f"{effect_path}: {e}") from e
-                    finally:
-                        if store.on_write:
-                            store.on_write(store.root_state)
+                self._execute_chain(self.defn.effects, store=store, child_store=child_store, ctx=ctx)
             else:
                 # Tree semantics: all effects run concurrently against the same
                 # deterministic snapshot from dynamic start, not sibling
@@ -371,19 +371,58 @@ class DynamicRuntime:
                     exc.__cause__ = tree_errors[0]
                     raise exc
 
-            dyn["value"] = True
-            meta["completed_at"] = _now_iso()
-            store.fire_effect_complete(self.defn.name, dyn)
+        except BaseException as e:
+            # Caught as BaseException, not Exception, so a Ctrl-C/
+            # cancellation (KeyboardInterrupt/SystemExit) still runs this
+            # dynamic's own `finally:` on the way out (best effort) — see
+            # the cancellation check below, which re-raises it regardless
+            # of on_error.
+            body_exc = e
 
-        except Exception as e:
+        finally_exc: BaseException | None = None
+        if self.defn.finally_effects:
+            try:
+                self._execute_chain(
+                    self.defn.finally_effects,
+                    store=store,
+                    child_store=child_store,
+                    ctx=ctx,
+                    label=f"{self.defn.name}.finally",
+                )
+            except BaseException as fe:
+                finally_exc = fe
+
+        if body_exc is not None:
             dyn["value"] = False
-            meta["error"] = str(e)
-            meta["completed_at"] = _now_iso()
-            # Balances the start fired above: a container that failed still
-            # closes its pair, carrying value False and meta.error.
-            store.fire_effect_complete(self.defn.name, dyn)
-            if self.defn.on_error == "fail":
-                raise
+            meta["error"] = str(body_exc)
+            if finally_exc is not None:
+                # The body's own failure is reported as-is; a finally
+                # failure on top of it is a second note, never the thing
+                # that hides the original (#272).
+                meta["finally_error"] = str(finally_exc)
+        elif finally_exc is not None:
+            dyn["value"] = False
+            meta["error"] = str(finally_exc)
+        else:
+            dyn["value"] = True
+
+        meta["completed_at"] = _now_iso()
+        # Balances the start fired above, on every exit — success, a body
+        # failure, a finally failure, or both.
+        store.fire_effect_complete(self.defn.name, dyn)
+
+        if body_exc is not None:
+            is_cancellation = isinstance(body_exc, (KeyboardInterrupt, SystemExit))
+            if finally_exc is not None:
+                logger.warning(
+                    "Dynamic %r: cleanup in 'finally' also failed (%s) after "
+                    "the original failure (%s)",
+                    self.defn.name,
+                    finally_exc,
+                    body_exc,
+                )
+            if is_cancellation or self.defn.on_error == "fail":
+                raise body_exc
             # skip/continue: the same degradation a leaf effect's on_error
             # gives — the failure is recorded on this dynamic's own meta.error
             # (above) and the exception stops here instead of propagating to
@@ -391,9 +430,47 @@ class DynamicRuntime:
             logger.warning(
                 "Dynamic %r: %s; on_error=%s, continuing with the next effect",
                 self.defn.name,
-                e,
+                body_exc,
                 self.defn.on_error,
             )
+            return
+
+        if finally_exc is not None:
+            # The body succeeded; a 'finally' effect's own failure (its
+            # on_error is 'fail', the default — skip/continue already
+            # swallowed it inside _execute_effect) fails this dynamic the
+            # same way a body failure would.
+            raise finally_exc
+
+    def _execute_chain(
+        self,
+        effects: Sequence[EffectDef],
+        *,
+        store: Store,
+        child_store: Store,
+        ctx: dict[str, Any],
+        label: str | None = None,
+    ) -> None:
+        """Run *effects* in sequence, stopping at the first failure.
+
+        Shared by this dynamic's own chain-flow body and its ``finally:``
+        list — ``finally`` always runs this way regardless of this
+        dynamic's own ``flow``. ``label`` names the list for the wrapped
+        error's path prefix (the body uses this dynamic's own name;
+        ``finally`` names its own list) — see ``_effect_path``.
+        """
+        container_name = label or self.defn.name
+        for idx, effect in enumerate(effects):
+            effect_path = self._effect_path(
+                effect=effect, index=idx, container_name=container_name
+            )
+            try:
+                self._execute_effect(effect, store=child_store, ctx=ctx)
+            except Exception as e:
+                raise RuntimeError(f"{effect_path}: {e}") from e
+            finally:
+                if store.on_write:
+                    store.on_write(store.root_state)
 
     def _execute_branch(
         self,
@@ -567,6 +644,9 @@ class DynamicRuntime:
             elif isinstance(effect, ToolDefinition):
                 ToolRuntime(
                     effect,
+                    adapter=self.adapter,
+                    model=self.model,
+                    model_locked=self.model_locked,
                     runtime_config=self.runtime_config,
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
@@ -654,17 +734,20 @@ class DynamicRuntime:
                     _console.print(line)
             raise
 
-    def _effect_path(self, *, effect: EffectDef, index: int) -> str:
+    def _effect_path(
+        self, *, effect: EffectDef, index: int, container_name: str | None = None
+    ) -> str:
+        prefix = container_name if container_name is not None else self.defn.name
         name = getattr(effect, "name", None)
         if isinstance(name, str) and name:
-            return f"{self.defn.name}.{name}"
+            return f"{prefix}.{name}"
         # An unnamed loop/conditional has no state node of its own and
         # contributes no path segment — same convention
         # `cli.profiles.collect_orchestration_effect_paths` documents for
         # addressing them. `type(effect).__name__` (e.g. `LoopDefinition[0]`)
         # is a Python class name, not a state path, and was surfacing
         # verbatim in error messages (#269 item 12 follow-up).
-        return self.defn.name
+        return prefix
 
 
 def _skip_disabled_effect(

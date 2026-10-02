@@ -9,6 +9,7 @@ file_structure:
     - flow (string, optional — default chain)
     - version (string, optional — free-form; see below)
     - interface (object, optional — declared inputs/outputs; see the interface section)
+    - finally (array, optional — cleanup effects, run after effects completes whether it succeeded or failed; also legal on a dynamic effect, see its own section)
   notes:
     - "adapter and model are only needed when the orchestration contains prompt or reflector effects."
     - "Tool-only orchestrations do not need adapter or model."

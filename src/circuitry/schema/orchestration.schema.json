@@ -26,6 +26,11 @@
       "description": "Ordered list of top-level effects to execute.",
       "items": { "$ref": "#/$defs/EffectDef" }
     },
+    "finally": {
+      "type": "array",
+      "description": "Cleanup effects run after 'effects' completes, whether it succeeded or failed, and best-effort on a Ctrl-C/cancellation. Always sequential. The original failure (if any) still propagates after 'finally' runs; a 'finally' failure on a successful run fails it too, unless that finally effect has its own on_error: continue/skip.",
+      "items": { "$ref": "#/$defs/EffectDef" }
+    },
     "interface": {
       "type": "object",
       "description": "Declares typed inputs and outputs for this orchestration. Enforced (required/type/default) at every run entry — cof run, the SDK, REST, MCP, the scheduler — and again by a 'use' effect calling this document as a child, for auto-wiring its outputs.",
@@ -178,6 +183,36 @@
       }
     },
 
+    "ExpectDef": {
+      "description": "Output check for a tool/use effect, run after a successful attempt. A bare string is shorthand for {mode: cel, expr: <string>}.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "CEL expression shorthand for {mode: cel, expr: <this string>}."
+        },
+        {
+          "type": "object",
+          "required": ["mode"],
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "type": "string", "enum": ["cel", "model"] },
+            "expr": {
+              "type": "string",
+              "description": "CEL expression over this effect's own 'value' and 'meta' (not state.value/state.meta — these two bind directly, unlike every other CEL site), plus 'state' bound the usual way (state.prime.<name>.value, ...). E.g. has(value.prompt_id). Required when mode is cel."
+            },
+            "template": {
+              "type": "string",
+              "description": "Prompt template asked yes/no like a model-mode if's template, on the run's own adapter/model. Required when mode is model."
+            }
+          },
+          "allOf": [
+            { "if": { "properties": { "mode": { "const": "cel" } }, "required": ["mode"] }, "then": { "required": ["expr"] } },
+            { "if": { "properties": { "mode": { "const": "model" } }, "required": ["mode"] }, "then": { "required": ["template"] } }
+          ]
+        }
+      ]
+    },
+
     "EffectDef": {
       "type": "object",
       "required": ["type"],
@@ -291,6 +326,11 @@
           "items": { "$ref": "#/$defs/EffectDef" },
           "minItems": 1,
           "description": "Child effects to execute. Must be non-empty."
+        },
+        "finally": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EffectDef" },
+          "description": "Cleanup effects run after 'effects' completes, whether it succeeded or failed, and best-effort on a Ctrl-C/cancellation. Always sequential, regardless of this dynamic's own flow. Only legal here and at the document root."
         },
         "max_concurrency": {
           "type": "integer",
@@ -489,6 +529,8 @@
           "description": "A Mustache template rendered to text and then parsed as JSON, producing a real object/array (not just strings). The parsed object is deep-merged over 'params' (params_json wins on overlapping keys). Use this to pass a runtime-built array or nested object to a tool whose schema requires one, e.g. '{\"arguments\": {\"symbols\": {{{prime.symbol_list.value}}} }}'."
         },
         "timeout_ms": { "type": "integer", "minimum": 0 },
+        "retries": { "$ref": "#/$defs/RetryPolicyDef" },
+        "expect": { "$ref": "#/$defs/ExpectDef" },
         "on_error": { "$ref": "#/$defs/OnErrorDefault" }
       }
     },
@@ -533,6 +575,8 @@
           "description": "Output mapping. Keys become fields in this effect's .value. Canonical value form is an object with a 'path' into the child's final state — {path: 'prime.summarize.value'} — the same shape 'interface.outputs' takes; a bare path string is accepted shorthand. When omitted, the entire child state is exposed at prime.<use_name>.<child_effect>.value (full-namespace mode).",
           "additionalProperties": { "$ref": "#/$defs/OutputDecl" }
         },
+        "retries": { "$ref": "#/$defs/RetryPolicyDef" },
+        "expect": { "$ref": "#/$defs/ExpectDef" },
         "on_error": { "$ref": "#/$defs/OnErrorDefault" }
       },
       "oneOf": [
