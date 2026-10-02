@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import math
@@ -15,6 +16,7 @@ from ..output import console as _console
 from ..plugins.base import ToolResult
 from .store import Store
 from .templates import render_template
+from .use import _resolve_reference
 
 logger = logging.getLogger(__name__)
 
@@ -110,14 +112,68 @@ def _format_output(value: Any) -> str:
         return s
 
 
-def _render_params(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
-    """Recursively Mustache-render all string values in params against ctx.
+#: The one or two keys of a by-reference ``params`` leaf: ``{from: <path>}``,
+#: optionally with a ``default:`` for when the path doesn't resolve (#234).
+PARAM_REFERENCE_KEY = "from"
+PARAM_DEFAULT_KEY = "default"
 
-    A value that fails to render raises (naming its path) rather than handing
-    the tool unrendered text.
+
+@dataclass(frozen=True)
+class ParamReference:
+    path: str
+    has_default: bool = False
+    default: Any = None
+
+
+def param_reference(value: Any) -> ParamReference | None:
+    """A ``params`` leaf's ``{from: <path>}`` (optionally with ``default:``), or None.
+
+    Only a mapping with exactly the keys ``{"from"}`` or ``{"from", "default"}``,
+    and a string ``from`` value, is a reference — any other mapping (including
+    one with other keys mixed in) is passed through literally, same as before.
+    ``params_json`` is the way to pass a literal one-key ``{from: ...}`` dict.
+    """
+    if not isinstance(value, dict):
+        return None
+    keys = set(value.keys())
+    if keys == {PARAM_REFERENCE_KEY}:
+        path = value[PARAM_REFERENCE_KEY]
+        return ParamReference(path=path.strip()) if isinstance(path, str) else None
+    if keys == {PARAM_REFERENCE_KEY, PARAM_DEFAULT_KEY}:
+        path = value[PARAM_REFERENCE_KEY]
+        if isinstance(path, str):
+            return ParamReference(
+                path=path.strip(), has_default=True, default=value[PARAM_DEFAULT_KEY]
+            )
+        return None
+    return None
+
+
+def _render_params(params: dict[str, Any], ctx: dict[str, Any], *, name: str) -> dict[str, Any]:
+    """Resolve by-reference leaves, then Mustache-render every remaining string in params.
+
+    A ``{from: <path>}`` leaf, at any depth in ``params`` (objects and lists),
+    passes the value at *path* through untouched — typed, deep-copied, never
+    rendered — the same contract as a ``use`` effect's own by-reference
+    inputs (``core.use._render_inputs``). A path that doesn't resolve raises,
+    naming the param's own path, unless the leaf also carries ``default:``,
+    which is used as-is (mirroring how ``interface.inputs`` defaults fill an
+    unresolved/absent value). Any other value that fails to render also
+    raises, naming its path, rather than handing the tool unrendered text.
     """
 
     def _render_value(v: Any, path: str) -> Any:
+        ref = param_reference(v)
+        if ref is not None:
+            resolved = _resolve_reference(ctx, ref.path)
+            if resolved is None:
+                if ref.has_default:
+                    return copy.deepcopy(ref.default)
+                raise ValueError(
+                    f"Tool effect '{name}' param '{path}': "
+                    f"'{{from: {ref.path}}}' did not resolve to a value."
+                )
+            return copy.deepcopy(resolved)
         if isinstance(v, str):
             return render_template(v, ctx, label=path)
         if isinstance(v, dict):
@@ -457,7 +513,7 @@ class ToolRuntime:
                 top_level["model"] = self.defn.model
 
             _reject_templated_security_params(self.defn.params)
-            params = _render_params(self.defn.params, ctx)
+            params = _render_params(self.defn.params, ctx, name=self.defn.name)
             if self.defn.params_json is not None:
                 params_json_overlay = _render_params_json(self.defn.params_json, ctx)
                 _reject_params_json_security_overrides(params_json_overlay)
