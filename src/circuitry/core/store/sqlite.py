@@ -84,6 +84,41 @@ class SQLiteStatePersistence:
             f"Persisted state_json has unsupported type: {type(payload).__name__}"
         )
 
+    def load_run(
+        self, *, orchestration_path: str, run_id: str
+    ) -> dict[str, Any] | None:
+        """The one row for *run_id*, scoped to *orchestration_path* so a
+        run-id from a different document is never returned (#270)."""
+        try:
+            with self._connect() as conn:
+                self._ensure_schema(conn)
+                cur = conn.execute(
+                    f"""
+                    SELECT state_json
+                    FROM {self._quoted_table}
+                    WHERE run_id = ? AND orchestration_path = ?
+                    """,
+                    (run_id, orchestration_path),
+                )
+                row = cur.fetchone()
+        except Exception as e:
+            raise RuntimeError(
+                f"SQLite state load failed for run_id={run_id}: {e}"
+            ) from e
+
+        if not row:
+            return None
+
+        payload = row[0]
+        if isinstance(payload, str):
+            decoded = json.loads(payload)
+            if isinstance(decoded, dict):
+                return decoded
+            raise RuntimeError("Persisted state_json is not a JSON object")
+        raise RuntimeError(
+            f"Persisted state_json has unsupported type: {type(payload).__name__}"
+        )
+
     def save_run_snapshot(
         self,
         *,

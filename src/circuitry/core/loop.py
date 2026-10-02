@@ -14,6 +14,7 @@ from ..adapters import Adapter
 from ..output import console as _console
 from .answers import parse_boolean_answer
 from .disabled import is_disabled_node, is_enabled
+from .resume import loop_pass_completed_ok
 from .scope import local_writes as _local_writes_state
 from .scope import scope_ctx as _scope_ctx
 from .store import Store
@@ -155,6 +156,7 @@ class LoopRuntime:
         depth: int = 0,
         ancestors: list | None = None,
         label_prefix: str | None = None,
+        resume: bool = False,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -171,6 +173,15 @@ class LoopRuntime:
         self._ancestors = ancestors or []
         # Set by an enclosing ``use`` effect — see ``_child_display_name``.
         self._label_prefix = label_prefix
+        # ``cof run --resume``: a named loop in chain flow (every ``while``,
+        # or an ``each`` not running ``flow: tree``) resumes at its first
+        # unfinished pass, keeping whatever contiguous prefix of ``iter_<N>``
+        # passes already finished without error — see ``_resume_from_pass``.
+        # An unnamed loop has no ``iter_<N>`` record to resume from (each
+        # pass overwrites the last at the same path) and a tree-flow each
+        # loop's passes finish out of order, so neither is "sound" to resume
+        # granularly; both just rerun whole, same as today.
+        self.resume = resume
         # Raw reply from the last `mode: model` while-condition evaluation,
         # success or failure — set inside _evaluate_model and read back in
         # execute() to record meta["answer"] alongside the parsed result.
@@ -270,6 +281,48 @@ class LoopRuntime:
         # Walking those keys collected stale passes alongside this run's
         # own; this list can't, since it only ever grows during this call.
         completed_indices: list[int] = []
+
+        # ``cof run --resume``: the count of leading passes already sitting
+        # on *node* (a named loop in chain flow) that finished without
+        # error, contiguous from iter_0 — the first index where that streak
+        # breaks is "the first unfinished pass" the loop resumes at. Stays 0
+        # (full rerun) for an unnamed loop, a tree-flow each loop, or a plain
+        # (non-resumed) run.
+        resume_from = 0
+        if (
+            self.resume
+            and is_named
+            and node is not None
+            and (
+                self.defn.while_def is not None
+                or (self.defn.each_def is not None and self.defn.flow == "chain")
+            )
+        ):
+            idx = 0
+            while True:
+                iter_node = node.get(f"iter_{idx}")
+                if not isinstance(iter_node, dict) or not loop_pass_completed_ok(
+                    iter_node
+                ):
+                    break
+                resume_from = idx + 1
+                idx += 1
+            if resume_from > 0:
+                kept_record = {
+                    "executed_effects": [
+                        {"type": type(e).__name__, "name": getattr(e, "name", None)}
+                        for e in self.defn.body
+                    ],
+                    "count": len(self.defn.body),
+                }
+                for i in range(resume_from):
+                    iterations_effects.append(dict(kept_record))
+                    completed_indices.append(i)
+                iteration_count = resume_from
+                last_completed = resume_from - 1
+                prev_writes = _local_writes_state(
+                    node[f"iter_{last_completed}"], frozenset(), self._body_names()
+                )
 
         # Build ancestor context for children (this loop is now a parent)
         from .dynamic import _EFFECT_STYLE as _ES
@@ -508,6 +561,10 @@ class LoopRuntime:
                     # Sequential iteration (default)
                     total = len(collection)
                     for idx, item in enumerate(collection):
+                        if idx < resume_from:
+                            # Kept from the saved state above (#270) — not
+                            # re-rendered, not re-dispatched.
+                            continue
                         if (
                             self.defn.max_iterations is not None
                             and idx >= self.defn.max_iterations
@@ -568,7 +625,10 @@ class LoopRuntime:
                 # body itself uses — a grammar a body template can use but a
                 # condition template cannot would send control flow wrong
                 # rather than merely rendering a prompt empty.
-                last_writes: dict[str, Any] = {}
+                last_writes: dict[str, Any] = (
+                    prev_writes if resume_from > 0 and prev_writes is not None else {}
+                )
+                iteration_count = resume_from
 
                 while (
                     self.defn.max_iterations is None

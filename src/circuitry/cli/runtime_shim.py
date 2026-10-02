@@ -18,6 +18,7 @@ from ..core.compiler import apply_effect_overrides, compile_orchestration
 from ..core.document_check import structural_errors, unknown_key_warnings
 from ..core.dynamic import DynamicRuntime
 from ..core.interface_inputs import check_interface_inputs
+from ..core.resume import document_sha256
 from ..core.runtime_plugins import (
     PLUGIN_CONTRACT_VERSION,
     PluginContext,
@@ -149,6 +150,15 @@ class RunRequest:
     # and network/tool-chosen documents keep the default and stay limited to
     # ORCHESTRATION_RUNTIME_KEYS — see `resolve_effective_settings`.
     trust_document: bool = False
+    # `cof run --resume`: when true, this run skips any effect whose node in
+    # `initial_state` already finished without error (see `core.resume`),
+    # and a named loop in chain flow resumes at its first unfinished pass
+    # instead of rerunning every pass. Resolving *which* saved state to pass
+    # as `initial_state` (an explicit --state file, the --last stash, or a
+    # persistence backend's run-id lookup) and the document-hash/input
+    # safety checks are the caller's job (see `cli.app.run_cmd`) — this flag
+    # only turns on the engine-level skip behavior once that state is here.
+    resume: bool = False
 
 
 @dataclass(frozen=True)
@@ -358,9 +368,18 @@ def run(req: RunRequest) -> RunResult:
         # run's (`--state`/persistence carryover).
         state["_run_id"] = run_id
         state["_timestamp"] = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        try:
+            document_hash = document_sha256(req.orchestration_path)
+        except OSError:
+            # The document check above already loaded this same file; an
+            # unreadable path would have failed there first. Still, a race
+            # (the file vanished between then and now) shouldn't block a run
+            # over a hash that only matters for a *future* --resume.
+            document_hash = None
         state["runtime"]["last_run"] = {
             "run_id": run_id,
             "orchestration_path": str(req.orchestration_path),
+            "document_hash": document_hash,
             "dry_run": req.dry_run,
             "validate_only": req.validate_only,
             "verbose": req.verbose,
@@ -666,6 +685,7 @@ def run(req: RunRequest) -> RunResult:
             dry_run=req.dry_run,
             timeout_seconds=timeout_seconds,
             verbose=req.verbose,
+            resume=req.resume,
         )
         runtime.execute(store=store)
 

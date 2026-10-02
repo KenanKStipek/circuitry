@@ -86,6 +86,47 @@ class JsonlFileStatePersistence:
             )
         return None
 
+    def load_run(
+        self, *, orchestration_path: str, run_id: str
+    ) -> dict[str, Any] | None:
+        """The one record for *run_id*, scoped to *orchestration_path* so a
+        run-id from a different document (or a different project's log,
+        accidentally pointed at by the same path) is never returned (#270).
+        """
+        log_file = self._resolve_path()
+        if not log_file.exists():
+            return None
+
+        try:
+            lines = log_file.read_text(encoding="utf-8").splitlines()
+        except Exception as e:
+            raise RuntimeError(
+                f"JSONL state load failed for run_id={run_id}: {e}"
+            ) from e
+
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                logger.warning("Skipping malformed JSONL record in %s", log_file)
+                continue
+            if not isinstance(record, dict):
+                continue
+            if record.get("run_id") != run_id:
+                continue
+            if record.get("orchestration_path") != orchestration_path:
+                continue
+            state = record.get("state")
+            if isinstance(state, dict):
+                return state
+            raise RuntimeError(
+                f"Persisted state is not a JSON object in {log_file} for run_id={run_id}"
+            )
+        return None
+
     def save_run_snapshot(
         self,
         *,

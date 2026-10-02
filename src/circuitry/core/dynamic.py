@@ -14,6 +14,7 @@ from ..adapters import Adapter
 from ..output import console as _console
 from .disabled import is_enabled, write_disabled_node
 from .prompt import PromptDefinition, PromptRuntime
+from .resume import effect_completed_ok
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -133,6 +134,7 @@ class DynamicRuntime:
         depth: int = 0,
         ancestors: list[AncestorContext] | None = None,
         label_prefix: str | None = None,
+        resume: bool = False,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -152,6 +154,16 @@ class DynamicRuntime:
         # that spawned them — see ``_child_display_name`` and
         # ``UseRuntime.execute``.
         self._label_prefix = label_prefix
+        # ``cof run --resume``: when true, ``_execute_effect`` skips a child
+        # whose own node already finished without error, reusing it as-is —
+        # see ``core.resume``. Carried down into every nested ``dynamic``/
+        # ``loop`` this instance constructs, so the skip applies at any
+        # depth a chain of ``dynamic``s reaches. ``conditional``/``use``/
+        # ``reflector`` children aren't passed this flag: a conditional or
+        # reflector always reruns whole once reached, and a ``use`` child
+        # runs its sub-orchestration in a fresh, isolated state with no
+        # resumable history of its own — so the flag would be a no-op there.
+        self.resume = resume
 
     def execute(
         self, *, store: Store, ctx_override: dict[str, Any] | None = None
@@ -479,6 +491,23 @@ class DynamicRuntime:
             )
             return
 
+        if (
+            self.resume
+            and isinstance(name, str)
+            and name != "?"
+            and effect_completed_ok(store.state.get(name))
+        ):
+            if self.verbose and not is_prompt and not is_tool and not is_use:
+                line = (
+                    f"{indent}[ok]↻[/ok] [{color}]{icon}[/{color}]"
+                    f" {name} [dim](resumed)[/dim]"
+                )
+                if cb_done is not None:
+                    cb_done(line)
+                else:
+                    _console.print(line)
+            return
+
         if self.verbose and not is_prompt and not is_tool and not is_use:
             if cb_start is not None:
                 cb_start()
@@ -521,6 +550,7 @@ class DynamicRuntime:
                     depth=self.depth + 1,
                     ancestors=self._child_ancestors,
                     label_prefix=self._label_prefix,
+                    resume=self.resume,
                 ).execute(store=store, ctx_override=ctx)
 
             elif isinstance(effect, ReflectorDefinition):
@@ -562,6 +592,7 @@ class DynamicRuntime:
                     depth=self.depth,
                     ancestors=self._child_ancestors,
                     label_prefix=self._label_prefix,
+                    resume=self.resume,
                 ).execute(store=store, ctx=ctx)
 
             elif isinstance(effect, ToolDefinition):

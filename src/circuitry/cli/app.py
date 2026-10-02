@@ -16,7 +16,9 @@ from rich.panel import Panel
 from rich.table import Table
 from typer.core import TyperGroup
 
+from ..core.resume import document_sha256
 from ..core.saved_state import dumps_saved_state
+from ..core.store import build_persistence_backend
 
 # The wizard host (chat's transcript, verdict, and save logic) — `cof wizard`
 # drives the exact same functions `circuitry.tui.chat.ChatScreen` does, so the
@@ -47,7 +49,7 @@ from .config_trust import TrustStoreError, record_trust
 from .doctor import register_doctor
 from .effective_settings import resolve_effective_settings
 from .explain_routing import make_explain_routing_observer
-from .last_run import LAST_RUN_PATH
+from .last_run import LAST_RUN_PATH, read_last_run
 from .library_sources import (
     Entry,
     LibraryFetchError,
@@ -385,6 +387,138 @@ def _load_last_run() -> dict[str, Any]:
     return json.loads(_LAST_RUN_PATH.read_text(encoding="utf-8"))
 
 
+def _resolve_resume_state(
+    *,
+    resume: str,
+    force: bool,
+    state_arg: Path | None,
+    orch_path: Path,
+    env_vars: list[str] | None,
+    config: Path | None,
+    cfg: CircuitryConfig,
+    trust_document: bool,
+) -> tuple[dict[str, Any], list[str]]:
+    """The saved state ``--resume`` continues from, and the args to replay
+    alongside it, with both safety checks (#270) already applied.
+
+    Three sources, picked by what the caller gave:
+
+    * ``--state <file>`` (also given): that file, named explicitly — the
+      most direct way to point at "whatever the run left behind".
+    * ``--resume last``: the most recent run's own ``--out``, found via the
+      ``--last`` stash (#320) — the stashed ``-e`` args are returned too, so
+      the caller can replay them the same way plain ``--last`` does.
+    * ``--resume <run-id>``: looked up in the orchestration's configured
+      ``runtime.persistence`` backend.
+
+    Raises ``typer.BadParameter`` naming exactly what's missing or
+    mismatched; the caller turns that into the usual CLI error.
+    """
+    replay_env_vars: list[str] = []
+    if state_arg is not None:
+        try:
+            loaded = _read_state_file(state_arg)
+        except FileNotFoundError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    elif resume == "last":
+        stash = read_last_run()
+        if stash is None:
+            raise typer.BadParameter(
+                "No previous run found — nothing to resume from."
+            )
+        if not stash.ok:
+            raise typer.BadParameter(f"{stash.error} Nothing to resume from.")
+        if Path(stash.orchestration) != orch_path and stash.orchestration != str(orch_path):
+            raise typer.BadParameter(
+                f"The last run was {stash.orchestration!r}, not {orch_path} — "
+                "run that orchestration again, or pass --state <file> to "
+                "resume a specific saved state instead of 'last'."
+            )
+        if stash.out_path is None:
+            raise typer.BadParameter(
+                "The last run did not use --out, so it saved no state to resume from."
+            )
+        try:
+            loaded = _read_state_file(stash.out_path)
+        except FileNotFoundError as exc:
+            raise typer.BadParameter(
+                f"The last run's --out file is gone: {exc}"
+            ) from exc
+        replay_env_vars = stash.env_pairs
+    else:
+        orch = load_orchestration_file(orch_path)
+        effective = resolve_effective_settings(
+            cfg=cfg,
+            orch=orch,
+            trust_document=trust_document,
+            document_name=orch_path.name,
+        )
+        persistence = build_persistence_backend(effective.runtime or {})
+        if persistence is None:
+            raise typer.BadParameter(
+                "--resume <run-id> needs this orchestration's "
+                "runtime.persistence backend enabled — that's how a run-id "
+                "is looked up. Use --resume last or --state <file> instead, "
+                "or configure persistence."
+            )
+        found = persistence.load_run(orchestration_path=str(orch_path), run_id=resume)
+        if found is None:
+            raise typer.BadParameter(
+                f"No persisted state found for run-id {resume!r} and "
+                f"orchestration {orch_path} — check the run-id, and that it "
+                "was run against this same orchestration."
+            )
+        loaded = found
+
+    if not isinstance(loaded, dict):
+        raise typer.BadParameter("The saved state to resume from is not a JSON object.")
+
+    # Safety 1: refuse a document that changed since the run being resumed —
+    # a stale node's recorded `params_rendered`/output could no longer match
+    # what this document would now produce for it.
+    last_run_record = loaded.get("runtime", {}).get("last_run") if isinstance(
+        loaded.get("runtime"), dict
+    ) else None
+    recorded_hash = (
+        last_run_record.get("document_hash")
+        if isinstance(last_run_record, dict)
+        else None
+    )
+    if recorded_hash and not force:
+        try:
+            current_hash = document_sha256(orch_path)
+        except OSError:
+            current_hash = None
+        if current_hash is not None and current_hash != recorded_hash:
+            raise typer.BadParameter(
+                f"{orch_path} changed since the run being resumed (content "
+                "hash differs) — rerun from scratch, or pass --force to "
+                "resume anyway."
+            )
+
+    # Safety 2: refuse silently-inherited inputs when there's no args stash
+    # to fall back on. --state names its own file (as explicit as it gets)
+    # and --resume last replays the stash above (same contract --last
+    # already has) — only a bare run-id has neither, so that's the one path
+    # that must see this invocation's own -e again before reusing anything.
+    recorded_input_ns = loaded.get("input")
+    if (
+        state_arg is None
+        and resume != "last"
+        and isinstance(recorded_input_ns, dict)
+        and recorded_input_ns
+        and not env_vars
+    ):
+        keys = ", ".join(sorted(recorded_input_ns))
+        raise typer.BadParameter(
+            f"The saved run had explicit inputs ({keys}) and this "
+            "invocation passed none — pass them again with -e to resume, "
+            "or rerun from scratch."
+        )
+
+    return loaded, replay_env_vars
+
+
 def _do_validate(
     orchestration: Path,
     json_out: bool,
@@ -524,8 +658,20 @@ RUN_EPILOG = """
   cof run ./my-orch.yml --scoring --routing --decompose
   cof run ./my-orch.yml --no-routing
   cof run --last
+  cof run ./my-orch.yml --resume last
+  cof run ./my-orch.yml --state ./run.json --resume x
 
 [bold]Resolution order:[/bold] local file path > bundled orchestration name.
+
+[bold]--resume[/bold] continues an interrupted or failed run of the SAME
+orchestration from its saved state: an effect that already finished without
+error is skipped and reused; the first unfinished or failed one, and
+everything after it, reruns (a named loop resumes at its first unfinished
+pass). 'last' finds the saved state through the --last stash; a run-id is
+looked up in the orchestration's runtime.persistence backend; --state
+<file> --resume names a saved state file directly. Refuses a document that
+changed since that run unless --force, and refuses silently-inherited
+inputs on the run-id path unless -e passes them again.
 
 [bold]Trust:[/bold] a file you name by path applies its whole runtime: block
 and plugins: list, with one notice naming any host settings among them; a
@@ -602,6 +748,27 @@ def run_cmd(
         False, "--last",
         help="Re-run the most recent orchestration with the same arguments.",
     ),
+    resume: str | None = typer.Option(
+        None, "--resume",
+        help=(
+            "Resume an interrupted or failed run of the SAME orchestration "
+            "from its saved state: 'last' (the most recent run's --out) or "
+            "a run-id (looked up in the orchestration's configured "
+            "runtime.persistence backend). Effects whose node already "
+            "finished without error are skipped and reused; the first "
+            "unfinished or failed one, and everything after it, reruns. A "
+            "named loop resumes at its first unfinished pass. Combine with "
+            "--state <file> to resume from a specific saved state file "
+            "directly instead of 'last'/a run-id."
+        ),
+    ),
+    force: bool = typer.Option(
+        False, "--force",
+        help=(
+            "With --resume, continue even though the orchestration's "
+            "content changed since the saved run."
+        ),
+    ),
     skip_preflight: bool = typer.Option(
         False, "--skip-preflight",
         help="Bypass dependency preflight; run even if check()s reported missing deps.",
@@ -675,6 +842,10 @@ def run_cmd(
         ),
     ),
 ):
+    if resume and last:
+        console.print("[red]Error:[/red] --resume and --last are mutually exclusive.")
+        raise typer.Exit(code=1)
+
     # --last: replay stashed args
     stashed_trust: bool | None = None
     stashed_service_profile: str | None = None
@@ -784,6 +955,24 @@ def run_cmd(
         console.print("[red]Error:[/red] --tail is mutually exclusive with --print and --json.")
         raise typer.Exit(code=1)
 
+    resumed_state: dict[str, Any] | None = None
+    resume_replay_env_vars: list[str] = []
+    if resume:
+        try:
+            resumed_state, resume_replay_env_vars = _resolve_resume_state(
+                resume=resume,
+                force=force,
+                state_arg=state,
+                orch_path=orch_path,
+                env_vars=env_vars,
+                config=config,
+                cfg=cfg,
+                trust_document=trust_document,
+            )
+        except typer.BadParameter as exc:
+            console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(code=1) from exc
+
     if profile and profile_from_state:
         console.print("[red]Error:[/red] --profile and --profile-from-state are mutually exclusive.")
         raise typer.Exit(code=1)
@@ -827,21 +1016,37 @@ def run_cmd(
             if value is not None:
                 console.print(f"[bold]{label} (override):[/bold] {'on' if value else 'off'}")
         console.print(f"[bold]Dry run:[/bold] {dry_run}")
+        if resume:
+            console.print(f"[bold]Resume:[/bold] {resume}{' (--force)' if force else ''}")
 
-    # Build initial state from --state file + -e overrides
+    # Build initial state from --state file + -e overrides, or (--resume)
+    # from the resolved resume source + -e overrides (the stashed env_vars,
+    # for --resume last, when this invocation didn't pass its own).
     initial_state: dict[str, Any] | None = None
-    inline = _parse_env_vars(env_vars)
-    if inline:
-        _restore_raw_text_for_string_inputs(inline, _raw_env_var_text(env_vars), orch_path)
-        if state:
-            try:
-                initial_state = _read_state_file(state)
-            except FileNotFoundError as exc:
-                _print_missing_state_file_error(exc, json_out=json_out)
-                raise typer.Exit(code=1) from exc
-            initial_state = apply_inline_overrides(initial_state, inline)
+    if resume:
+        assert resumed_state is not None
+        effective_env_vars = env_vars or resume_replay_env_vars or None
+        inline = _parse_env_vars(effective_env_vars)
+        if inline:
+            _restore_raw_text_for_string_inputs(
+                inline, _raw_env_var_text(effective_env_vars), orch_path
+            )
+            initial_state = apply_inline_overrides(resumed_state, inline)
         else:
-            initial_state = inline
+            initial_state = resumed_state
+    else:
+        inline = _parse_env_vars(env_vars)
+        if inline:
+            _restore_raw_text_for_string_inputs(inline, _raw_env_var_text(env_vars), orch_path)
+            if state:
+                try:
+                    initial_state = _read_state_file(state)
+                except FileNotFoundError as exc:
+                    _print_missing_state_file_error(exc, json_out=json_out)
+                    raise typer.Exit(code=1) from exc
+                initial_state = apply_inline_overrides(initial_state, inline)
+            else:
+                initial_state = inline
 
     # --explain-routing prints its own line per prompt effect as it dispatches
     # (see cli.explain_routing); --quiet and --json both mean "no prose on
@@ -873,6 +1078,7 @@ def run_cmd(
         effect_start_observer=effect_start_observer,
         decompose_out=decompose_out,
         trust_document=trust_document,
+        resume=bool(resume),
     )
 
     with (
@@ -891,25 +1097,11 @@ def run_cmd(
     if resolved_out:
         _write_state_json(out=resolved_out, state=result.state, pretty=pretty)
 
-    if not result.ok:
-        if json_out:
-            payload = {
-                "ok": False,
-                "error": result.error,
-                "warnings": result.warnings,
-                "state_out": str(resolved_out) if resolved_out else None,
-            }
-            console.print_json(json.dumps(payload))
-        else:
-            console.print("[red]Run failed[/red]")
-            console.print(f"[red]Error:[/red] {result.error}")
-            if resolved_out:
-                console.print(f"[bold]State written:[/bold] {resolved_out}")
-        raise typer.Exit(code=1)
-
-    # Stash for --last (only on success, skip if replaying via --last).
-    # Env-var values for credential-shaped keys are redacted before disk write —
-    # see RUN_EPILOG and circuitry.cli.redaction.
+    # Stash for --last/--resume last (success or failure, skip if replaying
+    # via --last itself) — a failed run must leave a stash too, or
+    # `--resume last` would have no record to find its --out through (#270).
+    # Env-var values for credential-shaped keys are redacted before disk write
+    # — see RUN_EPILOG and circuitry.cli.redaction.
     if not last:
         _save_last_run({
             "orchestration": str(orch_path),
@@ -937,6 +1129,22 @@ def run_cmd(
             "decompose": decompose,
             "trust_document": trust_document,
         })
+
+    if not result.ok:
+        if json_out:
+            payload = {
+                "ok": False,
+                "error": result.error,
+                "warnings": result.warnings,
+                "state_out": str(resolved_out) if resolved_out else None,
+            }
+            console.print_json(json.dumps(payload))
+        else:
+            console.print("[red]Run failed[/red]")
+            console.print(f"[red]Error:[/red] {result.error}")
+            if resolved_out:
+                console.print(f"[bold]State written:[/bold] {resolved_out}")
+        raise typer.Exit(code=1)
 
     if tail:
         val = _find_last_effect_value(result.state)

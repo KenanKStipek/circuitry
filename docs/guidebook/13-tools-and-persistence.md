@@ -227,6 +227,28 @@ With a backend configured, a run loads the last persisted state for the orchestr
 
 [Postgres Persistence](../postgres-persistence.md) has the production notes.
 
+### Resuming a run (`cof run --resume`)
+
+Persistence seeds a run's *starting* state; it does not skip anything —
+every effect reruns regardless of what a prior attempt already finished.
+`cof run --resume last` (or `--resume <run-id>`, or `--state <file>
+--resume <anything>`) is the opt-in that does skip: it continues an
+interrupted or failed run of the same document, reusing every effect whose
+node already finished without error (`meta.completed_at` set, no
+`meta.error`) and rerunning only the first unfinished/failed one and
+everything after it. A named loop in chain flow resumes at its first
+unfinished pass, keeping the finished `iter_<N>` passes — see [Resuming a
+Run](../orchestration-reference.md#resuming-a-run-cof-run---resume) in the
+reference for the full skip/rerun rule, the three state sources (`--state`,
+`--resume last`, `--resume <run-id>` via this section's persistence
+backend), and the content-hash/inputs safety checks.
+
+This is the owner's long film/upscale pipelines' main use: a 164-minute
+video-upscale loop that crashes at frame 250 doesn't lose the 249 already-
+rendered frames — `cof run upscale.yml --state run.json --resume x` picks
+up at frame 250, and the adapter/tool calls for frames 0–249 never happen
+again.
+
 ## Anti-patterns
 
 **A tool for text work.** Summarising is a prompt. A tool that "analyses" is a prompt wearing a `provider:`.

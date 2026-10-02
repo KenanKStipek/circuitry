@@ -26,6 +26,10 @@ class PersistenceBackend(Protocol):
         self, *, orchestration_path: str
     ) -> dict[str, Any] | None: ...
 
+    def load_run(
+        self, *, orchestration_path: str, run_id: str
+    ) -> dict[str, Any] | None: ...
+
     def save_run_snapshot(
         self,
         *,
