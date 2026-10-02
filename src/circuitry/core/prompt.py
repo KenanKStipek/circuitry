@@ -4,17 +4,19 @@ import hashlib
 import json
 import logging
 import math
-import random
 import time
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from typing import Any, Literal
 
 from ..adapters import Adapter, build_adapter
-from ..adapters._retry import RetryInfo, classify_exception
+from ..adapters._retry import (
+    RetryInfo,
+    classify_exception,
+    next_backoff_delay_ms,
+)
 from ..adapters.base import (
     TRUNCATED_FINISH_REASONS,
     ChatMessage,
@@ -32,12 +34,6 @@ from .store import Store
 from .templates import render_template
 
 logger = logging.getLogger(__name__)
-
-#: Exponential-backoff ceiling for a retryable failure's wait, including one
-#: driven by a provider's own ``Retry-After`` — a provider asking for longer
-#: than this is still only waited out this long, so a single effect's
-#: retries can't stall a run indefinitely.
-_RETRY_BACKOFF_CAP_MS = 60_000
 
 #: A decode/schema-validation failure's raw reply is capped before it goes
 #: into ``meta.fallback_attempts`` — state is serialized to ``--out``,
@@ -98,28 +94,6 @@ def _cap_reply_text(text: str) -> str:
     return f"{text[:_RAW_REPLY_CAP_CHARS]}... [truncated, {len(text)} chars total]"
 
 
-def _parse_retry_after_seconds(value: str) -> float | None:
-    """A ``Retry-After`` header value (seconds, or an HTTP-date) as seconds from now.
-
-    ``None`` when ``value`` is neither — a header present but unparseable
-    must not be read as "wait forever" or crash the retry loop.
-    """
-    value = (value or "").strip()
-    if not value:
-        return None
-    try:
-        return max(0.0, float(value))
-    except ValueError:
-        pass
-    try:
-        when = parsedate_to_datetime(value)
-    except (TypeError, ValueError, IndexError):
-        return None
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
-
-
 def _retry_info_for(exc: Exception | None) -> RetryInfo:
     """``RetryInfo`` for the error that ended a dispatch pass.
 
@@ -135,24 +109,6 @@ def _retry_info_for(exc: Exception | None) -> RetryInfo:
     if isinstance(exc, (AnswerParseError, SchemaValidationError)):
         return RetryInfo(retryable=True)
     return classify_exception(exc)
-
-
-def _next_backoff_delay_ms(retry_info: RetryInfo, *, attempt_index: int, base_ms: int) -> int:
-    """How long to wait before the next retry: exponential backoff with full
-    jitter, starting from ``base_ms`` and capped at :data:`_RETRY_BACKOFF_CAP_MS`.
-
-    ``attempt_index`` is the 0-based attempt that just failed, so the first
-    retry's ceiling is ``base_ms`` and each subsequent one roughly doubles.
-    A provider's own ``Retry-After`` (when the failing adapter could supply
-    one) overrides the computed wait outright, still capped — the provider
-    knows its own rate limit better than a generic curve does.
-    """
-    if retry_info.retry_after:
-        retry_after_seconds = _parse_retry_after_seconds(retry_info.retry_after)
-        if retry_after_seconds is not None:
-            return min(_RETRY_BACKOFF_CAP_MS, int(retry_after_seconds * 1000))
-    ceiling = min(_RETRY_BACKOFF_CAP_MS, base_ms * (2**attempt_index))
-    return int(random.uniform(0, ceiling))
 
 
 class _PromptSpinner:
@@ -812,7 +768,7 @@ class PromptRuntime:
                         self.cb_error(line)
                     else:
                         _console.print(line)
-                next_delay_ms = _next_backoff_delay_ms(
+                next_delay_ms = next_backoff_delay_ms(
                     retry_info, attempt_index=_attempt, base_ms=backoff_ms
                 )
 
