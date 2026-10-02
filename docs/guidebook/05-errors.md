@@ -16,7 +16,7 @@ This chapter comes before the cybernetic effects on purpose. A control loop that
   on_error: skip        # no reply drafted — the fix goes on
 ```
 
-**`retries`** — `{max_attempts, backoff_ms}` on a prompt. Each attempt re-renders nothing and re-sends the same prompt. Not every failure is retried: a dispatch failure (the adapter call itself erroring) is classified first — a rate limit, a request timeout, a 5xx, or a connection that never completed is worth trying again; a bad request, an auth failure, a not-found, or a missing key never will be, so that failure ends the attempt loop immediately rather than spending the rest of `max_attempts` on something that cannot succeed. A reply that came back but could not be used — see `provider_fallbacks` below — is always worth retrying, the same as before this classification existed. The wait between a retryable failure and the next attempt is exponential backoff with jitter starting from `backoff_ms`, capped at 60 seconds; a provider's own `Retry-After` response header, when the adapter can read one, overrides the computed wait outright (still capped) — litellm reads it off the SDK exception's response headers, and the curl-based adapters (openai, anthropic, ollama, watsonx, replicate, and the OpenAI-compatible family) capture it the same way `run_curl` keeps everything else off argv and out of temp files, falling back to the computed backoff on curl too old to support the capture. Each attempt is recorded, and `meta.retries_used` says how many it took. Prompts only — a tool that failed is not usually improved by asking again, and a `use` child carries its own policies.
+**`retries`** — `{max_attempts, backoff_ms}` on a prompt. Each attempt re-renders nothing and re-sends the same prompt. Not every failure is retried: a dispatch failure (the adapter call itself erroring) is classified first — a rate limit, a request timeout, a 5xx, or a connection that never completed is worth trying again; a bad request, an auth failure, a not-found, or a missing key never will be, so that failure ends the attempt loop immediately rather than spending the rest of `max_attempts` on something that cannot succeed. A reply that came back but could not be used — see `provider_fallbacks` below — is always worth retrying, the same as before this classification existed. The wait between a retryable failure and the next attempt is exponential backoff with jitter starting from `backoff_ms`, capped at 60 seconds; a provider's own `Retry-After` response header, when the adapter can read one, overrides the computed wait outright (still capped) — litellm reads it off the SDK exception's response headers, and the curl-based adapters (openai, anthropic, ollama, watsonx, replicate, and the OpenAI-compatible family) capture it the same way `run_curl` keeps everything else off argv and out of temp files, falling back to the computed backoff on curl too old to support the capture. Each attempt is recorded, and `meta.retries_used` says how many it took. `tool` and `use` take the same `retries` key, with their own retryable classification — see below.
 
 **`provider_fallbacks`** — an ordered list of providers to try when the primary errors *or* answers with something this effect can't use: an unreadable boolean/number, or JSON that fails its `schema`. Either kind of failure moves to the next provider in the list before a retry is ever counted — a small local model that keeps answering "maybe" to a yes/no prompt reaches a stronger fallback instead of exhausting `retries` on itself. Each entry is an `adapter[:model]` token: `ollama` means the ollama adapter with the run's default model; `openai:gpt-4o-mini` names both. The attempt chain — every adapter and model tried, in order, with its outcome and token cost — lands at `meta.fallback_attempts`, and `meta.fallback_recovered` is `true` when it took more than one. An attempt that answered but was unusable carries a size-capped `raw_reply` alongside its status (`decode_failed` for an unreadable boolean/number, `schema_invalid` for a schema failure) so you can see what was rejected, not just that it was. You can always see who actually answered. With no `provider_fallbacks` configured, an unreadable reply behaves exactly as it always has — it fails the attempt and `retries` applies. (An effect's own `provider:` sets the *primary* the same way; both are usually run policy, set in config or a profile, rather than something a document author writes.)
 
@@ -45,6 +45,84 @@ message also carries a bounded, redacted excerpt of the response body when
 one is available — a provider's validation reason, not just the bare
 status line — so `meta.error` alone usually says why, without a separate
 lookup into `meta.raw.body`.
+
+## `retries` and `expect` on `tool` and `use`
+
+```yaml
+- type: tool
+  name: generate_frame
+  provider: comfyui
+  prompt: "{{input.prompt}}"
+  model: flux1-dev-fp8.safetensors
+  retries: {max_attempts: 3, backoff_ms: 1000}
+  expect: "has(value.images) && size(value.images) > 0"
+```
+
+**`retries`** on `tool` and `use` is the same two fields, the same default (unset: one attempt) and the same backoff curve as a prompt's. What counts as retryable differs by what kind of failure it is. An **HTTP-family** tool (`http`, `web_fetch`, `webhook`, `linear`) classifies by status the way an adapter dispatch does: 429, 408 and 5xx retry; any other 4xx does not, for the same reason a prompt's bad request or missing key doesn't — it cannot succeed on a second try. Every other **process** tool — `shell`, `ffmpeg`, `comfyui`, and the rest — retries on any failure: there is no status to classify, and the motivating case is a macOS GPU watchdog killing a FLUX render mid-job, which a second attempt on a cooled-down GPU often clears. A `use` effect's `retries` re-runs the **whole child orchestration** from scratch each attempt, not just the step that failed inside it.
+
+**`expect`** is a check run after an attempt otherwise succeeds — the native replacement for the hand-built "did this actually work" `tool` step a model-generation pipeline tends to grow on its own. Either a CEL expression (a bare string is shorthand for `{mode: cel, expr: <string>}`) over this effect's own `value` and `meta` — bound directly, not under `state.` the way every other CEL site in the framework binds — plus `state` for reaching other effects' output the normal way; or `{mode: model, template: ...}`, which asks yes/no the same way a model-mode `if` does, on the run's own adapter/model, spending real tokens recorded at `meta.expect.tokens_sent`/`tokens_received`. A false or unreadable expectation fails the attempt with `expect failed: <expr or template summary>` — `retries` and `on_error` apply exactly as they would for any other failure, and an expect failure is always worth retrying (it carries no status of its own to classify). The outcome always lands at `meta.expect`, pass or fail:
+
+```yaml
+- type: tool
+  name: ladder_step
+  provider: comfyui
+  prompt: "{{input.prompt}}"
+  model: "{{input.checkpoint}}"
+  params: {width: 1024, height: 1024}
+  retries: {max_attempts: 3, backoff_ms: 2000}
+  expect:
+    mode: cel
+    expr: "has(value.image_path) && meta.status_code == null"
+```
+
+This replaces the `awk`-based `exit 1` guards a video pipeline otherwise writes by hand (`count`/`check8k`-style steps checking a prior tool's output before trusting it): the check is the effect's own `expect:`, not a sibling step, and a failure feeds the same `retries`/`on_error` every other failure does.
+
+## `finally` — cleanup that always runs
+
+```yaml
+- type: dynamic
+  name: with_ollama_server
+  effects:
+    - type: tool
+      name: start_server
+      provider: shell
+      params: {command: launchctl, allowed_commands: [launchctl], args: [submit, -l, com.example.ollama, --, /usr/bin/env, ollama, serve]}
+    - type: tool
+      name: wait_ready
+      provider: shell
+      params: {command: curl, allowed_commands: [curl], args: [-sf, --retry, "30", --retry-connrefused, --retry-delay, "1", "{{input.ollama_url}}/api/version"]}
+    - type: tool
+      name: ask
+      provider: http
+      params: {url: "{{input.ollama_url}}/api/chat", method: POST, parse: json, json: {model: "{{input.model}}", stream: false}}
+  finally:
+    - type: tool
+      name: stop_server
+      provider: shell
+      params: {command: launchctl, allowed_commands: [launchctl], allow_nonzero: true, args: [remove, com.example.ollama]}
+```
+
+`finally:` is a list of cleanup effects, legal on the document root and on a `dynamic` effect, nowhere else. It runs after the main `effects` complete, whatever happened — success, a failure anywhere inside, or a best-effort run on Ctrl-C/cancellation before the process exits — always sequentially, regardless of the enclosing `flow`. It sees state exactly as the body left it, so a `finally` step can read a value an earlier step produced (a started server's own output, a lock file's path) the normal way.
+
+Before `finally` existed, the only way to guarantee a cleanup step always ran was to mark the step *before* it `on_error: continue` with a comment explaining why — which quietly changes that step's own error policy too, turning "this step's failure doesn't matter" into "run the next thing regardless of what happened here":
+
+```yaml
+# Before finally: on_error: continue on `ask` is doing two jobs at once —
+# "a bad reply doesn't matter" AND "the server below must still be stopped".
+- type: tool
+  name: ask
+  provider: http
+  on_error: continue  # so the server below is always stopped; check fails loudly instead
+  params: {url: "{{input.ollama_url}}/api/chat", method: POST, parse: json, json: {model: "{{input.model}}", stream: false}}
+- type: tool
+  name: stop_server
+  provider: shell
+  params: {command: launchctl, allowed_commands: [launchctl], allow_nonzero: true, args: [remove, com.example.ollama]}
+```
+
+`finally` separates the two concerns: `ask` keeps `on_error: fail` (the default, so a real failure actually stops the run) and `stop_server` moves to `finally`, where it always runs regardless.
+
+A failure inside `finally` never hides the original error. If the main `effects` failed, that failure is still what's reported — a `finally` failure on top of it is recorded as a second note (`meta.finally_error`), never a replacement. If the main `effects` succeeded, a `finally` failure fails the run too, unless that particular `finally` effect has its own `on_error: continue`/`skip` — the same per-effect opt-out as anywhere else. A `use` child's own root `finally:` runs the same way, when the child orchestration finishes — the parent sees only the child's own `meta.error`/`meta.finally_error` folded into whatever the `use` effect reports, same as any other child failure.
 
 ## Where failure lands
 
@@ -147,4 +225,7 @@ Warnings are advisory: deprecated spellings, type-keyword names, an unknown key 
 ## See also
 
 - [Orchestration Reference → `prompt`](../orchestration-reference.md#prompt) — `retries`, `provider_fallbacks`, `timeout_ms`, `on_error`.
+- [Orchestration Reference → `tool`](../orchestration-reference.md#tool) — `retries`, `expect`.
+- [Orchestration Reference → `use`](../orchestration-reference.md#use) — `retries`, `expect`.
+- [Orchestration Reference → `dynamic`](../orchestration-reference.md#dynamic) — `finally`.
 - [Troubleshooting Deterministic State Paths](../troubleshooting-state-paths.md).

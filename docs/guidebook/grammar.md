@@ -14,7 +14,9 @@ TEMPLATE    ::= STRING with Mustache: {{input.<k>}} {{prime.<path>.value}} {{<lo
                 (triple-stache {{{…}}} to skip HTML escaping)
 CEL         ::= STRING in CEL (cel-python); 'state' bound to the shadow state's root, the only binding;
                 inside a loop's own body also state.<each.as> and state.iter.index;
-                an unset or null state. path makes the whole expression false (unless strict)
+                an unset or null state. path makes the whole expression false (unless strict).
+                Exception: a Tool/Use Expect's CEL binds 'value' and 'meta' directly (this
+                effect's own result, not state.value/state.meta) plus 'state' as usual.
 STATE_PATH  ::= dot-delimited path rooted at input. | prime. | runtime.
 BINDING_PATH ::= dot-delimited path rooted at an enclosing loop's each.as (or iter)
 REF         ::= { from: STATE_PATH | BINDING_PATH }     — passes the value unchanged
@@ -25,6 +27,8 @@ JSONSCHEMA  ::= a JSON-Schema (draft-07) object
 
 ```
 Orchestration ::= { effects: Effect+,                  — required, executed in order
+                    finally?: Effect+,                  — cleanup, after effects win or lose; best
+                                                          effort on cancellation; also legal on Dynamic
                     interface?: Interface,
                     flow?: Flow,                        — root topology, default chain
                     version?: STRING,                   — author's own; runtime ignores
@@ -72,6 +76,8 @@ Retry   ::= { max_attempts?: INT≥1, backoff_ms?: INT }
 
 ```
 Dynamic ::= { type: 'dynamic', name: NAME, effects: Effect+,
+              finally?: Effect+,                       — cleanup, after effects win or lose; best
+                                                          effort on cancellation; always sequential
               flow?: Flow, max_concurrency?: INT≥1,     — tree only
               stop_on_error?: BOOL, on_error?: OnError,
               labels?: MAP, description?: STRING }
@@ -125,7 +131,12 @@ Tool ::= { type: 'tool', name: NAME, provider: PLUGIN_NAME,
            prompt?: TEMPLATE, model?: STRING,
            params?: MAP,                                 — string values Mustache-rendered; wins over prompt/model
            params_json?: TEMPLATE,                       — renders to a JSON object; deep-merged over params
-           timeout_ms?: INT, on_error?: OnError, description?: STRING }
+           timeout_ms?: INT, retries?: Retry, expect?: Expect,
+           on_error?: OnError, description?: STRING }
+
+Expect ::= CEL                                           — shorthand for {mode: cel, expr: CEL}
+         | { mode: 'cel',   expr: CEL }                  — over this effect's own value/meta, plus state
+         | { mode: 'model', template: TEMPLATE }         — LLM answers yes/no, on the run's adapter/model
 ```
 
 ### Use — child orchestration in isolation
@@ -136,6 +147,8 @@ Use ::= { type: 'use', name: NAME,
           validate?: BOOL,                               — default true; schema-gates inline YAML
           inputs?: { NAME: value|TEMPLATE|REF … },       — become the child's input.*; TEMPLATE arrives as text
           outputs?: { NAME: OutputDecl … },              — omitted ⇒ full child namespace exposed
+          retries?: Retry,                               — a retry re-runs the whole child from scratch
+          expect?: Expect,                                — over this effect's own mapped value/meta, plus state
           on_error?: OnError, description?: STRING }
 
 LIBRARY_REF ::= '<category>/<name>' | '<source>:<category>/<name>'
@@ -161,6 +174,8 @@ Reflector ::= { type: 'reflector', name: NAME, effects: Effect+,   — base temp
 4. `collect` must name a body step, and needs a named loop to have anywhere to write — on an unnamed loop this is a `cof check` error naming the fix (give the loop a `name`). Chain-order reads only; tree siblings can't read each other.
 5. `use` cycle guard: an orchestration cannot (transitively) `use` itself.
 6. `runtime.*` in a document merges over config (orch wins) — the complexity block rides this.
+7. `finally` is legal only on the document root and on a Dynamic effect — anywhere else is a compile error. A failure inside `finally` never hides the main `effects`' own failure (reported as-is, with the `finally` failure added as a second note); on an otherwise-successful run, a `finally` failure fails it too, unless that `finally` effect's own `on_error` is `skip`/`continue`.
+8. A false or unreadable `expect` fails the attempt (`retries`/`on_error` apply) with `expect failed: <expr or template summary>`.
 
 ## Cybernetic overlay (config grammar, `runtime.complexity`)
 
