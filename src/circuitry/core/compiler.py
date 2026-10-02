@@ -25,7 +25,7 @@ from .state_ns import (
     validate_reference_path,
 )
 from .templates import template_syntax_error
-from .tool import ToolDefinition, param_reference
+from .tool import _SECURITY_SENSITIVE_PARAM_KEYS, ToolDefinition, param_reference
 from .use import UseDefinition, reference_path
 
 EffectDef = (
@@ -875,6 +875,32 @@ def _check_param_leaves(
             )
 
 
+def _check_security_sensitive_param_leaf(
+    value: Any, *, name: str, field: str
+) -> None:
+    """Reject a ``{from: <path>}`` leaf anywhere inside a security-sensitive
+    param (today: ``allowed_commands``) at compile time.
+
+    Mirrors the runtime guard in ``core.tool._reject_templated_security_params``:
+    only a document's literal, unrendered list of strings is ever honoured for
+    a plugin's own allowlist, so a by-reference value — which can carry
+    runtime or model-generated content — is caught here too, before the
+    orchestration ever runs.
+    """
+    if param_reference(value) is not None:
+        raise ValueError(
+            f"Tool effect '{name}' param '{field}': a by-reference '{{from: ...}}' "
+            "value is not honoured for this security-sensitive setting; it must "
+            "be a literal list of strings."
+        )
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _check_security_sensitive_param_leaf(item, name=name, field=f"{field}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _check_security_sensitive_param_leaf(item, name=name, field=f"{field}[{index}]")
+
+
 def _compile_tool(
     effect: dict[str, Any],
     *,
@@ -912,6 +938,10 @@ def _compile_tool(
     _check_param_leaves(
         params, name=str(name), effect_path=effect_path, field="params", loop_names=loop_names
     )
+    for sensitive_key in _SECURITY_SENSITIVE_PARAM_KEYS & params.keys():
+        _check_security_sensitive_param_leaf(
+            params[sensitive_key], name=str(name), field=f"params.{sensitive_key}"
+        )
     _check_templates(params_json, effect_path=effect_path, field="params_json")
 
     model = effect.get("model")

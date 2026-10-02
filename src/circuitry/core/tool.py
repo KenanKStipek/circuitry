@@ -261,22 +261,39 @@ _SECURITY_SENSITIVE_PARAM_KEYS: frozenset[str] = frozenset({"allowed_commands"})
 
 
 def _reject_templated_security_params(raw_params: dict[str, Any]) -> None:
-    """Raise if a security-sensitive param's literal value is templated.
+    """Raise if a security-sensitive param's literal value isn't a plain list of strings.
 
-    A list value is templated when any string element contains a Mustache
-    tag (``{{``) — its real content isn't known until render time, which
-    defeats the point of a boundary the document author is meant to write
-    down plainly.
+    Covers: a templated string element (``{{`` — its real content isn't known
+    until render time, which defeats the point of a boundary the document
+    author is meant to write down plainly); a ``{from: <path>}`` reference as
+    the whole value or as a list item (#234 made this reachable — a
+    by-reference value can carry runtime or model-generated content, e.g.
+    REST/MCP caller input or an LLM step's output, same as a templated
+    string); and any other non-string list item.
     """
     for key in _SECURITY_SENSITIVE_PARAM_KEYS:
-        value = raw_params.get(key)
+        if key not in raw_params:
+            continue
+        value = raw_params[key]
+        if param_reference(value) is not None:
+            raise ValueError(
+                f"params.{key} must be a literal list of strings; a by-reference "
+                "'{from: ...}' value is not honoured for this security-sensitive setting."
+            )
         if not isinstance(value, list):
             continue
-        if any(isinstance(item, str) and "{{" in item for item in value):
-            raise ValueError(
-                f"params.{key} must be a literal list of strings; a templated "
-                "value is not honoured for this security-sensitive setting."
-            )
+        for item in value:
+            if not isinstance(item, str):
+                raise ValueError(
+                    f"params.{key} must be a literal list of strings; a "
+                    "by-reference '{from: ...}' value is not honoured for this "
+                    "security-sensitive setting."
+                )
+            if "{{" in item:
+                raise ValueError(
+                    f"params.{key} must be a literal list of strings; a templated "
+                    "value is not honoured for this security-sensitive setting."
+                )
 
 
 def _reject_params_json_security_overrides(overlay: dict[str, Any]) -> None:

@@ -635,10 +635,20 @@ time.
   params:
     symbols: {from: prime.symbol_list.value, default: []}
   ```
+  A path that resolves to an explicit `null` counts as unresolved too — there
+  is no way to tell "missing" from "stored null" — so it also raises (or
+  falls back to `default:`), unlike a `use` effect's input reference, which
+  passes `null` through as the value.
 - Only a mapping with exactly the key `from` (optionally plus `default`) is a
   reference. Any other mapping — including one with other keys mixed in — is
   passed through literally, same as today. To pass a *literal* one-key
   `{from: ...}` object to a plugin, use `params_json` instead.
+- A security-sensitive param a plugin treats as its own allowlist (today:
+  the `shell` plugin's `allowed_commands`) must stay a literal list of
+  strings written in the document: `{from: ...}` there — as the whole value
+  or as a list item — is rejected at `cof check` time and again at run time,
+  the same as a templated string entry, so neither runtime state nor
+  `params_json` can widen what a document is allowed to run.
 
 Tool providers reference a *tool plugin*, not an *adapter*, so the `prompt`-effect `on_error` reclassification above does not apply here: a missing tool-plugin dependency (e.g. `ffmpeg` not on `PATH`) always hard-fails preflight regardless of this effect's `on_error`.
 

@@ -156,6 +156,39 @@ def test_params_from_is_validated_inside_a_list() -> None:
         compile_orchestration(orch=orch)
 
 
+def test_params_from_rejects_allowed_commands_whole_value_at_compile_time() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "tool",
+                "name": "call",
+                "provider": "shell",
+                "params": {"command": "ls", "allowed_commands": {"from": "prime.cmds.value"}},
+            },
+        ]
+    }
+    with pytest.raises(ValueError, match="security-sensitive setting"):
+        compile_orchestration(orch=orch)
+
+
+def test_params_from_rejects_allowed_commands_list_item_at_compile_time() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "tool",
+                "name": "call",
+                "provider": "shell",
+                "params": {
+                    "command": "ls",
+                    "allowed_commands": ["ls", {"from": "prime.cmd.value"}],
+                },
+            },
+        ]
+    }
+    with pytest.raises(ValueError, match="security-sensitive setting"):
+        compile_orchestration(orch=orch)
+
+
 def test_malformed_template_elsewhere_in_params_is_still_caught() -> None:
     orch = {
         "effects": [
@@ -299,6 +332,21 @@ def test_tool_runtime_unresolved_from_without_default_raises(monkeypatch: pytest
         ToolRuntime(defn).execute(store=store, ctx={})
 
     assert "params.symbols" in store.state["call"]["meta"]["error"]
+
+
+def test_tool_runtime_from_leaf_resolving_to_null_raises_like_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A path that exists but holds an explicit null is treated as unresolved,
+    same as a missing path -- there is no way to tell the two apart."""
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: MagicMock())
+
+    defn = ToolDefinition(name="call", provider="mcp", params={"symbols": {"from": "prime.src.value"}})
+    store = _make_store()
+    ctx = {"prime": {"src": {"value": None}}}
+
+    with pytest.raises(ValueError, match="did not resolve to a value"):
+        ToolRuntime(defn).execute(store=store, ctx=ctx)
 
 
 def test_tool_runtime_unresolved_from_with_default_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
