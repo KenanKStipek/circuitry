@@ -236,7 +236,7 @@ persisting run state.
 
 | plugin | extra | signal | required config | notes |
 | --- | --- | --- | --- | --- |
-| `opentelemetry` | `opentelemetry-api`/`-sdk`/`-exporter-otlp-proto-http` (`[opentelemetry]`) | one span per run, child spans per effect | — | standard `OTEL_*` env vars (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, ...); falls back to a console exporter when no OTLP endpoint is set |
+| `opentelemetry` | `opentelemetry-api`/`-sdk`/`-exporter-otlp-proto-http` (`[opentelemetry]`) | one span per run, one child span per effect, nested along the orchestration's own structure (a loop/`use`/dynamic's span parents every effect its body runs); each span's start/end come from the effect's own `meta.created_at`/`completed_at`, not from whenever the exporter happens to run, so durations are real | — | standard `OTEL_*` env vars (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, ...); falls back to a console exporter when no OTLP endpoint is set |
 | `honeycomb` | same OTel packages (`[honeycomb]`) | same span schema as `opentelemetry`, exported to Honeycomb's OTLP ingest | `HONEYCOMB_API_KEY` | `HONEYCOMB_DATASET` (default `circuitry`), `HONEYCOMB_API_HOST` (default `https://api.honeycomb.io`) |
 | `sentry` | `sentry-sdk` (`[sentry]`) | exceptions on run failure, tagged with `run_id`/`orchestration_path`; completed effects become breadcrumbs | `SENTRY_DSN` | — |
 | `datadog` | `datadog` (`[datadog]`) | count metrics (`circuitry.runs.started`, `circuitry.effects.completed`, `circuitry.runs.succeeded`/`failed`) plus token-count histograms | `DD_API_KEY` | `DD_APP_KEY`, `DD_SITE` (default `datadoghq.com`) |

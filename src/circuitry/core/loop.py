@@ -5,7 +5,7 @@ import threading
 import time
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal, Union
@@ -31,6 +31,77 @@ if TYPE_CHECKING:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _loop_progress(t0: float, done: int, total: int | None) -> dict[str, Any]:
+    """``meta.progress`` for a loop mid-run: what's done, what's known about
+    the rest, and how long it's taken so far.
+
+    ``eta_s`` is the average pass time (elapsed / done) times the passes
+    still to go — ``None`` before the first pass completes (no average yet)
+    or when ``total`` itself is unknown (an uncapped ``while`` loop). Costs
+    one ``time.monotonic()`` call and a few float ops per pass — see #271's
+    "must cost nothing measurable per pass" for the owner's long film/upscale
+    runs.
+    """
+    elapsed = time.monotonic() - t0
+    eta: float | None = None
+    if total is not None and done > 0:
+        remaining = max(total - done, 0)
+        eta = (elapsed / done) * remaining
+    return {"done": done, "total": total, "elapsed_s": elapsed, "eta_s": eta}
+
+
+def _human_duration(seconds: float) -> str:
+    """A short, human ETA: ``45s``, ``4 min``, ``1.5 hr`` — never more than
+    one unit, since a progress line is glanced at, not read closely."""
+    seconds = max(seconds, 0.0)
+    if seconds < 60:
+        return f"{round(seconds)}s"
+    minutes = seconds / 60
+    if minutes < 60:
+        return f"{round(minutes)} min"
+    hours = minutes / 60
+    return f"{hours:.1f} hr"
+
+
+def _format_loop_progress_line(
+    name: str, done: int, total: int | None, eta_s: float | None
+) -> str:
+    text = f"{name} {done}/{total}" if total is not None else f"{name} {done} done"
+    if eta_s is not None:
+        text += f", ~{_human_duration(eta_s)} left"
+    return text
+
+
+#: Guards the single interactive progress-status line a chain/while loop may
+#: show — rich allows only one ``Console.status``/``Live`` region at a time,
+#: and nested or concurrently-running loops would otherwise fight over it
+#: (and render garbled output, not raise). The common case this exists for
+#: — one long-running top-level loop (a film's frame loop, an upscale
+#: ladder) — is unaffected; a loop nested inside another progress-displaying
+#: loop simply shows no line of its own rather than corrupting the outer one.
+_progress_status_lock = threading.Lock()
+_progress_status_active = False
+
+
+@contextmanager
+def _loop_progress_status(enabled: bool, initial_text: str):
+    global _progress_status_active
+    if not enabled:
+        yield None
+        return
+    with _progress_status_lock:
+        if _progress_status_active:
+            yield None
+            return
+        _progress_status_active = True
+    try:
+        with _console.status(initial_text) as status:
+            yield status
+    finally:
+        with _progress_status_lock:
+            _progress_status_active = False
 
 
 EffectDef = Union[
@@ -152,6 +223,10 @@ class LoopRuntime:
         dry_run: bool = False,
         timeout_seconds: int = 120,
         verbose: bool = False,
+        # See core.dynamic.DynamicRuntime: gates the single updating progress
+        # line this loop itself may print (``shots 7/32, ~4 min left``) as
+        # well as being forwarded to every nested runtime its body builds.
+        progress_display: bool = False,
         depth: int = 0,
         ancestors: list | None = None,
         label_prefix: str | None = None,
@@ -167,6 +242,7 @@ class LoopRuntime:
         self.dry_run = dry_run
         self.timeout_seconds = timeout_seconds
         self.verbose = verbose
+        self.progress_display = progress_display
         self.depth = depth
         self._ancestors = ancestors or []
         # Set by an enclosing ``use`` effect — see ``_child_display_name``.
@@ -362,6 +438,12 @@ class LoopRuntime:
                         else collection[: self.defn.max_iterations]
                     )
                     total = len(capped)
+                    # Per #271: "total is the collection length for each
+                    # loops" — the uncapped length, even when `truncate`
+                    # means fewer than that will ever actually run.
+                    _progress_total = len(collection)
+                    if meta is not None:
+                        meta["progress"] = _loop_progress(_loop_t0, 0, _progress_total)
 
                     # The real ceiling on how many iterations can ever be
                     # concurrently pending — bounded by max_concurrency when
@@ -441,6 +523,7 @@ class LoopRuntime:
                                 ): idx
                                 for idx, iter_ctx in iter_ctxs
                             }
+                            _tree_done = 0
                             for future in as_completed(future_to_idx):
                                 i = future_to_idx[future]
                                 try:
@@ -448,6 +531,26 @@ class LoopRuntime:
                                 except Exception as exc:
                                     errors[i] = exc
                                 finally:
+                                    _tree_done += 1
+                                    if meta is not None:
+                                        # Mutates the same dict `child_store`'s
+                                        # branch publishers read `self.state`
+                                        # from (see Store.parallel_branches) —
+                                        # it rides along on the next branch's
+                                        # own publish (or the merge-then-
+                                        # publish below, for the last one) and
+                                        # must NOT publish here itself: at this
+                                        # point `store.root_state` is still the
+                                        # pre-merge snapshot (this iteration's
+                                        # own isolated-store write hasn't been
+                                        # folded into `child_store.state` yet),
+                                        # so publishing it would overwrite the
+                                        # correct, already-published snapshot
+                                        # with a stale one that's missing the
+                                        # pass that just finished.
+                                        meta["progress"] = _loop_progress(
+                                            _loop_t0, _tree_done, _progress_total
+                                        )
                                     # This iteration is done, whether or not
                                     # it ever registered a prompt — one fewer
                                     # settle point a listener still needs to
@@ -507,55 +610,75 @@ class LoopRuntime:
                 else:
                     # Sequential iteration (default)
                     total = len(collection)
-                    for idx, item in enumerate(collection):
-                        if (
-                            self.defn.max_iterations is not None
-                            and idx >= self.defn.max_iterations
-                        ):
-                            # Only reachable under each.truncate: true — the
-                            # fail-fast check above already stopped the
-                            # untruncated case before the first pass.
-                            termination_reason = "max_iterations_reached"
-                            unvisited = total - idx
-                            break
-
-                        # Bind current item to context
-                        iter_ctx = dict(ctx)
-                        iter_ctx[self.defn.each_def.as_name] = item
-                        iter_ctx["_loop_index"] = idx
-                        iter_ctx["iter"] = {"index": idx}
-                        iter_ctx = self._with_prev(iter_ctx, prev_writes)
-
-                        try:
-                            iter_effects, iter_writes = self._execute_body(
-                                store=child_store,
-                                ctx=iter_ctx,
-                                iteration=idx,
-                                baseline=baseline,
-                                iter_label=f"[{idx}]",
-                            )
-                            iterations_effects.append(iter_effects)
-                            iteration_count += 1
-                            last_completed = idx
-                            completed_indices.append(idx)
-                            prev_writes = iter_writes
-                            # Publish after every completed pass, the same
-                            # path the tree flow uses since #291 — otherwise
-                            # --live-state and other state observers see
-                            # nothing of a chain loop until it finishes (#299).
-                            if store.on_write:
-                                store.on_write(store.root_state)
-                        except Exception:
-                            failed_passes.append(idx)
-                            if self.defn.on_error == "fail":
-                                termination_reason = "error"
-                                raise
-                            if self.defn.on_error == "break":
-                                termination_reason = "error"
+                    if meta is not None:
+                        meta["progress"] = _loop_progress(_loop_t0, 0, total)
+                    _progress_enabled = self.progress_display and bool(self.defn.name)
+                    _progress_name = self.defn.name or ""
+                    with _loop_progress_status(
+                        _progress_enabled,
+                        _format_loop_progress_line(_progress_name, 0, total, None),
+                    ) as _status:
+                        for idx, item in enumerate(collection):
+                            if (
+                                self.defn.max_iterations is not None
+                                and idx >= self.defn.max_iterations
+                            ):
+                                # Only reachable under each.truncate: true — the
+                                # fail-fast check above already stopped the
+                                # untruncated case before the first pass.
+                                termination_reason = "max_iterations_reached"
+                                unvisited = total - idx
                                 break
-                            # continue: skip this iteration
-                    else:
-                        termination_reason = "collection_exhausted"
+
+                            # Bind current item to context
+                            iter_ctx = dict(ctx)
+                            iter_ctx[self.defn.each_def.as_name] = item
+                            iter_ctx["_loop_index"] = idx
+                            iter_ctx["iter"] = {"index": idx}
+                            iter_ctx = self._with_prev(iter_ctx, prev_writes)
+
+                            try:
+                                iter_effects, iter_writes = self._execute_body(
+                                    store=child_store,
+                                    ctx=iter_ctx,
+                                    iteration=idx,
+                                    baseline=baseline,
+                                    iter_label=f"[{idx}]",
+                                )
+                                iterations_effects.append(iter_effects)
+                                iteration_count += 1
+                                last_completed = idx
+                                completed_indices.append(idx)
+                                prev_writes = iter_writes
+                                if meta is not None:
+                                    progress = _loop_progress(_loop_t0, iteration_count, total)
+                                    meta["progress"] = progress
+                                    if _status is not None:
+                                        _status.update(
+                                            _format_loop_progress_line(
+                                                _progress_name,
+                                                iteration_count,
+                                                total,
+                                                progress["eta_s"],
+                                            )
+                                        )
+                                # Publish after every completed pass, the same
+                                # path the tree flow uses since #291 — otherwise
+                                # --live-state and other state observers see
+                                # nothing of a chain loop until it finishes (#299).
+                                if store.on_write:
+                                    store.on_write(store.root_state)
+                            except Exception:
+                                failed_passes.append(idx)
+                                if self.defn.on_error == "fail":
+                                    termination_reason = "error"
+                                    raise
+                                if self.defn.on_error == "break":
+                                    termination_reason = "error"
+                                    break
+                                # continue: skip this iteration
+                        else:
+                            termination_reason = "collection_exhausted"
 
             elif self.defn.while_def:
                 # Condition-based iteration mode
@@ -570,120 +693,150 @@ class LoopRuntime:
                 # rather than merely rendering a prompt empty.
                 last_writes: dict[str, Any] = {}
 
-                while (
-                    self.defn.max_iterations is None
-                    or iteration_count < self.defn.max_iterations
-                ):
-                    # A pass `min_iterations` already forces runs without
-                    # consulting the condition at all — not evaluating it and
-                    # discarding the answer, never evaluating it (#298). A
-                    # `mode: cel` condition that reads state only the body
-                    # itself sets would otherwise warn about an unset path on
-                    # every one of these passes; a `mode: model` condition
-                    # would otherwise make — and throw away — a model call.
-                    if iteration_count < self.defn.min_iterations:
-                        should_continue = True
-                    else:
-                        # Check continuation condition. A CEL expression that
-                        # cannot be evaluated raises (see ``cel_eval``) rather
-                        # than answering False — a broken condition used to be
-                        # indistinguishable from an exhausted loop.
-                        # A per-check overlay, not a mutation of ctx: a while
-                        # loop must not leak its own _loop_index/iter onto the
-                        # caller's dict (see #260). The values match what the
-                        # old leaking mutation left behind for this same check,
-                        # on purpose — the condition sees the *last finished*
-                        # pass's index (-1 before the first pass), not the pass
-                        # about to run, because that is the spelling every
-                        # existing `+ 1`-compensated condition already assumes.
-                        # `iter.count` (0 before the first pass) is the
-                        # uncompensated equivalent for new conditions:
-                        # `state.iter.count < N` reads the same as
-                        # `state.iter.index + 1 < N`.
-                        cond_ctx = {
+                if meta is not None:
+                    meta["progress"] = _loop_progress(
+                        _loop_t0, 0, self.defn.max_iterations
+                    )
+                _progress_enabled = self.progress_display and bool(self.defn.name)
+                _progress_name = self.defn.name or ""
+                _progress_cm = _loop_progress_status(
+                    _progress_enabled,
+                    _format_loop_progress_line(
+                        _progress_name, 0, self.defn.max_iterations, None
+                    ),
+                )
+                _status = _progress_cm.__enter__()
+                try:
+                    while (
+                        self.defn.max_iterations is None
+                        or iteration_count < self.defn.max_iterations
+                    ):
+                        # A pass `min_iterations` already forces runs without
+                        # consulting the condition at all — not evaluating it and
+                        # discarding the answer, never evaluating it (#298). A
+                        # `mode: cel` condition that reads state only the body
+                        # itself sets would otherwise warn about an unset path on
+                        # every one of these passes; a `mode: model` condition
+                        # would otherwise make — and throw away — a model call.
+                        if iteration_count < self.defn.min_iterations:
+                            should_continue = True
+                        else:
+                            # Check continuation condition. A CEL expression that
+                            # cannot be evaluated raises (see ``cel_eval``) rather
+                            # than answering False — a broken condition used to be
+                            # indistinguishable from an exhausted loop.
+                            # A per-check overlay, not a mutation of ctx: a while
+                            # loop must not leak its own _loop_index/iter onto the
+                            # caller's dict (see #260). The values match what the
+                            # old leaking mutation left behind for this same check,
+                            # on purpose — the condition sees the *last finished*
+                            # pass's index (-1 before the first pass), not the pass
+                            # about to run, because that is the spelling every
+                            # existing `+ 1`-compensated condition already assumes.
+                            # `iter.count` (0 before the first pass) is the
+                            # uncompensated equivalent for new conditions:
+                            # `state.iter.count < N` reads the same as
+                            # `state.iter.index + 1 < N`.
+                            cond_ctx = {
+                                **ctx,
+                                "iter": {"index": iteration_count - 1, "count": iteration_count},
+                            }
+                            try:
+                                should_continue = self._evaluate_condition(
+                                    ctx=_scope_ctx(cond_ctx, last_writes)
+                                )
+                                if meta and self.defn.while_def.mode == "model":
+                                    meta["answer"] = self._model_answer
+                                    meta["adapter"] = getattr(self.adapter, "name", "unknown")
+                                    meta["model"] = self.model
+                                    meta["tokens_sent"] = self._model_tokens_sent
+                                    meta["tokens_received"] = self._model_tokens_received
+                                    meta["tokens_sent_total"] = self._model_tokens_sent_total
+                                    meta["tokens_received_total"] = self._model_tokens_received_total
+                            except Exception as exc:
+                                if meta and self.defn.while_def.mode == "model":
+                                    meta["answer"] = self._model_answer
+                                    meta["adapter"] = getattr(self.adapter, "name", "unknown")
+                                    meta["model"] = self.model
+                                    meta["tokens_sent"] = self._model_tokens_sent
+                                    meta["tokens_received"] = self._model_tokens_received
+                                    meta["tokens_sent_total"] = self._model_tokens_sent_total
+                                    meta["tokens_received_total"] = self._model_tokens_received_total
+                                if self.defn.on_error == "fail":
+                                    termination_reason = "error"
+                                    raise
+                                # break/continue: a condition we cannot evaluate can
+                                # never become false, so continuing would spin to
+                                # max_iterations. Both stop the loop, loudly.
+                                logger.warning(
+                                    "Loop %r: while-condition failed (%s); on_error=%s, "
+                                    "stopping the loop",
+                                    self.defn.name or "<unnamed>",
+                                    exc,
+                                    self.defn.on_error,
+                                )
+                                termination_reason = "condition_error"
+                                if meta:
+                                    meta["error"] = str(exc)
+                                break
+
+                        if not should_continue and iteration_count >= self.defn.min_iterations:
+                            termination_reason = "condition_false"
+                            break
+
+                        # Per-pass overlay, like each already builds — never a
+                        # mutation of the caller's ctx (see #260): at the root
+                        # ctx IS the run state, and nested inside another loop's
+                        # body it is that outer pass's own dict.
+                        iter_ctx = {
                             **ctx,
-                            "iter": {"index": iteration_count - 1, "count": iteration_count},
+                            "_loop_index": iteration_count,
+                            "iter": {"index": iteration_count},
                         }
+                        iter_ctx = self._with_prev(iter_ctx, prev_writes)
                         try:
-                            should_continue = self._evaluate_condition(
-                                ctx=_scope_ctx(cond_ctx, last_writes)
+                            iter_effects, last_writes = self._execute_body(
+                                store=child_store,
+                                ctx=iter_ctx,
+                                iteration=iteration_count,
+                                baseline=baseline,
+                                iter_label=f"[{iteration_count}]",
                             )
-                            if meta and self.defn.while_def.mode == "model":
-                                meta["answer"] = self._model_answer
-                                meta["adapter"] = getattr(self.adapter, "name", "unknown")
-                                meta["model"] = self.model
-                                meta["tokens_sent"] = self._model_tokens_sent
-                                meta["tokens_received"] = self._model_tokens_received
-                                meta["tokens_sent_total"] = self._model_tokens_sent_total
-                                meta["tokens_received_total"] = self._model_tokens_received_total
-                        except Exception as exc:
-                            if meta and self.defn.while_def.mode == "model":
-                                meta["answer"] = self._model_answer
-                                meta["adapter"] = getattr(self.adapter, "name", "unknown")
-                                meta["model"] = self.model
-                                meta["tokens_sent"] = self._model_tokens_sent
-                                meta["tokens_received"] = self._model_tokens_received
-                                meta["tokens_sent_total"] = self._model_tokens_sent_total
-                                meta["tokens_received_total"] = self._model_tokens_received_total
+                            iterations_effects.append(iter_effects)
+                            last_completed = iteration_count
+                            completed_indices.append(iteration_count)
+                            iteration_count += 1
+                            prev_writes = last_writes
+                            if meta is not None:
+                                progress = _loop_progress(
+                                    _loop_t0, iteration_count, self.defn.max_iterations
+                                )
+                                meta["progress"] = progress
+                                if _status is not None:
+                                    _status.update(
+                                        _format_loop_progress_line(
+                                            _progress_name,
+                                            iteration_count,
+                                            self.defn.max_iterations,
+                                            progress["eta_s"],
+                                        )
+                                    )
+                            # Publish after every completed pass — see the each
+                            # (chain) branch above and #299.
+                            if store.on_write:
+                                store.on_write(store.root_state)
+                        except Exception:
+                            failed_passes.append(iteration_count)
                             if self.defn.on_error == "fail":
                                 termination_reason = "error"
                                 raise
-                            # break/continue: a condition we cannot evaluate can
-                            # never become false, so continuing would spin to
-                            # max_iterations. Both stop the loop, loudly.
-                            logger.warning(
-                                "Loop %r: while-condition failed (%s); on_error=%s, "
-                                "stopping the loop",
-                                self.defn.name or "<unnamed>",
-                                exc,
-                                self.defn.on_error,
-                            )
-                            termination_reason = "condition_error"
-                            if meta:
-                                meta["error"] = str(exc)
-                            break
-
-                    if not should_continue and iteration_count >= self.defn.min_iterations:
-                        termination_reason = "condition_false"
-                        break
-
-                    # Per-pass overlay, like each already builds — never a
-                    # mutation of the caller's ctx (see #260): at the root
-                    # ctx IS the run state, and nested inside another loop's
-                    # body it is that outer pass's own dict.
-                    iter_ctx = {
-                        **ctx,
-                        "_loop_index": iteration_count,
-                        "iter": {"index": iteration_count},
-                    }
-                    iter_ctx = self._with_prev(iter_ctx, prev_writes)
-                    try:
-                        iter_effects, last_writes = self._execute_body(
-                            store=child_store,
-                            ctx=iter_ctx,
-                            iteration=iteration_count,
-                            baseline=baseline,
-                            iter_label=f"[{iteration_count}]",
-                        )
-                        iterations_effects.append(iter_effects)
-                        last_completed = iteration_count
-                        completed_indices.append(iteration_count)
-                        iteration_count += 1
-                        prev_writes = last_writes
-                        # Publish after every completed pass — see the each
-                        # (chain) branch above and #299.
-                        if store.on_write:
-                            store.on_write(store.root_state)
-                    except Exception:
-                        failed_passes.append(iteration_count)
-                        if self.defn.on_error == "fail":
-                            termination_reason = "error"
-                            raise
-                        if self.defn.on_error == "break":
-                            termination_reason = "error"
-                            break
-                        # continue: skip this iteration
-                        iteration_count += 1
+                            if self.defn.on_error == "break":
+                                termination_reason = "error"
+                                break
+                            # continue: skip this iteration
+                            iteration_count += 1
+                finally:
+                    _progress_cm.__exit__(None, None, None)
 
                 if termination_reason == "max_iterations_reached":
                     # The while python-loop above exited on its own condition
@@ -1116,6 +1269,7 @@ Should the loop continue? Answer (yes/no):"""
                         dry_run=self.dry_run,
                         timeout_seconds=self.timeout_seconds,
                         verbose=self.verbose,
+                        progress_display=self.progress_display,
                         depth=self.depth + 2,
                         ancestors=self._child_ancestors,
                         label_prefix=self._label_prefix,
@@ -1131,6 +1285,7 @@ Should the loop continue? Answer (yes/no):"""
                         dry_run=self.dry_run,
                         timeout_seconds=self.timeout_seconds,
                         verbose=self.verbose,
+                        progress_display=self.progress_display,
                         depth=self.depth + 1,
                         ancestors=self._child_ancestors,
                     ).execute(store=iter_store, ctx=ctx)
@@ -1145,6 +1300,7 @@ Should the loop continue? Answer (yes/no):"""
                         dry_run=self.dry_run,
                         timeout_seconds=self.timeout_seconds,
                         verbose=self.verbose,
+                        progress_display=self.progress_display,
                         depth=self.depth + 1,
                         ancestors=self._child_ancestors,
                         label_prefix=self._label_prefix,
@@ -1160,6 +1316,7 @@ Should the loop continue? Answer (yes/no):"""
                         dry_run=self.dry_run,
                         timeout_seconds=self.timeout_seconds,
                         verbose=self.verbose,
+                        progress_display=self.progress_display,
                     ).execute(store=iter_store)
 
                 elif is_tool:
@@ -1208,6 +1365,7 @@ Should the loop continue? Answer (yes/no):"""
                         dry_run=self.dry_run,
                         timeout_seconds=self.timeout_seconds,
                         verbose=self.verbose,
+                        progress_display=self.progress_display,
                         depth=self.depth + 1,
                         cb_start=_cb_start,
                         cb_done=_cb_done,

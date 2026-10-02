@@ -42,9 +42,6 @@ from circuitry.runtime_plugins import (
     nats as nats_mod,
 )
 from circuitry.runtime_plugins import (
-    opentelemetry as otel_mod,
-)
-from circuitry.runtime_plugins import (
     prometheus as prometheus_mod,
 )
 from circuitry.runtime_plugins import (
@@ -370,131 +367,11 @@ def test_nats_lifecycle_uses_async_publish(
     assert "run_success" in [e["event"] for e in events]
 
 
-# ---------------------------------------------------------------------------
-# OpenTelemetry — fake tracer provider
-# ---------------------------------------------------------------------------
-
-
-class _FakeSpan:
-    def __init__(self, name: str, attributes: dict | None = None) -> None:
-        self.name = name
-        self.attributes = dict(attributes or {})
-        self.ended = False
-        self.status: Any = None
-
-    def set_status(self, status: Any) -> None:
-        self.status = status
-
-    def end(self) -> None:
-        self.ended = True
-
-    def __enter__(self) -> _FakeSpan:
-        return self
-
-    def __exit__(self, *args: Any) -> None:
-        self.end()
-
-
-class _FakeTracer:
-    def __init__(self) -> None:
-        self.spans: list[_FakeSpan] = []
-
-    def start_span(self, name: str, attributes: dict | None = None) -> _FakeSpan:
-        span = _FakeSpan(name, attributes)
-        self.spans.append(span)
-        return span
-
-    def start_as_current_span(self, name: str, attributes: dict | None = None) -> _FakeSpan:
-        return self.start_span(name, attributes)
-
-
-def _install_fake_otel(monkeypatch: pytest.MonkeyPatch) -> _FakeTracer:
-    tracer = _FakeTracer()
-
-    fake_api = types.ModuleType("opentelemetry")
-    fake_trace = types.ModuleType("opentelemetry.trace")
-
-    class FakeStatus:
-        OK = "OK"
-        ERROR = "ERROR"
-
-        def __init__(self, code: Any, description: str = "") -> None:
-            self.code = code
-            self.description = description
-
-    class FakeStatusCode:
-        OK = "OK"
-        ERROR = "ERROR"
-
-    fake_trace.Status = FakeStatus
-    fake_trace.StatusCode = FakeStatusCode
-
-    def fake_get_tracer(name: str, *, tracer_provider: Any = None) -> _FakeTracer:
-        return tracer
-
-    fake_trace.get_tracer = fake_get_tracer
-    fake_api.trace = fake_trace
-
-    fake_sdk = types.ModuleType("opentelemetry.sdk")
-    fake_resources = types.ModuleType("opentelemetry.sdk.resources")
-    fake_resources.Resource = types.SimpleNamespace(
-        create=lambda d: {"resource": d}
-    )
-    fake_sdk_trace = types.ModuleType("opentelemetry.sdk.trace")
-    fake_sdk_export = types.ModuleType("opentelemetry.sdk.trace.export")
-
-    class FakeProvider:
-        def __init__(self, resource: Any) -> None:
-            self._resource = resource
-            self._processors: list[Any] = []
-            self.shutdown_called = False
-
-        def add_span_processor(self, p: Any) -> None:
-            self._processors.append(p)
-
-        def shutdown(self) -> None:
-            self.shutdown_called = True
-
-    fake_sdk_trace.TracerProvider = FakeProvider
-    fake_sdk_export.BatchSpanProcessor = lambda exporter: ("batch", exporter)
-    fake_sdk_export.ConsoleSpanExporter = lambda: "console"
-
-    monkeypatch.setitem(sys.modules, "opentelemetry", fake_api)
-    monkeypatch.setitem(sys.modules, "opentelemetry.trace", fake_trace)
-    monkeypatch.setitem(sys.modules, "opentelemetry.sdk", fake_sdk)
-    monkeypatch.setitem(
-        sys.modules, "opentelemetry.sdk.resources", fake_resources
-    )
-    monkeypatch.setitem(sys.modules, "opentelemetry.sdk.trace", fake_sdk_trace)
-    monkeypatch.setitem(
-        sys.modules, "opentelemetry.sdk.trace.export", fake_sdk_export
-    )
-    return tracer
-
-
-def test_opentelemetry_creates_run_span_and_per_effect_spans(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    tracer = _install_fake_otel(monkeypatch)
-    plugin = otel_mod.plugin()
-    ctx = _make_context(tmp_path, "opentelemetry")
-    plugin.on_run_start(state={}, context=ctx)
-    plugin.on_effect_complete(
-        state={}, context=ctx,
-        effect_path="prime.greet",
-        effect_result={
-            "value": "hi",
-            "meta": {"tokens_sent": 10, "tokens_received": 5},
-        },
-    )
-    plugin.on_run_success(state={}, context=ctx)
-    span_names = [s.name for s in tracer.spans]
-    assert "circuitry.run" in span_names
-    assert "effect:prime.greet" in span_names
-    run_span = next(s for s in tracer.spans if s.name == "circuitry.run")
-    assert run_span.ended is True
-    eff_span = next(s for s in tracer.spans if s.name == "effect:prime.greet")
-    assert eff_span.attributes["circuitry.tokens_sent"] == 10
+# OpenTelemetry has its own dedicated test module
+# (tests/runtime_plugins/test_opentelemetry.py), using the real SDK's
+# InMemorySpanExporter rather than a hand-faked tracer — span
+# parenting/timing is exactly what #271 needed real coverage of, and a fake
+# tracer can't tell a correct `context=`/`start_time=` call from a wrong one.
 
 
 # ---------------------------------------------------------------------------
@@ -569,6 +446,39 @@ def test_datadog_emits_run_and_effect_metrics(
 # ---------------------------------------------------------------------------
 # Honeycomb
 # ---------------------------------------------------------------------------
+
+
+class _FakeSpan:
+    def __init__(self, name: str = "", attributes: dict | None = None) -> None:
+        self.name = name
+        self.attributes = dict(attributes or {})
+        self.ended = False
+        self.status: Any = None
+
+    def set_status(self, status: Any) -> None:
+        self.status = status
+
+    def end(self) -> None:
+        self.ended = True
+
+    def __enter__(self) -> _FakeSpan:
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        self.end()
+
+
+class _FakeTracer:
+    def __init__(self) -> None:
+        self.spans: list[_FakeSpan] = []
+
+    def start_span(self, name: str, attributes: dict | None = None) -> _FakeSpan:
+        span = _FakeSpan(name, attributes)
+        self.spans.append(span)
+        return span
+
+    def start_as_current_span(self, name: str, attributes: dict | None = None) -> _FakeSpan:
+        return self.start_span(name, attributes)
 
 
 def test_honeycomb_includes_team_header(

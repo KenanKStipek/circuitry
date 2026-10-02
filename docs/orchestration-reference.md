@@ -305,6 +305,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 - Aggregated (when `collect` is set): `prime.<name>.collected.value` — array of every iteration's collected effect value, in pass order. A pass that failed under `on_error: break`/`continue` is left out entirely (not a `null` placeholder), and its index is listed on `prime.<name>.meta.failed_passes`.
 - From *inside* the body: `prime.<body_effect>.value` — the current pass. See [Referencing a sibling within an iteration](#referencing-a-sibling-within-an-iteration).
 - From *inside* the body, the **previous** completed pass: `prime.<name>.prev.<body_effect>.value` (and `.meta`) — chain flow only (`each` and `while`); absent on the first pass, so a template renders it empty and CEL's `has()` reads false. A `flow: tree` body referencing it is a `cof check` error: tree passes run in parallel, so there is no previous one.
+- While the loop runs: `prime.<name>.meta.progress` = `{done, total, elapsed_s, eta_s}`. `total` is the collection length for `each` (chain or tree flow alike) and `max_iterations` (or `null` when uncapped) for `while`. `eta_s` is the average pass time so far times the remaining passes — `null` before the first pass completes, or whenever `total` itself is unknown. Published the same way the rest of a running loop's state is (see #299/#291 above): as each pass finishes, not only once the loop ends.
 - Termination: `prime.<name>.value.termination.reason` — see [Loop termination](#loop-termination) below.
 
 | Field | Type | Required | Default | Constraints |

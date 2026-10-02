@@ -11,3 +11,9 @@ mypy>=1.10
 # hand-rolled fake. Dev-only: production installs the `mongodb` extra
 # (pymongo) and never mongomock.
 mongomock>=4.3
+# Pure-Python, no native deps — lets tests/runtime_plugins/test_opentelemetry.py
+# exercise real span timing/parenting via the SDK's InMemorySpanExporter
+# instead of hand-faking sys.modules. Production installs the same two
+# packages (plus an exporter) via the `opentelemetry` extra.
+opentelemetry-api>=1.20
+opentelemetry-sdk>=1.20

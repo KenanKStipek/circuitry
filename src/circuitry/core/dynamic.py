@@ -130,6 +130,14 @@ class DynamicRuntime:
         dry_run: bool = False,
         timeout_seconds: int = 120,
         verbose: bool = False,
+        # Gates the single updating loop-progress line (``shots 7/32, ~4
+        # min left``) a verbose interactive run prints — distinct from
+        # ``verbose`` itself because it additionally requires a TTY and
+        # neither ``--quiet`` nor ``--json`` (see cli.app's run commands,
+        # the only place that knows both). Forwarded to every child runtime
+        # the same way ``verbose`` is, so a loop nested arbitrarily deep
+        # still gets it.
+        progress_display: bool = False,
         depth: int = 0,
         ancestors: list[AncestorContext] | None = None,
         label_prefix: str | None = None,
@@ -145,6 +153,7 @@ class DynamicRuntime:
         self.dry_run = dry_run
         self.timeout_seconds = timeout_seconds
         self.verbose = verbose
+        self.progress_display = progress_display
         self.depth = depth
         self._ancestors = ancestors or []
         # Set by an enclosing ``use`` effect so this dynamic's own leaf
@@ -518,6 +527,7 @@ class DynamicRuntime:
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
                     verbose=self.verbose,
+                    progress_display=self.progress_display,
                     depth=self.depth + 1,
                     ancestors=self._child_ancestors,
                     label_prefix=self._label_prefix,
@@ -533,6 +543,7 @@ class DynamicRuntime:
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
                     verbose=self.verbose,
+                    progress_display=self.progress_display,
                 ).execute(store=store)
 
             elif isinstance(effect, ConditionalDefinition):
@@ -545,6 +556,7 @@ class DynamicRuntime:
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
                     verbose=self.verbose,
+                    progress_display=self.progress_display,
                     depth=self.depth,
                     ancestors=self._child_ancestors,
                 ).execute(store=store, ctx=ctx)
@@ -559,6 +571,7 @@ class DynamicRuntime:
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
                     verbose=self.verbose,
+                    progress_display=self.progress_display,
                     depth=self.depth,
                     ancestors=self._child_ancestors,
                     label_prefix=self._label_prefix,
@@ -590,6 +603,7 @@ class DynamicRuntime:
                     dry_run=self.dry_run,
                     timeout_seconds=self.timeout_seconds,
                     verbose=self.verbose,
+                    progress_display=self.progress_display,
                     depth=self.depth,
                     cb_start=cb_start,
                     cb_done=cb_done,
