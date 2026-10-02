@@ -269,7 +269,11 @@
           "items": { "$ref": "#/$defs/AssetRefDef" }
         },
         "retries": { "$ref": "#/$defs/RetryPolicyDef" },
-        "on_error": { "$ref": "#/$defs/OnErrorDefault" }
+        "on_error": { "$ref": "#/$defs/OnErrorDefault" },
+        "group": {
+          "type": "string",
+          "description": "Named concurrency-group slot (runtime.concurrency_groups.<name>) this effect waits for a free slot in before dispatching, in addition to runtime.max_concurrency's run-wide cap. Leaf effects only — cof check rejects it elsewhere. The group must be defined in runtime.concurrency_groups or cof check rejects the reference."
+        }
       },
       "oneOf": [
         { "required": ["template"] },
@@ -489,7 +493,11 @@
           "description": "A Mustache template rendered to text and then parsed as JSON, producing a real object/array (not just strings). The parsed object is deep-merged over 'params' (params_json wins on overlapping keys). Use this to pass a runtime-built array or nested object to a tool whose schema requires one, e.g. '{\"arguments\": {\"symbols\": {{{prime.symbol_list.value}}} }}'."
         },
         "timeout_ms": { "type": "integer", "minimum": 0 },
-        "on_error": { "$ref": "#/$defs/OnErrorDefault" }
+        "on_error": { "$ref": "#/$defs/OnErrorDefault" },
+        "group": {
+          "type": "string",
+          "description": "Named concurrency-group slot (runtime.concurrency_groups.<name>) this effect waits for a free slot in before dispatching, in addition to runtime.max_concurrency's run-wide cap. Leaf effects only — cof check rejects it elsewhere. The group must be defined in runtime.concurrency_groups or cof check rejects the reference."
+        }
       }
     },
 

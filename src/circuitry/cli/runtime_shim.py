@@ -14,7 +14,13 @@ from uuid import uuid4
 from ..adapters import Adapter, build_adapter
 from ..adapters.factory import ADAPTER_REGISTRY, configured_timeout_seconds
 from ..allowlist_gate import AllowlistError, install_allowlists, require_adapter
-from ..core.compiler import apply_effect_overrides, compile_orchestration
+from ..core.compiler import (
+    apply_effect_overrides,
+    compile_orchestration,
+    unknown_concurrency_group_errors,
+)
+from ..core.concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
+from ..core.concurrency import RunConcurrencyLimiter
 from ..core.document_check import structural_errors, unknown_key_warnings
 from ..core.dynamic import DynamicRuntime
 from ..core.interface_inputs import check_interface_inputs
@@ -42,6 +48,8 @@ from .allowlist import (
 from .config import CircuitryConfig
 from .effective_settings import (
     EffectiveSettings,
+    _merge_runtime,
+    _split_orchestration_runtime,
     orchestration_host_setting_warnings,
     resolve_effective_settings,
 )
@@ -257,6 +265,17 @@ def run(req: RunRequest) -> RunResult:
         )
         warnings.extend(effective.warnings)
         resolved_out = effective.out
+
+        # Built once for the whole run, from the same merged runtime config
+        # every effect will see (document `runtime:` key by key over config,
+        # per #316) — shared by every tool/prompt leaf dispatched anywhere in
+        # the tree, including a `use` child's, via `runtime_config` (#274).
+        # Its group names are checked against the compiled document below,
+        # once `root_def` exists.
+        concurrency_limiter = RunConcurrencyLimiter.from_runtime_config(
+            effective.runtime or {}
+        )
+
         if profile is not None and profile.effects:
             # A pinned band name can only be checked once the run's actual
             # routing table is known — the profile alone can't tell, since
@@ -279,6 +298,7 @@ def run(req: RunRequest) -> RunResult:
         # One shared dict for the whole run: `use` effects append their library
         # pins to it as they resolve, at any nesting depth.
         runtime_config = effective.runtime if effective.runtime is not None else {}
+        runtime_config[_CONCURRENCY_LIMITER_KEY] = concurrency_limiter
         # Root directory a `path:`-resolving `use` effect falls back to when
         # its target isn't absolute or cwd-relative — see `UseRuntime`, which
         # rewrites this per-child as composition descends into subdirectories.
@@ -371,12 +391,19 @@ def run(req: RunRequest) -> RunResult:
         # Redact credential-bearing fields before embedding in state, since
         # state is serialized to --out, --json, --live-state, and last-run.json.
         # Live adapter calls keep using the un-redacted `effective.runtime`.
+        # The concurrency limiter rides the same dict purely for in-process
+        # plumbing (see core.concurrency) and, unlike every other private key
+        # already in here, isn't JSON-serializable at all — dropped before
+        # this snapshot, never before a live call reads `effective.runtime`.
+        _snapshot_runtime = {
+            k: v for k, v in effective.runtime.items() if k != _CONCURRENCY_LIMITER_KEY
+        }
         state["runtime"]["effective_settings"] = {
             "model": effective.model,
             "adapter": effective.adapter,
             "out": str(effective.out) if effective.out else None,
             "plugins": effective.plugins,
-            "runtime": redact(effective.runtime),
+            "runtime": redact(_snapshot_runtime),
             "sources": effective.sources,
         }
         if profile is not None:
@@ -430,6 +457,15 @@ def run(req: RunRequest) -> RunResult:
                 + "\n".join(f"  - {error}" for error in document_errors)
             )
         root_def = compile_orchestration(orch=orch, root_name="prime")
+
+        group_errors = unknown_concurrency_group_errors(
+            root_def, concurrency_limiter.group_names
+        )
+        if group_errors:
+            raise ValueError(
+                "Orchestration validation failed:\n"
+                + "\n".join(f"  - {error}" for error in group_errors)
+            )
 
         # A `use:` cycle is otherwise only caught mid-execution (core/use.py);
         # `validate()`/`cof check` already reject it here, so `validate_only`
@@ -865,7 +901,43 @@ def validate(
                     "warnings": lint_warnings,
                 }
 
-        compile_orchestration(orch=orch, root_name="prime")
+        root_def = compile_orchestration(orch=orch, root_name="prime")
+
+        # Same merge `run()` applies (document `runtime:` key by key over
+        # config, trusted document keeps its whole block) — just enough to
+        # know the run-wide cap/named groups `cof check` would actually run
+        # with, without resolving model/adapter/profile too (#274).
+        trusted = trust_document or (config is not None and config.trust_orchestration_runtime)
+        orch_runtime_raw = orch.get("runtime")
+        orch_runtime = orch_runtime_raw if isinstance(orch_runtime_raw, dict) else {}
+        accepted_orch_runtime = (
+            dict(orch_runtime)
+            if trusted
+            else _split_orchestration_runtime(orch_runtime, trusted=False)[0]
+        )
+        merged_runtime = _merge_runtime(
+            (config.runtime if config is not None else {}) or {}, accepted_orch_runtime
+        )
+        from ..core.concurrency import parse_concurrency_groups, parse_max_concurrency
+
+        _, mc_errors = parse_max_concurrency(merged_runtime.get("max_concurrency"))
+        groups, group_cfg_errors = parse_concurrency_groups(
+            merged_runtime.get("concurrency_groups")
+        )
+        concurrency_config_errors = [*mc_errors, *group_cfg_errors]
+        if concurrency_config_errors:
+            return {
+                "ok": False,
+                "errors": concurrency_config_errors,
+                "warnings": lint_warnings,
+            }
+        group_name_errors = unknown_concurrency_group_errors(root_def, frozenset(groups))
+        if group_name_errors:
+            return {
+                "ok": False,
+                "errors": group_name_errors,
+                "warnings": lint_warnings,
+            }
 
         document_adapter = orch.get("adapter")
         lint_warnings += image_asset_warnings(

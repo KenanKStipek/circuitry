@@ -5,7 +5,7 @@ import logging
 import math
 import time
 from collections.abc import Callable
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -13,6 +13,7 @@ from typing import Any, Literal
 from ..cli.redaction import redact
 from ..output import console as _console
 from ..plugins.base import ToolResult
+from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .store import Store
 from .templates import render_template
 
@@ -289,6 +290,13 @@ class ToolDefinition:
     # False = skip execution and write a disabled node (see core.disabled).
     enabled: bool = True
 
+    # Named concurrency-group slot this effect holds for the duration of its
+    # dispatch (core.concurrency.RunConcurrencyLimiter) — None means it only
+    # ever competes for runtime.max_concurrency's run-wide slots, if any are
+    # configured. A tool effect is a leaf, so this is where a slot is
+    # actually held; see #274.
+    group: str | None = None
+
 
 #: Fallback when neither the effect's ``timeout_ms`` nor
 #: ``runtime.tools.timeout_seconds`` in config is set. Tools get their own
@@ -420,6 +428,7 @@ class ToolRuntime:
         meta.pop("binary", None)
         meta.pop("status_code", None)
         meta.pop("raw", None)
+        meta["waiting_for"] = None
 
         if self.verbose and self.cb_start is not None:
             self.cb_start()
@@ -478,26 +487,47 @@ class ToolRuntime:
             if self.cb_running is not None:
                 self.cb_running(target, 0)
 
-            # Show spinner while running (if verbose and no external cb_start — same pattern as PromptRuntime)
-            if self.verbose and self.cb_start is None:
-                from rich.live import Live
+            def _on_wait(label: str) -> None:
+                store.set(f"{self.defn.name}.meta.waiting_for", label)
+                if self.verbose:
+                    _console.print(
+                        f"{indent}[info]…[/info] [white]⚙[/white] {self.display_name}"
+                        f" [dim]waiting for '{label}'[/dim]"
+                    )
 
-                live_cm = Live(
-                    _ToolSpinner(
-                        name=self.display_name,
-                        target=target,
-                        indent=indent,
-                        ancestors=self._ancestors,
-                    ),
-                    refresh_per_second=10,
-                    transient=True,
-                    console=_console,
+            def _on_acquired() -> None:
+                store.set(f"{self.defn.name}.meta.waiting_for", None)
+
+            limiter = self.runtime_config.get(_CONCURRENCY_LIMITER_KEY)
+            concurrency_cm: AbstractContextManager[None] = (
+                limiter.acquire(
+                    group=self.defn.group, on_wait=_on_wait, on_acquired=_on_acquired
                 )
-            else:
-                live_cm = nullcontext()
+                if limiter is not None
+                else nullcontext()
+            )
 
-            with live_cm:
-                result = plugin.execute(params=rendered, timeout_seconds=timeout_seconds)
+            with concurrency_cm:
+                # Show spinner while running (if verbose and no external cb_start — same pattern as PromptRuntime)
+                if self.verbose and self.cb_start is None:
+                    from rich.live import Live
+
+                    live_cm = Live(
+                        _ToolSpinner(
+                            name=self.display_name,
+                            target=target,
+                            indent=indent,
+                            ancestors=self._ancestors,
+                        ),
+                        refresh_per_second=10,
+                        transient=True,
+                        console=_console,
+                    )
+                else:
+                    live_cm = nullcontext()
+
+                with live_cm:
+                    result = plugin.execute(params=rendered, timeout_seconds=timeout_seconds)
 
         except Exception as e:
             if self.verbose:

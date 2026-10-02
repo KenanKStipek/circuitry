@@ -686,6 +686,26 @@ class UseRuntime:
 
             child_root = compile_orchestration(orch=child_orch, root_name="prime")
 
+            # The run-wide limiter (if any) is ambient — a `use` child never
+            # declares its own `runtime.concurrency_groups` (see
+            # `_load_child_orch`'s structural check, which only validates the
+            # document's own shape); it just has to honour the one group
+            # table the whole run already resolved (#274).
+            from .compiler import unknown_concurrency_group_errors
+            from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
+            from .concurrency import RunConcurrencyLimiter
+
+            limiter = self.runtime_config.get(_CONCURRENCY_LIMITER_KEY)
+            if isinstance(limiter, RunConcurrencyLimiter):
+                child_group_errors = unknown_concurrency_group_errors(
+                    child_root, limiter.group_names
+                )
+                if child_group_errors:
+                    raise ValueError(
+                        f"Orchestration {label} validation failed:\n"
+                        + "\n".join(f"  - {e}" for e in child_group_errors)
+                    )
+
             # Build isolated child state: rendered inputs land in the
             # child's `input` namespace, same contract as a top-level run.
             child_inputs: dict[str, Any] = {}
