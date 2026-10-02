@@ -218,6 +218,34 @@ def _print_run_warnings(warnings: list[str]) -> None:
         )
 
 
+def _parse_allow_capabilities(value: str | None) -> frozenset[str] | None:
+    """``--allow-capabilities shell,network`` -> ``{"shell", "network"}``."""
+    if not value:
+        return None
+    names = frozenset(part.strip() for part in value.split(",") if part.strip())
+    return names or None
+
+
+def _confirm_capabilities(label: str, capabilities: frozenset[str]) -> bool:
+    """The first-run capability consent prompt (#275): what *label* needs,
+    then y/N. Only ever reached when stdin/stdout are both a TTY and the
+    caller isn't `--quiet`/`--json` — see `_capability_prompt` below.
+    """
+    names = ", ".join(sorted(capabilities))
+    console.print(f"[bold]{escape(label)}[/bold] needs: [yellow]{escape(names)}[/yellow]")
+    return typer.confirm("Allow it? (recorded for this document until it changes)", default=False)
+
+
+def _capability_prompt(*, quiet: bool, json_out: bool) -> Any:
+    """The interactive capability-consent callback for this invocation, or
+    `None` (refuse rather than prompt) for anything that isn't a real
+    terminal on both ends — `--quiet`/`--json`, a pipe, CI (#275 rule 5).
+    """
+    if quiet or json_out or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return None
+    return _confirm_capabilities
+
+
 def _read_state_file(path: Path) -> dict[str, Any]:
     """Read a --state JSON file, failing loudly when it doesn't exist."""
     if not path.exists():
@@ -606,6 +634,15 @@ def run_cmd(
         False, "--skip-preflight",
         help="Bypass dependency preflight; run even if check()s reported missing deps.",
     ),
+    allow_capabilities: str | None = typer.Option(
+        None, "--allow-capabilities",
+        help=(
+            "Comma-separated capabilities (shell,python_eval,fs-write,network) to "
+            "approve for this run without prompting — a scripted/CI escape hatch for "
+            "a use: ref: child that needs fresh consent. Not persisted; see `cof trust` "
+            "to approve a document permanently."
+        ),
+    ),
     profile: str | None = typer.Option(
         None, "--profile",
         help=(
@@ -703,6 +740,7 @@ def run_cmd(
         env_vars = stashed.get("env_vars")
         tail = stashed.get("tail", False)
         skip_preflight = stashed.get("skip_preflight", False)
+        allow_capabilities = stashed.get("allow_capabilities")
         profile = stashed.get("profile")
         profile_from_state = (
             Path(stashed["profile_from_state"]) if stashed.get("profile_from_state") else None
@@ -873,11 +911,16 @@ def run_cmd(
         effect_start_observer=effect_start_observer,
         decompose_out=decompose_out,
         trust_document=trust_document,
+        allow_capabilities=_parse_allow_capabilities(allow_capabilities),
+        capability_prompt=_capability_prompt(quiet=quiet, json_out=json_out),
     )
 
+    # A capability-consent prompt (#275) needs real stdin/stdout, not a live
+    # spinner fighting it for the terminal — same reason --verbose already
+    # skips the status line.
     with (
         nullcontext()
-        if (quiet or json_out or verbose)
+        if (quiet or json_out or verbose or req.capability_prompt is not None)
         else console.status("[cyan]Running…[/cyan]")
     ):
         result = run(req)
@@ -926,6 +969,7 @@ def run_cmd(
             "env_vars": redact_env_pairs(env_vars),
             "tail": tail,
             "skip_preflight": skip_preflight,
+            "allow_capabilities": allow_capabilities,
             "profile": profile,
             "profile_from_state": str(profile_from_state) if profile_from_state else None,
             "adapter": adapter,
@@ -1059,6 +1103,14 @@ def run_library_cmd(
     skip_preflight: bool = typer.Option(
         False, "--skip-preflight",
         help="Bypass dependency preflight; run even if check()s reported missing deps.",
+    ),
+    allow_capabilities: str | None = typer.Option(
+        None, "--allow-capabilities",
+        help=(
+            "Comma-separated capabilities (shell,python_eval,fs-write,network) to "
+            "approve for this run without prompting — a scripted/CI escape hatch. "
+            "Not persisted; see `cof trust` to approve a document permanently."
+        ),
     ),
     profile: str | None = typer.Option(
         None, "--profile",
@@ -1209,11 +1261,13 @@ def run_library_cmd(
         routing_override=routing,
         decompose_override=decompose,
         effect_start_observer=effect_start_observer,
+        allow_capabilities=_parse_allow_capabilities(allow_capabilities),
+        capability_prompt=_capability_prompt(quiet=quiet, json_out=json_out),
     )
 
     with (
         nullcontext()
-        if (quiet or json_out or verbose)
+        if (quiet or json_out or verbose or req.capability_prompt is not None)
         else console.status("[cyan]Running…[/cyan]")
     ):
         result = run(req)

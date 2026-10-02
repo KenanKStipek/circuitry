@@ -551,6 +551,70 @@ class UseRuntime:
                 "enforcement: " + "; ".join(denials)
             )
 
+    def _check_capability_consent(
+        self, child_orch: dict[str, Any], label: str, digest: str
+    ) -> frozenset[str] | None:
+        """Capability consent for this child (#275).
+
+        A ``ref:`` child is a library entry, independently in scope
+        regardless of whether this document itself is trusted (#284) or
+        went through the whole-document gate at the top of the run: it must
+        already be consented to by its own digest, never interactively here
+        — this runs deep in execution, possibly off the main thread, and a
+        ``ref:`` value only known once a Mustache tag renders is exactly the
+        case :func:`circuitry.cli.document_consent.enforce_consent`'s static
+        walk up front cannot see. A missing consent always refuses, the same
+        non-interactive rule every surface besides an interactive
+        ``cof run``/``cof run-library`` gets (#275 rule 5). On success,
+        returns the capability ceiling this child's own subtree (further
+        nested ``use`` children, a generated plan) must stay inside.
+
+        A ``path:``/``inline:`` child is this document's own content, not
+        independently gated — only checked against whatever ceiling this run
+        is already under (``None`` return: inherit it unchanged), the same
+        check a generated plan's tool refs get
+        (:func:`circuitry.capability_gate.require_within_ceiling`).
+        """
+        from ..capability_gate import require_within_ceiling
+        from ..cli.allowlist import walk_orchestration_refs
+        from ..cli.document_consent import (
+            DocumentConsentError,
+            consented_capabilities,
+            refusal_message,
+        )
+        from ..plugins.capabilities import capabilities_of
+
+        _adapters, tools = walk_orchestration_refs(child_orch, include_document_adapter=False)
+        required = frozenset(cap for tool in tools for cap in capabilities_of(tool))
+
+        if self.defn.ref is None:
+            require_within_ceiling(
+                f"use '{self.defn.name}': child {label}", required, self.runtime_config
+            )
+            return None
+
+        if not required:
+            return frozenset()
+        store_path = self._capability_store_path()
+        allow = self._capability_allow_override()
+        consented = consented_capabilities(digest, store_path=store_path) or frozenset()
+        missing = required - consented - allow
+        if missing:
+            raise DocumentConsentError(
+                f"use '{self.defn.name}': child {refusal_message(label, missing)}"
+            )
+        return consented | allow
+
+    def _capability_store_path(self) -> Path:
+        from ..cli.config import trust_store_path
+
+        configured = self.runtime_config.get("_capability_store_path")
+        return Path(configured) if isinstance(configured, str) else trust_store_path()
+
+    def _capability_allow_override(self) -> frozenset[str]:
+        configured = self.runtime_config.get("_capability_allow")
+        return frozenset(configured) if isinstance(configured, list) else frozenset()
+
     def _child_on_write(
         self, store: Store, node: dict[str, Any], node_path: str
     ) -> Callable[[dict[str, Any]], None] | None:
@@ -581,6 +645,7 @@ class UseRuntime:
         return _publish
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
+        from ..capability_gate import install_capability_ceiling
         from .compiler import compile_orchestration
         from .dynamic import DynamicRuntime
 
@@ -659,6 +724,9 @@ class UseRuntime:
             if self._pin is not None:
                 meta["library_ref"] = self._pin
             self._check_allowlists(child_orch, label)
+            child_capability_ceiling = self._check_capability_consent(
+                child_orch, label, digest
+            )
 
             # Cycle detection — runtime call-stack tracking by resolved identity.
             # The stack is derived per call-path rather than mutated in place:
@@ -676,6 +744,8 @@ class UseRuntime:
                 )
             child_runtime_config = dict(self.runtime_config)
             child_runtime_config["_use_call_stack"] = [*parent_stack, identity]
+            if child_capability_ceiling is not None:
+                install_capability_ceiling(child_runtime_config, child_capability_ceiling)
             # A nested `use: {path: ...}` inside this child resolves relative
             # to *this* child's own directory, not the root orchestration's —
             # composition chains through each file's own location. Inline

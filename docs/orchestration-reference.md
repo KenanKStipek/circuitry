@@ -617,6 +617,30 @@ Not every plugin can actually be bounded by it:
 | Ignored — pure in-memory, nothing to bound | `json`, `xml`, `csv`, `regex`, `hash`, `hex`, `uuid`, `base64`, `gzip`, `zip`, `tar`, `fs`, `env_vars`, `validate_yaml`, `html_extract`, `pdf_extract`, `math`, `clock`, `system_info`, `process_list` |
 | Ignored — has its own, separate bound instead | `port_check` (`params.timeout_ms`, socket-level, default 2s), `surrealdb` (the SDK's own socket timeout), `embed`/`rerank`/`vector_search` (local inference; the first call per model can also trigger an unbounded download) |
 
+**Capability consent (#275):** a document that did not come from the user's
+own disk — a `cof run-library`/`run_shared_orchestration` asset, or any
+`use: ref:` child, reached from *any* document, trusted or not — is gated on
+an explicit yes before its tool effects may `shell`, `python_eval`,
+`fs-write` (write or delete a local path), or reach the `network`, the first
+time. A path-run document (`cof run ./my.yml`) is never asked about its own
+effects (see [Host settings versus orchestration documents](./threat-model.md#6-host-settings-versus-orchestration-documents)
+for the parallel rule on host settings), only about a `use: ref:` child it
+pulls in. See [Threat Model §9](./threat-model.md#9-capability-consent-for-a-document-that-is-not-the-users-own)
+for the full gate and [Configuration](./guidebook/04-configuration.md#capability-consent-for-a-fetched-or-referenced-document)
+for the CLI walkthrough. Each provider's capability tag
+(`circuitry.plugins.capabilities.PLUGIN_CAPABILITIES`):
+
+| Capability | Providers |
+|---|---|
+| `shell` | `shell`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ripgrep`, `pytest`, `awk`, `sed`, `pandoc`, `mediainfo`, `imagemagick`, `exiftool`, `7z`, `ping`, `traceroute`, `linter`, `ocr`, `gpg`, `diff_patch`, `pdf_render`, `ffmpeg` |
+| `python_eval` | `python_eval` |
+| `fs-write` | `fs`, `tar`, `zip`, `gzip`, `vector_search`, `gdrive` |
+| `network` | `comfyui`, `http`, `email_smtp`, `port_check`, `dns`, `whois`, `rss`, `wikipedia`, `webhook`, `web_fetch`, `web_search`, `weather`, `s3`, `surrealdb`, `mcp`, `linear`, `slack`, `discord`, `github`, `jira`, `notion`, `gcalendar`, `gdrive`, `playwright`, `screenshot`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ping`, `traceroute` |
+
+A provider absent from every row needs no consent: it only reads its own
+parameters and returns a value (`math`, `regex`, `json`, `clock`, `hash`,
+`uuid`, `base64`, ...).
+
 **Result contract — one meaning for "this tool failed":** a tool effect
 fails (`meta.error` set, `on_error` applies) exactly when the plugin raises,
 or when it returns a result with `ok: false` without raising. Both paths

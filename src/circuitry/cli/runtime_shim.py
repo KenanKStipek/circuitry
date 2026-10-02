@@ -14,6 +14,7 @@ from uuid import uuid4
 from ..adapters import Adapter, build_adapter
 from ..adapters.factory import ADAPTER_REGISTRY, configured_timeout_seconds
 from ..allowlist_gate import AllowlistError, install_allowlists, require_adapter
+from ..capability_gate import install_capability_ceiling
 from ..core.compiler import apply_effect_overrides, compile_orchestration
 from ..core.document_check import structural_errors, unknown_key_warnings
 from ..core.dynamic import DynamicRuntime
@@ -39,7 +40,8 @@ from .allowlist import (
     skippable_effect_names,
     walk_orchestration_refs,
 )
-from .config import CircuitryConfig
+from .config import CircuitryConfig, trust_store_path
+from .document_consent import ConsentPrompt, enforce_consent
 from .effective_settings import (
     EffectiveSettings,
     orchestration_host_setting_warnings,
@@ -149,6 +151,17 @@ class RunRequest:
     # and network/tool-chosen documents keep the default and stay limited to
     # ORCHESTRATION_RUNTIME_KEYS — see `resolve_effective_settings`.
     trust_document: bool = False
+    # Capability consent (#275). Pre-approved capabilities for this run only
+    # (never persisted to the consent store) — the scripted/CI escape hatch
+    # named in a `DocumentConsentError`'s own message, e.g.
+    # `frozenset({"shell", "network"})` for `--allow-capabilities shell,network`.
+    allow_capabilities: frozenset[str] | None = None
+    # An interactive callback — `(label, capabilities) -> bool` — the CLI
+    # supplies to ask the user before a document that needs fresh consent
+    # runs; `None` (every non-CLI caller: SDK, MCP, REST, TUI, scheduler)
+    # means never prompt, so a missing consent always refuses rather than
+    # blocking on input nobody can give (#275 rule 5).
+    capability_prompt: ConsentPrompt | None = None
 
 
 @dataclass(frozen=True)
@@ -215,6 +228,23 @@ def run(req: RunRequest) -> RunResult:
             raise AllowlistError(
                 "Allowlist enforcement failed: " + "; ".join(allowlist_errors)
             )
+
+        # Capability consent (#275): gated on the whole document only for a
+        # `cof fetch`/`cof run-library` asset (`shared_library_metadata` is
+        # the signal both the CLI command and `run_shared_orchestration` set);
+        # a `use: ref:` child is independently in scope regardless, including
+        # one reached from a path-trusted document. Raises/prompts before
+        # anything compiles or dispatches, same fail-fast spirit as the
+        # allowlist check above.
+        capability_ceiling = enforce_consent(
+            orch=orch,
+            orchestration_path=req.orchestration_path,
+            gate_whole_document=req.shared_library_metadata is not None,
+            runtime=cfg.runtime,
+            store_path=trust_store_path(),
+            allow_capabilities=req.allow_capabilities,
+            prompt=req.capability_prompt,
+        )
 
         if req.profile_name and req.profile_record is not None:
             raise ValueError(
@@ -293,6 +323,15 @@ def run(req: RunRequest) -> RunResult:
             enabled_adapters=cfg.enabled_adapters,
             enabled_tools=cfg.enabled_tools,
         )
+        # The ceiling a generated plan (reflector/decompose) inside this
+        # document may not exceed (#275 rule 4) — `None` (a path-run or
+        # plain library-name document) leaves it unrestricted.
+        install_capability_ceiling(runtime_config, capability_ceiling)
+        # So a `use: ref:` child only known once a Mustache tag renders
+        # (unreachable to the static walk above) still honors this run's
+        # own `--allow-capabilities` when `UseRuntime` re-checks it.
+        if req.allow_capabilities:
+            runtime_config["_capability_allow"] = sorted(req.allow_capabilities)
         persistence = build_persistence_backend(effective.runtime)
         plugins, plugin_events = _initialize_plugins(
             effective.plugins, allowed=cfg.enabled_plugins

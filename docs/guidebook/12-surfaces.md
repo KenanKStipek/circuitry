@@ -8,7 +8,7 @@ Everything the world reaches Circuitry through. One runtime sits under all of th
 | --- | --- |
 | `cof setup` | Interactive first-run: detect local backends, pick a model, write the global config. |
 | `cof init` | Write a project config and a `hello.yml` in the current directory, and trust the config. `--yes` skips every prompt (scripted use). |
-| `cof trust [path]` | Show what a project config sets, flag the host-sensitive settings, and — after you confirm (`--yes` to skip) — trust it so runs apply it. `--list` shows every trusted file and whether it still matches. See [Configuration](04-configuration.md#trusting-a-project-config). |
+| `cof trust [path]` | Show what a project config sets, flag the host-sensitive settings, and — after you confirm (`--yes` to skip) — trust it so runs apply it. `--list` shows every trusted file and whether it still matches. A `.yml`/`.yaml` PATH instead shows the capabilities an orchestration document needs and consents to them (#275). See [Configuration](04-configuration.md#trusting-a-project-config) and [Capability consent](04-configuration.md#capability-consent-for-a-fetched-or-referenced-document). |
 | `cof untrust [path]` | Stop applying a project config you trusted. |
 | `cof doctor` | Run every extension's preflight `check()` and report, including the project config and its trust state; `--generate` also makes a live model call. Non-zero exit when anything fails. |
 | `cof run <name-or-path>` | Execute an orchestration. Library entries by slash name (`learn/hello`), files by path. |
@@ -21,7 +21,7 @@ Everything the world reaches Circuitry through. One runtime sits under all of th
 | `cof gen <name> "<goal>"` | Generate an orchestration from a sentence, single-shot, via `agents/meta_orchestrator`. |
 | `cof wizard --goal "…"` | Build one by conversation — clarifying questions, then a validated draft — via `agents/wizard`. |
 | `cof library refresh <source>` | Fetch a remote library source into the local cache. The only library command that touches the network. |
-| `cof fetch` / `cof run-library` | Retrieve and run a shared-library asset by id and version. |
+| `cof fetch` / `cof run-library` | Retrieve and run a shared-library asset by id and version. `cof run-library` (and a `use: ref:` child of any document) asks before a first run whose tool effects shell out, evaluate Python, write/delete a file, or reach the network — `--allow-capabilities` for a scripted/CI run. See [Capability consent](04-configuration.md#capability-consent-for-a-fetched-or-referenced-document). |
 | `cof mcp` | Run the MCP server on stdio (also `circuitry-mcp`). |
 | `cof tui` | Launch the terminal UI (needs the `tui` extra). |
 | `cof version` | Also `cof --version`, at the root command. |

@@ -97,6 +97,28 @@ The run itself goes ahead on the other layers, and exit codes do not change. `co
 
 Two kinds of file are always trusted, because you named them: the global config, and a file passed with `--config` or `CIRCUITRY_CONFIG`. For CI jobs and containers where the checked-out repository is your own, `CIRCUITRY_TRUST_PROJECT_CONFIG=1` trusts every discovered project config without a trust entry. That is the whole protection switched off: set it only where every directory a run can start in holds a config you would have trusted anyway.
 
+## Capability consent for a fetched or referenced document
+
+`cof trust` and the project-config rule above decide whether a document can change *host settings*. They say nothing about what the document's own effects do — and a document you did not write yourself can still shell out, evaluate Python, write or delete a file, or reach the network, the moment one of its tool effects runs. #275 adds a second, narrower gate for exactly that: a document that did not come from your own disk — a `cof fetch`/`cof run-library` asset, or any `use: ref:` child, reached from *any* document, trusted or not — needs an explicit yes before its `shell`, `python_eval`, filesystem-write, or network tool effects run, the first time.
+
+Every bundled tool plugin is tagged with what it can do — `shell`, `python_eval`, `fs-write`, `network`, some with more than one — in `circuitry.plugins.capabilities.PLUGIN_CAPABILITIES`; the full table is in the [Orchestration Reference](../orchestration-reference.md#effect-types). Before such a document runs, Circuitry works out, statically, which of the four its tool effects (and its own `use` children) need, and asks:
+
+```
+'/path/to/fetched.yml' needs: network, shell
+Allow it? (recorded for this document until it changes) [y/N]:
+```
+
+A yes is recorded by the document's own content digest, in the same store `cof trust` keeps project-config trust in (`~/.config/circuitry/trusted.json`, a different top-level key) — an edited document (a changed digest) asks again. From a script or CI, where nothing can answer a prompt, the run simply refuses, naming what to do about it:
+
+```bash
+cof trust path/to/fetched.yml          # review it and consent permanently
+cof run-library asset --allow-capabilities shell,network   # approve just this run, not persisted
+```
+
+`cof trust` on a `.yml`/`.yaml` path shows the capabilities a document needs (the same walk the in-run prompt does) instead of config settings, and asks the same way `cof trust` on a project config does. A `use: ref:` child is gated independently of whatever document pulled it in — including one reached from a path-trusted document you wrote yourself, since the child's content still isn't yours; a `use: path:`/`inline:` child is not independently gated, only held to whatever capabilities the enclosing document already has consent for — the same reasoning that keeps it from setting its own host settings above. A reflector or decomposition plan generated inside a consented document is held to that same ceiling, never its own prompt.
+
+A file you run by path, with no `use: ref:` in it, is never asked: naming it by path is the decision to run it, same as the host-settings rule above. See [Threat Model §9](../threat-model.md#9-capability-consent-for-a-document-that-is-not-the-users-own) for the full gate.
+
 ## Which model actually runs
 
 Config sets the default, but it is one voice among several. The full ladder for a prompt's model, most authoritative first:
@@ -170,7 +192,7 @@ Every adapter, tool plugin, and runtime plugin implements a `check()`. Before th
 
 An adapter that only optional steps use does not block the run. When every prompt on an adapter has `on_error: skip` or `continue`, a missing credential for it is a warning, not a failure, and those steps skip. [Errors](05-errors.md) has the exact rule.
 
-The allowlists are the other gate: `enabled_adapters`, `enabled_tools`, and `enabled_plugins` in config (or their `CIRCUITRY_ENABLED_*` environment forms) restrict which extensions a run may touch. Unset means everything compiled in is available; set means an orchestration referencing anything else fails at validation, before any call. `cof check` follows the document's `use` children — `path:`, `ref:` and plain `inline:` — and applies the same lists to each. At run time every adapter and tool is checked again as it is built, which covers what no document text shows: a templated `inline:` child once it renders, reflector and decomposition plans, `--adapter`, the config's `default_adapter`, and a profile's `provider` overrides. `cof run-library --service-profile` keeps the lists too. In a deployment that should never shell out, `enabled_tools` is where you say so. [Threat Model](../threat-model.md) covers the reasoning.
+The allowlists are the other gate: `enabled_adapters`, `enabled_tools`, and `enabled_plugins` in config (or their `CIRCUITRY_ENABLED_*` environment forms) restrict which extensions a run may touch. Unset means everything compiled in is available; set means an orchestration referencing anything else fails at validation, before any call. `cof check` follows the document's `use` children — `path:`, `ref:` and plain `inline:` — and applies the same lists to each. At run time every adapter and tool is checked again as it is built, which covers what no document text shows: a templated `inline:` child once it renders, reflector and decomposition plans, `--adapter`, the config's `default_adapter`, and a profile's `provider` overrides. `cof run-library --service-profile` keeps the lists too. In a deployment that should never shell out, `enabled_tools` is where you say so. [Threat Model](../threat-model.md) covers the reasoning. Capability consent (above) is a separate, narrower gate for the same class of risk: an allowlist is a host-wide policy an operator sets once; consent is a per-document, one-time yes for a document that did not come from the operator's own disk.
 
 ## Timeouts
 
