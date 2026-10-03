@@ -221,19 +221,26 @@ def test_tui_state_file_relinks_last(tmp_path: Path) -> None:
 @dataclass
 class _StubPersistenceBackend:
     """``load_latest_state`` hands back a ref-form snapshot, as a real
-    backend would if the run that saved it wrote references (#220)."""
+    backend would if the run that saved it wrote references (#220).
 
-    snapshot: dict[str, Any]
+    ``save_run_snapshot`` records every call's kwargs in ``saved``, so a
+    test can inspect the ``state`` a run actually hands the backend (#236).
+    """
+
+    snapshot: dict[str, Any] | None
+    saved: list[dict[str, Any]] = field(default_factory=list)
 
     def describe(self) -> dict[str, Any]:
         return {"backend": "stub"}
 
-    def load_latest_state(self, *, orchestration_path: str) -> dict[str, Any]:
+    def load_latest_state(self, *, orchestration_path: str) -> dict[str, Any] | None:
         del orchestration_path
+        if self.snapshot is None:
+            return None
         return json.loads(json.dumps(self.snapshot))
 
     def save_run_snapshot(self, **kwargs: Any) -> None:
-        del kwargs
+        self.saved.append(kwargs)
 
 
 def test_resuming_from_a_persisted_snapshot_relinks_last(
@@ -266,3 +273,40 @@ def test_resuming_from_a_persisted_snapshot_relinks_last(
     assert adapter.prompts == ["read=[PASS b-y]"]
     outer = result.state["prime"]["outer"]
     assert outer["last"] is outer["iter_1"]
+
+
+def test_persistence_save_run_snapshot_writes_ref_form_last(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The persistence backend's write side gets the same ref-form state as
+    ``--out`` -- a loop's ``last`` is a sibling reference, not a full copy of
+    its final pass (#236)."""
+    backend = _StubPersistenceBackend(snapshot=None)
+    monkeypatch.setattr(
+        runtime_shim, "build_persistence_backend", lambda runtime: backend
+    )
+
+    adapter = EchoAdapter()
+    result = run(
+        RunRequest(
+            orchestration_path=_write_orch(tmp_path / "nested.json", NESTED_LOOPS),
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            initial_state={"input": dict(NESTED_INPUT)},
+            config=CircuitryConfig(runtime={"persistence": {"enabled": True}}),
+            adapter=adapter,
+            skip_preflight=True,
+        )
+    )
+
+    assert result.ok, result.error
+    assert len(backend.saved) == 1
+    saved_state = backend.saved[0]["state"]
+    outer = saved_state["prime"]["outer"]
+    assert outer["last"] == {"$ref": "iter_1"}
+    assert outer["iter_1"]["inner"]["last"] == {"$ref": "iter_1"}
+    # The live state the run returns is untouched -- still real aliases.
+    live_outer = result.state["prime"]["outer"]
+    assert live_outer["last"] is live_outer["iter_1"]

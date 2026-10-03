@@ -7,7 +7,7 @@ Three kinds of extension carry a run beyond the process, and all three are behin
 ```
 Tool ::= { type: 'tool', name: NAME, provider: PLUGIN_NAME,
            prompt?: TEMPLATE, model?: STRING,
-           params?: MAP,                                 — string values Mustache-rendered; wins over prompt/model
+           params?: MAP,                                 — string values Mustache-rendered; a {from: PATH} leaf passes a native value; wins over prompt/model
            params_json?: TEMPLATE,                       — rendered, parsed as JSON, deep-merged over params
            timeout_ms?: INT, on_error?: 'fail'|'skip'|'continue', description?: STRING }
 ```
@@ -42,6 +42,21 @@ A value rendered into `params` is always a string, so a list from an earlier ste
 ```
 
 Here `arguments.labels` is the label list an `array` prompt chose, the list itself, next to the three strings from `params`. A template that does not render to a JSON object fails the tool; it never runs with other parameters than the ones you wrote.
+
+`params_json` is one way to pass a native value through untouched; a `{from: <path>}` leaf anywhere inside `params` itself is the other, and it reads better when the value is already sitting at a known state path rather than built from a template:
+
+```yaml
+- type: tool
+  name: get_equity_quotes
+  provider: mcp
+  params:
+    server: robinhood
+    tool: get_equity_quotes
+    arguments:
+      symbols: {from: prime.symbol_list.value}
+```
+
+`arguments.symbols` arrives as the native array `prime.symbol_list.value` holds, not its Mustache-rendered string form. It resolves against the same scope a `use` effect's by-reference `inputs` do (state namespaces, an enclosing loop's bindings) and fails `cof check` the same way on an unrooted path; add `default: <value>` alongside `from:` to fall back instead of failing when the path doesn't resolve. See [Params by reference](../orchestration-reference.md#params-by-reference).
 
 The division of labour is strict. Tools are for what a model *cannot* do — side effects and observations. Text work — summarising, extracting, classifying, writing, coding — is a prompt, and the pattern that joins them is **prompt-then-tool**: a `json` prompt produces the parameters, a tool executes them.
 

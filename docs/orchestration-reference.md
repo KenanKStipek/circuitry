@@ -621,13 +621,60 @@ Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously
 | `provider` | string | yes | — | Plugin name: `ffmpeg`, `comfyui` |
 | `prompt` | string | no | — | Primary input text. Mustache-rendered. For comfyui: the image generation prompt |
 | `model` | string | no | — | Model/checkpoint name. For comfyui: checkpoint filename |
-| `params` | object | no | `{}` | Plugin-specific parameters. All string values support Mustache rendering. Takes precedence over top-level `prompt`/`model`. Quote every `args` entry: an unquoted `0x1`, `off` or `-0` reaches the tool as `1`, `False`, `0` (`cof check` warns) |
+| `params` | object | no | `{}` | Plugin-specific parameters. All string values support Mustache rendering. A leaf anywhere in `params` (any depth, in objects and lists), `{from: <path>}`, passes the value at that path unchanged instead of rendering it (see [Params by reference](#params-by-reference)). Takes precedence over top-level `prompt`/`model`. Quote every `args` entry: an unquoted `0x1`, `off` or `-0` reaches the tool as `1`, `False`, `0` (`cof check` warns) |
 | `params_json` | string | no | — | A Mustache template rendered to text and parsed as JSON, producing a real array/object instead of a Mustache-rendered string. Deep-merged over `params` (wins on overlapping keys). See [`params_json`](#params_json) below |
 | `timeout_ms` | integer | no | — | Per-effect timeout in milliseconds |
 | `retries` | object | no | — | `{max_attempts, backoff_ms}` — see [Retries](#tool-retries) below |
 | `expect` | string or object | no | — | Output check, run after a successful attempt — see [`expect`](#tool-expect) below |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `description` | string | no | — | |
+
+#### Params by reference
+
+A string `params` value is Mustache-rendered, so it always reaches the plugin as
+text (unless `params_json` builds it from JSON, see below). To pass a value
+as it is — an array, an object, a number, a boolean — anywhere inside
+`params` (any depth, in objects and lists), write `{from: <path>}`:
+
+```yaml
+- type: tool
+  name: get_equity_quotes
+  provider: mcp
+  params:
+    server: robinhood
+    tool: get_equity_quotes
+    arguments:
+      symbols: {from: prime.symbol_list.value}      # a native array, not a string
+```
+
+This resolves exactly like a `use` effect's by-reference `inputs` (see
+[Inputs by reference](#inputs-by-reference)): the same scope — state
+namespaces and the bindings of an enclosing loop (`each.as`, `iter`,
+`prime.<loop>.prev`) — and the same compile-time rooting check at `cof check`
+time.
+
+- A path that doesn't resolve is an error naming the param's own path
+  (`Tool effect '<name>' param '<path>': '{from: ...}' did not resolve to a
+  value.`), unless the leaf also carries `default:` — then that value is used
+  instead:
+  ```yaml
+  params:
+    symbols: {from: prime.symbol_list.value, default: []}
+  ```
+  A path that resolves to an explicit `null` counts as unresolved too — there
+  is no way to tell "missing" from "stored null" — so it also raises (or
+  falls back to `default:`), unlike a `use` effect's input reference, which
+  passes `null` through as the value.
+- Only a mapping with exactly the key `from` (optionally plus `default`) is a
+  reference. Any other mapping — including one with other keys mixed in — is
+  passed through literally, same as today. To pass a *literal* one-key
+  `{from: ...}` object to a plugin, use `params_json` instead.
+- A security-sensitive param a plugin treats as its own allowlist (today:
+  the `shell` plugin's `allowed_commands`) must stay a literal list of
+  strings written in the document: `{from: ...}` there — as the whole value
+  or as a list item — is rejected at `cof check` time and again at run time,
+  the same as a templated string entry, so neither runtime state nor
+  `params_json` can widen what a document is allowed to run.
 
 Tool providers reference a *tool plugin*, not an *adapter*, so the `prompt`-effect `on_error` reclassification above does not apply here: a missing tool-plugin dependency (e.g. `ffmpeg` not on `PATH`) always hard-fails preflight regardless of this effect's `on_error`.
 
