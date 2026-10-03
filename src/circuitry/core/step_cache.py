@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import tempfile
@@ -35,6 +36,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "CACHE_FORMAT_VERSION",
@@ -45,7 +48,15 @@ __all__ = [
     "cache_dir",
     "compute_cache_key",
     "parse_ttl",
+    "safe_get",
+    "safe_put",
 ]
+
+#: Entry filenames are a sha256 hex digest (see `compute_cache_key`) plus
+#: `.json` — never the `.tmp-*.json` `tempfile.mkstemp` prefix `put` writes
+#: a pending entry under before its atomic `os.replace`, and never anything
+#: else a stray file in `CIRCUITRY_CACHE_DIR` might be named.
+_ENTRY_NAME = re.compile(r"^[0-9a-f]{64}\.json$")
 
 #: Bumped whenever the key material (what goes into the hash) or the stored
 #: record's shape changes, so an old cache from a prior version of this
@@ -148,7 +159,10 @@ def compute_cache_key(*, effect_type: str, material: dict[str, Any], salt: str |
 @dataclass(frozen=True)
 class CacheLookup:
     """The result of a `StepCache.get` — `hit=False` on a miss, an expired
-    entry, or a corrupt/unreadable one; never raises."""
+    entry, or a corrupt/unreadable one. `StepCache.get` itself never raises;
+    constructing a `StepCache` (which resolves and creates `cache_dir()`)
+    can, which is exactly what `safe_get`/`safe_put` are for — prefer those
+    over calling `StepCache()` directly from an effect runtime."""
 
     hit: bool
     value: Any = None
@@ -220,7 +234,9 @@ class StepCache:
         if not self._root.exists():
             return 0
         count = 0
-        for entry in self._root.glob("*.json"):
+        for entry in self._root.iterdir():
+            if not _ENTRY_NAME.match(entry.name):
+                continue
             try:
                 entry.unlink()
             except OSError:
@@ -229,16 +245,43 @@ class StepCache:
         return count
 
     def stats(self) -> dict[str, Any]:
-        """`{entries, bytes, path}` — cheap: one `glob` + `stat` per entry,
+        """`{entries, bytes, path}` — cheap: one `iterdir` + `stat` per entry,
         no cache content read."""
         if not self._root.exists():
             return {"entries": 0, "bytes": 0, "path": str(self._root)}
         entries = 0
         total_bytes = 0
-        for entry in self._root.glob("*.json"):
+        for entry in self._root.iterdir():
+            if not _ENTRY_NAME.match(entry.name):
+                continue
             try:
                 total_bytes += entry.stat().st_size
             except OSError:
                 continue
             entries += 1
         return {"entries": entries, "bytes": total_bytes, "path": str(self._root)}
+
+
+def safe_get(key: str, *, ttl_seconds: float | None) -> CacheLookup:
+    """`StepCache().get`, degraded to a miss on any I/O or decode failure
+    that method doesn't already absorb — e.g. `cache_dir()` itself unable to
+    `mkdir` the cache root. A cache the effect cannot read is exactly a
+    cache with nothing in it, never a reason to fail an otherwise-successful
+    effect (#270 review)."""
+    try:
+        return StepCache().get(key, ttl_seconds=ttl_seconds)
+    except Exception:
+        logger.warning("Step cache lookup failed; treating as a miss", exc_info=True)
+        return CacheLookup(hit=False)
+
+
+def safe_put(key: str, value: Any, *, created_at: str) -> None:
+    """`StepCache().put`, swallowed (and logged) on any I/O failure — no
+    writable cache root, a full disk — or a value `json.dump` can't encode
+    (possible from a plugin's own result shape). The effect already
+    succeeded; failing to cache that success must never fail the effect
+    (#270 review)."""
+    try:
+        StepCache().put(key, value, created_at=created_at)
+    except Exception:
+        logger.warning("Step cache store failed; result not cached", exc_info=True)

@@ -1062,7 +1062,12 @@ def run_cmd(
         scoring = stashed.get("scoring")
         routing = stashed.get("routing")
         decompose = stashed.get("decompose")
-        no_cache = stashed.get("no_cache", False)
+        # Unlike the other replayed flags above, an explicit --no-cache on
+        # this invocation is never overridden by the stash: the cost of
+        # honoring it is at most a cache miss, but silently dropping it
+        # would turn "bypass the cache" into a cache hit the user
+        # explicitly asked not to get (#270 review).
+        no_cache = no_cache or stashed.get("no_cache", False)
 
         # Refuse to replay if the previous run stashed redacted secrets — the
         # sentinel string would silently flow into the new run as a literal.

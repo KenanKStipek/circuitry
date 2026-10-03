@@ -152,13 +152,21 @@ def test_step_cache_ttl_expiry(tmp_path: Path) -> None:
     assert cache.get("k1", ttl_seconds=None).hit is True
 
 
+# Real entry names are a sha256 hex digest (what `compute_cache_key` always
+# returns) — `clear`/`stats` only ever match that shape (see below), so these
+# use digest-shaped keys rather than the short "k1"/"k2" the other tests in
+# this file use for readability.
+_KEY_A = "a" * 64
+_KEY_B = "b" * 64
+
+
 def test_step_cache_clear_removes_every_entry(tmp_path: Path) -> None:
     cache = StepCache(root=tmp_path)
-    cache.put("k1", "v1", created_at="2026-01-01T00:00:00+00:00")
-    cache.put("k2", "v2", created_at="2026-01-01T00:00:00+00:00")
+    cache.put(_KEY_A, "v1", created_at="2026-01-01T00:00:00+00:00")
+    cache.put(_KEY_B, "v2", created_at="2026-01-01T00:00:00+00:00")
     assert cache.clear() == 2
-    assert cache.get("k1", ttl_seconds=None).hit is False
-    assert cache.get("k2", ttl_seconds=None).hit is False
+    assert cache.get(_KEY_A, ttl_seconds=None).hit is False
+    assert cache.get(_KEY_B, ttl_seconds=None).hit is False
     # Idempotent: clearing an already-empty store removes nothing.
     assert cache.clear() == 0
 
@@ -166,12 +174,36 @@ def test_step_cache_clear_removes_every_entry(tmp_path: Path) -> None:
 def test_step_cache_stats(tmp_path: Path) -> None:
     cache = StepCache(root=tmp_path)
     assert cache.stats() == {"entries": 0, "bytes": 0, "path": str(tmp_path)}
-    cache.put("k1", "v1", created_at="2026-01-01T00:00:00+00:00")
-    cache.put("k2", "v2", created_at="2026-01-01T00:00:00+00:00")
+    cache.put(_KEY_A, "v1", created_at="2026-01-01T00:00:00+00:00")
+    cache.put(_KEY_B, "v2", created_at="2026-01-01T00:00:00+00:00")
     stats = cache.stats()
     assert stats["entries"] == 2
     assert stats["bytes"] > 0
     assert stats["path"] == str(tmp_path)
+
+
+def test_step_cache_clear_ignores_in_flight_tmp_files(tmp_path: Path) -> None:
+    # An atomic `put` in progress elsewhere leaves a `.tmp-*.json` file in
+    # the same directory until its `os.replace` lands — `clear`/`stats` must
+    # never touch it (#270 review finding 5): deleting it out from under a
+    # concurrent `put` would make that `os.replace` raise.
+    cache = StepCache(root=tmp_path)
+    cache.put(_KEY_A, "v1", created_at="2026-01-01T00:00:00+00:00")
+    in_flight = tmp_path / ".tmp-abc123.json"
+    in_flight.write_text("{}", encoding="utf-8")
+    assert cache.stats()["entries"] == 1
+    assert cache.clear() == 1
+    assert in_flight.exists()
+
+
+def test_step_cache_clear_ignores_unrelated_json(tmp_path: Path) -> None:
+    cache = StepCache(root=tmp_path)
+    cache.put(_KEY_A, "v1", created_at="2026-01-01T00:00:00+00:00")
+    unrelated = tmp_path / "notes.json"
+    unrelated.write_text("{}", encoding="utf-8")
+    assert cache.stats()["entries"] == 1
+    assert cache.clear() == 1
+    assert unrelated.exists()
 
 
 # ---------------------------------------------------------------------------

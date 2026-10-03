@@ -35,8 +35,9 @@ from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .step_cache import (
     NO_CACHE_RUNTIME_CONFIG_KEY,
     CacheDef,
-    StepCache,
     compute_cache_key,
+    safe_get,
+    safe_put,
 )
 from .store import Store
 from .templates import render_template
@@ -679,9 +680,14 @@ class PromptRuntime:
             # generation options dispatch is about to use, so a key always
             # describes exactly what would have been sent. A hit returns
             # here, before any attempt/concurrency/retry machinery below
-            # spends a slot or a token. Decomposition (above) already ran
-            # by this point when it applies at all — a decomposed prompt's
-            # result is not cached; see the module docstring trade-off note.
+            # spends a slot or a token. A *successful* decomposition (above)
+            # already returned before this point, so its result is never
+            # cached and never consults the cache either — its planning
+            # call's tokens are spent unconditionally, even when the
+            # dispatch it would otherwise have replaced was going to be a
+            # cache hit. Decomposition that falls through to a normal
+            # dispatch (a declined or failed attempt that still allows a
+            # fallback model) reaches this cache check as usual, below.
             cache_key: str | None = None
             if self.defn.cache is not None and not self.runtime_config.get(
                 NO_CACHE_RUNTIME_CONFIG_KEY, False
@@ -692,9 +698,7 @@ class PromptRuntime:
                     options=options,
                     meta=meta,
                 )
-                cache_lookup = StepCache().get(
-                    cache_key, ttl_seconds=self.defn.cache.ttl_seconds
-                )
+                cache_lookup = safe_get(cache_key, ttl_seconds=self.defn.cache.ttl_seconds)
                 if cache_lookup.hit:
                     node["value"] = cache_lookup.value
                     meta["cache"] = {
@@ -799,9 +803,7 @@ class PromptRuntime:
                         meta["retries_used"] = _attempt
 
                     if cache_key is not None:
-                        StepCache().put(
-                            cache_key, decoded_value, created_at=meta["completed_at"]
-                        )
+                        safe_put(cache_key, decoded_value, created_at=meta["completed_at"])
 
                     if self.verbose:
                         elapsed = time.monotonic() - t0

@@ -1648,6 +1648,21 @@ disk a tool reads by path, model weights swapped in place under the same
 name — and you want a fresh entry without changing anything else the key
 already sees.
 
+An `http(s)://` image asset is keyed on the URL only, not a digest of its
+bytes (fetching it to hash it on every dispatch would defeat the purpose of
+ever caching the step that sends it) — a changed remote image behind an
+unchanged URL produces a stale hit. A local image path *is* keyed on its
+sha256, so a changed file on disk is seen. If a remote image can change
+underneath its URL, give the effect a `cache: {key: ...}` salt you bump
+when it does.
+
+A prompt eligible for runtime decomposition runs decomposition — including
+its own planning call, which spends tokens — before this cache check, and
+a *successful* decomposition's merged result is never cached at all (its
+effect is the sub-prompts it dispatched, not one scalar value here); only
+a decomposition that declines or falls back to a normal dispatch reaches
+the cache as usual.
+
 **What gets stored, and when.** Only a result that reached this effect's
 own success condition: for a `tool`, after its `expect:` passes (or
 immediately on success when there is none); a `prompt` has no `expect:`,
@@ -1678,6 +1693,12 @@ whose result is all that matters (a fetch, a computation, a lookup), or
 give it a `cache: {key: ...}` salt tied to whatever would make a reread
 necessary, so a changed salt forces the real action to happen again. A
 `prompt` has no such side effect — reusing its result is always safe.
+
+A hit restores only `value` to the node. `meta.stdout`, `meta.exit_code`,
+`meta.status_code` and `meta.raw` — all documented outputs a downstream
+step may read — are cleared, not replayed from whatever attempt originally
+produced the cached value: that attempt's process output belongs to a run
+that already finished, not to this one.
 
 **Storage.** A private, per-user directory (`~/.cache/circuitry/steps` by
 default, `$XDG_CACHE_HOME`-relative when set; override outright with

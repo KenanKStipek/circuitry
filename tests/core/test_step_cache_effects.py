@@ -444,3 +444,239 @@ def test_tool_without_cache_configured_never_writes_cache_meta(
     store = _make_store()
     ToolRuntime(defn).execute(store=store, ctx={})
     assert "cache" not in store.state["t"]["meta"]
+
+
+# ---------------------------------------------------------------------------
+# Cache errors never fail an otherwise-successful effect (#270 review finding 1)
+# ---------------------------------------------------------------------------
+
+
+def test_tool_cache_lookup_error_degrades_to_a_miss_not_a_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from circuitry.core import step_cache as step_cache_module
+
+    def _boom(self: Any, key: str, *, ttl_seconds: float | None) -> Any:
+        raise OSError("cache dir unavailable")
+
+    monkeypatch.setattr(step_cache_module.StepCache, "get", _boom)
+
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = ToolResult(
+        value="out", raw={}, stdout="", stderr="", exit_code=0
+    )
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin)
+
+    defn = ToolDefinition(
+        name="t", provider="json", params={"op": "parse", "input": "{}"}, cache=CacheDef()
+    )
+    store = _make_store()
+    ToolRuntime(defn).execute(store=store, ctx={})
+    assert store.state["t"]["value"] == "out"
+    assert store.state["t"]["meta"]["error"] is None
+
+
+def test_tool_cache_store_error_does_not_fail_a_successful_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from circuitry.core import step_cache as step_cache_module
+
+    def _boom(self: Any, key: str, value: Any, *, created_at: str) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(step_cache_module.StepCache, "put", _boom)
+
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = ToolResult(
+        value="out", raw={}, stdout="", stderr="", exit_code=0
+    )
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin)
+
+    defn = ToolDefinition(
+        name="t", provider="json", params={"op": "parse", "input": "{}"}, cache=CacheDef()
+    )
+    store = _make_store()
+    ToolRuntime(defn).execute(store=store, ctx={})
+    assert store.state["t"]["value"] == "out"
+    assert store.state["t"]["meta"]["error"] is None
+
+
+def test_prompt_cache_lookup_error_degrades_to_a_miss_not_a_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from circuitry.core import step_cache as step_cache_module
+
+    def _boom(self: Any, key: str, *, ttl_seconds: float | None) -> Any:
+        raise OSError("cache dir unavailable")
+
+    monkeypatch.setattr(step_cache_module.StepCache, "get", _boom)
+
+    orch = _cached_prompt_orch(tmp_path)
+    adapter = CountingAdapter()
+    result = _run(orch, adapter=adapter, state={"input": {"x": "a"}})
+    assert result.ok is True, result.error
+    assert adapter.calls == ["hi a"]
+    assert not result.state["prime"]["step1"]["meta"]["error"]
+
+
+def test_prompt_cache_store_error_does_not_fail_a_successful_step(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from circuitry.core import step_cache as step_cache_module
+
+    def _boom(self: Any, key: str, value: Any, *, created_at: str) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(step_cache_module.StepCache, "put", _boom)
+
+    orch = _cached_prompt_orch(tmp_path)
+    adapter = CountingAdapter()
+    result = _run(orch, adapter=adapter, state={"input": {"x": "a"}})
+    assert result.ok is True, result.error
+    assert result.state["prime"]["step1"]["value"] == "ok:hi a"
+    assert not result.state["prime"]["step1"]["meta"]["error"]
+
+
+# ---------------------------------------------------------------------------
+# A tool cache hit resets stale meta on a reused node (#270 review finding 2)
+# ---------------------------------------------------------------------------
+
+
+def test_tool_cache_hit_resets_stale_meta_on_a_reused_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = ToolResult(
+        value="out", raw={"extra": "data"}, stdout="first-stdout", stderr="first-stderr",
+        exit_code=0,
+    )
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin)
+
+    defn = ToolDefinition(
+        name="t", provider="json", params={"op": "parse", "input": "{}"}, cache=CacheDef()
+    )
+    # Same store reused across two passes — an unnamed loop's repeated body
+    # or a --state carryover, exactly the #260 scenario.
+    store = _make_store()
+    ToolRuntime(defn).execute(store=store, ctx={})
+    assert store.state["t"]["meta"]["stdout"] == "first-stdout"
+    assert store.state["t"]["meta"]["raw"] == {"extra": "data"}
+
+    ToolRuntime(defn).execute(store=store, ctx={})
+    assert mock_plugin.execute.call_count == 1
+    assert store.state["t"]["meta"]["cache"]["hit"] is True
+    assert store.state["t"]["value"] == "out"
+    # The earlier pass's stdout/exit_code/raw must not survive next to the
+    # cached value.
+    assert store.state["t"]["meta"]["stdout"] is None
+    assert store.state["t"]["meta"]["stderr"] is None
+    assert store.state["t"]["meta"]["exit_code"] is None
+    assert "raw" not in store.state["t"]["meta"]
+
+
+# ---------------------------------------------------------------------------
+# An expect: failure is never cached (#270 review finding 8)
+# ---------------------------------------------------------------------------
+
+
+def test_tool_expect_failure_is_never_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    from circuitry.core.expect import ExpectDef
+
+    mock_plugin = MagicMock()
+    mock_plugin.execute.return_value = ToolResult(
+        value="out", raw={}, stdout="", stderr="", exit_code=0
+    )
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: mock_plugin)
+
+    defn = ToolDefinition(
+        name="t", provider="json", params={"op": "parse", "input": "{}"},
+        cache=CacheDef(), expect=ExpectDef(mode="cel", expr="false"), on_error="continue",
+    )
+    ToolRuntime(defn).execute(store=_make_store(), ctx={})
+    assert mock_plugin.execute.call_count == 1
+
+    ToolRuntime(defn).execute(store=_make_store(), ctx={})
+    # expect: always failed -> never cached -> dispatched again.
+    assert mock_plugin.execute.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Cache key changes when a {from:}-resolved param changes (#270 review finding 8)
+# ---------------------------------------------------------------------------
+
+
+def _from_ref_orch(tmp_path: Path) -> Path:
+    return _write(
+        tmp_path,
+        "r.yml",
+        """
+effects:
+  - type: tool
+    name: step0
+    provider: json
+    params:
+      mode: parse
+      input: "{{input.x}}"
+  - type: tool
+    name: step1
+    provider: json
+    params:
+      mode: stringify
+      input:
+        from: "prime.step0.value"
+    cache: true
+""".lstrip(),
+    )
+
+
+def test_tool_cache_key_changes_when_a_from_resolved_param_changes(tmp_path: Path) -> None:
+    orch = _from_ref_orch(tmp_path)
+    adapter = CountingAdapter()
+
+    # Plain numbers, not quoted strings: the template engine HTML-escapes
+    # `"` on render, so a JSON string literal wouldn't survive intact.
+    first = _run(orch, adapter=adapter, state={"input": {"x": "1"}})
+    assert first.ok is True, first.error
+    assert first.state["prime"]["step1"]["meta"]["cache"]["hit"] is False
+    key_a = first.state["prime"]["step1"]["meta"]["cache"]["key"]
+
+    second = _run(orch, adapter=adapter, state={"input": {"x": "1"}})
+    assert second.state["prime"]["step1"]["meta"]["cache"]["hit"] is True
+    assert second.state["prime"]["step1"]["meta"]["cache"]["key"] == key_a
+
+    third = _run(orch, adapter=adapter, state={"input": {"x": "2"}})
+    assert third.state["prime"]["step1"]["meta"]["cache"]["hit"] is False
+    assert third.state["prime"]["step1"]["meta"]["cache"]["key"] != key_a
+
+
+# ---------------------------------------------------------------------------
+# cof check also walks the root finally: block (#270 review finding 4)
+# ---------------------------------------------------------------------------
+
+
+def test_cache_field_errors_walks_root_finally() -> None:
+    from circuitry.core.document_check import group_field_errors
+
+    orch = {
+        "effects": [{"type": "prompt", "name": "p", "template": "hi"}],
+        "finally": [{"type": "use", "name": "cleanup", "path": "foo.yml", "cache": True}],
+    }
+    errors = cache_field_errors(orch)
+    assert len(errors) == 1
+    assert "finally[0]" in errors[0]
+    assert errors[0] in structural_errors(orch)
+
+    group_orch = {
+        "effects": [{"type": "prompt", "name": "p", "template": "hi"}],
+        "finally": [
+            {
+                "type": "dynamic",
+                "name": "cleanup",
+                "group": "g",
+                "effects": [{"type": "prompt", "name": "p2", "template": "hi"}],
+            }
+        ],
+    }
+    group_errors = group_field_errors(group_orch)
+    assert len(group_errors) == 1
+    assert "finally[0]" in group_errors[0]

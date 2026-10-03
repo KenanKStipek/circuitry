@@ -421,6 +421,12 @@ chunk_count, yaml, result_path, fallback_model, error}` — whether it
 decomposed, routed up, ran as-is, or failed. Like `meta.complexity`, the key is
 absent entirely when the feature never triggered.
 
+Decomposition and [`cache:`](orchestration-reference.md#caching-a-steps-result-cache)
+interact: a prompt eligible for decomposition runs the plan step above
+(spending its own tokens) before any `cache:` on the effect is ever
+consulted, and a decomposition that succeeds is never cached — its result
+is the merge of its chunk effects, not one scalar dispatch `cache:` can key.
+
 Chunks are scored too, inside the child, so an over-complex chunk decomposes
 again — that is what `max_depth` bounds. At the ceiling the effect **routes
 up** instead of decomposing: it runs once on the routing table's catch-all

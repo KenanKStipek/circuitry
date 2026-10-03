@@ -243,6 +243,7 @@ def group_field_errors(orch: Any) -> list[str]:
 
     effects = orch.get("effects")
     walk(effects if effects is not None else orch.get("steps"), "effects")
+    walk(orch.get("finally"), "finally")
     return errors
 
 
@@ -280,6 +281,7 @@ def cache_field_errors(orch: Any) -> list[str]:
 
     effects = orch.get("effects")
     walk(effects if effects is not None else orch.get("steps"), "effects")
+    walk(orch.get("finally"), "finally")
     return errors
 
 

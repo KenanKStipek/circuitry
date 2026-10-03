@@ -28,8 +28,9 @@ from .prompt import RetryPolicyDef
 from .step_cache import (
     NO_CACHE_RUNTIME_CONFIG_KEY,
     CacheDef,
-    StepCache,
     compute_cache_key,
+    safe_get,
+    safe_put,
 )
 from .store import Store
 from .templates import render_template
@@ -642,9 +643,7 @@ class ToolRuntime:
                     material={"provider": self.defn.provider, "params": cache_rendered},
                     salt=self.defn.cache.key_salt,
                 )
-                cache_lookup = StepCache().get(
-                    cache_key, ttl_seconds=self.defn.cache.ttl_seconds
-                )
+                cache_lookup = safe_get(cache_key, ttl_seconds=self.defn.cache.ttl_seconds)
                 if cache_lookup.hit:
                     cache_t0 = time.monotonic()
                     node["value"] = cache_lookup.value
@@ -652,6 +651,20 @@ class ToolRuntime:
                     meta["provider"] = self.defn.provider
                     meta["params_rendered"] = redact(cache_rendered)
                     meta["error"] = None
+                    # Same reset the per-attempt path applies below (#260) —
+                    # a hit restores only `value`; a reused node (an unnamed
+                    # loop's earlier pass, a --state carryover) must not
+                    # keep that pass's stdout/exit_code/raw/expect sitting
+                    # next to this pass's cached value.
+                    meta["stdout"] = None
+                    meta["stderr"] = None
+                    meta["exit_code"] = None
+                    meta.pop("binary", None)
+                    meta.pop("status_code", None)
+                    meta.pop("raw", None)
+                    meta.pop("expect", None)
+                    meta.pop("retries_used", None)
+                    meta["waiting_for"] = None
                     meta["cache"] = {
                         "hit": True,
                         "key": cache_key,
@@ -933,7 +946,7 @@ class ToolRuntime:
                 meta["retries_used"] = attempt_index
 
             if cache_key is not None:
-                StepCache().put(cache_key, result.value, created_at=meta["completed_at"])
+                safe_put(cache_key, result.value, created_at=meta["completed_at"])
 
             if self.verbose:
                 elapsed = time.monotonic() - t0
