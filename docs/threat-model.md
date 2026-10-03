@@ -431,6 +431,27 @@ stays a run by path (§6) at the top level regardless of surface — a
 `use: ref:` child reached from it is still independently gated, same as
 every other surface.
 
+**The cache-path hole (#337).** A refreshable (`github`-type) `library.sources`
+entry is served from a SHA-pinned local cache directory
+(`circuitry.cli.github_source.GitHubSource.cache_dir`); naming that cached
+file by its raw, resolved (symlinks followed) path — instead of the library
+name `cof run hub/entry` resolves — used to look exactly like a run by path
+(§6): trusted, ungated, no consent asked. An MCP caller can name an absolute
+path just as easily as a name, and is not the host. `circuitry.cli.
+runtime_shim.run()` now classifies a resolved `orchestration_path` the same
+way regardless of which string named it: a path inside any configured
+refreshable source's cache directory
+(`LibraryRegistry.is_cache_path`) gets the whole-document gate, on every
+surface, since that check runs once centrally rather than per-surface. A
+`cof fetch -o file.yml` copy (a *different*, filesystem-backed "shared
+library", see `circuitry.cli.shared_library`) stays an ordinary run by path
+as documented above — its destination is the caller's own `-o` choice, not
+a source's cache directory, unless deliberately pointed there. Replaying a
+`cof run-library` run via `cof run --last` or the TUI Runs view's replay
+now also carries that run's own `remote_library_source` classification
+through the stash, closing a second hole (also #337) where a replay skipped
+the gate the original run applied.
+
 ---
 
 ## What Circuitry does NOT defend against

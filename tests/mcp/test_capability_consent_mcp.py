@@ -16,6 +16,7 @@ from circuitry.cli.app import _is_remote_library_source
 from circuitry.cli.config import CircuitryConfig, trust_store_path
 from circuitry.cli.document_consent import document_digest, record_consent
 from circuitry.cli.library_sources import Entry, LibraryRegistry
+from circuitry.mcp import runs as runs_module
 from circuitry.mcp import server as srv
 from circuitry.mcp.runs import RunManager
 
@@ -138,6 +139,84 @@ def test_run_orchestration_succeeds_once_the_document_is_trusted(
     record_consent(digest, frozenset({"shell"}), store_path=trust_store_path())
 
     resp = srv._run_orchestration_impl(orchestration="pipeline")
+
+    assert resp["status"] == "completed"
+    assert resp["error"] is None
+
+
+# ── naming a fetched document's cache path directly (#337) ───────────────
+
+
+def test_run_orchestration_refuses_a_shell_document_named_by_its_cache_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An MCP caller is not the host: naming a `github`-type source's cached
+    file by its absolute path must not let it run as if it were the host's
+    own trusted file — it is still fetched content, gated like a bare
+    library name (#337)."""
+    cache_dir = tmp_path / "cache"
+    doc = _write_yaml(cache_dir / "hub" / "sha1" / "pipeline.yml", _SHELL_IN_FINALLY)
+    cfg = CircuitryConfig(
+        runtime={
+            "library": {
+                "sources": [
+                    {"type": "github", "name": "hub", "repo": "owner/name", "cache_dir": str(cache_dir)}
+                ]
+            }
+        }
+    )
+    monkeypatch.setattr(runs_module, "resolve_config", lambda: cfg)
+
+    resp = srv._run_orchestration_impl(orchestration=str(doc))
+
+    assert resp["status"] == "failed"
+    assert "shell" in (resp["error"] or "")
+    assert "cof trust" in (resp["error"] or "")
+
+
+def test_run_orchestration_allows_a_cache_path_document_once_trusted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache_dir = tmp_path / "cache"
+    doc = _write_yaml(cache_dir / "hub" / "sha1" / "pipeline.yml", _SHELL_IN_FINALLY)
+    cfg = CircuitryConfig(
+        runtime={
+            "library": {
+                "sources": [
+                    {"type": "github", "name": "hub", "repo": "owner/name", "cache_dir": str(cache_dir)}
+                ]
+            }
+        }
+    )
+    monkeypatch.setattr(runs_module, "resolve_config", lambda: cfg)
+    record_consent(document_digest(doc.read_bytes()), frozenset({"shell"}), store_path=trust_store_path())
+
+    resp = srv._run_orchestration_impl(orchestration=str(doc))
+
+    assert resp["status"] == "completed"
+    assert resp["error"] is None
+
+
+def test_run_orchestration_a_path_outside_any_cache_dir_is_unaffected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#284 is unaffected: an ordinary file the caller names by path, not
+    inside any configured source's cache, stays a trusted path-run."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir(parents=True)
+    doc = _write_yaml(tmp_path / "plain.yml", _SHELL_IN_FINALLY)
+    cfg = CircuitryConfig(
+        runtime={
+            "library": {
+                "sources": [
+                    {"type": "github", "name": "hub", "repo": "owner/name", "cache_dir": str(cache_dir)}
+                ]
+            }
+        }
+    )
+    monkeypatch.setattr(runs_module, "resolve_config", lambda: cfg)
+
+    resp = srv._run_orchestration_impl(orchestration=str(doc))
 
     assert resp["status"] == "completed"
     assert resp["error"] is None

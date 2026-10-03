@@ -1699,9 +1699,14 @@ def run_library_cmd(
     # Stash for --last, the same shape `cof run` writes — so `cof run --last`
     # can replay a run-library run too. The resolved asset file (not the
     # asset id) is what the stash reruns; a library asset is never a trusted
-    # document (#265 part 2).
+    # document (#265 part 2). `remote_library_source: True` carries the same
+    # whole-document capability gate this run applied (via
+    # `shared_library_metadata`) into the replay, which otherwise has no
+    # metadata of its own to signal it — a run-library replay skipping the
+    # gate was on `main` before #335 (#337).
     _save_last_run({
         "orchestration": str(asset.file_path),
+        "remote_library_source": True,
         "config": str(config) if config else None,
         "state": str(state) if state else None,
         "out": str(out) if out else None,

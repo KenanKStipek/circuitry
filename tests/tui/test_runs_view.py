@@ -613,6 +613,49 @@ def test_replay_carries_the_stashed_remote_library_source(
     assert seen["request"].remote_library_source is (stashed_remote is True)
 
 
+def test_replay_of_a_remote_library_source_stash_is_gated_without_consent(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """End-to-end (no mocked runner): replaying a `cof run-library` stash
+    through the real `runtime_shim.run()` must go through the same
+    whole-document capability gate the original run applied (#275, #337),
+    not just carry the flag into a request nothing then checks.
+    """
+    orch = tmp_path / "demo.yml"
+    orch.write_text(
+        "effects: []\n"
+        "finally:\n"
+        "  - type: tool\n"
+        "    name: cleanup\n"
+        "    provider: shell\n"
+        "    params:\n"
+        "      command: echo\n",
+        encoding="utf-8",
+    )
+
+    async def scenario(pilot: Pilot[Any]) -> RunsScreen:
+        screen = await _open(
+            pilot,
+            _screen(
+                last_run=_stash(orch, remote_library_source=True),
+                config=CircuitryConfig(),
+            ),
+        )
+        screen.action_replay()
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if screen.status_text.startswith("Replay failed") or screen.status_text.endswith(
+                "replay finished"
+            ):
+                break
+        return screen
+
+    screen = run_app(scenario)
+    assert screen.status_text.startswith("Replay failed")
+    assert "shell" in screen.status_text
+    assert "cof trust" in screen.status_text
+
+
 def test_replay_refuses_a_run_that_stashed_redacted_secrets(
     run_app: Any, tmp_path: Path
 ) -> None:

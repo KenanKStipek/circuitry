@@ -495,6 +495,34 @@ class LibraryRegistry:
         resolution = self.resolve(ref)
         return resolution.entry if resolution is not None else None
 
+    def is_cache_path(self, path: Path) -> bool:
+        """Whether *path*, resolved (symlinks followed), lies inside some
+        refreshable source's cache directory — e.g. the local copy a
+        ``github`` source keeps its fetched subtree in.
+
+        Naming that path directly (instead of the source's name) is naming
+        the exact same fetched content: a ``folder``/``curation`` source is
+        already on the user's own disk or bundled with Circuitry, so only a
+        ``REFRESHABLE`` source's cache counts (#337).
+        """
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return False
+        for source in self.sources:
+            if not getattr(source, "REFRESHABLE", False):
+                continue
+            cache_dir = getattr(source, "cache_dir", None)
+            if cache_dir is None:
+                continue
+            try:
+                cache_dir = Path(cache_dir).resolve()
+            except OSError:
+                continue
+            if resolved == cache_dir or cache_dir in resolved.parents:
+                return True
+        return False
+
     def notices(self, *, source: str | None = None) -> list[str]:
         """User-facing hints from sources that cannot serve entries yet."""
         out: list[str] = []
