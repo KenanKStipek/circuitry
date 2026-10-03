@@ -122,9 +122,6 @@ def _hermetic_global_config(
     # cached result across runs in the same pytest process.
     monkeypatch.setenv("CIRCUITRY_CACHE_DIR", str(tmp_path / "hermetic-global-config" / "step-cache"))
 
-    if request.node.get_closest_marker("real_config_discovery"):
-        return
-
     from circuitry.cli import app as app_module
     from circuitry.cli import config as config_module
     from circuitry.cli import doctor as doctor_module
@@ -135,11 +132,20 @@ def _hermetic_global_config(
     fake_config_path = fake_dir / "config.json"
     fake_last_run_path = fake_dir / "last-run.json"
 
+    # The `--last` record is isolated ahead of the `real_config_discovery`
+    # early return too: those tests layer config files on purpose, but any
+    # `cof run` they invoke still stashes its arguments, and without this it
+    # overwrote the developer's real ~/.config/circuitry/last-run.json on every
+    # suite run (breaking their `cof run --last` / `--resume last`).
+    monkeypatch.setattr(last_run_module, "LAST_RUN_PATH", fake_last_run_path)
+    monkeypatch.setattr(app_module, "_LAST_RUN_PATH", fake_last_run_path)
+
+    if request.node.get_closest_marker("real_config_discovery"):
+        return
+
     monkeypatch.setattr(config_module, "GLOBAL_CONFIG_DIR", fake_dir)
     monkeypatch.setattr(config_module, "GLOBAL_CONFIG_PATH", fake_config_path)
-    monkeypatch.setattr(last_run_module, "LAST_RUN_PATH", fake_last_run_path)
     monkeypatch.setattr(app_module, "GLOBAL_CONFIG_DIR", fake_dir)
-    monkeypatch.setattr(app_module, "_LAST_RUN_PATH", fake_last_run_path)
     monkeypatch.setattr(setup_module, "GLOBAL_CONFIG_DIR", fake_dir)
     monkeypatch.setattr(setup_module, "GLOBAL_CONFIG_PATH", fake_config_path)
     monkeypatch.setattr(doctor_module, "GLOBAL_CONFIG_DIR", fake_dir)
