@@ -32,6 +32,13 @@ from ..output import console as _console
 from ..output import live_region as _live_region
 from .answers import AnswerParseError, parse_boolean_answer, parse_number_answer
 from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
+from .step_cache import (
+    NO_CACHE_RUNTIME_CONFIG_KEY,
+    CacheDef,
+    compute_cache_key,
+    safe_get,
+    safe_put,
+)
 from .store import Store
 from .templates import render_template
 
@@ -317,6 +324,10 @@ class PromptDefinition:
     # Description (for documentation/LLM guidance)
     description: str | None = None
 
+    # Opt-in result cache (#270) — None: not cached. See core.step_cache and
+    # PromptRuntime._cache_key for exactly what goes into the key.
+    cache: CacheDef | None = None
+
     # False = skip execution and write a disabled node (see core.disabled).
     enabled: bool = True
 
@@ -526,6 +537,7 @@ class PromptRuntime:
         meta.pop("retries_used", None)
         meta.pop("decomposition", None)
         meta.pop("answer", None)
+        meta.pop("cache", None)
         # Written only when they have content, so clear what an earlier
         # iteration of an unnamed loop (same store) left behind.
         for key in ("finish_reason", "warnings", "assets"):
@@ -664,6 +676,51 @@ class PromptRuntime:
             option_warnings = list(meta.get("warnings", []))
             attempts = self._build_attempts(default_model=dispatch_model)
 
+            # Cache lookup (#270): computed from the same rendered prompt and
+            # generation options dispatch is about to use, so a key always
+            # describes exactly what would have been sent. A hit returns
+            # here, before any attempt/concurrency/retry machinery below
+            # spends a slot or a token. A *successful* decomposition (above)
+            # already returned before this point, so its result is never
+            # cached and never consults the cache either — its planning
+            # call's tokens are spent unconditionally, even when the
+            # dispatch it would otherwise have replaced was going to be a
+            # cache hit. Decomposition that falls through to a normal
+            # dispatch (a declined or failed attempt that still allows a
+            # fallback model) reaches this cache check as usual, below.
+            cache_key: str | None = None
+            if self.defn.cache is not None and not self.runtime_config.get(
+                NO_CACHE_RUNTIME_CONFIG_KEY, False
+            ):
+                cache_key = self._cache_key(
+                    resolved_model=dispatch_model,
+                    prompt_sent=prompt_sent,
+                    options=options,
+                    meta=meta,
+                )
+                cache_lookup = safe_get(cache_key, ttl_seconds=self.defn.cache.ttl_seconds)
+                if cache_lookup.hit:
+                    node["value"] = cache_lookup.value
+                    meta["cache"] = {
+                        "hit": True,
+                        "key": cache_key,
+                        "created_at": cache_lookup.created_at,
+                    }
+                    meta["completed_at"] = _now_iso()
+                    if self.verbose:
+                        elapsed = time.monotonic() - t0
+                        line = (
+                            f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.display_name}"
+                            f" [dim]cache hit | {_elapsed_str(elapsed)}[/dim]"
+                        )
+                        if self.cb_done is not None:
+                            self.cb_done(line)
+                        else:
+                            _console.print(line)
+                    store.fire_effect_complete(self.defn.name, node)
+                    return
+                meta["cache"] = {"hit": False, "key": cache_key}
+
             next_delay_ms = backoff_ms
             for _attempt in range(max_attempts):
                 if _attempt > 0:
@@ -744,6 +801,9 @@ class PromptRuntime:
                         meta["model"] = last["model"]
                     if _attempt > 0:
                         meta["retries_used"] = _attempt
+
+                    if cache_key is not None:
+                        safe_put(cache_key, decoded_value, created_at=meta["completed_at"])
 
                     if self.verbose:
                         elapsed = time.monotonic() - t0
@@ -1104,6 +1164,36 @@ class PromptRuntime:
             return adapter_budget
         effect_seconds = max(1, math.ceil(self.defn.timeout_ms / 1000))
         return min(effect_seconds, adapter_budget)
+
+    def _cache_key(
+        self,
+        *,
+        resolved_model: str,
+        prompt_sent: str,
+        options: GenerateOptions,
+        meta: dict[str, Any],
+    ) -> str:
+        """This dispatch's `cache:` key — everything that shapes the result
+        once rendered: adapter/model, the rendered prompt/messages, asset
+        digests (never bytes), and the generation params that would reach
+        the adapter (temperature/max_tokens/stop/the rest of `params`,
+        `deterministic`), plus `prompt_type`/`schema` (#270).
+        """
+        material = {
+            "adapter": meta.get("adapter"),
+            "model": resolved_model,
+            "prompt_type": self.defn.prompt_type,
+            "schema": self.defn.schema,
+            "prompt_sent": prompt_sent,
+            "temperature": options.temperature,
+            "max_tokens": options.max_tokens,
+            "stop": list(options.stop),
+            "params": dict(options.params),
+            "deterministic": options.deterministic,
+            "assets": meta.get("assets"),
+        }
+        salt = self.defn.cache.key_salt if self.defn.cache is not None else None
+        return compute_cache_key(effect_type="prompt", material=material, salt=salt)
 
     def _generation_options(
         self,

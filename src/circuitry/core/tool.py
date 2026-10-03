@@ -25,6 +25,13 @@ from ..plugins.base import ToolResult
 from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .expect import ExpectDef, evaluate_expect, expect_failure_summary
 from .prompt import RetryPolicyDef
+from .step_cache import (
+    NO_CACHE_RUNTIME_CONFIG_KEY,
+    CacheDef,
+    compute_cache_key,
+    safe_get,
+    safe_put,
+)
 from .store import Store
 from .templates import render_template
 from .use import _resolve_reference
@@ -377,6 +384,10 @@ class ToolDefinition:
     # Output check (#273), run after a successful attempt — see core.expect.
     expect: ExpectDef | None = None
 
+    # Opt-in result cache (#270) — None: not cached. See core.step_cache and
+    # ToolRuntime._cache_key for exactly what goes into the key.
+    cache: CacheDef | None = None
+
     # False = skip execution and write a disabled node (see core.disabled).
     enabled: bool = True
 
@@ -523,6 +534,29 @@ class ToolRuntime:
             return classify_exception(failure).retryable
         return True
 
+    def _cache_rendered_params(self, ctx: dict[str, Any]) -> dict[str, Any]:
+        """The fully rendered params (after ``{from: ...}`` resolution) a
+        dispatch would send to the plugin — the same ``top_level``/``params``
+        render each attempt in :meth:`execute` performs, computed once up
+        front so a `cache:` lookup can happen before any attempt does
+        (#270). Raises exactly what a real attempt's render would; the
+        caller lets the attempt loop below raise it for real on a miss.
+        """
+        top_level: dict[str, Any] = {}
+        if self.defn.prompt is not None:
+            top_level["prompt"] = render_template(self.defn.prompt, ctx, label="prompt")
+        if self.defn.model is not None:
+            top_level["model"] = self.defn.model
+
+        _reject_templated_security_params(self.defn.params)
+        params = _render_params(self.defn.params, ctx, name=self.defn.name)
+        if self.defn.params_json is not None:
+            params_json_overlay = _render_params_json(self.defn.params_json, ctx)
+            _reject_params_json_security_overrides(params_json_overlay)
+            params = _deep_merge_params(params, params_json_overlay)
+
+        return {**top_level, **params}
+
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         from ..allowlist_gate import allowed_tools, require_tool
         from ..capability_gate import require_within_ceiling
@@ -588,6 +622,82 @@ class ToolRuntime:
             capabilities_of(self.defn.provider),
             self.runtime_config,
         )
+
+        # Cache lookup (#270): rendered once, up front — the same top_level +
+        # params rendering each attempt below performs — so a hit returns
+        # before the attempt loop ever acquires a concurrency slot or starts
+        # its retry/backoff schedule. A render failure here is swallowed and
+        # left for the real attempt below to raise properly; it only means
+        # this lookup can't happen, not that the effect itself failed.
+        cache_key: str | None = None
+        if self.defn.cache is not None and not self.runtime_config.get(
+            NO_CACHE_RUNTIME_CONFIG_KEY, False
+        ):
+            try:
+                cache_rendered = self._cache_rendered_params(ctx)
+            except Exception:
+                cache_rendered = None
+            if cache_rendered is not None:
+                cache_key = compute_cache_key(
+                    effect_type="tool",
+                    material={"provider": self.defn.provider, "params": cache_rendered},
+                    salt=self.defn.cache.key_salt,
+                )
+                cache_lookup = safe_get(cache_key, ttl_seconds=self.defn.cache.ttl_seconds)
+                if cache_lookup.hit:
+                    cache_t0 = time.monotonic()
+                    node["value"] = cache_lookup.value
+                    meta["created_at"] = _now_iso()
+                    meta["provider"] = self.defn.provider
+                    meta["params_rendered"] = redact(cache_rendered)
+                    meta["error"] = None
+                    # Same reset the per-attempt path applies below (#260) —
+                    # a hit restores only `value`; a reused node (an unnamed
+                    # loop's earlier pass, a --state carryover) must not
+                    # keep that pass's stdout/exit_code/raw/expect sitting
+                    # next to this pass's cached value.
+                    meta["stdout"] = None
+                    meta["stderr"] = None
+                    meta["exit_code"] = None
+                    meta.pop("binary", None)
+                    meta.pop("status_code", None)
+                    meta.pop("raw", None)
+                    meta.pop("expect", None)
+                    meta.pop("retries_used", None)
+                    meta["waiting_for"] = None
+                    meta["cache"] = {
+                        "hit": True,
+                        "key": cache_key,
+                        "created_at": cache_lookup.created_at,
+                    }
+                    meta["completed_at"] = _now_iso()
+                    if self.verbose:
+                        elapsed = time.monotonic() - cache_t0
+                        cache_mtag = _model_tag(cache_rendered)
+                        _label = (
+                            f"{self.defn.provider} · {cache_mtag}"
+                            if cache_mtag
+                            else self.defn.provider
+                        )
+                        line = (
+                            f"{indent}[ok]✓[/ok] [white]⚙[/white] {self.display_name}"
+                            f" [dim]{_label} | cache hit | {_elapsed_str(elapsed)}[/dim]"
+                        )
+                        if self.cb_done is not None:
+                            self.cb_done(line)
+                        else:
+                            _console.print(line)
+                    store.fire_effect_complete(self.defn.name, node)
+                    return
+                meta["cache"] = {"hit": False, "key": cache_key}
+            else:
+                meta.pop("cache", None)
+        else:
+            # Clears a stale hit/miss record a reused node (an unnamed
+            # loop's earlier pass, a --state carryover) left behind from a
+            # run where `cache:` was configured or active, now that it is
+            # neither (#260).
+            meta.pop("cache", None)
 
         next_delay_ms = backoff_ms
         for attempt_index in range(max_attempts):
@@ -834,6 +944,9 @@ class ToolRuntime:
 
             if attempt_index > 0:
                 meta["retries_used"] = attempt_index
+
+            if cache_key is not None:
+                safe_put(cache_key, result.value, created_at=meta["completed_at"])
 
             if self.verbose:
                 elapsed = time.monotonic() - t0
