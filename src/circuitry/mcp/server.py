@@ -28,7 +28,7 @@ from typing import Any
 
 from ..cli.app import _is_remote_library_source, _resolve_orchestration
 from ..cli.config import CircuitryConfig, resolve_config
-from ..cli.library_sources import LibraryRegistry, build_registry
+from ..cli.library_sources import LibraryRegistry, LibrarySourceError, build_registry
 from ..cli.registry import load_index
 from ..cli.runtime_shim import validate as validate_orch_path
 from ..core.saved_state import compact_last_aliases
@@ -44,8 +44,15 @@ def _run_registry(cfg: CircuitryConfig) -> LibraryRegistry:
     """The library registry a run resolves *orchestration* against — the
     same construction `cof run` uses, so a bare name classifies as a remote
     (refreshable) library source the same way on both surfaces (#275, #334).
+
+    A malformed ``runtime.library.sources`` must not make bundled names (or
+    plain file paths) unreachable over MCP, same as `cof run`
+    (`cli/app.py:_resolve_orchestration`) and the TUI (`tui/library.py`).
     """
-    return build_registry(cfg=cfg)
+    try:
+        return build_registry(cfg=cfg)
+    except LibrarySourceError:
+        return LibraryRegistry.default()
 
 
 # --------------------------------------------------------------------- helpers

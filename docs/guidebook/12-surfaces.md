@@ -72,7 +72,7 @@ Two ways to write an orchestration without writing YAML, and they are different 
 
 `?` shows the help overlay; `q` goes back, then quits; `Ctrl-C` quits from anywhere. [Terminal UI](../tui.md) is the full tour.
 
-Library's `enter` ("run this entry") carries whether the entry resolved from a remote (refreshable, e.g. GitHub) source through to Run, which applies the same capability consent gate (#275) `cof run hub/entry` does — and `Ctrl-R`'s replay in the Runs view carries the same answer from the stashed run it repeats. Neither ever prompts: unlike `cof run`'s interactive y/N, nothing in the TUI can block a launch on an answer without freezing the rest of the UI, so an entry that needs fresh consent refuses with the same message a script or CI run gets, naming `cof trust <document>`.
+Library's `enter` ("run this entry") carries whether the entry resolved from a remote (refreshable, e.g. GitHub) source through to Run, which applies the same capability consent gate (#275) `cof run hub/entry` does — and `Ctrl-R`'s replay in the Runs view carries the same answer from the stashed run it repeats. Neither ever prompts: the TUI refuses the same way a script or CI run of `cof run` does, naming `cof trust <document>`, rather than opening a dialog — a deliberate choice to keep one message and one path to approve a document, not a technical limit.
 
 ## The SDK
 

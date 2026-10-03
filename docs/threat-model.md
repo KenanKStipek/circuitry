@@ -419,11 +419,12 @@ the same gate. Neither MCP nor the REST trigger exposes any field a caller
 can use to grant capabilities on their own behalf — only `cof trust`'s
 store, consulted by content digest, can do that; a document whose digest
 was never consented there simply refuses, naming `cof trust <document>` the
-same way `cof run` does from a script or CI. The TUI does not prompt either,
-for the same reason: an interactive y/N would have to block the run's
-worker thread on an answer mid-launch, which the rest of the UI cannot stay
-responsive through, so a remote entry that needs fresh consent refuses with
-the identical message rather than opening a dialog. REST's own
+same way `cof run` does from a script or CI. The TUI refuses the same way
+rather than opening a dialog — a deliberate choice, not a technical limit
+(a modal could run on the UI thread before the worker starts): the same
+refusal every scripted/CI surface gets keeps one message and one path to
+approve a document (`cof trust <document>`) instead of a second,
+TUI-only grant mechanism. REST's own
 `orchestration_path` is always a file under the service's
 `orchestration_root`, never a name resolved against a library source, so it
 stays a run by path (§6) at the top level regardless of surface — a

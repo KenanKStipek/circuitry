@@ -105,6 +105,23 @@ def test_run_orchestration_allow_capabilities_unblocks_the_ref_child(tmp_path: P
     assert consented_capabilities(digest, store_path=trust_store_path()) is None
 
 
+def test_run_orchestration_allow_capabilities_rejects_a_bare_string(tmp_path: Path) -> None:
+    """`frozenset("shell")` would silently become `{'s', 'h', 'e', 'l'}` and
+    then refuse with a confusing error; reject the mistake outright instead.
+    """
+    root_path = _write_yaml(tmp_path / "root.yml", {"effects": []})
+
+    try:
+        run_orchestration(
+            orchestration_path=root_path,
+            allow_capabilities="shell",
+        )
+    except TypeError as exc:
+        assert "shell" in str(exc)
+    else:
+        raise AssertionError("expected TypeError for a bare string")
+
+
 # -- run_shared_orchestration: the fetched asset's own whole-document gate
 
 

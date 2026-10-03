@@ -13,7 +13,7 @@ import pytest
 import yaml
 
 from circuitry.cli.app import _is_remote_library_source
-from circuitry.cli.config import trust_store_path
+from circuitry.cli.config import CircuitryConfig, trust_store_path
 from circuitry.cli.document_consent import document_digest, record_consent
 from circuitry.cli.library_sources import Entry, LibraryRegistry
 from circuitry.mcp import server as srv
@@ -117,6 +117,17 @@ def test_run_orchestration_ignores_a_caller_supplied_capability_grant(
     assert "shell" in (resp["error"] or "")
 
 
+def test_run_orchestration_tool_has_no_capability_granting_field() -> None:
+    """Checks the wire schema itself, not just that `initial_state` is
+    ignored \u2014 a future field named e.g. `allow_capabilities` would still
+    pass the test above as long as the impl never reads it, but it would be
+    a grant-shaped field on an untrusted surface. Assert none exists."""
+    server = srv._build_server()
+    tools = {t.name: t for t in server._tool_manager.list_tools()}
+    properties = set(tools["run_orchestration"].parameters["properties"])
+    assert properties == {"orchestration", "initial_state", "override_model", "override_to"}
+
+
 def test_run_orchestration_succeeds_once_the_document_is_trusted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -129,4 +140,26 @@ def test_run_orchestration_succeeds_once_the_document_is_trusted(
     resp = srv._run_orchestration_impl(orchestration="pipeline")
 
     assert resp["status"] == "completed"
+    assert resp["error"] is None
+
+
+def test_run_registry_falls_back_to_default_on_a_malformed_sources_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed `runtime.library.sources` must not make bundled names
+    (or plain file paths) unreachable over MCP — `build_registry` raises
+    `LibrarySourceError` for e.g. an empty sources list, and `cof run`
+    already falls back to the bundled registry rather than letting that
+    escape (`cli/app.py:_resolve_orchestration`). `run_orchestration` must
+    do the same instead of raising out of `_run_orchestration_impl`."""
+    cfg = CircuitryConfig(runtime={"library": {"sources": []}})
+    monkeypatch.setattr(srv, "resolve_config", lambda: cfg)
+
+    resp = srv._run_orchestration_impl(
+        orchestration="learn/hello", initial_state={"name": "World"}, override_model=True
+    )
+
+    # host_claude pauses for the prompt effect rather than failing — proof
+    # the registry fallback let resolution and the run itself proceed.
+    assert resp["status"] == "paused"
     assert resp["error"] is None

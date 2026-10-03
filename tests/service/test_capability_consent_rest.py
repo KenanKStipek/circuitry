@@ -43,7 +43,7 @@ def _service(tmp_path: Path, lib_dir: Path) -> RestTriggerService:
     return RestTriggerService(allow_unauthenticated=True, orchestration_root=tmp_path, config=cfg)
 
 
-def test_rest_refuses_a_use_ref_child_whose_shell_use_is_uncented(tmp_path: Path) -> None:
+def test_rest_refuses_a_use_ref_child_whose_shell_use_is_unconsented(tmp_path: Path) -> None:
     lib_dir = tmp_path / "lib"
     _write_yaml(lib_dir / "helper.yml", _HELPER_SHELL_IN_FINALLY)
     root_path = _write_yaml(

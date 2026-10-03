@@ -32,6 +32,21 @@ from .core.diagnostics import find_divergence_paths as _find_divergence_paths
 from .core.saved_state import dumps_saved_state as _dumps_saved_state
 
 
+def _coerce_capabilities(allow_capabilities: Iterable[str] | None) -> frozenset[str] | None:
+    """``frozenset("shell")`` silently becomes ``{'s', 'h', 'e', 'l'}`` — a
+    caller who passes a bare string instead of a list gets a confusing
+    refusal rather than the capability they meant. Raise instead.
+    """
+    if allow_capabilities is None:
+        return None
+    if isinstance(allow_capabilities, str):
+        raise TypeError(
+            "allow_capabilities must be an iterable of capability names "
+            f"(e.g. ['shell']), not a single string: {allow_capabilities!r}"
+        )
+    return frozenset(allow_capabilities) if allow_capabilities else None
+
+
 def _write_out_path(result: RunResult, *, pretty: bool) -> None:
     """Write ``result.out_path`` (the CLI flag or a profile's ``out:``), the
     same as `cof run` writes `--out` — for both a successful and a failed
@@ -126,7 +141,7 @@ def run_orchestration(
         live_state_path=Path(live_state_path) if live_state_path is not None else None,
         adapter=adapter,
         trust_document=trust_document,
-        allow_capabilities=frozenset(allow_capabilities) if allow_capabilities else None,
+        allow_capabilities=_coerce_capabilities(allow_capabilities),
     )
     result = _run(req)
     _write_out_path(result, pretty=pretty)
@@ -198,7 +213,7 @@ def run_shared_orchestration(
         verbose=verbose,
         config=effective_config,
         live_state_path=Path(live_state_path) if live_state_path is not None else None,
-        allow_capabilities=frozenset(allow_capabilities) if allow_capabilities else None,
+        allow_capabilities=_coerce_capabilities(allow_capabilities),
     )
     result = _run(req)
     _write_out_path(result, pretty=pretty)
