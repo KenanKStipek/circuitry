@@ -122,3 +122,18 @@ def test_real_config_discovery_marker_still_isolates_the_step_cache(
 
     assert os.environ.get("CIRCUITRY_CACHE_DIR")
     assert cache_dir() != real_steps_dir
+
+
+@pytest.mark.real_config_discovery
+def test_real_config_discovery_marker_still_isolates_the_last_run_stash() -> None:
+    """The `--last` record is isolated ahead of the ``real_config_discovery``
+    early return as well. Tests with that marker still invoke ``cof run``,
+    which stashes its arguments; before this, every suite run overwrote the
+    developer's real ``~/.config/circuitry/last-run.json``, breaking their
+    ``cof run --last`` and ``--resume last``."""
+    from circuitry.cli import app as app_module
+    from circuitry.cli import last_run as last_run_module
+
+    real_last_run = Path.home() / ".config" / "circuitry" / "last-run.json"
+    assert real_last_run != last_run_module.LAST_RUN_PATH
+    assert real_last_run != app_module._LAST_RUN_PATH
