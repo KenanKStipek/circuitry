@@ -260,10 +260,10 @@ reference for the full skip/rerun rule, the three state sources (`--state`,
 backend), and the content-hash/inputs safety checks.
 
 This is the owner's long film/upscale pipelines' main use: a 164-minute
-video-upscale loop that crashes at frame 250 doesn't lose the 249 already-
-rendered frames — `cof run upscale.yml --state run.json --resume x` picks
-up at frame 250, and the adapter/tool calls for frames 0–249 never happen
-again.
+video-upscale loop that crashes — or is killed outright (Ctrl-C/SIGTERM,
+exiting 130/143) — at frame 250 doesn't lose the 249 already-rendered
+frames — `cof run upscale.yml --state run.json --resume x` picks up at
+frame 250, and the adapter/tool calls for frames 0–249 never happen again.
 
 ### Caching a step's result (`cache:`)
 
