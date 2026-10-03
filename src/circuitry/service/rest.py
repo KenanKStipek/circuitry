@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from ..cli.config import CircuitryConfig, resolve_config
+from ..cli.config import CircuitryConfig, load_user_env, resolve_config
 from ..cli.runtime_shim import RunRequest, run
 from ..core.state_ns import migrate_legacy_state
 
@@ -58,6 +58,10 @@ class RestTriggerService:
                 "allow_unauthenticated=True to explicitly opt into running "
                 "without one."
             )
+        # A host entry point, like the CLI and the MCP server — load the
+        # same private `.env` `cof setup` writes, or a key entered there
+        # never reaches an adapter a triggered run resolves (#348).
+        load_user_env()
         self._auth_token = auth_token
         self._orchestration_root = (
             Path(orchestration_root) if orchestration_root is not None else Path.cwd()

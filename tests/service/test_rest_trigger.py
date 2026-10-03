@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from pathlib import Path
 
@@ -24,6 +25,27 @@ effects:
         + "\n",
         encoding="utf-8",
     )
+
+
+def test_construction_loads_user_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`RestTriggerService` is a host entry point like the CLI and the MCP
+    server — the `.env` `cof setup` writes must reach a run it triggers
+    (#348)."""
+    canary = "sk-canary-rest-9f3a1c"
+    config_module.GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    env_path = config_module.GLOBAL_CONFIG_DIR / ".env"
+    env_path.write_text(f"OPENAI_API_KEY={canary}\n", encoding="utf-8")
+    env_path.chmod(0o600)
+    # `load_user_env` mutates `os.environ` directly, bypassing monkeypatch's
+    # own tracking — `delenv` still records whatever value was really
+    # present (the lane's shell exports a real `OPENAI_API_KEY`) and
+    # restores exactly that at teardown.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    RestTriggerService(allow_unauthenticated=True, orchestration_root=tmp_path)
+    assert os.environ.get("OPENAI_API_KEY") == canary
 
 
 def test_rest_trigger_success_returns_request_tracking_metadata(tmp_path: Path) -> None:

@@ -17,6 +17,22 @@ from circuitry import (
 )
 ```
 
+Unlike the `cof` CLI, the TUI, the MCP server, and the REST trigger service
+(`circuitry.service.RestTriggerService`) — which all load the private `.env`
+`cof setup` writes (`~/.config/circuitry/.env`) before anything else runs —
+this module never loads it automatically: an embedding program owns its own
+process environment, and is free to load whatever `.env` (or none) it
+chooses before calling in. Call `circuitry.cli.config.load_user_env()`
+yourself first if you want the same file.
+
+`load_user_env()` reports a refused or insecure file through the
+`circuitry` logger (`logger.warning(...)`), not by printing. The package
+attaches only a `NullHandler` to that logger, so an embedding program
+(including `RestTriggerService`) that hasn't configured its own logging
+handler never sees the warning — configure a handler for the `circuitry`
+logger, or call `cof doctor` / check `circuitry.cli.config.last_user_env_result()`
+yourself, if you need to surface it.
+
 ### `run_orchestration`
 
 Primary embedded entrypoint for local orchestration files.

@@ -112,7 +112,12 @@ def _hermetic_global_config(
     Tests that intentionally exercise config discovery tiers opt out with
     ``@pytest.mark.real_config_discovery`` and construct their own layering
     explicitly (patching ``GLOBAL_CONFIG_PATH`` to a controlled location, as
-    ``tests/cli/test_config_resolution.py`` already does).
+    ``tests/cli/test_config_resolution.py`` already does). The ``.env`` path
+    (``config_module.GLOBAL_CONFIG_DIR``) and the stashed ``load_user_env()``
+    result are isolated regardless of that marker, ahead of the early return
+    below — opting out of config-discovery isolation is not an invitation to
+    load the developer's real private ``.env`` into this pytest process's
+    environment (#349 review finding 1).
     """
     # Same isolation for the `cache:` step cache (#270): ahead of the
     # `real_config_discovery` early return below, so a test marked with it
@@ -144,14 +149,26 @@ def _hermetic_global_config(
     # and the real ~/.config/circuitry is created as a side effect.
     monkeypatch.setattr(app_module, "GLOBAL_CONFIG_DIR", fake_dir)
 
+    # Isolation for the `.env` `load_user_env()` reads (#348), ahead of the
+    # `real_config_discovery` early return: `config_module.GLOBAL_CONFIG_DIR`
+    # is the only thing `_user_env_path()` derives from, and `doctor_module`
+    # binds its own copy for the "secrets file mode" warning — without this,
+    # a `real_config_discovery` test that invokes the CLI (several do) loads
+    # the developer's real `~/.config/circuitry/.env` into `os.environ`,
+    # un-tracked by `monkeypatch`, for the rest of the pytest process (#349
+    # review finding 1). `_last_user_env_result` is reset too, so a stale
+    # result left over by an earlier test in the same process can't be
+    # mistaken for this test's own `load_user_env()` call (or lack of one).
+    monkeypatch.setattr(config_module, "GLOBAL_CONFIG_DIR", fake_dir)
+    monkeypatch.setattr(doctor_module, "GLOBAL_CONFIG_DIR", fake_dir)
+    monkeypatch.setattr(config_module, "_last_user_env_result", None)
+
     if request.node.get_closest_marker("real_config_discovery"):
         return
 
-    monkeypatch.setattr(config_module, "GLOBAL_CONFIG_DIR", fake_dir)
     monkeypatch.setattr(config_module, "GLOBAL_CONFIG_PATH", fake_config_path)
     monkeypatch.setattr(setup_module, "GLOBAL_CONFIG_DIR", fake_dir)
     monkeypatch.setattr(setup_module, "GLOBAL_CONFIG_PATH", fake_config_path)
-    monkeypatch.setattr(doctor_module, "GLOBAL_CONFIG_DIR", fake_dir)
     monkeypatch.setattr(doctor_module, "GLOBAL_CONFIG_PATH", fake_config_path)
 
 
