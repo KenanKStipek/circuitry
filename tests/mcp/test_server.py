@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from circuitry.mcp import server as srv
-from circuitry.mcp.runs import RunManager
+from circuitry.mcp.runs import Run, RunManager, RunStatus
 
 
 def _write_yml(tmp_path: Path, name: str, body: str) -> Path:
@@ -470,6 +470,26 @@ def test_state_is_json_serializable() -> None:
     assert safe["nested"]["more_paths"] == ["/a", "/b"]
     assert safe["nested"]["n"] == 1
     assert safe["nested"]["ok"] is True
+
+
+def test_run_response_writes_loop_last_as_a_reference_not_a_full_copy() -> None:
+    """A loop's in-memory ``last`` alias is reported the way ``--out``
+    writes it -- ``{"$ref": "iter_N"}`` -- not a second full copy of the
+    final pass (#236)."""
+    node = {"iter_0": {"value": "a"}, "iter_1": {"value": "b"}}
+    node["last"] = node["iter_1"]
+    run = Run(
+        run_id="run-1",
+        orchestration_path=Path("/tmp/orch.yml"),
+        status=RunStatus.COMPLETED,
+        state={"prime": {"loop": node}},
+    )
+
+    payload = srv._run_response(run, include_state=True)
+
+    assert payload["state"]["prime"]["loop"]["last"] == {"$ref": "iter_1"}
+    # The run's own live state is untouched -- still a real alias.
+    assert run.state["prime"]["loop"]["last"] is run.state["prime"]["loop"]["iter_1"]
 
 
 def test_run_state_response_is_json_safe(tmp_path: Path) -> None:
