@@ -80,7 +80,7 @@ def test_detect_openai_detail_never_contains_key_characters() -> None:
         status = detect_openai()
 
     assert canary not in status.detail
-    for i in range(len(canary) - 6):
+    for i in range(len(canary) - 5):
         assert canary[i : i + 6] not in status.detail
     assert status.detail == "API key set (OPENAI_API_KEY)"
 
@@ -110,7 +110,7 @@ def test_detect_anthropic_detail_never_contains_key_characters() -> None:
         status = detect_anthropic()
 
     assert canary not in status.detail
-    for i in range(len(canary) - 6):
+    for i in range(len(canary) - 5):
         assert canary[i : i + 6] not in status.detail
     assert status.detail == "API key set (ANTHROPIC_API_KEY)"
 

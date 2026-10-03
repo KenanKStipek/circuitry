@@ -74,7 +74,7 @@ def test_setup_json_never_shows_key_characters() -> None:
     )
     assert result.exit_code == 0
     assert _CANARY_KEY not in result.output
-    for i in range(len(_CANARY_KEY) - 6):
+    for i in range(len(_CANARY_KEY) - 5):
         assert _CANARY_KEY[i : i + 6] not in result.output
     data = _extract_json(result.output)
     openai_entry = next(e for e in data if e["name"] == "openai")
@@ -140,6 +140,33 @@ def test_write_env_file_tightens_mode_of_existing_file(monkeypatch: object) -> N
 
     assert _mode(env_path) == 0o600
     assert "EXISTING=1" in env_path.read_text()
+
+
+def test_write_env_file_hides_key_prompts(monkeypatch: object) -> None:
+    """#350: OPENAI_API_KEY/ANTHROPIC_API_KEY prompts must not echo input."""
+    from circuitry.cli.detect import BackendStatus, DetectionResult
+
+    monkeypatch.setattr("typer.confirm", lambda *a, **k: True)  # type: ignore[union-attr]
+    calls: list[tuple[tuple, dict]] = []
+
+    def fake_prompt(*args: object, **kwargs: object) -> str:
+        calls.append((args, kwargs))
+        return "sk-test"
+
+    monkeypatch.setattr("typer.prompt", fake_prompt)  # type: ignore[union-attr]
+
+    result = DetectionResult(
+        backends=[
+            BackendStatus(name="openai", available=False, detail=""),
+            BackendStatus(name="anthropic", available=False, detail=""),
+        ]
+    )
+    cli_setup._write_env_file(result)
+
+    assert len(calls) == 2
+    for args, kwargs in calls:
+        assert args[0] in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY")
+        assert kwargs.get("hide_input") is True
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +293,7 @@ def test_print_capability_match_maps_available_llm_backend(
 def test_pick_adapter_and_model_prompts_when_no_llm_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("typer.prompt", lambda label, default=None: default)
+    monkeypatch.setattr("typer.prompt", lambda label, default=None, **k: default)
     result = DetectionResult(backends=[])
 
     adapter, model = cli_setup._pick_adapter_and_model(result)
@@ -335,7 +362,7 @@ def test_build_config_uses_detected_ollama_url() -> None:
 def test_build_config_prompts_for_ollama_url_when_not_detected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("typer.prompt", lambda label, default=None: "http://manual:11434")
+    monkeypatch.setattr("typer.prompt", lambda label, default=None, **k: "http://manual:11434")
     result = DetectionResult(backends=[])
 
     config = cli_setup._build_config("ollama", "llama3", result)
@@ -379,7 +406,7 @@ def test_setup_cmd_writes_config_end_to_end(monkeypatch: pytest.MonkeyPatch) -> 
         ]
     )
     monkeypatch.setattr(cli_setup, "detect_all", lambda **_: fake)
-    monkeypatch.setattr("typer.prompt", lambda label, default=None: default)
+    monkeypatch.setattr("typer.prompt", lambda label, default=None, **k: default)
     monkeypatch.setattr("typer.confirm", lambda *a, **k: False)  # decline .env setup
 
     result = runner.invoke(app, ["setup"])
@@ -420,7 +447,7 @@ def test_setup_cmd_overwrites_existing_config_when_confirmed(
     fake = DetectionResult(backends=[])
     monkeypatch.setattr(cli_setup, "detect_all", lambda **_: fake)
     monkeypatch.setattr("typer.confirm", lambda *a, **k: True)  # overwrite, decline .env
-    monkeypatch.setattr("typer.prompt", lambda label, default=None: default)
+    monkeypatch.setattr("typer.prompt", lambda label, default=None, **k: default)
 
     result = runner.invoke(app, ["setup"])
 
@@ -432,7 +459,7 @@ def test_setup_cmd_overwrites_existing_config_when_confirmed(
 def test_setup_cmd_writes_env_file_when_confirmed(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = DetectionResult(backends=[])
     monkeypatch.setattr(cli_setup, "detect_all", lambda **_: fake)
-    monkeypatch.setattr("typer.prompt", lambda label, default=None: default or "sk-test")
+    monkeypatch.setattr("typer.prompt", lambda label, default=None, **k: default or "sk-test")
     monkeypatch.setattr("typer.confirm", lambda *a, **k: True)  # confirm every prompt
 
     result = runner.invoke(app, ["setup"])
@@ -454,7 +481,7 @@ def test_setup_cmd_prints_examples_dir_after_writing_private_files(
 ) -> None:
     fake = DetectionResult(backends=[])
     monkeypatch.setattr(cli_setup, "detect_all", lambda **_: fake)
-    monkeypatch.setattr("typer.prompt", lambda label, default=None: default or "sk-test")
+    monkeypatch.setattr("typer.prompt", lambda label, default=None, **k: default or "sk-test")
     monkeypatch.setattr("typer.confirm", lambda *a, **k: True)
 
     result = runner.invoke(app, ["setup"])

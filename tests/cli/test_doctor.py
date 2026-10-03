@@ -130,7 +130,7 @@ def test_doctor_never_shows_key_characters(
 
     assert result.exit_code == 0
     assert canary not in result.output
-    for i in range(len(canary) - 6):
+    for i in range(len(canary) - 5):
         assert canary[i : i + 6] not in result.output
 
 
