@@ -67,8 +67,11 @@ _EXTRA_TOP_LEVEL_KEYS = frozenset({"description", "runtime", "plugins"}) | _LEGA
 #: ``adapter`` is a real top-level key; on an effect it is ``provider``.
 _MISTAKEN_FOR = {"adapter": "provider"}
 
-#: Keys whose value is a list of child effects.
-_CHILD_KEYS = ("effects", "steps", "then", "else", "body")
+#: Keys whose value is a list of child effects. ``finally`` is only legal on
+#: ``dynamic`` (and the document root, walked separately below), but a
+#: near-miss key inside one is still a document author's typo worth catching
+#: here rather than only at runtime (#272 review).
+_CHILD_KEYS = ("effects", "steps", "then", "else", "body", "finally")
 
 
 @lru_cache(maxsize=1)
@@ -184,6 +187,7 @@ def _unknown_keys(orch: Any) -> tuple[list[str], list[str]]:
 
     effects = orch.get("effects")
     walk(effects if effects is not None else orch.get("steps"), "effects")
+    walk(orch.get("finally"), "finally")
     return errors, warnings
 
 

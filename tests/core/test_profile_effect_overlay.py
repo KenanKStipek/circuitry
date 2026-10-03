@@ -51,6 +51,61 @@ def test_apply_effect_overrides_targets_top_level_and_nested_paths() -> None:
     assert root.effects[1].effects[0].model is None
 
 
+def test_apply_effect_overrides_addresses_a_finally_effect() -> None:
+    """A profile addresses a cleanup effect the same way it addresses a body
+    one — `finally:` shares its dynamic's own scope, not a separate
+    namespace (#272 review, finding 5)."""
+    orch = {
+        "effects": [
+            {
+                "type": "dynamic",
+                "name": "with_server",
+                "effects": [{"type": "prompt", "name": "ask", "template": "a"}],
+                "finally": [
+                    {"type": "tool", "name": "stop_server", "provider": "shell", "params": {}}
+                ],
+            }
+        ],
+        "finally": [
+            {"type": "tool", "name": "root_cleanup", "provider": "shell", "params": {}}
+        ],
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+
+    new_root, matched = apply_effect_overrides(
+        root,
+        {
+            "with_server.stop_server": {"provider": "ffmpeg"},
+            "root_cleanup": {"provider": "ffmpeg"},
+        },
+    )
+
+    assert matched == {"with_server.stop_server", "root_cleanup"}
+    nested_finally = new_root.effects[0].finally_effects[0]
+    assert nested_finally.name == "stop_server"
+    assert nested_finally.provider == "ffmpeg"
+    assert new_root.finally_effects[0].provider == "ffmpeg"
+
+    # Original tree is untouched.
+    assert root.effects[0].finally_effects[0].provider == "shell"
+    assert root.finally_effects[0].provider == "shell"
+
+
+def test_apply_effect_overrides_disables_finally_effect_subtree() -> None:
+    orch = {
+        "effects": [{"type": "prompt", "name": "ask", "template": "a"}],
+        "finally": [
+            {"type": "tool", "name": "cleanup", "provider": "shell", "params": {}}
+        ],
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+
+    new_root, matched = apply_effect_overrides(root, {"cleanup": {"enabled": False}})
+
+    assert matched == {"cleanup"}
+    assert new_root.finally_effects[0].enabled is False
+
+
 def test_apply_effect_overrides_no_overrides_returns_same_root() -> None:
     root = compile_orchestration(orch=_nested_orch(), root_name="prime")
     new_root, matched = apply_effect_overrides(root, {})

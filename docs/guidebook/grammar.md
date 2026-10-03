@@ -174,7 +174,7 @@ Reflector ::= { type: 'reflector', name: NAME, effects: Effect+,   — base temp
 4. `collect` must name a body step, and needs a named loop to have anywhere to write — on an unnamed loop this is a `cof check` error naming the fix (give the loop a `name`). Chain-order reads only; tree siblings can't read each other.
 5. `use` cycle guard: an orchestration cannot (transitively) `use` itself.
 6. `runtime.*` in a document merges over config (orch wins) — the complexity block rides this.
-7. `finally` is legal only on the document root and on a Dynamic effect — anywhere else is a compile error. A failure inside `finally` never hides the main `effects`' own failure (reported as-is, with the `finally` failure added as a second note); on an otherwise-successful run, a `finally` failure fails it too, unless that `finally` effect's own `on_error` is `skip`/`continue`.
+7. `finally` is legal only on the document root and on a Dynamic effect — anywhere else is a compile error. It shares its Dynamic's own name scope with `effects` (no separate `finally` namespace), so a `finally` effect's name must not repeat one already used in `effects`. A failure inside `finally` stops the `finally` effects listed after it, the same way a failing body effect stops the rest of `effects`, and never hides the main `effects`' own failure (reported as-is, with the `finally` failure added as a second note); on an otherwise-successful run, a `finally` failure fails it too, unless that `finally` effect's own `on_error` is `skip`/`continue`.
 8. A false or unreadable `expect` fails the attempt (`retries`/`on_error` apply) with `expect failed: <expr or template summary>`.
 
 ## Cybernetic overlay (config grammar, `runtime.complexity`)

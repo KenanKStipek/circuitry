@@ -1034,6 +1034,66 @@ def test_has_prompt_effects_returns_false_for_cel_mode_if() -> None:
     assert _has_prompt_effects(root) is False
 
 
+def test_has_prompt_effects_returns_true_for_tool_expect_model_mode() -> None:
+    """A tool's own expect: {mode: model} calls adapter.generate() the same
+    way a model-mode `if` does (#273 review) — a tool-only document with
+    one still needs a real adapter, not the no-op."""
+    from circuitry.cli.runtime_shim import _has_prompt_effects
+
+    root = compile_orchestration(
+        orch={
+            "effects": [
+                {
+                    "type": "tool",
+                    "name": "x",
+                    "provider": "ffmpeg",
+                    "params": {},
+                    "expect": {"mode": "model", "template": "Does this look right?"},
+                }
+            ]
+        }
+    )
+    assert _has_prompt_effects(root) is True
+
+
+def test_has_prompt_effects_returns_false_for_tool_expect_cel_mode() -> None:
+    from circuitry.cli.runtime_shim import _has_prompt_effects
+
+    root = compile_orchestration(
+        orch={
+            "effects": [
+                {
+                    "type": "tool",
+                    "name": "x",
+                    "provider": "ffmpeg",
+                    "params": {},
+                    "expect": "size(value) > 0",
+                }
+            ]
+        }
+    )
+    assert _has_prompt_effects(root) is False
+
+
+def test_has_prompt_effects_sees_a_prompt_that_lives_only_in_finally() -> None:
+    """A prompt that appears only in `finally:` still needs a real adapter
+    (#272/#273 review, finding 5) — `_has_prompt_effects` walks a dynamic's
+    `finally_effects` the same way it walks its body `effects`."""
+    from circuitry.cli.runtime_shim import _has_prompt_effects
+
+    root = compile_orchestration(
+        orch={
+            "effects": [
+                {"type": "tool", "name": "x", "provider": "ffmpeg", "params": {}}
+            ],
+            "finally": [
+                {"type": "prompt", "name": "cleanup_note", "template": "done"}
+            ],
+        }
+    )
+    assert _has_prompt_effects(root) is True
+
+
 # ---------------------------------------------------------------------------
 # Tool effects nested inside control-flow containers
 #

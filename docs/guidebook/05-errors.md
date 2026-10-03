@@ -55,8 +55,13 @@ lookup into `meta.raw.body`.
   prompt: "{{input.prompt}}"
   model: flux1-dev-fp8.safetensors
   retries: {max_attempts: 3, backoff_ms: 1000}
-  expect: "has(value.images) && size(value.images) > 0"
+  expect: "size(value) > 0"
 ```
+
+(`comfyui`'s own `value` is the generated image's path/URL/base64 string, not
+an object — `size(value) > 0` is the right shape for it; a tool whose
+`value` actually is an object, e.g. an `http` JSON response, checks a field
+on it the way the second example below does.)
 
 **`retries`** on `tool` and `use` is the same two fields, the same default (unset: one attempt) and the same backoff curve as a prompt's. What counts as retryable differs by what kind of failure it is. An **HTTP-family** tool (`http`, `web_fetch`, `webhook`, `linear`) classifies by status the way an adapter dispatch does: 429, 408 and 5xx retry; any other 4xx does not, for the same reason a prompt's bad request or missing key doesn't — it cannot succeed on a second try. Every other **process** tool — `shell`, `ffmpeg`, `comfyui`, and the rest — retries on any failure: there is no status to classify, and the motivating case is a macOS GPU watchdog killing a FLUX render mid-job, which a second attempt on a cooled-down GPU often clears. A `use` effect's `retries` re-runs the **whole child orchestration** from scratch each attempt, not just the step that failed inside it.
 
@@ -72,8 +77,13 @@ lookup into `meta.raw.body`.
   retries: {max_attempts: 3, backoff_ms: 2000}
   expect:
     mode: cel
-    expr: "has(value.image_path) && meta.status_code == null"
+    expr: "size(value) > 0 && has(meta.raw.outputs)"
 ```
+
+(`meta.status_code` is only ever set for an HTTP-family tool — `comfyui` is
+a process tool and never has one, so checking it here would always fail,
+not skip; `meta.raw` is this tool's own result, ComfyUI's history entry for
+the prompt, which carries an `outputs` node once the job actually ran.)
 
 This replaces the `awk`-based `exit 1` guards a video pipeline otherwise writes by hand (`count`/`check8k`-style steps checking a prior tool's output before trusting it): the check is the effect's own `expect:`, not a sibling step, and a failure feeds the same `retries`/`on_error` every other failure does.
 
@@ -107,8 +117,9 @@ This replaces the `awk`-based `exit 1` guards a video pipeline otherwise writes 
 Before `finally` existed, the only way to guarantee a cleanup step always ran was to mark the step *before* it `on_error: continue` with a comment explaining why — which quietly changes that step's own error policy too, turning "this step's failure doesn't matter" into "run the next thing regardless of what happened here":
 
 ```yaml
-# Before finally: on_error: continue on `ask` is doing two jobs at once —
-# "a bad reply doesn't matter" AND "the server below must still be stopped".
+# ✗ runtime — on_error: continue on `ask` is doing two jobs at once: "a bad
+# reply doesn't matter" AND "the server below must still be stopped". It
+# validates and runs fine; `finally:` above is the fix, not a rejection.
 - type: tool
   name: ask
   provider: http

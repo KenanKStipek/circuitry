@@ -209,3 +209,150 @@ def test_finally_runs_when_a_use_child_document_finishes(tmp_path) -> None:
     store = Store({})
     UseRuntime(defn, adapter=EchoAdapter(), model="m").execute(store=store, ctx={})
     assert marker.exists()
+
+
+# ---------------------------------------------------------------------------
+# Cancellation (#272 review, finding 1) and a finally failure's own on_error
+# (finding 2).
+# ---------------------------------------------------------------------------
+
+
+class _CancelledLikeMCP(BaseException):
+    """Stands in for adapters.host_claude.RunCancelled: a BaseException that
+    is not a KeyboardInterrupt/SystemExit, the way the MCP server cancels a
+    run mid-prompt."""
+
+
+@dataclass
+class _CancellingAdapter:
+    exc: BaseException
+    name: str = "cancelling"
+
+    def generate(self, *, model: str, prompt: str, timeout_seconds: int = 120):
+        raise self.exc
+
+
+def _dynamic_with_cancelling_prompt(exc: BaseException, *, on_error: str) -> tuple:
+    from circuitry.core.dynamic import DynamicDefinition
+    from circuitry.core.prompt import PromptDefinition
+
+    body = PromptDefinition(name="ask", template="hi")
+    root = DynamicDefinition(name="prime", effects=(body,), on_error=on_error)
+    return root, _CancellingAdapter(exc)
+
+
+def test_mcp_run_cancelled_propagates_even_with_on_error_skip() -> None:
+    """A dynamic's on_error: skip only degrades an ordinary failure — an MCP
+    RunCancelled-like BaseException must still stop the run (#272 review,
+    finding 1), the same as it did before `finally:` existed."""
+    root, adapter = _dynamic_with_cancelling_prompt(
+        _CancelledLikeMCP("cancelled"), on_error="skip"
+    )
+    store = Store({})
+    with pytest.raises(_CancelledLikeMCP):
+        DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
+
+
+def test_mcp_run_cancelled_propagates_even_with_on_error_continue() -> None:
+    root, adapter = _dynamic_with_cancelling_prompt(
+        _CancelledLikeMCP("cancelled"), on_error="continue"
+    )
+    store = Store({})
+    with pytest.raises(_CancelledLikeMCP):
+        DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
+
+
+def test_keyboard_interrupt_still_propagates_with_on_error_skip() -> None:
+    root, adapter = _dynamic_with_cancelling_prompt(
+        KeyboardInterrupt(), on_error="skip"
+    )
+    store = Store({})
+    with pytest.raises(KeyboardInterrupt):
+        DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
+
+
+def test_ordinary_failure_with_on_error_skip_does_not_propagate() -> None:
+    """Sanity check: on_error: skip still degrades a real (Exception) body
+    failure normally — only a BaseException cancellation bypasses it."""
+    root, adapter = _dynamic_with_cancelling_prompt(
+        RuntimeError("adapter dispatch failed"), on_error="skip"
+    )
+    store = Store({})
+    DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
+    assert "adapter dispatch failed" in store.state["prime"]["meta"]["error"]
+
+
+def test_finally_failure_with_dynamics_own_on_error_continue_does_not_fail_the_run(
+    tmp_path,
+) -> None:
+    """A dynamic's own on_error: continue covers a finally failure on an
+    otherwise-successful body, not just a body failure (#272 review,
+    finding 2)."""
+    from circuitry.core.dynamic import DynamicDefinition
+
+    orch = {
+        "effects": [_write_tool("step", str(tmp_path / "ok.txt"))],
+        "finally": [_read_missing_tool("cleanup", str(tmp_path / "missing.txt"))],
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    root_with_on_error = DynamicDefinition(
+        name=root.name,
+        effects=root.effects,
+        finally_effects=root.finally_effects,
+        on_error="continue",
+    )
+    store = Store({})
+    # Degraded, not raised — on_error: continue recorded the finally failure
+    # on this dynamic's own meta.error (the same thing a body failure's
+    # on_error: continue does) rather than propagating it.
+    DynamicRuntime(root_with_on_error, adapter=EchoAdapter(), model="m").execute(store=store)
+    assert "cleanup" in store.state["prime"]["meta"]["error"]
+
+
+def test_finally_duplicate_name_with_body_effect_is_a_compile_error(tmp_path) -> None:
+    """A finally effect reusing a body effect's name would silently overwrite
+    that state node at runtime (both share the dynamic's own child_store) —
+    caught at compile time instead (#272 review, finding 8)."""
+    orch = {
+        "effects": [_write_tool("step", str(tmp_path / "ok.txt"))],
+        "finally": [_write_tool("step", str(tmp_path / "other.txt"))],
+    }
+    with pytest.raises(ValueError, match="Duplicate effect name 'step'"):
+        compile_orchestration(orch=orch, root_name="prime")
+
+
+def test_sum_tokens_includes_a_tool_or_use_effects_own_expect_tokens() -> None:
+    """A tool/use's own `expect: {mode: model}` spends tokens too (#273),
+    recorded under meta.expect rather than meta directly \u2014 a parent
+    dynamic's own displayed token total must still include them (#273
+    review, finding 4, P2 part)."""
+    from circuitry.core.dynamic import _sum_tokens
+
+    subtree = {
+        "meta": {"tokens_sent": 10, "tokens_received": 5},
+        "child": {
+            "meta": {
+                "tokens_sent": None,
+                "tokens_received": None,
+                "expect": {"tokens_sent": 7, "tokens_received": 3},
+            }
+        },
+    }
+    sent, recv = _sum_tokens(subtree)
+    assert sent == 17
+    assert recv == 8
+
+
+def test_finally_failure_path_matches_the_real_state_node(tmp_path) -> None:
+    """A finally effect writes into the same child_store namespace as the
+    body (no separate 'finally' segment in the state tree) \u2014 the wrapped
+    error's path should say so too (#272 review, finding 11)."""
+    orch = {
+        "effects": [_write_tool("step", str(tmp_path / "ok.txt"))],
+        "finally": [_read_missing_tool("stop_server", str(tmp_path / "missing.txt"))],
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({})
+    with pytest.raises(Exception, match=r"^prime\.stop_server: ") as excinfo:
+        DynamicRuntime(root, adapter=EchoAdapter(), model="m").execute(store=store)
+    assert "prime.finally.stop_server" not in str(excinfo.value)

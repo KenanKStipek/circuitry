@@ -91,6 +91,38 @@ def test_unknown_keys_in_nested_effects_are_found() -> None:
     ]
 
 
+def test_near_miss_key_inside_a_dynamics_finally_is_an_error() -> None:
+    """A typo on the exact key `finally:` exists for (`on_eror` instead of
+    `on_error`) is caught the same way one in `effects` is (#272 review,
+    finding 5) — the near-miss walk used to never enter `finally:` at all."""
+    orch = {
+        "effects": [
+            {
+                "type": "dynamic",
+                "name": "d",
+                "effects": [_TOOL],
+                "finally": [{**_TOOL, "name": "cleanup", "on_eror": "continue"}],
+            }
+        ]
+    }
+    errors = unknown_key_errors(orch)
+    assert len(errors) == 1
+    assert "finally" in errors[0]
+    assert "unknown key 'on_eror'" in errors[0]
+    assert "did you mean 'on_error'?" in errors[0]
+
+
+def test_near_miss_key_inside_the_root_finally_is_an_error() -> None:
+    orch = {
+        "effects": [_TOOL],
+        "finally": [{**_TOOL, "name": "cleanup", "Params": {}}],
+    }
+    errors = unknown_key_errors(orch)
+    assert len(errors) == 1
+    assert "finally[0]" in errors[0]
+    assert "did you mean 'params'?" in errors[0]
+
+
 def test_top_level_near_miss_is_an_error_and_other_keys_warn() -> None:
     orch = {"modle": "llama3", "name": "mine", "effects": [_TOOL]}
     assert len(unknown_key_errors(orch)) == 1

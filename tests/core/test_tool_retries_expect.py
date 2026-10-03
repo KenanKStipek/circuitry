@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import urllib.error
 from unittest.mock import MagicMock
 
 import pytest
@@ -162,6 +163,77 @@ def test_http_family_5xx_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     assert plugin.execute.call_count == 2
 
 
+def test_tool_retries_used_is_reset_on_a_reused_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A node that needed a retry on an earlier execution and succeeds on
+    the first attempt of a later one must not keep showing the earlier
+    pass's retries_used (#273 review, finding 10, the same stale-meta
+    problem #260 fixed elsewhere)."""
+    ok_result = ToolResult(value="done", raw={}, stdout="", stderr="", exit_code=0)
+    plugin = MagicMock()
+    plugin.execute.return_value = ok_result
+    _patch_plugin(monkeypatch, plugin)
+
+    defn = ToolDefinition(name="x", provider="shell", params={})
+    store = _make_store()
+    node = store.ensure_dict("x")
+    node["meta"] = {"retries_used": 2}
+
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert "retries_used" not in store.state["x"]["meta"]
+
+
+def test_http_family_connection_failure_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """http.py wraps a DNS/connection failure as ``RuntimeError(...) from
+    URLError`` (never a status code) — classify_exception reads the
+    __cause__ chain the same way an adapter dispatch failure is classified,
+    so this is retried like curl's own refused-connection exit code is
+    (#273 review, finding 3)."""
+    conn_err = RuntimeError("HTTP request to http://x failed: Connection refused")
+    conn_err.__cause__ = urllib.error.URLError("Connection refused")
+    ok_result = ToolResult(value={"ok": True}, raw={"status": 200}, stdout="", stderr="", exit_code=None)
+    plugin = MagicMock()
+    plugin.execute.side_effect = [conn_err, ok_result]
+    _patch_plugin(monkeypatch, plugin)
+
+    defn = ToolDefinition(
+        name="x",
+        provider="http",
+        params={},
+        retries=RetryPolicyDef(max_attempts=3, backoff_ms=10),
+    )
+    store = _make_store()
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert store.state["x"]["value"] == {"ok": True}
+    assert plugin.execute.call_count == 2
+
+
+def test_http_family_unclassifiable_exception_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An exception with no retryable cause (no status, no connection-level
+    __cause__) stays not-retryable — guessing wrong in the retryable
+    direction could spin on a request that will never succeed."""
+    plugin = MagicMock()
+    plugin.execute.side_effect = RuntimeError("params.url must be a string")
+    _patch_plugin(monkeypatch, plugin)
+
+    defn = ToolDefinition(
+        name="x",
+        provider="http",
+        params={},
+        retries=RetryPolicyDef(max_attempts=3, backoff_ms=10),
+    )
+    store = _make_store()
+    with pytest.raises(RuntimeError, match=r"params\.url must be a string"):
+        ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert plugin.execute.call_count == 1
+
+
 def test_http_family_4xx_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     fail_result = ToolResult(
         value=None, raw={"status": 404}, stdout="", stderr="not found", exit_code=None, ok=False
@@ -304,3 +376,36 @@ def test_expect_model_mode_without_adapter_raises_configuration_error(
     store = _make_store()
     with pytest.raises(ValueError, match="requires the run's adapter/model"):
         ToolRuntime(defn).execute(store=store, ctx={})
+
+    # The exception is caught inside the attempt loop, not left to escape
+    # past the start/complete pair unbalanced (#273 review, finding 4) —
+    # fire_effect_complete still ran before the re-raise.
+    assert store.state["x"]["meta"]["completed_at"] is not None
+    assert "requires the run's adapter/model" in store.state["x"]["meta"]["error"]
+
+
+def test_expect_model_mode_missing_adapter_error_is_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With retries configured, the same configuration error still counts
+    as a failed attempt (and is retried) rather than crashing the run
+    outright (#273 review, finding 4) — it keeps failing every attempt
+    since no adapter ever becomes available, so the run still ends in the
+    same error."""
+    ok_result = ToolResult(value="x", raw={}, stdout="", stderr="", exit_code=0)
+    plugin = MagicMock()
+    plugin.execute.return_value = ok_result
+    _patch_plugin(monkeypatch, plugin)
+
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={},
+        retries=RetryPolicyDef(max_attempts=2, backoff_ms=10),
+        expect=ExpectDef(mode="model", template="ok?"),
+    )
+    store = _make_store()
+    with pytest.raises(ValueError, match="requires the run's adapter/model"):
+        ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert plugin.execute.call_count == 2

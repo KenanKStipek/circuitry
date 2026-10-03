@@ -38,8 +38,10 @@ def _walk_effects(effects: Any) -> list[dict[str, Any]]:
         if not isinstance(effect, dict):
             continue
         out.append(effect)
-        # Recurse into nested containers
-        for child_key in ("effects", "then", "else", "body"):
+        # Recurse into nested containers. 'finally' is only legal on dynamic
+        # (and the document root, handled by each call site below), but a
+        # use effect living in one is a real edge in the static use-graph.
+        for child_key in ("effects", "then", "else", "body", "finally"):
             child = effect.get(child_key)
             if isinstance(child, list):
                 out.extend(_walk_effects(child))
@@ -54,7 +56,7 @@ def collect_use_refs(orch: dict[str, Any]) -> list[tuple[str, str]]:
     """
     out: list[tuple[str, str]] = []
     effects = orch.get("effects") or orch.get("steps") or []
-    for effect in _walk_effects(effects):
+    for effect in [*_walk_effects(effects), *_walk_effects(orch.get("finally"))]:
         if (effect.get("type") or "").strip().lower() != "use":
             continue
         ref = effect.get("ref")
@@ -155,7 +157,7 @@ def iter_use_children(
             visit(child, resolved.parent)
 
         effects = orch.get("effects") or orch.get("steps") or []
-        for effect in _walk_effects(effects):
+        for effect in [*_walk_effects(effects), *_walk_effects(orch.get("finally"))]:
             if (effect.get("type") or "").strip().lower() != "use":
                 continue
             text = effect.get("inline")

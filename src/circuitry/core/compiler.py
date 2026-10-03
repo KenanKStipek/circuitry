@@ -228,12 +228,19 @@ def _compile_effects_in_scope(
     scope_path: str,
     container_path: str,
     loop_names: frozenset[str] = frozenset(),
+    # Shared with a sibling call compiling the same scope's 'finally' (or
+    # body) list, so a finally effect reusing a body effect's name is
+    # caught as the same duplicate-name error a body/body collision is —
+    # both land on the same state node (core.dynamic runs 'finally' against
+    # the same child_store as the body, see _compile_effect's own comment).
+    seen_names: dict[str, str] | None = None,
 ) -> list[EffectDef]:
     if not isinstance(effects, list):
         raise ValueError(f"{container_path} must be a list of effects.")
 
     compiled: list[EffectDef] = []
-    seen_names: dict[str, str] = {}
+    if seen_names is None:
+        seen_names = {}
 
     for idx, effect in enumerate(effects):
         effect_path = f"{container_path}[{idx}]"
@@ -300,10 +307,12 @@ def compile_orchestration(
     # Bare {{name}} refs to this document's declared interface inputs are a
     # hard error — caller inputs live under the `input` namespace.
     validate_bare_input_refs(orch)
+    root_seen_names: dict[str, str] = {}
     compiled_effects = _compile_effects_in_scope(
         effects=effects,
         scope_path=root_name,
         container_path=f"{root_name}.effects",
+        seen_names=root_seen_names,
     )
 
     # Cleanup effects, allowed at the document root as well as on a
@@ -315,6 +324,7 @@ def compile_orchestration(
             effects=finally_raw,
             scope_path=root_name,
             container_path=f"{root_name}.finally",
+            seen_names=root_seen_names,
         )
         if finally_raw
         else []
@@ -357,7 +367,11 @@ def apply_effect_overrides(
         _overlay_effect(child, path="", overrides=overrides, matched=matched)
         for child in root.effects
     ]
-    return replace(root, effects=new_children), matched
+    new_finally = [
+        _overlay_effect(child, path="", overrides=overrides, matched=matched)
+        for child in root.finally_effects
+    ]
+    return replace(root, effects=new_children, finally_effects=new_finally), matched
 
 
 def _overlay_effect(
@@ -391,6 +405,14 @@ def _overlay_effect(
             effects=[
                 _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
                 for c in node.effects
+            ],
+            # 'finally' shares its dynamic's own scope (same child_scope the
+            # compiler gives its body, not a 'finally' segment of its own —
+            # see _compile_effect) so a profile addresses a cleanup effect
+            # exactly like a body one.
+            finally_effects=[
+                _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
+                for c in node.finally_effects
             ],
         )
     elif isinstance(node, ReflectorDefinition):
@@ -438,7 +460,11 @@ def _disable_subtree(node: EffectDef) -> EffectDef:
     node = replace(node, enabled=False)
 
     if isinstance(node, DynamicDefinition):
-        return replace(node, effects=[_disable_subtree(c) for c in node.effects])
+        return replace(
+            node,
+            effects=[_disable_subtree(c) for c in node.effects],
+            finally_effects=[_disable_subtree(c) for c in node.finally_effects],
+        )
     if isinstance(node, ReflectorDefinition):
         inner = cast(DynamicDefinition, _disable_subtree(node.inner))
         return replace(node, inner=inner)
@@ -499,15 +525,20 @@ def _compile_effect(
         # Support both 'effects' (spec) and 'steps' (legacy)
         child_effects = effect.get("effects") or effect.get("steps") or []
         child_scope = _scope_child(scope_path, valid_name)
+        dynamic_seen_names: dict[str, str] = {}
         compiled_children = _compile_effects_in_scope(
             effects=child_effects,
             scope_path=child_scope,
             container_path=f"{effect_path}.effects",
             loop_names=loop_names,
+            seen_names=dynamic_seen_names,
         )
 
         # Cleanup effects — same scope as this dynamic's own children, so
-        # they see state as it stands (e.g. a started server's pid).
+        # they see state as it stands (e.g. a started server's pid). Shares
+        # dynamic_seen_names with the body above so a finally effect reusing
+        # a body effect's name is caught as a duplicate, not a silent
+        # same-node overwrite at runtime.
         finally_raw = effect.get("finally") or []
         compiled_finally = (
             _compile_effects_in_scope(
@@ -515,6 +546,7 @@ def _compile_effect(
                 scope_path=child_scope,
                 container_path=f"{effect_path}.finally",
                 loop_names=loop_names,
+                seen_names=dynamic_seen_names,
             )
             if finally_raw
             else []

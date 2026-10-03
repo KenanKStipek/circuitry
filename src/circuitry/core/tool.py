@@ -13,6 +13,7 @@ from typing import Any, Literal
 from ..adapters import Adapter
 from ..adapters._retry import (
     RetryInfo,
+    classify_exception,
     next_backoff_delay_ms,
     status_is_retryable,
 )
@@ -415,23 +416,29 @@ class ToolRuntime:
             )
             return DEFAULT_TOOL_TIMEOUT_SECONDS
 
-    def _is_retryable_failure(self, *, status_code: int | None) -> bool:
+    def _is_retryable_failure(
+        self, *, status_code: int | None, failure: BaseException | None = None
+    ) -> bool:
         """Whether a failed attempt is worth retrying.
 
         HTTP-family tools (``http``, ``web_fetch``, ``webhook``, ``linear``)
         classify by status the same way an adapter dispatch does (429/408/
-        5xx retryable; any other 4xx is not) — and, when the failure never
-        got far enough to carry a status at all (a raised exception, a
-        connection that never completed), conservatively not, the same
-        "guessing wrong in the retryable direction could spin on a request
-        that will never succeed" reasoning ``classify_curl_exit`` uses for
-        an unreadable curl status. Every other (process) tool — ``shell``,
-        ``ffmpeg``, ``comfyui``, ... — retries on any failure: there is no
-        status to classify, and a process failing once (a transient GPU
-        watchdog kill, a flaky read) is exactly the case #273 exists for.
+        5xx retryable; any other 4xx is not). When the failure never got far
+        enough to carry a status at all (a raised exception, a connection
+        that never completed), ``failure`` is classified the same way an
+        adapter's own dispatch failure is (:func:`classify_exception`) — a
+        ``URLError``/``TimeoutError``/``ConnectionError`` (DNS failure,
+        refused connection, a request that never got a reply) is retryable,
+        matching ``RETRYABLE_CURL_EXIT_CODES``; anything else is not. Every
+        other (process) tool — ``shell``, ``ffmpeg``, ``comfyui``, ... —
+        retries on any failure: there is no status to classify, and a
+        process failing once (a transient GPU watchdog kill, a flaky read)
+        is exactly the case #273 exists for.
         """
         if self.defn.provider in _HTTP_FAMILY_PROVIDERS:
-            return status_code is not None and status_is_retryable(status_code)
+            if status_code is not None:
+                return status_is_retryable(status_code)
+            return classify_exception(failure).retryable
         return True
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
@@ -515,11 +522,16 @@ class ToolRuntime:
             meta.pop("status_code", None)
             meta.pop("raw", None)
             meta.pop("expect", None)
+            meta.pop("retries_used", None)
 
             target = self.defn.provider  # fallback if build_plugin fails before we can compute it
             result: ToolResult | None = None
             failure: Exception | None = None
             retryable = False
+            # Set only on the ok=False path below, from the plugin's own
+            # response headers — an exception never reached a response, so
+            # it never has one to read.
+            retry_after: str | None = None
             try:
                 # Render top-level prompt/model, then merge with params (params take precedence)
                 top_level: dict[str, Any] = {}
@@ -573,7 +585,7 @@ class ToolRuntime:
 
             except Exception as e:
                 failure = e
-                retryable = self._is_retryable_failure(status_code=None)
+                retryable = self._is_retryable_failure(status_code=None, failure=e)
 
             if failure is not None:
                 meta["error"] = str(failure)
@@ -625,29 +637,42 @@ class ToolRuntime:
                     result.stderr or f"{self.defn.provider} tool reported failure (ok=False)"
                 )
                 retryable = self._is_retryable_failure(status_code=status_code)
+                if self.defn.provider in _HTTP_FAMILY_PROVIDERS:
+                    headers = result.raw.get("headers")
+                    if isinstance(headers, dict):
+                        retry_after = headers.get("retry-after") or headers.get("Retry-After")
             else:
                 # Success — the expect check, if any, decides whether this
                 # attempt actually counts as one (#273). A failed expect is
                 # always worth retrying: unlike an HTTP status, it carries
                 # no classification of its own, and the motivating case
                 # (a flaky image-generation result) is exactly "try again".
+                # The call itself can also raise (no adapter/model available
+                # for mode: model, a bad template) — caught here, not left to
+                # escape past retries/on_error with the start/complete pair
+                # left unbalanced (#273 review).
                 if self.defn.expect is not None:
-                    outcome = evaluate_expect(
-                        self.defn.expect,
-                        value=node["value"],
-                        meta=meta,
-                        ctx=ctx,
-                        adapter=self.adapter,
-                        model=self.model,
-                        timeout_seconds=timeout_seconds,
-                        effect_label=f"tool '{self.defn.name}'",
-                    )
-                    meta["expect"] = outcome.meta
-                    if not outcome.passed:
-                        failure = RuntimeError(
-                            f"expect failed: {expect_failure_summary(self.defn.expect)}"
+                    try:
+                        outcome = evaluate_expect(
+                            self.defn.expect,
+                            value=node["value"],
+                            meta=meta,
+                            ctx=ctx,
+                            adapter=self.adapter,
+                            model=self.model,
+                            timeout_seconds=timeout_seconds,
+                            effect_label=f"tool '{self.defn.name}'",
                         )
+                    except Exception as expect_exc:
+                        failure = expect_exc
                         retryable = True
+                    else:
+                        meta["expect"] = outcome.meta
+                        if not outcome.passed:
+                            failure = RuntimeError(
+                                f"expect failed: {expect_failure_summary(self.defn.expect)}"
+                            )
+                            retryable = True
 
             meta["completed_at"] = _now_iso()
 
@@ -666,7 +691,9 @@ class ToolRuntime:
                         _console.print(line)
                 if retryable and not is_last_attempt:
                     next_delay_ms = next_backoff_delay_ms(
-                        RetryInfo(retryable=True), attempt_index=attempt_index, base_ms=backoff_ms
+                        RetryInfo(retryable=True, retry_after=retry_after),
+                        attempt_index=attempt_index,
+                        base_ms=backoff_ms,
                     )
                     continue
                 if self.defn.on_error in ("skip", "continue"):

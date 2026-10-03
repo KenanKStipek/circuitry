@@ -131,6 +131,92 @@ def test_use_exhausts_retries_and_fails(tmp_path, monkeypatch: pytest.MonkeyPatc
     assert store.state["run_child"]["meta"]["error"] is not None
 
 
+def test_use_missing_path_is_not_retried(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing child file fails the exact same way on every attempt —
+    retrying it only burns the backoff wait for nothing (#273 review,
+    finding 9). A retry sleeps before each attempt after the first, so zero
+    sleeps proves this failed on the first attempt."""
+    sleep = MagicMock()
+    monkeypatch.setattr("circuitry.core.use.time.sleep", sleep)
+
+    defn = UseDefinition(
+        name="run_child",
+        path=str(tmp_path / "does-not-exist.yml"),
+        retries=RetryPolicyDef(max_attempts=5, backoff_ms=10),
+    )
+    store = Store({})
+    with pytest.raises(RuntimeError, match="not found"):
+        UseRuntime(defn, adapter=_mock_adapter(), model="m").execute(store=store, ctx={})
+
+    sleep.assert_not_called()
+    assert store.state["run_child"]["meta"].get("retries_used") is None
+
+
+def test_use_cycle_is_not_retried(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cycle (`use` referencing an ancestor of its own call stack) never
+    resolves differently on a second attempt (#273 review, finding 9)."""
+    sleep = MagicMock()
+    monkeypatch.setattr("circuitry.core.use.time.sleep", sleep)
+
+    child_path = _write_orch(
+        tmp_path,
+        "self_referencing.yml",
+        {"effects": [{"type": "tool", "name": "t", "provider": "shell", "params": {}}]},
+    )
+
+    defn = UseDefinition(
+        name="run_child",
+        path=str(child_path),
+        retries=RetryPolicyDef(max_attempts=5, backoff_ms=10),
+    )
+    store = Store({})
+    identity = str(child_path.resolve())
+    runtime_config = {"_use_call_stack": [identity]}
+    with pytest.raises(RuntimeError, match="cycle detected"):
+        UseRuntime(
+            defn, adapter=_mock_adapter(), model="m", runtime_config=runtime_config
+        ).execute(store=store, ctx={})
+
+    sleep.assert_not_called()
+
+
+def test_use_retries_used_is_reset_on_a_reused_node(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A node that needed a retry on an earlier execution and succeeds on
+    the first attempt of a later one must not keep showing the earlier
+    pass's retries_used (#273 review, finding 10, the same stale-meta
+    problem #260 fixed elsewhere)."""
+    child_path = _write_orch(
+        tmp_path,
+        "child.yml",
+        {
+            "effects": [
+                {
+                    "type": "tool",
+                    "name": "t",
+                    "provider": "shell",
+                    "params": {"command": "echo", "allowed_commands": ["echo"], "args": ["ok"]},
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr("circuitry.core.use.time.sleep", lambda s: None)
+
+    defn = UseDefinition(
+        name="run_child",
+        path=str(child_path),
+        retries=RetryPolicyDef(max_attempts=3, backoff_ms=10),
+    )
+    store = Store({})
+    node = store.ensure_dict("run_child")
+    node["meta"] = {"retries_used": 2}
+
+    UseRuntime(defn, adapter=_mock_adapter(), model="m").execute(store=store, ctx={})
+
+    assert "retries_used" not in store.state["run_child"]["meta"]
+
+
 def test_use_expect_cel_over_mapped_value(tmp_path) -> None:
     child_path = _write_orch(
         tmp_path,

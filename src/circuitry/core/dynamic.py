@@ -387,7 +387,13 @@ class DynamicRuntime:
                     store=store,
                     child_store=child_store,
                     ctx=ctx,
-                    label=f"{self.defn.name}.finally",
+                    # No distinct 'finally' label segment: a finally effect
+                    # writes into the same child_store namespace as the body
+                    # (same state path a same-named body effect would have),
+                    # so the wrapped error's path should match the state
+                    # tree it actually names, not a '.finally.' segment that
+                    # isn't really there (#272 review).
+                    label=self.defn.name,
                 )
             except BaseException as fe:
                 finally_exc = fe
@@ -412,7 +418,11 @@ class DynamicRuntime:
         store.fire_effect_complete(self.defn.name, dyn)
 
         if body_exc is not None:
-            is_cancellation = isinstance(body_exc, (KeyboardInterrupt, SystemExit))
+            # Anything that is not an Exception (KeyboardInterrupt, SystemExit,
+            # or the MCP server's own RunCancelled(BaseException)) is a
+            # cancellation: it always propagates, regardless of this
+            # dynamic's own on_error, which only degrades an ordinary failure.
+            is_cancellation = not isinstance(body_exc, Exception)
             if finally_exc is not None:
                 logger.warning(
                     "Dynamic %r: cleanup in 'finally' also failed (%s) after "
@@ -439,8 +449,19 @@ class DynamicRuntime:
             # The body succeeded; a 'finally' effect's own failure (its
             # on_error is 'fail', the default — skip/continue already
             # swallowed it inside _execute_effect) fails this dynamic the
-            # same way a body failure would.
-            raise finally_exc
+            # same way a body failure would — unless this *dynamic's own*
+            # on_error says to degrade that failure too (#272 review).
+            is_cancellation = not isinstance(finally_exc, Exception)
+            if is_cancellation or self.defn.on_error == "fail":
+                raise finally_exc
+            logger.warning(
+                "Dynamic %r: finally failed (%s); on_error=%s, continuing with "
+                "the next effect",
+                self.defn.name,
+                finally_exc,
+                self.defn.on_error,
+            )
+            return
 
     def _execute_chain(
         self,
@@ -455,9 +476,12 @@ class DynamicRuntime:
 
         Shared by this dynamic's own chain-flow body and its ``finally:``
         list — ``finally`` always runs this way regardless of this
-        dynamic's own ``flow``. ``label`` names the list for the wrapped
-        error's path prefix (the body uses this dynamic's own name;
-        ``finally`` names its own list) — see ``_effect_path``.
+        dynamic's own ``flow``. ``label`` overrides the wrapped error's
+        path prefix, defaulting to this dynamic's own name — see
+        ``_effect_path``. A ``finally`` effect writes into the same
+        child_store namespace as the body, so its own call passes this
+        dynamic's name too (not a distinct ``.finally`` segment, which
+        wouldn't match the real state tree).
         """
         container_name = label or self.defn.name
         for idx, effect in enumerate(effects):
@@ -888,6 +912,13 @@ def _sum_tokens(d: dict) -> tuple[int, int]:
     if isinstance(meta, dict):
         sent += meta.get("tokens_sent") or 0
         recv += meta.get("tokens_received") or 0
+        # A tool/use's own expect: {mode: model} spends tokens too (#273),
+        # recorded under meta.expect rather than meta directly — counted
+        # here so a parent dynamic's own token total still includes them.
+        expect = meta.get("expect")
+        if isinstance(expect, dict):
+            sent += expect.get("tokens_sent") or 0
+            recv += expect.get("tokens_received") or 0
     for v in d.values():
         if isinstance(v, dict):
             s, r = _sum_tokens(v)

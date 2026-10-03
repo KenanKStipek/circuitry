@@ -58,7 +58,7 @@ DEPRECATED_FLOW_ALIASES = {
 TYPE_KEYWORDS = CANONICAL_EFFECT_TYPES | set(DEPRECATED_EFFECT_TYPE_ALIASES)
 
 #: Keys whose value is a list of child effects, in walk order.
-_CHILD_KEYS = ("effects", "then", "else", "body")
+_CHILD_KEYS = ("effects", "then", "else", "body", "finally")
 
 #: A fixed-iteration path segment: ``prime.rank.iter_0.score.value``.
 _ITER_SEGMENT = re.compile(r"\biter_\d+\b")
@@ -87,6 +87,7 @@ def lint_orchestration(orch: Any) -> list[str]:
     if not isinstance(effects, Sequence) or isinstance(effects, (str, bytes)):
         effects = orch.get("steps")
     _walk(effects, path="effects", warnings=warnings, loops=())
+    _walk(orch.get("finally"), path="finally", warnings=warnings, loops=())
 
     return warnings
 
