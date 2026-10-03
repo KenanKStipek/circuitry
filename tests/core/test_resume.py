@@ -535,3 +535,68 @@ def test_loop_resume_twice_does_not_rerun_a_pass_that_already_succeeded(
     # already finished.
     _run_loop(orch, state, adapter=adapter, resume=True)
     assert adapter.calls == ["frame-0", "frame-1", "frame-1"]
+
+
+def test_resume_skips_body_but_always_reruns_finally(tmp_path: Path) -> None:
+    """`cof run --resume` (#330) is positional-skip over the body only —
+    `finally:` (#272) always runs again on a resumed run, regardless of
+    whether its own node already completed OK in the prior run: cleanup
+    (stopping a server, releasing a lock) must happen again every time the
+    body finishes, not just the first time it ever ran."""
+    orch = _write(
+        tmp_path,
+        "resume_finally.yml",
+        """
+effects:
+  - type: prompt
+    name: step1
+    template: "one"
+  - type: prompt
+    name: step2
+    template: "two"
+finally:
+  - type: prompt
+    name: cleanup
+    template: "cleanup"
+""".lstrip(),
+    )
+    adapter = CountingAdapter()
+    adapter.fail_prompts = {"two"}
+
+    first = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+        )
+    )
+    assert first.ok is False
+    # `finally:` still ran despite the body failing on step2.
+    assert adapter.calls == ["one", "two", "cleanup"]
+    assert first.state["prime"]["cleanup"]["value"] == "ok:cleanup"
+
+    adapter.fail_prompts = set()
+    second = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+            initial_state=first.state,
+            resume=True,
+        )
+    )
+    assert second.ok is True, second.error
+    # step1 is skipped (no new "one" call); step2 reruns (it failed last
+    # time); cleanup reruns too even though it already succeeded in the
+    # first run — a second "cleanup" call proves `finally:` wasn't skipped
+    # by resume the way a completed body effect would be.
+    assert adapter.calls == ["one", "two", "cleanup", "two", "cleanup"]
+    assert second.state["prime"]["step1"]["value"] == "ok:one"
+    assert second.state["prime"]["step2"]["value"] == "ok:two"
+    assert second.state["prime"]["cleanup"]["value"] == "ok:cleanup"

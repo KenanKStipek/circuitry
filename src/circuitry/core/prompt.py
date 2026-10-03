@@ -4,18 +4,19 @@ import hashlib
 import json
 import logging
 import math
-import random
-import sys
 import time
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from typing import Any, Literal
 
 from ..adapters import Adapter, build_adapter
-from ..adapters._retry import RetryInfo, classify_exception
+from ..adapters._retry import (
+    RetryInfo,
+    classify_exception,
+    next_backoff_delay_ms,
+)
 from ..adapters.base import (
     TRUNCATED_FINISH_REASONS,
     ChatMessage,
@@ -35,12 +36,6 @@ from .store import Store
 from .templates import render_template
 
 logger = logging.getLogger(__name__)
-
-#: Exponential-backoff ceiling for a retryable failure's wait, including one
-#: driven by a provider's own ``Retry-After`` — a provider asking for longer
-#: than this is still only waited out this long, so a single effect's
-#: retries can't stall a run indefinitely.
-_RETRY_BACKOFF_CAP_MS = 60_000
 
 #: A decode/schema-validation failure's raw reply is capped before it goes
 #: into ``meta.fallback_attempts`` — state is serialized to ``--out``,
@@ -101,28 +96,6 @@ def _cap_reply_text(text: str) -> str:
     return f"{text[:_RAW_REPLY_CAP_CHARS]}... [truncated, {len(text)} chars total]"
 
 
-def _parse_retry_after_seconds(value: str) -> float | None:
-    """A ``Retry-After`` header value (seconds, or an HTTP-date) as seconds from now.
-
-    ``None`` when ``value`` is neither — a header present but unparseable
-    must not be read as "wait forever" or crash the retry loop.
-    """
-    value = (value or "").strip()
-    if not value:
-        return None
-    try:
-        return max(0.0, float(value))
-    except ValueError:
-        pass
-    try:
-        when = parsedate_to_datetime(value)
-    except (TypeError, ValueError, IndexError):
-        return None
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
-
-
 def _retry_info_for(exc: Exception | None) -> RetryInfo:
     """``RetryInfo`` for the error that ended a dispatch pass.
 
@@ -138,24 +111,6 @@ def _retry_info_for(exc: Exception | None) -> RetryInfo:
     if isinstance(exc, (AnswerParseError, SchemaValidationError)):
         return RetryInfo(retryable=True)
     return classify_exception(exc)
-
-
-def _next_backoff_delay_ms(retry_info: RetryInfo, *, attempt_index: int, base_ms: int) -> int:
-    """How long to wait before the next retry: exponential backoff with full
-    jitter, starting from ``base_ms`` and capped at :data:`_RETRY_BACKOFF_CAP_MS`.
-
-    ``attempt_index`` is the 0-based attempt that just failed, so the first
-    retry's ceiling is ``base_ms`` and each subsequent one roughly doubles.
-    A provider's own ``Retry-After`` (when the failing adapter could supply
-    one) overrides the computed wait outright, still capped — the provider
-    knows its own rate limit better than a generic curve does.
-    """
-    if retry_info.retry_after:
-        retry_after_seconds = _parse_retry_after_seconds(retry_info.retry_after)
-        if retry_after_seconds is not None:
-            return min(_RETRY_BACKOFF_CAP_MS, int(retry_after_seconds * 1000))
-    ceiling = min(_RETRY_BACKOFF_CAP_MS, base_ms * (2**attempt_index))
-    return int(random.uniform(0, ceiling))
 
 
 class _PromptSpinner:
@@ -640,10 +595,6 @@ class PromptRuntime:
         attempts_meta: list[dict[str, Any]] = []
         total_tokens_sent: int | None = None
         total_tokens_received: int | None = None
-        # Entered once dispatch actually starts (after any decomposition
-        # early-return) and exited exactly once, on whichever of this try's
-        # two exits is taken — see the acquisition site below.
-        concurrency_cm: AbstractContextManager[None] | None = None
         try:
             # Decomposition sits right at the dispatch seam: it either replaces
             # the model call entirely (the merged child result lands at this
@@ -688,18 +639,12 @@ class PromptRuntime:
                 if decomposition.fallback_model:
                     dispatch_model = decomposition.fallback_model
 
-            # Acquired once for the whole dispatch below, retries included —
-            # a retried/fallen-back-from attempt is still the same logical
-            # dispatch, not a fresh one competing for a fresh slot. Entered
-            # manually (not `with`) so the slot is held across the whole
-            # retry loop below without re-indenting it; released exactly
-            # once in the `finally` below, which is the only exit this `try`
-            # has that is guaranteed to run on every path out — a normal
-            # return, any exception the `except Exception` below catches, a
-            # `BaseException` it doesn't, and the body falling through
-            # without a `return` at all, e.g. a non-positive
-            # default_prompt_retries making the retry loop run zero times
-            # (#274 review P2).
+            # Acquired fresh each attempt below and released before this
+            # iteration's end (backoff sleep included) — a retried/
+            # fallen-back-from attempt still competes for a new slot each
+            # time, the same contract tool.py's retry loop holds (#333 x
+            # #281): a retrying GPU dispatch must never sleep through
+            # backoff while still holding its group.
             limiter = self.runtime_config.get(_CONCURRENCY_LIMITER_KEY)
 
             def _on_wait(label: str) -> None:
@@ -712,15 +657,6 @@ class PromptRuntime:
 
             def _on_acquired() -> None:
                 store.set(f"{self.defn.name}.meta.waiting_for", None)
-
-            concurrency_cm = (
-                limiter.acquire(
-                    group=self.defn.group, on_wait=_on_wait, on_acquired=_on_acquired
-                )
-                if limiter is not None
-                else nullcontext()
-            )
-            concurrency_cm.__enter__()
 
             options = self._generation_options(
                 ctx=effective_ctx, messages=messages, meta=meta
@@ -762,7 +698,14 @@ class PromptRuntime:
                     )
                 else:
                     live_cm = nullcontext()
-                with live_cm:
+                concurrency_cm: AbstractContextManager[None] = (
+                    limiter.acquire(
+                        group=self.defn.group, on_wait=_on_wait, on_acquired=_on_acquired
+                    )
+                    if limiter is not None
+                    else nullcontext()
+                )
+                with concurrency_cm, live_cm:
                     res, decoded_value, attempts_meta, generation_error = (
                         self._generate_with_fallbacks(
                             prompt=prompt_sent,
@@ -863,7 +806,7 @@ class PromptRuntime:
                         self.cb_error(line)
                     else:
                         _console.print(line)
-                next_delay_ms = _next_backoff_delay_ms(
+                next_delay_ms = next_backoff_delay_ms(
                     retry_info, attempt_index=_attempt, base_ms=backoff_ms
                 )
 
@@ -893,9 +836,6 @@ class PromptRuntime:
             store.fire_effect_complete(self.defn.name, node)
             if self.defn.on_error == "fail":
                 raise
-        finally:
-            if concurrency_cm is not None:
-                concurrency_cm.__exit__(*sys.exc_info())
 
     def _score_and_route(
         self, *, rendered_prompt: str

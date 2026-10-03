@@ -29,6 +29,9 @@ fields:
   labels:
     type: object
     note: "Free-form metadata, recorded on meta.labels. Observability tagging, not behavior."
+  finally:
+    type: array
+    note: "Cleanup effects, run after 'effects' completes whether it succeeded or failed, and best-effort on a Ctrl-C/cancellation. Always sequential, regardless of this dynamic's own flow. Sees state as it stands (e.g. a started server's pid). The original failure (if any) still propagates after finally runs; a finally failure on a successful run fails it too, unless that finally effect has its own on_error: continue/skip. Only legal here and at the document root."
 state_paths:
   child_output: "prime.<dynamic_name>.<child_name>.value"
   template_ref: "{{prime.<dynamic_name>.<child_name>.value}}"

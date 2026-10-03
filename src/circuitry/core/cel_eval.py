@@ -160,6 +160,55 @@ def evaluate_cel(expr: str, ctx: dict[str, Any], *, strict: bool = False) -> boo
     return bool(result)
 
 
+def evaluate_cel_expect(
+    expr: str, *, value: Any, meta: Mapping[str, Any], state: Mapping[str, Any]
+) -> bool:
+    """Evaluate a tool/use ``expect:`` CEL expression and return a bool.
+
+    Three root bindings, not one: ``value`` and ``meta`` are this effect's
+    own result (``has(value.prompt_id)``), and ``state`` is the full run
+    state exactly as :func:`evaluate_cel` binds it — unlike every other CEL
+    site in the framework, which only ever binds ``state``. There is no
+    absent-path-is-false convention here (that rule exists so a branch
+    doesn't need a ``has()`` guard for every optional field; `expect` is a
+    single check, not a branch): a path that doesn't resolve —
+    ``value.prompt_id`` on a value with no such key — raises
+    :class:`CelEvaluationError` the same as any other evaluation failure,
+    which the caller (``core.tool``/``core.use``) treats the same as a
+    false expectation.
+    """
+    if not expr or not expr.strip():
+        raise CelEvaluationError(
+            "CEL expression is empty; nothing to evaluate.", expression=expr
+        )
+    if len(expr) > _MAX_EXPR_LENGTH:
+        raise CelEvaluationError(
+            f"CEL expression too long ({len(expr)} chars, max "
+            f"{_MAX_EXPR_LENGTH}).",
+            expression=expr,
+        )
+    try:
+        compiled = _compile(expr)
+    except CelError as exc:
+        raise CelEvaluationError(
+            f"CEL evaluation failed for {expr!r}: {exc}", expression=expr
+        ) from exc
+    bindings = {
+        "value": _to_cel(value),
+        "meta": _to_cel(dict(meta)),
+        "state": _to_cel(state),
+    }
+    try:
+        result = compiled.runner.evaluate(bindings)
+        if isinstance(result, CELEvalError):
+            raise result
+    except Exception as exc:
+        raise CelEvaluationError(
+            f"CEL evaluation failed for {expr!r}: {exc}", expression=expr
+        ) from exc
+    return bool(result)
+
+
 def validate_cel_syntax(
     expr: str,
     *,

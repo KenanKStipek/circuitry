@@ -13,10 +13,13 @@ from pathlib import Path
 from typing import Any, Literal
 
 from ..adapters import Adapter
+from ..adapters._retry import RetryInfo, next_backoff_delay_ms
 from ..output import console as _console
 from .document_check import structural_errors
+from .expect import ExpectDef, evaluate_expect, expect_failure_summary
 from .interface_inputs import check_interface_inputs
 from .outputs import normalize_outputs
+from .prompt import RetryPolicyDef
 from .store import Store
 from .store.store import replace_node
 from .templates import render_template
@@ -278,6 +281,14 @@ class UseDefinition:
     validate: bool = True
     on_error: Literal["fail", "skip", "continue"] = "fail"
     description: str | None = None
+
+    # Reliability (#273) — same key names, default and backoff as prompts
+    # (see core.prompt.RetryPolicyDef). None: one attempt, no retry. A
+    # retry re-runs the whole child orchestration from scratch.
+    retries: RetryPolicyDef | None = None
+
+    # Output check (#273), run after a successful child run — see core.expect.
+    expect: ExpectDef | None = None
 
     # False = skip execution and write a disabled node (see core.disabled).
     enabled: bool = True
@@ -654,164 +665,263 @@ class UseRuntime:
                         _console.print(line)
                 return
 
-            # Load (file or inline) and compile
-            child_orch, resolved_label, identity, digest = self._load_child_orch(ctx)
-            meta["orchestration_sha256"] = digest
-            label = resolved_label
-            if not meta["inline"]:
-                meta["resolved_path"] = resolved_label
-            if self._pin is not None:
-                meta["library_ref"] = self._pin
-            self._check_allowlists(child_orch, label)
+            # Retry policy: per-use config, or one attempt (#273) — same key
+            # names and backoff curve as prompts (core.prompt.RetryPolicyDef).
+            # A retry re-runs the whole child orchestration from scratch.
+            if self.defn.retries is not None:
+                max_attempts = max(1, self.defn.retries.max_attempts)
+                backoff_ms = self.defn.retries.backoff_ms
+            else:
+                max_attempts = 1
+                backoff_ms = 1000
+            next_delay_ms = backoff_ms
 
-            # Cycle detection — runtime call-stack tracking by resolved identity.
-            # The stack is derived per call-path rather than mutated in place:
-            # `runtime_config` is one dict shared by every runtime in the run,
-            # and tree-flow iterations execute concurrently on a
-            # ThreadPoolExecutor, so a shared, mutated list would let sibling
-            # iterations see each other as ancestors (false-positive cycles).
-            parent_stack: list[str] = list(
-                self.runtime_config.get("_use_call_stack", [])
-            )
-            if identity in parent_stack:
-                cycle_path = " → ".join([*parent_stack, identity])
-                raise RecursionError(
-                    f"use '{self.defn.name}': cycle detected — {cycle_path}"
-                )
-            child_runtime_config = dict(self.runtime_config)
-            child_runtime_config["_use_call_stack"] = [*parent_stack, identity]
-            # A nested `use: {path: ...}` inside this child resolves relative
-            # to *this* child's own directory, not the root orchestration's —
-            # composition chains through each file's own location. Inline
-            # children have no file/directory of their own, so they inherit
-            # whatever directory was already in effect.
-            if not meta["inline"]:
-                child_runtime_config["_orchestration_dir"] = str(Path(identity).parent)
+            for attempt_index in range(max_attempts):
+                if attempt_index > 0:
+                    time.sleep(next_delay_ms / 1000)
+                    if self.verbose:
+                        retry_line = (
+                            f"{indent}[yellow]↺[/yellow] [green]⊕[/green]"
+                            f" {self.display_name} [dim]retry {attempt_index}/{max_attempts - 1}[/dim]"
+                        )
+                        if self.cb_done is not None:
+                            self.cb_done(retry_line)
+                        else:
+                            _console.print(retry_line)
 
-            child_root = compile_orchestration(orch=child_orch, root_name="prime")
+                t0 = time.monotonic()
+                child_store = None
+                node["value"] = None
+                meta["created_at"] = _now_iso()
+                meta["completed_at"] = None
+                meta["error"] = None
+                meta["child_errors"] = None
+                meta["inputs"] = None
+                meta["orchestration_sha256"] = None
+                meta.pop("expect", None)
+                meta.pop("retries_used", None)
 
-            # The run-wide limiter (if any) is ambient — a `use` child never
-            # declares its own `runtime.concurrency_groups` (see
-            # `_load_child_orch`'s structural check, which only validates the
-            # document's own shape); it just has to honour the one group
-            # table the whole run already resolved (#274).
-            from .compiler import unknown_concurrency_group_errors
-            from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
-            from .concurrency import RunConcurrencyLimiter
+                attempt_failure: Exception | None = None
+                try:
+                    # Load (file or inline) and compile
+                    child_orch, resolved_label, identity, digest = self._load_child_orch(ctx)
+                    meta["orchestration_sha256"] = digest
+                    label = resolved_label
+                    if not meta["inline"]:
+                        meta["resolved_path"] = resolved_label
+                    if self._pin is not None:
+                        meta["library_ref"] = self._pin
+                    self._check_allowlists(child_orch, label)
 
-            limiter = self.runtime_config.get(_CONCURRENCY_LIMITER_KEY)
-            if isinstance(limiter, RunConcurrencyLimiter):
-                child_group_errors = unknown_concurrency_group_errors(
-                    child_root, limiter.group_names
-                )
-                if child_group_errors:
-                    raise ValueError(
-                        f"Orchestration {label} validation failed:\n"
-                        + "\n".join(f"  - {e}" for e in child_group_errors)
+                    # Cycle detection — runtime call-stack tracking by resolved identity.
+                    # The stack is derived per call-path rather than mutated in place:
+                    # `runtime_config` is one dict shared by every runtime in the run,
+                    # and tree-flow iterations execute concurrently on a
+                    # ThreadPoolExecutor, so a shared, mutated list would let sibling
+                    # iterations see each other as ancestors (false-positive cycles).
+                    parent_stack: list[str] = list(
+                        self.runtime_config.get("_use_call_stack", [])
+                    )
+                    if identity in parent_stack:
+                        cycle_path = " → ".join([*parent_stack, identity])
+                        raise RecursionError(
+                            f"use '{self.defn.name}': cycle detected — {cycle_path}"
+                        )
+                    child_runtime_config = dict(self.runtime_config)
+                    child_runtime_config["_use_call_stack"] = [*parent_stack, identity]
+                    # A nested `use: {path: ...}` inside this child resolves relative
+                    # to *this* child's own directory, not the root orchestration's —
+                    # composition chains through each file's own location. Inline
+                    # children have no file/directory of their own, so they inherit
+                    # whatever directory was already in effect.
+                    if not meta["inline"]:
+                        child_runtime_config["_orchestration_dir"] = str(Path(identity).parent)
+
+                    child_root = compile_orchestration(orch=child_orch, root_name="prime")
+
+                    # The run-wide limiter (if any) is ambient — a `use` child
+                    # never declares its own `runtime.concurrency_groups` (see
+                    # `_load_child_orch`'s structural check, which only
+                    # validates the document's own shape); it just has to
+                    # honour the one group table the whole run already
+                    # resolved (#274).
+                    from .compiler import unknown_concurrency_group_errors
+                    from .concurrency import (
+                        RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY,
+                    )
+                    from .concurrency import RunConcurrencyLimiter
+
+                    group_limiter = self.runtime_config.get(_CONCURRENCY_LIMITER_KEY)
+                    if isinstance(group_limiter, RunConcurrencyLimiter):
+                        child_group_errors = unknown_concurrency_group_errors(
+                            child_root, group_limiter.group_names
+                        )
+                        if child_group_errors:
+                            raise ValueError(
+                                f"Orchestration {label} validation failed:\n"
+                                + "\n".join(f"  - {e}" for e in child_group_errors)
+                            )
+
+                    # Build isolated child state: rendered inputs land in the
+                    # child's `input` namespace, same contract as a top-level run.
+                    child_inputs: dict[str, Any] = {}
+                    unresolved: dict[str, str] = {}
+                    if self.defn.inputs:
+                        child_inputs = _render_inputs(self.defn.inputs, ctx)
+                        unresolved = _unresolved_references(self.defn.inputs, child_inputs)
+                    # Check interface first — it fills in declared `default:`s and
+                    # coerces declared-typed values — so `meta["inputs"]` below
+                    # records what the child actually ran with, not the pre-check
+                    # rendering.
+                    auto_outputs = self._check_interface(child_orch, child_inputs, unresolved)
+                    meta["inputs"] = copy.deepcopy(child_inputs)
+                    child_state: dict[str, Any] = {"input": child_inputs}
+
+                    # Isolated state, shared observation: the child keeps its own
+                    # state dict (and its explicit inputs/outputs mapping) but
+                    # inherits the parent's callbacks, its lock — so a snapshot is
+                    # never composed mid-write — and a path prefix that nests its
+                    # effects under this one.
+                    child_store = Store(
+                        state=child_state,
+                        on_write=self._child_on_write(store, node, node_path),
+                        effect_complete=_namespaced_effect_cb(
+                            store.effect_complete, node_path
+                        ),
+                        effect_start=_namespaced_effect_cb(store.effect_start, node_path),
+                        concurrent_dispatch=store.concurrent_dispatch,
+                        branch_settled=store.branch_settled,
+                        _lock=store._lock,
                     )
 
-            # Build isolated child state: rendered inputs land in the
-            # child's `input` namespace, same contract as a top-level run.
-            child_inputs: dict[str, Any] = {}
-            unresolved: dict[str, str] = {}
-            if self.defn.inputs:
-                child_inputs = _render_inputs(self.defn.inputs, ctx)
-                unresolved = _unresolved_references(self.defn.inputs, child_inputs)
-            # Check interface first — it fills in declared `default:`s and
-            # coerces declared-typed values — so `meta["inputs"]` below
-            # records what the child actually ran with, not the pre-check
-            # rendering.
-            auto_outputs = self._check_interface(child_orch, child_inputs, unresolved)
-            meta["inputs"] = copy.deepcopy(child_inputs)
-            child_state: dict[str, Any] = {"input": child_inputs}
+                    # Execute child orchestration. The child's own effects inherit
+                    # this invocation's display name as a label prefix — but only
+                    # when it actually differs from the bare effect name (i.e. an
+                    # enclosing loop or `use` gave it one); otherwise every
+                    # unqualified `use` would start tagging its child's lines,
+                    # changing output that today has nothing to disambiguate.
+                    child_label_prefix = (
+                        self.display_name if self.display_name != self.defn.name else None
+                    )
+                    DynamicRuntime(
+                        child_root,
+                        adapter=self.adapter,
+                        model=self.model,
+                        model_locked=self.model_locked,
+                        runtime_config=child_runtime_config,
+                        dry_run=self.dry_run,
+                        timeout_seconds=self.timeout_seconds,
+                        verbose=self.verbose,
+                        progress_display=self.progress_display,
+                        depth=self.depth + 1,
+                        ancestors=self._ancestors,
+                        label_prefix=child_label_prefix,
+                    ).execute(store=child_store)
 
-            # Isolated state, shared observation: the child keeps its own
-            # state dict (and its explicit inputs/outputs mapping) but
-            # inherits the parent's callbacks, its lock — so a snapshot is
-            # never composed mid-write — and a path prefix that nests its
-            # effects under this one.
-            child_store = Store(
-                state=child_state,
-                on_write=self._child_on_write(store, node, node_path),
-                effect_complete=_namespaced_effect_cb(
-                    store.effect_complete, node_path
-                ),
-                effect_start=_namespaced_effect_cb(store.effect_start, node_path),
-                concurrent_dispatch=store.concurrent_dispatch,
-                branch_settled=store.branch_settled,
-                _lock=store._lock,
-            )
+                    # Surface errors an on_error: skip/continue swallowed inside the
+                    # child — without this, a composed failure is indistinguishable
+                    # from a healthy result once only the mapped `value` is visible.
+                    child_errors = _collect_child_errors(child_store.state.get(_CHILD_ROOT))
+                    if child_errors:
+                        meta["child_errors"] = child_errors
 
-            # Execute child orchestration. The child's own effects inherit
-            # this invocation's display name as a label prefix — but only
-            # when it actually differs from the bare effect name (i.e. an
-            # enclosing loop or `use` gave it one); otherwise every
-            # unqualified `use` would start tagging its child's lines,
-            # changing output that today has nothing to disambiguate.
-            child_label_prefix = (
-                self.display_name if self.display_name != self.defn.name else None
-            )
-            DynamicRuntime(
-                child_root,
-                adapter=self.adapter,
-                model=self.model,
-                model_locked=self.model_locked,
-                runtime_config=child_runtime_config,
-                dry_run=self.dry_run,
-                timeout_seconds=self.timeout_seconds,
-                verbose=self.verbose,
-                progress_display=self.progress_display,
-                depth=self.depth + 1,
-                ancestors=self._ancestors,
-                label_prefix=child_label_prefix,
-            ).execute(store=child_store)
+                    # Extract outputs (explicit > auto-generated from interface > full child state).
+                    # The compiler already normalized `outputs`, but a UseDefinition can
+                    # also be built directly (embedded API, tests) — normalize again so
+                    # both spellings work on every path in.
+                    explicit_outputs = normalize_outputs(
+                        self.defn.outputs, context=f"Use effect '{self.defn.name}'"
+                    )
+                    effective_outputs = explicit_outputs or auto_outputs
+                    if effective_outputs:
+                        result: dict[str, Any] = {}
+                        for output_key, child_path in effective_outputs.items():
+                            result[output_key] = _resolve_dot_path(child_store.state, child_path)
+                        node["value"] = result
+                        # Complete record (opt-in): the child's own effects stay under
+                        # this node in the final state, as --live-state showed them.
+                        if record_children:
+                            _graft_child_record(node, child_store.state)
+                    else:
+                        # Full-namespace mode: expose child's prime subtree at
+                        # prime.<use_name>.<child_effect>.value (matches dynamic namespacing).
+                        child_prime = child_store.state.get("prime") or {}
+                        if isinstance(child_prime, dict):
+                            for key, val in child_prime.items():
+                                if key in ("value", "meta"):
+                                    continue
+                                node[key] = val
 
-            # Surface errors an on_error: skip/continue swallowed inside the
-            # child — without this, a composed failure is indistinguishable
-            # from a healthy result once only the mapped `value` is visible.
-            child_errors = _collect_child_errors(child_store.state.get(_CHILD_ROOT))
-            if child_errors:
-                meta["child_errors"] = child_errors
+                    # Output check (#273), run after a successful child run,
+                    # over this use effect's own mapped value/meta plus state.
+                    # A false or unreadable expectation fails this attempt —
+                    # retries/on_error apply exactly like any other failure.
+                    if self.defn.expect is not None:
+                        outcome = evaluate_expect(
+                            self.defn.expect,
+                            value=node["value"],
+                            meta=meta,
+                            ctx=ctx,
+                            adapter=self.adapter,
+                            model=self.model,
+                            timeout_seconds=self.timeout_seconds,
+                            effect_label=f"use '{self.defn.name}'",
+                        )
+                        meta["expect"] = outcome.meta
+                        if not outcome.passed:
+                            raise RuntimeError(
+                                f"expect failed: {expect_failure_summary(self.defn.expect)}"
+                            )
 
-            # Extract outputs (explicit > auto-generated from interface > full child state).
-            # The compiler already normalized `outputs`, but a UseDefinition can
-            # also be built directly (embedded API, tests) — normalize again so
-            # both spellings work on every path in.
-            explicit_outputs = normalize_outputs(
-                self.defn.outputs, context=f"Use effect '{self.defn.name}'"
-            )
-            effective_outputs = explicit_outputs or auto_outputs
-            if effective_outputs:
-                result: dict[str, Any] = {}
-                for output_key, child_path in effective_outputs.items():
-                    result[output_key] = _resolve_dot_path(child_store.state, child_path)
-                node["value"] = result
-                # Complete record (opt-in): the child's own effects stay under
-                # this node in the final state, as --live-state showed them.
-                if record_children:
-                    _graft_child_record(node, child_store.state)
-            else:
-                # Full-namespace mode: expose child's prime subtree at
-                # prime.<use_name>.<child_effect>.value (matches dynamic namespacing).
-                child_prime = child_store.state.get("prime") or {}
-                if isinstance(child_prime, dict):
-                    for key, val in child_prime.items():
-                        if key in ("value", "meta"):
-                            continue
-                        node[key] = val
+                    meta["completed_at"] = _now_iso()
 
-            meta["completed_at"] = _now_iso()
+                    if self.verbose:
+                        elapsed = time.monotonic() - t0
+                        line = (
+                            f"{indent}[ok]✓[/ok] [green]⊕[/green] {self.display_name}"
+                            f" [dim]{label} | {_elapsed_str(elapsed)}[/dim]"
+                        )
+                        if self.cb_done is not None:
+                            self.cb_done(line)
+                        else:
+                            _console.print(line)
+                except Exception as e:
+                    attempt_failure = e
 
-            if self.verbose:
-                elapsed = time.monotonic() - t0
-                line = (
-                    f"{indent}[ok]✓[/ok] [green]⊕[/green] {self.display_name}"
-                    f" [dim]{label} | {_elapsed_str(elapsed)}[/dim]"
+                if attempt_failure is None:
+                    if attempt_index > 0:
+                        meta["retries_used"] = attempt_index
+                    return
+
+                is_last_attempt = attempt_index >= max_attempts - 1
+                # A cycle, a missing/unresolvable reference, a structural
+                # validation failure, or a bad interface input is a
+                # configuration problem, not a transient one — the same
+                # ctx/defn fails the exact same way on every attempt, so a
+                # retry only burns the backoff wait for nothing (#273
+                # review). These are raised before the child ever executes
+                # (_load_child_orch/_check_allowlists/_check_interface); a
+                # failure inside the child's own run surfaces as RuntimeError
+                # (see core.dynamic._execute_chain), never these.
+                if is_last_attempt or isinstance(
+                    attempt_failure, (ValueError, RecursionError)
+                ):
+                    raise attempt_failure
+
+                meta["error"] = str(attempt_failure)
+                if self.verbose:
+                    elapsed = time.monotonic() - t0
+                    line = (
+                        f"{indent}[err]✗[/err] [green]⊕[/green] {self.display_name}"
+                        f" [dim]{label} | {_elapsed_str(elapsed)}[/dim]"
+                    )
+                    if self.cb_error is not None:
+                        self.cb_error(line)
+                    else:
+                        _console.print(line)
+                next_delay_ms = next_backoff_delay_ms(
+                    RetryInfo(retryable=True), attempt_index=attempt_index, base_ms=backoff_ms
                 )
-                if self.cb_done is not None:
-                    self.cb_done(line)
-                else:
-                    _console.print(line)
 
         except Exception as e:
             error_msg = str(e)

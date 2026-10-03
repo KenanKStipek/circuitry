@@ -82,6 +82,34 @@ def test_walk_collects_tool_provider() -> None:
     assert adapters == set()
 
 
+def test_walk_collects_tool_provider_in_root_finally() -> None:
+    """A cleanup tool only referenced from `finally:` is a real dependency
+    too — a missing/disallowed one should be caught at preflight, not only
+    discovered at runtime after the (possibly expensive) body already ran
+    (#272/#273 review, finding 5)."""
+    orch = {
+        "effects": [{"type": "tool", "name": "t", "provider": "ffmpeg"}],
+        "finally": [{"type": "tool", "name": "cleanup", "provider": "comfyui"}],
+    }
+    _adapters, tools = walk_orchestration_refs(orch)
+    assert tools == {"ffmpeg", "comfyui"}
+
+
+def test_walk_collects_tool_provider_in_a_dynamics_finally() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "dynamic",
+                "name": "d",
+                "effects": [{"type": "tool", "name": "t", "provider": "ffmpeg"}],
+                "finally": [{"type": "tool", "name": "cleanup", "provider": "comfyui"}],
+            }
+        ]
+    }
+    _adapters, tools = walk_orchestration_refs(orch)
+    assert tools == {"ffmpeg", "comfyui"}
+
+
 def test_walk_recurses_through_dynamic_loop_conditional_reflector() -> None:
     orch = {
         "effects": [

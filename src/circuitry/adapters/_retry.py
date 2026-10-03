@@ -31,11 +31,21 @@ response at all (a connection failure, for instance).
 
 from __future__ import annotations
 
+import random
 import re
 import urllib.error
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 from ..curl_support import extract_retry_after
+
+#: Exponential-backoff ceiling for a retryable failure's wait, including one
+#: driven by a provider's own ``Retry-After`` — a provider asking for longer
+#: than this is still only waited out this long, so a single effect's
+#: retries can't stall a run indefinitely. Shared by every retrying effect
+#: (prompt, tool, use), not just adapter dispatch.
+RETRY_BACKOFF_CAP_MS = 60_000
 
 #: curl exit codes that mean the request never got a reply at all — DNS
 #: failure (6), couldn't connect (7), operation timeout (28), SSL connect
@@ -52,6 +62,11 @@ _CURL_STATUS_RE = re.compile(r"returned error:\s*(\d{3})")
 
 def _status_is_retryable(status: int) -> bool:
     return status == 429 or status == 408 or 500 <= status <= 599
+
+
+#: Public name for the same check — an HTTP-family tool effect (core.tool)
+#: classifies its own status code the same way an adapter dispatch does.
+status_is_retryable = _status_is_retryable
 
 
 @dataclass(frozen=True)
@@ -191,3 +206,44 @@ def classify_exception(exc: BaseException | None) -> RetryInfo:
     if isinstance(exc, AdapterCallError):
         return exc.retry_info
     return _classify_cause_chain(exc)
+
+
+def parse_retry_after_seconds(value: str) -> float | None:
+    """A ``Retry-After`` header value (seconds, or an HTTP-date) as seconds from now.
+
+    ``None`` when ``value`` is neither — a header present but unparseable
+    must not be read as "wait forever" or crash a retry loop.
+    """
+    value = (value or "").strip()
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
+def next_backoff_delay_ms(retry_info: RetryInfo, *, attempt_index: int, base_ms: int) -> int:
+    """How long to wait before the next retry: exponential backoff with full
+    jitter, starting from ``base_ms`` and capped at :data:`RETRY_BACKOFF_CAP_MS`.
+
+    ``attempt_index`` is the 0-based attempt that just failed, so the first
+    retry's ceiling is ``base_ms`` and each subsequent one roughly doubles.
+    A provider's own ``Retry-After`` (when the failing call could supply
+    one) overrides the computed wait outright, still capped — the provider
+    knows its own rate limit better than a generic curve does. Shared by
+    every retrying effect (prompt, tool, use).
+    """
+    if retry_info.retry_after:
+        retry_after_seconds = parse_retry_after_seconds(retry_info.retry_after)
+        if retry_after_seconds is not None:
+            return min(RETRY_BACKOFF_CAP_MS, int(retry_after_seconds * 1000))
+    ceiling = min(RETRY_BACKOFF_CAP_MS, base_ms * (2**attempt_index))
+    return int(random.uniform(0, ceiling))

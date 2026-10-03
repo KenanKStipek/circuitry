@@ -29,6 +29,7 @@ Top-level fields of an orchestration YAML file:
 | `flow` | string | no | `chain` | Top-level flow for the implicit root dynamic. `chain` or `tree` |
 | `version` | string | no | — | Free-form version string for **this document**, e.g. `"1.2.0"` |
 | `interface` | object | no | — | Declared `inputs` / `outputs` — see [Interface](#interface) |
+| `finally` | array | no | — | Cleanup effects, run after `effects` completes — success, failure or cancellation alike. Also legal on a `dynamic` effect, nowhere else — see [`dynamic`](#dynamic) and [Errors](./guidebook/05-errors.md) |
 
 Other top-level keys: `description` (free text for readers of the file) and two that feed the run's configuration, `runtime:` and `plugins:` (below). Any other key is ignored, and `cof check` says so — see [What `cof check` and `cof run` reject](#what-cof-check-and-cof-run-reject). How much of `runtime:` and `plugins:` applies depends on how the document reached `cof`:
 
@@ -202,6 +203,7 @@ A named container that executes child effects sequentially (`chain`) or in paral
 | `stop_on_error` | boolean | no | `false` | `flow: tree` only. `true` cancels every child that has not started yet as soon as one fails; a child already running cannot be cancelled, finishes on its own, and its failure (if any) is not added to the dynamic's `meta.error` — only the triggering failure is. A cancelled child leaves no node and fires no hooks. No effect on `flow: chain`, where a failing child already stops the ones after it. |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` — same meaning as on a leaf effect (see [Errors](guidebook/05-errors.md)): governs whether a failure anywhere inside this dynamic propagates to *its own* parent (`fail`) or is recorded on this dynamic's own `meta.error` and swallowed there, letting the parent continue (`skip`/`continue`, the same degradation for both). |
 | `labels` | object | no | — | Arbitrary metadata annotations, recorded on `meta.labels` |
+| `finally` | array | no | — | Cleanup effects. Runs after `effects` completes — success, failure, or a best-effort run on Ctrl-C/cancellation — always sequentially, regardless of this dynamic's own `flow`; a failing `finally` effect stops the ones listed after it in the same `finally:`, the same way a failing body effect stops the rest of `effects`. Sees state exactly as the body left it (e.g. a started server's own output) — a `finally` effect writes into this dynamic's own node the same way a body effect does (there is no separate `finally` namespace), so it cannot share a name with one of `effects`' own. The original failure (if any) still propagates after `finally` runs — a `finally` failure never hides it, it is added as `meta.finally_error`. On an otherwise-successful run, a `finally` failure fails this dynamic too, unless that `finally` effect has its own `on_error: continue`/`skip`. Also legal at the document root; nowhere else. |
 
 **Flow semantics:**
 - `chain` — sequential: each effect executes after the previous, and sees all prior outputs in state
@@ -235,6 +237,28 @@ A named container that executes child effects sequentially (`chain`) or in paral
       prompt_type: boolean
       template: "Is this text positive? {{input.text}}"
 ```
+
+**Example — `finally` cleanup (a server always stopped, win or lose):**
+```yaml
+- type: dynamic
+  name: with_comfy_server
+  effects:
+    - type: tool
+      name: start_server
+      provider: shell
+      params: {command: launchctl, allowed_commands: [launchctl], args: [submit, -l, com.example.comfyui, --, /usr/bin/env, python, main.py]}
+    - type: tool
+      name: generate_image
+      provider: comfyui
+      prompt: "{{input.prompt}}"
+      model: flux1-dev-fp8.safetensors
+  finally:
+    - type: tool
+      name: stop_server
+      provider: shell
+      params: {command: launchctl, allowed_commands: [launchctl], allow_nonzero: true, args: [remove, com.example.comfyui]}
+```
+Before `finally` existed, the only way to guarantee `stop_server` always ran was to mark `generate_image` itself `on_error: continue` — which also meant a real failure there no longer stopped the run. `finally` separates the two concerns: `generate_image` keeps `on_error: fail` (the default), and `stop_server` still runs either way.
 
 ---
 
@@ -603,6 +627,8 @@ Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously
 | `params` | object | no | `{}` | Plugin-specific parameters. All string values support Mustache rendering. A leaf anywhere in `params` (any depth, in objects and lists), `{from: <path>}`, passes the value at that path unchanged instead of rendering it (see [Params by reference](#params-by-reference)). Takes precedence over top-level `prompt`/`model`. Quote every `args` entry: an unquoted `0x1`, `off` or `-0` reaches the tool as `1`, `False`, `0` (`cof check` warns) |
 | `params_json` | string | no | — | A Mustache template rendered to text and parsed as JSON, producing a real array/object instead of a Mustache-rendered string. Deep-merged over `params` (wins on overlapping keys). See [`params_json`](#params_json) below |
 | `timeout_ms` | integer | no | — | Per-effect timeout in milliseconds |
+| `retries` | object | no | — | `{max_attempts, backoff_ms}` — see [Retries](#tool-retries) below |
+| `expect` | string or object | no | — | Output check, run after a successful attempt — see [`expect`](#tool-expect) below |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `description` | string | no | — | |
 | `group` | string | no | — | Joins a named concurrency-group slot (`runtime.concurrency_groups.<name>`) — see [Concurrency Limits](#concurrency-limits). Must name a group `runtime.concurrency_groups` defines; `cof check` rejects an unknown one |
@@ -655,6 +681,12 @@ time.
   `params_json` can widen what a document is allowed to run.
 
 Tool providers reference a *tool plugin*, not an *adapter*, so the `prompt`-effect `on_error` reclassification above does not apply here: a missing tool-plugin dependency (e.g. `ffmpeg` not on `PATH`) always hard-fails preflight regardless of this effect's `on_error`.
+
+<a id="tool-retries"></a>
+**Retries.** `retries: {max_attempts, backoff_ms}` — same two fields, same default (unset: one attempt, no retry) and the same exponential-backoff-with-jitter curve (capped at 60s) a prompt's `retries` uses. What counts as worth retrying differs by provider family: an **HTTP-family** tool (`http`, `web_fetch`, `webhook`, `linear`) classifies its failure by status the way an adapter dispatch does — 429, 408 and 5xx retry; any other 4xx (400, 401, 404, 422, ...) does not, so a request that can never succeed doesn't spend the rest of the budget trying. Every other (**process**) tool — `shell`, `ffmpeg`, `comfyui`, and the rest — retries on any failure: there is no status to classify, and a process failing once (a transient GPU-watchdog kill, a flaky read) is exactly the case this exists for. `meta.retries_used` records how many it took, the same as a prompt's.
+
+<a id="tool-expect"></a>
+**`expect`.** An output check run once an attempt otherwise succeeds. Either a CEL expression — a bare string is shorthand for `{mode: cel, expr: <string>}` — evaluated over this effect's own `value` and `meta` (bound directly, not under `state.`) plus `state` (bound the usual way), e.g. `expect: "has(value.prompt_id)"`; or `{mode: model, template: ...}`, which asks yes/no the same way a model-mode `if` does, on the run's own adapter/model, and records its tokens. A false or unreadable expectation fails the attempt with `expect failed: <expr or template summary>`, after which `retries` and `on_error` apply exactly like any other failure — an expect failure is always worth retrying, since (unlike an HTTP status) it carries no classification of its own. The outcome lands at `meta.expect` (`{mode, result, expr|template, error?, tokens_sent?, tokens_received?}`).
 
 **Timeout:** `timeout_ms` on the effect wins, rounded up to the next whole second — a sub-second budget (e.g. `250`) never floors to a 0-second timeout, which some plugins would treat as "fail instantly" and others (curl-based ones) as "no limit at all". Unset, the tool's own default comes from `runtime.tools.timeout_seconds` in config (300s if that's unset too) — independent of `runtime.adapters.<name>.timeout_seconds`, the LLM adapter's socket timeout; a tool-only run, or one on the no-op adapter, still gets a real budget. See [Timeouts](./guidebook/04-configuration.md#timeouts).
 
@@ -849,6 +881,8 @@ Config inheritance: the child executes with the exact same resolved `runtime.*` 
 | `validate` | bool | no | `true` | Check the child — `inline`, `path` or `ref` — the way `cof check` checks a file (schema, near-miss keys) before it runs. `false` skips that; a repeated key is still an error |
 | `inputs` | object | no | `{}` | Map of name → value passed to child as initial state. String values are Mustache-rendered; `{from: <path>}` passes the value at that path unchanged (see [Inputs by reference](#inputs-by-reference)) |
 | `outputs` | object | no | — | Declared outputs — see [Outputs](#outputs). When present, switches to declared-outputs mode |
+| `retries` | object | no | — | `{max_attempts, backoff_ms}`. A retry re-runs the **whole child orchestration** from scratch — same shape, default and backoff curve as a prompt's/tool's `retries` |
+| `expect` | string or object | no | — | Output check, run after a successful child run, over this effect's own mapped `value`/`meta` plus `state` — same shape as a [tool's `expect`](#tool-expect) |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `description` | string | no | — | |
 
@@ -1325,6 +1359,15 @@ effect outputs. Names bound by an enclosing loop here: iter, score.
 ```
 
 See `learn/cel_showcase.yml`'s `filter_scores` loop for a runnable example.
+
+**The one exception: a `tool`/`use` effect's own `expect:` CEL.** Every CEL
+site above binds only `state`. A `tool`/`use` effect's `expect:` (mode `cel`)
+is the one place that is not true: it binds three roots — `value` and `meta`
+(this effect's own result, bound directly, *not* `state.value`/`state.meta`)
+plus `state` (bound the usual way). `expect: "has(value.prompt_id)"` reads
+the effect's own output; `expect: "meta.status_code == 200"` reads its own
+meta; `state.prime.other_step.value` still reaches another effect's output
+the normal way if the check needs it. See [`tool`'s `expect`](#tool-expect).
 
 #### What fails where
 

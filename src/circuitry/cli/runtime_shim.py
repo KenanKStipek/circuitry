@@ -1544,6 +1544,7 @@ def _has_prompt_effects(defn: Any) -> bool:
     from ..core.loop import LoopDefinition
     from ..core.prompt import PromptDefinition
     from ..core.reflector import ReflectorDefinition
+    from ..core.tool import ToolDefinition
 
     # A disabled effect never runs, so it never needs an adapter — a profile
     # that switches every prompt off makes the run adapter-free.
@@ -1552,8 +1553,15 @@ def _has_prompt_effects(defn: Any) -> bool:
 
     if isinstance(defn, PromptDefinition):
         return True
+    if isinstance(defn, ToolDefinition):
+        # A tool's own expect: {mode: model} calls adapter.generate() the
+        # same way a model-mode `if` does (#273) — a tool-only document
+        # with one still needs a real adapter, not the no-op.
+        return defn.expect is not None and defn.expect.mode == "model"
     if isinstance(defn, DynamicDefinition):
-        return any(_has_prompt_effects(e) for e in defn.effects)
+        return any(_has_prompt_effects(e) for e in defn.effects) or any(
+            _has_prompt_effects(e) for e in defn.finally_effects
+        )
     if isinstance(defn, ConditionalDefinition):
         # `mode: model` is the compiler's default for an `if` condition
         # (core/compiler.py) — it calls generate() itself even when neither

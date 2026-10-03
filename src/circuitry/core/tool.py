@@ -11,11 +11,20 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from ..adapters import Adapter
+from ..adapters._retry import (
+    RetryInfo,
+    classify_exception,
+    next_backoff_delay_ms,
+    status_is_retryable,
+)
 from ..cli.redaction import redact
 from ..output import console as _console
 from ..output import live_region as _live_region
 from ..plugins.base import ToolResult
 from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
+from .expect import ExpectDef, evaluate_expect, expect_failure_summary
+from .prompt import RetryPolicyDef
 from .store import Store
 from .templates import render_template
 from .use import _resolve_reference
@@ -361,6 +370,13 @@ class ToolDefinition:
     on_error: Literal["fail", "skip", "continue"] = "fail"
     description: str | None = None
 
+    # Reliability (#273) — same key names, default and backoff as prompts
+    # (see core.prompt.RetryPolicyDef). None: one attempt, no retry.
+    retries: RetryPolicyDef | None = None
+
+    # Output check (#273), run after a successful attempt — see core.expect.
+    expect: ExpectDef | None = None
+
     # False = skip execution and write a disabled node (see core.disabled).
     enabled: bool = True
 
@@ -429,6 +445,13 @@ class ToolRuntime:
         cb_running: Callable[[str, int], None] | None = None,
         display_name: str | None = None,
         ancestors: list | None = None,
+        # Only needed for `expect: {mode: model, ...}` (#273) — every other
+        # tool effect ignores both. Optional (unlike prompt/use, which always
+        # have one): most call sites exist to build/run a plugin, not to ask
+        # a model anything.
+        adapter: Adapter | None = None,
+        model: str | None = None,
+        model_locked: bool = False,
     ):
         self.defn = definition
         self.runtime_config = runtime_config or {}
@@ -439,6 +462,9 @@ class ToolRuntime:
         self.cb_start = cb_start
         self.cb_done = cb_done
         self.cb_error = cb_error
+        self.adapter = adapter
+        self.model = model
+        self.model_locked = model_locked
         self.cb_running = cb_running
         self.display_name = display_name or definition.name
         self._ancestors = ancestors or []
@@ -472,6 +498,31 @@ class ToolRuntime:
             )
             return DEFAULT_TOOL_TIMEOUT_SECONDS
 
+    def _is_retryable_failure(
+        self, *, status_code: int | None, failure: BaseException | None = None
+    ) -> bool:
+        """Whether a failed attempt is worth retrying.
+
+        HTTP-family tools (``http``, ``web_fetch``, ``webhook``, ``linear``)
+        classify by status the same way an adapter dispatch does (429/408/
+        5xx retryable; any other 4xx is not). When the failure never got far
+        enough to carry a status at all (a raised exception, a connection
+        that never completed), ``failure`` is classified the same way an
+        adapter's own dispatch failure is (:func:`classify_exception`) — a
+        ``URLError``/``TimeoutError``/``ConnectionError`` (DNS failure,
+        refused connection, a request that never got a reply) is retryable,
+        matching ``RETRYABLE_CURL_EXIT_CODES``; anything else is not. Every
+        other (process) tool — ``shell``, ``ffmpeg``, ``comfyui``, ... —
+        retries on any failure: there is no status to classify, and a
+        process failing once (a transient GPU watchdog kill, a flaky read)
+        is exactly the case #273 exists for.
+        """
+        if self.defn.provider in _HTTP_FAMILY_PROVIDERS:
+            if status_code is not None:
+                return status_is_retryable(status_code)
+            return classify_exception(failure).retryable
+        return True
+
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         from ..allowlist_gate import allowed_tools, require_tool
         from ..plugins.factory import build_plugin
@@ -485,29 +536,12 @@ class ToolRuntime:
 
         indent = "  " * self.depth
         timeout_seconds = self._resolve_timeout_seconds()
-        t0 = time.monotonic()
-        mtag = ""
-
-        meta["created_at"] = _now_iso()
-        meta["completed_at"] = None
-        meta["provider"] = self.defn.provider
-        meta["error"] = None
-        # Reset every pass/attempt rather than only on success — otherwise a
-        # reused node (an unnamed loop's repeated pass, a --state resume)
-        # keeps a prior pass's result sitting next to this pass's error
-        # (#260).
-        meta["stdout"] = None
-        meta["stderr"] = None
-        meta["exit_code"] = None
-        meta.pop("binary", None)
-        meta.pop("status_code", None)
-        meta.pop("raw", None)
-        meta["waiting_for"] = None
 
         if self.verbose and self.cb_start is not None:
             self.cb_start()
 
         if self.dry_run:
+            t0 = time.monotonic()
             node["value"] = None
             meta["completed_at"] = _now_iso()
             meta["dry_run"] = True
@@ -529,153 +563,274 @@ class ToolRuntime:
         # complete — start mirrors that exactly so the pair stays balanced.
         store.fire_effect_start(self.defn.name, node)
 
-        target = self.defn.provider  # fallback if build_plugin fails before we can compute it
-        result: ToolResult | None = None
-        try:
-            # Render top-level prompt/model, then merge with params (params take precedence)
-            top_level: dict[str, Any] = {}
-            if self.defn.prompt is not None:
-                top_level["prompt"] = render_template(self.defn.prompt, ctx, label="prompt")
-            if self.defn.model is not None:
-                top_level["model"] = self.defn.model
+        # Retry policy: per-tool config, or one attempt (#273) — same key
+        # names and backoff curve as prompts (core.prompt.RetryPolicyDef).
+        if self.defn.retries is not None:
+            max_attempts = max(1, self.defn.retries.max_attempts)
+            backoff_ms = self.defn.retries.backoff_ms
+        else:
+            max_attempts = 1
+            backoff_ms = 1000
 
-            _reject_templated_security_params(self.defn.params)
-            params = _render_params(self.defn.params, ctx, name=self.defn.name)
-            if self.defn.params_json is not None:
-                params_json_overlay = _render_params_json(self.defn.params_json, ctx)
-                _reject_params_json_security_overrides(params_json_overlay)
-                params = _deep_merge_params(params, params_json_overlay)
-
-            rendered = {**top_level, **params}
-            meta["params_rendered"] = redact(rendered)
-            mtag = _model_tag(rendered)
-
-            # Build plugin early so we can use its target string in the spinner
-            require_tool(self.defn.provider, allowed_tools(self.runtime_config))
-            plugin = build_plugin(
-                plugin_name=self.defn.provider,
-                runtime=self.runtime_config,
-            )
-            target = _plugin_target(plugin, mtag)
-
-            if self.cb_running is not None:
-                self.cb_running(target, 0)
-
-            def _on_wait(label: str) -> None:
-                store.set(f"{self.defn.name}.meta.waiting_for", label)
+        next_delay_ms = backoff_ms
+        for attempt_index in range(max_attempts):
+            if attempt_index > 0:
+                time.sleep(next_delay_ms / 1000)
                 if self.verbose:
-                    _console.print(
-                        f"{indent}[info]…[/info] [white]⚙[/white] {self.display_name}"
-                        f" [dim]waiting for '{label}'[/dim]"
+                    retry_line = (
+                        f"{indent}[yellow]↺[/yellow] [white]⚙[/white]"
+                        f" {self.display_name} [dim]retry {attempt_index}/{max_attempts - 1}[/dim]"
                     )
+                    if self.cb_done is not None:
+                        self.cb_done(retry_line)
+                    else:
+                        _console.print(retry_line)
 
-            def _on_acquired() -> None:
-                store.set(f"{self.defn.name}.meta.waiting_for", None)
+            t0 = time.monotonic()
+            mtag = ""
 
-            limiter = self.runtime_config.get(_CONCURRENCY_LIMITER_KEY)
-            concurrency_cm: AbstractContextManager[None] = (
-                limiter.acquire(
-                    group=self.defn.group, on_wait=_on_wait, on_acquired=_on_acquired
+            meta["created_at"] = _now_iso()
+            meta["completed_at"] = None
+            meta["provider"] = self.defn.provider
+            meta["error"] = None
+            # Reset every pass/attempt rather than only on success — otherwise
+            # a reused node (an unnamed loop's repeated pass, a --state
+            # resume, or this effect's own earlier attempt) keeps a prior
+            # pass's result sitting next to this pass's error (#260).
+            meta["stdout"] = None
+            meta["stderr"] = None
+            meta["exit_code"] = None
+            meta.pop("binary", None)
+            meta.pop("status_code", None)
+            meta.pop("raw", None)
+            meta.pop("expect", None)
+            meta.pop("retries_used", None)
+            meta["waiting_for"] = None
+
+            target = self.defn.provider  # fallback if build_plugin fails before we can compute it
+            result: ToolResult | None = None
+            failure: Exception | None = None
+            retryable = False
+            # Set only on the ok=False path below, from the plugin's own
+            # response headers — an exception never reached a response, so
+            # it never has one to read.
+            retry_after: str | None = None
+            try:
+                # Render top-level prompt/model, then merge with params (params take precedence)
+                top_level: dict[str, Any] = {}
+                if self.defn.prompt is not None:
+                    top_level["prompt"] = render_template(self.defn.prompt, ctx, label="prompt")
+                if self.defn.model is not None:
+                    top_level["model"] = self.defn.model
+
+                _reject_templated_security_params(self.defn.params)
+                params = _render_params(self.defn.params, ctx, name=self.defn.name)
+                if self.defn.params_json is not None:
+                    params_json_overlay = _render_params_json(self.defn.params_json, ctx)
+                    _reject_params_json_security_overrides(params_json_overlay)
+                    params = _deep_merge_params(params, params_json_overlay)
+
+                rendered = {**top_level, **params}
+                meta["params_rendered"] = redact(rendered)
+                mtag = _model_tag(rendered)
+
+                # Build plugin early so we can use its target string in the spinner
+                require_tool(self.defn.provider, allowed_tools(self.runtime_config))
+                plugin = build_plugin(
+                    plugin_name=self.defn.provider,
+                    runtime=self.runtime_config,
                 )
-                if limiter is not None
-                else nullcontext()
-            )
+                target = _plugin_target(plugin, mtag)
 
-            with concurrency_cm:
-                # Show spinner while running (if verbose and no external cb_start — same pattern as PromptRuntime)
-                if self.verbose and self.cb_start is None:
-                    from rich.live import Live
+                if self.cb_running is not None:
+                    self.cb_running(target, 0)
 
-                    live_cm: Any = _live_region(
-                        lambda: Live(
-                            _ToolSpinner(
-                                name=self.display_name,
-                                target=target,
-                                indent=indent,
-                                ancestors=self._ancestors,
-                            ),
-                            refresh_per_second=10,
-                            transient=True,
-                            console=_console,
+                def _on_wait(label: str) -> None:
+                    store.set(f"{self.defn.name}.meta.waiting_for", label)
+                    if self.verbose:
+                        _console.print(
+                            f"{indent}[info]…[/info] [white]⚙[/white] {self.display_name}"
+                            f" [dim]waiting for '{label}'[/dim]"
                         )
+
+                def _on_acquired() -> None:
+                    store.set(f"{self.defn.name}.meta.waiting_for", None)
+
+                limiter = self.runtime_config.get(_CONCURRENCY_LIMITER_KEY)
+                concurrency_cm: AbstractContextManager[None] = (
+                    limiter.acquire(
+                        group=self.defn.group, on_wait=_on_wait, on_acquired=_on_acquired
                     )
-                else:
-                    live_cm = nullcontext()
-
-                with live_cm:
-                    result = plugin.execute(params=rendered, timeout_seconds=timeout_seconds)
-
-        except Exception as e:
-            if self.verbose:
-                elapsed = time.monotonic() - t0
-                _tgt = f"{self.defn.provider} · {mtag}" if mtag else self.defn.provider
-                line = (
-                    f"{indent}[err]✗[/err] [white]⚙[/white] {self.display_name}"
-                    f" [dim]{_tgt} | {_elapsed_str(elapsed)}[/dim]"
+                    if limiter is not None
+                    else nullcontext()
                 )
-                if self.cb_error is not None:
-                    self.cb_error(line)
-                else:
-                    _console.print(line)
-            meta["error"] = str(e)
-            meta["completed_at"] = _now_iso()
-            if self.defn.on_error in ("skip", "continue"):
-                node["value"] = None
-            # Fires before the re-raise so the start/complete pair stays
-            # balanced on the failure path too — the node carries meta.error.
-            store.fire_effect_complete(self.defn.name, node)
-            if self.defn.on_error == "fail":
-                raise
-            return
 
-        assert result is not None
+                # Acquired fresh for this attempt and released by the `with`
+                # below before the retry loop's backoff sleep (top of the
+                # next iteration) or an expect: check runs — a retrying GPU
+                # step must never sleep while holding its group, and a
+                # model-mode expect: must not hold it either (#333 x #273).
+                with concurrency_cm:
+                    # Show spinner while running (if verbose and no external cb_start — same pattern as PromptRuntime)
+                    if self.verbose and self.cb_start is None:
+                        from rich.live import Live
 
-        node["value"] = result.value
-        meta["stdout"] = result.stdout
-        meta["stderr"] = result.stderr
-        meta["exit_code"] = result.exit_code
-        if self.defn.provider in _HTTP_FAMILY_PROVIDERS and isinstance(
-            result.raw.get("status"), int
-        ):
-            meta["status_code"] = result.raw["status"]
-        if "binary" in result.raw:
-            meta["binary"] = result.raw["binary"]
-        meta["raw"] = _capped_raw(result.raw)
-        meta["completed_at"] = _now_iso()
+                        live_cm: Any = _live_region(
+                            lambda _target=target: Live(
+                                _ToolSpinner(
+                                    name=self.display_name,
+                                    target=_target,
+                                    indent=indent,
+                                    ancestors=self._ancestors,
+                                ),
+                                refresh_per_second=10,
+                                transient=True,
+                                console=_console,
+                            )
+                        )
+                    else:
+                        live_cm = nullcontext()
 
-        if not result.ok:
-            error_message = result.stderr or f"{self.defn.provider} tool reported failure (ok=False)"
-            meta["error"] = error_message
-            if self.verbose:
-                elapsed = time.monotonic() - t0
-                line = (
-                    f"{indent}[err]✗[/err] [white]⚙[/white] {self.display_name}"
-                    f" [dim]{target} | {_elapsed_str(elapsed)}[/dim]"
+                    with live_cm:
+                        result = plugin.execute(params=rendered, timeout_seconds=timeout_seconds)
+
+            except Exception as e:
+                failure = e
+                retryable = self._is_retryable_failure(status_code=None, failure=e)
+
+            if failure is not None:
+                meta["error"] = str(failure)
+                meta["completed_at"] = _now_iso()
+                is_last_attempt = attempt_index >= max_attempts - 1
+                if self.verbose:
+                    elapsed = time.monotonic() - t0
+                    _tgt = f"{self.defn.provider} · {mtag}" if mtag else self.defn.provider
+                    line = (
+                        f"{indent}[err]✗[/err] [white]⚙[/white] {self.display_name}"
+                        f" [dim]{_tgt} | {_elapsed_str(elapsed)}[/dim]"
+                    )
+                    if self.cb_error is not None:
+                        self.cb_error(line)
+                    else:
+                        _console.print(line)
+                if retryable and not is_last_attempt:
+                    next_delay_ms = next_backoff_delay_ms(
+                        RetryInfo(retryable=True), attempt_index=attempt_index, base_ms=backoff_ms
+                    )
+                    continue
+                if self.defn.on_error in ("skip", "continue"):
+                    node["value"] = None
+                # Fires before the re-raise so the start/complete pair stays
+                # balanced on the failure path too — the node carries meta.error.
+                store.fire_effect_complete(self.defn.name, node)
+                if self.defn.on_error == "fail":
+                    raise failure
+                return
+
+            assert result is not None
+
+            node["value"] = result.value
+            meta["stdout"] = result.stdout
+            meta["stderr"] = result.stderr
+            meta["exit_code"] = result.exit_code
+            status_code: int | None = None
+            if self.defn.provider in _HTTP_FAMILY_PROVIDERS and isinstance(
+                result.raw.get("status"), int
+            ):
+                status_code = result.raw["status"]
+                meta["status_code"] = status_code
+            if "binary" in result.raw:
+                meta["binary"] = result.raw["binary"]
+            meta["raw"] = _capped_raw(result.raw)
+
+            if not result.ok:
+                failure = RuntimeError(
+                    result.stderr or f"{self.defn.provider} tool reported failure (ok=False)"
                 )
-                if self.cb_error is not None:
-                    self.cb_error(line)
-                else:
-                    _console.print(line)
-            if self.defn.on_error in ("skip", "continue"):
-                node["value"] = None
-            store.fire_effect_complete(self.defn.name, node)
-            if self.defn.on_error == "fail":
-                raise RuntimeError(error_message)
-            return
-
-        if self.verbose:
-            elapsed = time.monotonic() - t0
-            suffix = _elapsed_str(elapsed)
-            out = _format_output(result.value)
-            if out:
-                suffix += f" → {out}"
-            line = (
-                f"{indent}[ok]✓[/ok] [white]⚙[/white] {self.display_name}"
-                f" [dim]{target} | {suffix}[/dim]"
-            )
-            if self.cb_done is not None:
-                self.cb_done(line)
+                retryable = self._is_retryable_failure(status_code=status_code)
+                if self.defn.provider in _HTTP_FAMILY_PROVIDERS:
+                    headers = result.raw.get("headers")
+                    if isinstance(headers, dict):
+                        retry_after = headers.get("retry-after") or headers.get("Retry-After")
             else:
-                _console.print(line)
+                # Success — the expect check, if any, decides whether this
+                # attempt actually counts as one (#273). A failed expect is
+                # always worth retrying: unlike an HTTP status, it carries
+                # no classification of its own, and the motivating case
+                # (a flaky image-generation result) is exactly "try again".
+                # The call itself can also raise (no adapter/model available
+                # for mode: model, a bad template) — caught here, not left to
+                # escape past retries/on_error with the start/complete pair
+                # left unbalanced (#273 review).
+                if self.defn.expect is not None:
+                    try:
+                        outcome = evaluate_expect(
+                            self.defn.expect,
+                            value=node["value"],
+                            meta=meta,
+                            ctx=ctx,
+                            adapter=self.adapter,
+                            model=self.model,
+                            timeout_seconds=timeout_seconds,
+                            effect_label=f"tool '{self.defn.name}'",
+                        )
+                    except Exception as expect_exc:
+                        failure = expect_exc
+                        retryable = True
+                    else:
+                        meta["expect"] = outcome.meta
+                        if not outcome.passed:
+                            failure = RuntimeError(
+                                f"expect failed: {expect_failure_summary(self.defn.expect)}"
+                            )
+                            retryable = True
 
-        store.fire_effect_complete(self.defn.name, node)
+            meta["completed_at"] = _now_iso()
+
+            if failure is not None:
+                meta["error"] = str(failure)
+                is_last_attempt = attempt_index >= max_attempts - 1
+                if self.verbose:
+                    elapsed = time.monotonic() - t0
+                    line = (
+                        f"{indent}[err]✗[/err] [white]⚙[/white] {self.display_name}"
+                        f" [dim]{target} | {_elapsed_str(elapsed)}[/dim]"
+                    )
+                    if self.cb_error is not None:
+                        self.cb_error(line)
+                    else:
+                        _console.print(line)
+                if retryable and not is_last_attempt:
+                    next_delay_ms = next_backoff_delay_ms(
+                        RetryInfo(retryable=True, retry_after=retry_after),
+                        attempt_index=attempt_index,
+                        base_ms=backoff_ms,
+                    )
+                    continue
+                if self.defn.on_error in ("skip", "continue"):
+                    node["value"] = None
+                store.fire_effect_complete(self.defn.name, node)
+                if self.defn.on_error == "fail":
+                    raise failure
+                return
+
+            if attempt_index > 0:
+                meta["retries_used"] = attempt_index
+
+            if self.verbose:
+                elapsed = time.monotonic() - t0
+                suffix = _elapsed_str(elapsed)
+                out = _format_output(result.value)
+                if out:
+                    suffix += f" → {out}"
+                line = (
+                    f"{indent}[ok]✓[/ok] [white]⚙[/white] {self.display_name}"
+                    f" [dim]{target} | {suffix}[/dim]"
+                )
+                if self.cb_done is not None:
+                    self.cb_done(line)
+                else:
+                    _console.print(line)
+
+            store.fire_effect_complete(self.defn.name, node)
+            return

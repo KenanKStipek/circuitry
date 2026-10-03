@@ -232,10 +232,13 @@ def validate_bare_input_refs(orch: dict[str, Any]) -> None:
     effects = orch.get("effects") or orch.get("steps") or []
     if isinstance(effects, list):
         _walk_bare_refs(effects, declared, container_path="effects")
+    finally_effects = orch.get("finally")
+    if isinstance(finally_effects, list):
+        _walk_bare_refs(finally_effects, declared, container_path="finally")
 
 
 #: Container fields whose values are lists of child effect dicts.
-_CHILD_LISTS = ("effects", "steps", "body", "then", "else")
+_CHILD_LISTS = ("effects", "steps", "body", "then", "else", "finally")
 
 
 def _walk_bare_refs(

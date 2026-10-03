@@ -7,6 +7,7 @@ from typing import Any, Literal, cast
 from .cel_eval import validate_cel_syntax
 from .conditional import ConditionalDefinition, ConditionDef
 from .dynamic import DynamicDefinition
+from .expect import ExpectDef
 from .loop import LoopDefinition, LoopEachDef, LoopWhileDef
 from .outputs import normalize_outputs
 from .primes import REFLECTOR_PRIME_V1
@@ -130,6 +131,75 @@ def _check_templates(value: Any, *, effect_path: str, field: str) -> None:
             _check_templates(item, effect_path=effect_path, field=f"{field}[{index}]")
 
 
+def _compile_retries(effect: dict[str, Any]) -> RetryPolicyDef | None:
+    """``retries:`` on a ``tool``/``use`` effect — same shape and defaults as
+    a prompt's (#273)."""
+    retries_raw = effect.get("retries")
+    if not retries_raw or not isinstance(retries_raw, dict):
+        return None
+    return RetryPolicyDef(
+        max_attempts=int(retries_raw.get("max_attempts") or 1),
+        backoff_ms=int(retries_raw.get("backoff_ms") or 1000),
+    )
+
+
+def _compile_expect(
+    effect: dict[str, Any],
+    *,
+    effect_type: str,
+    effect_path: str,
+    loop_names: frozenset[str] = frozenset(),
+) -> ExpectDef | None:
+    """``expect:`` on a ``tool``/``use`` effect (#273).
+
+    A bare string is shorthand for ``{mode: cel, expr: <string>}``. A CEL
+    expression here is over this effect's own ``value``/``meta`` plus
+    ``state`` — the three-binding convention ``cel_eval.evaluate_cel_expect``
+    documents — so ``validate_cel_expr``'s ``state.<key>`` namespace check
+    still applies (an expression that never mentions ``state.`` passes it
+    trivially) while the syntax check (``validate_cel_syntax``) always does.
+    """
+    raw = effect.get("expect")
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        expr = raw.strip()
+        if not expr:
+            raise ValueError(
+                f"{effect_type} effect at '{effect_path}': 'expect' must not be "
+                "an empty string."
+            )
+        validate_cel_expr(expr, effect_path=effect_path, extra_names=loop_names)
+        validate_cel_syntax(expr, effect_path=effect_path, label="expect CEL expression")
+        return ExpectDef(mode="cel", expr=expr)
+    if isinstance(raw, dict):
+        mode_raw = str(raw.get("mode") or "cel").strip().lower()
+        mode: Literal["cel", "model"] = "model" if mode_raw == "model" else "cel"
+        if mode == "cel":
+            expr = raw.get("expr")
+            if not isinstance(expr, str) or not expr.strip():
+                raise ValueError(
+                    f"{effect_type} effect at '{effect_path}': expect mode 'cel' "
+                    "requires a non-empty 'expr' field."
+                )
+            expr = expr.strip()
+            validate_cel_expr(expr, effect_path=effect_path, extra_names=loop_names)
+            validate_cel_syntax(expr, effect_path=effect_path, label="expect CEL expression")
+            return ExpectDef(mode="cel", expr=expr)
+        template = raw.get("template")
+        if not isinstance(template, str) or not template.strip():
+            raise ValueError(
+                f"{effect_type} effect at '{effect_path}': expect mode 'model' "
+                "requires a non-empty 'template' field."
+            )
+        _check_templates(template, effect_path=effect_path, field="expect.template")
+        return ExpectDef(mode="model", template=template)
+    raise ValueError(
+        f"{effect_type} effect at '{effect_path}': 'expect' must be a CEL string "
+        "or a mapping with 'mode'."
+    )
+
+
 def _tree_loop_prev_references(effects: Any, name: str) -> bool:
     """Whether any string anywhere under *effects* references ``prime.<name>.prev``.
 
@@ -158,12 +228,19 @@ def _compile_effects_in_scope(
     scope_path: str,
     container_path: str,
     loop_names: frozenset[str] = frozenset(),
+    # Shared with a sibling call compiling the same scope's 'finally' (or
+    # body) list, so a finally effect reusing a body effect's name is
+    # caught as the same duplicate-name error a body/body collision is —
+    # both land on the same state node (core.dynamic runs 'finally' against
+    # the same child_store as the body, see _compile_effect's own comment).
+    seen_names: dict[str, str] | None = None,
 ) -> list[EffectDef]:
     if not isinstance(effects, list):
         raise ValueError(f"{container_path} must be a list of effects.")
 
     compiled: list[EffectDef] = []
-    seen_names: dict[str, str] = {}
+    if seen_names is None:
+        seen_names = {}
 
     for idx, effect in enumerate(effects):
         effect_path = f"{container_path}[{idx}]"
@@ -230,10 +307,27 @@ def compile_orchestration(
     # Bare {{name}} refs to this document's declared interface inputs are a
     # hard error — caller inputs live under the `input` namespace.
     validate_bare_input_refs(orch)
+    root_seen_names: dict[str, str] = {}
     compiled_effects = _compile_effects_in_scope(
         effects=effects,
         scope_path=root_name,
         container_path=f"{root_name}.effects",
+        seen_names=root_seen_names,
+    )
+
+    # Cleanup effects, allowed at the document root as well as on a
+    # `dynamic` effect (see `_compile_effect`'s `finally` guard) — same
+    # scope as the main effects, so e.g. a started server's pid is in reach.
+    finally_raw = orch.get("finally") or []
+    compiled_finally = (
+        _compile_effects_in_scope(
+            effects=finally_raw,
+            scope_path=root_name,
+            container_path=f"{root_name}.finally",
+            seen_names=root_seen_names,
+        )
+        if finally_raw
+        else []
     )
 
     flow = _normalize_flow(orch.get("flow") or orch.get("strategy") or "chain")
@@ -242,6 +336,7 @@ def compile_orchestration(
         name=root_name,
         effects=compiled_effects,
         flow=flow,
+        finally_effects=tuple(compiled_finally),
     )
 
 
@@ -272,7 +367,11 @@ def apply_effect_overrides(
         _overlay_effect(child, path="", overrides=overrides, matched=matched)
         for child in root.effects
     ]
-    return replace(root, effects=new_children), matched
+    new_finally = [
+        _overlay_effect(child, path="", overrides=overrides, matched=matched)
+        for child in root.finally_effects
+    ]
+    return replace(root, effects=new_children, finally_effects=new_finally), matched
 
 
 def _overlay_effect(
@@ -306,6 +405,14 @@ def _overlay_effect(
             effects=[
                 _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
                 for c in node.effects
+            ],
+            # 'finally' shares its dynamic's own scope (same child_scope the
+            # compiler gives its body, not a 'finally' segment of its own —
+            # see _compile_effect) so a profile addresses a cleanup effect
+            # exactly like a body one.
+            finally_effects=[
+                _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
+                for c in node.finally_effects
             ],
         )
     elif isinstance(node, ReflectorDefinition):
@@ -353,7 +460,11 @@ def _disable_subtree(node: EffectDef) -> EffectDef:
     node = replace(node, enabled=False)
 
     if isinstance(node, DynamicDefinition):
-        return replace(node, effects=[_disable_subtree(c) for c in node.effects])
+        return replace(
+            node,
+            effects=[_disable_subtree(c) for c in node.effects],
+            finally_effects=[_disable_subtree(c) for c in node.finally_effects],
+        )
     if isinstance(node, ReflectorDefinition):
         inner = cast(DynamicDefinition, _disable_subtree(node.inner))
         return replace(node, inner=inner)
@@ -380,7 +491,7 @@ def collect_effect_groups(node: EffectDef) -> set[str]:
         if node.group is not None:
             groups.add(node.group)
     elif isinstance(node, DynamicDefinition):
-        for child in node.effects:
+        for child in (*node.effects, *node.finally_effects):
             groups |= collect_effect_groups(child)
     elif isinstance(node, ReflectorDefinition):
         groups |= collect_effect_groups(node.inner)
@@ -419,6 +530,12 @@ def _compile_effect(
     effect_type = (effect.get("type") or "").strip().lower()
     name = effect.get("name")
 
+    if effect_type != "dynamic" and "finally" in effect:
+        raise ValueError(
+            f"{effect_type or 'unknown'} effect at '{effect_path}': 'finally' is "
+            "only allowed on a 'dynamic' effect or the document root."
+        )
+
     if effect_type == "prompt":
         if name is None:
             raise ValueError(
@@ -449,11 +566,31 @@ def _compile_effect(
         # Support both 'effects' (spec) and 'steps' (legacy)
         child_effects = effect.get("effects") or effect.get("steps") or []
         child_scope = _scope_child(scope_path, valid_name)
+        dynamic_seen_names: dict[str, str] = {}
         compiled_children = _compile_effects_in_scope(
             effects=child_effects,
             scope_path=child_scope,
             container_path=f"{effect_path}.effects",
             loop_names=loop_names,
+            seen_names=dynamic_seen_names,
+        )
+
+        # Cleanup effects — same scope as this dynamic's own children, so
+        # they see state as it stands (e.g. a started server's pid). Shares
+        # dynamic_seen_names with the body above so a finally effect reusing
+        # a body effect's name is caught as a duplicate, not a silent
+        # same-node overwrite at runtime.
+        finally_raw = effect.get("finally") or []
+        compiled_finally = (
+            _compile_effects_in_scope(
+                effects=finally_raw,
+                scope_path=child_scope,
+                container_path=f"{effect_path}.finally",
+                loop_names=loop_names,
+                seen_names=dynamic_seen_names,
+            )
+            if finally_raw
+            else []
         )
 
         # Max parallel workers (only meaningful when flow="tree")
@@ -482,6 +619,7 @@ def _compile_effect(
             stop_on_error=stop_on_error,
             on_error=dyn_on_error,
             labels=labels,
+            finally_effects=tuple(compiled_finally),
         )
 
     if effect_type in ("conditional", "if"):
@@ -1004,6 +1142,10 @@ def _compile_tool(
     if description is not None and not isinstance(description, str):
         description = None
 
+    retries = _compile_retries(effect)
+    expect = _compile_expect(
+        effect, effect_type="tool", effect_path=effect_path, loop_names=loop_names
+    )
     group_raw = effect.get("group")
     group = group_raw.strip() if isinstance(group_raw, str) and group_raw.strip() else None
 
@@ -1018,6 +1160,8 @@ def _compile_tool(
         timeout_ms=timeout_ms,
         on_error=on_error,
         description=description,
+        retries=retries,
+        expect=expect,
         group=group,
     )
 
@@ -1120,6 +1264,11 @@ def _compile_use(
     if description is not None and not isinstance(description, str):
         description = None
 
+    retries = _compile_retries(effect)
+    expect = _compile_expect(
+        effect, effect_type="use", effect_path=effect_path, loop_names=loop_names
+    )
+
     _ = scope_path
     return UseDefinition(
         name=name,
@@ -1132,6 +1281,8 @@ def _compile_use(
         validate=validate_flag,
         on_error=on_error,
         description=description,
+        retries=retries,
+        expect=expect,
     )
 
 

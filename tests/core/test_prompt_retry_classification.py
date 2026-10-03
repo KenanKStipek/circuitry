@@ -105,9 +105,9 @@ def test_backoff_honours_retry_after_seconds(monkeypatch: pytest.MonkeyPatch) ->
 def test_backoff_without_retry_after_grows_and_is_capped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from circuitry.core import prompt as prompt_mod
+    from circuitry.adapters import _retry as retry_mod
 
-    monkeypatch.setattr(prompt_mod.random, "uniform", lambda lo, hi: hi)
+    monkeypatch.setattr(retry_mod.random, "uniform", lambda lo, hi: hi)
 
     root = compile_orchestration(
         orch=_retries_orch(max_attempts=3, backoff_ms=1000), root_name="prime"
@@ -136,9 +136,9 @@ def test_backoff_at_a_large_attempt_index_stays_at_the_cap(
     """The exponential curve would blow past any sane wait by attempt 10
     (``backoff_ms * 2**9`` from a 1s base is over 8 minutes); the cap must
     hold regardless of how many attempts preceded it."""
-    from circuitry.core import prompt as prompt_mod
+    from circuitry.adapters import _retry as retry_mod
 
-    monkeypatch.setattr(prompt_mod.random, "uniform", lambda lo, hi: hi)
+    monkeypatch.setattr(retry_mod.random, "uniform", lambda lo, hi: hi)
 
     root = compile_orchestration(
         orch=_retries_orch(max_attempts=10, backoff_ms=1000), root_name="prime"
