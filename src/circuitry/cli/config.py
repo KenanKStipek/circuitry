@@ -517,34 +517,47 @@ def load_user_env() -> UserEnvResult:
         return _last_user_env_result
 
     mode = stat.S_IMODE(st.st_mode)
-    owned_by_user = st.st_uid == os.getuid()
-    group_or_other_writable = bool(mode & 0o022)
-    if not owned_by_user or group_or_other_writable:
-        unsafe_warning = (
-            f"{path} is not safe to load (owner mismatch or group/world-writable, "
-            f"mode {oct(mode)}); refusing to load it. Run 'chmod 600 {path}' and "
-            "check its ownership."
-        )
-        logger.warning(unsafe_warning)
-        _last_user_env_result = UserEnvResult(path=path, loaded=False, warning=unsafe_warning)
-        return _last_user_env_result
+    # POSIX ownership/mode bits are meaningless on Windows (`os.getuid` does
+    # not exist there, and files commonly report a permissive mode like
+    # 0o666 regardless of any real ACL) — skip the ownership/writability
+    # refusal and just load the file.
+    if hasattr(os, "getuid"):
+        owned_by_user = st.st_uid == os.getuid()
+        group_or_other_writable = bool(mode & 0o022)
+        if not owned_by_user or group_or_other_writable:
+            unsafe_warning = (
+                f"{path} is not safe to load (owner mismatch or group/world-writable, "
+                f"mode {oct(mode)}); refusing to load it. Run 'chmod 600 {path}' and "
+                "check its ownership."
+            )
+            logger.warning(unsafe_warning)
+            _last_user_env_result = UserEnvResult(path=path, loaded=False, warning=unsafe_warning)
+            return _last_user_env_result
 
     warning: str | None = None
-    if mode & 0o077:
+    if hasattr(os, "getuid") and mode & 0o077:
         warning = f"{path} is mode {oct(mode)} (group/world-readable); run 'chmod 600 {path}'."
         logger.warning(warning)
 
     from dotenv import dotenv_values
 
-    values = dotenv_values(path)
+    try:
+        values = dotenv_values(path)
+    except (OSError, UnicodeDecodeError) as exc:
+        unreadable_warning = f"{path} could not be read ({exc.__class__.__name__}); skipping it."
+        logger.warning(unreadable_warning)
+        _last_user_env_result = UserEnvResult(path=path, loaded=False, warning=unreadable_warning)
+        return _last_user_env_result
+
     supplied: list[str] = []
     skipped: list[str] = []
     for key, value in values.items():
         if key in os.environ:
             skipped.append(key)
             continue
-        if value is not None:
-            os.environ[key] = value
+        if value is None:
+            continue
+        os.environ[key] = value
         supplied.append(key)
 
     _last_user_env_result = UserEnvResult(

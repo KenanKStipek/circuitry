@@ -137,3 +137,20 @@ def test_real_config_discovery_marker_still_isolates_the_last_run_stash() -> Non
     real_last_run = Path.home() / ".config" / "circuitry" / "last-run.json"
     assert real_last_run != last_run_module.LAST_RUN_PATH
     assert real_last_run != app_module._LAST_RUN_PATH
+
+
+@pytest.mark.real_config_discovery
+def test_real_config_discovery_marker_still_isolates_the_user_env_path() -> None:
+    """The private ``.env`` path (``load_user_env()``, #348) is isolated
+    ahead of the ``real_config_discovery`` early return too. Several tests
+    with that marker invoke the CLI, whose root callback calls
+    ``load_user_env()`` on every run; before this, that read the developer's
+    real ``~/.config/circuitry/.env`` into ``os.environ`` for the rest of the
+    pytest process, untracked by ``monkeypatch`` (#349 review finding 1)."""
+    from circuitry.cli import config as config_module
+    from circuitry.cli import doctor as doctor_module
+
+    real_user_env_path = Path.home() / ".config" / "circuitry" / ".env"
+    assert real_user_env_path != config_module.GLOBAL_CONFIG_DIR / ".env"
+    assert real_user_env_path != doctor_module.GLOBAL_CONFIG_DIR / ".env"
+    assert config_module.last_user_env_result() is None

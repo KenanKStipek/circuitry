@@ -33,17 +33,16 @@ def _write_env(content: str, *, mode: int = 0o600) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def _clean_canary_env():
+def _clean_canary_env(monkeypatch: pytest.MonkeyPatch):
     """`load_user_env` mutates `os.environ` directly (mirroring real
-    `load_dotenv(override=False)` behaviour), bypassing `monkeypatch`'s
-    tracking — clean up by hand so a canary set by one test can never leak
-    into the next.
+    `load_dotenv(override=False)` behaviour), bypassing `monkeypatch`'s own
+    tracking of the values it set — but `monkeypatch.delenv` here still
+    records whatever value was really present and restores exactly that at
+    teardown (the lane's shell exports a real `OPENAI_API_KEY`; a test must
+    not delete it for the rest of the process).
     """
     for name in ("OPENAI_API_KEY", "CIRCUITRY_DOTENV_CANARY"):
-        os.environ.pop(name, None)
-    yield
-    for name in ("OPENAI_API_KEY", "CIRCUITRY_DOTENV_CANARY"):
-        os.environ.pop(name, None)
+        monkeypatch.delenv(name, raising=False)
 
 
 def test_missing_file_is_not_loaded():
@@ -127,6 +126,48 @@ def test_group_readable_env_file_loads_with_warning():
     assert os.environ["OPENAI_API_KEY"] == _CANARY
 
 
+def test_windows_has_no_getuid_but_still_loads(monkeypatch: pytest.MonkeyPatch):
+    """`os.getuid` doesn't exist on Windows; `load_user_env` must skip the
+    POSIX ownership/mode checks there rather than raising `AttributeError`
+    for every `cof` command once `.env` exists (#349 review finding 2)."""
+    monkeypatch.delattr(os, "getuid", raising=False)
+    _write_env(f"OPENAI_API_KEY={_CANARY}\n")
+
+    result = load_user_env()
+
+    assert result.loaded is True
+    assert result.supplied == ("OPENAI_API_KEY",)
+    assert result.warning is None
+    assert os.environ["OPENAI_API_KEY"] == _CANARY
+
+
+def test_unreadable_env_file_does_not_crash():
+    path = _write_env(f"OPENAI_API_KEY={_CANARY}\n", mode=0o000)
+    if os.access(path, os.R_OK):
+        pytest.skip("running as a user that can read a mode-0 file (e.g. root)")
+
+    try:
+        result = load_user_env()
+    finally:
+        path.chmod(0o600)
+
+    assert result.loaded is False
+    assert result.warning is not None
+    assert "OPENAI_API_KEY" not in os.environ
+
+
+def test_bare_key_with_no_value_is_not_reported_as_supplied():
+    _write_env("BARE_KEY\nOPENAI_API_KEY=" + _CANARY + "\n")
+
+    try:
+        result = load_user_env()
+        assert "BARE_KEY" not in result.supplied
+        assert "BARE_KEY" not in os.environ
+        assert result.supplied == ("OPENAI_API_KEY",)
+    finally:
+        os.environ.pop("BARE_KEY", None)
+
+
 def test_doctor_reports_names_only_never_a_value(tmp_path):
     import json
 
@@ -153,6 +194,11 @@ def test_doctor_reports_names_only_never_a_value(tmp_path):
     )
 
     assert result.exit_code == 0
+    # Proves the CLI root callback actually wired up `load_user_env()` —
+    # without that call, `OPENAI_API_KEY` would never reach `os.environ` and
+    # this would still pass on `"OPENAI_API_KEY"` appearing in doctor's own
+    # "missing: env:OPENAI_API_KEY" extension-check output.
+    assert os.environ["OPENAI_API_KEY"] == _CANARY
     assert "OPENAI_API_KEY" in result.output
     assert "User .env" in result.output
     assert _CANARY not in result.output

@@ -303,9 +303,15 @@ def main() -> None:
     # `circuitry-mcp` is a standalone entry point (bypasses `cli.app`'s own
     # callback) — load the same private `.env` `cof setup` writes, or a key
     # entered there never reaches an adapter run through this server (#348).
-    from ..cli.config import load_user_env
+    # `cof mcp` reaches here too (`app.py`'s `mcp_cmd`), after `_root` has
+    # already called `load_user_env()` once; skip the second call rather
+    # than re-running it and overwriting `_last_user_env_result` with every
+    # supplied variable misreported as "skipped" (everything is already set
+    # the second time through).
+    from ..cli.config import last_user_env_result, load_user_env
 
-    load_user_env()
+    if last_user_env_result() is None:
+        load_user_env()
     server = _build_server()
     server.run("stdio")
 
