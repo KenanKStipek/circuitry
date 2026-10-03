@@ -176,6 +176,25 @@ The allowlists are the other gate: `enabled_adapters`, `enabled_tools`, and `ena
 
 Three clocks, two of them in config. `timeout_ms` on an effect bounds that effect, rounded up to the next whole second if you give it a sub-second value — a budget like `250` never floors to an instant 0-second timeout. `runtime.adapters.<name>.timeout_seconds` in config bounds that adapter's own socket, for `prompt` effects — a large local model can need cold-load headroom well beyond any single effect's budget, which is why the example above gives ollama ten minutes. It is read for whichever adapter an attempt actually dispatches to, not just the run default: a prompt with `provider: ollama` (or a `provider_fallbacks` entry naming it) uses `runtime.adapters.ollama.timeout_seconds` for that attempt even when `default_adapter` is something else entirely. `runtime.tools.timeout_seconds` (default 300s) is the same idea for `tool` effects, and deliberately separate from the adapter's: a tool run on the no-op adapter, or a slow `ffmpeg` pass alongside a fast model, each get their own number instead of inheriting whichever adapter the run happens to be using. All three compose: the effect's `timeout_ms` is the one you tune per step; the other two are the ones you set once per machine. Not every tool plugin can actually be bounded this way — see the `tool` effect's [Timeout](../orchestration-reference.md#tool) section for which ones do. (`litellm`'s own timeout key is `runtime.adapters.litellm.timeout_seconds`, the same spelling as every other adapter; the earlier `timeout` key still works but is deprecated and logs a warning.) [Errors](05-errors.md) is next.
 
+## Concurrency limits
+
+`max_concurrency` on a `loop`/`dynamic` effect (see [Loop](07-loop.md), [Dynamic](02-dynamic.md)) only ever bounds that one container's own fan-out. Nest a few of those — a tree loop inside a parallel dynamic inside another tree loop — and the actual number of effects dispatching at once is the *product* of every level's own pool size, not any one of them. `runtime.max_concurrency` and `runtime.concurrency_groups` are the run-wide answer: one cap (or a set of named caps) shared by every `tool`/`prompt` effect dispatched anywhere in the run, regardless of which loop, dynamic, or `use` child it sits inside.
+
+```yaml
+runtime:
+  max_concurrency: 4
+  concurrency_groups:
+    gpu: 1
+```
+
+`max_concurrency` here is a single pool: at most 4 leaf effects run at once, full stop, no matter how many containers are fanned out in parallel above them. `concurrency_groups` adds named pools on top of it — a `tool`/`prompt` effect opts into one with its own `group: <name>` field, and then waits for a free slot in *both* that group and the run-wide pool (if both are set) before it dispatches. This is how you protect something physically singular: one GPU, one ComfyUI worker, one third-party API that only accepts one request at a time — give its tool calls `group: gpu`, set `concurrency_groups: {gpu: 1}`, and every parallel branch that reaches one waits its turn, however deep the nesting above it.
+
+Only `tool` and `prompt` — the leaves — ever hold a slot. A container never dispatches itself, so `group:` on one is rejected by `cof check`, and a `group:` naming something `concurrency_groups` doesn't define is too. This is also why nesting can't deadlock: a container never holds a slot its own children are waiting on, so a blocked leaf is only ever waiting on another leaf's own unconditional, eventual release. A blocked effect's own node shows `meta.waiting_for` (`"global"` or the group name) for as long as it's waiting, visible in `--live-state` and the verbose CLI output, cleared once it gets a slot.
+
+Like every other `runtime:` key besides `complexity`/`state`, both settings are host-level: set them in `config.json`, or in the top-level document's own `runtime:` block if it's trusted (run by path — see [What a document can set](#what-a-document-can-set)). A document reached through a `use ref:`, a library name, MCP, or the REST trigger cannot set either, by the same rule that keeps it from repointing an adapter — a shared, physically limited resource is a host decision, not something any document that happens to run should be able to loosen.
+
+See the orchestration reference's [Concurrency Limits](../orchestration-reference.md#concurrency-limits) for the full field reference.
+
 ## Anti-patterns
 
 **Hard-wiring the provider.** `adapter: openai` at the top of a document that is meant to be shared. Put it in config, or in a profile.
@@ -191,3 +210,4 @@ Three clocks, two of them in config. `timeout_ms` on an effect bounds that effec
 - [Named Profiles](../profiles.md).
 - [Library Sources](../library-sources.md) — `runtime.library.sources`.
 - [CyberDiner demo runbook](../cyberdiner-demo-runbook.md) — a broker adapter end to end.
+- [Concurrency Limits](../orchestration-reference.md#concurrency-limits) — `runtime.max_concurrency` and `runtime.concurrency_groups` field reference.

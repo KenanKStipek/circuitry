@@ -32,7 +32,7 @@ Top-level fields of an orchestration YAML file:
 
 Other top-level keys: `description` (free text for readers of the file) and two that feed the run's configuration, `runtime:` and `plugins:` (below). Any other key is ignored, and `cof check` says so — see [What `cof check` and `cof run` reject](#what-cof-check-and-cof-run-reject). How much of `runtime:` and `plugins:` applies depends on how the document reached `cof`:
 
-- **`runtime:`** — `runtime.complexity` (see [Complexity Configuration](./complexity-config.md)) and `runtime.state` (e.g. `record_children`, see [Complete record](#complete-record-opt-in)) always apply; each replaces the config-level block of the same name. Every other key — `adapters`, `plugins`, `persistence`, `library`, `mcp`, anything else — is a host setting.
+- **`runtime:`** — `runtime.complexity` (see [Complexity Configuration](./complexity-config.md)) and `runtime.state` (e.g. `record_children`, see [Complete record](#complete-record-opt-in)) always apply; each replaces the config-level block of the same name. Every other key — `adapters`, `plugins`, `persistence`, `library`, `mcp`, `max_concurrency`, `concurrency_groups` (see [Concurrency Limits](#concurrency-limits)), anything else — is a host setting.
 - **`plugins:`** — runtime-plugin modules to load. An entry config.json already lists in `plugins` or `enabled_plugins` always loads; any other is a host setting too.
 
 **A file you run by path is trusted**, like a script you run: `cof run ./my.yml`, `cof check` / `cof score` on a path, a local file picked in the TUI Run view, the SDK's `run_orchestration(orchestration_path=...)` and scheduler jobs apply the document's whole `runtime:` block and `plugins:` list. When that includes host settings, `cof run` prints one line on stderr naming them (keys only, never values), and `cof check` shows the same line:
@@ -71,6 +71,7 @@ effects:
 - **An `interface.inputs` default that doesn't match its declared `type`** is an error naming the input, the type and the value — the same rule a caller-supplied value is checked against once it's filled in, but without that check's string coercion: a YAML/JSON default is already a typed value, not a CLI `-e`/`use:` value crossing as text, so a quoted numeral (`default: "3"` for an `integer` input) is flagged with a hint to remove the quotes rather than silently accepted.
 - **A loop needs exactly one of `each` or `while`.** One with neither would run zero passes and report a clean termination.
 - **A malformed Mustache template** — an unclosed tag (`{{input.topic}`), a section closed under the wrong name — is an error naming the field, wherever a template is rendered: a prompt's `template` or `messages`, a tool's `prompt`, `params` and `params_json`, a model-mode `if`/`while` template, a `use` effect's `inline` and string `inputs`. Were one to reach a run anyway, rendering it fails the effect under its `on_error`; the raw text is never sent on.
+- **`group:` on anything but a `tool`/`prompt` effect** is an error — a container (`dynamic`, `loop`, `use`, `if`, `reflector`) never dispatches itself, so it can never hold the concurrency-group slot the field would name. **A `group:` name `runtime.concurrency_groups` doesn't define** is also an error. See [Concurrency Limits](#concurrency-limits).
 
 `cof check` also **warns** when a tool's `params.args` holds a value YAML read as a number, boolean or null: the tool receives `str()` of it, so an unquoted `0x1` arrives as `1`, `off` as `False`, `-0` as `0`. Quote the argument.
 
@@ -103,6 +104,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `assets` | array | no | — | Images for a vision model: `[{kind: "image", ref: "path/to/img"}]`. `ref` is a Mustache template rendering to a local path or an `http(s)` URL. Other kinds are skipped with a warning |
 | `retries` | object | no | — | `{max_attempts: N, backoff_ms: M}`. A dispatch failure retries only if classified retryable (429, 408, 5xx, a timeout, a dropped connection); 400/401/403/404/422 and a missing key fail the attempt loop immediately. A reply that came back but failed to decode/validate (see `provider_fallbacks` below) always retries, same as before classification existed. Wait is exponential backoff with jitter from `backoff_ms`, capped at 60s; a provider's `Retry-After` header overrides the computed wait when the adapter can read one |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
+| `group` | string | no | — | Joins a named concurrency-group slot (`runtime.concurrency_groups.<name>`) — see [Concurrency Limits](#concurrency-limits). Must name a group `runtime.concurrency_groups` defines; `cof check` rejects an unknown one. Held for the whole dispatch, retries included — but not decomposition's chunk fan-out (see [Complexity Configuration](./complexity-config.md)): decomposition runs before the slot is acquired, and the chunk prompts it generates do not inherit this effect's `group:` |
 
 **Example — text output:**
 ```yaml
@@ -602,6 +604,7 @@ Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously
 | `timeout_ms` | integer | no | — | Per-effect timeout in milliseconds |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `description` | string | no | — | |
+| `group` | string | no | — | Joins a named concurrency-group slot (`runtime.concurrency_groups.<name>`) — see [Concurrency Limits](#concurrency-limits). Must name a group `runtime.concurrency_groups` defines; `cof check` rejects an unknown one |
 
 #### Params by reference
 
@@ -995,6 +998,81 @@ The runtime tracks a per-execution call stack of resolved orchestration paths. I
   inline: "{{prime.plan.value}}"
   validate: true
 ```
+
+---
+
+## Concurrency Limits
+
+`runtime.max_concurrency` and `runtime.concurrency_groups` cap how many
+`tool`/`prompt` effects dispatch at once **across the whole run** — not just
+within one `flow: tree` loop or parallel `dynamic`'s own fan-out
+(`max_concurrency` on a `loop`/`dynamic` effect, see those sections, is still
+a separate, per-container bound; the stricter of the two always wins for an
+effect both apply to).
+
+```yaml
+runtime:
+  max_concurrency: 4          # at most 4 tool/prompt effects run at once, anywhere in the run
+  concurrency_groups:
+    gpu: 1                    # at most 1 effect with group: gpu runs at once, anywhere in the run
+    comfy: 2
+```
+
+- **`runtime.max_concurrency`** is a single run-wide cap shared by every leaf
+  effect dispatched anywhere in the tree — every tree loop's iterations, every
+  parallel `dynamic`'s branches, and every `use` child's own effects, all draw
+  from the same pool of slots.
+- **`runtime.concurrency_groups`** names additional, independent caps. A
+  `tool`/`prompt` effect joins one with its own `group: <name>` field; it then
+  waits for a free slot in that group *and* in the run-wide cap (if one is
+  set) before dispatching. An effect with no `group:` only ever competes for
+  the run-wide cap.
+- **Only leaf effects — `tool` and `prompt` — ever hold a slot.** A container
+  (`dynamic`, `loop`, `use`, `if`, `reflector`) never dispatches itself, so it
+  never counts against either cap and never holds one while its own children
+  are still running — the thing that makes nesting safe: a container can
+  never block on a slot one of its own children needs. `group:` is only valid
+  on `tool`/`prompt`; `cof check` rejects it anywhere else, and rejects a
+  `group:` name `runtime.concurrency_groups` doesn't define.
+- A slot is acquired immediately before dispatch and released immediately
+  after; for a `prompt` effect, one dispatch (its whole retry chain, `retries:`
+  included) holds the slot the whole time — a retried attempt is the same
+  logical dispatch, not a fresh one competing for a fresh slot.
+- **Waiting is visible.** An effect blocked on a slot shows
+  `meta.waiting_for: <"global"|group name>` on its own node — in `--live-state`
+  while it waits, and in the verbose CLI display — cleared back to `null` the
+  moment it's granted one.
+- Set either in `config.json` or in the document's own `runtime:` block
+  (merged key by key over config, same as any other `runtime:` setting); an
+  untrusted document (reached via a `use ref:`, a library name, MCP, or the
+  REST trigger, rather than run by path) cannot set either — the same rule
+  every `runtime:` key besides `complexity`/`state` already follows, see
+  [File Structure](#file-structure). This keeps a shared, host-protected
+  resource (a single GPU, a rate-limited third-party API) out of reach of a
+  document the host did not choose to trust.
+
+**Example — one GPU-bound tool plugin shared across parallel branches:**
+```yaml
+runtime:
+  concurrency_groups:
+    gpu: 1
+
+effects:
+  - type: loop
+    name: render_frames
+    flow: tree
+    each: {in: input.frames, as: frame}
+    body:
+      - type: tool
+        name: upscale
+        provider: comfyui
+        group: gpu
+        params: {image: "{{frame}}"}
+```
+Every iteration of `render_frames` still runs in parallel; only the
+`upscale` tool call inside each one waits its turn for the single `gpu`
+slot, so two upscales never run against the same GPU at once no matter how
+many frames are in flight.
 
 ---
 
