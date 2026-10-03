@@ -15,6 +15,7 @@ from ..output import console as _console
 from ..output import live_region as _live_region
 from .disabled import is_enabled, write_disabled_node
 from .prompt import PromptDefinition, PromptRuntime
+from .resume import effect_completed_ok
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -149,6 +150,7 @@ class DynamicRuntime:
         depth: int = 0,
         ancestors: list[AncestorContext] | None = None,
         label_prefix: str | None = None,
+        resume: bool = False,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -169,6 +171,16 @@ class DynamicRuntime:
         # that spawned them — see ``_child_display_name`` and
         # ``UseRuntime.execute``.
         self._label_prefix = label_prefix
+        # ``cof run --resume``: when true, ``_execute_effect`` skips a child
+        # whose own node already finished without error, reusing it as-is —
+        # see ``core.resume``. Carried down into every nested ``dynamic``/
+        # ``loop`` this instance constructs, so the skip applies at any
+        # depth a chain of ``dynamic``s reaches. ``conditional``/``use``/
+        # ``reflector`` children aren't passed this flag: a conditional or
+        # reflector always reruns whole once reached, and a ``use`` child
+        # runs its sub-orchestration in a fresh, isolated state with no
+        # resumable history of its own — so the flag would be a no-op there.
+        self.resume = resume
 
     def execute(
         self, *, store: Store, ctx_override: dict[str, Any] | None = None
@@ -232,7 +244,32 @@ class DynamicRuntime:
         body_exc: BaseException | None = None
         try:
             if self.defn.flow == "chain":
-                self._execute_chain(self.defn.effects, store=store, child_store=child_store, ctx=ctx)
+                # `cof run --resume`: positional, not per-effect. Skipping
+                # stops for good the moment one effect in this chain isn't
+                # resumed whole — whatever an old run's later nodes show,
+                # they're either past the point this run actually diverged
+                # from (a stale leftover, #270 F2) or sit after a failure
+                # that on_error absorbed (also stale: the chain kept going
+                # past it last time, so this run must too). A disabled
+                # effect doesn't count: it's a deterministic no-op this run
+                # regardless of resume, not a sign the position is stale.
+                resume_active = self.resume
+                for idx, effect in enumerate(self.defn.effects):
+                    effect_path = self._effect_path(effect=effect, index=idx)
+                    try:
+                        outcome = self._execute_effect(
+                            effect,
+                            store=child_store,
+                            ctx=ctx,
+                            resume_active=resume_active,
+                        )
+                    except Exception as e:
+                        raise RuntimeError(f"{effect_path}: {e}") from e
+                    finally:
+                        if store.on_write:
+                            store.on_write(store.root_state)
+                    if outcome == "ran":
+                        resume_active = False
             else:
                 # Tree semantics: all effects run concurrently against the same
                 # deterministic snapshot from dynamic start, not sibling
@@ -288,6 +325,23 @@ class DynamicRuntime:
                 isolated_stores = child_store.parallel_branches(
                     len(self.defn.effects)
                 )
+
+                # `cof run --resume`: a branch store starts life as
+                # ``state={}`` (Store.parallel_branches), so without this
+                # ``_execute_effect``'s own skip check (`store.state.get`)
+                # could never see a finished node from a prior run — tree
+                # children would always rerun. Seed the one key each branch
+                # is actually responsible for from the pre-existing
+                # child_store (which, under resume, still carries the
+                # earlier run's children) before dispatch.
+                if self.resume:
+                    for idx, effect in enumerate(self.defn.effects):
+                        branch_name = getattr(effect, "name", None)
+                        if not isinstance(branch_name, str):
+                            continue
+                        existing = child_store.state.get(branch_name)
+                        if effect_completed_ok(existing):
+                            isolated_stores[idx].state[branch_name] = existing
 
                 # An empty tree runs nothing, like an empty chain;
                 # ThreadPoolExecutor itself refuses max_workers=0. Unset
@@ -486,14 +540,16 @@ class DynamicRuntime:
     ) -> None:
         """Run *effects* in sequence, stopping at the first failure.
 
-        Shared by this dynamic's own chain-flow body and its ``finally:``
-        list — ``finally`` always runs this way regardless of this
-        dynamic's own ``flow``. ``label`` overrides the wrapped error's
-        path prefix, defaulting to this dynamic's own name — see
-        ``_effect_path``. A ``finally`` effect writes into the same
-        child_store namespace as the body, so its own call passes this
-        dynamic's name too (not a distinct ``.finally`` segment, which
-        wouldn't match the real state tree).
+        This dynamic's own ``finally:`` list's only caller — ``finally``
+        always runs sequentially regardless of this dynamic's own
+        ``flow``, and (unlike the chain-flow body, which inlines its own
+        positional ``cof run --resume`` skip logic in ``execute()``)
+        never skips via resume — see the ``resume_active=False`` below.
+        ``label`` overrides the wrapped error's path prefix, defaulting to
+        this dynamic's own name — see ``_effect_path``. A ``finally``
+        effect writes into the same child_store namespace as the body, so
+        its own call passes this dynamic's name too (not a distinct
+        ``.finally`` segment, which wouldn't match the real state tree).
         """
         container_name = label or self.defn.name
         for idx, effect in enumerate(effects):
@@ -501,7 +557,14 @@ class DynamicRuntime:
                 effect=effect, index=idx, container_name=container_name
             )
             try:
-                self._execute_effect(effect, store=child_store, ctx=ctx)
+                # `cof run --resume` (#330) never skips a `finally:` effect
+                # — this helper's only remaining caller — even if its node
+                # already completed OK in the prior run: cleanup (stopping
+                # a server, releasing a lock) must run again every time the
+                # body finishes, not just the first time it ever ran.
+                self._execute_effect(
+                    effect, store=child_store, ctx=ctx, resume_active=False
+                )
             except Exception as e:
                 raise RuntimeError(f"{effect_path}: {e}") from e
             finally:
@@ -550,8 +613,18 @@ class DynamicRuntime:
         cb_done: Callable[[str], None] | None = None,
         cb_error: Callable[[str], None] | None = None,
         tracker: _TreeStatus | None = None,
-    ) -> None:
-        """Execute a single effect within the dynamic."""
+        resume_active: bool | None = None,
+    ) -> str:
+        """Execute a single effect within the dynamic.
+
+        Returns which of three things happened: ``"disabled"`` (the effect
+        didn't run, deterministically, regardless of resume), ``"resumed"``
+        (skipped because its own node already finished without error), or
+        ``"ran"`` (actually dispatched this call, success or an absorbed
+        failure). Chain flow uses this to know when to stop treating later
+        nodes as resumable — see the call site in ``execute()``.
+        """
+        effective_resume = self.resume if resume_active is None else resume_active
         # Local imports to avoid circular imports at module load time
         from .conditional import ConditionalDefinition, ConditionalRuntime
         from .loop import LoopDefinition, LoopRuntime
@@ -590,7 +663,24 @@ class DynamicRuntime:
                 verbose=self.verbose,
                 cb_done=cb_done,
             )
-            return
+            return "disabled"
+
+        if (
+            effective_resume
+            and isinstance(name, str)
+            and name != "?"
+            and effect_completed_ok(store.state.get(name))
+        ):
+            if self.verbose and not is_prompt and not is_tool and not is_use:
+                line = (
+                    f"{indent}[ok]↻[/ok] [{color}]{icon}[/{color}]"
+                    f" {name} [dim](resumed)[/dim]"
+                )
+                if cb_done is not None:
+                    cb_done(line)
+                else:
+                    _console.print(line)
+            return "resumed"
 
         if self.verbose and not is_prompt and not is_tool and not is_use:
             if cb_start is not None:
@@ -635,6 +725,7 @@ class DynamicRuntime:
                     depth=self.depth + 1,
                     ancestors=self._child_ancestors,
                     label_prefix=self._label_prefix,
+                    resume=effective_resume,
                 ).execute(store=store, ctx_override=ctx)
 
             elif isinstance(effect, ReflectorDefinition):
@@ -679,6 +770,7 @@ class DynamicRuntime:
                     depth=self.depth,
                     ancestors=self._child_ancestors,
                     label_prefix=self._label_prefix,
+                    resume=effective_resume,
                 ).execute(store=store, ctx=ctx)
 
             elif isinstance(effect, ToolDefinition):
@@ -756,6 +848,8 @@ class DynamicRuntime:
                         cb_done(line)
                     else:
                         _console.print(line)
+
+            return "ran"
 
         except Exception:
             if self.verbose and not is_prompt and not is_tool and not is_use:

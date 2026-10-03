@@ -146,6 +146,15 @@ class ConditionalRuntime:
                 meta = {}
                 node["meta"] = meta
             meta["created_at"] = _now_iso()
+            # Clear a previous call's own completed_at/error before this one
+            # runs — this node is reused across a --state/persistence
+            # carryover or a `cof run --resume`, and a stale meta.error left
+            # over from an earlier attempt would make a later resume treat
+            # this conditional as still unfinished even after it just
+            # completed cleanly (#270 F4). `_decide_and_run` below sets both
+            # again, fresh, if *this* call's own condition eval fails.
+            meta["completed_at"] = None
+            meta["error"] = None
             meta["mode"] = self.defn.condition.mode
             meta["threshold"] = self.defn.threshold
             meta["labels"] = dict(self.defn.labels) if self.defn.labels else None
