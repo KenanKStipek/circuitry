@@ -30,13 +30,11 @@ def _write(path: Path, content: str) -> Path:
     return path
 
 
-def _two_step_orch(tmp_path: Path) -> Path:
+def _two_step_orch_body() -> str:
     """A `uuid` step that always succeeds, then a `json` step whose params
     always fail to parse — a known plugin (so preflight doesn't reject it
     before anything runs), deterministically wrong every time it runs."""
-    return _write(
-        tmp_path / "chain.yml",
-        """
+    return """
 effects:
   - type: tool
     name: step1
@@ -47,7 +45,13 @@ effects:
     params:
       mode: parse
       input: "not valid json"
-""".lstrip(),
+""".lstrip()
+
+
+def _two_step_orch(tmp_path: Path) -> Path:
+    return _write(
+        tmp_path / "chain.yml",
+        _two_step_orch_body(),
     )
 
 
@@ -63,15 +67,19 @@ def test_resume_from_explicit_state_file_skips_completed_steps(
     assert state["prime"]["step1"]["meta"]["completed_at"]
     assert not state["prime"]["step1"]["meta"]["error"]
     assert state["prime"]["step2"]["meta"]["error"]
+    step1_uuid = state["prime"]["step1"]["value"]
 
     second = runner.invoke(
         app, ["run", str(orch), "--state", str(out), "--resume", "whatever"]
     )
-    # step2's provider still doesn't exist, so resuming still fails there —
+    # step2's input is always invalid JSON, so resuming still fails there —
     # the error names step2, proving the run reached it again rather than
-    # stopping (or erroring) at step1.
+    # stopping (or erroring) at step1. step1's own uuid being unchanged (not
+    # just its error-free meta) proves it wasn't re-dispatched at all.
     assert second.exit_code == 1
     assert "step2" in second.stdout
+    second_state = json.loads(out.read_text(encoding="utf-8"))
+    assert second_state["prime"]["step1"]["value"] == step1_uuid
 
 
 def test_resume_rejects_a_run_that_was_never_recorded(tmp_path: Path) -> None:
@@ -122,7 +130,7 @@ def test_resume_last_resumes_a_failed_run(tmp_path: Path) -> None:
     assert first.exit_code == 1, first.stdout
 
     second = runner.invoke(app, ["run", str(orch), "--resume", "last"])
-    # step2's provider still doesn't exist, so this still fails — proving
+    # step2's input is always invalid JSON, so this still fails — proving
     # the *source resolution* (finding `out` via the --last stash) worked,
     # which is this test's job; the engine's no-rerun behavior is covered in
     # tests/core/test_resume.py.
@@ -253,3 +261,116 @@ def test_resume_and_last_are_mutually_exclusive(tmp_path: Path) -> None:
     result = runner.invoke(app, ["run", str(orch), "--resume", "last", "--last"])
     assert result.exit_code == 1
     assert "mutually exclusive" in result.stdout
+
+
+def test_resume_by_run_id_finds_a_failed_run(tmp_path: Path) -> None:
+    """#270 F1: the run store must persist a failed run too, or `--resume
+    <run-id>` can never find one — only runs that happened to succeed."""
+    db_path = tmp_path / "runs.jsonl"
+    orch = _write(
+        tmp_path / "chain.yml",
+        f"""
+runtime:
+  persistence:
+    enabled: true
+    backend: jsonl-file
+    path: "{db_path}"
+""".lstrip()
+        + _two_step_orch_body(),
+    )
+
+    first = runner.invoke(app, ["run", str(orch)])
+    assert first.exit_code == 1, first.stdout
+
+    records = [json.loads(line) for line in db_path.read_text(encoding="utf-8").splitlines()]
+    assert records, "the failed run must still be persisted"
+    record = records[-1]
+    assert record["ok"] is False
+    run_id = record["run_id"]
+
+    second = runner.invoke(app, ["run", str(orch), "--resume", run_id])
+    # Found and resumed (not "No persisted state found") — step2 fails the
+    # same deterministic way every time, proving the run reached it again.
+    assert second.exit_code == 1
+    assert "No persisted state found" not in second.stdout
+    assert "step2" in second.stdout
+
+
+def test_resume_refuses_a_state_with_no_document_hash_unless_forced(tmp_path: Path) -> None:
+    """#270 F8: a state with no `runtime.last_run.document_hash` (never
+    written by `cof run`, or predating this field) must refuse the same
+    way a genuinely changed document does, not silently skip the check."""
+    orch = _write(
+        tmp_path / "chain.yml", "effects:\n  - type: tool\n    name: s\n    provider: uuid\n"
+    )
+    handwritten = tmp_path / "handwritten.json"
+    handwritten.write_text(json.dumps({"prime": {}}), encoding="utf-8")
+
+    blocked = runner.invoke(
+        app, ["run", str(orch), "--state", str(handwritten), "--resume", "x"]
+    )
+    assert blocked.exit_code == 1
+    assert "document_hash" in blocked.stdout
+
+    forced = runner.invoke(
+        app, ["run", str(orch), "--state", str(handwritten), "--resume", "x", "--force"]
+    )
+    assert forced.exit_code == 0, forced.stdout
+
+
+def test_resume_defaults_out_to_the_state_file_when_not_given(tmp_path: Path) -> None:
+    """#270 F10: a resumed run with neither --out nor a profile `out:` must
+    still save its own progress somewhere — back to the file its state
+    came from — rather than risking losing it all again."""
+    orch = _two_step_orch(tmp_path)
+    run_json = tmp_path / "run.json"
+
+    first = runner.invoke(app, ["run", str(orch), "--out", str(run_json)])
+    assert first.exit_code == 1, first.stdout
+    before = json.loads(run_json.read_text(encoding="utf-8"))
+    assert before["prime"]["step1"]["meta"]["completed_at"]
+
+    second = runner.invoke(
+        app, ["run", str(orch), "--state", str(run_json), "--resume", "x"]
+    )
+    assert second.exit_code == 1, second.stdout
+    # Written back to run.json even though --out wasn't passed this time.
+    after = json.loads(run_json.read_text(encoding="utf-8"))
+    assert after["prime"]["step2"]["meta"]["error"]
+
+
+def test_resume_last_does_not_replay_a_redacted_secret_as_a_literal_value(
+    tmp_path: Path,
+) -> None:
+    """#270 F9: `--resume last` must not feed the stash's redaction marker
+    back in as if it were the real `-e` value — the resumed state (loaded
+    straight from --out) already carries the real one."""
+    orch = _write(
+        tmp_path / "chain.yml",
+        """
+interface:
+  inputs:
+    api_key: {type: string, required: true}
+effects:
+  - type: tool
+    name: step1
+    provider: json
+    params:
+      mode: parse
+      input: "not valid json"
+""".lstrip(),
+    )
+    run_json = tmp_path / "run.json"
+
+    first = runner.invoke(
+        app,
+        ["run", str(orch), "-e", "api_key=realsecret123", "--out", str(run_json)],
+    )
+    assert first.exit_code == 1, first.stdout
+    before = json.loads(run_json.read_text(encoding="utf-8"))
+    assert before["input"]["api_key"] == "realsecret123"
+
+    second = runner.invoke(app, ["run", str(orch), "--resume", "last"])
+    assert second.exit_code == 1, second.stdout
+    after = json.loads(run_json.read_text(encoding="utf-8"))
+    assert after["input"]["api_key"] == "realsecret123"

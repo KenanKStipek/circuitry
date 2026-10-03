@@ -89,7 +89,7 @@ class MongodbStatePersistence:
             try:
                 collection = client[self.database][self.collection]
                 doc = collection.find_one(
-                    {"orchestration_path": orchestration_path},
+                    {"orchestration_path": orchestration_path, "ok": True},
                     sort=[("created_at", -1)],
                 )
             finally:

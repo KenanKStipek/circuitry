@@ -58,7 +58,7 @@ class SQLiteStatePersistence:
                     f"""
                     SELECT state_json
                     FROM {self._quoted_table}
-                    WHERE orchestration_path = ?
+                    WHERE orchestration_path = ? AND ok = 1
                     ORDER BY created_at DESC, rowid DESC
                     LIMIT 1
                     """,

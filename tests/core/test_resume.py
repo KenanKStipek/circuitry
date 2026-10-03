@@ -272,3 +272,266 @@ def test_loop_without_resume_flag_reruns_every_pass(tmp_path: Path) -> None:
 
     _run_loop(orch, state, adapter=adapter, resume=False)
     assert adapter.calls == ["frame-0", "frame-1", "frame-0", "frame-1"]
+
+
+def test_resume_reruns_everything_after_an_absorbed_on_error_continue_failure(
+    tmp_path: Path,
+) -> None:
+    """#270 F2 (case 2): an `on_error: continue` failure that the chain
+    absorbed must not leave later, already-finished effects skippable on a
+    later resume — the chain reran past that point last time, so it must
+    again, even though those later nodes still look finished."""
+    orch = _write(
+        tmp_path,
+        "chain.yml",
+        """
+effects:
+  - type: prompt
+    name: step1
+    template: "one"
+  - type: prompt
+    name: step2
+    template: "two"
+    on_error: continue
+  - type: prompt
+    name: step3
+    template: "three"
+""".lstrip(),
+    )
+    adapter = CountingAdapter()
+    adapter.fail_prompts = {"two"}
+
+    first = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+        )
+    )
+    assert first.ok is True, first.error
+    assert adapter.calls == ["one", "two", "three"]
+    assert first.state["prime"]["step2"]["meta"]["error"]
+
+    adapter.fail_prompts = set()
+    second = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+            initial_state=first.state,
+            resume=True,
+        )
+    )
+    assert second.ok is True, second.error
+    # step1 stays skipped; step2 reruns (it never finished without error)
+    # and step3 reruns too, even though its old node already looked
+    # finished — positional, not per-effect.
+    assert adapter.calls == ["one", "two", "three", "two", "three"]
+    assert not second.state["prime"]["step2"]["meta"]["error"]
+
+
+def test_resume_reruns_a_stale_node_left_after_the_actual_stop_point(
+    tmp_path: Path,
+) -> None:
+    """#270 F2 (case 1): a state seeded from an earlier, fully-successful
+    run (--state prev.json carryover) that then fails partway through this
+    run must not reuse the earlier run's now-stale later nodes."""
+    orch = _chain_orch(tmp_path)
+    state: dict[str, Any] = {
+        "prime": {
+            "step1": {"value": "ok:one", "meta": {"completed_at": "t", "error": None}},
+            "step2": {"value": "ok:two", "meta": {"completed_at": "t", "error": None}},
+            # This run's own stop point: never finished.
+            "step3": {"value": None, "meta": {"completed_at": None, "error": None}},
+            # Stale: left over from the earlier run this state was seeded
+            # from, at a position after the stop point above.
+            "step4": {"value": "ok:four-stale", "meta": {"completed_at": "t", "error": None}},
+        }
+    }
+    adapter = CountingAdapter()
+
+    result = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+            initial_state=state,
+            resume=True,
+        )
+    )
+    assert result.ok is True, result.error
+    assert adapter.calls == ["three", "four"]
+    assert result.state["prime"]["step4"]["value"] == "ok:four"
+
+
+def test_resume_skips_a_finished_child_of_a_tree_dynamic(tmp_path: Path) -> None:
+    """#270 F3: a tree-flow dynamic's children are each checked (and
+    skipped) independently, not always rerun wholesale."""
+    orch = _write(
+        tmp_path,
+        "tree.yml",
+        """
+effects:
+  - type: dynamic
+    name: group
+    flow: tree
+    effects:
+      - type: prompt
+        name: a
+        template: "a"
+      - type: prompt
+        name: b
+        template: "b"
+""".lstrip(),
+    )
+    adapter = CountingAdapter()
+    adapter.fail_prompts = {"b"}
+
+    first = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+        )
+    )
+    assert first.ok is False
+    assert sorted(adapter.calls) == ["a", "b"]
+    assert first.state["prime"]["group"]["a"]["value"] == "ok:a"
+
+    adapter.fail_prompts = set()
+    adapter.calls = []
+    second = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+            initial_state=first.state,
+            resume=True,
+        )
+    )
+    assert second.ok is True, second.error
+    # "a" already finished the first time — not re-dispatched.
+    assert adapter.calls == ["b"]
+
+
+def test_resume_twice_does_not_rerun_an_if_that_already_succeeded(
+    tmp_path: Path,
+) -> None:
+    """#270 F4: a conditional that failed once and then succeeded on a
+    resume must not be stuck looking "still failed" (stale meta.error) on
+    a *later* resume triggered by something else further down the chain."""
+    orch = _write(
+        tmp_path,
+        "chain.yml",
+        """
+effects:
+  - type: if
+    name: gate
+    if:
+      mode: cel
+      expr: "true"
+    then:
+      - type: prompt
+        name: inner
+        template: "inner"
+  - type: prompt
+    name: after
+    template: "after"
+""".lstrip(),
+    )
+    adapter = CountingAdapter()
+    adapter.fail_prompts = {"inner"}
+
+    first = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+        )
+    )
+    assert first.ok is False
+    assert adapter.calls == ["inner"]
+
+    adapter.fail_prompts = {"after"}
+    second = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+            initial_state=first.state,
+            resume=True,
+        )
+    )
+    assert second.ok is False
+    # `gate` succeeds this time (meta.error/completed_at freshly reset at
+    # the top of this call) and `after` fails.
+    assert adapter.calls == ["inner", "inner", "after"]
+    assert not second.state["prime"]["gate"]["meta"]["error"]
+
+    adapter.fail_prompts = set()
+    third = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+            initial_state=second.state,
+            resume=True,
+        )
+    )
+    assert third.ok is True, third.error
+    # `gate` stays skipped — without clearing its stale meta.error on the
+    # second run's success, this would re-run `inner` a third time.
+    assert adapter.calls == ["inner", "inner", "after", "after"]
+
+
+def test_loop_resume_twice_does_not_rerun_a_pass_that_already_succeeded(
+    tmp_path: Path,
+) -> None:
+    """#270 F4/F5: same stale-error/stale-completed_passes concern, for a
+    named loop resumed twice."""
+    adapter = CountingAdapter()
+    adapter.fail_prompts = {"frame-1"}
+    state: dict[str, Any] = {"input": {"items": ["0", "1"]}}
+    orch = _each_loop_orch()
+
+    try:
+        _run_loop(orch, state, adapter=adapter, resume=False)
+    except RuntimeError:
+        pass
+    assert adapter.calls == ["frame-0", "frame-1"]
+
+    adapter.fail_prompts = set()
+    _run_loop(orch, state, adapter=adapter, resume=True)
+    assert adapter.calls == ["frame-0", "frame-1", "frame-1"]
+    assert not state["prime"]["frames"]["meta"]["error"]
+
+    # A second resume (as if triggered by an unrelated later failure) must
+    # not re-render either pass: the loop's own completed_passes record
+    # (not a stale meta.error from the first failed attempt) says both
+    # already finished.
+    _run_loop(orch, state, adapter=adapter, resume=True)
+    assert adapter.calls == ["frame-0", "frame-1", "frame-1"]

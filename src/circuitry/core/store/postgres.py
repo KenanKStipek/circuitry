@@ -59,7 +59,7 @@ class PostgresStatePersistence:
                         sql.SQL("""
                         SELECT state_json
                         FROM {}
-                        WHERE orchestration_path = %s
+                        WHERE orchestration_path = %s AND ok = true
                         ORDER BY created_at DESC
                         LIMIT 1
                         """).format(sql.Identifier(self.table)),

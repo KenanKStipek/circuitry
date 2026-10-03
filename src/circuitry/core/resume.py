@@ -5,9 +5,20 @@ An effect is safe to reuse exactly when its node shows a *finished* run:
 never started, still mid-flight when the process died (Ctrl-C, a crash),
 or finished with an error — reruns. This mirrors every runtime's own
 completion contract (``prompt.py``, ``tool.py``, ``use.py``, ``dynamic.py``,
-``loop.py`` all set ``meta.completed_at`` on both their success and their
-absorbed-failure paths, and only on those paths), so the same check applies
-uniformly to a leaf effect, a container, or one loop pass.
+``loop.py``, ``conditional.py`` all set ``meta.completed_at`` *and clear*
+``meta.error`` on their success path, and set both on an absorbed failure),
+so the same check applies uniformly to a leaf effect or a container.
+
+A loop pass is different: a named chain loop (every ``while``, or an
+``each`` not running ``flow: tree``) doesn't ask whether an ``iter_<N>``
+node merely *looks* finished — that can't tell a pass that genuinely
+completed from one that was only partway written when a run stopped (an
+unnamed ``if`` in the body whose condition raised before touching the
+node; any interruption between body effects). Instead the loop keeps its
+own authoritative record, ``meta.completed_passes`` — the indices
+``_execute_body`` actually returned successfully for, persisted on both
+its success and its failure path — and resumes at the first index missing
+from the contiguous prefix of that list. See ``LoopRuntime.execute``.
 """
 
 from __future__ import annotations
@@ -16,7 +27,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-__all__ = ["document_sha256", "effect_completed_ok", "loop_pass_completed_ok"]
+__all__ = ["document_sha256", "effect_completed_ok"]
 
 
 def document_sha256(path: Path) -> str:
@@ -39,30 +50,3 @@ def effect_completed_ok(node: Any) -> bool:
         return False
     return bool(meta.get("completed_at")) and not meta.get("error")
 
-
-def loop_pass_completed_ok(iter_node: Any) -> bool:
-    """True when every effect inside one loop pass (an ``iter_<N>`` node)
-    finished without error.
-
-    *iter_node* is a container of the pass's own body-effect nodes, not an
-    effect record itself — it carries no ``meta`` of its own — so this walks
-    every child looking for one, recursing through nested containers (an
-    unnamed ``if``/``dynamic`` inside the body merges its own children
-    straight into the pass, a named one nests them one level deeper) rather
-    than trusting a fixed set of body names.
-    """
-    if isinstance(iter_node, dict):
-        meta = iter_node.get("meta")
-        if isinstance(meta, dict):
-            if meta.get("error"):
-                return False
-            if not meta.get("completed_at"):
-                return False
-        return all(
-            loop_pass_completed_ok(value)
-            for key, value in iter_node.items()
-            if key != "meta" and isinstance(value, (dict, list))
-        )
-    if isinstance(iter_node, list):
-        return all(loop_pass_completed_ok(item) for item in iter_node)
-    return True

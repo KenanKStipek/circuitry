@@ -14,7 +14,6 @@ from ..adapters import Adapter
 from ..output import console as _console
 from .answers import parse_boolean_answer
 from .disabled import is_disabled_node, is_enabled
-from .resume import loop_pass_completed_ok
 from .scope import local_writes as _local_writes_state
 from .scope import scope_ctx as _scope_ctx
 from .store import Store
@@ -175,11 +174,13 @@ class LoopRuntime:
         self._label_prefix = label_prefix
         # ``cof run --resume``: a named loop in chain flow (every ``while``,
         # or an ``each`` not running ``flow: tree``) resumes at its first
-        # unfinished pass, keeping whatever contiguous prefix of ``iter_<N>``
-        # passes already finished without error — see ``_resume_from_pass``.
-        # An unnamed loop has no ``iter_<N>`` record to resume from (each
-        # pass overwrites the last at the same path) and a tree-flow each
-        # loop's passes finish out of order, so neither is "sound" to resume
+        # unfinished pass, keeping whatever contiguous prefix of passes
+        # ``meta.completed_passes`` (this loop's own record of which passes
+        # it actually finished, not a guess from what an ``iter_<N>`` node
+        # happens to contain) already covers — see ``execute``. An unnamed
+        # loop has no ``iter_<N>`` record to resume from (each pass
+        # overwrites the last at the same path) and a tree-flow each loop's
+        # passes finish out of order, so neither is "sound" to resume
         # granularly; both just rerun whole, same as today.
         self.resume = resume
         # Raw reply from the last `mode: model` while-condition evaluation,
@@ -222,6 +223,17 @@ class LoopRuntime:
                 meta = {}
                 node["meta"] = meta
             meta["created_at"] = _now_iso()
+            # Clear a previous call's own completed_at/error before this one
+            # runs — this node is reused across a --state/persistence
+            # carryover or a `cof run --resume`, and a stale meta.error left
+            # over from an earlier failed attempt would make a later resume
+            # treat this loop as still unfinished even after it just
+            # completed cleanly (#270 F4). `meta.completed_passes`, read
+            # below to compute resume_from, is deliberately left untouched:
+            # it's the previous call's own authoritative record, not a
+            # stale leftover.
+            meta["completed_at"] = None
+            meta["error"] = None
             if self.defn.max_iterations is not None:
                 meta["max_iterations"] = self.defn.max_iterations
             meta["min_iterations"] = self.defn.min_iterations
@@ -298,13 +310,25 @@ class LoopRuntime:
                 or (self.defn.each_def is not None and self.defn.flow == "chain")
             )
         ):
+            # Which passes actually finished, per the *loop's own* record
+            # (meta.completed_passes, written below on both the success and
+            # the failure path) — not by eyeballing the iter_<N> node and
+            # guessing it looks done. A pass that was only partway written
+            # when the run stopped (an unnamed `if` in the body whose
+            # condition raised before touching the node, or any interruption
+            # between body effects) never reached `completed_indices.append`
+            # on the run that produced it, so it is correctly absent here
+            # even though iter_<N> itself holds some finished-looking
+            # children (#270 F5).
+            assert meta is not None
+            prior_completed = meta.get("completed_passes")
+            prior_set = (
+                {i for i in prior_completed if isinstance(i, int)}
+                if isinstance(prior_completed, list)
+                else set()
+            )
             idx = 0
-            while True:
-                iter_node = node.get(f"iter_{idx}")
-                if not isinstance(iter_node, dict) or not loop_pass_completed_ok(
-                    iter_node
-                ):
-                    break
+            while idx in prior_set:
                 resume_from = idx + 1
                 idx += 1
             if resume_from > 0:
@@ -785,8 +809,11 @@ class LoopRuntime:
                 }
                 if meta:
                     meta["completed_at"] = _now_iso()
+                    meta["completed_passes"] = sorted(set(completed_indices))
                     if failed_passes:
                         meta["failed_passes"] = list(failed_passes)
+                    else:
+                        meta.pop("failed_passes", None)
 
                 # collect: aggregate the named body effect's .value across all iterations
                 if self.defn.collect:
@@ -803,6 +830,10 @@ class LoopRuntime:
             if meta:
                 meta["error"] = str(e)
                 meta["completed_at"] = _now_iso()
+                # Whatever passes this call did complete before the
+                # failure stay resumable, even though the loop as a whole
+                # didn't finish (#270 F5).
+                meta["completed_passes"] = sorted(set(completed_indices))
             if node:
                 node["value"] = {
                     "iterations": iteration_count,

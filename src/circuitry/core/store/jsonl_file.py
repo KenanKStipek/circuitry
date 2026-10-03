@@ -77,6 +77,8 @@ class JsonlFileStatePersistence:
                 continue
             if record.get("orchestration_path") != orchestration_path:
                 continue
+            if record.get("ok") is not True:
+                continue
             state = record.get("state")
             if isinstance(state, dict):
                 return state
