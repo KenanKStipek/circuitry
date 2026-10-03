@@ -613,6 +613,185 @@ def test_replay_carries_the_stashed_remote_library_source(
     assert seen["request"].remote_library_source is (stashed_remote is True)
 
 
+def test_replay_of_a_remote_library_source_stash_is_gated_without_consent(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """End-to-end (no mocked runner): replaying a `cof run-library` stash
+    through the real `runtime_shim.run()` must go through the same
+    whole-document capability gate the original run applied (#275, #337),
+    not just carry the flag into a request nothing then checks.
+    """
+    orch = tmp_path / "demo.yml"
+    orch.write_text(
+        "effects: []\n"
+        "finally:\n"
+        "  - type: tool\n"
+        "    name: cleanup\n"
+        "    provider: shell\n"
+        "    params:\n"
+        "      command: echo\n",
+        encoding="utf-8",
+    )
+
+    async def scenario(pilot: Pilot[Any]) -> RunsScreen:
+        screen = await _open(
+            pilot,
+            _screen(
+                last_run=_stash(orch, remote_library_source=True),
+                config=CircuitryConfig(),
+            ),
+        )
+        screen.action_replay()
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if screen.status_text.startswith("Replay failed") or screen.status_text.endswith(
+                "replay finished"
+            ):
+                break
+        return screen
+
+    screen = run_app(scenario)
+    assert screen.status_text.startswith("Replay failed")
+    assert "shell" in screen.status_text
+    assert "cof trust" in screen.status_text
+
+
+def test_replay_of_a_real_run_library_stash_is_gated_without_consent(
+    run_app: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end with the *real* stash `cof run-library` writes (#337),
+    not a hand-written one: before this fix the stash carried no
+    `remote_library_source` key at all, so a TUI replay of it skipped the
+    whole-document capability gate entirely. A hand-written stash that
+    already sets the flag can't tell that gap apart from the fix."""
+    from typer.testing import CliRunner
+
+    from circuitry.cli import app as cli_app_module
+    from circuitry.cli.app import app as cli_app
+    from circuitry.cli.last_run import read_last_run
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(cli_app_module, "GLOBAL_CONFIG_DIR", fake_home)
+    stash_path = fake_home / "last-run.json"
+    monkeypatch.setattr(cli_app_module, "_LAST_RUN_PATH", stash_path)
+
+    lib_root = tmp_path / "library"
+    (lib_root / "welcome").mkdir(parents=True)
+    (lib_root / "welcome" / "1.0.0.yml").write_text(
+        "effects:\n"
+        "  - type: tool\n"
+        "    name: t\n"
+        "    provider: shell\n"
+        "    params:\n"
+        "      command: echo\n"
+        "      args: [hi]\n",
+        encoding="utf-8",
+    )
+    (lib_root / "welcome" / "1.0.0.json").write_text(
+        json.dumps({"title": "welcome-1.0.0"}) + "\n", encoding="utf-8"
+    )
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {"runtime": {"library": {"backend": "filesystem", "local_root": str(lib_root)}}}
+        ),
+        encoding="utf-8",
+    )
+
+    first = CliRunner().invoke(
+        cli_app,
+        [
+            "run-library", "welcome", "--version", "1.0.0",
+            "--config", str(config_path), "--dry-run",
+            "--allow-capabilities", "shell",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+
+    stashed = read_last_run(path=stash_path)
+    assert stashed is not None and stashed.ok
+    assert stashed.remote_library_source is True
+
+    async def scenario(pilot: Pilot[Any]) -> RunsScreen:
+        screen = await _open(pilot, _screen(last_run=stashed))
+        screen.action_replay()
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if screen.status_text.startswith("Replay failed") or screen.status_text.endswith(
+                "replay finished"
+            ):
+                break
+        return screen
+
+    screen = run_app(scenario)
+    assert screen.status_text.startswith("Replay failed")
+    assert "shell" in screen.status_text
+    assert "cof trust" in screen.status_text
+
+
+def test_replay_of_a_document_named_by_its_cache_path_is_gated_without_consent(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """End-to-end (#337): a stashed path inside a `github`-type source's own
+    cache directory is gated by `is_cache_path` alone, with no
+    `remote_library_source` flag in the stash at all — the way a plain
+    `cof run <cache-path>` run's own stash wouldn't carry one."""
+    cache_dir = tmp_path / "cache"
+    doc = cache_dir / "hub" / "sha1" / "pipeline.yml"
+    doc.parent.mkdir(parents=True)
+    doc.write_text(
+        "effects: []\n"
+        "finally:\n"
+        "  - type: tool\n"
+        "    name: cleanup\n"
+        "    provider: shell\n"
+        "    params:\n"
+        "      command: echo\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "runtime": {
+                    "library": {
+                        "sources": [
+                            {
+                                "type": "github",
+                                "name": "hub",
+                                "repo": "owner/name",
+                                "cache_dir": str(cache_dir),
+                            }
+                        ]
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    stashed = LastRun(
+        path=tmp_path / "last-run.json",
+        args={"orchestration": str(doc), "config": str(config_path)},
+    )
+
+    async def scenario(pilot: Pilot[Any]) -> RunsScreen:
+        screen = await _open(pilot, _screen(last_run=stashed))
+        screen.action_replay()
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if screen.status_text.startswith("Replay failed") or screen.status_text.endswith(
+                "replay finished"
+            ):
+                break
+        return screen
+
+    screen = run_app(scenario)
+    assert screen.status_text.startswith("Replay failed")
+    assert "shell" in screen.status_text
+    assert "cof trust" in screen.status_text
+
+
 def test_replay_refuses_a_run_that_stashed_redacted_secrets(
     run_app: Any, tmp_path: Path
 ) -> None:

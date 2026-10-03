@@ -60,6 +60,7 @@ from .effective_settings import (
     resolve_effective_settings,
 )
 from .interrupts import SigTermInterrupt
+from .library_sources import LibraryRegistry
 from .live_state import LiveStateMirror
 from .orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
 from .profiles import (
@@ -418,18 +419,26 @@ def run(req: RunRequest) -> RunResult:
 
         # Capability consent (#275): gated on the whole document for a
         # `cof fetch`/`cof run-library` asset (`shared_library_metadata` is
-        # the signal both the CLI command and `run_shared_orchestration` set)
-        # and for a remote library source run by bare name
-        # (`remote_library_source`, set by `cof run` when the resolved path
-        # came from a `github`-type source); a `use: ref:` child is
-        # independently in scope regardless, including one reached from a
-        # path-trusted document. Raises/prompts before anything compiles or
-        # dispatches, same fail-fast spirit as the allowlist check above.
+        # the signal both the CLI command and `run_shared_orchestration` set),
+        # for a remote library source run by bare name (`remote_library_source`,
+        # set by `cof run` when the resolved path came from a `github`-type
+        # source), and for a document whose resolved path (symlinks followed)
+        # lies inside any `github`-type source's own cache directory — naming
+        # that path directly instead of the library name is naming the exact
+        # same fetched content, and an MCP/TUI/CLI caller must not be able to
+        # dodge the gate just by pointing at the file instead of the name
+        # (#337). A `use: ref:` child is independently in scope regardless,
+        # including one reached from a path-trusted document. Raises/prompts
+        # before anything compiles or dispatches, same fail-fast spirit as the
+        # allowlist check above.
+        library_registry = LibraryRegistry.from_runtime(cfg.runtime)
         capability_ceiling = enforce_consent(
             orch=orch,
             orchestration_path=req.orchestration_path,
             gate_whole_document=(
-                req.shared_library_metadata is not None or req.remote_library_source
+                req.shared_library_metadata is not None
+                or req.remote_library_source
+                or library_registry.is_cache_path(req.orchestration_path)
             ),
             runtime=cfg.runtime,
             store_path=trust_store_path(),
