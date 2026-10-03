@@ -156,6 +156,27 @@ def test_nested_tree_loops_with_use_children_group_cap_one(
     assert plugin.max_in_flight == 1
 
 
+def test_nested_tree_loops_with_use_children_global_and_group_cap_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both caps active at once, each at 1 — the group-first acquisition
+    order (#274 review P1) must not deadlock a leaf that needs both a
+    group slot and a global one."""
+    plugin = _TrackingPlugin()
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: plugin)
+
+    child_path = _write_child(tmp_path, group="gpu")
+    root = compile_orchestration(orch=_outer_orch(child_path))
+    limiter = RunConcurrencyLimiter(max_concurrency=1, groups={"gpu": 1})
+    runtime_config = {RUNTIME_CONFIG_KEY: limiter}
+    state = {"input": {"items": [[0, 1, 2], [3, 4, 5], [6, 7, 8]]}}
+
+    _run_with_timeout(root, runtime_config=runtime_config, state=state)
+
+    assert plugin.calls == 9
+    assert plugin.max_in_flight == 1
+
+
 def test_nested_tree_loops_with_use_children_cap_two_allows_real_parallelism(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

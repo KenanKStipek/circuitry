@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import random
+import sys
 import time
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager, nullcontext
@@ -689,10 +690,15 @@ class PromptRuntime:
             # Acquired once for the whole dispatch below, retries included —
             # a retried/fallen-back-from attempt is still the same logical
             # dispatch, not a fresh one competing for a fresh slot. Entered
-            # and exited manually (not `with`) so the slot is held across the
-            # whole retry loop below without re-indenting it; released in the
-            # two exit paths it has — the success `return` and the `except`
-            # below — covering every way this `try` block can end (#274).
+            # manually (not `with`) so the slot is held across the whole
+            # retry loop below without re-indenting it; released exactly
+            # once in the `finally` below, which is the only exit this `try`
+            # has that is guaranteed to run on every path out — a normal
+            # return, any exception the `except Exception` below catches, a
+            # `BaseException` it doesn't, and the body falling through
+            # without a `return` at all, e.g. a non-positive
+            # default_prompt_retries making the retry loop run zero times
+            # (#274 review P2).
             limiter = self.runtime_config.get(_CONCURRENCY_LIMITER_KEY)
 
             def _on_wait(label: str) -> None:
@@ -810,7 +816,6 @@ class PromptRuntime:
                         else:
                             _console.print(line)
 
-                    concurrency_cm.__exit__(None, None, None)
                     store.fire_effect_complete(self.defn.name, node)
                     return
 
@@ -860,8 +865,6 @@ class PromptRuntime:
                 )
 
         except Exception as e:
-            if concurrency_cm is not None:
-                concurrency_cm.__exit__(type(e), e, e.__traceback__)
             if self.verbose:
                 elapsed = time.monotonic() - t0
                 failure_target = self._attempts_target(attempts_meta) or target
@@ -887,6 +890,9 @@ class PromptRuntime:
             store.fire_effect_complete(self.defn.name, node)
             if self.defn.on_error == "fail":
                 raise
+        finally:
+            if concurrency_cm is not None:
+                concurrency_cm.__exit__(*sys.exc_info())
 
     def _score_and_route(
         self, *, rendered_prompt: str

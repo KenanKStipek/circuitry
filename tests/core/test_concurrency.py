@@ -131,6 +131,53 @@ def test_global_cap_and_group_cap_compose() -> None:
     assert tracker.max_in_flight == 2
 
 
+def test_group_waiters_do_not_hold_global_slots() -> None:
+    """Group acquisition happens before the global one (#274 review P1):
+    a leaf queued behind a full group must not occupy a global slot while
+    it waits, or it would starve every ungrouped leaf in the run."""
+    limiter = RunConcurrencyLimiter(max_concurrency=2, groups={"gpu": 1})
+
+    gpu_holder_ready = threading.Event()
+    release_gpu_holder = threading.Event()
+
+    def hold_gpu() -> None:
+        with limiter.acquire(group="gpu"):
+            gpu_holder_ready.set()
+            release_gpu_holder.wait(timeout=5)
+
+    holder = threading.Thread(target=hold_gpu)
+    holder.start()
+    gpu_holder_ready.wait(timeout=5)
+
+    # Two more gpu leaves queue behind the group's single slot. If group
+    # acquisition happened after the global one, each would first grab one
+    # of the two global slots and then block — leaving none for the
+    # ungrouped leaf below.
+    def queue_gpu() -> None:
+        with limiter.acquire(group="gpu"):
+            pass
+
+    queued = [threading.Thread(target=queue_gpu) for _ in range(2)]
+    for t in queued:
+        t.start()
+
+    # Give the queued threads a moment to reach (and block on) the group
+    # semaphore before checking the ungrouped leaf.
+    time.sleep(0.1)
+
+    ungrouped_ran = threading.Event()
+    with limiter.acquire(group=None):
+        ungrouped_ran.set()
+    assert ungrouped_ran.is_set()
+
+    release_gpu_holder.set()
+    holder.join(timeout=5)
+    for t in queued:
+        t.join(timeout=5)
+    assert not holder.is_alive()
+    assert all(not t.is_alive() for t in queued)
+
+
 def test_unknown_group_raises() -> None:
     limiter = RunConcurrencyLimiter(groups={"gpu": 1})
     with pytest.raises(UnknownConcurrencyGroupError, match="comfy"):

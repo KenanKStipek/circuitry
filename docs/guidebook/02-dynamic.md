@@ -135,6 +135,8 @@ A dynamic has its own `on_error`, with the same three values and the same meanin
 
 `stop_on_error` is the one field the leaf effects do not have, and it is tree-only: by default a tree runs every child to completion and collects whichever failed; `stop_on_error: true` instead cancels every child that has not started yet as soon as one fails. A child already running when that happens cannot be stopped — no thread can be killed from outside — so `stop_on_error` only cuts work that `max_concurrency` was holding back from starting. Any child that was already running when the cancellation happened still finishes, but its own failure (if it has one) is not added to the dynamic's own `meta.error`, and a cancelled child leaves no node and fires no hooks at all — only the triggering failure is recorded. In a chain, a failing child already stops the ones after it (it is sequential), so `stop_on_error` does nothing there. Per-effect `on_error` on the children themselves covers the same intent one effect at a time and is usually the better tool.
 
+A child blocked acquiring a `runtime.max_concurrency`/`concurrency_groups` slot (see [Configuration](04-configuration.md)) is, from this container's own point of view, already started — the pool has dispatched it, it just hasn't passed the run-wide gate yet — so `stop_on_error` cannot cancel it either, the same as a child already running. After the triggering failure, every other child still queued on that same cap or group keeps waiting its turn and runs, one at a time, exactly as it would have without the failure.
+
 ## What lands in the shadow state
 
 ```

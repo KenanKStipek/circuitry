@@ -58,6 +58,30 @@ def test_group_on_a_container_is_a_structural_error(container_type: str, extra: 
     assert f"a '{container_type}' effect" in errors[0]
 
 
+@pytest.mark.parametrize(
+    ("container_type", "extra"),
+    [
+        ("use", {"path": "child.yml"}),
+        ("reflector", {"effects": [{"type": "tool", "name": "t", "provider": "json", "params": {"input": "1"}}]}),
+    ],
+)
+def test_group_on_use_or_reflector_is_also_a_structural_error(
+    container_type: str, extra: dict
+) -> None:
+    """`use` and `reflector` are containers too — neither dispatches itself,
+    so `group:` is just as much an error on them as on loop/dynamic/if
+    (#274 review P2: only loop/dynamic/if were covered before)."""
+    orch = {
+        "effects": [
+            {"type": container_type, "name": "c", "group": "gpu", **extra},
+        ]
+    }
+    errors = group_field_errors(orch)
+    assert len(errors) == 1
+    assert "'group' is only allowed on tool/prompt effects" in errors[0]
+    assert f"a '{container_type}' effect" in errors[0]
+
+
 def test_group_on_tool_and_prompt_is_not_a_structural_error() -> None:
     orch = {
         "effects": [
@@ -291,3 +315,63 @@ def test_run_executes_a_grouped_tool_with_a_configured_group(tmp_path: Path) -> 
     )
     assert result.ok is True, result.error
     assert result.state["prime"]["t"]["value"] == '"ran"'
+
+
+def test_run_max_concurrency_actually_limits_leaves_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`run()`-level proof, not just "doesn't crash" (#274 review P2): a
+    `runtime.max_concurrency: 1` config caps a tree loop's own
+    `max_concurrency: 3` dispatches to 1 at a time, the whole way through
+    `cli.runtime_shim.run`."""
+    import threading
+    import time as _time
+
+    lock = threading.Lock()
+    in_flight = 0
+    max_in_flight = 0
+    calls = 0
+
+    class _TrackingPlugin:
+        def execute(self, *, params: dict, timeout_seconds: int):
+            nonlocal in_flight, max_in_flight, calls
+            from circuitry.plugins.base import ToolResult
+
+            with lock:
+                in_flight += 1
+                max_in_flight = max(max_in_flight, in_flight)
+                calls += 1
+            _time.sleep(0.03)
+            with lock:
+                in_flight -= 1
+            return ToolResult(value="ok", raw={}, stdout="", stderr="", exit_code=0)
+
+    monkeypatch.setattr(
+        "circuitry.plugins.factory.build_plugin", lambda **kw: _TrackingPlugin()
+    )
+    path = _write(
+        tmp_path,
+        "effects:\n"
+        "  - type: loop\n"
+        "    name: outer\n"
+        "    flow: tree\n"
+        "    max_concurrency: 3\n"
+        "    each: {in: input.xs, as: x}\n"
+        "    body:\n"
+        "      - {type: tool, name: t, provider: json, params: {input: '1'}}\n",
+    )
+    cfg = CircuitryConfig(runtime={"max_concurrency": 1})
+    result = run(
+        RunRequest(
+            orchestration_path=path,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            config=cfg,
+            initial_state={"input": {"xs": [1, 2, 3, 4, 5]}},
+        )
+    )
+    assert result.ok is True, result.error
+    assert calls == 5
+    assert max_in_flight == 1

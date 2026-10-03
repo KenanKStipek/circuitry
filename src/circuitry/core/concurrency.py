@@ -94,9 +94,16 @@ class RunConcurrencyLimiter:
     eventual, unconditional release, never on a container that is itself
     waiting on that thread.
 
-    Acquisition order is always the same — the global slot first, then the
-    named group's — so two leaves can never hold the two resources in
-    opposite order and deadlock on each other.
+    Acquisition order is always the same — the named group's slot first,
+    then the global one — so two leaves can never hold the two resources in
+    opposite order and deadlock on each other. Group-first also keeps the
+    global cap meaning what the design promises ("effects running at the
+    same time", not effects merely waiting their turn for a group): a
+    leaf blocked on its group has not reached the global semaphore yet, so
+    it holds no slot a non-grouped leaf elsewhere in the run needs, and
+    anything that *has* acquired the global slot has already cleared its
+    group and is actually dispatching, so it will release both in bounded
+    time.
     """
 
     def __init__(
@@ -163,15 +170,15 @@ class RunConcurrencyLimiter:
             )
         held: list[threading.Semaphore] = []
         try:
+            if group is not None:
+                sem = self._group_sems[group]
+                self._acquire_one(sem, group, on_wait, on_acquired)
+                held.append(sem)
             if self._global_sem is not None:
                 self._acquire_one(
                     self._global_sem, GLOBAL_RESOURCE_LABEL, on_wait, on_acquired
                 )
                 held.append(self._global_sem)
-            if group is not None:
-                sem = self._group_sems[group]
-                self._acquire_one(sem, group, on_wait, on_acquired)
-                held.append(sem)
             yield
         finally:
             for sem in reversed(held):

@@ -15,6 +15,7 @@ Prompt ::= { type: 'prompt', name: NAME,
              params?: MAP, inputs?: MAP,
              assets?: Asset*, retries?: Retry,
              timeout_ms?: INT, deterministic?: BOOL,
+             group?: STRING,                             — names a runtime.concurrency_groups key; leaf only
              on_error?: 'fail'|'skip'|'continue', description?: STRING }
 ```
 
