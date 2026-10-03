@@ -5,9 +5,10 @@ import json
 import logging
 import math
 import random
+import sys
 import time
 from collections.abc import Callable, Sequence
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -29,6 +30,7 @@ from ..cli.redaction import redact
 from ..output import console as _console
 from ..output import live_region as _live_region
 from .answers import AnswerParseError, parse_boolean_answer, parse_number_answer
+from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .store import Store
 from .templates import render_template
 
@@ -363,6 +365,13 @@ class PromptDefinition:
     # False = skip execution and write a disabled node (see core.disabled).
     enabled: bool = True
 
+    # Named concurrency-group slot this effect holds for the duration of its
+    # dispatch (core.concurrency.RunConcurrencyLimiter) — None means it only
+    # ever competes for runtime.max_concurrency's run-wide slots, if any are
+    # configured. A prompt effect is a leaf, so this is where a slot is
+    # actually held; see #274.
+    group: str | None = None
+
 
 class PromptRuntime:
     """
@@ -566,6 +575,7 @@ class PromptRuntime:
         # iteration of an unnamed loop (same store) left behind.
         for key in ("finish_reason", "warnings", "assets"):
             meta.pop(key, None)
+        meta["waiting_for"] = None
 
         # Scored here, alongside the rest of the pre-dispatch meta, so the
         # score is on the node before anything can go wrong. A post-success
@@ -630,6 +640,10 @@ class PromptRuntime:
         attempts_meta: list[dict[str, Any]] = []
         total_tokens_sent: int | None = None
         total_tokens_received: int | None = None
+        # Entered once dispatch actually starts (after any decomposition
+        # early-return) and exited exactly once, on whichever of this try's
+        # two exits is taken — see the acquisition site below.
+        concurrency_cm: AbstractContextManager[None] | None = None
         try:
             # Decomposition sits right at the dispatch seam: it either replaces
             # the model call entirely (the merged child result lands at this
@@ -673,6 +687,40 @@ class PromptRuntime:
                     )
                 if decomposition.fallback_model:
                     dispatch_model = decomposition.fallback_model
+
+            # Acquired once for the whole dispatch below, retries included —
+            # a retried/fallen-back-from attempt is still the same logical
+            # dispatch, not a fresh one competing for a fresh slot. Entered
+            # manually (not `with`) so the slot is held across the whole
+            # retry loop below without re-indenting it; released exactly
+            # once in the `finally` below, which is the only exit this `try`
+            # has that is guaranteed to run on every path out — a normal
+            # return, any exception the `except Exception` below catches, a
+            # `BaseException` it doesn't, and the body falling through
+            # without a `return` at all, e.g. a non-positive
+            # default_prompt_retries making the retry loop run zero times
+            # (#274 review P2).
+            limiter = self.runtime_config.get(_CONCURRENCY_LIMITER_KEY)
+
+            def _on_wait(label: str) -> None:
+                store.set(f"{self.defn.name}.meta.waiting_for", label)
+                if self.verbose:
+                    _console.print(
+                        f"{indent}[info]…[/info] [cyan]◆[/cyan] {self.display_name}"
+                        f" [dim]waiting for '{label}'[/dim]"
+                    )
+
+            def _on_acquired() -> None:
+                store.set(f"{self.defn.name}.meta.waiting_for", None)
+
+            concurrency_cm = (
+                limiter.acquire(
+                    group=self.defn.group, on_wait=_on_wait, on_acquired=_on_acquired
+                )
+                if limiter is not None
+                else nullcontext()
+            )
+            concurrency_cm.__enter__()
 
             options = self._generation_options(
                 ctx=effective_ctx, messages=messages, meta=meta
@@ -845,6 +893,9 @@ class PromptRuntime:
             store.fire_effect_complete(self.defn.name, node)
             if self.defn.on_error == "fail":
                 raise
+        finally:
+            if concurrency_cm is not None:
+                concurrency_cm.__exit__(*sys.exc_info())
 
     def _score_and_route(
         self, *, rendered_prompt: str

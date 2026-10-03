@@ -9,6 +9,7 @@ Tool ::= { type: 'tool', name: NAME, provider: PLUGIN_NAME,
            prompt?: TEMPLATE, model?: STRING,
            params?: MAP,                                 — string values Mustache-rendered; a {from: PATH} leaf passes a native value; wins over prompt/model
            params_json?: TEMPLATE,                       — rendered, parsed as JSON, deep-merged over params
+           group?: STRING,                               — names a runtime.concurrency_groups key; leaf only
            timeout_ms?: INT, on_error?: 'fail'|'skip'|'continue', description?: STRING }
 ```
 
