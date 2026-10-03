@@ -40,6 +40,7 @@ from ..cli.effective_settings import (
     orchestration_host_setting_warnings,
     resolve_effective_settings,
 )
+from ..cli.library_sources import LibraryRegistry, LibrarySourceError
 from ..cli.orchestration_loader import load_orchestration_file
 from ..cli.redaction import redact
 from ..core.compiler import compile_orchestration
@@ -417,6 +418,20 @@ def validate_report(
     warnings carry the notice naming the host settings a run would apply
     rather than the ones it would ignore.
     """
+    # Same cache-path override `runtime_shim.validate()` applies (#343): a
+    # path inside a library source's own cache directory is fetched content,
+    # so this view must not report "Applied host settings" for a document a
+    # real run would limit.
+    try:
+        library_registry = LibraryRegistry.from_runtime(
+            config.runtime if config is not None else None
+        )
+    except LibrarySourceError:
+        library_registry = LibraryRegistry.default()
+    trust_document = runtime_shim.effective_document_trust(
+        trust_document, path, library_registry
+    )
+
     issues: list[ValidationIssue] = []
     skipped: list[str] = []
 

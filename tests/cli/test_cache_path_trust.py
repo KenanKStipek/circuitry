@@ -19,6 +19,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
@@ -331,6 +332,10 @@ def test_cof_check_on_a_cache_path_document_reports_it_as_limited(tmp_path: Path
     assert result.exit_code == 0, result.output
     report = json.loads(result.stdout)
     assert not any("Applied host settings" in w for w in report["warnings"])
+    assert any(
+        w.startswith("Ignored runtime.adapters from the orchestration")
+        for w in report["warnings"]
+    )
 
 
 def test_sdk_validate_orchestration_on_a_cache_path_document_matches_the_run(
@@ -346,3 +351,85 @@ def test_sdk_validate_orchestration_on_a_cache_path_document_matches_the_run(
 
     assert report["ok"], report["errors"]
     assert not any("Applied host settings" in w for w in report["warnings"])
+    assert any(
+        w.startswith("Ignored runtime.adapters from the orchestration")
+        for w in report["warnings"]
+    )
+
+
+def test_cof_check_with_a_malformed_library_sources_config_does_not_crash(
+    tmp_path: Path,
+) -> None:
+    """Deciding a document's cache-path trust (#343) builds a
+    ``LibraryRegistry`` from ``runtime.library.sources``; a malformed config
+    there must surface as a normal ``ok: false`` document report — the same
+    way the allowlist check's own ``use:`` resolution already reports it —
+    not escape as an uncaught ``LibrarySourceError`` with no JSON on stdout
+    at all (confirmed against the pre-fix code: ``result.exception`` was the
+    raw ``LibrarySourceError`` and stdout was empty)."""
+    doc = _write_yaml(tmp_path / "plain.yml", _doc())
+    config = tmp_path / "config.json"
+    config.write_text(
+        json.dumps({"runtime": {"library": {"sources": []}}}), encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["check", str(doc), "-c", str(config), "--json"])
+
+    assert isinstance(result.exception, SystemExit), result.exception
+    report = json.loads(result.stdout)
+    assert any(
+        "runtime.library.sources" in e for e in report["errors"]
+    ), report["errors"]
+
+
+# ── cof doctor ───────────────────────────────────────────────────────────────
+
+
+def test_doctor_generate_on_a_cache_path_document_does_not_apply_its_runtime_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``cof doctor --orch <cache-path> --generate`` must not take the
+    document's own ``runtime.adapters.<x>.base_url`` (or send a real
+    ``generate`` call there) any more than ``cof run`` does on the same
+    path (#343) — the one surface the original fix missed."""
+    monkeypatch.setenv("CIRCUITRY_ENABLED_ADAPTERS", "")
+    monkeypatch.setenv("CIRCUITRY_ENABLED_TOOLS", "")
+    monkeypatch.setenv("CIRCUITRY_ENABLED_PLUGINS", "")
+    cache_dir = tmp_path / "cache"
+    doc = _write_yaml(cache_dir / "hub" / "sha1" / "pipeline.yml", _doc())
+    config_data = {
+        **_github_sources_config(cache_dir),
+        "default_adapter": "openai",
+        "default_model": "gpt-4o-mini",
+    }
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps(config_data), encoding="utf-8")
+
+    captured: dict[str, Any] = {}
+
+    class FakeAdapter:
+        def generate(self, *, model: str, prompt: str, timeout_seconds: int) -> Any:
+            from circuitry.adapters.base import GenerateResult
+
+            return GenerateResult(text="ok", raw={})
+
+    def fake_build_adapter(*, adapter_name: str, runtime: dict[str, Any]) -> FakeAdapter:
+        captured["runtime"] = runtime
+        return FakeAdapter()
+
+    from circuitry.cli import doctor as doctor_module
+
+    # `build_adapter` only becomes a module attribute once
+    # `_load_extension_registries` has run once (doctor.py's own lazy-import
+    # guard) — force it so this test doesn't depend on another doctor test
+    # having already run first in the same session.
+    doctor_module._load_extension_registries()
+    monkeypatch.setattr(doctor_module, "build_adapter", fake_build_adapter)
+
+    result = runner.invoke(
+        app, ["doctor", "-c", str(config), "--orch", str(doc), "--generate"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "runtime" in captured
+    _assert_document_runtime_not_applied(captured["runtime"])
