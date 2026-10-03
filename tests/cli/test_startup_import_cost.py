@@ -10,6 +10,7 @@ else this test session already imported.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -55,12 +56,18 @@ def test_cof_check_still_validates_correctly_with_lazy_imports(tmp_path) -> None
         "effects:\n  - type: prompt\n    name: hello\n    template: Hi\n",
         encoding="utf-8",
     )
+    # A fake $HOME keeps this off the real ~/.config/circuitry/config.json
+    # (CLAUDE.md hermeticity) — CIRCUITRY_CACHE_DIR alone (set by conftest)
+    # isn't enough, since config discovery still reads the real HOME.
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
     result = subprocess.run(
         [sys.executable, "-m", "circuitry.cli.app", "check", str(orch)],
         capture_output=True,
         text=True,
         timeout=30,
         check=False,
+        env={**os.environ, "HOME": str(home)},
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Valid" in result.stdout
