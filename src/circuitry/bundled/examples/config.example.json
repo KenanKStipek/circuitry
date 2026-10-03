@@ -1,0 +1,43 @@
+{
+  "default_adapter": "ollama",
+  "default_model": "llama3.1:8b",
+  "environment": "dev",
+  "enabled_adapters": ["ollama", "openai", "anthropic"],
+  "enabled_tools": ["shell", "python_eval", "regex", "http"],
+  "runtime": {
+    "adapters": {
+      "ollama": {
+        "base_url": "http://localhost:11434",
+        "timeout_seconds": 600
+      },
+      "openai": {
+        "base_url": "https://api.openai.com/v1",
+        "default_model": "gpt-4o-mini",
+        "timeout_seconds": 120
+      },
+      "anthropic": {
+        "base_url": "https://api.anthropic.com",
+        "default_model": "claude-sonnet-4-20250514",
+        "max_tokens": 4096,
+        "timeout_seconds": 120
+      }
+    },
+    "plugins": {
+      "shell": {
+        "allowed_commands": ["ls", "cat", "echo", "pwd"]
+      }
+    },
+    "persistence": {
+      "enabled": true,
+      "backend": "jsonl-file",
+      "path": "./runs/state.jsonl"
+    },
+    "max_concurrency": 4,
+    "concurrency_groups": {
+      "gpu": 1
+    },
+    "tools": {
+      "timeout_seconds": 300
+    }
+  }
+}
