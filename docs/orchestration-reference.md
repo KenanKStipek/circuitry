@@ -205,7 +205,7 @@ A named container that executes child effects sequentially (`chain`) or in paral
 | `stop_on_error` | boolean | no | `false` | `flow: tree` only. `true` cancels every child that has not started yet as soon as one fails; a child already running cannot be cancelled, finishes on its own, and its failure (if any) is not added to the dynamic's `meta.error` — only the triggering failure is. A cancelled child leaves no node and fires no hooks. No effect on `flow: chain`, where a failing child already stops the ones after it. |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` — same meaning as on a leaf effect (see [Errors](guidebook/05-errors.md)): governs whether a failure anywhere inside this dynamic propagates to *its own* parent (`fail`) or is recorded on this dynamic's own `meta.error` and swallowed there, letting the parent continue (`skip`/`continue`, the same degradation for both). |
 | `labels` | object | no | — | Arbitrary metadata annotations, recorded on `meta.labels` |
-| `finally` | array | no | — | Cleanup effects. Runs after `effects` completes — success, failure, or a best-effort run on Ctrl-C/cancellation — always sequentially, regardless of this dynamic's own `flow`; a failing `finally` effect stops the ones listed after it in the same `finally:`, the same way a failing body effect stops the rest of `effects`. Sees state exactly as the body left it (e.g. a started server's own output) — a `finally` effect writes into this dynamic's own node the same way a body effect does (there is no separate `finally` namespace), so it cannot share a name with one of `effects`' own. The original failure (if any) still propagates after `finally` runs — a `finally` failure never hides it, it is added as `meta.finally_error`. On an otherwise-successful run, a `finally` failure fails this dynamic too, unless that `finally` effect has its own `on_error: continue`/`skip`. Also legal at the document root; nowhere else. |
+| `finally` | array | no | — | Cleanup effects. Runs after `effects` completes — success, failure, or a best-effort run on Ctrl-C/SIGTERM/cancellation — always sequentially, regardless of this dynamic's own `flow`; a failing `finally` effect stops the ones listed after it in the same `finally:`, the same way a failing body effect stops the rest of `effects`. Sees state exactly as the body left it (e.g. a started server's own output) — a `finally` effect writes into this dynamic's own node the same way a body effect does (there is no separate `finally` namespace), so it cannot share a name with one of `effects`' own. The original failure (if any) still propagates after `finally` runs — a `finally` failure never hides it, it is added as `meta.finally_error`. On an otherwise-successful run, a `finally` failure fails this dynamic too, unless that `finally` effect has its own `on_error: continue`/`skip`. Also legal at the document root; nowhere else. |
 
 **Flow semantics:**
 - `chain` — sequential: each effect executes after the previous, and sees all prior outputs in state
@@ -1591,12 +1591,17 @@ wrote:
 | `--resume last` | the most recent run's own `--out` file, found through the `--last` stash (`~/.config/circuitry/last-run.json`); that file already carries its own resolved `input.*`, so nothing from the stash's `-e` args is replayed on top of it |
 | `--resume <run-id>` | looked up in the orchestration's configured `runtime.persistence` backend, scoped to that same orchestration path — a run that *failed* is looked up and found here too, not only one that succeeded |
 
-A run interrupted by Ctrl-C/SIGINT is handled the same way a crash or an
+A run interrupted by Ctrl-C/SIGINT, or killed by SIGTERM (`kill <pid>`, a
+process manager, a system shutdown), is handled the same way a crash or an
 ordinary failure is: `--out`, the `--last` stash, and `runtime.persistence`
 (if configured) are all written before the process exits, so it is
 resumable through any of the three sources above exactly like a run that
-failed outright (the CLI still exits `130`, not `1`, so a script can tell
-the two apart). A run that saved nothing usable for any of these — no
+failed outright (the CLI still exits `130` for Ctrl-C/SIGINT or `143` for
+SIGTERM, not `1`, so a script can tell them apart). SIGTERM is only caught
+this way for the duration of `cof run`/`run-library` themselves, on the
+CLI's own main thread — an embedder (the SDK, the MCP server, the REST
+host) driving a run from its own process/thread keeps its own SIGTERM
+handling untouched. A run that saved nothing usable for any of these — no
 `--out`, no persistence, a state file missing `runtime.last_run` (and so
 no `document_hash` to check against) — fails `--resume` with a message
 naming exactly what's missing, rather than silently starting fresh or

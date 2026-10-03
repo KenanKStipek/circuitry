@@ -137,6 +137,7 @@ def test_resume_after_sigterm_skips_finished_steps(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
     assert resume.returncode == 0, (resume.stdout, resume.stderr)
