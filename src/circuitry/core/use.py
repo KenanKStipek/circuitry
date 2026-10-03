@@ -300,6 +300,9 @@ class UseRuntime:
         dry_run: bool = False,
         timeout_seconds: int = 120,
         verbose: bool = False,
+        # See DynamicRuntime: gates the loop-progress line, forwarded the
+        # same way ``verbose`` is to the composed child orchestration.
+        progress_display: bool = False,
         depth: int = 0,
         cb_start: Callable[[], None] | None = None,
         cb_done: Callable[[str], None] | None = None,
@@ -318,6 +321,7 @@ class UseRuntime:
         self.dry_run = dry_run
         self.timeout_seconds = timeout_seconds
         self.verbose = verbose
+        self.progress_display = progress_display
         self.depth = depth
         self.cb_start = cb_start
         self.cb_done = cb_done
@@ -756,6 +760,7 @@ class UseRuntime:
                 dry_run=self.dry_run,
                 timeout_seconds=self.timeout_seconds,
                 verbose=self.verbose,
+                progress_display=self.progress_display,
                 depth=self.depth + 1,
                 ancestors=self._ancestors,
                 label_prefix=child_label_prefix,

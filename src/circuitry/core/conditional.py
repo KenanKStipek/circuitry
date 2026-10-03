@@ -103,6 +103,9 @@ class ConditionalRuntime:
         dry_run: bool = False,
         timeout_seconds: int = 120,
         verbose: bool = False,
+        # See DynamicRuntime: gates the loop-progress line, forwarded the
+        # same way ``verbose`` is to every child runtime a branch builds.
+        progress_display: bool = False,
         depth: int = 0,
         ancestors: list | None = None,
     ):
@@ -117,6 +120,7 @@ class ConditionalRuntime:
         self.dry_run = dry_run
         self.timeout_seconds = timeout_seconds
         self.verbose = verbose
+        self.progress_display = progress_display
         self.depth = depth
         self._ancestors = ancestors or []
         # Raw reply from the last `mode: model` evaluation, success or
@@ -309,6 +313,7 @@ class ConditionalRuntime:
                             dry_run=self.dry_run,
                             timeout_seconds=self.timeout_seconds,
                             verbose=self.verbose,
+                            progress_display=self.progress_display,
                             depth=self.depth + 2,
                             ancestors=self._ancestors,
                         ).execute(store=child_store, ctx_override=ctx)
@@ -323,6 +328,7 @@ class ConditionalRuntime:
                             dry_run=self.dry_run,
                             timeout_seconds=self.timeout_seconds,
                             verbose=self.verbose,
+                            progress_display=self.progress_display,
                             depth=self.depth + 1,
                             ancestors=self._ancestors,
                         ).execute(store=child_store, ctx=ctx)
@@ -337,6 +343,7 @@ class ConditionalRuntime:
                             dry_run=self.dry_run,
                             timeout_seconds=self.timeout_seconds,
                             verbose=self.verbose,
+                            progress_display=self.progress_display,
                             depth=self.depth + 1,
                             ancestors=self._ancestors,
                         ).execute(store=child_store, ctx=ctx)
@@ -351,6 +358,7 @@ class ConditionalRuntime:
                             dry_run=self.dry_run,
                             timeout_seconds=self.timeout_seconds,
                             verbose=self.verbose,
+                            progress_display=self.progress_display,
                         ).execute(store=child_store)
 
                     elif isinstance(effect, ToolDefinition):
@@ -374,6 +382,7 @@ class ConditionalRuntime:
                             dry_run=self.dry_run,
                             timeout_seconds=self.timeout_seconds,
                             verbose=self.verbose,
+                            progress_display=self.progress_display,
                             depth=self.depth + 1,
                             ancestors=self._ancestors,
                         ).execute(store=child_store, ctx=ctx)

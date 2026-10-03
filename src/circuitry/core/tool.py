@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 from ..cli.redaction import redact
 from ..output import console as _console
+from ..output import live_region as _live_region
 from ..plugins.base import ToolResult
 from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .store import Store
@@ -585,16 +586,18 @@ class ToolRuntime:
                 if self.verbose and self.cb_start is None:
                     from rich.live import Live
 
-                    live_cm = Live(
-                        _ToolSpinner(
-                            name=self.display_name,
-                            target=target,
-                            indent=indent,
-                            ancestors=self._ancestors,
-                        ),
-                        refresh_per_second=10,
-                        transient=True,
-                        console=_console,
+                    live_cm: Any = _live_region(
+                        lambda: Live(
+                            _ToolSpinner(
+                                name=self.display_name,
+                                target=target,
+                                indent=indent,
+                                ancestors=self._ancestors,
+                            ),
+                            refresh_per_second=10,
+                            transient=True,
+                            console=_console,
+                        )
                     )
                 else:
                     live_cm = nullcontext()

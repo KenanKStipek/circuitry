@@ -28,6 +28,7 @@ from ..adapters.factory import configured_timeout_seconds
 from ..allowlist_gate import AllowlistError, allowed_adapters, require_adapter
 from ..cli.redaction import redact
 from ..output import console as _console
+from ..output import live_region as _live_region
 from .answers import AnswerParseError, parse_boolean_answer, parse_number_answer
 from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .store import Store
@@ -745,17 +746,19 @@ class PromptRuntime:
                 if self.verbose and self.cb_start is None:
                     from rich.live import Live
 
-                    live_cm = Live(
-                        _PromptSpinner(
-                            name=self.display_name,
-                            target=target,
-                            token_hint=f"~{estimated_out}tok ↑",
-                            indent=indent,
-                            ancestors=self._ancestors,
-                        ),
-                        refresh_per_second=10,
-                        transient=True,
-                        console=_console,
+                    live_cm: Any = _live_region(
+                        lambda: Live(
+                            _PromptSpinner(
+                                name=self.display_name,
+                                target=target,
+                                token_hint=f"~{estimated_out}tok ↑",
+                                indent=indent,
+                                ancestors=self._ancestors,
+                            ),
+                            refresh_per_second=10,
+                            transient=True,
+                            console=_console,
+                        )
                     )
                 else:
                     live_cm = nullcontext()

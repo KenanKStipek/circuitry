@@ -251,6 +251,20 @@ An **unnamed** loop is transparent: the body writes at stable paths in the enclo
 
 **Termination reasons** — every completed named loop records one: `collection_exhausted` (every element done), `condition_false` (the `while` said stop), `max_iterations_reached` (the cap you set: a `while` that never said stop, or a truncated `each`, which also records `unvisited`), `collection_unresolved` (`each.in` was not an array), `condition_error` (the `while` condition could not be evaluated, under `break` or `continue`), `error` (the loop failed; `termination.detail` and `meta.error` say why). They are CEL-readable — `state.prime.candidates.value.termination.reason == 'max_iterations_reached'` is a fine thing to branch on after a loop whose patches never applied.
 
+## Progress while it runs
+
+A named loop carries `prime.<name>.meta.progress` while it is running, not only once it finishes:
+
+```
+prime.render.meta.progress.done       # passes completed so far
+prime.render.meta.progress.total      # each: the collection length; while: max_iterations, or null if uncapped
+prime.render.meta.progress.elapsed_s  # wall time since the loop started
+prime.render.meta.progress.eta_s      # average pass time × passes remaining; null until a pass has
+                                       # completed, or whenever total itself is unknown
+```
+
+It updates every pass — the same `on_write` publish a chain loop already does per pass (so `--live-state` and any state observer see it move), and the same per-iteration publish a `flow: tree` loop's isolated branches already do. A `--verbose` run watching a real terminal (never under `--quiet`/`--json`, never when stdout isn't a TTY) also shows one updating line for the loop currently running — `shots 7/32, ~4 min left` for a bounded `each`, `attempts 2/3` for a bounded `while`. It costs one `time.monotonic()` call and a few float operations per pass: cheap enough to leave on for a multi-hour ladder or film render.
+
 ## Errors in a loop
 
 `on_error` on a loop governs a failed *pass*, and the same too-long-collection bounds check an `each` loop runs before its first pass ("The collection is the bound", above): `fail` (default) propagates; `break` ends the loop at the failed pass, keeping what completed before it; `continue` drops the pass and goes on. In a `tree` loop every pass is already running, so `break` and `continue` both let the other passes finish and drop the failed ones, and `fail` raises the lowest-index failure deterministically — naming that pass's iteration — rather than whichever concurrent pass happened to raise first. Under `break` and `continue` alike, `last` is the last pass that completed, never the failed one.
