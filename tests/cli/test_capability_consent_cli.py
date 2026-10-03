@@ -217,6 +217,50 @@ def test_cof_run_refuses_a_ref_child_even_though_the_parent_is_trusted(
     assert "cof trust" in payload["error"]
 
 
+def test_cof_run_resume_still_refuses_a_ref_child_without_repeated_consent(
+    tmp_path: Path,
+) -> None:
+    """#330's `--resume` must not let a `use: ref:` child skip the gate just
+    because the resumed run's content-hash/safety checks pass —
+    `--allow-capabilities` approves one run only (never persisted, see
+    `test_run_library_allow_capabilities_does_not_persist` above), so a
+    `--resume` that doesn't repeat it hits the same refusal a fresh run
+    would.
+    """
+    folder = tmp_path / "lib"
+    _shell_orch(folder / "helper.yml")
+    orch = _write_yaml(
+        tmp_path / "root.yml",
+        {
+            "effects": [
+                {"type": "tool", "name": "step1", "provider": "uuid"},
+                {"type": "use", "name": "u", "ref": "helper"},
+            ]
+        },
+    )
+    config = _config_file(
+        tmp_path, library={"sources": [{"type": "folder", "name": "local", "path": str(folder)}]}
+    )
+    out = tmp_path / "run.json"
+
+    first = runner.invoke(
+        app,
+        [
+            "run", str(orch), "-c", str(config), "--out", str(out),
+            "--allow-capabilities", "shell",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+
+    resumed = runner.invoke(
+        app, ["run", str(orch), "-c", str(config), "--resume", "last"]
+    )
+
+    assert resumed.exit_code == 1
+    assert "shell" in resumed.stdout
+    assert "cof trust" in resumed.stdout
+
+
 def test_cof_run_a_tool_only_document_by_path_is_unaffected(tmp_path: Path) -> None:
     """#275's owner check: no use: ref:, so nothing about this changes — with
     a gated provider (`shell`, not the untagged `uuid`), so a regression that

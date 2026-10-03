@@ -1,11 +1,13 @@
 """The last-run stash: where ``cof run`` records what to replay for ``--last``.
 
-``cof run`` writes its arguments to ``~/.config/circuitry/last-run.json`` after
-a successful run (credential-shaped ``-e`` values redacted first — see
-:mod:`circuitry.cli.redaction`) so ``cof run --last`` can repeat it. The TUI's
-Runs view offers the same replay from a keypress, so the *location* of that
-file and the rules for reading it back live here rather than inside the CLI
-command that happens to write it.
+``cof run`` writes its arguments to ``~/.config/circuitry/last-run.json``
+after every run, successful or not (credential-shaped ``-e`` values
+redacted first — see :mod:`circuitry.cli.redaction`) so ``cof run --last``
+can repeat it and ``cof run --resume last`` can find the failed run's own
+``--out`` to resume from (#270). The TUI's Runs view offers the same
+replay from a keypress, so the *location* of that file and the rules for
+reading it back live here rather than inside the CLI command that happens
+to write it.
 
 Reading is total: a missing stash is ``None`` and an unreadable one is a
 :class:`LastRun` carrying ``error``, because a corrupt file must render as an
@@ -42,7 +44,7 @@ REDACTED_REFUSAL = (
 
 @dataclass(frozen=True)
 class LastRun:
-    """The stashed arguments of the most recent successful ``cof run``."""
+    """The stashed arguments of the most recent ``cof run``, successful or not."""
 
     path: Path
     args: dict[str, Any] = field(default_factory=dict)

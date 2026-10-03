@@ -315,6 +315,7 @@ def resolve_effective_settings(
     profile: ProfileSettings | None = None,
     trust_document: bool = False,
     document_name: str | None = None,
+    resume_default_out: Path | None = None,
 ) -> EffectiveSettings:
     """Merge cli > profile > orchestration > config > default for one run.
 
@@ -368,16 +369,25 @@ def resolve_effective_settings(
         adapter = None
         sources["adapter"] = "default"
 
-    # out precedence: cli > profile > default (no file written). Unlike
-    # model/adapter there is no orchestration/config layer — `--out` has
-    # never had one, and a profile is orthogonal to the persistence backend
-    # selected via the `persistence` block (see docs/profiles.md).
+    # out precedence: cli > profile > resume source > default (no file
+    # written). Unlike model/adapter there is no orchestration/config
+    # layer — `--out` has never had one, and a profile is orthogonal to the
+    # persistence backend selected via the `persistence` block (see
+    # docs/profiles.md). `resume_default_out` — the file `--resume` loaded
+    # its state from, named by the caller (`cli.app.run_cmd`) — ranks below
+    # a profile's own `out:` but above writing nothing: a resumed run that
+    # names neither still needs its own progress saved back somewhere, or a
+    # second crash loses everything the resume itself just finished (#270
+    # F10).
     if cli_out is not None:
         out = cli_out
         sources["out"] = "cli"
     elif profile is not None and profile.out is not None:
         out = Path(profile.out)
         sources["out"] = "profile"
+    elif resume_default_out is not None:
+        out = resume_default_out
+        sources["out"] = "resume"
     else:
         out = None
         sources["out"] = "default"

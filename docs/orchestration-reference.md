@@ -1483,6 +1483,98 @@ outer binding of the same name.
 
 ---
 
+## Resuming a Run (`cof run --resume`)
+
+`cof run --resume last` (or `--resume <run-id>`, or `--state <file> --resume
+<anything>`) continues an interrupted or failed run of the *same* document
+from its saved state, instead of starting over. This is a different,
+opt-in behavior from plain `--state`/persistence carryover (above and
+[Loop Iteration Paths](#loop-iteration-paths)), which only seeds a run's
+starting state and reruns every effect regardless of what already finished.
+
+**What gets skipped, what reruns.** Every effect's node already carries
+`meta.completed_at` and `meta.error` (see each effect type above). An
+effect whose node shows `meta.completed_at` set and no `meta.error`
+finished cleanly in the saved state — `--resume` skips it and reuses that
+node exactly as saved, with no new adapter/tool call. The first effect that
+never finished (the process died mid-flight — Ctrl-C, a crash) or that
+failed, and everything after it **in the same chain**, reruns, in order,
+same as a fresh run from there onward — positionally, not per effect: once
+one effect in a chain didn't resume whole (whether it never finished, or
+it failed and `on_error` absorbed the failure so the chain kept going),
+every later node in that chain reruns too, even one that itself looks
+finished. A later node's saved content either postdates the point this run
+actually diverged from (stale, from an earlier `--state`/persistence
+carryover) or was produced after an absorbed failure the chain is now
+redoing differently — neither is safe to reuse. A **tree**-flow dynamic's
+children are each checked (and skipped) independently instead, since they
+have no "later in the chain" to protect.
+
+A **named** loop in **chain** flow (every `while`; an `each` loop not
+running `flow: tree`) resumes at its first unfinished pass: finished
+`iter_<N>` passes are kept untouched, and the loop continues from the
+first pass that didn't finish — `collect:`/`last` see the kept passes
+exactly as the original run left them. Which passes count as finished is
+the loop's own record (`meta.completed_passes`, the contiguous prefix
+starting at pass 0), not a guess from what the `iter_<N>` node happens to
+contain — a pass interrupted partway through its body, or an unnamed `if`
+in the body whose condition raised before writing anything, can leave an
+`iter_<N>` node that holds some finished-looking children without the pass
+itself having completed, and the loop's own record is what tells those
+apart. A **tree**-flow `each` loop finishes its passes out of order, and an
+**unnamed** loop has no `iter_<N>` record at all (each pass overwrites the
+last at the same path) — neither is sound to resume pass-by-pass, so both
+rerun their whole loop. A `use` effect, an `if`, and a `reflector` are
+all-or-nothing for resume: if the effect's own node already finished
+without error, `--resume` skips the whole thing; otherwise the whole thing
+reruns from the start (a `use` child always runs in a fresh, isolated
+state, so there is nothing of its own partway through to resume either
+way).
+
+**Where the saved state comes from.** `--resume` needs a saved state that
+records each effect's `meta.completed_at`/`meta.error` and
+`runtime.last_run.document_hash` — in practice, anything `cof run` itself
+wrote:
+
+| `--resume` form | Source |
+|---|---|
+| `--state <file> --resume <anything>` | that file, read directly — the value after `--resume` is ignored |
+| `--resume last` | the most recent run's own `--out` file, found through the `--last` stash (`~/.config/circuitry/last-run.json`); that file already carries its own resolved `input.*`, so nothing from the stash's `-e` args is replayed on top of it |
+| `--resume <run-id>` | looked up in the orchestration's configured `runtime.persistence` backend, scoped to that same orchestration path — a run that *failed* is looked up and found here too, not only one that succeeded |
+
+A run interrupted by Ctrl-C/SIGINT is handled the same way a crash or an
+ordinary failure is: `--out`, the `--last` stash, and `runtime.persistence`
+(if configured) are all written before the process exits, so it is
+resumable through any of the three sources above exactly like a run that
+failed outright (the CLI still exits `130`, not `1`, so a script can tell
+the two apart). A run that saved nothing usable for any of these — no
+`--out`, no persistence, a state file missing `runtime.last_run` (and so
+no `document_hash` to check against) — fails `--resume` with a message
+naming exactly what's missing, rather than silently starting fresh or
+skipping the content-hash check.
+
+A resumed run writes its own `--out` back to the file its state came from
+by default when neither `--out` nor a profile's `out:` says otherwise —
+so `--state run.json --resume x` (with no `--out` of its own) still saves
+progress back to `run.json`, rather than risking losing it all again on a
+second interruption.
+
+**Safety.** `--resume` refuses to continue against a document that changed
+since the saved run — it compares content hashes — unless you pass
+`--force`; a saved state with no recorded hash at all refuses the same way,
+since there is then no way to tell whether the document changed. It also
+refuses to resume with *silently inherited* inputs: `--state <file>` names
+its own inputs explicitly and `--resume last` loads a state that already
+carries its own resolved `input.*`, but `--resume <run-id>` has no such
+stash, so every one of the original run's `input.*` keys must be named
+again with `-e` (changed or not) — otherwise it refuses, naming which
+inputs are missing. The persistence lookup for `--resume <run-id>` is also
+scoped to the orchestration path you named, so a run-id from a different
+document — or another project's persistence log reached by accident — is
+never resumed.
+
+---
+
 ## Patterns & Antipatterns
 
 ### Chain vs Tree
