@@ -593,7 +593,7 @@ def test_main_loads_user_env_before_serving(monkeypatch: pytest.MonkeyPatch) -> 
         def run(self, transport: str) -> None:
             assert transport == "stdio"
 
-    monkeypatch.setattr(srv, "_build_server", lambda: _FakeServer())
+    monkeypatch.setattr(srv, "_build_server", _FakeServer)
 
     srv.main()
 

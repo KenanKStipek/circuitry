@@ -10,7 +10,6 @@ writing `.env` there never touches the developer's real
 from __future__ import annotations
 
 import os
-import stat
 from pathlib import Path
 
 import pytest
