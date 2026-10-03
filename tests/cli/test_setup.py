@@ -422,3 +422,32 @@ def test_setup_cmd_writes_env_file_when_confirmed(monkeypatch: pytest.MonkeyPatc
     assert env_path.exists()
     assert "OPENAI_API_KEY=sk-test" in env_path.read_text()
     assert "ANTHROPIC_API_KEY=sk-test" in env_path.read_text()
+
+
+# ---------------------------------------------------------------------------
+# #346 — `cof setup` prints the installed example files' location
+# ---------------------------------------------------------------------------
+
+
+def test_examples_dir_resolves_to_installed_bundled_examples() -> None:
+    examples_dir = cli_setup.examples_dir()
+
+    assert (examples_dir / ".env.example").is_file()
+    assert (examples_dir / "config.example.json").is_file()
+
+
+def test_setup_cmd_prints_examples_dir_after_writing_private_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = DetectionResult(backends=[])
+    monkeypatch.setattr(cli_setup, "detect_all", lambda **_: fake)
+    monkeypatch.setattr("typer.prompt", lambda label, default=None: default or "sk-test")
+    monkeypatch.setattr("typer.confirm", lambda *a, **k: True)
+
+    result = runner.invoke(app, ["setup"])
+
+    assert result.exit_code == 0, result.output
+    # Rich wraps the path across lines at test-runner width; collapse all
+    # whitespace (including the wrap-inserted newlines) out of both sides.
+    collapsed_output = "".join(result.output.split())
+    assert "".join(str(cli_setup.examples_dir()).split()) in collapsed_output

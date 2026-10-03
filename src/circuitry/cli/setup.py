@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.resources
 import json
 import os
 import tempfile
@@ -18,6 +19,14 @@ from .detect import DetectionResult, detect_all
 from .registry import load_index
 
 console = Console()
+
+
+def examples_dir() -> Path:
+    """The installed path of `bundled/examples/` — `.env.example` and
+    `config.example.json`, shipped in the wheel so a fresh install has
+    something to copy from without reaching GitHub."""
+    pkg = importlib.resources.files("circuitry") / "bundled" / "examples"
+    return Path(str(pkg))
 
 
 def _detect_urls_from_existing_config() -> tuple[str, str]:
@@ -290,6 +299,10 @@ def register_setup(app: typer.Typer) -> None:
         env_path = _write_env_file(result)
         if env_path:
             console.print(f"[green]Env file written:[/green] {env_path}")
+
+        console.print(
+            f"[dim]Example files (config.example.json, .env.example): {examples_dir()}[/dim]"
+        )
 
         # Next steps
         console.print()

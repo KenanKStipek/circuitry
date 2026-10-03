@@ -23,7 +23,7 @@ cof list                            # the bundled library: learn, utilities, pat
 cof tui                             # or do all of it in the terminal UI
 ```
 
-Hosted providers read their keys from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …); `cof doctor` shows what is reachable.
+Hosted providers read their keys from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …); `cof doctor` shows what is reachable. [`config.example.json`](src/circuitry/bundled/examples/config.example.json) and [`.env.example`](src/circuitry/bundled/examples/.env.example) show every documented config key and credential env var with placeholder values, if you'd rather write the files by hand than run `cof setup`.
 
 ## Your first orchestration
 

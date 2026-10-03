@@ -320,4 +320,9 @@ circuitry = [
     "bundled/docs/*.md",
     "bundled/docs/plugins/*.md",
     "bundled/rules/*.yml",
+    # Dotfiles (`.env.example`) don't match a `*` glob, so it's listed by its
+    # literal name rather than `bundled/examples/*` — drop it here and the
+    # file silently stays out of the wheel (#346).
+    "bundled/examples/.env.example",
+    "bundled/examples/config.example.json",
 ]

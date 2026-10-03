@@ -56,6 +56,7 @@ out.json
 # ================================
 .env
 .env.*
+!src/circuitry/bundled/examples/.env.example
 *.key
 *.pem
 config.json
