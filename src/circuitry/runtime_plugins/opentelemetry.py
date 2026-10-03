@@ -58,11 +58,22 @@ class OpentelemetryPlugin:
         self._provider: Any = None
         self._run_span: Any = None
         self._run_ctx: Any = None
-        #: effect_path -> (span, context-with-that-span-current), for every
+        #: effect_path -> one (thread_id, span, context-with-that-span-
+        #: current) entry per currently-open span at that path, for every
         #: effect whose start has fired but whose complete hasn't yet — a
         #: child effect's start looks up its nearest open ancestor here to
-        #: parent itself under it (see ``_parent_context``).
-        self._spans: dict[str, tuple[Any, Any]] = {}
+        #: parent itself under it (see ``_parent_context``). A list, not a
+        #: single entry: an unnamed loop doesn't namespace its body's state
+        #: path per pass (``loop.py``'s ``_execute_body`` only does that for
+        #: a *named* loop), so concurrent tree-flow branches can report the
+        #: exact same ``effect_path`` at once; without this, the second
+        #: branch's ``on_effect_start`` would overwrite the first's entry
+        #: and its `on_effect_complete`` would then end the wrong branch's
+        #: span (#331 finding 7). ``threading.get_ident()`` disambiguates
+        #: which entry belongs to which completing call — a span's own
+        #: start and complete always fire on the same thread, whatever else
+        #: is running concurrently.
+        self._spans: dict[str, list[tuple[int, Any, Any]]] = {}
 
     def _check_dep(self) -> tuple[bool, list[str]]:
         try:
@@ -127,9 +138,18 @@ class OpentelemetryPlugin:
         """
         parts = effect_path.split(".")
         for i in range(len(parts) - 1, 0, -1):
-            entry = self._spans.get(".".join(parts[:i]))
-            if entry is not None:
-                return entry[1]
+            entries = self._spans.get(".".join(parts[:i]))
+            if entries:
+                # An ancestor container may itself be running one branch per
+                # thread (a tree loop/dynamic) — its own span was opened on
+                # whichever thread drives that container, not necessarily
+                # this child's thread, so this can't be a thread-id lookup
+                # like the exact-path push/pop below. Any still-open entry
+                # is a correct parent; the most recently opened one is the
+                # closest guess when more than one is open (an unnamed
+                # container reused across concurrent branches, #331 finding
+                # 7 — inherently ambiguous without a name to tell them apart).
+                return entries[-1][2]
         return self._run_ctx
 
     def on_run_start(self, *, state: dict[str, Any], context: Any) -> None:
@@ -180,13 +200,18 @@ class OpentelemetryPlugin:
             flow = meta.get("flow") or meta.get("mode")
             if isinstance(flow, str) and flow:
                 attrs["circuitry.flow"] = flow
+            provider = meta.get("provider")
+            if isinstance(provider, str) and provider:
+                attrs["circuitry.provider"] = provider
             span = self._tracer.start_span(
                 f"effect:{effect_path}",
                 context=self._parent_context(effect_path),
                 attributes=attrs,
                 start_time=_iso_to_ns(meta.get("created_at")),
             )
-            self._spans[effect_path] = (span, trace.set_span_in_context(span))
+            self._spans.setdefault(effect_path, []).append(
+                (threading.get_ident(), span, trace.set_span_in_context(span))
+            )
 
     def on_effect_complete(
         self,
@@ -204,23 +229,25 @@ class OpentelemetryPlugin:
             meta = meta if isinstance(meta, dict) else {}
             end_ns = _iso_to_ns(meta.get("completed_at"))
 
-            entry = self._spans.pop(effect_path, None)
-            if entry is None:
+            span = self._pop_own_span(effect_path)
+            if span is None:
                 # No matching on_effect_start — a plugin attached mid-run,
                 # or a caller that only wires on_effect_complete (some test
                 # harnesses). Degrade to a span with whatever timing meta
                 # has rather than dropping the event.
+                attrs = {
+                    "circuitry.run_id": context.run_id,
+                    "circuitry.effect_path": effect_path,
+                }
+                provider = meta.get("provider")
+                if isinstance(provider, str) and provider:
+                    attrs["circuitry.provider"] = provider
                 span = self._tracer.start_span(
                     f"effect:{effect_path}",
                     context=self._parent_context(effect_path),
-                    attributes={
-                        "circuitry.run_id": context.run_id,
-                        "circuitry.effect_path": effect_path,
-                    },
+                    attributes=attrs,
                     start_time=_iso_to_ns(meta.get("created_at")) or end_ns,
                 )
-            else:
-                span, _ = entry
 
             for key in ("tokens_sent", "tokens_received"):
                 v = meta.get(key)
@@ -250,13 +277,31 @@ class OpentelemetryPlugin:
         ok, missing = self._check_dep()
         return CheckResult(ok=ok, missing=missing)
 
+    def _pop_own_span(self, effect_path: str) -> Any | None:
+        """Remove and return *this call's own* span at *effect_path* — the
+        entry whose start fired on this same thread, not any other
+        concurrent branch's entry sharing the same (unnamed-container)
+        path (#331 finding 7)."""
+        entries = self._spans.get(effect_path)
+        if not entries:
+            return None
+        ident = threading.get_ident()
+        for i, (thread_id, span, _ctx) in enumerate(entries):
+            if thread_id == ident:
+                entries.pop(i)
+                if not entries:
+                    del self._spans[effect_path]
+                return span
+        return None
+
     def _finalize(self, *, success: bool, error: str | None) -> None:
         with self._lock:
             # Any span whose complete never fired (a run that crashed mid-
             # effect) still gets closed, so the exporter doesn't hold it open
             # forever — best-effort "now" for its end time.
-            for _span, _ctx in self._spans.values():
-                _span.end()
+            for entries in self._spans.values():
+                for _thread_id, _span, _ctx in entries:
+                    _span.end()
             self._spans = {}
             if self._run_span is not None:
                 if not success:

@@ -948,6 +948,11 @@ def run_cmd(
             console.print(f"[red]Error:[/red] {result.error}")
             if resolved_out:
                 console.print(f"[bold]State written:[/bold] {resolved_out}")
+            totals_line = _format_run_totals_line(
+                result.state.get("runtime", {}).get("last_run", {}).get("totals")
+            )
+            if totals_line:
+                console.print(f"[bold]Totals:[/bold] {totals_line}")
         raise typer.Exit(code=1)
 
     # Stash for --last (only on success, skip if replaying via --last).
@@ -1291,6 +1296,11 @@ def run_library_cmd(
             console.print(f"[red]Error:[/red] {result.error}")
             if resolved_out:
                 console.print(f"[bold]State written:[/bold] {resolved_out}")
+            totals_line = _format_run_totals_line(
+                result.state.get("runtime", {}).get("last_run", {}).get("totals")
+            )
+            if totals_line:
+                console.print(f"[bold]Totals:[/bold] {totals_line}")
         raise typer.Exit(code=1)
 
     # Stash for --last, the same shape `cof run` writes — so `cof run --last`

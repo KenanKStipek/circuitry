@@ -216,9 +216,19 @@ def _int_field(meta: dict[str, Any], *keys: str) -> int:
 
 
 def _run_totals(state: dict[str, Any], *, wall_time_s: float) -> dict[str, Any]:
-    """``state.runtime.last_run.totals`` — wall time, effects run, tokens
-    both ways over every attempt, and cost where some effect reported one
-    (no adapter does yet, so this is ``None`` until one does).
+    """``state.runtime.last_run.totals`` recomputed from a *finished* state
+    tree — wall time, effects run, tokens both ways over every attempt, and
+    cost where some effect reported one (no adapter does yet, so this is
+    ``None`` until one does).
+
+    A pure function of the final state, so it's only correct for effects
+    that actually landed there. ``run()`` itself does not use this for its
+    own ``last_run.totals`` (see ``_TotalsAccumulator``): a ``use`` child in
+    declared-outputs mode (no ``record_children``) never leaves its effects
+    in the final state at all, and an unnamed loop overwrites the same node
+    every pass, so walking the finished tree undercounts both. Kept as a
+    standalone utility for recomputing totals against a state snapshot
+    that wasn't accumulated live (e.g. a loaded ``--state`` file).
     """
     effects_run = 0
     tokens_sent = tokens_received = 0
@@ -238,6 +248,50 @@ def _run_totals(state: dict[str, Any], *, wall_time_s: float) -> dict[str, Any]:
         "tokens_received": tokens_received,
         "cost_usd": cost_usd,
     }
+
+
+class _TotalsAccumulator:
+    """Builds ``state.runtime.last_run.totals`` live, from the same
+    ``effect_complete`` stream plugins and ``--live-state`` already observe
+    (#331 finding 4), instead of walking the finished state tree:
+
+    - A ``use`` child's effects reach this observer namespaced under the
+      parent path (see ``use.py``'s ``_namespaced_effect_cb``) even in
+      declared-outputs mode, where they never land in the final state at
+      all — walking the tree after the fact cannot see them.
+    - An unnamed loop's pass overwrites the same state node every
+      iteration, so only the last pass would ever be visible to a
+      post-hoc walk; each pass's own ``effect_complete`` firing is still
+      distinct here.
+    """
+
+    def __init__(self) -> None:
+        self.effects_run = 0
+        self.tokens_sent = 0
+        self.tokens_received = 0
+        self.cost_usd: float | None = None
+
+    def observe(self, effect_path: str, effect_result: dict[str, Any]) -> None:
+        meta = effect_result.get("meta")
+        if not isinstance(meta, dict) or not meta.get("completed_at"):
+            return
+        self.effects_run += 1
+        self.tokens_sent += _int_field(meta, "tokens_sent_total", "tokens_sent")
+        self.tokens_received += _int_field(
+            meta, "tokens_received_total", "tokens_received"
+        )
+        cost = meta.get("cost_usd")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            self.cost_usd = (self.cost_usd or 0.0) + cost
+
+    def totals(self, *, wall_time_s: float) -> dict[str, Any]:
+        return {
+            "wall_time_s": wall_time_s,
+            "effects_run": self.effects_run,
+            "tokens_sent": self.tokens_sent,
+            "tokens_received": self.tokens_received,
+            "cost_usd": self.cost_usd,
+        }
 
 
 def _load_state(
@@ -277,6 +331,10 @@ def run(req: RunRequest) -> RunResult:
     # `started_at`/`completed_at` ISO timestamps (which a system clock
     # adjustment mid-run could skew).
     _run_t0 = time.monotonic()
+    # Fed every effect_complete event below, success or failure — defined
+    # before the try so a failure before that wiring still reports zeroed,
+    # accurate totals rather than raising in the except block.
+    totals_accumulator = _TotalsAccumulator()
 
     try:
         state = _load_state(req.state_path, req.initial_state)
@@ -673,7 +731,9 @@ def run(req: RunRequest) -> RunResult:
         # learns an effect started or landed without diffing whole state
         # snapshots.
         start_observers: list[Callable[[str, dict[str, Any]], None]] = []
-        effect_observers: list[Callable[[str, dict[str, Any]], None]] = []
+        effect_observers: list[Callable[[str, dict[str, Any]], None]] = [
+            totals_accumulator.observe
+        ]
         if plugins:
             _plugin_ctx = PluginContext(
                 run_id=run_id,
@@ -750,8 +810,8 @@ def run(req: RunRequest) -> RunResult:
 
         _record_library_pins(state, runtime_config)
         state["runtime"]["last_run"]["completed_at"] = _now_iso()
-        state["runtime"]["last_run"]["totals"] = _run_totals(
-            state, wall_time_s=time.monotonic() - _run_t0
+        state["runtime"]["last_run"]["totals"] = totals_accumulator.totals(
+            wall_time_s=time.monotonic() - _run_t0
         )
 
         success_events = invoke_plugins(
@@ -794,6 +854,15 @@ def run(req: RunRequest) -> RunResult:
             _record_library_pins(state, runtime_config)
             if run_id is None:
                 run_id = str(uuid4())
+            # Written before on_run_failure runs (not after, as success's
+            # on_run_success could previously assume) so a failure-hook
+            # plugin sees the same totals a success-hook plugin would
+            # (#331 finding 11).
+            last_run_node = state.setdefault("runtime", {}).setdefault("last_run", {})
+            last_run_node["completed_at"] = _now_iso()
+            last_run_node["totals"] = totals_accumulator.totals(
+                wall_time_s=time.monotonic() - _run_t0
+            )
             plugins_meta = state.setdefault("runtime", {}).setdefault("plugins", {})
             if isinstance(plugins_meta, dict):
                 configured = plugins_meta.get("configured")
@@ -822,11 +891,6 @@ def run(req: RunRequest) -> RunResult:
                     error=str(e),
                 )
                 plugins_meta["events"].extend(failure_events)
-            last_run_node = state.setdefault("runtime", {}).setdefault("last_run", {})
-            last_run_node["completed_at"] = _now_iso()
-            last_run_node["totals"] = _run_totals(
-                state, wall_time_s=time.monotonic() - _run_t0
-            )
             persistence_node = state.setdefault("runtime", {}).get("persistence")
             if isinstance(persistence_node, dict):
                 if not persistence_node.get("status"):

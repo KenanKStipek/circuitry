@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal, Union
 
 from ..adapters import Adapter
 from ..output import console as _console
+from ..output import live_region as _live_region
 from .disabled import is_enabled, write_disabled_node
 from .prompt import PromptDefinition, PromptRuntime
 from .store import Store
@@ -268,11 +269,13 @@ class DynamicRuntime:
                 if tree_tracker is not None:
                     from rich.live import Live
 
-                    live_ctx: Any = Live(
-                        tree_tracker,
-                        refresh_per_second=10,
-                        transient=True,
-                        console=_console,
+                    live_ctx: Any = _live_region(
+                        lambda: Live(
+                            tree_tracker,
+                            refresh_per_second=10,
+                            transient=True,
+                            console=_console,
+                        )
                     )
                 else:
                     live_ctx = nullcontext()

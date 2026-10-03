@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal, Union
 
 from ..adapters import Adapter
 from ..output import console as _console
+from ..output import live_region as _live_region
 from .answers import parse_boolean_answer
 from .disabled import is_disabled_node, is_enabled
 from .scope import local_writes as _local_writes_state
@@ -74,34 +75,18 @@ def _format_loop_progress_line(
     return text
 
 
-#: Guards the single interactive progress-status line a chain/while loop may
-#: show — rich allows only one ``Console.status``/``Live`` region at a time,
-#: and nested or concurrently-running loops would otherwise fight over it
-#: (and render garbled output, not raise). The common case this exists for
-#: — one long-running top-level loop (a film's frame loop, an upscale
-#: ladder) — is unaffected; a loop nested inside another progress-displaying
-#: loop simply shows no line of its own rather than corrupting the outer one.
-_progress_status_lock = threading.Lock()
-_progress_status_active = False
-
-
 @contextmanager
 def _loop_progress_status(enabled: bool, initial_text: str):
-    global _progress_status_active
+    """The single interactive progress-status line a chain/while loop may
+    show, via the process-wide ``live_region`` guard (see ``output.py``): a
+    loop nested inside another progress-displaying loop (or a prompt/tool
+    spinner nested inside this loop's own body) simply shows no live region
+    of its own rather than fighting over the console."""
     if not enabled:
         yield None
         return
-    with _progress_status_lock:
-        if _progress_status_active:
-            yield None
-            return
-        _progress_status_active = True
-    try:
-        with _console.status(initial_text) as status:
-            yield status
-    finally:
-        with _progress_status_lock:
-            _progress_status_active = False
+    with _live_region(lambda: _console.status(initial_text)) as status:
+        yield status
 
 
 EffectDef = Union[
@@ -493,15 +478,20 @@ class LoopRuntime:
                             icon=_icon,
                             color=_color,
                             ancestors=self._child_ancestors,
+                            loop_name=self.defn.name if meta is not None else None,
                         )
+                        if meta is not None:
+                            tree_tracker.set_progress(meta["progress"])
 
                     if tree_tracker is not None:
                         from rich.live import Live
-                        live_ctx: Any = Live(
-                            tree_tracker,
-                            refresh_per_second=10,
-                            transient=True,
-                            console=_console,
+                        live_ctx: Any = _live_region(
+                            lambda: Live(
+                                tree_tracker,
+                                refresh_per_second=10,
+                                transient=True,
+                                console=_console,
+                            )
                         )
                     else:
                         live_ctx = nullcontext()
@@ -532,6 +522,9 @@ class LoopRuntime:
                                     errors[i] = exc
                                 finally:
                                     _tree_done += 1
+                                    _tree_progress = _loop_progress(
+                                        _loop_t0, _tree_done, _progress_total
+                                    )
                                     if meta is not None:
                                         # Mutates the same dict `child_store`'s
                                         # branch publishers read `self.state`
@@ -548,9 +541,9 @@ class LoopRuntime:
                                         # correct, already-published snapshot
                                         # with a stale one that's missing the
                                         # pass that just finished.
-                                        meta["progress"] = _loop_progress(
-                                            _loop_t0, _tree_done, _progress_total
-                                        )
+                                        meta["progress"] = _tree_progress
+                                    if tree_tracker is not None:
+                                        tree_tracker.set_progress(_tree_progress)
                                     # This iteration is done, whether or not
                                     # it ever registered a prompt — one fewer
                                     # settle point a listener still needs to
@@ -651,13 +644,22 @@ class LoopRuntime:
                                 completed_indices.append(idx)
                                 prev_writes = iter_writes
                                 if meta is not None:
-                                    progress = _loop_progress(_loop_t0, iteration_count, total)
+                                    # `idx + 1`, not `iteration_count`
+                                    # (successes only): `done` must count
+                                    # every pass that's finished running,
+                                    # the same as the failed-pass branch
+                                    # below and tree flow's `_tree_done` —
+                                    # otherwise a run with any earlier
+                                    # on_error: continue failure would
+                                    # undercount `done` for every pass after
+                                    # it (#331 finding 6).
+                                    progress = _loop_progress(_loop_t0, idx + 1, total)
                                     meta["progress"] = progress
                                     if _status is not None:
                                         _status.update(
                                             _format_loop_progress_line(
                                                 _progress_name,
-                                                iteration_count,
+                                                idx + 1,
                                                 total,
                                                 progress["eta_s"],
                                             )
@@ -670,6 +672,25 @@ class LoopRuntime:
                                     store.on_write(store.root_state)
                             except Exception:
                                 failed_passes.append(idx)
+                                # A failed pass still finished running — tree
+                                # flow counts it toward `done` the same way
+                                # (see the `finally` above); leaving `done`
+                                # frozen here would freeze the line and
+                                # overestimate the ETA across a run with any
+                                # on_error: continue/break failures (#331
+                                # finding 6).
+                                if meta is not None:
+                                    progress = _loop_progress(_loop_t0, idx + 1, total)
+                                    meta["progress"] = progress
+                                    if _status is not None:
+                                        _status.update(
+                                            _format_loop_progress_line(
+                                                _progress_name,
+                                                idx + 1,
+                                                total,
+                                                progress["eta_s"],
+                                            )
+                                        )
                                 if self.defn.on_error == "fail":
                                     termination_reason = "error"
                                     raise
@@ -827,6 +848,26 @@ class LoopRuntime:
                                 store.on_write(store.root_state)
                         except Exception:
                             failed_passes.append(iteration_count)
+                            # A failed pass still finished running — tree
+                            # flow counts it toward `done` the same way;
+                            # leaving `done` frozen here would freeze the
+                            # line and overestimate the ETA across a run
+                            # with any on_error: continue/break failures
+                            # (#331 finding 6).
+                            if meta is not None:
+                                progress = _loop_progress(
+                                    _loop_t0, iteration_count + 1, self.defn.max_iterations
+                                )
+                                meta["progress"] = progress
+                                if _status is not None:
+                                    _status.update(
+                                        _format_loop_progress_line(
+                                            _progress_name,
+                                            iteration_count + 1,
+                                            self.defn.max_iterations,
+                                            progress["eta_s"],
+                                        )
+                                    )
                             if self.defn.on_error == "fail":
                                 termination_reason = "error"
                                 raise
@@ -1444,6 +1485,7 @@ class _LoopIterTracker:
         icon: str,
         color: str,
         ancestors: list | None = None,
+        loop_name: str | None = None,
     ) -> None:
         self._lock = threading.Lock()
         self._total = total
@@ -1457,6 +1499,16 @@ class _LoopIterTracker:
         self._icon = icon
         self._color = color
         self._ancestors = ancestors or []
+        #: The loop's own name, for the `name k/N, ~ETA left` header row
+        #: (#331 finding 3) — None for an unnamed loop, which has no
+        #: `meta.progress` to show (same gating as the chain/while status
+        #: line).
+        self._loop_name = loop_name
+        self._progress: dict[str, Any] | None = None
+
+    def set_progress(self, progress: dict[str, Any]) -> None:
+        with self._lock:
+            self._progress = progress
 
     def on_start(self, idx: int) -> None:
         with self._lock:
@@ -1492,11 +1544,22 @@ class _LoopIterTracker:
             targets = list(self._targets)
             estimated = list(self._estimated)
             item_starts = list(self._item_starts)
+            progress = self._progress
         ic = self._icon
         co = self._color
 
         # Render ancestor context lines above the iteration items
         lines = _render_ancestors(self._ancestors, self._SPINNER)
+
+        # The loop's own `k/N, ~ETA left` header (#331 finding 3) — a tree
+        # loop's progress is otherwise invisible: the ancestor line above
+        # shows only that the loop is running, not how far through it is.
+        if self._loop_name and progress is not None:
+            lines.append(
+                f"{self._indent}[dim]"
+                f"{_format_loop_progress_line(self._loop_name, progress['done'], progress['total'], progress['eta_s'])}"
+                "[/dim]"
+            )
 
         for idx, state in enumerate(states):
             label = self._name if self._total == 1 else f"{self._name} [{idx}]"
