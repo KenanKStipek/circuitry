@@ -132,6 +132,7 @@ class RunManager:
         initial_state: dict[str, Any] | None = None,
         override_model: bool = False,
         override_to: str = "",
+        remote_library_source: bool = False,
     ) -> Run:
         run = Run(run_id=uuid.uuid4().hex, orchestration_path=orchestration_path)
         with self._lock:
@@ -196,6 +197,13 @@ class RunManager:
             state_observer=_observe_state,
             concurrent_dispatch_observer=_on_concurrent_dispatch,
             branch_settled_observer=_on_branch_settled,
+            # Capability consent (#275, #334): a name resolved from a remote
+            # (refreshable, e.g. github) library source gets the same
+            # whole-document gate `cof run hub/entry` does; nothing in this
+            # request grants capabilities on the caller's behalf — MCP never
+            # prompts and has no field for it, so a covered document runs
+            # only when its digest was already consented via `cof trust`.
+            remote_library_source=remote_library_source,
         )
         thread = threading.Thread(
             target=self._thread_target,

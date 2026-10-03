@@ -548,6 +548,7 @@ class RunsScreen(ViewScreen):
             routing_override=stashed.routing,
             decompose_override=stashed.decompose,
             trust_document=stashed.trust_document,
+            remote_library_source=stashed.remote_library_source,
         )
         self.store.begin(label=orch.name)
         self._mode = LIVE

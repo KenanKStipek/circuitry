@@ -82,6 +82,13 @@ class LastRun:
         return self.args.get("trust_document") is True
 
     @property
+    def remote_library_source(self) -> bool:
+        """Whether the stashed run resolved from a remote (refreshable)
+        library source by bare name — replayed with the same capability
+        consent gate (#275, #334) the original run applied."""
+        return self.args.get("remote_library_source") is True
+
+    @property
     def dry_run(self) -> bool:
         return bool(self.args.get("dry_run"))
 

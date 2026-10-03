@@ -926,7 +926,17 @@ class LibraryScreen(ViewScreen):
             return
         # A library entry stays limited regardless of source — bundled,
         # folder or GitHub — same as `cof run <library name>` (issue #283).
-        launch(entry.path, trust_document=False)
+        # A remote (refreshable, e.g. GitHub) source additionally gets the
+        # whole-document capability gate `cof run hub/entry` applies (#275,
+        # #334) — the resolved path alone can't say that once it's handed
+        # off, so it rides along as its own flag.
+        launch(
+            entry.path,
+            trust_document=False,
+            remote_library_source=(
+                bool(entry.source) and self.registry.is_refreshable(entry.source)
+            ),
+        )
 
     # -- refresh -------------------------------------------------------------
 

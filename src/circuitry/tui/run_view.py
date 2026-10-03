@@ -291,6 +291,11 @@ class RunScreen(ViewScreen):
         #: still selected, so picking something else off the dropdown falls
         #: back to the ordinary local/bundled rule below.
         self._pending_trust: tuple[str, bool] | None = None
+        #: Same pairing as :attr:`_pending_trust`, for whether the hand-off
+        #: came from a remote (refreshable) library source — the Library
+        #: view's own answer, since Run's picker never resolves one itself
+        #: (#275, #334).
+        self._pending_remote_library_source: tuple[str, bool] | None = None
         #: Last finished result, for tests and for the execution view to pick up.
         self.last_result: RunResult | None = None
 
@@ -407,9 +412,11 @@ class RunScreen(ViewScreen):
             return
         self.profile_name = getattr(self.app, "pending_profile", None)
         trust = bool(getattr(self.app, "pending_trust", False))
+        remote_library_source = bool(getattr(self.app, "pending_remote_library_source", False))
         self.app.pending_run = None  # type: ignore[attr-defined]
         self.app.pending_profile = None  # type: ignore[attr-defined]
         self.app.pending_trust = False  # type: ignore[attr-defined]
+        self.app.pending_remote_library_source = False  # type: ignore[attr-defined]
 
         choice = next(
             (c for c in self._choices if c.path.resolve() == path.resolve()), None
@@ -424,6 +431,7 @@ class RunScreen(ViewScreen):
             select: Select[str] = self.query_one("#run-orchestration", Select)
             select.set_options([(c.option, c.key) for c in self._choices])
         self._pending_trust = (choice.key, trust)
+        self._pending_remote_library_source = (choice.key, remote_library_source)
         self.query_one("#run-orchestration", Select).value = choice.key
 
     # -- selection -----------------------------------------------------------
@@ -613,6 +621,19 @@ class RunScreen(ViewScreen):
             return self._pending_trust[1]
         return choice.source == "local"
 
+    def _remote_library_source_for(self, choice: OrchestrationChoice) -> bool:
+        """Whether this launch's document resolved from a remote (refreshable)
+        library source — the other half of :meth:`_trust_for`'s hand-off
+        pairing. Run's own picker (bundled curation + local files) never
+        resolves one itself, so the default is always False.
+        """
+        if (
+            self._pending_remote_library_source is not None
+            and self._pending_remote_library_source[0] == choice.key
+        ):
+            return self._pending_remote_library_source[1]
+        return False
+
     def action_launch(self) -> None:
         """Validate the form and start the run on a worker thread."""
         if self._session is not None and self._session.running:
@@ -650,6 +671,13 @@ class RunScreen(ViewScreen):
             skip_preflight=False,
             profile_name=self.profile_name,
             trust_document=self._trust_for(self._form.choice),
+            # Capability consent (#275, #334): a remote library hand-off gets
+            # the same whole-document gate `cof run hub/entry` applies. The
+            # TUI never prompts — unlike `cof run`'s interactive y/N, nobody
+            # here can answer one mid-launch without blocking the rest of the
+            # UI — so a document whose digest was never consented refuses,
+            # the same message `cof run` gives from a script or CI.
+            remote_library_source=self._remote_library_source_for(self._form.choice),
         )
 
         self._updates = 0

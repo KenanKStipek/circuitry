@@ -701,14 +701,17 @@ Not every plugin can actually be bounded by it:
 | Ignored — has its own, separate bound instead | `port_check` (`params.timeout_ms`, socket-level, default 2s), `surrealdb` (the SDK's own socket timeout), `embed`/`rerank`/`vector_search` (local inference; the first call per model can also trigger an unbounded download) |
 
 **Capability consent (#275):** a document that did not come from the user's
-own disk — a `cof run-library`/`run_shared_orchestration` asset, or any
+own disk — a `cof run-library`/`run_shared_orchestration` asset, a remote
+(refreshable, e.g. `github`) library source run by bare name, or any
 `use: ref:` child, reached from *any* document, trusted or not — is gated on
 an explicit yes before its tool effects may `shell`, `python_eval`,
 `fs-write` (write or delete a local path), or reach the `network`, the first
 time. A path-run document (`cof run ./my.yml`) is never asked about its own
 effects (see [Host settings versus orchestration documents](./threat-model.md#6-host-settings-versus-orchestration-documents)
 for the parallel rule on host settings), only about a `use: ref:` child it
-pulls in. See [Threat Model §9](./threat-model.md#9-capability-consent-for-a-document-that-is-not-the-users-own)
+pulls in. The gate is the same on every surface — CLI, TUI, SDK, MCP, REST
+(#334) — see [Surfaces](./guidebook/12-surfaces.md) for how each one reaches
+it. See [Threat Model §9](./threat-model.md#9-capability-consent-for-a-document-that-is-not-the-users-own)
 for the full gate and [Configuration](./guidebook/04-configuration.md#capability-consent-for-a-fetched-or-referenced-document)
 for the CLI walkthrough. Each provider's capability tag
 (`circuitry.plugins.capabilities.PLUGIN_CAPABILITIES`):
