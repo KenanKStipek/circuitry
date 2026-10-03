@@ -373,6 +373,9 @@ class ConditionalRuntime:
                     elif isinstance(effect, ToolDefinition):
                         ToolRuntime(
                             effect,
+                            adapter=self.adapter,
+                            model=self.model,
+                            model_locked=self.model_locked,
                             runtime_config=self.runtime_config,
                             dry_run=self.dry_run,
                             timeout_seconds=self.timeout_seconds,

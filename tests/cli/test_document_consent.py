@@ -59,6 +59,29 @@ def test_required_capabilities_follows_a_path_child(tmp_path: Path) -> None:
     assert required_capabilities(orch, root_path=root, runtime=None) == {"shell"}
 
 
+def test_required_capabilities_sees_a_root_finally_only_shell_use() -> None:
+    """A fetched document cannot hide `shell` from consent by putting its
+    only tool effect in a root-level `finally:` block (#275 security review):
+    the walk this check runs on must cover `finally:`, not just `effects:`.
+    """
+    orch = {"effects": [], "finally": [_tool("shell")]}
+    assert required_capabilities(orch, root_path=None, runtime=None) == {"shell"}
+
+
+def test_required_capabilities_sees_a_dynamics_finally_only_shell_use() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "dynamic",
+                "name": "d",
+                "effects": [],
+                "finally": [_tool("shell")],
+            }
+        ]
+    }
+    assert required_capabilities(orch, root_path=None, runtime=None) == {"shell"}
+
+
 # ── ref_child_requirements ───────────────────────────────────────────────────
 
 
@@ -253,6 +276,28 @@ def test_enforce_consent_gates_the_whole_document_when_fetched(tmp_path: Path) -
     with pytest.raises(DocumentConsentError):
         enforce_consent(
             orch={"effects": [_tool("shell")]},
+            orchestration_path=orch_path,
+            gate_whole_document=True,
+            runtime=None,
+            store_path=trust_store_path(),
+            allow_capabilities=None,
+            prompt=None,
+        )
+
+
+def test_enforce_consent_refuses_a_fetched_document_whose_only_shell_use_is_in_finally(
+    tmp_path: Path,
+) -> None:
+    """Security regression (#275 review): a library/remote document that
+    puts its only `shell` tool in `finally:` must still require consent —
+    and, with no prompt callback (every non-interactive surface), refuse
+    rather than silently running the cleanup block.
+    """
+    orch = {"effects": [], "finally": [_tool("shell")]}
+    orch_path = _write_yaml(tmp_path / "orch.yml", orch)
+    with pytest.raises(DocumentConsentError):
+        enforce_consent(
+            orch=orch,
             orchestration_path=orch_path,
             gate_whole_document=True,
             runtime=None,

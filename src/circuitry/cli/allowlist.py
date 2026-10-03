@@ -62,6 +62,11 @@ def walk_orchestration_refs(
         # (core/compiler.py) — a document written with the legacy key must not
         # look like it references nothing.
         _walk_effects(orch.get("effects") or orch.get("steps"), adapters, tools)
+        # Root-level `finally:` (#272) — a preflight-missing cleanup tool is
+        # otherwise found only at runtime, after the (possibly expensive)
+        # main effects already ran. Also required for consent (#275): a
+        # fetched document must not be able to hide `shell` in `finally:`.
+        _walk_effects(orch.get("finally"), adapters, tools)
 
     return adapters, tools
 
@@ -93,6 +98,7 @@ def _walk_effects(
                 tools.add(prov.strip())
         elif etype == "dynamic":
             _walk_effects(effect.get("effects") or effect.get("steps"), adapters, tools)
+            _walk_effects(effect.get("finally"), adapters, tools)
         elif etype in ("if", "conditional"):
             _walk_effects(effect.get("then"), adapters, tools)
             _walk_effects(effect.get("else"), adapters, tools)
@@ -133,6 +139,7 @@ def collect_adapter_usages(orch: dict[str, Any]) -> dict[str, list[AdapterUsage]
             else None
         )
         _walk_effects_usages(orch.get("effects"), default_adapter, usages)
+        _walk_effects_usages(orch.get("finally"), default_adapter, usages)
     return usages
 
 
@@ -174,6 +181,7 @@ def _walk_effects_usages(
                         )
         elif etype == "dynamic":
             _walk_effects_usages(effect.get("effects"), default_adapter, usages)
+            _walk_effects_usages(effect.get("finally"), default_adapter, usages)
         elif etype in ("if", "conditional"):
             # `mode: model` (the compiler's default, see core/compiler.py) calls
             # generate() itself on the document's default adapter — there's no

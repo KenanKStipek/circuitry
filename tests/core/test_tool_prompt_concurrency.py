@@ -11,6 +11,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -20,7 +21,8 @@ from circuitry.core.concurrency import (
     RunConcurrencyLimiter,
     UnknownConcurrencyGroupError,
 )
-from circuitry.core.prompt import PromptDefinition, PromptRuntime
+from circuitry.core.expect import ExpectDef
+from circuitry.core.prompt import PromptDefinition, PromptRuntime, RetryPolicyDef
 from circuitry.core.store import Store
 from circuitry.core.tool import ToolDefinition, ToolRuntime
 from circuitry.plugins.base import ToolResult
@@ -343,3 +345,136 @@ def test_prompt_runtime_on_error_continue_releases_the_slot_on_failure() -> None
         raise errors[0]
     assert store.state["first"]["meta"]["error"] is not None
     assert ok_adapter.max_concurrent == 1
+
+
+def test_tool_retry_releases_group_slot_during_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A grouped tool's retry loop releases its slot before the backoff
+    sleep between attempts (#333 x #273) — another grouped leaf, scheduled
+    while the first is sleeping, must still be able to acquire and finish
+    well inside that sleep rather than block on it."""
+    limiter = RunConcurrencyLimiter(groups={"gpu": 1})
+    runtime_config = {RUNTIME_CONFIG_KEY: limiter}
+    store = Store({})
+
+    ok_result = ToolResult(value="done", raw={}, stdout="", stderr="", exit_code=0)
+    retry_plugin = MagicMock()
+    attempt_failed = threading.Event()
+
+    def retry_side_effect(*, params: dict, timeout_seconds: int) -> ToolResult:
+        if retry_plugin.execute.call_count == 1:
+            attempt_failed.set()
+            raise RuntimeError("transient")
+        return ok_result
+
+    retry_plugin.execute.side_effect = retry_side_effect
+    second_plugin = _TrackingPlugin(delay=0.01)
+
+    def build_plugin(*, plugin_name: str, runtime: dict) -> object:
+        return retry_plugin if plugin_name == "retry_provider" else second_plugin
+
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", build_plugin)
+
+    backoff_ms = 300
+    retry_defn = ToolDefinition(
+        name="retry_tool",
+        provider="retry_provider",
+        params={},
+        group="gpu",
+        retries=RetryPolicyDef(max_attempts=2, backoff_ms=backoff_ms),
+    )
+    second_defn = ToolDefinition(
+        name="second_tool", provider="second_provider", params={}, group="gpu"
+    )
+
+    second_elapsed: dict[str, float] = {}
+
+    def run_retry() -> None:
+        ToolRuntime(retry_defn, runtime_config=runtime_config).execute(store=store, ctx={})
+
+    def run_second() -> None:
+        assert attempt_failed.wait(timeout=_JOIN_TIMEOUT)
+        t0 = time.monotonic()
+        ToolRuntime(second_defn, runtime_config=runtime_config).execute(store=store, ctx={})
+        second_elapsed["value"] = time.monotonic() - t0
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_retry = pool.submit(run_retry)
+        f_second = pool.submit(run_second)
+        f_retry.result(timeout=_JOIN_TIMEOUT)
+        f_second.result(timeout=_JOIN_TIMEOUT)
+
+    # Well under backoff_ms: the second tool ran in the gap instead of
+    # blocking on the group slot the first attempt still held.
+    assert second_elapsed["value"] < (backoff_ms / 1000) / 2
+    assert store.state["retry_tool"]["value"] == "done"
+
+
+def test_tool_expect_model_mode_runs_after_group_slot_released(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model-mode `expect:` on a grouped tool dispatches its own adapter
+    call after the tool's group slot is released (#333 x #273) — a second
+    grouped leaf, scheduled while `expect:` is still evaluating, must not
+    block waiting for that slot."""
+    limiter = RunConcurrencyLimiter(groups={"gpu": 1})
+    runtime_config = {RUNTIME_CONFIG_KEY: limiter}
+    store = Store({})
+
+    ok_result = ToolResult(value="a summary", raw={}, stdout="", stderr="", exit_code=0)
+    first_plugin = MagicMock()
+    first_plugin.execute.return_value = ok_result
+    second_plugin = _TrackingPlugin(delay=0.01)
+
+    def build_plugin(*, plugin_name: str, runtime: dict) -> object:
+        return first_plugin if plugin_name == "first_provider" else second_plugin
+
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", build_plugin)
+
+    expect_started = threading.Event()
+
+    class _SlowAdapter:
+        name = "slow"
+
+        def generate(
+            self, *, model: str, prompt: str, timeout_seconds: int = 120
+        ) -> GenerateResult:
+            expect_started.set()
+            time.sleep(0.2)
+            return GenerateResult(text="yes", raw={"model": model})
+
+    defn = ToolDefinition(
+        name="first_tool",
+        provider="first_provider",
+        params={},
+        group="gpu",
+        expect=ExpectDef(mode="model", template="Does this look right? {{value}}"),
+    )
+    second_defn = ToolDefinition(
+        name="second_tool", provider="second_provider", params={}, group="gpu"
+    )
+
+    second_elapsed: dict[str, float] = {}
+
+    def run_first() -> None:
+        ToolRuntime(
+            defn, runtime_config=runtime_config, adapter=_SlowAdapter(), model="m"
+        ).execute(store=store, ctx={})
+
+    def run_second() -> None:
+        assert expect_started.wait(timeout=_JOIN_TIMEOUT)
+        t0 = time.monotonic()
+        ToolRuntime(second_defn, runtime_config=runtime_config).execute(store=store, ctx={})
+        second_elapsed["value"] = time.monotonic() - t0
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_first = pool.submit(run_first)
+        f_second = pool.submit(run_second)
+        f_first.result(timeout=_JOIN_TIMEOUT)
+        f_second.result(timeout=_JOIN_TIMEOUT)
+
+    # Well under the adapter's 0.2s expect delay: the second tool ran
+    # while expect: was still in flight instead of waiting on it.
+    assert second_elapsed["value"] < 0.1
+    assert store.state["first_tool"]["meta"]["expect"]["result"] is True

@@ -29,6 +29,14 @@ fields:
     type: boolean
     default: true
     note: "Schema-validate inline YAML before execution. Keep true for LLM-generated plans."
+  retries:
+    type: object
+    properties:
+      max_attempts: "integer, min 1"
+      backoff_ms: "integer, min 0"
+    note: "Retry policy, same shape and backoff curve as a prompt's. A retry re-runs the whole child orchestration from scratch. Usually omitted."
+  expect:
+    note: "Output check, run after a successful child run; a false or unreadable expectation fails it (retries/on_error apply). Either a bare CEL string (sugar for {mode: cel, expr: <string>}) over this effect's own mapped value and meta plus state, or {mode: model, template: ...}, asked yes/no on the run's adapter/model. Usually omitted."
   on_error:
     enum: [fail, skip, continue]
     default: fail

@@ -1460,6 +1460,9 @@ Should the loop continue? Answer (yes/no):"""
                 elif is_tool:
                     ToolRuntime(
                         effect,
+                        adapter=self.adapter,
+                        model=self.model,
+                        model_locked=self.model_locked,
                         runtime_config=self.runtime_config,
                         dry_run=self.dry_run,
                         timeout_seconds=self.timeout_seconds,
