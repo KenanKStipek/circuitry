@@ -1042,7 +1042,12 @@ def run_cmd(
         env_vars = stashed.get("env_vars")
         tail = stashed.get("tail", False)
         skip_preflight = stashed.get("skip_preflight", False)
-        allow_capabilities = stashed.get("allow_capabilities")
+        # The stash's own value wins when it has one (`cof run` persists it;
+        # see the write below) — but a `run-library` stash deliberately never
+        # does (its one-time grant is not persisted), so this invocation's own
+        # `--allow-capabilities` still works for a `--last` replay of one,
+        # same scripted/CI escape hatch the refusal message advertises (#337).
+        allow_capabilities = stashed.get("allow_capabilities") or allow_capabilities
         profile = stashed.get("profile")
         profile_from_state = (
             Path(stashed["profile_from_state"]) if stashed.get("profile_from_state") else None

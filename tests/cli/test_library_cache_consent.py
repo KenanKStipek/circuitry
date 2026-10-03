@@ -125,16 +125,23 @@ def test_cof_fetch_copy_outside_the_cache_dir_stays_an_ordinary_trusted_path_run
     assert "runtime" in json.loads(result.stdout)
 
 
-def test_trust_by_cache_path_does_not_persist_for_a_copy_outside_it(tmp_path: Path) -> None:
+def test_trust_by_cache_path_records_consent_only_for_that_documents_digest(
+    tmp_path: Path,
+) -> None:
     """Consent is recorded by content digest, not by path \u2014 trusting the
-    cached file does not somehow also cover an unrelated document with
-    different bytes."""
+    cached file records consent for its own bytes, and does not somehow
+    also cover an unrelated document with different bytes."""
     cache_dir = tmp_path / "cache"
     doc = _write_yaml(
         cache_dir / "hub" / "sha1" / "pipeline.yml", {"effects": [_SHELL_EFFECT]}
     )
     config = _github_config(tmp_path, cache_dir)
-    runner.invoke(app, ["trust", str(doc), "-c", str(config), "--yes"])
+    trusted = runner.invoke(app, ["trust", str(doc), "-c", str(config), "--yes"])
+    assert trusted.exit_code == 0, trusted.output
+
+    assert consented_capabilities(
+        document_digest(doc.read_bytes()), store_path=trust_store_path()
+    ) == frozenset({"shell"})
 
     other = _write_yaml(
         tmp_path / "other.yml",

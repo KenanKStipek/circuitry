@@ -516,3 +516,42 @@ def test_is_cache_path_false_for_a_non_refreshable_source(tmp_path: Path) -> Non
 
 def test_is_cache_path_false_when_no_sources_configured() -> None:
     assert LibraryRegistry([]).is_cache_path(Path("/tmp/anything.yml")) is False
+
+
+def test_is_cache_path_true_for_a_case_altered_spelling_of_the_same_cache_dir(
+    tmp_path: Path,
+) -> None:
+    """Review finding (#337): the check must compare directory *identity*,
+    not path strings — `Path.resolve()` follows symlinks but does not fix
+    letter case, so on a case-insensitive filesystem (macOS's default) a
+    caller must not be able to skip the gate by spelling the same cache
+    path with different case."""
+    cache_dir = tmp_path / "cache" / "hub"
+    doc = cache_dir / "sha123" / "pipeline.yml"
+    doc.parent.mkdir(parents=True)
+    doc.write_text("effects: []\n", encoding="utf-8")
+
+    altered = tmp_path / "CACHE" / "HUB" / "sha123" / "pipeline.yml"
+    if not altered.is_file():
+        pytest.skip("filesystem is case-sensitive")
+
+    registry = LibraryRegistry([_FakeRefreshableSource("hub", cache_dir)])
+
+    assert registry.is_cache_path(altered) is True
+
+
+def test_is_cache_path_true_under_the_shared_cache_root_even_when_unconfigured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `github` source's cache under the one cache root every such source
+    shares counts even when no source in *this* registry names it — a
+    one-off `-c` config, a project config the caller's working directory
+    doesn't pick up, or a source since removed from config must not un-gate
+    content it already fetched (#337)."""
+    cache_root = tmp_path / "shared-cache-root"
+    monkeypatch.setenv("CIRCUITRY_CACHE_DIR", str(cache_root))
+    doc = cache_root / "hub" / "sha123" / "pipeline.yml"
+    doc.parent.mkdir(parents=True)
+    doc.write_text("effects: []\n", encoding="utf-8")
+
+    assert LibraryRegistry([]).is_cache_path(doc) is True
