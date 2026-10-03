@@ -427,19 +427,26 @@ def run(req: RunRequest) -> RunResult:
         # before anything compiles or dispatches, same fail-fast spirit as the
         # allowlist check above.
         library_registry = LibraryRegistry.from_runtime(cfg.runtime)
+        document_is_cache_path = library_registry.is_cache_path(req.orchestration_path)
         capability_ceiling = enforce_consent(
             orch=orch,
             orchestration_path=req.orchestration_path,
             gate_whole_document=(
                 req.shared_library_metadata is not None
                 or req.remote_library_source
-                or library_registry.is_cache_path(req.orchestration_path)
+                or document_is_cache_path
             ),
             runtime=cfg.runtime,
             store_path=trust_store_path(),
             allow_capabilities=req.allow_capabilities,
             prompt=req.capability_prompt,
         )
+        # A path inside a library source's own cache directory names the
+        # exact same fetched content a library-name run would resolve to
+        # (#340's capability-consent gate above already treats it that way);
+        # its runtime:/plugins: block must stay limited too, or the cache
+        # path is a second door around #284's path-trust rule (#342).
+        document_trust_document = req.trust_document and not document_is_cache_path
 
         if req.profile_name and req.profile_record is not None:
             raise ValueError(
@@ -477,7 +484,7 @@ def run(req: RunRequest) -> RunResult:
             cli_routing=req.routing_override,
             cli_decompose=req.decompose_override,
             profile=profile,
-            trust_document=req.trust_document,
+            trust_document=document_trust_document,
             document_name=req.orchestration_path.name,
             resume_default_out=req.resume_default_out if req.resume else None,
         )

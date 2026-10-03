@@ -227,7 +227,12 @@ is persisted and which Python modules are imported.
 `cof run ./my.yml`, `cof check` / `cof score` on a path, a local file picked
 in the TUI's Run view, the SDK's `run_orchestration(orchestration_path=...)` /
 `validate_orchestration` and scheduler jobs apply the document's whole
-`runtime:` block and `plugins:` list. A fetched, library, generated or
+`runtime:` block and `plugins:` list — unless that path resolves (symlinks
+followed) inside a refreshable (e.g. `github`) library source's own cache
+directory: that is fetched content regardless of what string named it, the
+same content a bare library-name run already limits, so it stays limited
+too (#342), on every surface built on `runtime_shim.run` (CLI, TUI, SDK, MCP,
+REST). A fetched, library, generated or
 tool-chosen document is limited: `cof run <library name>`, `cof run-library`,
 `run_shared_orchestration`, the MCP `run_orchestration` / `validate_orchestration`
 tools, the REST trigger and the TUI Library view's "run this entry" (bundled,
@@ -237,7 +242,9 @@ disk: the document is still what the model just generated, not something you
 named by path. Save it, then run that same file with `cof run f.yml` or pick
 it from the Run view's local-file list, and it trusts like any other local
 file. `cof fetch` followed by `cof run ./fetched.yml` is running the file by
-path, so read a fetched file before you run it that way.
+path, so read a fetched file before you run it that way — unless the saved
+copy's path itself happens to land inside a configured source's cache
+directory, which stays limited for the reason above.
 
 **Mitigation.** A limited document's `runtime:` block contributes only the
 author-level keys in `ORCHESTRATION_RUNTIME_KEYS` — `runtime.complexity` and
@@ -253,8 +260,14 @@ runtime and its own `runtime:` / `plugins:` keys are never read, whether the
 parent is trusted or not; generated reflector and decompose plans never
 contribute them either. Trust is an explicit input (`RunRequest.trust_document`,
 default `False`), set only by the entry points above, so an internal or
-programmatic caller that does not say otherwise is limited. Implementation:
-[`src/circuitry/cli/effective_settings.py`](../src/circuitry/cli/effective_settings.py).
+programmatic caller that does not say otherwise is limited — and
+`runtime_shim.run` overrides it back to `False` itself when the resolved path
+is a library source's cache path (above), so a caller that passes
+`trust_document=True` for a path it did not actually choose (the SDK's
+default) cannot apply a fetched document's settings by believing it owns the
+path. Implementation:
+[`src/circuitry/cli/effective_settings.py`](../src/circuitry/cli/effective_settings.py)
+and [`src/circuitry/cli/runtime_shim.py`](../src/circuitry/cli/runtime_shim.py).
 
 **Residual risk.** A path is trusted whoever wrote the file: a document
 cloned with a repository or downloaded runs with full host authority once you
