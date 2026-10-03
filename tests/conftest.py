@@ -137,6 +137,13 @@ def _hermetic_global_config(
     monkeypatch.setattr(doctor_module, "GLOBAL_CONFIG_DIR", fake_dir)
     monkeypatch.setattr(doctor_module, "GLOBAL_CONFIG_PATH", fake_config_path)
 
+    # Same isolation for the `cache:` step cache (#270): without this, a test
+    # run would read and write the developer's real ~/.cache/circuitry/steps,
+    # and worse, two unrelated tests whose rendered prompt/params happen to
+    # hash the same way could see each other's cached result across runs in
+    # the same pytest process.
+    monkeypatch.setenv("CIRCUITRY_CACHE_DIR", str(fake_dir / "step-cache"))
+
 
 @pytest.fixture(autouse=True)
 def _reset_circuitry_logger() -> Any:
