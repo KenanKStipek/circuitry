@@ -50,6 +50,7 @@ from .config_trust import TrustStoreError, record_trust
 from .doctor import register_doctor
 from .effective_settings import resolve_effective_settings
 from .explain_routing import make_explain_routing_observer
+from .interrupts import sigterm_as_interrupt
 from .last_run import LAST_RUN_PATH, read_last_run
 from .library_sources import (
     Entry,
@@ -1289,7 +1290,9 @@ def run_cmd(
     # rather than this run losing the spinner outright on the mere chance one
     # might — most interactive runs never need to ask at all.
     status_cm = console.status("[cyan]Running…[/cyan]") if show_status else nullcontext()
-    with status_cm:
+    # SIGTERM for the duration of the run only (#338) — same resumable
+    # cleanup path Ctrl-C/SIGINT already take, see `cli.interrupts`.
+    with status_cm, sigterm_as_interrupt():
         if show_status:
             status_holder["status"] = status_cm
         result = run(req)
@@ -1373,7 +1376,9 @@ def run_cmd(
         # 130 (128 + SIGINT) is the conventional exit code for Ctrl-C —
         # distinct from an ordinary failure's 1, even though both wrote the
         # same --out/--last record above and are equally resumable (#270 F6).
-        raise typer.Exit(code=130 if result.interrupted else 1)
+        # SIGTERM gets its own, 143 (128 + SIGTERM), for the same reason
+        # (#338).
+        raise typer.Exit(code=143 if result.sigterm else 130 if result.interrupted else 1)
 
     if tail:
         val = _find_last_effect_value(result.state)
@@ -1674,7 +1679,9 @@ def run_library_cmd(
     )
 
     status_cm = console.status("[cyan]Running…[/cyan]") if show_status else nullcontext()
-    with status_cm:
+    # SIGTERM for the duration of the run only (#338) — same resumable
+    # cleanup path Ctrl-C/SIGINT already take, see `cli.interrupts`.
+    with status_cm, sigterm_as_interrupt():
         if show_status:
             status_holder["status"] = status_cm
         result = run(req)
@@ -1710,7 +1717,7 @@ def run_library_cmd(
             )
             if totals_line:
                 console.print(f"[bold]Totals:[/bold] {totals_line}")
-        raise typer.Exit(code=130 if result.interrupted else 1)
+        raise typer.Exit(code=143 if result.sigterm else 130 if result.interrupted else 1)
 
     # Stash for --last, the same shape `cof run` writes — so `cof run --last`
     # can replay a run-library run too. The resolved asset file (not the
