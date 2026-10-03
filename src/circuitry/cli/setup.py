@@ -223,13 +223,13 @@ def _write_env_file(result: DetectionResult) -> Path | None:
     if not (openai and openai.available) and typer.confirm(
         "Set up OpenAI API key?", default=False
     ):
-        key = typer.prompt("OPENAI_API_KEY")
+        key = typer.prompt("OPENAI_API_KEY", hide_input=True)
         lines.append(f"OPENAI_API_KEY={key}")
 
     if not (anthropic and anthropic.available) and typer.confirm(
         "Set up Anthropic API key?", default=False
     ):
-        key = typer.prompt("ANTHROPIC_API_KEY")
+        key = typer.prompt("ANTHROPIC_API_KEY", hide_input=True)
         lines.append(f"ANTHROPIC_API_KEY={key}")
 
     if not lines:
