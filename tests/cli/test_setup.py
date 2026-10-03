@@ -429,13 +429,6 @@ def test_setup_cmd_writes_env_file_when_confirmed(monkeypatch: pytest.MonkeyPatc
 # ---------------------------------------------------------------------------
 
 
-def test_examples_dir_resolves_to_installed_bundled_examples() -> None:
-    examples_dir = cli_setup.examples_dir()
-
-    assert (examples_dir / ".env.example").is_file()
-    assert (examples_dir / "config.example.json").is_file()
-
-
 def test_setup_cmd_prints_examples_dir_after_writing_private_files(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

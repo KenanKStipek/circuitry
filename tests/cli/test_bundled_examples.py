@@ -15,31 +15,45 @@ from pathlib import Path
 from dotenv import dotenv_values
 
 from circuitry.adapters.factory import build_adapter
-from circuitry.cli.config import CONFIG_ENV_VARS, CircuitryConfig
+from circuitry.cli.config import CONFIG_ENV_VARS, CircuitryConfig, load_config
 from circuitry.cli.setup import examples_dir
 from circuitry.core.store.persistence import build_persistence_backend
 from circuitry.plugins.factory import build_plugin
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_ADAPTERS_DIR = Path(__file__).resolve().parents[2] / "src" / "circuitry" / "adapters"
+_SRC_DIR = Path(__file__).resolve().parents[2] / "src" / "circuitry"
+_ADAPTERS_DIR = _SRC_DIR / "adapters"
+_PLUGINS_DIR = _SRC_DIR / "plugins"
 
-#: Credential/endpoint env vars hardcoded in the adapters — scraped from
-#: source rather than duplicated here, so a new adapter's env var that is
-#: missing from `.env.example` fails this test instead of going unnoticed.
+#: Credential/endpoint env vars hardcoded in the adapters and tool plugins —
+#: scraped from source rather than duplicated here, so a new adapter's or
+#: plugin's env var that is missing from `.env.example` fails this test
+#: instead of going unnoticed.
 _ENV_VAR_PATTERNS = (
     re.compile(r'os\.environ\.get\(\s*["\'](\w+)["\']'),
+    re.compile(r'os\.environ\[\s*["\'](\w+)["\']'),
+    re.compile(r'os\.getenv\(\s*["\'](\w+)["\']'),
     re.compile(r'api_key_env=["\'](\w+)["\']'),
     re.compile(r'api_key_env:\s*str\s*=\s*["\'](\w+)["\']'),
 )
 
 
-def _adapter_credential_env_vars() -> set[str]:
+def _credential_env_vars(*dirs: Path) -> set[str]:
     names: set[str] = set()
-    for py_file in _ADAPTERS_DIR.glob("*.py"):
-        text = py_file.read_text(encoding="utf-8")
-        for pattern in _ENV_VAR_PATTERNS:
-            names.update(pattern.findall(text))
+    for directory in dirs:
+        for py_file in directory.glob("*.py"):
+            text = py_file.read_text(encoding="utf-8")
+            for pattern in _ENV_VAR_PATTERNS:
+                names.update(pattern.findall(text))
     return names
+
+
+def _adapter_credential_env_vars() -> set[str]:
+    return _credential_env_vars(_ADAPTERS_DIR)
+
+
+def _adapter_and_plugin_credential_env_vars() -> set[str]:
+    return _credential_env_vars(_ADAPTERS_DIR, _PLUGINS_DIR)
 
 
 def _env_example_path() -> Path:
@@ -60,8 +74,7 @@ def test_config_example_is_valid_json() -> None:
 
 
 def test_config_example_loads_through_the_real_config_loader() -> None:
-    data = json.loads(_config_example_path().read_text(encoding="utf-8"))
-    cfg = CircuitryConfig.from_dict(data)
+    cfg = load_config(_config_example_path())
 
     assert cfg.default_adapter == "ollama"
     assert cfg.default_model
@@ -72,9 +85,40 @@ def test_config_example_loads_through_the_real_config_loader() -> None:
 def test_config_example_has_no_api_keys() -> None:
     """Keys belong in `.env` only — never in config.json (#308)."""
     text = _config_example_path().read_text(encoding="utf-8")
-    credential_names = _adapter_credential_env_vars()
+    credential_names = _adapter_and_plugin_credential_env_vars()
     for name in credential_names:
         assert name not in text, f"{name} must not appear in config.example.json"
+
+
+#: Whole underscore-separated segments, so "max_tokens" doesn't false-positive
+#: on "token".
+_SECRET_LOOKING_WORDS = ("token", "password", "secret")
+#: Checked as a substring since it's itself a compound word.
+_SECRET_LOOKING_SUBSTRINGS = ("api_key",)
+
+
+def _assert_no_secret_shaped_keys(value: object, path: str = "$") -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            lowered = str(key).lower()
+            segments = lowered.split("_")
+            flagged = any(word in segments for word in _SECRET_LOOKING_WORDS) or any(
+                sub in lowered for sub in _SECRET_LOOKING_SUBSTRINGS
+            )
+            assert not flagged, (
+                f"{path}.{key} looks like a credential field — keys belong in .env only"
+            )
+            _assert_no_secret_shaped_keys(child, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _assert_no_secret_shaped_keys(child, f"{path}[{index}]")
+
+
+def test_config_example_has_no_secret_shaped_keys() -> None:
+    """Catches a credential under a generic key name an env-var-name check
+    would miss, e.g. ``"api_key": "sk-..."`` nested anywhere in the file."""
+    data = json.loads(_config_example_path().read_text(encoding="utf-8"))
+    _assert_no_secret_shaped_keys(data)
 
 
 def test_config_example_every_top_level_key_is_known() -> None:
@@ -157,15 +201,20 @@ def test_env_example_handles_comments_and_blank_lines() -> None:
 
 
 def test_every_adapter_credential_env_var_appears_in_env_example() -> None:
-    """Drift test: a new adapter's hardcoded credential/base-url env var
-    must be added to .env.example (#346)."""
+    """Drift test: a new adapter's or tool plugin's hardcoded
+    credential/base-url env var must be added to .env.example (#346)."""
     text = _env_example_path().read_text(encoding="utf-8")
     missing = [
         name
-        for name in _adapter_credential_env_vars()
+        for name in _adapter_and_plugin_credential_env_vars()
         if not re.search(rf"^#?\s*{re.escape(name)}=", text, re.MULTILINE)
     ]
     assert not missing, f"Missing from .env.example: {sorted(missing)}"
+
+
+def test_circuitry_library_token_appears_in_env_example() -> None:
+    text = _env_example_path().read_text(encoding="utf-8")
+    assert re.search(r"^#?\s*CIRCUITRY_LIBRARY_TOKEN=", text, re.MULTILINE)
 
 
 def test_every_circuitry_config_env_var_appears_in_env_example() -> None:
