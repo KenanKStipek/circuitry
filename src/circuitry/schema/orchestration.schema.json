@@ -304,7 +304,11 @@
           "items": { "$ref": "#/$defs/AssetRefDef" }
         },
         "retries": { "$ref": "#/$defs/RetryPolicyDef" },
-        "on_error": { "$ref": "#/$defs/OnErrorDefault" }
+        "on_error": { "$ref": "#/$defs/OnErrorDefault" },
+        "group": {
+          "type": "string",
+          "description": "Named concurrency-group slot (runtime.concurrency_groups.<name>) this effect waits for a free slot in before dispatching, in addition to runtime.max_concurrency's run-wide cap. Leaf effects only — cof check rejects it elsewhere. The group must be defined in runtime.concurrency_groups or cof check rejects the reference."
+        }
       },
       "oneOf": [
         { "required": ["template"] },
@@ -531,7 +535,11 @@
         "timeout_ms": { "type": "integer", "minimum": 0 },
         "retries": { "$ref": "#/$defs/RetryPolicyDef" },
         "expect": { "$ref": "#/$defs/ExpectDef" },
-        "on_error": { "$ref": "#/$defs/OnErrorDefault" }
+        "on_error": { "$ref": "#/$defs/OnErrorDefault" },
+        "group": {
+          "type": "string",
+          "description": "Named concurrency-group slot (runtime.concurrency_groups.<name>) this effect waits for a free slot in before dispatching, in addition to runtime.max_concurrency's run-wide cap. Leaf effects only — cof check rejects it elsewhere. The group must be defined in runtime.concurrency_groups or cof check rejects the reference."
+        }
       }
     },
 

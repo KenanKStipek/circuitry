@@ -273,7 +273,9 @@ def test_run_without_profile_is_unaffected_by_profile_plumbing(tmp_path: Path) -
         """Replace every timestamp-ish key anywhere in the tree.
 
         Every effect node carries its own meta timestamps — including the
-        `dynamic` wrapper — so this walks rather than naming nodes.
+        `dynamic` wrapper — so this walks rather than naming nodes. `totals`
+        (#271) carries real wall-clock elapsed time, which never matches
+        between two separately-timed runs even with identical inputs.
         """
         if isinstance(node, dict):
             return {
@@ -283,6 +285,8 @@ def test_run_without_profile_is_unaffected_by_profile_plumbing(tmp_path: Path) -
                 if key == "run_id"
                 else "PATH"
                 if key == "orchestration_path"
+                else "TOTALS"
+                if key == "totals"
                 else _scrub(value)
                 for key, value in node.items()
             }
@@ -305,13 +309,19 @@ def test_run_without_profile_is_unaffected_by_profile_plumbing(tmp_path: Path) -
 
 
 def _scrub_volatile(node: object) -> object:
-    """Replace run id / timestamp fields anywhere in the tree with fixed markers."""
+    """Replace run id / timestamp fields anywhere in the tree with fixed markers.
+
+    `totals` (#271) carries real wall-clock elapsed time, which never
+    matches between two separately-timed runs even with identical inputs.
+    """
     if isinstance(node, dict):
         return {
             key: "T"
             if key in {"created_at", "completed_at", "started_at"}
             else "RID"
             if key == "run_id"
+            else "TOTALS"
+            if key == "totals"
             else _scrub_volatile(value)
             for key, value in node.items()
         }

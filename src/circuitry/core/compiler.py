@@ -479,6 +479,47 @@ def _disable_subtree(node: EffectDef) -> EffectDef:
     return node
 
 
+def collect_effect_groups(node: EffectDef) -> set[str]:
+    """Every ``group:`` name set on a tool/prompt effect anywhere under *node*.
+
+    Does not descend into a ``use`` effect's child — that document isn't
+    compiled yet when its parent is; its own ``group:`` fields are checked
+    against the same known groups when it loads (see ``core.use``).
+    """
+    groups: set[str] = set()
+    if isinstance(node, (ToolDefinition, PromptDefinition)):
+        if node.group is not None:
+            groups.add(node.group)
+    elif isinstance(node, DynamicDefinition):
+        for child in (*node.effects, *node.finally_effects):
+            groups |= collect_effect_groups(child)
+    elif isinstance(node, ReflectorDefinition):
+        groups |= collect_effect_groups(node.inner)
+    elif isinstance(node, ConditionalDefinition):
+        for child in (*node.then_effects, *node.else_effects):
+            groups |= collect_effect_groups(child)
+    elif isinstance(node, LoopDefinition):
+        for child in node.body:
+            groups |= collect_effect_groups(child)
+    return groups
+
+
+def unknown_concurrency_group_errors(
+    root: EffectDef, known_groups: frozenset[str]
+) -> list[str]:
+    """One error per ``group:`` name under *root* that ``known_groups`` —
+    ``runtime.concurrency_groups``'s own keys — doesn't define (#274)."""
+    unknown = sorted(collect_effect_groups(root) - known_groups)
+    if not unknown:
+        return []
+    known_desc = ", ".join(sorted(known_groups)) if known_groups else "(none configured)"
+    return [
+        f"group {name!r} is not defined in runtime.concurrency_groups — "
+        f"known groups: {known_desc}."
+        for name in unknown
+    ]
+
+
 def _compile_effect(
     effect: dict[str, Any],
     *,
@@ -1105,6 +1146,8 @@ def _compile_tool(
     expect = _compile_expect(
         effect, effect_type="tool", effect_path=effect_path, loop_names=loop_names
     )
+    group_raw = effect.get("group")
+    group = group_raw.strip() if isinstance(group_raw, str) and group_raw.strip() else None
 
     _ = scope_path  # used by caller for deterministic addressing context
     return ToolDefinition(
@@ -1119,6 +1162,7 @@ def _compile_tool(
         description=description,
         retries=retries,
         expect=expect,
+        group=group,
     )
 
 
@@ -1362,6 +1406,9 @@ def _compile_prompt(effect: dict[str, Any], *, effect_path: str) -> PromptDefini
     if description is not None and not isinstance(description, str):
         description = None
 
+    group_raw = effect.get("group")
+    group = group_raw.strip() if isinstance(group_raw, str) and group_raw.strip() else None
+
     return PromptDefinition(
         name=name,
         template=template,
@@ -1379,4 +1426,5 @@ def _compile_prompt(effect: dict[str, Any], *, effect_path: str) -> PromptDefini
         retries=retries,
         on_error=on_error,
         description=description,
+        group=group,
     )

@@ -6,7 +6,7 @@ import logging
 import math
 import time
 from collections.abc import Callable, Sequence
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -29,7 +29,9 @@ from ..adapters.factory import configured_timeout_seconds
 from ..allowlist_gate import AllowlistError, allowed_adapters, require_adapter
 from ..cli.redaction import redact
 from ..output import console as _console
+from ..output import live_region as _live_region
 from .answers import AnswerParseError, parse_boolean_answer, parse_number_answer
+from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .store import Store
 from .templates import render_template
 
@@ -318,6 +320,13 @@ class PromptDefinition:
     # False = skip execution and write a disabled node (see core.disabled).
     enabled: bool = True
 
+    # Named concurrency-group slot this effect holds for the duration of its
+    # dispatch (core.concurrency.RunConcurrencyLimiter) — None means it only
+    # ever competes for runtime.max_concurrency's run-wide slots, if any are
+    # configured. A prompt effect is a leaf, so this is where a slot is
+    # actually held; see #274.
+    group: str | None = None
+
 
 class PromptRuntime:
     """
@@ -521,6 +530,7 @@ class PromptRuntime:
         # iteration of an unnamed loop (same store) left behind.
         for key in ("finish_reason", "warnings", "assets"):
             meta.pop(key, None)
+        meta["waiting_for"] = None
 
         # Scored here, alongside the rest of the pre-dispatch meta, so the
         # score is on the node before anything can go wrong. A post-success
@@ -629,6 +639,25 @@ class PromptRuntime:
                 if decomposition.fallback_model:
                     dispatch_model = decomposition.fallback_model
 
+            # Acquired fresh each attempt below and released before this
+            # iteration's end (backoff sleep included) — a retried/
+            # fallen-back-from attempt still competes for a new slot each
+            # time, the same contract tool.py's retry loop holds (#333 x
+            # #281): a retrying GPU dispatch must never sleep through
+            # backoff while still holding its group.
+            limiter = self.runtime_config.get(_CONCURRENCY_LIMITER_KEY)
+
+            def _on_wait(label: str) -> None:
+                store.set(f"{self.defn.name}.meta.waiting_for", label)
+                if self.verbose:
+                    _console.print(
+                        f"{indent}[info]…[/info] [cyan]◆[/cyan] {self.display_name}"
+                        f" [dim]waiting for '{label}'[/dim]"
+                    )
+
+            def _on_acquired() -> None:
+                store.set(f"{self.defn.name}.meta.waiting_for", None)
+
             options = self._generation_options(
                 ctx=effective_ctx, messages=messages, meta=meta
             )
@@ -653,21 +682,30 @@ class PromptRuntime:
                 if self.verbose and self.cb_start is None:
                     from rich.live import Live
 
-                    live_cm = Live(
-                        _PromptSpinner(
-                            name=self.display_name,
-                            target=target,
-                            token_hint=f"~{estimated_out}tok ↑",
-                            indent=indent,
-                            ancestors=self._ancestors,
-                        ),
-                        refresh_per_second=10,
-                        transient=True,
-                        console=_console,
+                    live_cm: Any = _live_region(
+                        lambda: Live(
+                            _PromptSpinner(
+                                name=self.display_name,
+                                target=target,
+                                token_hint=f"~{estimated_out}tok ↑",
+                                indent=indent,
+                                ancestors=self._ancestors,
+                            ),
+                            refresh_per_second=10,
+                            transient=True,
+                            console=_console,
+                        )
                     )
                 else:
                     live_cm = nullcontext()
-                with live_cm:
+                concurrency_cm: AbstractContextManager[None] = (
+                    limiter.acquire(
+                        group=self.defn.group, on_wait=_on_wait, on_acquired=_on_acquired
+                    )
+                    if limiter is not None
+                    else nullcontext()
+                )
+                with concurrency_cm, live_cm:
                     res, decoded_value, attempts_meta, generation_error = (
                         self._generate_with_fallbacks(
                             prompt=prompt_sent,

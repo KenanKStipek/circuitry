@@ -104,6 +104,9 @@ class ReflectorRuntime:
         dry_run: bool = False,
         timeout_seconds: int = 120,
         verbose: bool = False,
+        # See DynamicRuntime: gates the loop-progress line, forwarded the
+        # same way ``verbose`` is to the inner and generated runs.
+        progress_display: bool = False,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -116,6 +119,7 @@ class ReflectorRuntime:
         self.dry_run = dry_run
         self.timeout_seconds = timeout_seconds
         self.verbose = verbose
+        self.progress_display = progress_display
 
     def execute(self, *, store: Store) -> None:
         node = store.ensure_dict(self.defn.name)
@@ -201,6 +205,7 @@ class ReflectorRuntime:
                 dry_run=self.dry_run,
                 timeout_seconds=self.timeout_seconds,
                 verbose=self.verbose,
+                progress_display=self.progress_display,
             ).execute(store=reflector_store)
         except Exception as e:
             rec["error"] = f"inner_failed: {e}"
@@ -291,6 +296,7 @@ class ReflectorRuntime:
                 dry_run=self.dry_run,
                 timeout_seconds=self.timeout_seconds,
                 verbose=self.verbose,
+                progress_display=self.progress_display,
             ).execute(store=gen_store, ctx=_store_root(store))
 
         except Exception as e:

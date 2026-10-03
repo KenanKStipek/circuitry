@@ -65,6 +65,7 @@ Prompt ::= { type: 'prompt', name: NAME,
              params?: MAP, inputs?: MAP,                — inputs: prompt-local template vars
              assets?: Asset*, retries?: Retry,
              timeout_ms?: INT, deterministic?: BOOL,
+             group?: STRING,                             — names a runtime.concurrency_groups key; leaf only
              on_error?: OnError, description?: STRING }
 
 Message ::= { role: 'system'|'user'|'assistant'|'tool', content: STRING }
@@ -131,6 +132,7 @@ Tool ::= { type: 'tool', name: NAME, provider: PLUGIN_NAME,
            prompt?: TEMPLATE, model?: STRING,
            params?: MAP,                                 — string values Mustache-rendered; wins over prompt/model
            params_json?: TEMPLATE,                       — renders to a JSON object; deep-merged over params
+           group?: STRING,                               — names a runtime.concurrency_groups key; leaf only
            timeout_ms?: INT, retries?: Retry, expect?: Expect,
            on_error?: OnError, description?: STRING }
 

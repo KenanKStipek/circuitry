@@ -21,6 +21,10 @@ file_structure:
     sequential: chain
     parallel: tree
     also_accepted: "chain_of_thought and cot parse as chain; tree_of_thought and tot parse as tree. Deprecated — always write chain or tree."
+  runtime_block:
+    max_concurrency: "runtime.max_concurrency: N caps how many tool/prompt effects dispatch at once across the WHOLE run — every tree loop, parallel dynamic and use child shares this one cap, not just one container's own. Containers (loop, dynamic, use, if, reflector) never count against it, only the leaf tool/prompt effects they eventually dispatch."
+    concurrency_groups: "runtime.concurrency_groups: {name: N} defines named resource-group caps (e.g. gpu: 1) in addition to max_concurrency. A tool/prompt effect joins one with its own group: <name> field — leaf effects only; cof check rejects group: on a container, and rejects a group: name runtime.concurrency_groups doesn't define."
+    note: "Set either in config.json or in the document's own runtime: block (merged key by key over config); an untrusted document (reached via use ref/library/MCP rather than run by path) cannot set either — same rule as every other runtime: key besides complexity/state."
 
 effect_fields:
   summary: "Fields accepted by every effect type, in addition to the type-specific fields."
