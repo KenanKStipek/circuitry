@@ -1132,6 +1132,15 @@ def run_cmd(
         _print_run_warnings(cfg.resolution_warnings())
         console.print("[dim]Tip: run [bold]cof list[/bold] to see available orchestrations.[/dim]")
         raise typer.Exit(code=1)
+    # The same cache-path override `runtime_shim.run()` applies (#343):
+    # naming a path inside a library source's own cache directory is naming
+    # the exact same fetched content a library-name run already limits, so
+    # this command's own `--resume <run-id>` lookup below (which resolves
+    # the document's `runtime.persistence` backend before `run()` ever sees
+    # it) must not trust that block either.
+    from .runtime_shim import effective_document_trust as _effective_document_trust
+
+    trust_document = _effective_document_trust(trust_document, orch_path, run_registry)
     remote_library_source = (
         stashed_remote_library_source
         if stashed_remote_library_source is not None

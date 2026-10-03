@@ -368,6 +368,20 @@ def _load_state(
     )
 
 
+def effective_document_trust(
+    trust_document: bool, orchestration_path: Path, registry: LibraryRegistry
+) -> bool:
+    """*trust_document*, overridden back to ``False`` when *orchestration_path*
+    (symlinks followed) lies inside one of *registry*'s own cache
+    directories: that is fetched content regardless of what string named it,
+    the same content a bare library-name run already limits (#343). The one
+    shared choke point every caller that computes a document's trust must go
+    through — ``run()``, ``validate()``, and a CLI ``--resume <run-id>``
+    lookup of the document's own ``runtime.persistence`` backend.
+    """
+    return trust_document and not registry.is_cache_path(orchestration_path)
+
+
 def run(req: RunRequest) -> RunResult:
     state: dict[str, Any] = {}
     warnings: list[str] = []
@@ -446,7 +460,9 @@ def run(req: RunRequest) -> RunResult:
         # (#340's capability-consent gate above already treats it that way);
         # its runtime:/plugins: block must stay limited too, or the cache
         # path is a second door around #284's path-trust rule (#343).
-        document_trust_document = req.trust_document and not document_is_cache_path
+        document_trust_document = effective_document_trust(
+            req.trust_document, req.orchestration_path, library_registry
+        )
 
         if req.profile_name and req.profile_record is not None:
             raise ValueError(
@@ -1158,6 +1174,16 @@ def validate(
     # docstring for exactly what stays checked (#265 part 4/9).
     # A skipped (untrusted) project config: the checks below ran without it.
     config_warnings = config.resolution_warnings() if config is not None else []
+    # Same cache-path override `run()` applies (#343): a document named by a
+    # path inside a library source's own cache directory is fetched content,
+    # so `cof check`'s "Applied host settings" notice and `trusted` merge
+    # below must agree with what the actual run would do, not just what the
+    # caller believed about the path.
+    trust_document = effective_document_trust(
+        trust_document,
+        orchestration_path,
+        LibraryRegistry.from_runtime(config.runtime if config is not None else None),
+    )
     text = orchestration_path.read_text(encoding="utf-8").strip()
     if not text:
         return {"ok": False, "errors": ["Orchestration file is empty."], "warnings": config_warnings}

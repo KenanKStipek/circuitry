@@ -232,7 +232,9 @@ followed) inside a refreshable (e.g. `github`) library source's own cache
 directory: that is fetched content regardless of what string named it, the
 same content a bare library-name run already limits, so it stays limited
 too (#343), on every surface built on `runtime_shim.run` (CLI, TUI, SDK, MCP,
-REST). A fetched, library, generated or
+REST) and on `cof check` / `validate_orchestration`'s own report of what a
+run would do, and a `cof run <path> --resume <run-id>` lookup of the
+document's `runtime.persistence` backend. A fetched, library, generated or
 tool-chosen document is limited: `cof run <library name>`, `cof run-library`,
 `run_shared_orchestration`, the MCP `run_orchestration` / `validate_orchestration`
 tools, the REST trigger and the TUI Library view's "run this entry" (bundled,
@@ -261,11 +263,14 @@ parent is trusted or not; generated reflector and decompose plans never
 contribute them either. Trust is an explicit input (`RunRequest.trust_document`,
 default `False`), set only by the entry points above, so an internal or
 programmatic caller that does not say otherwise is limited — and
-`runtime_shim.run` overrides it back to `False` itself when the resolved path
-is a library source's cache path (above), so a caller that passes
-`trust_document=True` for a path it did not actually choose (the SDK's
-default) cannot apply a fetched document's settings by believing it owns the
-path. Implementation:
+`runtime_shim.effective_document_trust` overrides it back to `False` itself
+when the resolved path is a library source's cache path (above), so a caller
+that passes `trust_document=True` for a path it did not actually choose (the
+SDK's default) cannot apply a fetched document's settings by believing it
+owns the path. `run()`, `validate()` (so `cof check` and
+`validate_orchestration` agree with what a run would do) and the CLI's
+`--resume <run-id>` persistence lookup (which resolves before `run()` ever
+sees the document) all go through this one function. Implementation:
 [`src/circuitry/cli/effective_settings.py`](../src/circuitry/cli/effective_settings.py)
 and [`src/circuitry/cli/runtime_shim.py`](../src/circuitry/cli/runtime_shim.py).
 
