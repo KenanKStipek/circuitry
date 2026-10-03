@@ -1,5 +1,5 @@
 """A fetched document run by its cache path is a limited document, not a
-trusted one (#342).
+trusted one (#343).
 
 #340 made a document whose resolved path lies inside a library source's own
 cache directory count as *fetched* for capability consent (`LibraryRegistry
@@ -160,7 +160,7 @@ def test_sdk_run_orchestration_by_cache_path_does_not_apply_it_even_when_trusted
 
 def test_sdk_run_orchestration_by_an_ordinary_path_still_applies_it(tmp_path: Path) -> None:
     """Unaffected control: an ordinary path outside any cache dir stays a
-    trusted SDK run, same as before #342."""
+    trusted SDK run, same as before #343."""
     cache_dir = tmp_path / "cache"
     cfg = CircuitryConfig(**_github_sources_config(cache_dir))
     doc = _write_yaml(tmp_path / "plain.yml", _doc())

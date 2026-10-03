@@ -445,7 +445,7 @@ def run(req: RunRequest) -> RunResult:
         # exact same fetched content a library-name run would resolve to
         # (#340's capability-consent gate above already treats it that way);
         # its runtime:/plugins: block must stay limited too, or the cache
-        # path is a second door around #284's path-trust rule (#342).
+        # path is a second door around #284's path-trust rule (#343).
         document_trust_document = req.trust_document and not document_is_cache_path
 
         if req.profile_name and req.profile_record is not None:

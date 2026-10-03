@@ -231,7 +231,7 @@ in the TUI's Run view, the SDK's `run_orchestration(orchestration_path=...)` /
 followed) inside a refreshable (e.g. `github`) library source's own cache
 directory: that is fetched content regardless of what string named it, the
 same content a bare library-name run already limits, so it stays limited
-too (#342), on every surface built on `runtime_shim.run` (CLI, TUI, SDK, MCP,
+too (#343), on every surface built on `runtime_shim.run` (CLI, TUI, SDK, MCP,
 REST). A fetched, library, generated or
 tool-chosen document is limited: `cof run <library name>`, `cof run-library`,
 `run_shared_orchestration`, the MCP `run_orchestration` / `validate_orchestration`
