@@ -6,6 +6,7 @@ from circuitry.plugins.capabilities import (
     CAPABILITIES,
     FS_WRITE,
     NETWORK,
+    NO_CAPABILITIES,
     PLUGIN_CAPABILITIES,
     PYTHON_EVAL,
     SHELL,
@@ -17,6 +18,21 @@ from circuitry.plugins.factory import PLUGIN_REGISTRY
 def test_every_tagged_plugin_is_a_real_registry_name() -> None:
     """The tag table can only drift by naming something that doesn't exist."""
     assert set(PLUGIN_CAPABILITIES) <= set(PLUGIN_REGISTRY)
+
+
+def test_every_plugin_registry_entry_is_classified() -> None:
+    """Every registry name is in exactly one of PLUGIN_CAPABILITIES (needs
+    something) or NO_CAPABILITIES (needs nothing, on purpose) — so a plugin
+    nobody classified yet fails CI instead of silently needing no consent.
+    """
+    tagged = set(PLUGIN_CAPABILITIES)
+    untagged = set(NO_CAPABILITIES)
+    assert tagged.isdisjoint(untagged), tagged & untagged
+    registry = set(PLUGIN_REGISTRY)
+    assert registry == tagged | untagged, (
+        f"unclassified: {registry - tagged - untagged}; "
+        f"classified but no longer registered: {(tagged | untagged) - registry}"
+    )
 
 
 def test_every_tag_is_one_of_the_four_capabilities() -> None:

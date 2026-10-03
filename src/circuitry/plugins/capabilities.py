@@ -105,6 +105,40 @@ PLUGIN_CAPABILITIES: dict[str, frozenset[str]] = {
     "screenshot": frozenset({NETWORK, FS_WRITE}),
 }
 
+#: Every :data:`circuitry.plugins.factory.PLUGIN_REGISTRY` name *not* in
+#: :data:`PLUGIN_CAPABILITIES` — a deliberate "needs nothing" classification,
+#: not the absence of one. ``test_every_plugin_registry_entry_is_classified``
+#: (``tests/plugins/test_capabilities.py``) asserts every registry key is in
+#: exactly one of this set and :data:`PLUGIN_CAPABILITIES`, so a newly added
+#: plugin fails CI until someone puts it in one or the other — the tag table
+#: can drift by omission (a plugin nobody classified) as easily as by a typo,
+#: and only this closes that half.
+NO_CAPABILITIES: frozenset[str] = frozenset(
+    {
+        "clock",
+        "math",
+        "regex",
+        "json",
+        "csv",
+        "env_vars",
+        "hash",
+        "base64",
+        "hex",
+        "uuid",
+        "validate_yaml",
+        "pdf_extract",
+        "xml",
+        "html_extract",
+        "system_info",
+        "process_list",
+        # Debatable (#275 review): both can download a model file over the
+        # network on first use. Left unclassified pending an explicit
+        # product decision rather than guessed at here.
+        "embed",
+        "rerank",
+    }
+)
+
 
 def capabilities_of(plugin_name: str) -> frozenset[str]:
     """The capabilities referencing tool plugin *plugin_name* requires.

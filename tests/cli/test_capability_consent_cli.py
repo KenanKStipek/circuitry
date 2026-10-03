@@ -17,6 +17,7 @@ from circuitry.cli.app import (
     _capability_prompt,
     _confirm_capabilities,
     _parse_allow_capabilities,
+    _status_pausing_prompt,
     app,
 )
 from circuitry.cli.config import trust_store_path
@@ -81,6 +82,41 @@ def test_capability_prompt_is_none_without_a_real_tty(monkeypatch: Any) -> None:
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     assert _capability_prompt(quiet=False, json_out=False) is None
+
+
+# ── _status_pausing_prompt ───────────────────────────────────────────────────
+
+
+def test_status_pausing_prompt_is_none_when_base_prompt_is_none() -> None:
+    assert _status_pausing_prompt(None, {}) is None
+
+
+def test_status_pausing_prompt_stops_and_restarts_the_live_status() -> None:
+    calls: list[str] = []
+
+    class _FakeStatus:
+        def stop(self) -> None:
+            calls.append("stop")
+
+        def start(self) -> None:
+            calls.append("start")
+
+    def base_prompt(label: str, capabilities: frozenset[str]) -> bool:
+        calls.append("prompt")
+        return True
+
+    status_holder: dict[str, Any] = {"status": _FakeStatus()}
+    wrapped = _status_pausing_prompt(base_prompt, status_holder)
+    assert wrapped is not None
+
+    assert wrapped("doc.yml", frozenset({"shell"})) is True
+    assert calls == ["stop", "prompt", "start"]
+
+
+def test_status_pausing_prompt_tolerates_no_status_installed_yet() -> None:
+    wrapped = _status_pausing_prompt(lambda label, caps: True, {})
+    assert wrapped is not None
+    assert wrapped("doc.yml", frozenset({"shell"})) is True
 
 
 def test_confirm_capabilities_prints_and_defers_to_typer_confirm(monkeypatch: Any) -> None:
@@ -182,8 +218,11 @@ def test_cof_run_refuses_a_ref_child_even_though_the_parent_is_trusted(
 
 
 def test_cof_run_a_tool_only_document_by_path_is_unaffected(tmp_path: Path) -> None:
-    """#275's owner check: no use: ref:, so nothing about this changes."""
-    orch = _write_yaml(tmp_path / "orch.yml", {"effects": [{"type": "tool", "name": "t", "provider": "uuid"}]})
+    """#275's owner check: no use: ref:, so nothing about this changes — with
+    a gated provider (`shell`, not the untagged `uuid`), so a regression that
+    started gating a by-path run would actually fail this test.
+    """
+    orch = _shell_orch(tmp_path / "orch.yml")
 
     result = runner.invoke(
         app, ["run", str(orch), "-c", str(_config_file(tmp_path)), "--json", "--skip-preflight"]

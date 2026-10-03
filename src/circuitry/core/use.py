@@ -593,23 +593,23 @@ class UseRuntime:
             )
             return None
 
-        if not required:
-            return frozenset()
-        store_path = self._capability_store_path()
+        from ..cli.config import trust_store_path
+
         allow = self._capability_allow_override()
-        consented = consented_capabilities(digest, store_path=store_path) or frozenset()
+        consented = (
+            consented_capabilities(digest, store_path=trust_store_path()) or frozenset()
+        )
         missing = required - consented - allow
         if missing:
             raise DocumentConsentError(
                 f"use '{self.defn.name}': child {refusal_message(label, missing)}"
             )
+        # consented | allow, not just `required`: this child's own ceiling must
+        # carry forward whatever broader capability set was already consented
+        # for its digest (and any --allow-capabilities override), so a ref
+        # child with few or no gated tools of its own doesn't wall off a
+        # grandchild that needs more (#275).
         return consented | allow
-
-    def _capability_store_path(self) -> Path:
-        from ..cli.config import trust_store_path
-
-        configured = self.runtime_config.get("_capability_store_path")
-        return Path(configured) if isinstance(configured, str) else trust_store_path()
 
     def _capability_allow_override(self) -> frozenset[str]:
         configured = self.runtime_config.get("_capability_allow")

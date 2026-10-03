@@ -634,7 +634,7 @@ for the CLI walkthrough. Each provider's capability tag
 |---|---|
 | `shell` | `shell`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ripgrep`, `pytest`, `awk`, `sed`, `pandoc`, `mediainfo`, `imagemagick`, `exiftool`, `7z`, `ping`, `traceroute`, `linter`, `ocr`, `gpg`, `diff_patch`, `pdf_render`, `ffmpeg` |
 | `python_eval` | `python_eval` |
-| `fs-write` | `fs`, `tar`, `zip`, `gzip`, `vector_search`, `gdrive` |
+| `fs-write` | `fs`, `tar`, `zip`, `gzip`, `vector_search`, `gdrive`, `screenshot` |
 | `network` | `comfyui`, `http`, `email_smtp`, `port_check`, `dns`, `whois`, `rss`, `wikipedia`, `webhook`, `web_fetch`, `web_search`, `weather`, `s3`, `surrealdb`, `mcp`, `linear`, `slack`, `discord`, `github`, `jira`, `notion`, `gcalendar`, `gdrive`, `playwright`, `screenshot`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ping`, `traceroute` |
 
 A provider absent from every row needs no consent: it only reads its own

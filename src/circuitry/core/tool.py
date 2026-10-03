@@ -392,6 +392,8 @@ class ToolRuntime:
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         from ..allowlist_gate import allowed_tools, require_tool
+        from ..capability_gate import require_within_ceiling
+        from ..plugins.capabilities import capabilities_of
         from ..plugins.factory import build_plugin
 
         node = store.ensure_dict(self.defn.name)
@@ -469,6 +471,16 @@ class ToolRuntime:
 
             # Build plugin early so we can use its target string in the spinner
             require_tool(self.defn.provider, allowed_tools(self.runtime_config))
+            # Backstop for #275: the static consent walk can miss a tool effect
+            # reached through a form it doesn't parse (e.g. a legacy 'steps:'
+            # branch type it doesn't recognize, or a provider: only knowable
+            # after templating) — this check sees the provider actually about
+            # to run, so no such gap can skip the capability ceiling.
+            require_within_ceiling(
+                f"tool '{self.defn.provider}'",
+                capabilities_of(self.defn.provider),
+                self.runtime_config,
+            )
             plugin = build_plugin(
                 plugin_name=self.defn.provider,
                 runtime=self.runtime_config,

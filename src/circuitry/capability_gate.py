@@ -37,8 +37,17 @@ class CapabilityConsentError(ValueError):
 def install_capability_ceiling(
     runtime_config: dict[str, Any], ceiling: frozenset[str] | None
 ) -> None:
-    """Record the run's capability ceiling. ``None`` means unrestricted."""
-    if ceiling is not None:
+    """Record the run's capability ceiling. ``None`` means unrestricted —
+    actively removed, not left alone, so a stray ``_capability_ceiling`` a
+    trusted document's own ``runtime:`` block happened to carry can never
+    survive into the shared ``runtime_config`` a run actually checks against
+    (#275). A caller that means "leave whatever is already installed" (a
+    `use: ref:` child with nothing of its own to add) must not call this
+    with ``None`` at all — see ``UseRuntime.execute``'s own guard.
+    """
+    if ceiling is None:
+        runtime_config.pop(CAPABILITY_CEILING_KEY, None)
+    else:
         runtime_config[CAPABILITY_CEILING_KEY] = sorted(ceiling)
 
 

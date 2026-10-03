@@ -162,6 +162,12 @@ class RunRequest:
     # means never prompt, so a missing consent always refuses rather than
     # blocking on input nobody can give (#275 rule 5).
     capability_prompt: ConsentPrompt | None = None
+    # True when `orchestration_path` was resolved from a refreshable (today,
+    # `github`) library source run by bare name rather than through
+    # `run_shared_orchestration`/`cof run-library` — the other half of
+    # `gate_whole_document` below, so a remote library source gets the same
+    # whole-document capability gate whichever surface reaches it (#275).
+    remote_library_source: bool = False
 
 
 @dataclass(frozen=True)
@@ -229,17 +235,21 @@ def run(req: RunRequest) -> RunResult:
                 "Allowlist enforcement failed: " + "; ".join(allowlist_errors)
             )
 
-        # Capability consent (#275): gated on the whole document only for a
+        # Capability consent (#275): gated on the whole document for a
         # `cof fetch`/`cof run-library` asset (`shared_library_metadata` is
-        # the signal both the CLI command and `run_shared_orchestration` set);
-        # a `use: ref:` child is independently in scope regardless, including
-        # one reached from a path-trusted document. Raises/prompts before
-        # anything compiles or dispatches, same fail-fast spirit as the
-        # allowlist check above.
+        # the signal both the CLI command and `run_shared_orchestration` set)
+        # and for a remote library source run by bare name
+        # (`remote_library_source`, set by `cof run` when the resolved path
+        # came from a `github`-type source); a `use: ref:` child is
+        # independently in scope regardless, including one reached from a
+        # path-trusted document. Raises/prompts before anything compiles or
+        # dispatches, same fail-fast spirit as the allowlist check above.
         capability_ceiling = enforce_consent(
             orch=orch,
             orchestration_path=req.orchestration_path,
-            gate_whole_document=req.shared_library_metadata is not None,
+            gate_whole_document=(
+                req.shared_library_metadata is not None or req.remote_library_source
+            ),
             runtime=cfg.runtime,
             store_path=trust_store_path(),
             allow_capabilities=req.allow_capabilities,
@@ -329,9 +339,15 @@ def run(req: RunRequest) -> RunResult:
         install_capability_ceiling(runtime_config, capability_ceiling)
         # So a `use: ref:` child only known once a Mustache tag renders
         # (unreachable to the static walk above) still honors this run's
-        # own `--allow-capabilities` when `UseRuntime` re-checks it.
-        if req.allow_capabilities:
-            runtime_config["_capability_allow"] = sorted(req.allow_capabilities)
+        # own `--allow-capabilities` when `UseRuntime` re-checks it. Always
+        # overwritten, never left alone, for the same reason as the ceiling
+        # above: a stray `_capability_allow` a trusted document's own
+        # `runtime:` block happened to carry must never survive into the
+        # shared runtime_config and widen what a `use: ref:` child is
+        # allowed without the user's own `--allow-capabilities` (#275).
+        runtime_config["_capability_allow"] = (
+            sorted(req.allow_capabilities) if req.allow_capabilities else []
+        )
         persistence = build_persistence_backend(effective.runtime)
         plugins, plugin_events = _initialize_plugins(
             effective.plugins, allowed=cfg.enabled_plugins

@@ -366,8 +366,10 @@ deletes an arbitrary local path without shelling out), and `network`
 (reaches a remote host: the HTTP family, a cloud/SaaS SDK, a DNS/ping-style
 probe, a download). Before the first run of a document that did not come
 from the user's own disk — a `cof run-library`/`run_shared_orchestration`
-asset, or any `use: ref:` child, reached from *any* document, trusted or
-not — `circuitry.cli.document_consent.enforce_consent` works out, statically,
+asset, a remote (refreshable, e.g. `github`) library source run by bare
+name (`cof run hub:entry`), or any `use: ref:` child, reached from *any*
+document, trusted or not — `circuitry.cli.document_consent.enforce_consent`
+works out, statically,
 every capability the compiled document and its reachable `use` children need,
 and gates it: an interactive `cof run`/`cof run-library` lists them and asks
 y/N; anything else (MCP, REST, CI, no TTY) refuses outright, naming
@@ -397,7 +399,14 @@ it uses, not just the one the user had in mind. A `use: path:` child and a
 generated (`inline:`) plan are not independently gated — only bound to
 whatever ceiling the run already carries — because they are the enclosing
 document's own content, the same reasoning that limits them from setting
-their own host settings (§6).
+their own host settings (§6). The remote-library-source gate is wired only
+into `cof run`'s own resolution so far: the TUI Library view's "run this
+entry," the SDK, MCP, and REST surfaces reach a remote source's resolved
+path without going through it, and stay limited only by §6's trust rule
+until each is wired the same way. `cof fetch` writing a file to disk, then a
+later `cof run ./that-file.yml`, is a run by path (§6) and is never gated
+here, whatever the file's origin — read a fetched file before running it
+that way, or run it through `cof run-library`.
 
 ---
 

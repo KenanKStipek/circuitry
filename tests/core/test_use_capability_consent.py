@@ -97,6 +97,44 @@ def test_path_child_within_the_ceiling_passes() -> None:
     assert runtime._check_capability_consent(child_orch, "child.yml", "digest-6") is None
 
 
+def test_ref_child_with_no_own_gated_tools_still_carries_its_consent_forward() -> None:
+    """A `ref:` child whose own effects need nothing must not collapse to an
+    empty ceiling that discards what was already consented for it — the
+    consented set (plus any `--allow-capabilities` override) has to carry
+    forward as the ceiling installed for this child's own `use` children,
+    or a networked path grandchild gets walled off even though the wrapper
+    itself was already approved for that capability (#275).
+    """
+    record_consent("digest-wrapper", frozenset({"network"}), store_path=trust_store_path())
+    defn = UseDefinition(name="u", ref="wrapper")
+    runtime = UseRuntime(defn, adapter=None, model=None)
+    # The wrapper's own effects are only a nested `use:`; nothing of its own
+    # needs a capability (`walk_orchestration_refs` never crosses `use:`).
+    wrapper_orch = {"effects": [{"type": "use", "name": "inner", "path": "fetch.yml"}]}
+
+    ceiling = runtime._check_capability_consent(wrapper_orch, "wrapper.yml", "digest-wrapper")
+
+    assert ceiling == {"network"}
+
+    # That ceiling is exactly what UseRuntime.execute installs for the
+    # wrapper's own `use` children's runtime_config — the networked path
+    # grandchild must pass under it, not refuse with "ceiling: none".
+    grandchild_runtime_config: dict = {}
+    install_capability_ceiling(grandchild_runtime_config, ceiling)
+    grandchild_runtime = UseRuntime(
+        UseDefinition(name="inner", path="fetch.yml"),
+        adapter=None,
+        model=None,
+        runtime_config=grandchild_runtime_config,
+    )
+    grandchild_orch = {"effects": [{"type": "tool", "name": "t", "provider": "http"}]}
+
+    assert (
+        grandchild_runtime._check_capability_consent(grandchild_orch, "fetch.yml", "digest-fetch")
+        is None
+    )
+
+
 # ── a templated ref:, end to end ─────────────────────────────────────────────
 
 

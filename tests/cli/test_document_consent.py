@@ -305,11 +305,13 @@ def test_enforce_consent_passes_a_tool_only_document_run_by_path_with_no_ref(
     tmp_path: Path,
 ) -> None:
     """#275's owner check: a plain tool-only document run by path, no
-    `use: ref:`, never asks \u2014 nothing changes for it.
+    `use: ref:`, never asks \u2014 nothing changes for it. Uses `shell`, a
+    gated provider, not the untagged `uuid`: a regression that started
+    gating a path run would actually make this raise.
     """
-    orch_path = _write_yaml(tmp_path / "orch.yml", {"effects": [_tool("uuid")]})
+    orch_path = _write_yaml(tmp_path / "orch.yml", {"effects": [_tool("shell")]})
     ceiling = enforce_consent(
-        orch={"effects": [_tool("uuid")]},
+        orch={"effects": [_tool("shell")]},
         orchestration_path=orch_path,
         gate_whole_document=False,
         runtime=None,

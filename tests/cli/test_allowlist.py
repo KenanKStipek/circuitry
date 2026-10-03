@@ -82,6 +82,35 @@ def test_walk_collects_tool_provider() -> None:
     assert adapters == set()
 
 
+def test_walk_reads_legacy_top_level_steps_key() -> None:
+    """The compiler accepts `steps:` as a legacy alias for `effects:`
+    (core/compiler.py); the walk must see the same tool references or a
+    document written with the legacy key looks like it needs nothing (#275).
+    """
+    orch = {"steps": [{"type": "tool", "name": "t", "provider": "shell"}]}
+    _adapters, tools = walk_orchestration_refs(orch)
+    assert tools == {"shell"}
+
+
+def test_walk_reads_legacy_steps_key_inside_dynamic_and_reflector() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "dynamic",
+                "name": "d",
+                "steps": [{"type": "tool", "name": "ff", "provider": "ffmpeg"}],
+            },
+            {
+                "type": "reflector",
+                "name": "r",
+                "steps": [{"type": "tool", "name": "sh", "provider": "shell"}],
+            },
+        ]
+    }
+    _adapters, tools = walk_orchestration_refs(orch)
+    assert tools == {"ffmpeg", "shell"}
+
+
 def test_walk_recurses_through_dynamic_loop_conditional_reflector() -> None:
     orch = {
         "effects": [

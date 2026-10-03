@@ -246,6 +246,31 @@ def _capability_prompt(*, quiet: bool, json_out: bool) -> Any:
     return _confirm_capabilities
 
 
+def _status_pausing_prompt(
+    base_prompt: Any, status_holder: dict[str, Any]
+) -> Any:
+    """Wrap *base_prompt* so it stops the run's "Running…" status spinner
+    before asking (and resumes it after) — the two otherwise fight over the
+    terminal. *status_holder* is filled with the live ``Status`` only once
+    the caller actually enters it, so most runs (no prompt ever fires) pay
+    nothing beyond this wrapper. ``None`` in, ``None`` out.
+    """
+    if base_prompt is None:
+        return None
+
+    def _prompt(label: str, capabilities: frozenset[str]) -> bool:
+        status = status_holder.get("status")
+        if status is not None:
+            status.stop()
+        try:
+            return bool(base_prompt(label, capabilities))
+        finally:
+            if status is not None:
+                status.start()
+
+    return _prompt
+
+
 def _read_state_file(path: Path) -> dict[str, Any]:
     """Read a --state JSON file, failing loudly when it doesn't exist."""
     if not path.exists():
@@ -539,6 +564,25 @@ def _resolve_orchestration(
     return resolution.path
 
 
+def _is_remote_library_source(name_or_path: str, registry: LibraryRegistry) -> bool:
+    """Whether *name_or_path* resolves to an entry from a refreshable
+    (``REFRESHABLE``) library source — today, a ``github`` one.
+
+    Capability consent (#275) scopes its whole-document gate to documents
+    that did not come from the user's own disk: a ``cof fetch``/
+    ``cof run-library`` asset, and — this — a remote library source run by
+    bare name (``cof run hub/entry``), not just by the dedicated command. A
+    ``folder``/``curation`` source stays ungated: both are already on the
+    user's own disk or bundled with Circuitry itself, same as a path run.
+    """
+    if _names_a_file(name_or_path):
+        return False
+    resolution = registry.resolve(name_or_path)
+    if resolution is None:
+        return False
+    return registry.is_refreshable(resolution.entry.source)
+
+
 RUN_EPILOG = """
 [bold]Examples:[/bold]
   cof run hello -e name=World
@@ -714,13 +758,18 @@ def run_cmd(
 ):
     # --last: replay stashed args
     stashed_trust: bool | None = None
+    stashed_remote_library_source: bool | None = None
     stashed_service_profile: str | None = None
     if last:
         stashed = _load_last_run()
         orchestration = stashed["orchestration"]
         # The stash holds the resolved file even for a library name, so
-        # whether the original run named a file comes from the stash too.
+        # whether the original run named a file (trust_document) or came
+        # from a remote library source (remote_library_source) comes from
+        # the stash too — re-resolving the stashed, already-local path would
+        # always say neither.
         stashed_trust = stashed.get("trust_document") is True
+        stashed_remote_library_source = stashed.get("remote_library_source") is True
         # A run-library run stashed with `--service-profile` applied its
         # adapter/model/runtime/plugin overrides on top of `cfg` before
         # fetching and running — replaying via plain `cof run --last`
@@ -811,6 +860,11 @@ def run_cmd(
         _print_run_warnings(cfg.resolution_warnings())
         console.print("[dim]Tip: run [bold]cof list[/bold] to see available orchestrations.[/dim]")
         raise typer.Exit(code=1)
+    remote_library_source = (
+        stashed_remote_library_source
+        if stashed_remote_library_source is not None
+        else _is_remote_library_source(orchestration, run_registry)
+    )
 
     # Auto-pipe detection (before mutual exclusivity check so --tail wins in pipes)
     if not sys.stdout.isatty() and not tail:
@@ -890,6 +944,9 @@ def run_cmd(
         else None
     )
 
+    show_status = not (quiet or json_out or verbose)
+    status_holder: dict[str, Any] = {}
+
     req = RunRequest(
         orchestration_path=orch_path,
         state_path=state if initial_state is None else None,
@@ -911,18 +968,25 @@ def run_cmd(
         effect_start_observer=effect_start_observer,
         decompose_out=decompose_out,
         trust_document=trust_document,
+        remote_library_source=remote_library_source,
         allow_capabilities=_parse_allow_capabilities(allow_capabilities),
-        capability_prompt=_capability_prompt(quiet=quiet, json_out=json_out),
+        capability_prompt=(
+            _status_pausing_prompt(
+                _capability_prompt(quiet=quiet, json_out=json_out), status_holder
+            )
+            if show_status
+            else _capability_prompt(quiet=quiet, json_out=json_out)
+        ),
     )
 
-    # A capability-consent prompt (#275) needs real stdin/stdout, not a live
-    # spinner fighting it for the terminal — same reason --verbose already
-    # skips the status line.
-    with (
-        nullcontext()
-        if (quiet or json_out or verbose or req.capability_prompt is not None)
-        else console.status("[cyan]Running…[/cyan]")
-    ):
+    # A capability-consent prompt (#275), when one actually fires, pauses this
+    # status spinner for the duration of the y/N ask (_status_pausing_prompt)
+    # rather than this run losing the spinner outright on the mere chance one
+    # might — most interactive runs never need to ask at all.
+    status_cm = console.status("[cyan]Running…[/cyan]") if show_status else nullcontext()
+    with status_cm:
+        if show_status:
+            status_holder["status"] = status_cm
         result = run(req)
     _print_run_warnings(result.warnings)
 
@@ -980,6 +1044,7 @@ def run_cmd(
             "routing": routing,
             "decompose": decompose,
             "trust_document": trust_document,
+            "remote_library_source": remote_library_source,
         })
 
     if tail:
@@ -1242,6 +1307,9 @@ def run_library_cmd(
         else None
     )
 
+    show_status = not (quiet or json_out or verbose)
+    status_holder: dict[str, Any] = {}
+
     req = RunRequest(
         orchestration_path=asset.file_path,
         state_path=state if initial_state is None else None,
@@ -1262,14 +1330,19 @@ def run_library_cmd(
         decompose_override=decompose,
         effect_start_observer=effect_start_observer,
         allow_capabilities=_parse_allow_capabilities(allow_capabilities),
-        capability_prompt=_capability_prompt(quiet=quiet, json_out=json_out),
+        capability_prompt=(
+            _status_pausing_prompt(
+                _capability_prompt(quiet=quiet, json_out=json_out), status_holder
+            )
+            if show_status
+            else _capability_prompt(quiet=quiet, json_out=json_out)
+        ),
     )
 
-    with (
-        nullcontext()
-        if (quiet or json_out or verbose or req.capability_prompt is not None)
-        else console.status("[cyan]Running…[/cyan]")
-    ):
+    status_cm = console.status("[cyan]Running…[/cyan]") if show_status else nullcontext()
+    with status_cm:
+        if show_status:
+            status_holder["status"] = status_cm
         result = run(req)
     _print_run_warnings(result.warnings)
 
