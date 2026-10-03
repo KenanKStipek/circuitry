@@ -110,7 +110,11 @@ def run_orchestration(
     ``trust_document=False`` for a path you did not choose yourself (fetched,
     generated, or picked by a tool or network caller): the document may then
     only set ``runtime.complexity`` and ``runtime.state``, and anything else
-    is ignored with a warning.
+    is ignored with a warning. ``trust_document=True`` (the default) is still
+    overridden back to limited when *orchestration_path* itself resolves
+    inside a configured library source's own cache directory — the same
+    fetched content a library-name run already limits, regardless of what
+    the caller believes about a path it did not actually pick itself (#343).
 
     *out_path* (the CLI flag, or a profile's own ``out:``) is written to disk
     the same way ``cof run --out`` writes it, for both a successful and a

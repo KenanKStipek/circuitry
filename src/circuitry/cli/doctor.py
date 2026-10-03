@@ -82,12 +82,32 @@ def register_doctor(app: typer.Typer) -> None:
         resolved_cfg = resolve_config(explicit_path=config)
 
         orch_obj = {}
+        trust_document = orchestration is not None
         if orchestration:
             orch_obj = load_orchestration_file(orchestration)
+            # A path inside a library source's own cache directory names the
+            # same fetched content a library-name run already limits, so
+            # `doctor --orch <cache-path> --generate` must not take that
+            # document's own `runtime.adapters.<x>.base_url`/API-key settings
+            # any more than `cof run` does (#343).
+            from .library_sources import (
+                LibraryRegistry,
+                LibrarySourceError,
+                build_registry,
+            )
+            from .runtime_shim import effective_document_trust
+
+            try:
+                library_registry = build_registry(cfg=resolved_cfg)
+            except LibrarySourceError:
+                library_registry = LibraryRegistry.default()
+            trust_document = effective_document_trust(
+                trust_document, orchestration, library_registry
+            )
 
         # `--orch` names a file by path: resolved as `cof run` would run it.
         effective = resolve_effective_settings(
-            cfg=resolved_cfg, orch=orch_obj, trust_document=orchestration is not None
+            cfg=resolved_cfg, orch=orch_obj, trust_document=trust_document
         )
 
         table = Table(title="Circuitry · Doctor", show_lines=True)

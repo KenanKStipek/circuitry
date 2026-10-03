@@ -60,7 +60,7 @@ from .effective_settings import (
     resolve_effective_settings,
 )
 from .interrupts import SigTermInterrupt
-from .library_sources import LibraryRegistry
+from .library_sources import LibraryRegistry, LibrarySourceError
 from .live_state import LiveStateMirror
 from .orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
 from .profiles import (
@@ -373,6 +373,20 @@ def _load_state(
     )
 
 
+def effective_document_trust(
+    trust_document: bool, orchestration_path: Path, registry: LibraryRegistry
+) -> bool:
+    """*trust_document*, overridden back to ``False`` when *orchestration_path*
+    (symlinks followed) lies inside one of *registry*'s own cache
+    directories: that is fetched content regardless of what string named it,
+    the same content a bare library-name run already limits (#343). The one
+    shared choke point every caller that computes a document's trust must go
+    through — ``run()``, ``validate()``, and a CLI ``--resume <run-id>``
+    lookup of the document's own ``runtime.persistence`` backend.
+    """
+    return trust_document and not registry.is_cache_path(orchestration_path)
+
+
 def run(req: RunRequest) -> RunResult:
     state: dict[str, Any] = {}
     warnings: list[str] = []
@@ -432,18 +446,27 @@ def run(req: RunRequest) -> RunResult:
         # before anything compiles or dispatches, same fail-fast spirit as the
         # allowlist check above.
         library_registry = LibraryRegistry.from_runtime(cfg.runtime)
+        document_is_cache_path = library_registry.is_cache_path(req.orchestration_path)
         capability_ceiling = enforce_consent(
             orch=orch,
             orchestration_path=req.orchestration_path,
             gate_whole_document=(
                 req.shared_library_metadata is not None
                 or req.remote_library_source
-                or library_registry.is_cache_path(req.orchestration_path)
+                or document_is_cache_path
             ),
             runtime=cfg.runtime,
             store_path=trust_store_path(),
             allow_capabilities=req.allow_capabilities,
             prompt=req.capability_prompt,
+        )
+        # A path inside a library source's own cache directory names the
+        # exact same fetched content a library-name run would resolve to
+        # (#340's capability-consent gate above already treats it that way);
+        # its runtime:/plugins: block must stay limited too, or the cache
+        # path is a second door around #284's path-trust rule (#343).
+        document_trust_document = effective_document_trust(
+            req.trust_document, req.orchestration_path, library_registry
         )
 
         if req.profile_name and req.profile_record is not None:
@@ -482,7 +505,7 @@ def run(req: RunRequest) -> RunResult:
             cli_routing=req.routing_override,
             cli_decompose=req.decompose_override,
             profile=profile,
-            trust_document=req.trust_document,
+            trust_document=document_trust_document,
             document_name=req.orchestration_path.name,
             resume_default_out=req.resume_default_out if req.resume else None,
         )
@@ -1169,6 +1192,29 @@ def validate(
     # docstring for exactly what stays checked (#265 part 4/9).
     # A skipped (untrusted) project config: the checks below ran without it.
     config_warnings = config.resolution_warnings() if config is not None else []
+    # Same cache-path override `run()` applies (#343): a document named by a
+    # path inside a library source's own cache directory is fetched content,
+    # so `cof check`'s "Applied host settings" notice and `trusted` merge
+    # below must agree with what the actual run would do, not just what the
+    # caller believed about the path. Only built when trust_document is
+    # already true: `False and ...` never needs the registry, and building
+    # it unconditionally would make a malformed `runtime.library.sources`
+    # crash `cof check`/MCP validate instead of reporting a document error
+    # (#345's own review round). A malformed config falls back to the
+    # curation-only default, same tolerance as MCP's `_run_registry` and
+    # `cof run`'s own resolution — `is_cache_path` still checks the shared
+    # `default_cache_root()` regardless of which sources are configured, so
+    # the fallback doesn't reopen the gate this override exists for.
+    if trust_document:
+        try:
+            library_registry = LibraryRegistry.from_runtime(
+                config.runtime if config is not None else None
+            )
+        except LibrarySourceError:
+            library_registry = LibraryRegistry.default()
+        trust_document = effective_document_trust(
+            trust_document, orchestration_path, library_registry
+        )
     text = orchestration_path.read_text(encoding="utf-8").strip()
     if not text:
         return {"ok": False, "errors": ["Orchestration file is empty."], "warnings": config_warnings}
