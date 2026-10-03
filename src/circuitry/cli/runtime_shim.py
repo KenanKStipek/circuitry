@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
@@ -14,7 +15,13 @@ from uuid import uuid4
 from ..adapters import Adapter, build_adapter
 from ..adapters.factory import ADAPTER_REGISTRY, configured_timeout_seconds
 from ..allowlist_gate import AllowlistError, install_allowlists, require_adapter
-from ..core.compiler import apply_effect_overrides, compile_orchestration
+from ..core.compiler import (
+    apply_effect_overrides,
+    compile_orchestration,
+    unknown_concurrency_group_errors,
+)
+from ..core.concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
+from ..core.concurrency import RunConcurrencyLimiter
 from ..core.document_check import structural_errors, unknown_key_warnings
 from ..core.dynamic import DynamicRuntime
 from ..core.interface_inputs import check_interface_inputs
@@ -44,6 +51,8 @@ from .allowlist import (
 from .config import CircuitryConfig
 from .effective_settings import (
     EffectiveSettings,
+    _merge_runtime,
+    _split_orchestration_runtime,
     orchestration_host_setting_warnings,
     resolve_effective_settings,
 )
@@ -95,6 +104,12 @@ class RunRequest:
     initial_state: dict[str, Any] | None = None
     shared_library_metadata: dict[str, Any] | None = None
     verbose: bool = False
+    # The caller already knows whether this run is interactive (a TTY,
+    # neither --quiet nor --json) — run() itself never checks stdout, so
+    # every non-CLI caller (SDK, MCP, the scheduler) defaults to no
+    # progress line rather than one that assumes a terminal exists. See
+    # cli.app's run commands, the only built-in caller that passes True.
+    show_loop_progress: bool = False
     config: CircuitryConfig | None = None
     live_state_path: Path | None = None
     adapter: Adapter | None = None
@@ -188,6 +203,127 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _effect_meta_nodes(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every effect's ``meta`` dict in *state*, each counted once.
+
+    Alias-aware like ``tui.execution.sum_tokens``: a named loop exposes its
+    final completed pass at both ``iter_<N>`` and ``last`` — the same dict,
+    reachable twice — so dedupe by ``id()`` rather than walking every path
+    to it.
+    """
+    metas: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    stack: list[Any] = [state]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            if id(current) in seen:
+                continue
+            seen.add(id(current))
+            meta = current.get("meta")
+            if isinstance(meta, dict):
+                metas.append(meta)
+            for key, value in current.items():
+                if key != "meta":
+                    stack.append(value)
+        elif isinstance(current, list):
+            stack.extend(current)
+    return metas
+
+
+def _int_field(meta: dict[str, Any], *keys: str) -> int:
+    """The first of *keys* present on *meta* as a real (non-bool) int, else 0.
+
+    Tries ``<field>_total`` before the plain field so a prompt's run total
+    (#313: every attempt — failed, retried, fallen-back-from) counts instead
+    of just the attempt that finally answered.
+    """
+    for key in keys:
+        value = meta.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return 0
+
+
+def _run_totals(state: dict[str, Any], *, wall_time_s: float) -> dict[str, Any]:
+    """``state.runtime.last_run.totals`` recomputed from a *finished* state
+    tree — wall time, effects run, tokens both ways over every attempt, and
+    cost where some effect reported one (no adapter does yet, so this is
+    ``None`` until one does).
+
+    A pure function of the final state, so it's only correct for effects
+    that actually landed there. ``run()`` itself does not use this for its
+    own ``last_run.totals`` (see ``_TotalsAccumulator``): a ``use`` child in
+    declared-outputs mode (no ``record_children``) never leaves its effects
+    in the final state at all, and an unnamed loop overwrites the same node
+    every pass, so walking the finished tree undercounts both. Kept as a
+    standalone utility for recomputing totals against a state snapshot
+    that wasn't accumulated live (e.g. a loaded ``--state`` file).
+    """
+    effects_run = 0
+    tokens_sent = tokens_received = 0
+    cost_usd: float | None = None
+    for meta in _effect_meta_nodes(state):
+        if meta.get("completed_at"):
+            effects_run += 1
+        tokens_sent += _int_field(meta, "tokens_sent_total", "tokens_sent")
+        tokens_received += _int_field(meta, "tokens_received_total", "tokens_received")
+        cost = meta.get("cost_usd")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            cost_usd = (cost_usd or 0.0) + cost
+    return {
+        "wall_time_s": wall_time_s,
+        "effects_run": effects_run,
+        "tokens_sent": tokens_sent,
+        "tokens_received": tokens_received,
+        "cost_usd": cost_usd,
+    }
+
+
+class _TotalsAccumulator:
+    """Builds ``state.runtime.last_run.totals`` live, from the same
+    ``effect_complete`` stream plugins and ``--live-state`` already observe
+    (#331 finding 4), instead of walking the finished state tree:
+
+    - A ``use`` child's effects reach this observer namespaced under the
+      parent path (see ``use.py``'s ``_namespaced_effect_cb``) even in
+      declared-outputs mode, where they never land in the final state at
+      all — walking the tree after the fact cannot see them.
+    - An unnamed loop's pass overwrites the same state node every
+      iteration, so only the last pass would ever be visible to a
+      post-hoc walk; each pass's own ``effect_complete`` firing is still
+      distinct here.
+    """
+
+    def __init__(self) -> None:
+        self.effects_run = 0
+        self.tokens_sent = 0
+        self.tokens_received = 0
+        self.cost_usd: float | None = None
+
+    def observe(self, effect_path: str, effect_result: dict[str, Any]) -> None:
+        meta = effect_result.get("meta")
+        if not isinstance(meta, dict) or not meta.get("completed_at"):
+            return
+        self.effects_run += 1
+        self.tokens_sent += _int_field(meta, "tokens_sent_total", "tokens_sent")
+        self.tokens_received += _int_field(
+            meta, "tokens_received_total", "tokens_received"
+        )
+        cost = meta.get("cost_usd")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            self.cost_usd = (self.cost_usd or 0.0) + cost
+
+    def totals(self, *, wall_time_s: float) -> dict[str, Any]:
+        return {
+            "wall_time_s": wall_time_s,
+            "effects_run": self.effects_run,
+            "tokens_sent": self.tokens_sent,
+            "tokens_received": self.tokens_received,
+            "cost_usd": self.cost_usd,
+        }
+
+
 def _load_state(
     path: Path | None, initial_state: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -226,6 +362,14 @@ def run(req: RunRequest) -> RunResult:
     # serialises under it and writes the file after releasing it.
     store_lock = threading.RLock()
     live_mirror: LiveStateMirror | None = None
+    # Wall time for `state.runtime.last_run.totals` — monotonic, not the
+    # `started_at`/`completed_at` ISO timestamps (which a system clock
+    # adjustment mid-run could skew).
+    _run_t0 = time.monotonic()
+    # Fed every effect_complete event below, success or failure — defined
+    # before the try so a failure before that wiring still reports zeroed,
+    # accurate totals rather than raising in the except block.
+    totals_accumulator = _TotalsAccumulator()
 
     try:
         state = _load_state(req.state_path, req.initial_state)
@@ -285,6 +429,17 @@ def run(req: RunRequest) -> RunResult:
         )
         warnings.extend(effective.warnings)
         resolved_out = effective.out
+
+        # Built once for the whole run, from the same merged runtime config
+        # every effect will see (document `runtime:` key by key over config,
+        # per #316) — shared by every tool/prompt leaf dispatched anywhere in
+        # the tree, including a `use` child's, via `runtime_config` (#274).
+        # Its group names are checked against the compiled document below,
+        # once `root_def` exists.
+        concurrency_limiter = RunConcurrencyLimiter.from_runtime_config(
+            effective.runtime or {}
+        )
+
         if profile is not None and profile.effects:
             # A pinned band name can only be checked once the run's actual
             # routing table is known — the profile alone can't tell, since
@@ -307,6 +462,7 @@ def run(req: RunRequest) -> RunResult:
         # One shared dict for the whole run: `use` effects append their library
         # pins to it as they resolve, at any nesting depth.
         runtime_config = effective.runtime if effective.runtime is not None else {}
+        runtime_config[_CONCURRENCY_LIMITER_KEY] = concurrency_limiter
         # Root directory a `path:`-resolving `use` effect falls back to when
         # its target isn't absolute or cwd-relative — see `UseRuntime`, which
         # rewrites this per-child as composition descends into subdirectories.
@@ -408,12 +564,19 @@ def run(req: RunRequest) -> RunResult:
         # Redact credential-bearing fields before embedding in state, since
         # state is serialized to --out, --json, --live-state, and last-run.json.
         # Live adapter calls keep using the un-redacted `effective.runtime`.
+        # The concurrency limiter rides the same dict purely for in-process
+        # plumbing (see core.concurrency) and, unlike every other private key
+        # already in here, isn't JSON-serializable at all — dropped before
+        # this snapshot, never before a live call reads `effective.runtime`.
+        _snapshot_runtime = {
+            k: v for k, v in effective.runtime.items() if k != _CONCURRENCY_LIMITER_KEY
+        }
         state["runtime"]["effective_settings"] = {
             "model": effective.model,
             "adapter": effective.adapter,
             "out": str(effective.out) if effective.out else None,
             "plugins": effective.plugins,
-            "runtime": redact(effective.runtime),
+            "runtime": redact(_snapshot_runtime),
             "sources": effective.sources,
         }
         if profile is not None:
@@ -467,6 +630,15 @@ def run(req: RunRequest) -> RunResult:
                 + "\n".join(f"  - {error}" for error in document_errors)
             )
         root_def = compile_orchestration(orch=orch, root_name="prime")
+
+        group_errors = unknown_concurrency_group_errors(
+            root_def, concurrency_limiter.group_names
+        )
+        if group_errors:
+            raise ValueError(
+                "Orchestration validation failed:\n"
+                + "\n".join(f"  - {error}" for error in group_errors)
+            )
 
         # A `use:` cycle is otherwise only caught mid-execution (core/use.py);
         # `validate()`/`cof check` already reject it here, so `validate_only`
@@ -632,7 +804,9 @@ def run(req: RunRequest) -> RunResult:
         # learns an effect started or landed without diffing whole state
         # snapshots.
         start_observers: list[Callable[[str, dict[str, Any]], None]] = []
-        effect_observers: list[Callable[[str, dict[str, Any]], None]] = []
+        effect_observers: list[Callable[[str, dict[str, Any]], None]] = [
+            totals_accumulator.observe
+        ]
         if plugins:
             _plugin_ctx = PluginContext(
                 run_id=run_id,
@@ -704,11 +878,15 @@ def run(req: RunRequest) -> RunResult:
             timeout_seconds=timeout_seconds,
             verbose=req.verbose,
             resume=req.resume,
+            progress_display=req.show_loop_progress,
         )
         runtime.execute(store=store)
 
         _record_library_pins(state, runtime_config)
         state["runtime"]["last_run"]["completed_at"] = _now_iso()
+        state["runtime"]["last_run"]["totals"] = totals_accumulator.totals(
+            wall_time_s=time.monotonic() - _run_t0
+        )
 
         success_events = invoke_plugins(
             plugins=plugins,
@@ -761,6 +939,15 @@ def run(req: RunRequest) -> RunResult:
             _record_library_pins(state, runtime_config)
             if run_id is None:
                 run_id = str(uuid4())
+            # Written before on_run_failure runs (not after, as success's
+            # on_run_success could previously assume) so a failure-hook
+            # plugin sees the same totals a success-hook plugin would
+            # (#331 finding 11).
+            last_run_node = state.setdefault("runtime", {}).setdefault("last_run", {})
+            last_run_node["completed_at"] = _now_iso()
+            last_run_node["totals"] = totals_accumulator.totals(
+                wall_time_s=time.monotonic() - _run_t0
+            )
             plugins_meta = state.setdefault("runtime", {}).setdefault("plugins", {})
             if isinstance(plugins_meta, dict):
                 configured = plugins_meta.get("configured")
@@ -789,9 +976,6 @@ def run(req: RunRequest) -> RunResult:
                     error=error_message,
                 )
                 plugins_meta["events"].extend(failure_events)
-            state.setdefault("runtime", {}).setdefault("last_run", {})[
-                "completed_at"
-            ] = _now_iso()
             persistence_node = state.setdefault("runtime", {}).get("persistence")
             if isinstance(persistence_node, dict):
                 if not persistence_node.get("status"):
@@ -948,7 +1132,43 @@ def validate(
                     "warnings": lint_warnings,
                 }
 
-        compile_orchestration(orch=orch, root_name="prime")
+        root_def = compile_orchestration(orch=orch, root_name="prime")
+
+        # Same merge `run()` applies (document `runtime:` key by key over
+        # config, trusted document keeps its whole block) — just enough to
+        # know the run-wide cap/named groups `cof check` would actually run
+        # with, without resolving model/adapter/profile too (#274).
+        trusted = trust_document or (config is not None and config.trust_orchestration_runtime)
+        orch_runtime_raw = orch.get("runtime")
+        orch_runtime = orch_runtime_raw if isinstance(orch_runtime_raw, dict) else {}
+        accepted_orch_runtime = (
+            dict(orch_runtime)
+            if trusted
+            else _split_orchestration_runtime(orch_runtime, trusted=False)[0]
+        )
+        merged_runtime = _merge_runtime(
+            (config.runtime if config is not None else {}) or {}, accepted_orch_runtime
+        )
+        from ..core.concurrency import parse_concurrency_groups, parse_max_concurrency
+
+        _, mc_errors = parse_max_concurrency(merged_runtime.get("max_concurrency"))
+        groups, group_cfg_errors = parse_concurrency_groups(
+            merged_runtime.get("concurrency_groups")
+        )
+        concurrency_config_errors = [*mc_errors, *group_cfg_errors]
+        if concurrency_config_errors:
+            return {
+                "ok": False,
+                "errors": concurrency_config_errors,
+                "warnings": lint_warnings,
+            }
+        group_name_errors = unknown_concurrency_group_errors(root_def, frozenset(groups))
+        if group_name_errors:
+            return {
+                "ok": False,
+                "errors": group_name_errors,
+                "warnings": lint_warnings,
+            }
 
         document_adapter = orch.get("adapter")
         lint_warnings += image_asset_warnings(
