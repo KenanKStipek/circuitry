@@ -515,6 +515,43 @@ def test_a_library_hand_off_stays_limited_even_though_it_resolves_outside_the_sc
     assert captured[0].trust_document is False
 
 
+@pytest.mark.parametrize("remote", [True, False])
+def test_a_library_hand_off_carries_its_remote_source_flag(
+    run_app: Any, tmp_path: Path, remote: bool
+) -> None:
+    """Capability consent (#275, #334): the Library view's hand-off states
+    whether the entry resolved from a remote (refreshable) source, and Run
+    must carry that through to the request unchanged — it cannot be
+    recovered from the handed-off path alone."""
+    path = _write(tmp_path, TWO_INPUTS)
+    captured: list[RunRequest] = []
+
+    def runner(request: RunRequest) -> RunResult:
+        captured.append(request)
+        return RunResult(ok=True, state={}, warnings=[])
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        pilot.app.pending_run = path
+        pilot.app.pending_trust = False
+        pilot.app.pending_remote_library_source = remote
+        screen = RunScreen(
+            RUN_SPEC,
+            choices=[],
+            adapter=EchoAdapter(),
+            config=CircuitryConfig(),
+            runner=runner,
+        )
+        await pilot.app.push_screen(screen)
+        await pilot.pause()
+        await pilot.pause()
+        _fill(screen, text="hello")
+        screen.action_launch()
+        await _settle(pilot, lambda: screen.last_result is not None)
+
+    run_app(scenario)
+    assert captured[0].remote_library_source is remote
+
+
 # -- complexity switches (issue #110) ----------------------------------------
 
 

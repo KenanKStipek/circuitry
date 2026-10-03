@@ -26,8 +26,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ..cli.app import _resolve_orchestration
-from ..cli.config import resolve_config
+from ..cli.app import _is_remote_library_source, _resolve_orchestration
+from ..cli.config import CircuitryConfig, resolve_config
+from ..cli.library_sources import LibraryRegistry, build_registry
 from ..cli.registry import load_index
 from ..cli.runtime_shim import validate as validate_orch_path
 from ..core.saved_state import compact_last_aliases
@@ -37,6 +38,14 @@ logger = logging.getLogger(__name__)
 
 
 _manager = RunManager()
+
+
+def _run_registry(cfg: CircuitryConfig) -> LibraryRegistry:
+    """The library registry a run resolves *orchestration* against — the
+    same construction `cof run` uses, so a bare name classifies as a remote
+    (refreshable) library source the same way on both surfaces (#275, #334).
+    """
+    return build_registry(cfg=cfg)
 
 
 # --------------------------------------------------------------------- helpers
@@ -144,15 +153,18 @@ def _run_orchestration_impl(
     override_model: bool = False,
     override_to: str = "",
 ) -> dict[str, Any]:
-    candidate = _resolve_orchestration(orchestration)
+    registry = _run_registry(resolve_config())
+    candidate = _resolve_orchestration(orchestration, registry=registry)
     if candidate is None:
         return _error_response(f"Orchestration not found: {orchestration}")
+    remote_library_source = _is_remote_library_source(orchestration, registry)
     try:
         run = _manager.start_run(
             orchestration_path=candidate,
             initial_state=initial_state,
             override_model=override_model,
             override_to=override_to,
+            remote_library_source=remote_library_source,
         )
     except Exception as exc:
         logger.exception("Failed to start run")

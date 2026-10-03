@@ -399,14 +399,36 @@ it uses, not just the one the user had in mind. A `use: path:` child and a
 generated (`inline:`) plan are not independently gated — only bound to
 whatever ceiling the run already carries — because they are the enclosing
 document's own content, the same reasoning that limits them from setting
-their own host settings (§6). The remote-library-source gate is wired only
-into `cof run`'s own resolution so far: the TUI Library view's "run this
-entry," the SDK, MCP, and REST surfaces reach a remote source's resolved
-path without going through it, and stay limited only by §6's trust rule
-until each is wired the same way. `cof fetch` writing a file to disk, then a
+their own host settings (§6). `cof fetch` writing a file to disk, then a
 later `cof run ./that-file.yml`, is a run by path (§6) and is never gated
 here, whatever the file's origin — read a fetched file before running it
 that way, or run it through `cof run-library`.
+
+**The remote-library-source gate now covers every surface (#334).** It was
+wired only into `cof run`'s own resolution at first; the residual this
+noted — the TUI Library view's "run this entry", the SDK, MCP, and REST
+reaching a remote source's resolved path without going through it — is
+closed: the TUI's Library view (and the Runs view's replay of a stashed
+`cof run`) resolves a bare name the same way `cof run` does and carries
+whether it came from a refreshable source through the hand-off;
+`circuitry.api.run_orchestration`/`run_shared_orchestration` take an
+`allow_capabilities=` parameter, since the embedding program is itself the
+host deciding what runs; and the MCP server's `run_orchestration` tool
+resolves a bare name against the same registry `cof run` builds and applies
+the same gate. Neither MCP nor the REST trigger exposes any field a caller
+can use to grant capabilities on their own behalf — only `cof trust`'s
+store, consulted by content digest, can do that; a document whose digest
+was never consented there simply refuses, naming `cof trust <document>` the
+same way `cof run` does from a script or CI. The TUI does not prompt either,
+for the same reason: an interactive y/N would have to block the run's
+worker thread on an answer mid-launch, which the rest of the UI cannot stay
+responsive through, so a remote entry that needs fresh consent refuses with
+the identical message rather than opening a dialog. REST's own
+`orchestration_path` is always a file under the service's
+`orchestration_root`, never a name resolved against a library source, so it
+stays a run by path (§6) at the top level regardless of surface — a
+`use: ref:` child reached from it is still independently gated, same as
+every other surface.
 
 ---
 

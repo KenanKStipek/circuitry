@@ -44,6 +44,12 @@ Key parameters:
   caller): the document is then limited to `runtime.complexity` and
   `runtime.state`, and its other settings are ignored with a warning. See
   [Orchestration reference](./orchestration-reference.md).
+- `allow_capabilities` (default `None`): pre-approve capabilities (`shell`,
+  `python_eval`, `fs-write`, `network`) a `use: ref:` child reached from this
+  document may need — gated regardless of `trust_document` (#275). This
+  call's own consent, never persisted to `cof trust`'s store; without it, a
+  covered document refuses unless its digest was already consented there.
+  See [Capability consent](./guidebook/04-configuration.md#capability-consent-for-a-fetched-or-referenced-document).
 
 ### `run_shared_orchestration`
 
@@ -59,6 +65,11 @@ Key parameters:
 - `service_profile`: optional runtime override profile name
 - `auth_token`: optional library auth token
 - `out_path`: write resulting state to disk (`pretty` controls formatting)
+- `allow_capabilities` (default `None`): pre-approve capabilities the fetched
+  asset (or a `use: ref:` child it reaches) may need — this call's own
+  consent, never persisted. Without it, the asset refuses unless its digest
+  was already consented via `cof trust`. See
+  [Capability consent](./guidebook/04-configuration.md#capability-consent-for-a-fetched-or-referenced-document).
 
 A fetched asset is limited: it may only set `runtime.complexity` and
 `runtime.state` (unless config sets `trust_orchestration_runtime`).

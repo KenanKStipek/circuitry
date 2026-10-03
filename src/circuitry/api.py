@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,7 @@ def run_orchestration(
     live_state_path: str | Path | None = None,
     adapter: Adapter | None = None,
     trust_document: bool = True,
+    allow_capabilities: Iterable[str] | None = None,
     pretty: bool = False,
 ) -> RunResult:
     """
@@ -98,6 +100,16 @@ def run_orchestration(
     *out_path* (the CLI flag, or a profile's own ``out:``) is written to disk
     the same way ``cof run --out`` writes it, for both a successful and a
     failed run — *pretty* matches ``--pretty``.
+
+    *allow_capabilities* pre-approves capabilities (``"shell"``,
+    ``"python_eval"``, ``"fs-write"``, ``"network"``) a document that is not
+    the user's own may need — a ``use: ref:`` child, reached regardless of
+    *trust_document* (#275, #334). Embedding code is the host, so this is the
+    SDK's own consent, never persisted to ``cof trust``'s store and never
+    read from the document or its input; it approves this one call, the same
+    as ``cof run --allow-capabilities shell,network`` approves one invocation.
+    Without it, a covered document refuses unless its digest was already
+    consented via `cof trust <path>`; nothing here ever prompts.
     """
     if state is not None and state_path is not None:
         raise ValueError("Provide either 'state' or 'state_path', not both.")
@@ -114,6 +126,7 @@ def run_orchestration(
         live_state_path=Path(live_state_path) if live_state_path is not None else None,
         adapter=adapter,
         trust_document=trust_document,
+        allow_capabilities=frozenset(allow_capabilities) if allow_capabilities else None,
     )
     result = _run(req)
     _write_out_path(result, pretty=pretty)
@@ -142,13 +155,20 @@ def run_shared_orchestration(
     verbose: bool = False,
     raise_on_error: bool = True,
     live_state_path: str | Path | None = None,
+    allow_capabilities: Iterable[str] | None = None,
     pretty: bool = False,
 ) -> RunResult:
     """Fetch and run a shared-library orchestration using embedded API.
 
     A fetched document is someone else's, so it stays limited: it may only set
     ``runtime.complexity`` and ``runtime.state`` (unless config sets
-    ``trust_orchestration_runtime``).
+    ``trust_orchestration_runtime``). It is also, unconditionally, a document
+    this call did not come from the user's own disk — every run goes through
+    the capability consent gate (#275, #334): refused unless its digest was
+    already consented via ``cof trust``, or pre-approved here with
+    *allow_capabilities* (``"shell"``, ``"python_eval"``, ``"fs-write"``,
+    ``"network"``) — the embedding host's own consent for this one call,
+    never persisted and never read from the asset or its input.
 
     *out_path* is written to disk the same way ``cof run --out`` writes it,
     for both a successful and a failed run — *pretty* matches ``--pretty``.
@@ -178,6 +198,7 @@ def run_shared_orchestration(
         verbose=verbose,
         config=effective_config,
         live_state_path=Path(live_state_path) if live_state_path is not None else None,
+        allow_capabilities=frozenset(allow_capabilities) if allow_capabilities else None,
     )
     result = _run(req)
     _write_out_path(result, pretty=pretty)

@@ -55,6 +55,13 @@ class CircuitryApp(App[None]):
     #: than inferred from where Run's own picker thinks the path lives.
     pending_trust: bool = False
 
+    #: Set alongside :attr:`pending_run` — whether it resolved from a remote
+    #: (refreshable, e.g. github) library source run by bare name, so Run
+    #: applies the same capability consent gate (#275) `cof run` does for one
+    #: (#334). Only the Library view's "run this entry" sets this; Run's own
+    #: picker (bundled curation + local files) never reaches one directly.
+    pending_remote_library_source: bool = False
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         #: State published by whatever run is in flight, read by the Runs
@@ -223,7 +230,12 @@ class CircuitryApp(App[None]):
         self.leaving(_switch)
 
     def launch_run(
-        self, path: Path, *, profile: str | None = None, trust_document: bool
+        self,
+        path: Path,
+        *,
+        profile: str | None = None,
+        trust_document: bool,
+        remote_library_source: bool = False,
     ) -> None:
         """Hand a saved orchestration — and optionally a profile — to Run.
 
@@ -231,15 +243,18 @@ class CircuitryApp(App[None]):
         profile" and the Run view are separate stories, so the hand-off is a
         value on the app rather than a call into a screen that may still be a
         placeholder: Run reads ``app.pending_run`` / ``app.pending_profile`` /
-        ``app.pending_trust`` on mount and needs nothing from here.
+        ``app.pending_trust`` / ``app.pending_remote_library_source`` on mount
+        and needs nothing from here.
 
         ``trust_document`` is required rather than defaulted so every caller
         states its own answer instead of inheriting one meant for a
-        different source — see issue #283.
+        different source — see issue #283. ``remote_library_source`` defaults
+        to False since only the Library view's hand-off can ever be True.
         """
         self.pending_run = path
         self.pending_profile = profile
         self.pending_trust = trust_document
+        self.pending_remote_library_source = remote_library_source
         for spec in VIEWS:
             if spec.slug == "run":
                 self.show_view(spec)

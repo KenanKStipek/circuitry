@@ -584,6 +584,35 @@ def test_replay_carries_the_stashed_document_trust(
     assert seen["request"].trust_document is (stashed_trust is True)
 
 
+@pytest.mark.parametrize("stashed_remote", [True, False, None])
+def test_replay_carries_the_stashed_remote_library_source(
+    run_app: Any, tmp_path: Path, stashed_remote: bool | None
+) -> None:
+    """Capability consent (#275, #334): a replayed run resolved from a
+    remote library source gets the same whole-document gate the original
+    `cof run hub/entry` applied — the stash is the only place that answer
+    survives once the run is replayed from its own already-local path."""
+    orch = tmp_path / "demo.yml"
+    orch.write_text("effects: []\n", encoding="utf-8")
+    seen: dict[str, Any] = {}
+    extra = {} if stashed_remote is None else {"remote_library_source": stashed_remote}
+
+    def runner(request: RunRequest) -> RunResult:
+        seen["request"] = request
+        return RunResult(ok=True, state={}, warnings=[])
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        screen = await _open(pilot, _screen(last_run=_stash(orch, **extra), runner=runner))
+        screen.action_replay()
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if "request" in seen:
+                break
+
+    run_app(scenario)
+    assert seen["request"].remote_library_source is (stashed_remote is True)
+
+
 def test_replay_refuses_a_run_that_stashed_redacted_secrets(
     run_app: Any, tmp_path: Path
 ) -> None:
