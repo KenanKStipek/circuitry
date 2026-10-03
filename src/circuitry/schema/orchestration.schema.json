@@ -183,6 +183,27 @@
       }
     },
 
+    "CacheDef": {
+      "description": "Opt-in result cache for a prompt/tool effect, keyed by a hash of everything that shapes its result once rendered. 'true' caches with no expiry/salt. A hit skips dispatch entirely; only a successful result is ever stored. Leaf effects only — cof check rejects it elsewhere.",
+      "oneOf": [
+        { "type": "boolean" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ttl": {
+              "oneOf": [{ "type": "string" }, { "type": "number" }],
+              "description": "How long a stored entry stays valid: '7d', '12h', '30m', '45s', or a number of seconds. Omitted: never expires."
+            },
+            "key": {
+              "type": "string",
+              "description": "Extra salt folded into the cache key, for when an input outside the rendered effect itself changes (a file on disk, model weights swapped in place) and a fresh entry is wanted without changing anything else the key sees."
+            }
+          }
+        }
+      ]
+    },
+
     "ExpectDef": {
       "description": "Output check for a tool/use effect, run after a successful attempt. A bare string is shorthand for {mode: cel, expr: <string>}.",
       "oneOf": [
@@ -305,6 +326,7 @@
         },
         "retries": { "$ref": "#/$defs/RetryPolicyDef" },
         "on_error": { "$ref": "#/$defs/OnErrorDefault" },
+        "cache": { "$ref": "#/$defs/CacheDef" },
         "group": {
           "type": "string",
           "description": "Named concurrency-group slot (runtime.concurrency_groups.<name>) this effect waits for a free slot in before dispatching, in addition to runtime.max_concurrency's run-wide cap. Leaf effects only — cof check rejects it elsewhere. The group must be defined in runtime.concurrency_groups or cof check rejects the reference."
@@ -536,6 +558,7 @@
         "retries": { "$ref": "#/$defs/RetryPolicyDef" },
         "expect": { "$ref": "#/$defs/ExpectDef" },
         "on_error": { "$ref": "#/$defs/OnErrorDefault" },
+        "cache": { "$ref": "#/$defs/CacheDef" },
         "group": {
           "type": "string",
           "description": "Named concurrency-group slot (runtime.concurrency_groups.<name>) this effect waits for a free slot in before dispatching, in addition to runtime.max_concurrency's run-wide cap. Leaf effects only — cof check rejects it elsewhere. The group must be defined in runtime.concurrency_groups or cof check rejects the reference."

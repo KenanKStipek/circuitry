@@ -73,6 +73,7 @@ effects:
 - **A loop needs exactly one of `each` or `while`.** One with neither would run zero passes and report a clean termination.
 - **A malformed Mustache template** — an unclosed tag (`{{input.topic}`), a section closed under the wrong name — is an error naming the field, wherever a template is rendered: a prompt's `template` or `messages`, a tool's `prompt`, `params` and `params_json`, a model-mode `if`/`while` template, a `use` effect's `inline` and string `inputs`. Were one to reach a run anyway, rendering it fails the effect under its `on_error`; the raw text is never sent on.
 - **`group:` on anything but a `tool`/`prompt` effect** is an error — a container (`dynamic`, `loop`, `use`, `if`, `reflector`) never dispatches itself, so it can never hold the concurrency-group slot the field would name. **A `group:` name `runtime.concurrency_groups` doesn't define** is also an error. See [Concurrency Limits](#concurrency-limits).
+- **`cache:` on anything but a `tool`/`prompt` effect** is an error — a container or `use` has no single rendered call for a cache key to describe. See [Caching a Step's Result](#caching-a-steps-result-cache).
 
 `cof check` also **warns** when a tool's `params.args` holds a value YAML read as a number, boolean or null: the tool receives `str()` of it, so an unquoted `0x1` arrives as `1`, `off` as `False`, `-0` as `0`. Quote the argument.
 
@@ -105,6 +106,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `assets` | array | no | — | Images for a vision model: `[{kind: "image", ref: "path/to/img"}]`. `ref` is a Mustache template rendering to a local path or an `http(s)` URL. Other kinds are skipped with a warning |
 | `retries` | object | no | — | `{max_attempts: N, backoff_ms: M}`. A dispatch failure retries only if classified retryable (429, 408, 5xx, a timeout, a dropped connection); 400/401/403/404/422 and a missing key fail the attempt loop immediately. A reply that came back but failed to decode/validate (see `provider_fallbacks` below) always retries, same as before classification existed. Wait is exponential backoff with jitter from `backoff_ms`, capped at 60s; a provider's `Retry-After` header overrides the computed wait when the adapter can read one |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
+| `cache` | boolean or object | no | — | `true`, or `{ttl?, key?}` — opt-in result cache keyed by the rendered prompt/messages, model/provider, and generation params; a hit skips dispatch entirely. See [Caching a Step's Result](#caching-a-steps-result-cache) below |
 | `group` | string | no | — | Joins a named concurrency-group slot (`runtime.concurrency_groups.<name>`) — see [Concurrency Limits](#concurrency-limits). Must name a group `runtime.concurrency_groups` defines; `cof check` rejects an unknown one. Held for the whole dispatch, retries included — but not decomposition's chunk fan-out (see [Complexity Configuration](./complexity-config.md)): decomposition runs before the slot is acquired, and the chunk prompts it generates do not inherit this effect's `group:` |
 
 **Example — text output:**
@@ -630,6 +632,7 @@ Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously
 | `retries` | object | no | — | `{max_attempts, backoff_ms}` — see [Retries](#tool-retries) below |
 | `expect` | string or object | no | — | Output check, run after a successful attempt — see [`expect`](#tool-expect) below |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
+| `cache` | boolean or object | no | — | `true`, or `{ttl?, key?}` — opt-in result cache keyed by the provider and the fully rendered params; a hit skips dispatch entirely. **A cached tool step does not run again — a file it would have written is not recreated.** See [Caching a Step's Result](#caching-a-steps-result-cache) below |
 | `description` | string | no | — | |
 | `group` | string | no | — | Joins a named concurrency-group slot (`runtime.concurrency_groups.<name>`) — see [Concurrency Limits](#concurrency-limits). Must name a group `runtime.concurrency_groups` defines; `cof check` rejects an unknown one |
 
@@ -1622,6 +1625,117 @@ inputs are missing. The persistence lookup for `--resume <run-id>` is also
 scoped to the orchestration path you named, so a run-id from a different
 document — or another project's persistence log reached by accident — is
 never resumed.
+
+---
+
+## Caching a Step's Result (`cache:`)
+
+`cache: true` (or `cache: {ttl: ..., key: ...}`) on a `prompt` or `tool`
+effect — nowhere else; `cof check` rejects it on a container or `use` —
+reuses a prior successful result instead of dispatching again, when
+nothing that would change the result has changed. Opt-in, off by default:
+an effect with no `cache:` behaves exactly as it always has. This is a
+different axis from [`--resume`](#resuming-a-run-cof-run---resume), which
+reuses a *specific prior run's* saved state positionally; `cache:` reuses
+any prior successful dispatch of *this effect*, across runs, keyed by what
+it would actually send.
+
+**The key.** A content hash of: this dispatch's effect type and
+provider/adapter/model, plus everything that shapes the result once
+rendered — for a `prompt`, the rendered template/messages, image asset
+digests (never the bytes), and the generation params that would reach the
+adapter (`temperature`, `max_tokens`, `stop`, the rest of `params`,
+`deterministic`, `prompt_type`, `schema`); for a `tool`, the provider and
+the fully rendered `params` (after `{from: ...}` resolution, exactly what
+the plugin would receive). The hash also carries a cache-format version, so
+a future change to what goes into the key never misreads an old entry as a
+hit for a differently-keyed one. `cache: {key: "v2"}` folds in an extra
+salt for when something *outside* the rendered effect changes — a file on
+disk a tool reads by path, model weights swapped in place under the same
+name — and you want a fresh entry without changing anything else the key
+already sees.
+
+An `http(s)://` image asset is keyed on the URL only, not a digest of its
+bytes (fetching it to hash it on every dispatch would defeat the purpose of
+ever caching the step that sends it) — a changed remote image behind an
+unchanged URL produces a stale hit. A local image path *is* keyed on its
+sha256, so a changed file on disk is seen. If a remote image can change
+underneath its URL, give the effect a `cache: {key: ...}` salt you bump
+when it does.
+
+A prompt eligible for runtime decomposition runs decomposition — including
+its own planning call, which spends tokens — before this cache check, and
+a *successful* decomposition's merged result is never cached at all (its
+effect is the sub-prompts it dispatched, not one scalar value here); only
+a decomposition that declines or falls back to a normal dispatch reaches
+the cache as usual.
+
+**What gets stored, and when.** Only a result that reached this effect's
+own success condition: for a `tool`, after its `expect:` passes (or
+immediately on success when there is none); a `prompt` has no `expect:`,
+so success is a reply that decoded and validated cleanly. A failure is
+never cached — not a raised error, not an `on_error: continue`/`skip`
+failure the chain absorbed and kept going past. A hit skips the dispatch
+entirely: no concurrency-group slot is acquired, no retry/backoff loop
+runs, no tokens are spent, no plugin executes. It records
+`meta.cache: {hit: true, key, created_at}` (`created_at` is when the
+reused entry was originally stored, not now); a miss records
+`meta.cache: {hit: false, key}` before dispatching normally, then stores
+the result under that key once it succeeds. An effect with no `cache:`
+never carries a `meta.cache` key at all — same conditional-key contract as
+`meta.complexity`/`meta.decomposition`.
+
+**`ttl`.** `cache: {ttl: "7d"}` (also `"12h"`, `"30m"`, `"45s"`, or a bare
+number of seconds) expires a stored entry after that long; omitted, an
+entry is valid however old it is. An expired entry is a miss like any
+other — it dispatches again and overwrites the stale entry.
+
+**A cached `tool` step does not run again.** The whole point of a cache
+hit is that nothing downstream of the key happens — including a side
+effect a successful dispatch would otherwise have had. A `tool` effect
+that writes a file, calls a webhook, or appends a database row produces
+that side effect again only on a miss; a hit reuses the *recorded result*
+and skips the action that produced it the first time. Cache only a `tool`
+whose result is all that matters (a fetch, a computation, a lookup), or
+give it a `cache: {key: ...}` salt tied to whatever would make a reread
+necessary, so a changed salt forces the real action to happen again. A
+`prompt` has no such side effect — reusing its result is always safe.
+
+A hit restores only `value` to the node. `meta.stdout`, `meta.exit_code`,
+`meta.status_code` and `meta.raw` — all documented outputs a downstream
+step may read — are cleared, not replayed from whatever attempt originally
+produced the cached value: that attempt's process output belongs to a run
+that already finished, not to this one.
+
+**Storage.** A private, per-user directory (`~/.cache/circuitry/steps` by
+default, `$XDG_CACHE_HOME`-relative when set; override outright with
+`CIRCUITRY_CACHE_DIR`), never the run's own `--out`/`--state`/persistence
+record — a cached value can be exactly as sensitive as the call that
+produced it. The directory is created at `0700`, each entry's file at
+`0600`, written atomically (a temp file renamed into place), so a reader
+never observes a partial write and a cached value is never briefly
+world/group readable.
+
+**CLI.** `cof run --no-cache` disables both reading and writing the cache
+for that run only — every `cache:` effect dispatches as if it had none,
+and nothing it would have stored is written. `cof cache clear` deletes
+every stored entry; `cof cache stats` reports the entry count and total
+size.
+
+```yaml
+- type: prompt
+  name: summarize
+  template: "Summarize this article in one sentence: {{input.article_text}}"
+  cache: true
+
+- type: tool
+  name: fetch_page
+  provider: web_fetch
+  params:
+    url: "{{input.url}}"
+  cache:
+    ttl: "1h"
+```
 
 ---
 

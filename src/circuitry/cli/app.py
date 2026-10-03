@@ -18,6 +18,7 @@ from typer.core import TyperGroup
 
 from ..core.resume import document_sha256
 from ..core.saved_state import dumps_saved_state
+from ..core.step_cache import StepCache
 from ..core.store import build_persistence_backend
 
 # The wizard host (chat's transcript, verdict, and save logic) — `cof wizard`
@@ -1004,6 +1005,13 @@ def run_cmd(
             "(from this flag or config) when turned on."
         ),
     ),
+    no_cache: bool = typer.Option(
+        False, "--no-cache",
+        help=(
+            "Neither read nor write the per-step cache for `cache:` effects "
+            "this run — every such effect dispatches as if it had none."
+        ),
+    ),
 ):
     if resume and last:
         console.print("[red]Error:[/red] --resume and --last are mutually exclusive.")
@@ -1059,6 +1067,12 @@ def run_cmd(
         scoring = stashed.get("scoring")
         routing = stashed.get("routing")
         decompose = stashed.get("decompose")
+        # Unlike the other replayed flags above, an explicit --no-cache on
+        # this invocation is never overridden by the stash: the cost of
+        # honoring it is at most a cache miss, but silently dropping it
+        # would turn "bypass the cache" into a cache hit the user
+        # explicitly asked not to get (#270 review).
+        no_cache = no_cache or stashed.get("no_cache", False)
 
         # Refuse to replay if the previous run stashed redacted secrets — the
         # sentinel string would silently flow into the new run as a literal.
@@ -1272,6 +1286,7 @@ def run_cmd(
         ),
         resume=bool(resume),
         resume_default_out=resume_default_out,
+        no_cache=no_cache,
     )
 
     # A capability-consent prompt (#275), when one actually fires, pauses this
@@ -1334,6 +1349,7 @@ def run_cmd(
             "scoring": scoring,
             "routing": routing,
             "decompose": decompose,
+            "no_cache": no_cache,
             "trust_document": trust_document,
             "remote_library_source": remote_library_source,
         })
@@ -2279,6 +2295,38 @@ library_app = typer.Typer(
     help="Manage library sources (`runtime.library.sources`).",
 )
 app.add_typer(library_app, name="library")
+
+
+cache_app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="Manage the per-step result cache (`cache:` on prompt/tool effects, #270).",
+)
+app.add_typer(cache_app, name="cache")
+
+
+@cache_app.command("clear", help="Delete every cached step result.")
+def cache_clear_cmd(
+    json_out: bool = typer.Option(False, "--json", help="Output machine-readable JSON only."),
+) -> None:
+    removed = StepCache().clear()
+    if json_out:
+        console.print_json(json.dumps({"removed": removed}))
+    else:
+        console.print(f"[green]Cleared {removed} cached result(s).[/green]")
+
+
+@cache_app.command("stats", help="Show cached-entry count and size.")
+def cache_stats_cmd(
+    json_out: bool = typer.Option(False, "--json", help="Output machine-readable JSON only."),
+) -> None:
+    stats = StepCache().stats()
+    if json_out:
+        console.print_json(json.dumps(stats))
+    else:
+        console.print(f"[bold]Path:[/bold] {stats['path']}")
+        console.print(f"[bold]Entries:[/bold] {stats['entries']}")
+        console.print(f"[bold]Size:[/bold] {stats['bytes']} bytes")
 
 
 @library_app.command(

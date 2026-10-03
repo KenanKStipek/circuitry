@@ -265,6 +265,30 @@ rendered frames — `cof run upscale.yml --state run.json --resume x` picks
 up at frame 250, and the adapter/tool calls for frames 0–249 never happen
 again.
 
+### Caching a step's result (`cache:`)
+
+`--resume` reuses one specific prior run's state, positionally. `cache:` is
+the other axis: `cache: true` (or `cache: {ttl: "7d", key: "..."}`) on a
+`prompt` or `tool` effect — nowhere else, `cof check` rejects it elsewhere
+— reuses *any* prior successful dispatch of that same effect, across runs,
+keyed by a hash of everything that shapes its result once rendered
+(provider/adapter/model, the rendered prompt or fully-resolved tool params,
+generation settings/schema for a prompt). A hit skips the dispatch outright
+— no concurrency slot, no retries, no tokens, no plugin call — and only a
+result that reached the effect's own success condition (`expect:` passing,
+for a tool) is ever stored; a failure, including one `on_error: continue`
+absorbed, never is. Off by default; `cof run --no-cache` suspends both
+reading and writing it for one run, and `cof cache clear`/`cof cache stats`
+manage the store directly. Full key/storage/TTL contract: [Caching a Step's
+Result](../orchestration-reference.md#caching-a-steps-result-cache) in the
+reference.
+
+**A cached `tool` step does not run again** — a file it would have written
+is not recreated, a webhook it would have called is not called. Cache only
+a `tool` whose result is all that matters, or add a `cache: {key: ...}`
+salt tied to whatever would make rerunning it necessary. A `prompt` has no
+side effect of its own, so caching one is always safe.
+
 ## Anti-patterns
 
 **A tool for text work.** Summarising is a prompt. A tool that "analyses" is a prompt wearing a `provider:`.

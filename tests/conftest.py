@@ -114,6 +114,14 @@ def _hermetic_global_config(
     explicitly (patching ``GLOBAL_CONFIG_PATH`` to a controlled location, as
     ``tests/cli/test_config_resolution.py`` already does).
     """
+    # Same isolation for the `cache:` step cache (#270): ahead of the
+    # `real_config_discovery` early return below, so a test marked with it
+    # still never reads or writes the developer's real
+    # ~/.cache/circuitry/steps, and two unrelated tests whose rendered
+    # prompt/params happen to hash the same way can't see each other's
+    # cached result across runs in the same pytest process.
+    monkeypatch.setenv("CIRCUITRY_CACHE_DIR", str(tmp_path / "hermetic-global-config" / "step-cache"))
+
     if request.node.get_closest_marker("real_config_discovery"):
         return
 
