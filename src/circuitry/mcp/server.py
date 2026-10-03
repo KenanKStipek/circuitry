@@ -30,6 +30,7 @@ from ..cli.app import _resolve_orchestration
 from ..cli.config import resolve_config
 from ..cli.registry import load_index
 from ..cli.runtime_shim import validate as validate_orch_path
+from ..core.saved_state import compact_last_aliases
 from .runs import Run, RunManager
 
 logger = logging.getLogger(__name__)
@@ -73,11 +74,16 @@ def _run_response(run: Run, *, include_state: bool = False) -> dict[str, Any]:
         error = run.error
         warnings = list(run.warnings)
 
+    # Each loop's `last` as a `{"$ref": "iter_N"}` sibling reference, not a
+    # full copy of its final pass (#236, mirroring `--out`); a caller that
+    # re-hydrates this payload into a run relinks it the same way `--state`
+    # does (`core.saved_state.link_last_refs`).
+    safe_state = _to_json_safe(compact_last_aliases(snapshot)) if snapshot is not None else None
     payload: dict[str, Any] = {
         "run_id": run.run_id,
         "status": status.value,
         "pending_prompts": pending,
-        "state": _to_json_safe(snapshot) if snapshot is not None else None,
+        "state": safe_state,
         "error": error,
         "warnings": warnings,
     }
