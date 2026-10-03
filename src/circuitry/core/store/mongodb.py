@@ -89,7 +89,7 @@ class MongodbStatePersistence:
             try:
                 collection = client[self.database][self.collection]
                 doc = collection.find_one(
-                    {"orchestration_path": orchestration_path},
+                    {"orchestration_path": orchestration_path, "ok": True},
                     sort=[("created_at", -1)],
                 )
             finally:
@@ -98,6 +98,35 @@ class MongodbStatePersistence:
             raise RuntimeError(
                 "MongoDB state load failed for orchestration "
                 f"{orchestration_path}: {e}"
+            ) from e
+
+        if not doc:
+            return None
+
+        state = doc.get("state")
+        if isinstance(state, dict):
+            return state
+        raise RuntimeError(
+            f"Persisted state has unsupported type: {type(state).__name__}"
+        )
+
+    def load_run(
+        self, *, orchestration_path: str, run_id: str
+    ) -> dict[str, Any] | None:
+        """The one document for *run_id*, scoped to *orchestration_path* so
+        a run-id from a different document is never returned (#270)."""
+        try:
+            client = self._connect()
+            try:
+                collection = client[self.database][self.collection]
+                doc = collection.find_one(
+                    {"_id": run_id, "orchestration_path": orchestration_path}
+                )
+            finally:
+                self._close(client)
+        except Exception as e:
+            raise RuntimeError(
+                f"MongoDB state load failed for run_id={run_id}: {e}"
             ) from e
 
         if not doc:

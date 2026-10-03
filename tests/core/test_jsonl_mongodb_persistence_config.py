@@ -125,6 +125,12 @@ def test_jsonl_round_trip_returns_latest_record(tmp_path: Path) -> None:
         error=None,
         state={"n": 99},
     )
+    # A failed run (#270 F1) is persisted too, but `load_latest_state` —
+    # plain persistence carryover's own source — skips it: carrying a
+    # failed run's state forward into the next run's starting state would
+    # silently resurrect a broken run without anyone asking to resume it.
+    # `load_run` (below) still finds it by run_id, which is the whole point
+    # of saving it at all — `--resume <run-id>` needs exactly this record.
     backend.save_run_snapshot(
         orchestration_path="orch.yml",
         run_id="r3",
@@ -133,9 +139,10 @@ def test_jsonl_round_trip_returns_latest_record(tmp_path: Path) -> None:
         state={"n": 2},
     )
 
-    assert backend.load_latest_state(orchestration_path="orch.yml") == {"n": 2}
+    assert backend.load_latest_state(orchestration_path="orch.yml") == {"n": 1}
     assert backend.load_latest_state(orchestration_path="other.yml") == {"n": 99}
     assert backend.load_latest_state(orchestration_path="missing.yml") is None
+    assert backend.load_run(orchestration_path="orch.yml", run_id="r3") == {"n": 2}
 
     lines = (tmp_path / "logs" / "runs.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 3

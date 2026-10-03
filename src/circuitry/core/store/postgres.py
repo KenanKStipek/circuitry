@@ -59,7 +59,7 @@ class PostgresStatePersistence:
                         sql.SQL("""
                         SELECT state_json
                         FROM {}
-                        WHERE orchestration_path = %s
+                        WHERE orchestration_path = %s AND ok = true
                         ORDER BY created_at DESC
                         LIMIT 1
                         """).format(sql.Identifier(self.table)),
@@ -69,6 +69,46 @@ class PostgresStatePersistence:
         except Exception as e:
             raise RuntimeError(
                 f"Postgres state load failed for orchestration {orchestration_path}: {e}"
+            ) from e
+
+        if not row:
+            return None
+
+        payload = row[0]
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, str):
+            decoded = json.loads(payload)
+            if isinstance(decoded, dict):
+                return decoded
+            raise RuntimeError("Persisted state_json is not a JSON object")
+        raise RuntimeError(
+            f"Persisted state_json has unsupported type: {type(payload).__name__}"
+        )
+
+    def load_run(
+        self, *, orchestration_path: str, run_id: str
+    ) -> dict[str, Any] | None:
+        """The one row for *run_id*, scoped to *orchestration_path* so a
+        run-id from a different document is never returned (#270)."""
+        try:
+            with self._connect() as conn:
+                from psycopg import sql  # type: ignore[import-not-found]
+
+                self._ensure_schema(conn)
+                with conn.cursor() as cur:
+                    cur.execute(
+                        sql.SQL("""
+                        SELECT state_json
+                        FROM {}
+                        WHERE run_id = %s AND orchestration_path = %s
+                        """).format(sql.Identifier(self.table)),
+                        (run_id, orchestration_path),
+                    )
+                    row = cur.fetchone()
+        except Exception as e:
+            raise RuntimeError(
+                f"Postgres state load failed for run_id={run_id}: {e}"
             ) from e
 
         if not row:

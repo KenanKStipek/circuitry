@@ -25,6 +25,7 @@ from ..core.concurrency import RunConcurrencyLimiter
 from ..core.document_check import structural_errors, unknown_key_warnings
 from ..core.dynamic import DynamicRuntime
 from ..core.interface_inputs import check_interface_inputs
+from ..core.resume import document_sha256
 from ..core.runtime_plugins import (
     PLUGIN_CONTRACT_VERSION,
     PluginContext,
@@ -35,6 +36,7 @@ from ..core.runtime_plugins import (
 from ..core.saved_state import compact_last_aliases, link_last_refs
 from ..core.state_ns import migrate_legacy_state
 from ..core.store import Store, build_persistence_backend
+from ..core.store.persistence import PersistenceBackend
 from ..plugins.factory import build_plugin
 from ..preflight import CheckResult, call_check
 from .allowlist import (
@@ -164,6 +166,22 @@ class RunRequest:
     # and network/tool-chosen documents keep the default and stay limited to
     # ORCHESTRATION_RUNTIME_KEYS — see `resolve_effective_settings`.
     trust_document: bool = False
+    # `cof run --resume`: when true, this run skips any effect whose node in
+    # `initial_state` already finished without error (see `core.resume`),
+    # and a named loop in chain flow resumes at its first unfinished pass
+    # instead of rerunning every pass. Resolving *which* saved state to pass
+    # as `initial_state` (an explicit --state file, the --last stash, or a
+    # persistence backend's run-id lookup) and the document-hash/input
+    # safety checks are the caller's job (see `cli.app.run_cmd`) — this flag
+    # only turns on the engine-level skip behavior once that state is here.
+    resume: bool = False
+    # The file this resume's state came from (an explicit --state file, or
+    # the --last stash's --out), named by `cli.app.run_cmd` — used as the
+    # `out` a run writes back to when neither --out nor a profile named one,
+    # so a resumed run saves its own progress by default (#270 F10). `None`
+    # for a bare run-id resume (no single file the state came from) or any
+    # non-resumed run.
+    resume_default_out: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -175,6 +193,10 @@ class RunResult:
     # Resolved --out path (cli > profile > default) callers should write the
     # final state to, instead of re-deriving precedence themselves.
     out_path: Path | None = None
+    # Set when `error` is a Ctrl-C/SIGINT rather than an ordinary failure —
+    # same `ok=False` shape (state/out_path are still written the usual way,
+    # so the run is resumable), but the CLI exits 130 for it instead of 1.
+    interrupted: bool = False
 
 
 def _now_iso() -> str:
@@ -327,6 +349,11 @@ def run(req: RunRequest) -> RunResult:
     plugins: list[RuntimePlugin] = []
     run_id: str | None = None
     runtime_config: dict[str, Any] = {}
+    # Bound inside the try once the orchestration's runtime.persistence is
+    # resolved; kept outside it (like run_id) so the except branch below can
+    # still persist a failure snapshot even though it shares this function's
+    # one try/except rather than its own.
+    persistence: PersistenceBackend | None = None
     # Resolved --out path (cli > profile > default); refined once the
     # profile, if any, is loaded below. Kept outside the try's happy path so
     # a failure before that point still reports the caller's own --out.
@@ -398,6 +425,7 @@ def run(req: RunRequest) -> RunResult:
             profile=profile,
             trust_document=req.trust_document,
             document_name=req.orchestration_path.name,
+            resume_default_out=req.resume_default_out if req.resume else None,
         )
         warnings.extend(effective.warnings)
         resolved_out = effective.out
@@ -514,9 +542,18 @@ def run(req: RunRequest) -> RunResult:
         # run's (`--state`/persistence carryover).
         state["_run_id"] = run_id
         state["_timestamp"] = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        try:
+            document_hash = document_sha256(req.orchestration_path)
+        except OSError:
+            # The document check above already loaded this same file; an
+            # unreadable path would have failed there first. Still, a race
+            # (the file vanished between then and now) shouldn't block a run
+            # over a hash that only matters for a *future* --resume.
+            document_hash = None
         state["runtime"]["last_run"] = {
             "run_id": run_id,
             "orchestration_path": str(req.orchestration_path),
+            "document_hash": document_hash,
             "dry_run": req.dry_run,
             "validate_only": req.validate_only,
             "verbose": req.verbose,
@@ -840,6 +877,7 @@ def run(req: RunRequest) -> RunResult:
             dry_run=req.dry_run,
             timeout_seconds=timeout_seconds,
             verbose=req.verbose,
+            resume=req.resume,
             progress_display=req.show_loop_progress,
         )
         runtime.execute(store=store)
@@ -886,7 +924,15 @@ def run(req: RunRequest) -> RunResult:
 
         return RunResult(ok=True, state=state, warnings=warnings, out_path=resolved_out)
 
-    except Exception as e:
+    except (Exception, KeyboardInterrupt) as e:
+        # Ctrl-C/SIGINT during a long effect dispatch reaches here exactly
+        # like any other failure (KeyboardInterrupt isn't an Exception
+        # subclass, hence the explicit tuple): the same cleanup records
+        # what finished, writes the usual failure snapshot/--out, and the
+        # error below just says why, so an interrupted run is resumable
+        # the same way a crashed one is (#270 F6).
+        interrupted = isinstance(e, KeyboardInterrupt)
+        error_message = "Interrupted (Ctrl-C/SIGINT)" if interrupted else str(e)
         try:
             # Pins resolved before the failure still describe what this run
             # reached for — keep them for the post-mortem.
@@ -927,17 +973,51 @@ def run(req: RunRequest) -> RunResult:
                             req.config.environment if req.config is not None else "dev"
                         ),
                     ),
-                    error=str(e),
+                    error=error_message,
                 )
                 plugins_meta["events"].extend(failure_events)
             persistence_node = state.setdefault("runtime", {}).get("persistence")
             if isinstance(persistence_node, dict):
                 if not persistence_node.get("status"):
                     persistence_node["status"] = "failed"
-                persistence_node["error"] = str(e)
+                persistence_node["error"] = error_message
+            already_broken = (
+                isinstance(persistence_node, dict)
+                and persistence_node.get("status") == "load_failed"
+            )
+            if persistence is not None and not already_broken:
+                # A failed run is exactly the one `--resume <run-id>` most
+                # needs to find — a snapshot that only ever saved on
+                # success made run-id resume of a failed run impossible.
+                # Skipped when this same run already failed to *load* from
+                # this backend: it's demonstrably unreachable, so a second
+                # call would only clobber that diagnosis with a less useful
+                # "save_failed".
+                try:
+                    persistence.save_run_snapshot(
+                        orchestration_path=str(req.orchestration_path),
+                        run_id=run_id,
+                        ok=False,
+                        error=error_message,
+                        state=state,
+                    )
+                    if isinstance(persistence_node, dict):
+                        persistence_node["status"] = "persisted"
+                        persistence_node["persisted"] = True
+                except Exception as persist_exc:
+                    if isinstance(persistence_node, dict):
+                        persistence_node["status"] = "save_failed"
+                        persistence_node["error"] = str(persist_exc)
         except Exception:
             logger.exception("Error during error-handling cleanup")
-        return RunResult(ok=False, state=state, warnings=warnings, error=str(e), out_path=resolved_out)
+        return RunResult(
+            ok=False,
+            state=state,
+            warnings=warnings,
+            error=error_message,
+            out_path=resolved_out,
+            interrupted=interrupted,
+        )
     finally:
         # The final flush, success or failure: everything recorded after the
         # last effect included, so the mirror ends equal to --out. `warnings`
