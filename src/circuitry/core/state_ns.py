@@ -93,19 +93,21 @@ def migrate_legacy_state(state: dict[str, Any]) -> dict[str, Any]:
 def validate_reference_path(
     path: str,
     *,
-    use_name: str,
-    input_name: str,
+    label: str,
     effect_path: str,
     loop_names: frozenset[str] = frozenset(),
 ) -> None:
-    """Hard-error unless a by-reference ``use`` input path has a legal root.
+    """Hard-error unless a by-reference ``{from: <path>}`` leaf has a legal root.
 
-    ``{from: <path>}`` resolves against the same scope templates see: a path
-    rooted at ``input.``/``prime.``/``runtime.``, or a binding of an enclosing
-    loop (``each.as``, ``iter``). ``state.``-prefixed spellings and bare keys
-    raise, with the canonical spelling named in the message.
+    Shared by every ``{from: <path>}`` leaf — a ``use`` effect's ``inputs``
+    and a tool effect's ``params`` (#234) alike: a path resolves against the
+    same scope templates see: rooted at ``input.``/``prime.``/``runtime.``, or
+    a binding of an enclosing loop (``each.as``, ``iter``). ``state.``-prefixed
+    spellings and bare keys raise, with the canonical spelling named in the
+    message. *label* names the specific leaf (e.g. "Use effect 'sub' input
+    'got'", "Tool effect 'call' param 'symbols'") for the error text.
     """
-    where = f"Use effect '{use_name}' input '{input_name}' at '{effect_path}'"
+    where = f"{label} at '{effect_path}'"
     if not path:
         raise ValueError(f"{where}: '{{from: ...}}' needs a non-empty path.")
     root, _, rest = path.partition(".")

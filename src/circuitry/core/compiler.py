@@ -25,7 +25,7 @@ from .state_ns import (
     validate_reference_path,
 )
 from .templates import template_syntax_error
-from .tool import ToolDefinition
+from .tool import _SECURITY_SENSITIVE_PARAM_KEYS, ToolDefinition, param_reference
 from .use import UseDefinition, reference_path
 
 EffectDef = (
@@ -464,7 +464,9 @@ def _compile_effect(
             scope_path=scope_path,
             effect_path=effect_path,
         )
-        return _compile_tool(effect, scope_path=scope_path, effect_path=effect_path)
+        return _compile_tool(
+            effect, scope_path=scope_path, effect_path=effect_path, loop_names=loop_names
+        )
 
     if effect_type == "use":
         if name is None:
@@ -822,8 +824,89 @@ def _compile_loop(
     )
 
 
+def _check_param_leaves(
+    value: Any,
+    *,
+    name: str,
+    effect_path: str,
+    field: str,
+    loop_names: frozenset[str],
+) -> None:
+    """Walk a tool effect's ``params`` for malformed templates and bad ``{from:}`` roots.
+
+    A leaf matching ``{from: <path>}`` (optionally with ``default:``) is a
+    by-reference param (#234): its path is checked against the same rooting
+    rules as a ``use`` effect's own by-reference inputs, and — since it never
+    renders — is not also walked as a template. Every other leaf is checked
+    exactly as :func:`_check_templates` checks ``params`` today.
+    """
+    ref = param_reference(value)
+    if ref is not None:
+        validate_reference_path(
+            ref.path,
+            label=f"Tool effect '{name}' param '{field}'",
+            effect_path=effect_path,
+            loop_names=loop_names,
+        )
+        return
+    if isinstance(value, str):
+        reason = template_syntax_error(value)
+        if reason is not None:
+            raise ValueError(
+                f"{effect_path}.{field}: malformed Mustache template: {reason}"
+            )
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _check_param_leaves(
+                item,
+                name=name,
+                effect_path=effect_path,
+                field=f"{field}.{key}",
+                loop_names=loop_names,
+            )
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _check_param_leaves(
+                item,
+                name=name,
+                effect_path=effect_path,
+                field=f"{field}[{index}]",
+                loop_names=loop_names,
+            )
+
+
+def _check_security_sensitive_param_leaf(
+    value: Any, *, name: str, field: str
+) -> None:
+    """Reject a ``{from: <path>}`` leaf anywhere inside a security-sensitive
+    param (today: ``allowed_commands``) at compile time.
+
+    Mirrors the runtime guard in ``core.tool._reject_templated_security_params``:
+    only a document's literal, unrendered list of strings is ever honoured for
+    a plugin's own allowlist, so a by-reference value — which can carry
+    runtime or model-generated content — is caught here too, before the
+    orchestration ever runs.
+    """
+    if param_reference(value) is not None:
+        raise ValueError(
+            f"Tool effect '{name}' param '{field}': a by-reference '{{from: ...}}' "
+            "value is not honoured for this security-sensitive setting; it must "
+            "be a literal list of strings."
+        )
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _check_security_sensitive_param_leaf(item, name=name, field=f"{field}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _check_security_sensitive_param_leaf(item, name=name, field=f"{field}[{index}]")
+
+
 def _compile_tool(
-    effect: dict[str, Any], *, scope_path: str, effect_path: str
+    effect: dict[str, Any],
+    *,
+    scope_path: str,
+    effect_path: str,
+    loop_names: frozenset[str] = frozenset(),
 ) -> ToolDefinition:
     """Compile a tool effect."""
     name = effect.get("name")
@@ -852,7 +935,13 @@ def _compile_tool(
         prompt = None
 
     _check_templates(prompt, effect_path=effect_path, field="prompt")
-    _check_templates(params, effect_path=effect_path, field="params")
+    _check_param_leaves(
+        params, name=str(name), effect_path=effect_path, field="params", loop_names=loop_names
+    )
+    for sensitive_key in _SECURITY_SENSITIVE_PARAM_KEYS & params.keys():
+        _check_security_sensitive_param_leaf(
+            params[sensitive_key], name=str(name), field=f"params.{sensitive_key}"
+        )
     _check_templates(params_json, effect_path=effect_path, field="params_json")
 
     model = effect.get("model")
@@ -962,8 +1051,7 @@ def _compile_use(
         if from_path is not None:
             validate_reference_path(
                 from_path,
-                use_name=str(name),
-                input_name=str(input_name),
+                label=f"Use effect '{name}' input '{input_name}'",
                 effect_path=effect_path,
                 loop_names=loop_names,
             )

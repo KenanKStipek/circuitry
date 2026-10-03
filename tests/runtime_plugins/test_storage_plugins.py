@@ -905,3 +905,27 @@ def test_base_class_protocol_requirement() -> None:
         base._check_dep()
     with pytest.raises(NotImplementedError):
         base._upsert_snapshot("run-1", {})
+
+
+def test_snapshot_writes_loop_last_as_a_reference_not_a_full_copy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A loop's in-memory ``last`` alias is written the way ``--out`` writes
+    it -- ``{"$ref": "iter_N"}`` -- not a second full copy of the final pass
+    (#236)."""
+    holder = _install_fake_pymongo(monkeypatch)
+    plugin = mongodb_mod.plugin()
+    ctx = _make_context(tmp_path, "mongodb")
+
+    node = {"iter_0": {"value": "a"}, "iter_1": {"value": "b"}}
+    node["last"] = node["iter_1"]
+    state = {"prime": {"loop": node}}
+
+    plugin.on_run_start(state=state, context=ctx)
+    plugin.on_run_success(state=state, context=ctx)
+
+    coll = next(iter(holder["c"]._collections.values()))
+    saved = coll.upserts[-1][1]["state"]
+    assert saved["prime"]["loop"]["last"] == {"$ref": "iter_1"}
+    # The in-memory alias itself is untouched.
+    assert state["prime"]["loop"]["last"] is state["prime"]["loop"]["iter_1"]

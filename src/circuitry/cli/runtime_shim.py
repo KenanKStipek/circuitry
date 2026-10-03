@@ -26,7 +26,7 @@ from ..core.runtime_plugins import (
     invoke_plugins,
     load_plugins,
 )
-from ..core.saved_state import link_last_refs
+from ..core.saved_state import compact_last_aliases, link_last_refs
 from ..core.state_ns import migrate_legacy_state
 from ..core.store import Store, build_persistence_backend
 from ..plugins.factory import build_plugin
@@ -749,7 +749,10 @@ def run(req: RunRequest) -> RunResult:
                     run_id=run_id,
                     ok=True,
                     error=None,
-                    state=state,
+                    # Each loop's `last` as a sibling reference, not a full
+                    # copy of its final pass (#236, mirroring `--out`); the
+                    # load side above already relinks it back.
+                    state=compact_last_aliases(state),
                 )
                 state["runtime"]["persistence"]["status"] = "persisted"
                 state["runtime"]["persistence"]["persisted"] = True

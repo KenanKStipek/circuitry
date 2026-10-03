@@ -16,7 +16,7 @@ fields:
     note: "Model/checkpoint for the plugin. For comfyui: checkpoint filename (e.g. flux1-dev-fp8.safetensors)."
   params:
     type: object
-    note: "Plugin-specific parameters. All string values support Mustache rendering."
+    note: "Plugin-specific parameters. All string values support Mustache rendering. A leaf anywhere in params (any depth, in objects and lists), {from: <path>}, passes the value at that path unchanged (array, object, number or boolean) instead of rendering it, same contract as a use effect's inputs; add default: <value> alongside from: to fall back when the path doesn't resolve. A mapping with any other key is a literal value, passed as written — use params_json to pass a literal one-key {from: ...} object."
   params_json:
     type: string
     note: "A Mustache template rendered to text and parsed as JSON, deep-merged over params (params_json wins on conflicts). Use it to send a runtime-built array/object (e.g. a list from a prior step) instead of a Mustache-rendered string — e.g. '{\"arguments\": {\"symbols\": {{{prime.symbol_list.value}}} }}'. A bad template or non-JSON result is a hard failure."
@@ -34,6 +34,7 @@ constraints:
   - "Always use a prompt effect before a tool to generate the tool's parameters via state interpolation."
   - "Available plugin descriptions are injected separately via {{plugins}}."
   - "Quote every params.args entry. Unquoted, YAML reads 0x1 as 1, off as false and -0 as 0, and the tool receives that instead of what you wrote; cof check warns."
+  - "params.allowed_commands (shell plugin) must stay a literal list of strings written in the document — never {from: ...} and never a templated entry. It is the plugin's security allowlist; a runtime or model-supplied value there is rejected."
 providers:
   ffmpeg:
     required_params: [input, output]
