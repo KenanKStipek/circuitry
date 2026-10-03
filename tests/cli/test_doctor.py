@@ -116,6 +116,24 @@ def test_doctor_model_present_no(
     assert "NO (missing: llama3:latest)" in result.output
 
 
+def test_doctor_never_shows_key_characters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#350: a canary key's characters never appear in `cof doctor` output."""
+    _lockdown_env(monkeypatch)
+    config = _write_config(tmp_path)
+    canary = "sk-CANARYvalueNeverShown1234567890"
+    monkeypatch.setenv("OPENAI_API_KEY", canary)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", canary)
+
+    result = runner.invoke(app, ["doctor", "--config", str(config)])
+
+    assert result.exit_code == 0
+    assert canary not in result.output
+    for i in range(len(canary) - 6):
+        assert canary[i : i + 6] not in result.output
+
+
 def test_doctor_generate_flag_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

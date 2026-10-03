@@ -73,6 +73,18 @@ def test_detect_openai_with_key() -> None:
     assert len(status.models) > 0
 
 
+def test_detect_openai_detail_never_contains_key_characters() -> None:
+    """#350: the detail string names the variable, never any part of the value."""
+    canary = "sk-CANARYvalueNeverShown1234567890"
+    with patch.dict("os.environ", {"OPENAI_API_KEY": canary}):
+        status = detect_openai()
+
+    assert canary not in status.detail
+    for i in range(len(canary) - 6):
+        assert canary[i : i + 6] not in status.detail
+    assert status.detail == "API key set (OPENAI_API_KEY)"
+
+
 def test_detect_openai_without_key() -> None:
     with patch.dict("os.environ", {}, clear=True):
         status = detect_openai()
@@ -89,6 +101,18 @@ def test_detect_anthropic_with_key() -> None:
 
     assert status.available is True
     assert len(status.models) > 0
+
+
+def test_detect_anthropic_detail_never_contains_key_characters() -> None:
+    """#350: the detail string names the variable, never any part of the value."""
+    canary = "sk-ant-CANARYvalueNeverShown1234567890"
+    with patch.dict("os.environ", {"ANTHROPIC_API_KEY": canary}):
+        status = detect_anthropic()
+
+    assert canary not in status.detail
+    for i in range(len(canary) - 6):
+        assert canary[i : i + 6] not in status.detail
+    assert status.detail == "API key set (ANTHROPIC_API_KEY)"
 
 
 def test_detect_anthropic_without_key() -> None:

@@ -14,6 +14,8 @@ from circuitry.cli import setup as cli_setup
 from circuitry.cli.app import app
 from circuitry.cli.detect import BackendStatus, DetectionResult
 
+_CANARY_KEY = "sk-CANARYvalueNeverShown1234567890"
+
 runner = CliRunner()
 
 
@@ -61,6 +63,24 @@ def test_setup_json_has_expected_fields() -> None:
         assert "detail" in entry
         assert "models" in entry
         assert isinstance(entry["models"], list)
+
+
+def test_setup_json_never_shows_key_characters() -> None:
+    """#350: a canary key's characters never appear in --json output."""
+    result = runner.invoke(
+        app,
+        ["setup", "--json"],
+        env={"OPENAI_API_KEY": _CANARY_KEY, "ANTHROPIC_API_KEY": _CANARY_KEY},
+    )
+    assert result.exit_code == 0
+    assert _CANARY_KEY not in result.output
+    for i in range(len(_CANARY_KEY) - 6):
+        assert _CANARY_KEY[i : i + 6] not in result.output
+    data = _extract_json(result.output)
+    openai_entry = next(e for e in data if e["name"] == "openai")
+    anthropic_entry = next(e for e in data if e["name"] == "anthropic")
+    assert openai_entry["detail"] == "API key set (OPENAI_API_KEY)"
+    assert anthropic_entry["detail"] == "API key set (ANTHROPIC_API_KEY)"
 
 
 # ---------------------------------------------------------------------------

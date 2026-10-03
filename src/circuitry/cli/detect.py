@@ -70,7 +70,7 @@ def detect_openai() -> BackendStatus:
         return BackendStatus(
             name="openai",
             available=True,
-            detail=f"API key set ({key[:8]}...)",
+            detail="API key set (OPENAI_API_KEY)",
             models=["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano"],
         )
     return BackendStatus(name="openai", available=False, detail="OPENAI_API_KEY not set")
@@ -89,7 +89,7 @@ def detect_anthropic() -> BackendStatus:
         return BackendStatus(
             name="anthropic",
             available=True,
-            detail=f"API key set ({key[:8]}...)",
+            detail="API key set (ANTHROPIC_API_KEY)",
             models=list(AnthropicAdapter.KNOWN_MODELS),
         )
     return BackendStatus(name="anthropic", available=False, detail="ANTHROPIC_API_KEY not set")
