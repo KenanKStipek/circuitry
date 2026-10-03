@@ -552,6 +552,7 @@ def _validate_plan(
         return problems
     problems.extend(_check_merge_contract(plan))
     problems.extend(_check_allowlists(plan, runtime_config))
+    problems.extend(_check_capability_ceiling(plan, runtime_config))
     return problems
 
 
@@ -574,6 +575,34 @@ def _check_allowlists(plan: _Plan, runtime_config: Mapping[str, Any]) -> list[st
         enabled_tools=allowed_tools(runtime_config),
         skip_templated=True,
     )
+
+
+def _check_capability_ceiling(plan: _Plan, runtime_config: Mapping[str, Any]) -> list[str]:
+    """A generated plan may only use capabilities already consented for the
+    document it serves (#275 rule 4) — no ceiling installed (a path-run or
+    plain library-name document) means unrestricted, unchanged from before.
+    """
+    import yaml as _yaml
+
+    from ..capability_gate import capabilities_beyond_ceiling
+    from ..cli.allowlist import walk_orchestration_refs
+    from ..plugins.capabilities import capabilities_of
+
+    try:
+        parsed = _yaml.safe_load(plan.yaml or "")
+    except _yaml.YAMLError:
+        return []  # already reported by the schema check
+    if not isinstance(parsed, dict):
+        return []
+    _adapters, tools = walk_orchestration_refs(parsed, include_document_adapter=False)
+    required = frozenset(cap for tool in tools for cap in capabilities_of(tool))
+    beyond = capabilities_beyond_ceiling(required, runtime_config)
+    if not beyond:
+        return []
+    return [
+        "the plan needs capabilities beyond this document's consented ones: "
+        + ", ".join(sorted(beyond))
+    ]
 
 
 def _check_merge_contract(plan: _Plan) -> list[str]:

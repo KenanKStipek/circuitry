@@ -15,6 +15,7 @@ from uuid import uuid4
 from ..adapters import Adapter, build_adapter
 from ..adapters.factory import ADAPTER_REGISTRY, configured_timeout_seconds
 from ..allowlist_gate import AllowlistError, install_allowlists, require_adapter
+from ..capability_gate import install_capability_ceiling
 from ..core.compiler import (
     apply_effect_overrides,
     compile_orchestration,
@@ -48,7 +49,8 @@ from .allowlist import (
     skippable_effect_names,
     walk_orchestration_refs,
 )
-from .config import CircuitryConfig
+from .config import CircuitryConfig, trust_store_path
+from .document_consent import ConsentPrompt, enforce_consent
 from .effective_settings import (
     EffectiveSettings,
     _merge_runtime,
@@ -166,6 +168,23 @@ class RunRequest:
     # and network/tool-chosen documents keep the default and stay limited to
     # ORCHESTRATION_RUNTIME_KEYS — see `resolve_effective_settings`.
     trust_document: bool = False
+    # Capability consent (#275). Pre-approved capabilities for this run only
+    # (never persisted to the consent store) — the scripted/CI escape hatch
+    # named in a `DocumentConsentError`'s own message, e.g.
+    # `frozenset({"shell", "network"})` for `--allow-capabilities shell,network`.
+    allow_capabilities: frozenset[str] | None = None
+    # An interactive callback — `(label, capabilities) -> bool` — the CLI
+    # supplies to ask the user before a document that needs fresh consent
+    # runs; `None` (every non-CLI caller: SDK, MCP, REST, TUI, scheduler)
+    # means never prompt, so a missing consent always refuses rather than
+    # blocking on input nobody can give (#275 rule 5).
+    capability_prompt: ConsentPrompt | None = None
+    # True when `orchestration_path` was resolved from a refreshable (today,
+    # `github`) library source run by bare name rather than through
+    # `run_shared_orchestration`/`cof run-library` — the other half of
+    # `gate_whole_document` below, so a remote library source gets the same
+    # whole-document capability gate whichever surface reaches it (#275).
+    remote_library_source: bool = False
     # `cof run --resume`: when true, this run skips any effect whose node in
     # `initial_state` already finished without error (see `core.resume`),
     # and a named loop in chain flow resumes at its first unfinished pass
@@ -387,6 +406,27 @@ def run(req: RunRequest) -> RunResult:
                 "Allowlist enforcement failed: " + "; ".join(allowlist_errors)
             )
 
+        # Capability consent (#275): gated on the whole document for a
+        # `cof fetch`/`cof run-library` asset (`shared_library_metadata` is
+        # the signal both the CLI command and `run_shared_orchestration` set)
+        # and for a remote library source run by bare name
+        # (`remote_library_source`, set by `cof run` when the resolved path
+        # came from a `github`-type source); a `use: ref:` child is
+        # independently in scope regardless, including one reached from a
+        # path-trusted document. Raises/prompts before anything compiles or
+        # dispatches, same fail-fast spirit as the allowlist check above.
+        capability_ceiling = enforce_consent(
+            orch=orch,
+            orchestration_path=req.orchestration_path,
+            gate_whole_document=(
+                req.shared_library_metadata is not None or req.remote_library_source
+            ),
+            runtime=cfg.runtime,
+            store_path=trust_store_path(),
+            allow_capabilities=req.allow_capabilities,
+            prompt=req.capability_prompt,
+        )
+
         if req.profile_name and req.profile_record is not None:
             raise ValueError(
                 "RunRequest.profile_name and RunRequest.profile_record are "
@@ -476,6 +516,21 @@ def run(req: RunRequest) -> RunResult:
             runtime_config,
             enabled_adapters=cfg.enabled_adapters,
             enabled_tools=cfg.enabled_tools,
+        )
+        # The ceiling a generated plan (reflector/decompose) inside this
+        # document may not exceed (#275 rule 4) — `None` (a path-run or
+        # plain library-name document) leaves it unrestricted.
+        install_capability_ceiling(runtime_config, capability_ceiling)
+        # So a `use: ref:` child only known once a Mustache tag renders
+        # (unreachable to the static walk above) still honors this run's
+        # own `--allow-capabilities` when `UseRuntime` re-checks it. Always
+        # overwritten, never left alone, for the same reason as the ceiling
+        # above: a stray `_capability_allow` a trusted document's own
+        # `runtime:` block happened to carry must never survive into the
+        # shared runtime_config and widen what a `use: ref:` child is
+        # allowed without the user's own `--allow-capabilities` (#275).
+        runtime_config["_capability_allow"] = (
+            sorted(req.allow_capabilities) if req.allow_capabilities else []
         )
         persistence = build_persistence_backend(effective.runtime)
         plugins, plugin_events = _initialize_plugins(

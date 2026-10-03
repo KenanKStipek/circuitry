@@ -115,21 +115,14 @@ def env_trusts_project_config() -> bool:
 
 
 def _read_store(store_path: Path) -> dict[str, TrustEntry]:
-    """Every entry in the store; raises :class:`TrustStoreError` if unreadable."""
-    try:
-        text = store_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return {}
-    except (OSError, UnicodeDecodeError) as exc:
-        raise TrustStoreError(f"Trust store {store_path} could not be read ({exc}).") from exc
-    try:
-        raw = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise TrustStoreError(
-            f"Trust store {store_path} is not valid JSON ({exc.msg}, line {exc.lineno}); "
-            "fix or delete it."
-        ) from exc
-    trusted = raw.get("trusted") if isinstance(raw, dict) else None
+    """Every entry in the store; raises :class:`TrustStoreError` if unreadable.
+
+    A file with no ``trusted`` key at all (one that holds only another
+    module's section — see :func:`_read_raw_store`) reads as no entries, not
+    an error; a ``trusted`` key present but the wrong shape still is.
+    """
+    raw = _read_raw_store(store_path)
+    trusted = raw.get("trusted", {})
     if not isinstance(trusted, dict):
         raise TrustStoreError(
             f"Trust store {store_path} has no 'trusted' object; fix or delete it."
@@ -167,15 +160,48 @@ def check_trust(path: Path, data: bytes, *, store_path: Path) -> TrustState:
     return "trusted" if entry.sha256 == config_digest(data) else "changed"
 
 
+def _read_raw_store(store_path: Path) -> dict[str, Any]:
+    """The whole store file as a dict; raises :class:`TrustStoreError` if
+    the file exists but is unreadable or not a JSON object.
+
+    Shared with :mod:`circuitry.cli.document_consent`, which keeps its own
+    entries under a different top-level key (``document_capabilities``) in
+    this same file — reading raw first, rather than assuming the file holds
+    only ``trusted``, is what lets both write back without clobbering the
+    other's section.
+    """
+    try:
+        text = store_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except (OSError, UnicodeDecodeError) as exc:
+        raise TrustStoreError(f"Trust store {store_path} could not be read ({exc}).") from exc
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise TrustStoreError(
+            f"Trust store {store_path} is not valid JSON ({exc.msg}, line {exc.lineno}); "
+            "fix or delete it."
+        ) from exc
+    if not isinstance(raw, dict):
+        raise TrustStoreError(
+            f"Trust store {store_path} is not a JSON object; fix or delete it."
+        )
+    return raw
+
+
 def _write_store(store_path: Path, entries: dict[str, TrustEntry]) -> None:
-    """Atomically replace the store; the file is 0600 in a directory created 0700."""
+    """Atomically replace the store; the file is 0600 in a directory created 0700.
+
+    Preserves any other top-level section already in the file (see
+    :func:`_read_raw_store`) rather than overwriting it.
+    """
     store_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    payload: dict[str, Any] = {
-        "version": TRUST_STORE_VERSION,
-        "trusted": {
-            key: {"sha256": entry.sha256, "trusted_at": entry.trusted_at}
-            for key, entry in sorted(entries.items())
-        },
+    payload: dict[str, Any] = _read_raw_store(store_path)
+    payload["version"] = TRUST_STORE_VERSION
+    payload["trusted"] = {
+        key: {"sha256": entry.sha256, "trusted_at": entry.trusted_at}
+        for key, entry in sorted(entries.items())
     }
     fd, tmp_name = tempfile.mkstemp(
         dir=store_path.parent, prefix=".trusted.", suffix=".tmp"

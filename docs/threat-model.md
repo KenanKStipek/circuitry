@@ -209,7 +209,9 @@ then validated against the JSON Schema before execution. There is no
 signature verification today — anyone with write access to the shared
 library can publish an asset. Treat shared-library assets the same way you
 would treat any third-party orchestration: prefer fetching from a library
-you control, or read the YAML before running it.
+you control, or read the YAML before running it. [Section 9](#9-capability-consent-for-a-document-that-is-not-the-users-own)
+covers the consent gate a `cof run-library` asset's `shell`/`python_eval`/
+`fs-write`/`network` tool effects go through before they run.
 
 ### 6. Host settings versus orchestration documents
 
@@ -344,6 +346,67 @@ name; the document it points to is otherwise limited the same way any
 REST/MCP-reached document is (see §6 above). A host that wires this up still
 needs to choose its own transport-level protections (TLS, network ACLs) —
 this class has none.
+
+### 9. Capability consent for a document that is not the user's own
+
+Section 6's trust rule decides whose *host settings* a document's
+`runtime:`/`plugins:` can touch. It says nothing about the document's own
+effects: before #275, a `cof run-library` asset or a `use: ref:` child ran
+its `shell`/`python_eval`/filesystem-write/network tool effects exactly like
+a document the operator wrote themselves — no prompt, no record that anyone
+saw it coming.
+
+**Mitigation.** Every bundled tool plugin is tagged, in the one place
+(`circuitry.plugins.capabilities.PLUGIN_CAPABILITIES`, next to the plugin
+registry so the tag can't drift from it), with what it can do to the host:
+`shell` (runs an external binary with effect-supplied arguments — the
+`shell` plugin and every "subprocess wrapper" in `circuitry.plugins.factory`),
+`python_eval` (evaluates document-supplied Python), `fs-write` (writes or
+deletes an arbitrary local path without shelling out), and `network`
+(reaches a remote host: the HTTP family, a cloud/SaaS SDK, a DNS/ping-style
+probe, a download). Before the first run of a document that did not come
+from the user's own disk — a `cof run-library`/`run_shared_orchestration`
+asset, a remote (refreshable, e.g. `github`) library source run by bare
+name (`cof run hub:entry`), or any `use: ref:` child, reached from *any*
+document, trusted or not — `circuitry.cli.document_consent.enforce_consent`
+works out, statically,
+every capability the compiled document and its reachable `use` children need,
+and gates it: an interactive `cof run`/`cof run-library` lists them and asks
+y/N; anything else (MCP, REST, CI, no TTY) refuses outright, naming
+`cof trust <document>` (extended by #275 to accept a `.yml`/`.yaml` path, not
+just a project config) and the `--allow-capabilities shell,network,...`
+scripted/CI escape hatch (never persisted — it approves one run, not the
+document). A yes is recorded by the document's own content digest in the
+same store `cof trust` keeps project-config trust in
+(`~/.config/circuitry/trusted.json`, a different top-level key), so an
+edited document asks again. A `ref:` child gets its own entry, independent of
+whatever document pulled it in — including one reached from a path-trusted
+document, since the child itself is still someone else's content. A plan a
+reflector or decomposition step generates inside a consented document is
+held to a ceiling: the same capability set already consented for the
+enclosing document, never its own prompt. Implementation:
+[`src/circuitry/cli/document_consent.py`](../src/circuitry/cli/document_consent.py),
+[`src/circuitry/capability_gate.py`](../src/circuitry/capability_gate.py),
+[`src/circuitry/plugins/capabilities.py`](../src/circuitry/plugins/capabilities.py).
+
+**Residual risk.** The tag table is current best judgement, not a formal
+proof: a plugin not bundled with Circuitry carries no tag at all (needs
+none, by the same rule untagged stdlib-only plugins do) and a user-authored
+one should be read before it is trusted the way any new dependency would be.
+Consent is about *capability class*, not about what a specific call does
+with it — approving `network` for a document approves every networked tool
+it uses, not just the one the user had in mind. A `use: path:` child and a
+generated (`inline:`) plan are not independently gated — only bound to
+whatever ceiling the run already carries — because they are the enclosing
+document's own content, the same reasoning that limits them from setting
+their own host settings (§6). The remote-library-source gate is wired only
+into `cof run`'s own resolution so far: the TUI Library view's "run this
+entry," the SDK, MCP, and REST surfaces reach a remote source's resolved
+path without going through it, and stay limited only by §6's trust rule
+until each is wired the same way. `cof fetch` writing a file to disk, then a
+later `cof run ./that-file.yml`, is a run by path (§6) and is never gated
+here, whatever the file's origin — read a fetched file before running it
+that way, or run it through `cof run-library`.
 
 ---
 

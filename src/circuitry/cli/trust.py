@@ -58,6 +58,69 @@ def _fail(message: str) -> typer.Exit:
     return typer.Exit(code=1)
 
 
+def _trust_document(path: Path, *, yes: bool, store: Path, config: Path | None) -> None:
+    """Capability consent for an orchestration document (#275).
+
+    The interactive counterpart to the in-run prompt
+    (:mod:`circuitry.cli.document_consent`): shows what the document and its
+    statically reachable ``use`` children need, then records a yes against
+    its content digest in the same store a project config's trust lives in
+    (a different top-level key, see :mod:`circuitry.cli.config_trust`) — so
+    approving it here is exactly what answering "y" to the in-run prompt
+    does, just ahead of time, for a CI job or a document reached through
+    ``use: ref:`` from code that never prompts.
+    """
+    from .config import resolve_config
+    from .document_consent import (
+        consented_capabilities,
+        document_digest,
+        record_consent,
+        required_capabilities,
+    )
+    from .orchestration_loader import load_orchestration_file
+
+    try:
+        data = path.read_bytes()
+        orch = load_orchestration_file(path)
+    except (OSError, ValueError) as exc:
+        raise _fail(str(exc)) from exc
+
+    cfg = resolve_config(explicit_path=config)
+    needed = required_capabilities(orch, root_path=path, runtime=cfg.runtime)
+    digest = document_digest(data)
+    consented = consented_capabilities(digest, store_path=store)
+
+    console.print(f"[bold]Orchestration:[/bold] {escape(str(path.resolve()))}")
+    if not needed:
+        console.print(
+            "It uses none of the gated capabilities (shell, python_eval, "
+            "fs-write, network) — nothing to consent to."
+        )
+        return
+
+    currently = (
+        f"consented ({', '.join(sorted(consented))})" if consented else "not consented"
+    )
+    console.print(f"[bold]Currently:[/bold] {currently}")
+    console.print()
+    console.print("[bold]It uses:[/bold] " + ", ".join(sorted(needed)))
+    console.print()
+
+    if not yes and not typer.confirm("Allow it?", default=False):
+        console.print("Not consented; nothing changed.")
+        raise typer.Exit(code=1)
+
+    try:
+        entry = record_consent(digest, needed, store_path=store)
+    except OSError as exc:
+        raise _fail(str(exc)) from exc
+    console.print(
+        f"[green]Consented:[/green] {escape(str(path.resolve()))} "
+        f"(sha256 {entry.sha256[:12]}…) may use {', '.join(entry.capabilities)}. "
+        "Applies until the file changes; an edited document needs `cof trust` again."
+    )
+
+
 def _print_settings(settings: dict[str, Any]) -> None:
     """What the file sets, one line per leaf, host-sensitive settings flagged."""
     pairs = flatten_settings(settings)
@@ -89,20 +152,28 @@ def register_trust(app: typer.Typer) -> None:
     @app.command(
         "trust",
         help=(
-            "Trust a project config file so runs in its directory apply it. "
-            "Shows what the file sets and asks first."
+            "Trust a project config file, or consent to an orchestration "
+            "document's capabilities (#275). A .yml/.yaml PATH is a "
+            "document (shows the capabilities it needs and asks); anything "
+            "else is a project config file (shows what it sets and asks)."
         ),
     )
     def trust_cmd(
         path: Path | None = typer.Argument(
             None,
-            help="Config file to trust (default: circuitry.config.json or "
-            "config.json in the current directory).",
+            help="Config file or .yml/.yaml orchestration document to trust "
+            "(default: circuitry.config.json or config.json in the current "
+            "directory).",
             show_default=False,
         ),
         yes: bool = typer.Option(False, "--yes", "-y", help="Trust without asking."),
         list_: bool = typer.Option(
             False, "--list", help="List trusted files and whether each still matches."
+        ),
+        config: Path | None = typer.Option(
+            None, "--config", "-c",
+            help="Config to resolve library sources from, for a .yml/.yaml "
+            "document's use: ref: children (or use CIRCUITRY_CONFIG).",
         ),
     ) -> None:
         store = trust_store_path()
@@ -113,6 +184,10 @@ def register_trust(app: typer.Typer) -> None:
                 _list_trusted(store)
             except TrustStoreError as exc:
                 raise _fail(str(exc)) from exc
+            return
+
+        if path is not None and path.suffix.lower() in (".yml", ".yaml"):
+            _trust_document(path, yes=yes, store=store, config=config)
             return
 
         try:

@@ -58,10 +58,14 @@ def walk_orchestration_refs(
         top_adapter = orch.get("adapter")
         if include_document_adapter and isinstance(top_adapter, str) and top_adapter.strip():
             adapters.add(top_adapter.strip())
-        _walk_effects(orch.get("effects"), adapters, tools)
+        # Mirror the compiler's own 'effects' (spec) / 'steps' (legacy) fallback
+        # (core/compiler.py) — a document written with the legacy key must not
+        # look like it references nothing.
+        _walk_effects(orch.get("effects") or orch.get("steps"), adapters, tools)
         # Root-level `finally:` (#272) — a preflight-missing cleanup tool is
         # otherwise found only at runtime, after the (possibly expensive)
-        # main effects already ran.
+        # main effects already ran. Also required for consent (#275): a
+        # fetched document must not be able to hide `shell` in `finally:`.
         _walk_effects(orch.get("finally"), adapters, tools)
 
     return adapters, tools
@@ -93,7 +97,7 @@ def _walk_effects(
             if isinstance(prov, str) and prov.strip():
                 tools.add(prov.strip())
         elif etype == "dynamic":
-            _walk_effects(effect.get("effects"), adapters, tools)
+            _walk_effects(effect.get("effects") or effect.get("steps"), adapters, tools)
             _walk_effects(effect.get("finally"), adapters, tools)
         elif etype in ("if", "conditional"):
             _walk_effects(effect.get("then"), adapters, tools)
@@ -101,7 +105,7 @@ def _walk_effects(
         elif etype == "loop":
             _walk_effects(effect.get("body"), adapters, tools)
         elif etype == "reflector":
-            _walk_effects(effect.get("effects"), adapters, tools)
+            _walk_effects(effect.get("effects") or effect.get("steps"), adapters, tools)
         # `use` children are walked as documents of their own — see
         # check_allowlist and UseRuntime.
 

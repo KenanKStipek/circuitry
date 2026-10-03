@@ -566,6 +566,70 @@ class UseRuntime:
                 "enforcement: " + "; ".join(denials)
             )
 
+    def _check_capability_consent(
+        self, child_orch: dict[str, Any], label: str, digest: str
+    ) -> frozenset[str] | None:
+        """Capability consent for this child (#275).
+
+        A ``ref:`` child is a library entry, independently in scope
+        regardless of whether this document itself is trusted (#284) or
+        went through the whole-document gate at the top of the run: it must
+        already be consented to by its own digest, never interactively here
+        — this runs deep in execution, possibly off the main thread, and a
+        ``ref:`` value only known once a Mustache tag renders is exactly the
+        case :func:`circuitry.cli.document_consent.enforce_consent`'s static
+        walk up front cannot see. A missing consent always refuses, the same
+        non-interactive rule every surface besides an interactive
+        ``cof run``/``cof run-library`` gets (#275 rule 5). On success,
+        returns the capability ceiling this child's own subtree (further
+        nested ``use`` children, a generated plan) must stay inside.
+
+        A ``path:``/``inline:`` child is this document's own content, not
+        independently gated — only checked against whatever ceiling this run
+        is already under (``None`` return: inherit it unchanged), the same
+        check a generated plan's tool refs get
+        (:func:`circuitry.capability_gate.require_within_ceiling`).
+        """
+        from ..capability_gate import require_within_ceiling
+        from ..cli.allowlist import walk_orchestration_refs
+        from ..cli.document_consent import (
+            DocumentConsentError,
+            consented_capabilities,
+            refusal_message,
+        )
+        from ..plugins.capabilities import capabilities_of
+
+        _adapters, tools = walk_orchestration_refs(child_orch, include_document_adapter=False)
+        required = frozenset(cap for tool in tools for cap in capabilities_of(tool))
+
+        if self.defn.ref is None:
+            require_within_ceiling(
+                f"use '{self.defn.name}': child {label}", required, self.runtime_config
+            )
+            return None
+
+        from ..cli.config import trust_store_path
+
+        allow = self._capability_allow_override()
+        consented = (
+            consented_capabilities(digest, store_path=trust_store_path()) or frozenset()
+        )
+        missing = required - consented - allow
+        if missing:
+            raise DocumentConsentError(
+                f"use '{self.defn.name}': child {refusal_message(label, missing)}"
+            )
+        # consented | allow, not just `required`: this child's own ceiling must
+        # carry forward whatever broader capability set was already consented
+        # for its digest (and any --allow-capabilities override), so a ref
+        # child with few or no gated tools of its own doesn't wall off a
+        # grandchild that needs more (#275).
+        return consented | allow
+
+    def _capability_allow_override(self) -> frozenset[str]:
+        configured = self.runtime_config.get("_capability_allow")
+        return frozenset(configured) if isinstance(configured, list) else frozenset()
+
     def _child_on_write(
         self, store: Store, node: dict[str, Any], node_path: str
     ) -> Callable[[dict[str, Any]], None] | None:
@@ -596,6 +660,7 @@ class UseRuntime:
         return _publish
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
+        from ..capability_gate import install_capability_ceiling
         from .compiler import compile_orchestration
         from .dynamic import DynamicRuntime
 
@@ -665,6 +730,17 @@ class UseRuntime:
                         _console.print(line)
                 return
 
+            # Capability consent (#275), checked once per execute() call,
+            # before the retry loop: a `ref:` child's consent decision is a
+            # property of its digest, not of which attempt is running, and a
+            # refused child must never even start the retry/backoff schedule.
+            _preload_orch, _preload_label, _preload_identity, _preload_digest = (
+                self._load_child_orch(ctx)
+            )
+            child_capability_ceiling = self._check_capability_consent(
+                _preload_orch, _preload_label, _preload_digest
+            )
+
             # Retry policy: per-use config, or one attempt (#273) — same key
             # names and backoff curve as prompts (core.prompt.RetryPolicyDef).
             # A retry re-runs the whole child orchestration from scratch.
@@ -729,6 +805,10 @@ class UseRuntime:
                         )
                     child_runtime_config = dict(self.runtime_config)
                     child_runtime_config["_use_call_stack"] = [*parent_stack, identity]
+                    if child_capability_ceiling is not None:
+                        install_capability_ceiling(
+                            child_runtime_config, child_capability_ceiling
+                        )
                     # A nested `use: {path: ...}` inside this child resolves relative
                     # to *this* child's own directory, not the root orchestration's —
                     # composition chains through each file's own location. Inline
