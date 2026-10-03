@@ -139,13 +139,16 @@ def _hermetic_global_config(
     # suite run (breaking their `cof run --last` / `--resume last`).
     monkeypatch.setattr(last_run_module, "LAST_RUN_PATH", fake_last_run_path)
     monkeypatch.setattr(app_module, "_LAST_RUN_PATH", fake_last_run_path)
+    # `_save_last_run` creates `app.GLOBAL_CONFIG_DIR` before writing the
+    # stash, so it must point at the temp dir too, or the write lands nowhere
+    # and the real ~/.config/circuitry is created as a side effect.
+    monkeypatch.setattr(app_module, "GLOBAL_CONFIG_DIR", fake_dir)
 
     if request.node.get_closest_marker("real_config_discovery"):
         return
 
     monkeypatch.setattr(config_module, "GLOBAL_CONFIG_DIR", fake_dir)
     monkeypatch.setattr(config_module, "GLOBAL_CONFIG_PATH", fake_config_path)
-    monkeypatch.setattr(app_module, "GLOBAL_CONFIG_DIR", fake_dir)
     monkeypatch.setattr(setup_module, "GLOBAL_CONFIG_DIR", fake_dir)
     monkeypatch.setattr(setup_module, "GLOBAL_CONFIG_PATH", fake_config_path)
     monkeypatch.setattr(doctor_module, "GLOBAL_CONFIG_DIR", fake_dir)
