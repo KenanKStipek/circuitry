@@ -25,6 +25,9 @@ fields:
   on_error:
     enum: [fail, skip, continue]
     default: fail
+  group:
+    type: string
+    note: "Named concurrency-group slot (runtime.concurrency_groups.<name>) this effect waits for a free slot in before dispatching, on top of runtime.max_concurrency's run-wide cap. Must name a group runtime.concurrency_groups defines, or cof check rejects it. Usually omitted."
 state_paths:
   output: "prime.<name>.value"
   template_ref: "{{prime.<name>.value}}"

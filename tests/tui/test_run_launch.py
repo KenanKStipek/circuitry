@@ -370,9 +370,18 @@ def _request(path: Path, **kwargs: Any) -> RunRequest:
     )
 
 
-#: Run identity and wall-clock stamps differ between any two runs.
+#: Run identity and wall-clock stamps differ between any two runs. `totals`
+#: (#271) carries real wall-clock elapsed time for the same reason.
 VOLATILE = frozenset(
-    {"_run_id", "_timestamp", "run_id", "created_at", "completed_at", "started_at"}
+    {
+        "_run_id",
+        "_timestamp",
+        "run_id",
+        "created_at",
+        "completed_at",
+        "started_at",
+        "totals",
+    }
 )
 
 

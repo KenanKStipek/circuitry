@@ -278,6 +278,48 @@ def _read_state_file(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _show_loop_progress(*, verbose: bool, quiet: bool, json_out: bool) -> bool:
+    """Whether a loop's interactive progress line may print (#271): verbose,
+    a real TTY, and neither ``--quiet`` nor ``--json``. The TTY check reads
+    ``sys.stdout`` at call time (not a parameter) so it always reflects
+    whatever the process's stdout actually is at the moment a run starts."""
+    return bool(verbose and not quiet and not json_out and sys.stdout.isatty())
+
+
+def _format_seconds(value: float) -> str:
+    if value >= 60:
+        minutes, rest = divmod(value, 60)
+        return f"{int(minutes)}m{rest:04.1f}s"
+    return f"{value:.1f}s"
+
+
+def _format_run_totals_line(totals: Any) -> str | None:
+    """The one-line run summary (#271): wall time, effects, tokens, cost.
+
+    ``None`` when ``totals`` isn't the dict ``run()`` writes — a caller on
+    an old state shape, or a run that failed before totals were computed.
+    """
+    if not isinstance(totals, dict):
+        return None
+    bits: list[str] = []
+    wall_time_s = totals.get("wall_time_s")
+    if isinstance(wall_time_s, (int, float)):
+        bits.append(_format_seconds(wall_time_s))
+    effects_run = totals.get("effects_run")
+    if isinstance(effects_run, int):
+        bits.append(f"{effects_run} effects")
+    tokens_sent = totals.get("tokens_sent")
+    tokens_received = totals.get("tokens_received")
+    if isinstance(tokens_sent, int) or isinstance(tokens_received, int):
+        bits.append(f"↑{tokens_sent or 0} ↓{tokens_received or 0} tok")
+    cost_usd = totals.get("cost_usd")
+    if isinstance(cost_usd, (int, float)):
+        bits.append(f"${cost_usd:.4f}")
+    if not bits:
+        return None
+    return "  ·  ".join(bits)
+
+
 def _print_missing_state_file_error(exc: FileNotFoundError, *, json_out: bool) -> None:
     """Report a missing `--state` file the same way a failed run does, so
     `--json` output stays valid JSON on this (`--state ... -e ...`) early-exit
@@ -955,6 +997,7 @@ def run_cmd(
         dry_run=dry_run,
         validate_only=False,
         verbose=verbose,
+        show_loop_progress=_show_loop_progress(verbose=verbose, quiet=quiet, json_out=json_out),
         config=cfg,
         live_state_path=live_state,
         skip_preflight=skip_preflight,
@@ -1012,6 +1055,11 @@ def run_cmd(
             console.print(f"[red]Error:[/red] {result.error}")
             if resolved_out:
                 console.print(f"[bold]State written:[/bold] {resolved_out}")
+            totals_line = _format_run_totals_line(
+                result.state.get("runtime", {}).get("last_run", {}).get("totals")
+            )
+            if totals_line:
+                console.print(f"[bold]Totals:[/bold] {totals_line}")
         raise typer.Exit(code=1)
 
     # Stash for --last (only on success, skip if replaying via --last).
@@ -1055,6 +1103,11 @@ def run_cmd(
         console.print("[green]Run succeeded[/green]")
         if resolved_out:
             console.print(f"[bold]State written:[/bold] {resolved_out}")
+        totals_line = _format_run_totals_line(
+            result.state.get("runtime", {}).get("last_run", {}).get("totals")
+        )
+        if totals_line:
+            console.print(f"[bold]Totals:[/bold] {totals_line}")
 
     # Print --print (or default print for --json with no --out)
     if not tail and (print_state or (not resolved_out and json_out)):
@@ -1319,6 +1372,7 @@ def run_library_cmd(
         validate_only=False,
         shared_library_metadata=asset.metadata,
         verbose=verbose,
+        show_loop_progress=_show_loop_progress(verbose=verbose, quiet=quiet, json_out=json_out),
         config=effective_cfg,
         live_state_path=live_state,
         skip_preflight=skip_preflight,
@@ -1369,6 +1423,11 @@ def run_library_cmd(
             console.print(f"[red]Error:[/red] {result.error}")
             if resolved_out:
                 console.print(f"[bold]State written:[/bold] {resolved_out}")
+            totals_line = _format_run_totals_line(
+                result.state.get("runtime", {}).get("last_run", {}).get("totals")
+            )
+            if totals_line:
+                console.print(f"[bold]Totals:[/bold] {totals_line}")
         raise typer.Exit(code=1)
 
     # Stash for --last, the same shape `cof run` writes — so `cof run --last`
@@ -1414,6 +1473,11 @@ def run_library_cmd(
         console.print("[green]Run succeeded[/green]")
         if out:
             console.print(f"[bold]State written:[/bold] {out}")
+        totals_line = _format_run_totals_line(
+            result.state.get("runtime", {}).get("last_run", {}).get("totals")
+        )
+        if totals_line:
+            console.print(f"[bold]Totals:[/bold] {totals_line}")
 
     if not tail and (print_state or (not out and json_out)):
         console.print_json(dumps_saved_state(result.state, pretty=pretty))
