@@ -26,6 +26,26 @@ effects:
     )
 
 
+def test_construction_loads_user_env(tmp_path: Path) -> None:
+    """`RestTriggerService` is a host entry point like the CLI and the MCP
+    server — the `.env` `cof setup` writes must reach a run it triggers
+    (#348)."""
+    import os
+
+    canary = "sk-canary-rest-9f3a1c"
+    config_module.GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    env_path = config_module.GLOBAL_CONFIG_DIR / ".env"
+    env_path.write_text(f"OPENAI_API_KEY={canary}\n", encoding="utf-8")
+    env_path.chmod(0o600)
+    os.environ.pop("OPENAI_API_KEY", None)
+
+    try:
+        RestTriggerService(allow_unauthenticated=True, orchestration_root=tmp_path)
+        assert os.environ.get("OPENAI_API_KEY") == canary
+    finally:
+        os.environ.pop("OPENAI_API_KEY", None)
+
+
 def test_rest_trigger_success_returns_request_tracking_metadata(tmp_path: Path) -> None:
     orch_path = tmp_path / "hello.yml"
     _write_orchestration(orch_path)

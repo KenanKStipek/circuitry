@@ -574,3 +574,27 @@ def test_server_builds_with_six_tools() -> None:
         "get_run_state",
         "cancel_run",
     }
+
+
+# ---------------------------------------------------------------------------
+# 15. `main()` loads the user's `.env` before serving (#348) — this is a
+# standalone entry point (`circuitry-mcp`), bypassing the CLI's own root
+# callback entirely, so it must call `load_user_env()` itself.
+# ---------------------------------------------------------------------------
+
+
+def test_main_loads_user_env_before_serving(monkeypatch: pytest.MonkeyPatch) -> None:
+    from circuitry.cli import config as config_module
+
+    calls: list[bool] = []
+    monkeypatch.setattr(config_module, "load_user_env", lambda: calls.append(True))
+
+    class _FakeServer:
+        def run(self, transport: str) -> None:
+            assert transport == "stdio"
+
+    monkeypatch.setattr(srv, "_build_server", lambda: _FakeServer())
+
+    srv.main()
+
+    assert calls == [True]

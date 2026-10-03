@@ -17,8 +17,10 @@ if TYPE_CHECKING:
 from .config import (
     GLOBAL_CONFIG_DIR,
     GLOBAL_CONFIG_PATH,
+    UserEnvResult,
     describe_config_sources,
     find_config_path,
+    last_user_env_result,
     resolve_config,
 )
 from .detect import detect_all
@@ -134,6 +136,7 @@ def register_doctor(app: typer.Typer) -> None:
             warning = _insecure_mode_warning(secret_path)
             if warning:
                 table.add_row("Secrets file mode", f"[yellow]WARN[/yellow] {warning}")
+        table.add_row("User .env", _describe_user_env(last_user_env_result()))
 
         # Backend detection
         ollama_url = resolved_cfg.runtime.get("adapters", {}).get("ollama", {}).get("base_url", "http://localhost:11434")
@@ -181,6 +184,23 @@ def register_doctor(app: typer.Typer) -> None:
         any_failed = _check_extensions(resolved_cfg)
         if any_failed:
             raise typer.Exit(code=1)
+
+
+def _describe_user_env(result: UserEnvResult | None) -> str:
+    """Render :func:`load_user_env`'s result — names only, never a value."""
+    if result is None:
+        return "— (not loaded this run)"
+    if not result.loaded:
+        if result.warning:
+            return f"[yellow]WARN[/yellow] {result.warning}"
+        return f"— (no file at {result.path})"
+    parts = [f"loaded {result.path}"]
+    parts.append(f"supplied: {', '.join(result.supplied) or '(none)'}")
+    if result.skipped:
+        parts.append(f"already set in environment: {', '.join(result.skipped)}")
+    if result.warning:
+        parts.append(f"[yellow]WARN[/yellow] {result.warning}")
+    return "; ".join(parts)
 
 
 def _insecure_mode_warning(path: Path) -> str | None:

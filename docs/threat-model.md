@@ -334,6 +334,19 @@ looser from before this), and `cof doctor` warns if either is still group- or
 world-readable. Implementation:
 [`src/circuitry/cli/setup.py`](../src/circuitry/cli/setup.py).
 
+Every host entry point (the `cof` CLI, the TUI, the MCP server, the REST
+trigger service) loads that one `.env` at startup — never a `.env` from the
+working directory or a document's directory, and never automatically by the
+SDK (`circuitry.api`), since an embedding program owns its own environment.
+A variable already set in the real environment always wins. A file not
+owned by the current user, or writable by group or others, is refused rather
+than loaded, with one warning naming the file and `chmod 600`; a file merely
+readable by group or others is still loaded, with the same warning. `cof
+doctor` reports whether the file was loaded and the variable *names* it
+supplied or skipped — never a value. Implementation:
+[`src/circuitry/cli/config.py`](../src/circuitry/cli/config.py) (`load_user_env`).
+(#348)
+
 ### 8. The REST trigger service
 
 `circuitry.service.RestTriggerService` is a building block for embedding a

@@ -4,6 +4,7 @@ import copy
 import json
 import logging
 import os
+import stat
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -453,6 +454,107 @@ def _applied_env_vars() -> list[str]:
             else os.getenv(name)
         )
     ]
+
+
+@dataclass(frozen=True)
+class UserEnvResult:
+    """What :func:`load_user_env` did with the user's private ``.env``.
+
+    ``supplied``/``skipped`` carry variable *names* only — never values, so
+    a caller (``cof doctor``) can report them verbatim.
+    """
+
+    path: Path
+    loaded: bool
+    supplied: tuple[str, ...] = ()
+    skipped: tuple[str, ...] = ()
+    warning: str | None = None
+
+
+def _user_env_path() -> Path:
+    """The private ``.env`` ``cof setup`` writes, next to the global config."""
+    return GLOBAL_CONFIG_DIR / ".env"
+
+
+#: The most recent :func:`load_user_env` call's result, for ``cof doctor`` to
+#: report — a CLI invocation's root callback loads the file once, before
+#: `doctor` (or any other subcommand) runs in the same process, so `doctor`
+#: reads what actually happened rather than recomputing it (which would see
+#: every variable as already-set and misreport it as "skipped").
+_last_user_env_result: UserEnvResult | None = None
+
+
+def last_user_env_result() -> UserEnvResult | None:
+    """The result of the most recent :func:`load_user_env` call in this
+    process, or ``None`` if it has not run yet."""
+    return _last_user_env_result
+
+
+def load_user_env() -> UserEnvResult:
+    """Load the global ``.env`` (the file ``cof setup`` writes) into ``os.environ``.
+
+    Every host entry point (the ``cof`` CLI, the TUI, the MCP server, the REST
+    trigger service) calls this once at startup, before config resolution.
+    Only this one private file is ever loaded — never a ``.env`` in the
+    working directory or a document's directory, and never by
+    ``circuitry.api``, whose embedding program owns its own environment.
+
+    A variable already set in the real environment always wins (``override``
+    semantics), and a file not owned by the current user, or writable by
+    group or others, is refused rather than loaded (one warning naming the
+    fix). A file merely *readable* by group or others is still loaded, with
+    the same warning ``cof doctor`` already prints for that case.
+
+    ``dotenv`` is imported lazily here, not at module import time, to keep
+    the CLI's lazy-import startup budget (#321).
+    """
+    global _last_user_env_result
+    path = _user_env_path()
+    try:
+        st = path.stat()
+    except OSError:
+        _last_user_env_result = UserEnvResult(path=path, loaded=False)
+        return _last_user_env_result
+
+    mode = stat.S_IMODE(st.st_mode)
+    owned_by_user = st.st_uid == os.getuid()
+    group_or_other_writable = bool(mode & 0o022)
+    if not owned_by_user or group_or_other_writable:
+        unsafe_warning = (
+            f"{path} is not safe to load (owner mismatch or group/world-writable, "
+            f"mode {oct(mode)}); refusing to load it. Run 'chmod 600 {path}' and "
+            "check its ownership."
+        )
+        logger.warning(unsafe_warning)
+        _last_user_env_result = UserEnvResult(path=path, loaded=False, warning=unsafe_warning)
+        return _last_user_env_result
+
+    warning: str | None = None
+    if mode & 0o077:
+        warning = f"{path} is mode {oct(mode)} (group/world-readable); run 'chmod 600 {path}'."
+        logger.warning(warning)
+
+    from dotenv import dotenv_values
+
+    values = dotenv_values(path)
+    supplied: list[str] = []
+    skipped: list[str] = []
+    for key, value in values.items():
+        if key in os.environ:
+            skipped.append(key)
+            continue
+        if value is not None:
+            os.environ[key] = value
+        supplied.append(key)
+
+    _last_user_env_result = UserEnvResult(
+        path=path,
+        loaded=True,
+        supplied=tuple(supplied),
+        skipped=tuple(skipped),
+        warning=warning,
+    )
+    return _last_user_env_result
 
 
 def _narrow_allowlists(

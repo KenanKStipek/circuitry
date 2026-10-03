@@ -17,6 +17,14 @@ from circuitry import (
 )
 ```
 
+Unlike the `cof` CLI, the TUI, the MCP server, and the REST trigger service
+(`circuitry.service.RestTriggerService`) — which all load the private `.env`
+`cof setup` writes (`~/.config/circuitry/.env`) before anything else runs —
+this module never loads it automatically: an embedding program owns its own
+process environment, and is free to load whatever `.env` (or none) it
+chooses before calling in. Call `circuitry.cli.config.load_user_env()`
+yourself first if you want the same file.
+
 ### `run_orchestration`
 
 Primary embedded entrypoint for local orchestration files.

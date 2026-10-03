@@ -43,6 +43,7 @@ from .config import (
     CircuitryConfig,
     ConfigError,
     describe_config_sources,
+    load_user_env,
     resolve_config,
     trust_store_path,
 )
@@ -178,6 +179,10 @@ def _root(
     # Baseline WARNING on every invocation; a command with its own
     # --verbose/-v bumps this to INFO once its own options are parsed.
     configure_cli_logging()
+    # Before any config resolution, for every subcommand (and the bare/`tui`
+    # TUI launch below) — the file `cof setup` writes is otherwise never read
+    # by anything (#348).
+    load_user_env()
     if ctx.invoked_subcommand is not None:
         return
     from ..tui import run_tui, should_launch_tui
