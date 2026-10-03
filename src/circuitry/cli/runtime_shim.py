@@ -59,6 +59,7 @@ from .effective_settings import (
     orchestration_host_setting_warnings,
     resolve_effective_settings,
 )
+from .interrupts import SigTermInterrupt
 from .library_sources import LibraryRegistry
 from .live_state import LiveStateMirror
 from .orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
@@ -222,6 +223,10 @@ class RunResult:
     # same `ok=False` shape (state/out_path are still written the usual way,
     # so the run is resumable), but the CLI exits 130 for it instead of 1.
     interrupted: bool = False
+    # Set (alongside `interrupted`) when the interrupt was specifically a
+    # SIGTERM (#338) rather than Ctrl-C/SIGINT — same resumable shape, but
+    # the CLI exits 143 (128 + SIGTERM) instead of 130.
+    sigterm: bool = False
 
 
 def _now_iso() -> str:
@@ -1000,9 +1005,21 @@ def run(req: RunRequest) -> RunResult:
         # subclass, hence the explicit tuple): the same cleanup records
         # what finished, writes the usual failure snapshot/--out, and the
         # error below just says why, so an interrupted run is resumable
-        # the same way a crashed one is (#270 F6).
+        # the same way a crashed one is (#270 F6). A SIGTERM mid-run (#338)
+        # arrives here the same way, as `SigTermInterrupt` — a
+        # `KeyboardInterrupt` subclass the CLI's own `sigterm_as_interrupt`
+        # raises in place of the interpreter's default (process-killing,
+        # state-losing) SIGTERM handling — so `interrupted` still covers it,
+        # and `sigterm` lets the caller tell the two apart for the exit code.
         interrupted = isinstance(e, KeyboardInterrupt)
-        error_message = "Interrupted (Ctrl-C/SIGINT)" if interrupted else str(e)
+        sigterm = isinstance(e, SigTermInterrupt)
+        error_message = (
+            "Interrupted (SIGTERM)"
+            if sigterm
+            else "Interrupted (Ctrl-C/SIGINT)"
+            if interrupted
+            else str(e)
+        )
         try:
             # Pins resolved before the failure still describe what this run
             # reached for — keep them for the post-mortem.
@@ -1087,6 +1104,7 @@ def run(req: RunRequest) -> RunResult:
             error=error_message,
             out_path=resolved_out,
             interrupted=interrupted,
+            sigterm=sigterm,
         )
     finally:
         # The final flush, success or failure: everything recorded after the
