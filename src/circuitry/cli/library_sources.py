@@ -34,6 +34,7 @@ which bypasses precedence entirely. Bare names search sources in order.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -494,6 +495,66 @@ class LibraryRegistry:
     def find_entry(self, ref: str) -> Entry | None:
         resolution = self.resolve(ref)
         return resolution.entry if resolution is not None else None
+
+    def is_cache_path(self, path: Path) -> bool:
+        """Whether *path*, resolved (symlinks followed), lies inside some
+        refreshable source's cache directory — e.g. the local copy a
+        ``github`` source keeps its fetched subtree in.
+
+        Naming that path directly (instead of the source's name) is naming
+        the exact same fetched content: a ``folder``/``curation`` source is
+        already on the user's own disk or bundled with Circuitry, so only a
+        ``REFRESHABLE`` source's cache counts (#337).
+
+        Compares directory *identity* (``st_dev``/``st_ino``), not path
+        strings. ``Path.resolve()`` follows symlinks but does not fix letter
+        case or macOS firmlinks (``/System/Volumes/Data/...``), so a string
+        comparison would let a case-altered or firmlinked path to the exact
+        same cache directory skip the gate on a case-insensitive filesystem
+        (macOS's default).
+        """
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return False
+
+        ancestor_stats: list[os.stat_result] = []
+        for candidate in (resolved, *resolved.parents):
+            try:
+                ancestor_stats.append(candidate.stat())
+            except OSError:
+                continue
+        if not ancestor_stats:
+            return False
+
+        candidate_dirs: list[Path] = []
+        for source in self.sources:
+            if not getattr(source, "REFRESHABLE", False):
+                continue
+            cache_dir = getattr(source, "cache_dir", None)
+            if cache_dir is not None:
+                candidate_dirs.append(Path(cache_dir))
+
+        # Independent of which sources this run's resolved config happens to
+        # list: a one-off `-c` config, a project config the caller's working
+        # directory doesn't pick up, or a `github` source since removed from
+        # config must not un-gate a file it already fetched. Every `github`
+        # source shares one cache root.
+        from .github_source import default_cache_root
+
+        candidate_dirs.append(default_cache_root())
+
+        for cache_dir in candidate_dirs:
+            try:
+                cache_stat = cache_dir.resolve().stat()
+            except OSError:
+                continue
+            if any(
+                (st.st_dev, st.st_ino) == (cache_stat.st_dev, cache_stat.st_ino)
+                for st in ancestor_stats
+            ):
+                return True
+        return False
 
     def notices(self, *, source: str | None = None) -> list[str]:
         """User-facing hints from sources that cannot serve entries yet."""

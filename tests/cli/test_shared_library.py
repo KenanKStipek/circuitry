@@ -209,9 +209,66 @@ def test_run_library_stashes_for_last_with_no_trust(
     stash = json.loads((fake_home / "last-run.json").read_text(encoding="utf-8"))
     assert stash["orchestration"] == str(lib_root / "welcome" / "1.0.0.yml")
     assert stash["trust_document"] is False
+    # #337: a replay via `cof run --last` must apply the same whole-document
+    # capability gate the original `run-library` invocation did.
+    assert stash["remote_library_source"] is True
 
     second = runner.invoke(app, ["run", "--last"])
     assert second.exit_code == 0, second.output
+
+
+def test_run_library_replay_via_last_carries_the_capability_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#337: replaying a `cof run-library` stash with `cof run --last` must
+    go through the same whole-document capability gate the original run
+    applied, not skip it — the hole this closes: before `run-library`'s own
+    stash carried `remote_library_source`, a replay ran a shell-using
+    fetched asset with no consent at all.
+    """
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(app_module, "GLOBAL_CONFIG_DIR", fake_home)
+    monkeypatch.setattr(app_module, "_LAST_RUN_PATH", fake_home / "last-run.json")
+    lib_root = tmp_path / "library"
+    config_path = tmp_path / "config.json"
+    _write(
+        lib_root / "welcome" / "1.0.0.yml",
+        (
+            "effects:\n"
+            "  - type: tool\n"
+            "    name: t\n"
+            "    provider: shell\n"
+            "    params:\n"
+            "      command: echo\n"
+            "      args: [hi]\n"
+        ),
+    )
+    _write(lib_root / "welcome" / "1.0.0.json", json.dumps({"title": "welcome-1.0.0"}) + "\n")
+    _write_config(config_path, lib_root)
+
+    first = runner.invoke(
+        app,
+        [
+            "run-library", "welcome", "--version", "1.0.0",
+            "--config", str(config_path), "--dry-run",
+            "--allow-capabilities", "shell",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+    stash = json.loads((fake_home / "last-run.json").read_text(encoding="utf-8"))
+    assert stash["remote_library_source"] is True
+    # The one-time `--allow-capabilities` grant is never persisted — the
+    # replay below must refuse rather than silently reuse it.
+    assert "allow_capabilities" not in stash
+
+    replayed = runner.invoke(app, ["run", "--last", "--json"])
+
+    assert replayed.exit_code == 1
+    payload = json.loads(replayed.stdout)
+    assert payload["ok"] is False
+    assert "shell" in payload["error"]
+    assert "cof trust" in payload["error"]
 
 
 def test_run_library_service_profile_reapplied_on_last_replay(
