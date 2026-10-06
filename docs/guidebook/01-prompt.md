@@ -43,7 +43,7 @@ prime.kind.meta     # adapter, model, model_reason, prompt_type, prompt_sent,
 
 ## Templates and messages
 
-`template` is a [Mustache](https://mustache.github.io/) string. Anything in double braces is looked up in the shadow state: `{{input.issue}}` reads a caller-supplied value, `{{prime.kind.value}}` reads an earlier effect's output. Triple-stache `{{{…}}}` skips HTML escaping, which matters when you interpolate code or markup. [Shadow state](03-state.md) covers the full addressing rules; the short version is that every reference starts with `input.`, `prime.`, or `runtime.`.
+`template` is a [Mustache](https://mustache.github.io/) string. Anything in double braces is looked up in the shadow state: `{{input.issue}}` reads a caller-supplied value, `{{prime.kind.value}}` reads an earlier effect's output. Triple-stache `{{{…}}}` skips HTML escaping, which matters when you interpolate code or markup. [Shadow state](03-state.md) covers the full addressing rules; the short version is that every reference starts with `input.`, `prime.`, or `runtime.`. Partials (`{{> name}}`) are not supported — a template is rendered with Mustache's defaults, so one would read `name.mustache` from the process's working directory rather than anything the orchestration declares; `cof check` rejects the tag, and one that only appears at run time (a generated plan, a `use: inline` child) fails the render instead of touching the file system.
 
 `messages` is the role-based alternative for models that expect a conversation:
 
