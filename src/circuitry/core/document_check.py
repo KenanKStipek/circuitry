@@ -31,7 +31,6 @@ from typing import Any
 from .interface_inputs import _TYPE_NAMES, _matches_type
 
 __all__ = [
-    "cache_field_errors",
     "group_field_errors",
     "interface_default_type_errors",
     "interface_unknown_type_errors",
@@ -247,44 +246,6 @@ def group_field_errors(orch: Any) -> list[str]:
     return errors
 
 
-def cache_field_errors(orch: Any) -> list[str]:
-    """``cache:`` set on anything but a tool/prompt effect — a container
-    (dynamic/loop/if/reflector) or a ``use`` effect never dispatches itself
-    the way a leaf effect does, so there is no single rendered call for a
-    cache key to describe (#270).
-    """
-    errors: list[str] = []
-    if not isinstance(orch, Mapping):
-        return errors
-
-    def walk(effects: Any, path: str) -> None:
-        if not isinstance(effects, Sequence) or isinstance(effects, (str, bytes)):
-            return
-        for index, effect in enumerate(effects):
-            if not isinstance(effect, Mapping):
-                continue
-            here = f"{path}[{index}]"
-            raw_type = effect.get("type")
-            effect_type = raw_type.strip().lower() if isinstance(raw_type, str) else ""
-            if (
-                "cache" in effect
-                and effect_type in _EFFECT_DEFS
-                and effect_type not in _LEAF_EFFECT_TYPES
-            ):
-                errors.append(
-                    f"{here}: 'cache' is only allowed on tool/prompt effects "
-                    "(it keys a cached result on that effect's own rendered "
-                    f"call) — found on a '{effect_type}' effect."
-                )
-            for child_key in _CHILD_KEYS:
-                walk(effect.get(child_key), f"{here}.{child_key}")
-
-    effects = orch.get("effects")
-    walk(effects if effects is not None else orch.get("steps"), "effects")
-    walk(orch.get("finally"), "finally")
-    return errors
-
-
 def _unquote_hint(value: str, declared_type: str) -> str:
     """A hint if *value*, unquoted, would itself satisfy *declared_type*.
 
@@ -383,7 +344,6 @@ def structural_errors(orch: Any) -> list[str]:
         *unknown_key_errors(orch),
         *schema_errors(orch),
         *group_field_errors(orch),
-        *cache_field_errors(orch),
         *interface_unknown_type_errors(orch),
         *interface_default_type_errors(orch),
     ]

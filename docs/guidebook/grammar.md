@@ -65,15 +65,12 @@ Prompt ::= { type: 'prompt', name: NAME,
              params?: MAP, inputs?: MAP,                — inputs: prompt-local template vars
              assets?: Asset*, retries?: Retry,
              timeout_ms?: INT, deterministic?: BOOL,
-             cache?: Cache,                              — leaf only; see Tool below
              group?: STRING,                             — names a runtime.concurrency_groups key; leaf only
              on_error?: OnError, description?: STRING }
 
 Message ::= { role: 'system'|'user'|'assistant'|'tool', content: STRING }
 Asset   ::= { kind: STRING, ref: STRING }
 Retry   ::= { max_attempts?: INT≥1, backoff_ms?: INT }
-Cache   ::= BOOL                                         — true: cache with no ttl/salt; false/absent: not cached
-          | { ttl?: STRING|NUMBER, key?: STRING }        — ttl: '7d'|'12h'|'30m'|'45s' or seconds; key: extra salt
 ```
 
 ### Dynamic — named container → `prime.<name>.<child>.value`
@@ -135,7 +132,6 @@ Tool ::= { type: 'tool', name: NAME, provider: PLUGIN_NAME,
            prompt?: TEMPLATE, model?: STRING,
            params?: MAP,                                 — string values Mustache-rendered; wins over prompt/model
            params_json?: TEMPLATE,                       — renders to a JSON object; deep-merged over params
-           cache?: Cache,                                — keyed by provider + fully rendered params; leaf only
            group?: STRING,                               — names a runtime.concurrency_groups key; leaf only
            timeout_ms?: INT, retries?: Retry, expect?: Expect,
            on_error?: OnError, description?: STRING }

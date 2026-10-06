@@ -22,8 +22,6 @@ Everything the world reaches Circuitry through. One runtime sits under all of th
 | `cof wizard --goal "…"` | Build one by conversation — clarifying questions, then a validated draft — via `agents/wizard`. |
 | `cof library refresh <source>` | Fetch a remote library source into the local cache. The only library command that touches the network. |
 | `cof fetch` / `cof run-library` | Retrieve and run a shared-library asset by id and version. `cof run-library` (and a `use: ref:` child of any document) asks before a first run whose tool effects shell out, evaluate Python, write/delete a file, or reach the network — `--allow-capabilities` for a scripted/CI run. See [Capability consent](04-configuration.md#capability-consent-for-a-fetched-or-referenced-document). |
-| `cof cache clear` | Delete every entry in the private per-step `cache:` store. |
-| `cof cache stats` | Entry count and total size of the `cache:` store. |
 | `cof mcp` | Run the MCP server on stdio (also `circuitry-mcp`). |
 | `cof tui` | Launch the terminal UI (needs the `tui` extra). |
 | `cof version` | Also `cof --version`, at the root command. |

@@ -36,7 +36,6 @@ from ..core.runtime_plugins import (
 )
 from ..core.saved_state import compact_last_aliases, link_last_refs
 from ..core.state_ns import migrate_legacy_state
-from ..core.step_cache import NO_CACHE_RUNTIME_CONFIG_KEY
 from ..core.store import Store, build_persistence_backend
 from ..core.store.persistence import PersistenceBackend
 from ..plugins.factory import build_plugin
@@ -204,10 +203,6 @@ class RunRequest:
     # for a bare run-id resume (no single file the state came from) or any
     # non-resumed run.
     resume_default_out: Path | None = None
-    # `cof run --no-cache`: neither reads nor writes the per-step `cache:`
-    # store for this run — every prompt/tool effect with `cache:` set
-    # dispatches as if it had none (#270).
-    no_cache: bool = False
 
 
 @dataclass(frozen=True)
@@ -545,7 +540,6 @@ def run(req: RunRequest) -> RunResult:
         # pins to it as they resolve, at any nesting depth.
         runtime_config = effective.runtime if effective.runtime is not None else {}
         runtime_config[_CONCURRENCY_LIMITER_KEY] = concurrency_limiter
-        runtime_config[NO_CACHE_RUNTIME_CONFIG_KEY] = req.no_cache
         # Root directory a `path:`-resolving `use` effect falls back to when
         # its target isn't absolute or cwd-relative — see `UseRuntime`, which
         # rewrites this per-child as composition descends into subdirectories.

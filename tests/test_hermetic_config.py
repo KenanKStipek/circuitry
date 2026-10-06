@@ -104,24 +104,24 @@ def test_real_config_discovery_marker_skips_the_autouse_patch() -> None:
 
 
 @pytest.mark.real_config_discovery
-def test_real_config_discovery_marker_still_isolates_the_step_cache(
+def test_real_config_discovery_marker_still_isolates_the_library_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Unlike the global-config tier above, ``CIRCUITRY_CACHE_DIR`` isolation
     is set ahead of the ``real_config_discovery`` early return in
     ``tests/conftest.py`` — a test opting out of config-discovery isolation
-    must never read or write the developer's real ``~/.cache/circuitry/steps``
-    (#270 review finding 8)."""
+    must never read or write the developer's real
+    ``~/.cache/circuitry/library`` (#270 review finding 8)."""
     import os
 
-    from circuitry.core.step_cache import cache_dir
+    from circuitry.cli.github_source import default_cache_root
 
     real_home = Path.home()
-    real_steps_dir = real_home / ".cache" / "circuitry" / "steps"
+    real_library_dir = real_home / ".cache" / "circuitry" / "library"
     monkeypatch.setattr(Path, "home", lambda: real_home)
 
     assert os.environ.get("CIRCUITRY_CACHE_DIR")
-    assert cache_dir() != real_steps_dir
+    assert default_cache_root() != real_library_dir
 
 
 @pytest.mark.real_config_discovery

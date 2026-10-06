@@ -119,13 +119,11 @@ def _hermetic_global_config(
     load the developer's real private ``.env`` into this pytest process's
     environment (#349 review finding 1).
     """
-    # Same isolation for the `cache:` step cache (#270): ahead of the
-    # `real_config_discovery` early return below, so a test marked with it
-    # still never reads or writes the developer's real
-    # ~/.cache/circuitry/steps, and two unrelated tests whose rendered
-    # prompt/params happen to hash the same way can't see each other's
-    # cached result across runs in the same pytest process.
-    monkeypatch.setenv("CIRCUITRY_CACHE_DIR", str(tmp_path / "hermetic-global-config" / "step-cache"))
+    # Same isolation for the library source cache (`cof library refresh`):
+    # ahead of the `real_config_discovery` early return below, so a test
+    # marked with it still never reads or writes the developer's real
+    # ~/.cache/circuitry/library.
+    monkeypatch.setenv("CIRCUITRY_CACHE_DIR", str(tmp_path / "hermetic-global-config" / "library-cache"))
 
     from circuitry.cli import app as app_module
     from circuitry.cli import config as config_module
