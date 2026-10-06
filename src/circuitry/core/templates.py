@@ -29,8 +29,8 @@ def _describe(exc: Exception) -> str:
     return " ".join(str(exc).split()) or type(exc).__name__
 
 
-def _tokenize_rejecting_partials(template: str) -> list[tuple[str, str]]:
-    """Tokenize *template*, raising :class:`ChevronError` on a partial tag.
+def _reject_partials(template: str) -> None:
+    """Raise :class:`ChevronError` if *template* contains a partial tag.
 
     Checked with chevron's own tokenizer (token type ``"partial"``), not a
     regex, so ``{{{ }}}`` and ``{{& }}`` (both tokenize as ``"no escape"``)
@@ -39,17 +39,15 @@ def _tokenize_rejecting_partials(template: str) -> list[tuple[str, str]]:
     name}}`` would read ``name.mustache`` from the process's working
     directory.
     """
-    tokens = list(chevron.tokenizer.tokenize(template))
-    for token_type, value in tokens:
+    for token_type, value in chevron.tokenizer.tokenize(template):
         if token_type == "partial":
             raise ChevronError(f"partials are not supported: {{{{> {value}}}}}")
-    return tokens
 
 
 def template_syntax_error(template: str) -> str | None:
     """Why *template* is not valid Mustache, or ``None`` when it parses."""
     try:
-        _tokenize_rejecting_partials(template)
+        _reject_partials(template)
     except Exception as exc:  # chevron raises ChevronError, and IndexError on '{{}}'
         return _describe(exc)
     return None
@@ -68,7 +66,7 @@ def render_template(template: str, ctx: Any, *, label: str = "template") -> str:
     future chevron version still can't reach the file system.
     """
     try:
-        _tokenize_rejecting_partials(template)
+        _reject_partials(template)
         return str(
             chevron.render(template, ctx, partials_dict={}, partials_path=None)
         )

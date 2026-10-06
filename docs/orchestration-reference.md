@@ -1292,7 +1292,7 @@ Templates use Mustache syntax (`{{...}}`). Two kinds of references:
 - Never use a bare `{{<name>}}` for caller-supplied input — always include the `input.` prefix; a bare reference matching a declared `interface.inputs` name is a hard error from `cof check`
 - Nested effects always include their parent dynamic name in the path
 - A malformed tag (`{{input.topic}`, a section closed under the wrong name) is an error from `cof check` and `cof run`, never text sent on as written
-- **Partials (`{{> name}}`) are not supported.** A template is rendered with Mustache's defaults, so a partial would read `name.mustache` from the process's working directory — not from the orchestration's own directory, and not from any declared input. `cof check` rejects any `{{> name}}` tag as a malformed template, naming the field and the tag; one reaching a run anyway (a generated reflector/decompose plan, a `use: inline` child) fails the same way at render time, under the effect's `on_error`, without touching the file system.
+- **Circuitry does not support partials.** A `{{> name}}` tag is an error: `cof check` reports it, naming the field and the tag, and at run time the render fails without reading any file — one reaching a run anyway (a generated reflector/decompose plan, a `use: inline` child) fails the same way under the effect's `on_error`. (chevron, the renderer Circuitry uses, would otherwise read `name.mustache` from the working directory — not from the orchestration's own directory, and not from any declared input.)
 
 ### CEL Expressions
 
