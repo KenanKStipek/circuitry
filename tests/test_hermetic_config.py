@@ -111,7 +111,7 @@ def test_real_config_discovery_marker_still_isolates_the_library_cache(
     is set ahead of the ``real_config_discovery`` early return in
     ``tests/conftest.py`` — a test opting out of config-discovery isolation
     must never read or write the developer's real
-    ``~/.cache/circuitry/library`` (#270 review finding 8)."""
+    ``~/.cache/circuitry/library``."""
     import os
 
     from circuitry.cli.github_source import default_cache_root
