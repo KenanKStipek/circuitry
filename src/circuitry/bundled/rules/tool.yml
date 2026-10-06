@@ -33,12 +33,6 @@ fields:
   on_error:
     enum: [fail, skip, continue]
     default: fail
-  cache:
-    type: "boolean or object"
-    properties:
-      ttl: "string ('7d', '12h', '30m', '45s') or number of seconds"
-      key: "string, extra salt"
-    note: "Opt-in result cache: true, or {ttl, key}. Keyed by the provider and the fully rendered params (after {from: ...} resolution). A hit skips dispatch entirely — including a tool's own side effect, e.g. a file it would write is not recreated. Only a result that passed expect: (or had none) is ever stored. cof check rejects cache: on anything but a prompt/tool effect. Usually omitted."
   group:
     type: string
     note: "Named concurrency-group slot (runtime.concurrency_groups.<name>) this effect waits for a free slot in before dispatching, on top of runtime.max_concurrency's run-wide cap. Must name a group runtime.concurrency_groups defines, or cof check rejects it. Usually omitted."

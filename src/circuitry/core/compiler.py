@@ -25,7 +25,6 @@ from .state_ns import (
     validate_each_in_path,
     validate_reference_path,
 )
-from .step_cache import CacheDef, parse_ttl
 from .templates import template_syntax_error
 from .tool import _SECURITY_SENSITIVE_PARAM_KEYS, ToolDefinition, param_reference
 from .use import UseDefinition, reference_path
@@ -198,42 +197,6 @@ def _compile_expect(
     raise ValueError(
         f"{effect_type} effect at '{effect_path}': 'expect' must be a CEL string "
         "or a mapping with 'mode'."
-    )
-
-
-def _compile_cache(
-    effect: dict[str, Any], *, effect_type: str, effect_path: str
-) -> CacheDef | None:
-    """``cache:`` on a ``prompt``/``tool`` effect (#270).
-
-    ``true`` normalizes to a bare :class:`CacheDef` (no ttl, no salt);
-    ``false``/absent means not cached. A mapping takes ``ttl`` (a duration
-    string or a positive number of seconds) and/or ``key`` (an extra salt
-    folded into the cache key — see the module docstring of
-    ``core.step_cache``). Elsewhere in the document — a container, ``use``
-    — this key never reaches here; see ``document_check.cache_field_errors``
-    for why ``cof check`` rejects it there instead of silently ignoring it.
-    """
-    raw = effect.get("cache")
-    if raw is None or raw is False:
-        return None
-    if raw is True:
-        return CacheDef()
-    if isinstance(raw, dict):
-        ttl_seconds: float | None = None
-        if "ttl" in raw:
-            ttl_seconds = parse_ttl(
-                raw["ttl"], label=f"{effect_type} effect at '{effect_path}'.cache.ttl"
-            )
-        key_salt = raw.get("key")
-        if key_salt is not None and not isinstance(key_salt, str):
-            raise ValueError(
-                f"{effect_type} effect at '{effect_path}': 'cache.key' must be a string."
-            )
-        return CacheDef(ttl_seconds=ttl_seconds, key_salt=key_salt)
-    raise ValueError(
-        f"{effect_type} effect at '{effect_path}': 'cache' must be true/false or a "
-        "mapping with 'ttl'/'key'."
     )
 
 
@@ -1183,7 +1146,6 @@ def _compile_tool(
     expect = _compile_expect(
         effect, effect_type="tool", effect_path=effect_path, loop_names=loop_names
     )
-    cache = _compile_cache(effect, effect_type="tool", effect_path=effect_path)
     group_raw = effect.get("group")
     group = group_raw.strip() if isinstance(group_raw, str) and group_raw.strip() else None
 
@@ -1200,7 +1162,6 @@ def _compile_tool(
         description=description,
         retries=retries,
         expect=expect,
-        cache=cache,
         group=group,
     )
 
@@ -1445,8 +1406,6 @@ def _compile_prompt(effect: dict[str, Any], *, effect_path: str) -> PromptDefini
     if description is not None and not isinstance(description, str):
         description = None
 
-    cache = _compile_cache(effect, effect_type="prompt", effect_path=effect_path)
-
     group_raw = effect.get("group")
     group = group_raw.strip() if isinstance(group_raw, str) and group_raw.strip() else None
 
@@ -1467,6 +1426,5 @@ def _compile_prompt(effect: dict[str, Any], *, effect_path: str) -> PromptDefini
         retries=retries,
         on_error=on_error,
         description=description,
-        cache=cache,
         group=group,
     )

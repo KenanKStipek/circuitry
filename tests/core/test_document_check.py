@@ -77,6 +77,23 @@ def test_unrelated_unknown_key_is_a_warning_not_an_error(tmp_path: Path) -> None
     )
 
 
+def test_leftover_cache_key_is_an_ordinary_unknown_key_warning() -> None:
+    """The step cache (#336) is gone (#352); a document that still has
+    `cache:` on a prompt/tool effect gets the ordinary unknown-key warning,
+    not an error — it does not resemble any key either effect type knows."""
+    orch = {"effects": [{**_TOOL, "cache": True}]}
+    assert unknown_key_errors(orch) == []
+    warnings = unknown_key_warnings(orch)
+    assert len(warnings) == 1
+    assert "unknown key 'cache' on a 'tool' effect is ignored" in warnings[0]
+
+    prompt = {"type": "prompt", "name": "p", "template": "hi", "cache": {"ttl": "7d"}}
+    assert unknown_key_errors({"effects": [prompt]}) == []
+    warnings = unknown_key_warnings({"effects": [prompt]})
+    assert len(warnings) == 1
+    assert "unknown key 'cache' on a 'prompt' effect is ignored" in warnings[0]
+
+
 def test_unknown_keys_in_nested_effects_are_found() -> None:
     orch = {
         "effects": [

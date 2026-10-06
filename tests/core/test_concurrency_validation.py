@@ -116,6 +116,24 @@ def test_group_field_errors_walks_into_nested_containers() -> None:
     assert "effects[0].effects[0]" in errors[0]
 
 
+def test_group_field_errors_walks_root_finally() -> None:
+    orch = {
+        "effects": [{"type": "prompt", "name": "p", "template": "hi"}],
+        "finally": [
+            {
+                "type": "dynamic",
+                "name": "cleanup",
+                "group": "g",
+                "effects": [{"type": "prompt", "name": "p2", "template": "hi"}],
+            }
+        ],
+    }
+    errors = group_field_errors(orch)
+    assert len(errors) == 1
+    assert "finally[0]" in errors[0]
+    assert errors[0] in structural_errors(orch)
+
+
 # ── collect_effect_groups / unknown_concurrency_group_errors ───────────────
 
 

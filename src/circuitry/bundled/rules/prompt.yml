@@ -60,12 +60,6 @@ fields:
   on_error:
     enum: [fail, skip, continue]
     default: fail
-  cache:
-    type: "boolean or object"
-    properties:
-      ttl: "string ('7d', '12h', '30m', '45s') or number of seconds"
-      key: "string, extra salt"
-    note: "Opt-in result cache: true, or {ttl, key}. Keyed by the rendered prompt/messages, model/provider, and generation params. A hit skips dispatch entirely (no tokens); only a successfully decoded/validated reply is ever stored. cof check rejects cache: on anything but a prompt/tool effect. Usually omitted."
   group:
     type: string
     note: "Named concurrency-group slot (runtime.concurrency_groups.<name>) this call waits for a free slot in before dispatching, on top of runtime.max_concurrency's run-wide cap. Must name a group runtime.concurrency_groups defines, or cof check rejects it. Usually omitted."
