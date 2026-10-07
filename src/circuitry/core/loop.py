@@ -16,6 +16,7 @@ from ..output import live_region as _live_region
 from .answers import parse_boolean_answer
 from .cancellation import get_token, submit_with_context
 from .disabled import is_disabled_node, is_enabled
+from .effect_identity import nested_container
 from .scope import local_writes as _local_writes_state
 from .scope import scope_ctx as _scope_ctx
 from .store import Store
@@ -578,20 +579,27 @@ class LoopRuntime:
                         with ThreadPoolExecutor(
                             max_workers=self.defn.max_concurrency
                         ) as executor:
-                            future_to_idx = {
-                                submit_with_context(
-                                    executor,
-                                    self._execute_body,
-                                    store=isolated_stores[idx],
-                                    ctx=iter_ctx,
-                                    iteration=idx,
-                                    baseline=baseline,
-                                    parallel=True,
-                                    tracker=tree_tracker,
-                                    iter_label=f"[{idx}]",
-                                ): idx
-                                for idx, iter_ctx in iter_ctxs
-                            }
+                            # Each branch's own ``isolated_stores[idx]`` resets
+                            # its path prefix (Store.parallel_branches), so a
+                            # model call inside it would otherwise lose this
+                            # loop's own absolute path — pushed here, before
+                            # ``submit_with_context`` copies the submitting
+                            # thread's contextvars into the worker (#362).
+                            with nested_container(store, self.defn.name):
+                                future_to_idx = {
+                                    submit_with_context(
+                                        executor,
+                                        self._execute_body,
+                                        store=isolated_stores[idx],
+                                        ctx=iter_ctx,
+                                        iteration=idx,
+                                        baseline=baseline,
+                                        parallel=True,
+                                        tracker=tree_tracker,
+                                        iter_label=f"[{idx}]",
+                                    ): idx
+                                    for idx, iter_ctx in iter_ctxs
+                                }
                             try:
                                 _tree_done = 0
                                 for future in as_completed(future_to_idx):
