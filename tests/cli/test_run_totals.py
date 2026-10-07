@@ -66,7 +66,7 @@ def test_totals_sum_tokens_and_count_effects(tmp_path: Path) -> None:
     assert totals["effects_run"] == 3  # prime (the root dynamic) + 2 prompts
     assert isinstance(totals["wall_time_s"], float)
     assert totals["wall_time_s"] >= 0.0
-    assert totals["cost_usd"] is None  # no adapter reports cost yet
+    assert totals["cost_usd"] is None  # this adapter reports no cost
 
 
 def test_totals_prefer_per_attempt_total_token_fields(tmp_path: Path) -> None:
