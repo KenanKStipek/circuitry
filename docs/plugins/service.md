@@ -69,7 +69,9 @@ What `start` does, in order:
    within `ready_timeout_ms`, `start` fails too. Either way the process
    group it started is stopped again and the record removed. If the run is
    cancelled (Ctrl-C, SIGTERM) during the wait, the group is stopped before
-   the cancellation goes on.
+   the cancellation goes on. This cleanup only stops the group this `start`
+   started: if another run stopped and restarted the service meanwhile, the
+   new one is left alone.
 
 `value`: `{name, running, ready, already_running, pgid, ports, log,
 started_at}`. A failed start returns `ok: false` (so `on_error` applies)
@@ -116,7 +118,9 @@ plugin started:
   is dropped.
 - **The leader is gone but its process group still has members** — still
   ours: a pid cannot be reused while a process group with that id exists.
-- **The group is gone** — the record is stale and dropped.
+- **The group is gone** — the record is stale and dropped. A group whose
+  only members are zombies (exited, but not yet reaped by the run that
+  started them, which may still be running) counts as gone.
 
 A stale record is dropped silently by `start`, `stop` and `status` alike.
 
@@ -132,7 +136,9 @@ default `~/.config/circuitry/services` (beside the global config):
 A service outlives the run on purpose — a later run can use it, or stop it.
 To stop it when the run ends, win or lose, put the `stop` in a
 [`finally:`](../guidebook/05-errors.md#finally--cleanup-that-always-runs)
-block. `finally:` runs on success, on failure and on Ctrl-C/SIGTERM:
+block. `finally:` runs on success, on failure and on Ctrl-C/SIGTERM. A
+second Ctrl-C while `finally:` runs exits at once: the service then keeps
+running with its record, and a later `stop` still finds it.
 
 ```yaml
 - type: dynamic
@@ -164,6 +170,11 @@ block. `finally:` runs on success, on failure and on Ctrl-C/SIGTERM:
 and an `http(s)` readiness check reaches a URL): a fetched or referenced
 document asks before using it (see the capability-consent table in the
 [orchestration reference](../orchestration-reference.md#tool)).
+
+`service` runs any command it is given — an argv list, or a `/bin/sh -c`
+string with `shell: true`. The host pin `runtime.plugins.shell.allowed_commands`
+applies to the `shell` plugin only, not to `service`: where that pin is
+what you rely on, leave `service` out of the `enabled_tools` allowlist.
 
 POSIX only (macOS, Linux). The leader's start time comes from
 `/proc/<pid>/stat` on Linux and `ps -o lstart=` elsewhere; the boot time
