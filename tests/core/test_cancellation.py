@@ -23,6 +23,7 @@ from circuitry.core.cancellation import (
     CancellationToken,
     RunCancelledBySignal,
     kill_process_group,
+    kill_tracked_process,
     submit_with_context,
 )
 
@@ -42,6 +43,23 @@ class _FakeTrackedProc:
     def kill(self) -> None:
         self.killed = True
         self._exited = True
+
+
+class _FakeMpProcess:
+    """Stands in for a `multiprocessing.Process` tracked by
+    `CancellationToken.track_process` (#357 follow-up) — just enough of
+    the interface `kill_tracked_process`/`track_process` touch."""
+
+    def __init__(self) -> None:
+        self._alive = True
+        self.killed = False
+
+    def is_alive(self) -> bool:
+        return self._alive
+
+    def kill(self) -> None:
+        self.killed = True
+        self._alive = False
 
 
 @pytest.fixture
@@ -214,3 +232,55 @@ def test_track_does_not_kill_inside_cleanup_even_if_already_cancelled(
             pass
 
     assert killed == []
+
+
+def test_kill_tracked_process_kills_by_pid_only() -> None:
+    """#357 follow-up: `python_eval`'s sandboxed child shares cof's own
+    process group (it is never started with `start_new_session`), so
+    unlike `kill_process_group` there is no group-vs-pid branch at all —
+    `kill_tracked_process` must always just call `proc.kill()`."""
+    proc = _FakeMpProcess()
+    kill_tracked_process(proc)  # type: ignore[arg-type]
+    assert proc.killed is True
+
+
+def test_kill_tracked_process_is_a_no_op_once_already_exited() -> None:
+    proc = _FakeMpProcess()
+    proc.kill()
+    assert proc.killed is True
+    proc.killed = False  # reset the flag to prove a second kill() isn't called
+    kill_tracked_process(proc)  # type: ignore[arg-type]
+    assert proc.killed is False
+
+
+def test_track_process_kills_a_process_added_after_cancellation_was_already_requested() -> None:
+    """Mirrors `test_track_kills_a_process_added_after_cancellation_was_
+    already_requested` for `track_process`/multiprocessing children."""
+    token = CancellationToken()
+    token.request()
+    proc = _FakeMpProcess()
+
+    with token.track_process(proc):  # type: ignore[arg-type]
+        pass
+
+    assert proc.killed is True
+
+
+def test_track_process_does_not_kill_inside_cleanup_even_if_already_cancelled() -> None:
+    token = CancellationToken()
+    token.request()
+    proc = _FakeMpProcess()
+
+    with token.cleanup():
+        with token.track_process(proc):  # type: ignore[arg-type]
+            pass
+
+    assert proc.killed is False
+
+
+def test_request_kills_every_tracked_mp_process() -> None:
+    token = CancellationToken()
+    proc = _FakeMpProcess()
+    with token.track_process(proc):  # type: ignore[arg-type]
+        token.request()
+        assert proc.killed is True

@@ -51,9 +51,17 @@ but fail at runtime with ``ImportError`` because ``__import__`` isn't in
 the sandboxed builtins.
 
 The compile + eval/exec step runs in a forked child process so the
-effect's ``timeout_ms`` budget can be enforced from outside: a tight
-``while True: pass`` loop (or anything else that never returns control)
-is killed on overrun instead of hanging the run forever. The parent and
+effect's ``timeout_ms`` budget can be enforced from outside, and so a
+cancelled run (Ctrl-C/SIGTERM/SIGHUP, #357 follow-up) kills it at once
+instead of waiting out that same budget: the parent registers the child
+with ``core.cancellation.get_token().track_process`` for exactly as long
+as it is blocked waiting on the result, so ``request()`` (called from the
+signal handler, on whichever thread actually holds the cancellation
+token — a tree-flow branch running this on a worker thread never sees a
+signal directly) can kill it from there, by pid only, never its process
+group (it shares cof's own). A tight ``while True: pass`` loop (or
+anything else that never returns control) is killed on overrun instead
+of hanging the run forever either way. The parent and
 child talk over an explicit ``Pipe`` (not a ``SimpleQueue``): the parent
 closes its copy of the write end right after starting the child, and
 reads with a ``poll()``/``recv()`` deadline *before* joining. Both parts
@@ -90,6 +98,7 @@ import operator
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from ..core.cancellation import get_token
 from ..preflight import CheckResult
 from .base import ToolResult
 
@@ -413,31 +422,41 @@ class PythonEvalPlugin:
         # the child dies without ever sending a result.
         write_conn.close()
 
-        # Poll-then-recv, not join()-then-recv: draining the pipe while the
-        # child is still writing is what lets a result bigger than the OS
-        # pipe buffer (tens of KiB) get through instead of deadlocking the
-        # child's write for the whole budget.
-        if not read_conn.poll(wall_seconds):
-            read_conn.close()
-            proc.terminate()
-            proc.join(2)
-            if proc.is_alive():
-                proc.kill()
-                proc.join()
-            raise RuntimeError(f"python_eval: exceeded timeout of {wall_seconds}s")
+        # Registered only for the stretch where the parent is actually
+        # blocked waiting on it -- a cancelled run's signal handler
+        # (whichever thread holds the token; this call itself may be on a
+        # tree-flow branch's own worker thread, which a signal never
+        # reaches directly) kills this process the moment cancellation is
+        # requested rather than waiting out `wall_seconds` (#357 follow-up).
+        # Killing the child closes its copy of `write_conn`, which is what
+        # unblocks `poll()`/`recv()` below -- the existing timeout/EOF
+        # handling after it covers the rest.
+        with get_token().track_process(proc):
+            # Poll-then-recv, not join()-then-recv: draining the pipe while
+            # the child is still writing is what lets a result bigger than
+            # the OS pipe buffer (tens of KiB) get through instead of
+            # deadlocking the child's write for the whole budget.
+            if not read_conn.poll(wall_seconds):
+                read_conn.close()
+                proc.terminate()
+                proc.join(2)
+                if proc.is_alive():
+                    proc.kill()
+                    proc.join()
+                raise RuntimeError(f"python_eval: exceeded timeout of {wall_seconds}s")
 
-        try:
-            status, payload = read_conn.recv()
-        except EOFError as exc:
-            read_conn.close()
-            proc.join(2)
-            if proc.is_alive():
-                proc.kill()
-                proc.join()
-            raise RuntimeError(
-                "python_eval: sandboxed process exited unexpectedly "
-                f"(exit code {proc.exitcode})."
-            ) from exc
+            try:
+                status, payload = read_conn.recv()
+            except EOFError as exc:
+                read_conn.close()
+                proc.join(2)
+                if proc.is_alive():
+                    proc.kill()
+                    proc.join()
+                raise RuntimeError(
+                    "python_eval: sandboxed process exited unexpectedly "
+                    f"(exit code {proc.exitcode})."
+                ) from exc
 
         read_conn.close()
         # Bounded, not unbounded: a live callable passed in via `inputs`

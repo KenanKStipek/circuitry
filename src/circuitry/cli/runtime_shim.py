@@ -60,7 +60,7 @@ from .effective_settings import (
     orchestration_host_setting_warnings,
     resolve_effective_settings,
 )
-from .interrupts import SigTermInterrupt
+from .interrupts import SigHupInterrupt, SigTermInterrupt
 from .library_sources import LibraryRegistry, LibrarySourceError
 from .live_state import LiveStateMirror
 from .orchestration_loader import ORCHESTRATION_SUFFIXES, load_orchestration_file
@@ -73,6 +73,11 @@ from .profiles import (
 from .redaction import redact
 
 logger = logging.getLogger(__name__)
+
+#: ``None`` on a platform with no SIGHUP (Windows) — the `sighup` check
+#: below then never matches, the same as every other POSIX-only signal
+#: concept this module already relies on (``cli.interrupts``).
+_SIGHUP: int | None = getattr(signal, "SIGHUP", None)
 
 try:
     import jsonschema as _jsonschema
@@ -224,6 +229,10 @@ class RunResult:
     # SIGTERM (#338) rather than Ctrl-C/SIGINT — same resumable shape, but
     # the CLI exits 143 (128 + SIGTERM) instead of 130.
     sigterm: bool = False
+    # Set (alongside `interrupted`) when the interrupt was specifically a
+    # SIGHUP (a terminal hangup) rather than Ctrl-C/SIGINT or SIGTERM —
+    # same resumable shape, but the CLI exits 129 (128 + SIGHUP) instead.
+    sighup: bool = False
 
 
 def _now_iso() -> str:
@@ -1040,9 +1049,14 @@ def run(req: RunRequest) -> RunResult:
         sigterm = isinstance(e, SigTermInterrupt) or (
             isinstance(e, RunCancelledBySignal) and get_token().signum == signal.SIGTERM
         )
+        sighup = isinstance(e, SigHupInterrupt) or (
+            isinstance(e, RunCancelledBySignal) and get_token().signum == _SIGHUP
+        )
         error_message = (
             "Interrupted (SIGTERM)"
             if sigterm
+            else "Interrupted (SIGHUP)"
+            if sighup
             else "Interrupted (Ctrl-C/SIGINT)"
             if interrupted
             else str(e)
@@ -1132,6 +1146,7 @@ def run(req: RunRequest) -> RunResult:
             out_path=resolved_out,
             interrupted=interrupted,
             sigterm=sigterm,
+            sighup=sighup,
         )
     finally:
         # The final flush, success or failure: everything recorded after the

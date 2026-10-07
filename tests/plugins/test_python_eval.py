@@ -8,6 +8,7 @@ assignment (issue #208), and the comprehension-scope fix for ``inputs``.
 from __future__ import annotations
 
 import os
+import threading
 import time
 import types
 from dataclasses import dataclass
@@ -191,3 +192,42 @@ class TestTimeout:
         result = _run("'x' * 2_000_000", timeout_seconds=10)
         assert result.value == "x" * 2_000_000
         assert time.monotonic() - start < 10
+
+
+class TestCancellation:
+    def test_long_running_eval_stops_promptly_when_cancelled(self):
+        # #357 follow-up: the sandboxed child is a multiprocessing.Process
+        # the cancellation token didn't track, so a cancelled run used to
+        # wait out this whole 30s budget instead of stopping at once.
+        from circuitry.core.cancellation import get_token
+
+        token = get_token()
+        token.reset()
+        errors: list[BaseException] = []
+
+        def worker() -> None:
+            try:
+                _run(
+                    "sleep_fn(30)",
+                    mode="exec",
+                    inputs={"sleep_fn": time.sleep},
+                    timeout_seconds=30,
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=worker)
+        start = time.monotonic()
+        try:
+            thread.start()
+            # Generous: just needs the child to have forked and reached its
+            # own sleep call before cancellation is requested.
+            time.sleep(0.5)
+            token.request()
+            thread.join(timeout=10)
+        finally:
+            token.reset()
+
+        assert not thread.is_alive()
+        assert time.monotonic() - start < 10
+        assert errors, "cancellation should have ended the sandboxed child, not timed out"

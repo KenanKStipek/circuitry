@@ -1,4 +1,4 @@
-"""SIGINT/SIGTERM-as-cancellation for the CLI's own run commands (#338, #356).
+"""SIGINT/SIGTERM/SIGHUP-as-cancellation for the CLI's own run commands (#338, #356).
 
 Ctrl-C/SIGINT already raises ``KeyboardInterrupt`` in the main thread via
 CPython's default handler, and ``runtime_shim.run`` treats that exactly
@@ -25,7 +25,17 @@ duration of one run:
     lets a tree-flow branch running on a worker thread — which a signal
     never reaches directly — see that the run was cancelled and stop
     promptly instead of running to completion while the main thread waits.
-  - A *second* SIGINT/SIGTERM, while the first one's cleanup
+  - SIGHUP (a terminal hangup: the terminal window closing, an SSH
+    disconnect) is handled exactly like SIGTERM — a hangup kills the
+    terminal, not this process's session, and with every tracked child
+    started in its own process group (``core.cancellation.run_tracked``)
+    a bare, unhandled SIGHUP would otherwise end `cof` with no cleanup at
+    all while those children kept running as orphans. Left alone if it is
+    already ignored on entry (``signal.getsignal(signal.SIGHUP) is
+    signal.SIG_IGN`` — e.g. launched under ``nohup``, which is exactly the
+    mechanism by which a caller opts out of this), and skipped entirely on
+    a platform with no SIGHUP (Windows).
+  - A *second* SIGINT/SIGTERM/SIGHUP, while the first one's cleanup
     (``finally:`` blocks, state persistence) is still running, ends the
     process at once via ``os._exit`` — the same exit code, no traceback —
     rather than escaping as an uncaught exception from inside that cleanup.
@@ -52,10 +62,17 @@ from ..core.cancellation import get_token
 #: what a second signal during cleanup exits with, matching the code the
 #: first signal's own (uninterrupted) cleanup path would have produced.
 _EXIT_CODES: dict[int, int] = {signal.SIGINT: 130, signal.SIGTERM: 143}
+if hasattr(signal, "SIGHUP"):
+    _EXIT_CODES[signal.SIGHUP] = 129
 
 
 class SigTermInterrupt(KeyboardInterrupt):
     """Raised in the main thread when SIGTERM arrives during a run."""
+
+
+class SigHupInterrupt(KeyboardInterrupt):
+    """Raised in the main thread when SIGHUP (a terminal hangup) arrives
+    during a run — treated exactly like :class:`SigTermInterrupt`."""
 
 
 def _make_handler(exc: type[BaseException]):
@@ -74,7 +91,7 @@ def _make_handler(exc: type[BaseException]):
 
 @contextmanager
 def sigterm_as_interrupt() -> Iterator[None]:
-    """Make SIGINT/SIGTERM cancel the ``with`` body's run promptly (#356).
+    """Make SIGINT/SIGTERM/SIGHUP cancel the ``with`` body's run promptly (#356).
 
     A no-op off the main thread, so it is always safe to wrap a CLI command
     body in this regardless of how that command happens to be invoked.
@@ -88,10 +105,26 @@ def sigterm_as_interrupt() -> Iterator[None]:
     token.arm()
     previous_sigint = signal.signal(signal.SIGINT, _make_handler(KeyboardInterrupt))
     previous_sigterm = signal.signal(signal.SIGTERM, _make_handler(SigTermInterrupt))
+    # SIGHUP is installed only when the platform has one (not Windows) and
+    # it isn't already ignored on entry -- a caller that ran `cof` under
+    # `nohup` (or otherwise set SIG_IGN) means it, and a hangup can't reach
+    # an ignored handler anyway, so leave it exactly as found and never
+    # touch it again on the way out either.
+    install_sighup = (
+        hasattr(signal, "SIGHUP")
+        and signal.getsignal(signal.SIGHUP) is not signal.SIG_IGN
+    )
+    previous_sighup = (
+        signal.signal(signal.SIGHUP, _make_handler(SigHupInterrupt))
+        if install_sighup
+        else None
+    )
     try:
         yield
     finally:
         signal.signal(signal.SIGINT, previous_sigint)
         signal.signal(signal.SIGTERM, previous_sigterm)
+        if install_sighup:
+            signal.signal(signal.SIGHUP, previous_sighup)
         token.disarm()
         token.reset()

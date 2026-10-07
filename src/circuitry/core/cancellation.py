@@ -49,6 +49,7 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Executor, Future
 from contextlib import contextmanager
+from multiprocessing.process import BaseProcess
 from typing import Any, TypeVar
 
 _T = TypeVar("_T")
@@ -121,6 +122,26 @@ def kill_process_group(proc: subprocess.Popen[str] | subprocess.Popen[bytes]) ->
         pass
 
 
+def kill_tracked_process(proc: BaseProcess) -> None:
+    """Best-effort SIGKILL of *proc*'s own pid only -- never a process group
+    (#357 follow-up).
+
+    Unlike :func:`kill_process_group`, which kills a ``subprocess.Popen``
+    started with ``start_new_session=True`` (its own session leader) via
+    ``killpg``, ``plugins.python_eval``'s sandboxed child is a
+    ``multiprocessing.Process`` started in cof's own process group, not its
+    own session -- ``killpg`` would SIGKILL this interpreter and its whole
+    process group right along with the child. ``Process.kill()`` already
+    targets only the child's own pid, so there is no group-vs-pid branch to
+    make here, unlike :func:`kill_process_group`.
+    """
+    if proc.is_alive():
+        try:
+            proc.kill()
+        except (OSError, ValueError):
+            pass
+
+
 class CancellationToken:
     """Run-wide cancellation flag plus the subprocess registry it kills.
 
@@ -141,6 +162,11 @@ class CancellationToken:
         # RLock lets the same thread reacquire it instead.
         self._lock = threading.RLock()
         self._processes: set[subprocess.Popen[str] | subprocess.Popen[bytes]] = set()
+        #: python_eval's own sandboxed child (#357 follow-up) -- tracked
+        #: separately from `_processes`, not folded into the same set,
+        #: because it is killed differently: `kill_tracked_process` (pid
+        #: only, never `killpg`) rather than `kill_process_group`.
+        self._mp_processes: set[BaseProcess] = set()
         self._signum: int | None = None
         self._armed = False
 
@@ -156,6 +182,7 @@ class CancellationToken:
         self._event.clear()
         with self._lock:
             self._processes.clear()
+            self._mp_processes.clear()
         self._signum = None
 
     def request(self, signum: int | None = None) -> bool:
@@ -179,8 +206,11 @@ class CancellationToken:
         self._event.set()
         with self._lock:
             procs = list(self._processes)
+            mp_procs = list(self._mp_processes)
         for proc in procs:
             kill_process_group(proc)
+        for mp_proc in mp_procs:
+            kill_tracked_process(mp_proc)
         return first
 
     @property
@@ -298,6 +328,29 @@ class CancellationToken:
         finally:
             with self._lock:
                 self._processes.discard(proc)
+
+    @contextmanager
+    def track_process(self, proc: BaseProcess) -> Iterator[None]:
+        """Register a ``multiprocessing`` child (``plugins.python_eval``'s
+        sandboxed process) so :meth:`request` kills it too (#357 follow-up).
+
+        Unlike :meth:`track`, this never calls ``killpg``: the child isn't
+        a session leader of its own, so :meth:`request` kills it via
+        :func:`kill_tracked_process` (pid only) instead. Mirrors
+        :meth:`track`'s own already-cancelled race close: if cancellation
+        is set the moment *proc* is registered, kill it immediately rather
+        than leaving it to run unseen.
+        """
+        with self._lock:
+            self._mp_processes.add(proc)
+            already_cancelled = self._event.is_set() and not self.in_cleanup()
+        if already_cancelled:
+            kill_tracked_process(proc)
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._mp_processes.discard(proc)
 
 
 _token = CancellationToken()

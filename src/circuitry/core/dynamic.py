@@ -60,7 +60,8 @@ def _error_text(exc: BaseException) -> str:
     """Human-readable text for *exc* on this dynamic's own ``meta.error`` —
     never empty.
 
-    A bare ``KeyboardInterrupt``/``SigTermInterrupt``/``RunCancelledBySignal``
+    A bare ``KeyboardInterrupt``/``SigTermInterrupt``/``SigHupInterrupt``/
+    ``RunCancelledBySignal``
     (what a real signal, or a cancelled worker-thread wait, raises — see
     ``core.cancellation``) stringifies to ``''``. Left as ``str(exc)``, an
     interrupted dynamic's own ``meta.error`` would then be falsy — exactly
@@ -77,10 +78,18 @@ def _error_text(exc: BaseException) -> str:
         return text
     if isinstance(exc, Exception):
         return repr(exc)
-    from ..cli.interrupts import SigTermInterrupt
+    from ..cli.interrupts import SigHupInterrupt, SigTermInterrupt
 
-    sigterm = isinstance(exc, SigTermInterrupt) or get_token().signum == signal.SIGTERM
-    return "Interrupted (SIGTERM)" if sigterm else "Interrupted (Ctrl-C/SIGINT)"
+    signum = get_token().signum
+    sigterm = isinstance(exc, SigTermInterrupt) or signum == signal.SIGTERM
+    sighup = isinstance(exc, SigHupInterrupt) or (
+        signum is not None and signum == getattr(signal, "SIGHUP", None)
+    )
+    if sigterm:
+        return "Interrupted (SIGTERM)"
+    if sighup:
+        return "Interrupted (SIGHUP)"
+    return "Interrupted (Ctrl-C/SIGINT)"
 
 
 EffectDef = Union[
