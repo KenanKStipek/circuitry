@@ -23,18 +23,24 @@ from agent_cli_test_support import (
     write_fake_cli,
 )
 
-from circuitry.agent_cli import AgentCliTimeout
+from circuitry.agent_cli import AgentCliError, AgentCliTimeout
 from circuitry.core import cancellation
 from circuitry.core.cancellation import CancellationToken, RunCancelledBySignal
-from circuitry.plugins.agent import AgentPlugin, make_plugin
+from circuitry.plugins.agent import (
+    AgentPlugin,
+    AgentTurn,
+    make_plugin,
+    run_agent_session,
+)
 from circuitry.plugins.capabilities import FS_WRITE, NETWORK, SHELL, capabilities_of
 from circuitry.plugins.factory import build_plugin
 
 #: Logs argv, stdin, attachments and selected env to ``FAKE_AGENT_LOG`` (one
 #: JSON line per call). On a first call it writes ``FAKE_RESULT_FIRST`` to
 #: ``FAKE_RESULT_PATH``, on a resumed call ``FAKE_RESULT_REPAIR`` (an unset
-#: variable writes nothing). Then prints pi's event stream (``--mode`` in
-#: argv) or Claude Code's stream-json, with one tool call and one reply.
+#: variable writes nothing). A resumed call hangs when
+#: ``FAKE_HANG_ON_RESUME`` is set. Then prints pi's event stream (``--mode``
+#: in argv) or Claude Code's stream-json, with one tool call and one reply.
 FAKE_AGENT_BODY = """\
 argv = sys.argv[1:]
 is_pi = "--mode" in argv
@@ -54,6 +60,9 @@ with open(os.environ["FAKE_AGENT_LOG"], "a", encoding="utf-8") as handle:
         "env": {key: os.environ.get(key) for key in
                 ("ADDED_VAR", "ANTHROPIC_API_KEY", "PI_SESSION_ID", "KEEP_ME")},
     }) + "\\n")
+if resumed and os.environ.get("FAKE_HANG_ON_RESUME"):
+    import time
+    time.sleep(60)
 content = os.environ.get("FAKE_RESULT_REPAIR" if resumed else "FAKE_RESULT_FIRST")
 if content is not None:
     with open(os.environ["FAKE_RESULT_PATH"], "w", encoding="utf-8") as handle:
@@ -351,6 +360,32 @@ def test_claude_code_repair_turn_resumes_the_session(tmp_path: Path, workdir: Pa
     assert result.raw["tokens"] == {"sent": 14, "received": 6}
 
 
+def test_claude_code_result_still_invalid_after_repair_fails_with_the_errors(
+    tmp_path: Path, workdir: Path
+) -> None:
+    plugin = _plugin(tmp_path, "claude_code")
+    result = plugin.execute(
+        params={
+            "prompt": "do it",
+            "cwd": str(workdir),
+            "env": _env(tmp_path, workdir, FAKE_RESULT_REPAIR=json.dumps({"summary": 3})),
+            "result_file": "result.json",
+            "result_schema": SCHEMA,
+        },
+        timeout_seconds=30,
+    )
+    assert not result.ok
+    assert result.stderr is not None
+    assert "still invalid (after one repair turn)" in result.stderr
+    assert "summary: 3 is not of type 'string'" in result.stderr
+    first, repair = _calls(tmp_path)
+    assert "--resume" not in first["argv"]
+    assert repair["argv"][repair["argv"].index("--resume") + 1] == "sess-abc"
+    assert "the file was not written" in repair["stdin"]
+    assert result.raw["session_id"] == "sess-abc"
+    assert result.raw["repair_turn"] is True
+
+
 def test_claude_code_session_param_resumes_that_session(tmp_path: Path, workdir: Path) -> None:
     plugin = _plugin(tmp_path, "claude_code")
     plugin.execute(
@@ -364,6 +399,62 @@ def test_claude_code_session_param_resumes_that_session(tmp_path: Path, workdir:
     )
     (call,) = _calls(tmp_path)
     assert call["argv"][call["argv"].index("--resume") + 1] == "abc-123"
+
+
+# ---------- the repair turn, through a fake engine ----------
+
+
+class _FakeEngine:
+    """An engine whose turns report ``session_id`` and record their prompts."""
+
+    name = "fake"
+
+    def __init__(self, session_id: str | None) -> None:
+        self.session_id = session_id
+        self.prompts: list[str] = []
+
+    def run_turn(
+        self, prompt: str, *, session_id: str | None, timeout_seconds: float, scratch_dir: Path
+    ) -> AgentTurn:
+        self.prompts.append(prompt)
+        return AgentTurn(text="done", session_id=self.session_id, turns=1, tool_calls=0)
+
+
+def test_no_repair_turn_without_a_session_id_to_resume(tmp_path: Path) -> None:
+    engine = _FakeEngine(session_id=None)
+    result = run_agent_session(
+        engine,
+        "do it",
+        session_id=None,
+        result_file=tmp_path / "result.json",
+        result_schema=None,
+        timeout_seconds=30,
+        scratch_dir=tmp_path,
+    )
+    assert not result.ok
+    assert result.stderr is not None
+    assert "no session id to resume" in result.stderr
+    assert "the file was not written" in result.stderr
+    assert len(engine.prompts) == 1
+    assert result.raw["repair_turn"] is False
+
+
+def test_no_repair_turn_when_no_time_is_left(tmp_path: Path) -> None:
+    engine = _FakeEngine(session_id="sess-1")
+    result = run_agent_session(
+        engine,
+        "do it",
+        session_id=None,
+        result_file=tmp_path / "result.json",
+        result_schema=None,
+        timeout_seconds=0.5,
+        scratch_dir=tmp_path,
+    )
+    assert not result.ok
+    assert result.stderr is not None
+    assert "no time was left for a repair turn" in result.stderr
+    assert len(engine.prompts) == 1
+    assert result.raw["session_id"] == "sess-1"
 
 
 # ---------- timeout and cancellation ----------
@@ -391,13 +482,47 @@ def test_timeout_stops_the_cli_and_the_child_it_started(
     assert list((tmp_path / "scratch").iterdir()) == []
 
 
+@pytest.mark.parametrize("engine", ["pi", "claude_code"])
+def test_repair_turn_timeout_names_the_session_and_keeps_the_transcript(
+    tmp_path: Path, workdir: Path, engine: str
+) -> None:
+    plugin = _plugin(tmp_path, engine)
+    with pytest.raises(AgentCliTimeout) as caught:
+        plugin.execute(
+            params={
+                "prompt": "do it",
+                "cwd": str(workdir),
+                "env": _env(tmp_path, workdir, FAKE_HANG_ON_RESUME="1"),
+                "result_file": "result.json",
+            },
+            timeout_seconds=4,
+        )
+    message = str(caught.value)
+    assert "session sess-abc can be resumed with params['session']" in message
+    (scratch,) = (tmp_path / "scratch").iterdir()
+    transcript = scratch / "transcript.log"
+    assert f"transcript: {transcript}" in message
+    assert "reply all done" in transcript.read_text(encoding="utf-8")
+
+
+def test_cli_error_with_nothing_to_resume_leaves_no_scratch_dir(
+    tmp_path: Path, workdir: Path
+) -> None:
+    plugin = _plugin(tmp_path, "pi", body="sys.exit(3)")
+    with pytest.raises(AgentCliError) as caught:
+        plugin.execute(params={"prompt": "x", "cwd": str(workdir)}, timeout_seconds=30)
+    assert "can be resumed" not in str(caught.value)
+    assert list((tmp_path / "scratch").iterdir()) == []
+
+
 @pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
+@pytest.mark.parametrize("engine", ["pi", "claude_code"])
 def test_cancelled_run_stops_the_session_and_its_child(
-    tmp_path: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch, engine: str
 ) -> None:
     token = CancellationToken()
     monkeypatch.setattr(cancellation, "_token", token)
-    plugin = _plugin(tmp_path, "pi", body=SPAWN_CHILD_AND_HANG)
+    plugin = _plugin(tmp_path, engine, body=SPAWN_CHILD_AND_HANG)
     pid_file = tmp_path / "child.pid"
     outcome: list[BaseException] = []
 
@@ -442,6 +567,7 @@ def test_cancelled_run_stops_the_session_and_its_child(
         ({"prompt": "x", "result_file": "r.json", "result_schema": {"type": 5}}, "not a valid JSON Schema"),
         ({"prompt": "x", "tools": "read,write"}, "'tools'\\] must be a list of strings"),
         ({"prompt": "x", "cwd": "/no/such/dir/anywhere"}, "is not a directory"),
+        ({"prompt": "x", "env": {"OTHER": None}}, "is null; unset_env removes"),
     ],
 )
 def test_invalid_params_are_rejected_before_the_cli_runs(
@@ -449,7 +575,21 @@ def test_invalid_params_are_rejected_before_the_cli_runs(
 ) -> None:
     plugin = _plugin(tmp_path, "pi")
     with pytest.raises(ValueError, match=message):
-        plugin.execute(params={**params, "env": {"FAKE_AGENT_LOG": str(tmp_path / "calls.jsonl")}})
+        log = {"FAKE_AGENT_LOG": str(tmp_path / "calls.jsonl")}
+        plugin.execute(params={**params, "env": {**log, **params.get("env", {})}})
+    assert _calls(tmp_path) == []
+
+
+def test_result_file_that_is_a_directory_is_rejected_before_the_cli_runs(
+    tmp_path: Path, workdir: Path
+) -> None:
+    (workdir / "result.json").mkdir()
+    plugin = _plugin(tmp_path, "pi")
+    with pytest.raises(ValueError, match=r"agent: result_file .* could not be cleared"):
+        plugin.execute(
+            params={"prompt": "x", "cwd": str(workdir), "env": _env(tmp_path, workdir),
+                    "result_file": "result.json"},
+        )
     assert _calls(tmp_path) == []
 
 

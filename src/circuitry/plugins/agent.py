@@ -20,8 +20,11 @@ this module adds the session's contract on top:
   itself never goes into state.
 
 The agent runs with the user's own permissions and is not sandboxed; the
-engine's tool lists (``tools`` / ``exclude_tools``) are the way to narrow
-it. See ``docs/plugins/agent.md``.
+engine's tool lists are the way to narrow it. For pi, ``tools`` is an
+allowlist and ``exclude_tools`` a denylist. For Claude Code,
+``exclude_tools`` (``--disallowedTools``) is the hard deny, while ``tools``
+(``--allowedTools``) only pre-approves tools so they run without a
+permission prompt; it removes none. See ``docs/plugins/agent.md``.
 
 Params:
   - ``prompt`` (required, str): multi-line; written to a temporary file
@@ -34,8 +37,8 @@ Params:
   - ``model`` (optional, str); ``thinking`` (pi only); ``permission_mode``
     (claude_code only).
   - ``tools`` / ``exclude_tools`` (optional, list[str]): pi ``--tools`` /
-    ``--exclude-tools``; Claude Code ``--allowedTools`` /
-    ``--disallowedTools``.
+    ``--exclude-tools``; Claude Code ``--allowedTools`` (pre-approval) /
+    ``--disallowedTools`` (deny).
   - ``session`` (optional, str): resume this session id.
   - ``extra_args`` (optional, list[str]); ``env`` (optional, mapping of
     variables to add); ``unset_env`` (optional, list[str]: replaces the
@@ -64,6 +67,7 @@ import jsonschema
 
 from ..agent_cli import (
     DEFAULT_UNSET_ENV,
+    AgentCliError,
     child_env,
     claude_command,
     parse_claude_output,
@@ -85,6 +89,9 @@ DEFAULT_ENGINE = PI
 
 #: How many schema errors a repair prompt or a failure message quotes.
 _MAX_QUOTED_ERRORS = 20
+
+#: The compact transcript's file name inside the effect's scratch directory.
+TRANSCRIPT_NAME = "transcript.log"
 
 #: How much of a reply or a tool call's arguments one transcript line keeps.
 _TRANSCRIPT_LINE_CHARS = 300
@@ -358,13 +365,14 @@ def run_agent_session(
     id and transcript so the session can be inspected or resumed)."""
     deadline = time.monotonic() + timeout_seconds
     session = _Session(
-        engine=engine, session_id=session_id, transcript_path=scratch_dir / "transcript.log"
+        engine=engine, session_id=session_id, transcript_path=scratch_dir / TRANSCRIPT_NAME
     )
     first_prompt = prompt if result_file is None else _with_result_contract(
         prompt, result_file, result_schema
     )
     session.add(
-        engine.run_turn(
+        _run_turn(
+            session,
             first_prompt,
             session_id=session_id,
             timeout_seconds=timeout_seconds,
@@ -389,7 +397,8 @@ def run_agent_session(
         )
     session.repair_turn = True
     session.add(
-        engine.run_turn(
+        _run_turn(
+            session,
             _repair_prompt(result_file, errors),
             session_id=session.session_id,
             timeout_seconds=remaining,
@@ -401,6 +410,37 @@ def run_agent_session(
     if errors:
         return _invalid_result(session, result_file, errors, why="after one repair turn")
     return ToolResult(value=value, raw=session.raw())
+
+
+def _run_turn(
+    session: _Session,
+    prompt: str,
+    *,
+    session_id: str | None,
+    timeout_seconds: float,
+    scratch_dir: Path,
+) -> AgentTurn:
+    """One turn of ``session``'s engine. A CLI failure or timeout is
+    re-raised (same class) naming the session id and the transcript, when
+    there are any, so a long session can still be inspected or resumed."""
+    try:
+        return session.engine.run_turn(
+            prompt,
+            session_id=session_id,
+            timeout_seconds=timeout_seconds,
+            scratch_dir=scratch_dir,
+        )
+    except AgentCliError as exc:
+        notes: list[str] = []
+        if session.session_id:
+            notes.append(
+                f"session {session.session_id} can be resumed with params['session']"
+            )
+        if session.transcript_path.exists():
+            notes.append(f"transcript: {session.transcript_path}")
+        if not notes:
+            raise
+        raise type(exc)(f"{exc} ({'; '.join(notes)})") from exc
 
 
 def _with_result_contract(
@@ -530,6 +570,11 @@ def _str_mapping(params: Mapping[str, Any], key: str) -> dict[str, str]:
         return {}
     if not isinstance(value, dict):
         raise ValueError(f"agent: params['{key}'] must be a mapping of variable names to values.")
+    for name, item in value.items():
+        if item is None:
+            raise ValueError(
+                f"agent: params['{key}']['{name}'] is null; unset_env removes a variable."
+            )
     return {str(name): str(item) for name, item in value.items()}
 
 
@@ -599,7 +644,13 @@ class AgentPlugin:
 
         # A result left over from an earlier run must not pass for this one.
         if result_file is not None:
-            result_file.unlink(missing_ok=True)
+            try:
+                result_file.unlink(missing_ok=True)
+            except OSError as exc:
+                raise ValueError(
+                    f"agent: result_file {str(result_file)!r} could not be cleared before the "
+                    f"session: {exc}"
+                ) from exc
         # Holds the prompt files while a turn runs, and the transcript after.
         scratch_dir = Path(tempfile.mkdtemp(prefix=f"cof-agent-{engine_name}-"))
         try:
@@ -612,8 +663,14 @@ class AgentPlugin:
                 timeout_seconds=float(timeout_seconds),
                 scratch_dir=scratch_dir,
             )
+        except AgentCliError:
+            # The error names the transcript when there is one (_run_turn).
+            if not (scratch_dir / TRANSCRIPT_NAME).exists():
+                shutil.rmtree(scratch_dir, ignore_errors=True)
+            raise
         except BaseException:
-            # No result carries the transcript's path, so nothing could read it.
+            # No result or error carries the transcript's path, so nothing
+            # could read it.
             shutil.rmtree(scratch_dir, ignore_errors=True)
             raise
 
