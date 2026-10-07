@@ -3,7 +3,8 @@
 ## What it is
 Cybernetic orchestration framework (Python). Core library in `src/`, tests in
 `tests/`, bundled orchestration curation in `src/circuitry/curation/`, docs in
-`docs/`.
+`docs/`. `electricity/` is a preview Rust runner for the same orchestrations
+(its own Cargo workspace; see `electricity/README.md` and `electricity/DESIGN.md`).
 
 ## Minimum verification for any change
 ```
@@ -39,6 +40,22 @@ need a further, distinct `CIRCUITRY_LIVE_TESTS=1` — credentials
 (`CYBERDINER_TOKEN`/`CYBERDINER_EXPO_URL`) being present in the environment
 is deliberately never enough on its own to run them (#266). Never set
 `CIRCUITRY_LIVE_TESTS` for a routine test run.
+
+## Rust (`electricity/`)
+Any change under `electricity/` additionally needs, run from `electricity/`:
+```
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test --workspace
+```
+Use the installed stable toolchain as-is — never `cargo install`, `rustup
+target add/toolchain install`, or any other global install; cross-compiles
+(musl targets, other OSes) are verified in CI only (`.github/workflows/electricity.yml`).
+The workspace `version` in `electricity/Cargo.toml` must always equal
+`pyproject.toml`'s (checked by a Python test and by the release workflow's tag
+check); bump both together. Build output stays in `electricity/target/`
+(gitignored). A test that runs the `electricity` binary gets a temporary HOME
+and the credential variables removed, exactly like `cof` subprocesses.
 
 ## Changelog — write a fragment, never edit `CHANGELOG.md`
 Every change ships its release note as a **new file**, `changelog.d/<issue-or-pr>.<type>.md`

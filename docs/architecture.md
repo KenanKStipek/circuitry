@@ -135,6 +135,7 @@ circuitry/
 │   ├── assets/               figures
 │   └── examples/             runnable routing and profile examples
 ├── editor/                   VS Code syntax highlighting for orchestration YAML
+├── electricity/              electricity — a preview Rust runner for orchestrations (its own Cargo workspace)
 ├── scripts/                  install.sh, the curation smoke test, the changelog compiler and checker, the guidebook build
 ├── changelog.d/              one changelog fragment per change, compiled at release
 ├── .claude/                  the /cof slash command and agent settings
