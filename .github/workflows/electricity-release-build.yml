@@ -20,13 +20,20 @@ on:
         description: "electricity workspace version that was built"
         value: ${{ jobs.version.outputs.version }}
 
-permissions:
-  contents: read
+# No top-level `permissions:` here: a called workflow's jobs may only
+# downgrade the caller's token, never elevate it, so a job here that needs
+# more than the caller granted (packages: write, below) would make the
+# whole run fail at startup rather than just that job. Each job below
+# declares the permissions it actually needs; build-image declares none, so
+# it inherits exactly what the calling job granted (contents: read only
+# from electricity.yml, contents: read + packages: write from release.yml).
 
 jobs:
   version:
     name: Read workspace version
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.extract.outputs.version }}
     steps:
@@ -39,6 +46,8 @@ jobs:
   build-archives:
     name: build (${{ matrix.target }})
     needs: version
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -109,9 +118,6 @@ jobs:
     name: container image
     needs: [version, build-archives]
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
     steps:
       - uses: actions/checkout@v4
 
