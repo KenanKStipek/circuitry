@@ -30,6 +30,7 @@ from circuitry.agent_cli import (
     AgentCliTimeout,
     child_env,
     claude_command,
+    claude_json_schema,
     parse_claude_output,
     parse_pi_output,
     pi_command,
@@ -103,8 +104,15 @@ def test_pi_command_persist_session_drops_no_session() -> None:
 
 def test_claude_command_defaults_to_one_toolless_unsaved_call() -> None:
     assert claude_command(binary="claude") == [
-        "claude", "-p", "--output-format", "json", "--tools", "", "--no-session-persistence",
+        "claude", "-p", "--output-format", "json", "--tools", "", "--strict-mcp-config",
+        "--no-session-persistence",
     ]  # fmt: skip
+
+
+def test_claude_command_strict_mcp_is_independent_of_tools() -> None:
+    assert "--strict-mcp-config" in claude_command(binary="claude", tools=True)
+    assert "--strict-mcp-config" not in claude_command(binary="claude", strict_mcp=False)
+    assert "--tools" in claude_command(binary="claude", strict_mcp=False)
 
 
 def test_claude_command_with_model_schema_session_tools_and_extra_args() -> None:
@@ -118,10 +126,47 @@ def test_claude_command_with_model_schema_session_tools_and_extra_args() -> None
         extra_args=["--max-turns", "3"],
     )
     assert cmd == [
-        "claude", "-p", "--output-format", "json", "--resume", "s1",
+        "claude", "-p", "--output-format", "json", "--strict-mcp-config", "--resume", "s1",
         "--model", "claude-sonnet-4-5", "--json-schema", json.dumps(schema),
         "--max-turns", "3",
     ]  # fmt: skip
+
+
+def test_claude_command_sends_a_non_object_schema_wrapped() -> None:
+    schema = {"type": "array", "items": {"type": "integer"}}
+    cmd = claude_command(binary="claude", json_schema=schema)
+    assert json.loads(cmd[cmd.index("--json-schema") + 1]) == claude_json_schema(schema)
+
+
+def test_claude_json_schema_sends_an_object_schema_unchanged() -> None:
+    schema = {"type": "object", "properties": {"a": {"type": "integer"}}}
+    assert claude_json_schema(schema) == schema
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"type": "array", "items": {"type": "string"}},
+        {"type": "string"},
+        {"type": ["object", "null"]},
+        {"anyOf": [{"type": "object"}, {"type": "string"}]},
+    ],
+)
+def test_claude_json_schema_wraps_any_other_schema_in_an_object(schema: dict) -> None:
+    assert claude_json_schema(schema) == {
+        "type": "object",
+        "properties": {"value": schema},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+
+
+def test_claude_json_schema_keeps_definitions_at_the_root() -> None:
+    defs = {"item": {"type": "string"}}
+    schema = {"type": "array", "items": {"$ref": "#/$defs/item"}, "$defs": defs}
+    wrapped = claude_json_schema(schema)
+    assert wrapped["$defs"] == defs
+    assert wrapped["properties"]["value"] == {"type": "array", "items": {"$ref": "#/$defs/item"}}
 
 
 # ---------- run_agent_cli ----------
@@ -159,8 +204,9 @@ def test_run_agent_cli_timeout_kills_the_whole_process_group(tmp_path: Path) -> 
     fake = write_fake_cli(tmp_path, "fake", body=SPAWN_CHILD_AND_HANG)
     env = {**os.environ, "FAKE_CLI_CHILD_PID": str(pid_file)}
     started = time.monotonic()
-    with pytest.raises(AgentCliTimeout, match="did not finish within 2s"):
-        run_agent_cli([str(fake)], env=env, timeout_seconds=2)
+    # Long enough for the fake's Python to start and write the pid file under load.
+    with pytest.raises(AgentCliTimeout, match="did not finish within 3s"):
+        run_agent_cli([str(fake)], env=env, timeout_seconds=3)
     assert time.monotonic() - started < 20
     child_pid = int(pid_file.read_text())
     assert wait_until_dead(child_pid), "the CLI's own child survived the timeout"
@@ -249,8 +295,8 @@ def test_parse_pi_output_without_an_answer_reports_exit_code_and_stderr() -> Non
 
 
 def test_parse_claude_output_reads_text_usage_cost_and_session() -> None:
-    result = parse_claude_output(_completed(claude_result(result=" hi ")))
-    assert result.text == " hi "
+    result = parse_claude_output(_completed(claude_result(result=" hi \n")))
+    assert result.text == "hi"
     assert result.session_id == "sess-2"
     assert (result.tokens_sent, result.tokens_received) == (1110, 5)
     assert result.cost_usd == pytest.approx(0.0123)
@@ -261,6 +307,28 @@ def test_parse_claude_output_uses_structured_output() -> None:
     result = parse_claude_output(_completed(claude_result(result="", structured_output={"a": 1})))
     assert result.structured_output == {"a": 1}
     assert json.loads(result.text) == {"a": 1}
+
+
+def test_parse_claude_output_unwraps_the_answer_to_a_wrapped_schema() -> None:
+    stdout = claude_result(result="", structured_output={"value": [" x ", 2]})
+    result = parse_claude_output(_completed(stdout), json_schema={"type": "array"})
+    assert result.structured_output == [" x ", 2]
+    assert json.loads(result.text) == [" x ", 2]
+
+
+def test_parse_claude_output_keeps_an_object_schema_answer_with_a_value_key() -> None:
+    stdout = claude_result(result="", structured_output={"value": 1})
+    result = parse_claude_output(_completed(stdout), json_schema={"type": "object"})
+    assert result.structured_output == {"value": 1}
+
+
+def test_parse_claude_output_error_hides_a_success_subtype_and_shows_others() -> None:
+    stdout = claude_result(is_error=True, subtype="success", result="API Error: 400 bad")
+    with pytest.raises(AgentCliError, match=r"^claude failed: API Error: 400 bad$"):
+        parse_claude_output(_completed(stdout, returncode=1))
+    stdout = claude_result(is_error=True, subtype="error_max_turns", result="stopped")
+    with pytest.raises(AgentCliError, match=r"^claude failed \(error_max_turns\): stopped$"):
+        parse_claude_output(_completed(stdout, returncode=1))
 
 
 def test_parse_claude_output_is_error_passes_the_cli_message_through() -> None:
