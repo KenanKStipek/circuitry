@@ -4,10 +4,12 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from ..agent_cli import DEFAULT_UNSET_ENV
 from .ai21 import AI21Adapter
 from .anthropic import AnthropicAdapter
 from .azure_openai import AzureOpenAIAdapter
 from .base import Adapter
+from .claude_code import ClaudeCodeAdapter
 from .cloudflare_workers_ai import CloudflareWorkersAIAdapter
 from .cohere import CohereAdapter
 from .cyberdiner import CyberdinerAdapter
@@ -26,6 +28,7 @@ from .ollama import OllamaAdapter
 from .openai import OpenAIAdapter
 from .openrouter import OpenRouterAdapter
 from .perplexity import PerplexityAdapter
+from .pi import PiAdapter
 from .qwen_dashscope import QwenDashScopeAdapter
 from .replicate import ReplicateAdapter
 from .tgi import TgiAdapter
@@ -313,6 +316,42 @@ def _build_watsonx(cfg: dict[str, Any]) -> Adapter:
     )
 
 
+def _string_list(
+    cfg: dict[str, Any], key: str, *, adapter_name: str, default: tuple[str, ...] = ()
+) -> tuple[str, ...]:
+    """``cfg[key]`` as a tuple of strings, ``default`` when absent; an empty
+    list is kept as empty."""
+    raw = cfg.get(key)
+    if raw is None:
+        return default
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise ValueError(
+            f"runtime.adapters.{adapter_name}.{key} must be a list of strings, got {raw!r}"
+        )
+    return tuple(raw)
+
+
+def _build_pi(cfg: dict[str, Any]) -> Adapter:
+    return PiAdapter(
+        binary=cfg.get("binary") or "pi",
+        default_model=cfg.get("default_model") or "",
+        thinking=cfg.get("thinking") or "",
+        unset_env=_string_list(cfg, "unset_env", adapter_name="pi", default=DEFAULT_UNSET_ENV),
+        extra_args=_string_list(cfg, "extra_args", adapter_name="pi"),
+    )
+
+
+def _build_claude_code(cfg: dict[str, Any]) -> Adapter:
+    return ClaudeCodeAdapter(
+        binary=cfg.get("binary") or "claude",
+        default_model=cfg.get("default_model") or "",
+        unset_env=_string_list(
+            cfg, "unset_env", adapter_name="claude_code", default=DEFAULT_UNSET_ENV
+        ),
+        extra_args=_string_list(cfg, "extra_args", adapter_name="claude_code"),
+    )
+
+
 def _build_host_claude(cfg: dict[str, Any]) -> Adapter:
     raise RuntimeError(
         "host_claude cannot be built from config; it requires a "
@@ -355,6 +394,9 @@ ADAPTER_REGISTRY: dict[str, AdapterBuilder] = {
     "azure-openai": _build_azure_openai,
     "replicate": _build_replicate,
     "watsonx": _build_watsonx,
+    # Coding-agent CLIs, called through their own login (agent_cli).
+    "pi": _build_pi,
+    "claude_code": _build_claude_code,
 }
 
 

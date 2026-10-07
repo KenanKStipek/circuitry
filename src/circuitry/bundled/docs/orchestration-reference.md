@@ -24,7 +24,7 @@ Top-level fields of an orchestration YAML file:
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `effects` | array | **yes** | — | Ordered list of top-level effects to execute |
-| `adapter` | string | no | from config.json | Adapter: e.g. `ollama`, `openai`, `anthropic`, `litellm`, `cyberdiner` (job queue; `model:` is a tier), `host_claude` (MCP-only — see below). Full compiled-in list: `cof list --extensions` |
+| `adapter` | string | no | from config.json | Adapter: e.g. `ollama`, `openai`, `anthropic`, `litellm`, `cyberdiner` (job queue; `model:` is a tier), `pi` / `claude_code` (a coding-agent CLI through its own login — see [below](#coding-agent-cli-adapters-pi-and-claude_code)), `host_claude` (MCP-only — see below). Full compiled-in list: `cof list --extensions` |
 | `model` | string | no | from config.json | Model identifier (e.g. `llama3`, `gpt-4o`, `claude-haiku-20240307`) |
 | `flow` | string | no | `chain` | Top-level flow for the implicit root dynamic. `chain` or `tree` |
 | `version` | string | no | — | Free-form version string for **this document**, e.g. `"1.2.0"` |
@@ -154,13 +154,14 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `messages` | `/api/chat` turns | `messages` turns | `system` field + turns |
 | image assets | base64 `images` (local files only) | `image_url` parts (`data:` URL for a local file) | `image` blocks (base64 or `url`) |
 
-A `tool` turn has no standalone form in the OpenAI-compatible or Anthropic APIs, so those adapters send it as a user turn prefixed `tool:`. Images go with the last user turn. Every other adapter (`litellm`, `replicate`, `watsonx`, `cyberdiner`, `host_claude`, and an out-of-tree adapter whose `generate()` has no `options` keyword) runs the prompt as before, with `messages` flattened into one `role: content` string, and records one warning naming what it ignored. `cof check` and run preflight warn when a prompt's image assets go to an adapter that cannot send images.
+A `tool` turn has no standalone form in the OpenAI-compatible or Anthropic APIs, so those adapters send it as a user turn prefixed `tool:`. Images go with the last user turn. Every other adapter (`litellm`, `replicate`, `watsonx`, `cyberdiner`, `pi`, `claude_code`, `host_claude`, and an out-of-tree adapter whose `generate()` has no `options` keyword) runs the prompt as before, with `messages` flattened into one `role: content` string, and records one warning naming what it ignored. `cof check` and run preflight warn when a prompt's image assets go to an adapter that cannot send images.
 
 What lands in `meta` beyond the usual keys, each only when it has something to say:
 
 - `meta.assets` — one `{kind, ref, media_type, size, sha256}` per local image (`{kind, ref}` for a URL). The image bytes never enter state.
 - `meta.finish_reason` — the provider's stop reason (`stop`, `length`, `end_turn`, `max_tokens`, ...) when it reports one.
 - `meta.warnings` — a reply cut off at the length limit (`finish_reason` `length`/`max_tokens`), options an adapter ignored, an asset kind no adapter sends.
+- `meta.cost_usd` — the winning attempt's cost in US dollars, when its adapter reports one (`pi`, `claude_code`). The run's `runtime.last_run.totals.cost_usd` sums it.
 - `meta.tokens_sent_total` / `meta.tokens_received_total` — every attempt this dispatch made, failed/retried/fallen-back-from included, summed across all of them; `meta.tokens_sent`/`meta.tokens_received` stay the winning attempt's own count, unchanged in meaning.
 
 **Example — an image to a local vision model:**
@@ -183,6 +184,32 @@ What lands in `meta` beyond the usual keys, each only when it has something to s
 ```
 
 A slow model needs a longer adapter timeout, `runtime.adapters.ollama.timeout_seconds: 1800` in config: a prompt's `timeout_ms` is capped by the timeout of whichever adapter the attempt actually dispatches to, so it can only shorten the wait — that's `ollama`'s own configured timeout here even when `ollama` isn't the run's default adapter, as long as this prompt's `provider:` (or a fallback) names it. Write `ref` with triple braces (`{{{...}}}`): double braces HTML-escape the value, which breaks a URL with `&` in its query string.
+
+#### Coding-agent CLI adapters: `pi` and `claude_code`
+
+`pi` and `claude_code` run a coding-agent CLI headlessly for one completion, through the CLI's own login instead of an API key — a Claude subscription used through Claude Code, or pi with any provider it is logged in to (its `claude-bridge` provider uses Claude Code's login). The CLI's own tools are off and nothing is saved as a session:
+
+| | `pi` | `claude_code` |
+|---|---|---|
+| Command | `pi -p --mode json --no-approve --no-tools --no-session [--model M] [--thinking T] @<prompt-file> "<instruction>"` | `claude -p --output-format json --tools "" --no-session-persistence [--model M] [--json-schema S]` |
+| Prompt | a temporary file attached with `@` (pi reads no prompt from stdin) | stdin |
+| `model:` | pi's `provider/id`, e.g. `claude-bridge/claude-sonnet-4-5` | a Claude Code model, e.g. `claude-sonnet-4-5` |
+| `prompt_type: json` with a `schema` | the reply's text is decoded and validated as usual | `--json-schema`; the answer is Claude Code's `structured_output`, then validated as usual |
+| `meta.tokens_sent` / `tokens_received` | input tokens including cache reads and writes / output tokens, summed over the call's model turns | the same, from the result's `usage` |
+| `meta.cost_usd` | `usage.cost`, summed | `total_cost_usd` |
+
+Each call runs in a fresh temporary directory, so no project's `AGENTS.md`/`CLAUDE.md` is read, and in its own process group: a timeout or a cancelled run (Ctrl-C, SIGTERM) stops the CLI and everything it started. A timeout is retried like any other; a CLI error is not, and fails the attempt with the CLI's own message — an auth failure (`Failed to authenticate. API Error: 401 ...`) or a CLI too old for the requested model (`... version X or newer is required`). `params`, `messages` turns and images are not sent: the prompt arrives flattened, with one warning naming what was ignored.
+
+The child gets the caller's environment minus the variables that make a CLI think it runs inside a parent session (`PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PANE_ARGS`, `PI_CODING_AGENT`, `PI_MODEL`, `PI_PROVIDER`, `PI_REASONING_LEVEL`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` — always removed) and minus `unset_env` (by default `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, so the CLI uses its own login rather than a key that happens to be exported). Config, in `runtime.adapters.pi` / `runtime.adapters.claude_code`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `binary` | `pi` / `claude` | The CLI to run: a name on `PATH` or a path. `cof check` and `cof doctor` report it as `binary:<name>` when it is missing |
+| `default_model` | — (the CLI's own default) | Used only for a call that arrives with no model. A run normally resolves one (config `default_model`, `--model`, a document's or effect's `model:`, `provider: "pi:<provider/id>"`), so set that to a model this CLI knows |
+| `thinking` | — (pi's default) | `pi` only: `--thinking` level |
+| `timeout_seconds` | the run's adapter timeout | Per-call budget. A CLI retries a failing request on its own before it gives up, which can take minutes |
+| `unset_env` | `["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]` | Variables removed from the CLI's environment; replaces the default list (`[]` keeps both) |
+| `extra_args` | `[]` | Extra CLI arguments, added before the prompt (`pi`) or last (`claude_code`) |
 
 **`on_error` and preflight — optional adapters:** `cof check`/`cof run` walk every `adapter`/`provider` an orchestration references and probe its credentials before anything runs (`check()`, see the plugins pages). By default that's a **hard** dependency: a missing credential fails preflight for the whole file, even if only one effect needs it. Set `on_error: skip` (or `continue`) on every `prompt` effect that uses a given adapter and preflight reclassifies it as **soft** — a missing credential downgrades to a warning naming the effects that will skip, and the run proceeds, leaving those effects' `value` as `null`. An adapter is soft only when *every* effect referencing it tolerates failure; one effect without `on_error` handling makes the whole adapter a hard dependency again, and preflight's error names that effect specifically. This looks at each `prompt` effect's own `on_error`, not an enclosing `dynamic`/`loop`/`if` container's — a `prompt` effect nested in a container that tolerates failure still needs its own `on_error: skip`/`continue` to be classified as soft. `cof run --skip-preflight` bypasses preflight entirely (hard and soft alike) — unrelated to this classification.
 
@@ -1805,7 +1832,7 @@ The following rules are sufficient for generating structurally correct Circuitry
 **File structure:**
 1. Top-level fields: `adapter` (string), `model` (string), `effects` (array). Only `effects` is required. `description`, `version`, `interface`, `flow`, `runtime` and `plugins` are the other keys the top level knows; anything else is ignored with a warning. A top-level `runtime:` block should set only `complexity` and `state`; never put `adapters`, `plugins`, `persistence`, `library` or credentials in it — those are host settings that belong in config.json. A document run by library name, fetched or generated has its copy ignored with a warning; a file run by path applies it with a notice.
 2. `adapter` and `model` are only required when the orchestration contains `prompt` or `reflector` effects. Tool-only orchestrations (`type: tool` effects only) do not need `adapter` or `model`.
-3. Valid `adapter` values: any name in the compiled-in adapter registry (`cof list --extensions`) — e.g. `ollama`, `openai`, `anthropic`, `litellm`, `cyberdiner`, `host_claude`. Two need special handling. `cyberdiner` is a job-queue broker: `model:` must be a capability tier (`cheap`, `fast-cheap`, `fast`, `good-cheap`, `good`, `good-fast`, `alpha` — the network owns the list), not a provider model name, and `runtime.adapters.cyberdiner.expo_url` / `token` must be set in config — never in the YAML. `host_claude` is MCP-only (the host Claude session generates each prompt — set via `circuitry-mcp` rather than config.json. By default rejects non-Claude `model:` pins; pass `override_model=True` to `run_orchestration` to ignore the pin and run through Claude regardless).
+3. Valid `adapter` values: any name in the compiled-in adapter registry (`cof list --extensions`) — e.g. `ollama`, `openai`, `anthropic`, `litellm`, `cyberdiner`, `pi`, `claude_code`, `host_claude`. `pi` and `claude_code` call a coding-agent CLI through its own login; `model:` is that CLI's model name (pi: `provider/id`). Two need special handling. `cyberdiner` is a job-queue broker: `model:` must be a capability tier (`cheap`, `fast-cheap`, `fast`, `good-cheap`, `good`, `good-fast`, `alpha` — the network owns the list), not a provider model name, and `runtime.adapters.cyberdiner.expo_url` / `token` must be set in config — never in the YAML. `host_claude` is MCP-only (the host Claude session generates each prompt — set via `circuitry-mcp` rather than config.json. By default rejects non-Claude `model:` pins; pass `override_model=True` to `run_orchestration` to ignore the pin and run through Claude regardless).
 4. Valid `flow` values: `chain` (sequential) and `tree` (parallel). Write nothing else — `chain_of_thought`/`cot` and `tree_of_thought`/`tot` still parse but are deprecated and warned about.
 
 **Effect types and required fields:**

@@ -284,8 +284,9 @@ def _int_field(meta: dict[str, Any], *keys: str) -> int:
 def _run_totals(state: dict[str, Any], *, wall_time_s: float) -> dict[str, Any]:
     """``state.runtime.last_run.totals`` recomputed from a *finished* state
     tree — wall time, effects run, tokens both ways over every attempt, and
-    cost where some effect reported one (no adapter does yet, so this is
-    ``None`` until one does).
+    cost where some effect reported one (``meta.cost_usd``, which only the
+    ``pi`` and ``claude_code`` adapters report so far; ``None`` when no
+    effect did).
 
     A pure function of the final state, so it's only correct for effects
     that actually landed there. ``run()`` itself does not use this for its

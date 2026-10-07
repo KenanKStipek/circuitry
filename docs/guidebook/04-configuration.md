@@ -151,7 +151,31 @@ The less usual part is that every one of these decisions is recorded. `runtime.e
 
 The runtime does not interpret model names. For most adapters they are provider model identifiers — `llama3.1:8b`, `gpt-4o-mini`. For a broker they can be something else entirely: the [CyberDiner](https://github.com/KenanKStipek/CyberDiner) adapter is a job-queue LLM network, and there `model:` names a *capability tier* — `cheap`, `fast`, `good`, `good-fast`, `alpha` — that the network resolves to whatever is serving that tier. The adapter hides submit-and-poll behind the same synchronous `generate()` every other adapter implements, so the document neither knows nor cares. `cof list --models <adapter>` asks an adapter what it can serve.
 
-Twenty-nine adapters ship in-tree behind one `Adapter` protocol — hosted APIs, self-hosted servers (vllm, llama.cpp, LM Studio, TGI), aggregator routes (OpenRouter, LiteLLM), the CyberDiner broker, and `host_claude`, the adapter that turns a Claude session into the model over MCP ([Surfaces](12-surfaces.md)). `cof list --extensions` prints the compiled-in set. [Tools and persistence](13-tools-and-persistence.md) covers writing one.
+Thirty-one adapters ship in-tree behind one `Adapter` protocol — hosted APIs, self-hosted servers (vllm, llama.cpp, LM Studio, TGI), aggregator routes (OpenRouter, LiteLLM), the CyberDiner broker, two coding-agent CLIs (`pi`, `claude_code`, below), and `host_claude`, the adapter that turns a Claude session into the model over MCP ([Surfaces](12-surfaces.md)). `cof list --extensions` prints the compiled-in set. [Tools and persistence](13-tools-and-persistence.md) covers writing one.
+
+## A coding-agent CLI's own login
+
+Every other adapter needs an API key or a local model server. `pi` and `claude_code` need neither: each runs a coding-agent CLI — pi or Claude Code — headlessly for one completion and uses whatever that CLI is logged in to, such as a Claude subscription. The CLI's own tools are off and no session is saved; the prompt is just a prompt.
+
+```json
+{
+  "default_adapter": "claude_code",
+  "default_model": "claude-sonnet-4-5",
+  "runtime": {
+    "adapters": {
+      "claude_code": { "timeout_seconds": 600 },
+      "pi": {
+        "binary": "pi",
+        "thinking": "low",
+        "timeout_seconds": 600,
+        "unset_env": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
+      }
+    }
+  }
+}
+```
+
+The model is the CLI's own name for it: a Claude Code model for `claude_code`, pi's `provider/id` (`claude-bridge/claude-sonnet-4-5`) for `pi` — so a prompt can pick either with `provider: "pi:claude-bridge/claude-sonnet-4-5"`. The CLI runs with your environment minus two things: the variables that would make it think it is part of a parent pi or Claude Code session — Circuitry may well be running inside one — and `unset_env`, by default `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, so an exported key does not quietly replace the login you meant to use. Give it a generous `timeout_seconds`: a CLI retries a failing request on its own before it reports the error, and a timeout or a cancelled run stops the CLI and everything it started. `cof doctor` reports a CLI that is not installed as `binary:pi` or `binary:claude`; an auth failure or a CLI too old for the model fails the prompt with the CLI's own message. `prompt_type: json` works on both, and on `claude_code` the schema goes to the CLI itself. Tokens land in `meta` as usual, and the cost the CLI reports in `meta.cost_usd`. The [Orchestration Reference](../orchestration-reference.md#coding-agent-cli-adapters-pi-and-claude_code) has the exact commands and every key.
 
 ## Profiles
 
