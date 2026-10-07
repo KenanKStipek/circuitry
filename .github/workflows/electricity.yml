@@ -53,6 +53,24 @@ jobs:
         working-directory: electricity
         run: cargo test --workspace
 
+  value-corpus:
+    name: electricity-value golden corpus is up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: regenerate the Unicode printable-ranges table and check it is unchanged
+        working-directory: electricity
+        run: python3 scripts/generate_unicode_printable_ranges.py --check
+
+      - name: regenerate the golden corpus and check it is unchanged
+        working-directory: electricity
+        run: python3 scripts/generate_value_corpus.py --check
+
   msrv:
     name: MSRV check
     runs-on: ubuntu-latest
