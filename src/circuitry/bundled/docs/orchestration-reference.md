@@ -1622,7 +1622,12 @@ tool plugin and every HTTP call that goes through curl (every model
 adapter's own prompt, `web_search`, `weather`, ComfyUI's REST calls) —
 an in-flight MCP call is not cancelled; the MCP client does not watch
 for cancellation, so a branch blocked in one keeps running until the
-server responds (or its own timeout) regardless of the signal. A step's
+server responds (or its own timeout) regardless of the signal. A killed
+child is sent SIGKILL directly, not the SIGINT/SIGTERM the signal itself
+carried, so a tool with its own graceful-shutdown handling (`ffmpeg`
+finalizing a partial output) never gets the chance; running detached from
+the terminal this way also means a step that needs one (an `ssh`/`sudo`
+credential prompt, gpg's pinentry-curses) cannot use it. A step's
 own `finally:` still runs in full (and reruns on `--resume`, like any
 other `finally:`) even though the run it is cleaning up from was already
 cancelled; a running parallel step is never merged into its parent —

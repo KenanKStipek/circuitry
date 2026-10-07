@@ -472,11 +472,20 @@ class _FakePopen:
         self.returncode = returncode
         self._stdout = stdout
         self._raises = raises
+        self.killed = False
+        self.waited = False
 
     def communicate(self, input: Any = None, timeout: Any = None) -> tuple[str, str]:
         if self._raises is not None:
             raise self._raises
         return (self._stdout, "")
+
+    def kill(self) -> None:
+        self.killed = True
+
+    def wait(self, timeout: Any = None) -> int:
+        self.waited = True
+        return self.returncode
 
     def __enter__(self) -> _FakePopen:
         return self
@@ -519,15 +528,23 @@ def test_curl_supports_retry_after_header_false_when_probe_times_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A hung `curl --version` (SubprocessError, e.g. TimeoutExpired) must
-    not escape the probe and break `run_curl` for every caller."""
+    not escape the probe and break `run_curl` for every caller — and must
+    not block forever either (#357 review N3): a bare `TimeoutExpired`
+    propagating out of `communicate()` through `with proc:` would hit
+    `Popen.__exit__`'s own unbounded `self.wait()`, since `__exit__` only
+    special-cases `KeyboardInterrupt`, not `TimeoutExpired`. The fix kills
+    the child itself, inside the `with`, before that can happen."""
     _curl_supports_retry_after_header.cache_clear()
+    proc = _FakePopen(0, "", raises=subprocess.TimeoutExpired("curl", 5))
 
     def fake_popen(cmd: list[str], **kwargs: Any) -> Any:
-        return _FakePopen(0, "", raises=subprocess.TimeoutExpired(cmd, 5))
+        return proc
 
     monkeypatch.setattr("circuitry.curl_support._real_popen_cls", fake_popen)
     try:
         assert _curl_supports_retry_after_header() is False
+        assert proc.killed is True
+        assert proc.waited is True
     finally:
         _curl_supports_retry_after_header.cache_clear()
 

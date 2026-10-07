@@ -87,6 +87,15 @@ def kill_process_group(proc: subprocess.Popen[str] | subprocess.Popen[bytes]) ->
     Public: ``plugins._subprocess.run_binary`` reuses this same helper for
     its own (pre-existing) per-call timeout kill, so a timed-out subprocess
     and a cancelled one are torn down identically.
+
+    A child only ever gets its own process group when it was started with
+    ``start_new_session=True`` — :func:`run_tracked` only does that while
+    :attr:`CancellationToken.armed` is set (#357 review N1). Otherwise the
+    child's ``pgid`` *is* this interpreter's own ``getpgrp()``, so
+    ``killpg`` on it would SIGKILL this process and its whole group along
+    with the child — e.g. an unarmed timeout under the SDK, the MCP
+    server, or any embedder that never installs ``cof run``'s signal
+    handler. Guard against that case and kill just the child instead.
     """
     if proc.poll() is not None:
         return
@@ -99,6 +108,12 @@ def kill_process_group(proc: subprocess.Popen[str] | subprocess.Popen[bytes]) ->
     try:
         pgid = os.getpgid(proc.pid)
     except ProcessLookupError:
+        return
+    if pgid == os.getpgrp():
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
         return
     try:
         os.killpg(pgid, signal.SIGKILL)
@@ -264,9 +279,20 @@ class CancellationToken:
         *proc* must have been started with ``start_new_session=True`` (POSIX)
         for the group-kill to reach only this process's own descendants, not
         this interpreter's own process group.
+
+        :func:`run_tracked` already calls :meth:`check` before ``Popen``,
+        but cancellation can still be requested in the gap between that
+        check and this registration -- :meth:`request` only kills the
+        processes it can already see, so a process added right after it
+        took its snapshot would otherwise run to completion unseen (#357
+        review N2). Close that race here: if cancellation is already set
+        the moment *proc* is registered, kill it immediately.
         """
         with self._lock:
             self._processes.add(proc)
+            already_cancelled = self._event.is_set() and not self.in_cleanup()
+        if already_cancelled:
+            kill_process_group(proc)
         try:
             yield
         finally:
