@@ -78,6 +78,31 @@ def _load_raw(path: Path) -> Any:
         raise ScriptedRepliesError(f"{path}: invalid YAML: {e}") from e
 
 
+#: Keys a text reply / an error mapping may carry — anything else is a
+#: load-time error (a typo like ``token_sent`` must not silently drop the
+#: count it was meant to set).
+_TEXT_REPLY_KEYS = frozenset({"text", "tokens_sent", "tokens_received", "finish_reason"})
+_ERROR_KEYS = frozenset({"kind", "status", "message"})
+
+
+def _is_plain_int(value: Any) -> bool:
+    """``True`` for an ``int``, ``False`` for a ``bool`` (a ``bool`` *is* an
+    ``int`` in Python, but ``status: true``/``tokens_sent: false`` are typos,
+    not valid values)."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _reject_unknown_keys(
+    entry: dict[str, Any], allowed: frozenset[str], *, path: str, index: int, source: Path
+) -> None:
+    unknown = sorted(set(entry) - allowed)
+    if unknown:
+        raise ScriptedRepliesError(
+            f"{source}: reply {index} for path '{path}': unknown key(s) "
+            f"{unknown}; one of {sorted(allowed)}"
+        )
+
+
 def _parse_error(entry: dict[str, Any], *, path: str, index: int, source: Path) -> _Reply:
     error = entry["error"]
     if not isinstance(error, dict) or "kind" not in error:
@@ -85,6 +110,7 @@ def _parse_error(entry: dict[str, Any], *, path: str, index: int, source: Path) 
             f"{source}: reply {index} for path '{path}': 'error' must be a "
             "mapping with a 'kind'"
         )
+    _reject_unknown_keys(error, _ERROR_KEYS, path=path, index=index, source=source)
     kind = error["kind"]
     if kind not in _DEFAULT_STATUS:
         raise ScriptedRepliesError(
@@ -92,14 +118,18 @@ def _parse_error(entry: dict[str, Any], *, path: str, index: int, source: Path) 
             f"{kind!r}; one of {sorted(_DEFAULT_STATUS)}"
         )
     status = error.get("status", _DEFAULT_STATUS[kind])
-    if kind == "http" and status is None:
-        raise ScriptedRepliesError(
-            f"{source}: reply {index} for path '{path}': error kind 'http' "
-            "needs a 'status'"
-        )
-    if status is not None and not isinstance(status, int):
+    if status is not None and not _is_plain_int(status):
         raise ScriptedRepliesError(
             f"{source}: reply {index} for path '{path}': 'status' must be an int"
+        )
+    # Every kind except timeout/connection carries a status by construction
+    # (``_retry_info`` asserts as much at call time) — an explicit
+    # ``status: null`` must be rejected here, not left to crash later with
+    # an assertion that names no path.
+    if status is None and kind not in _ALWAYS_RETRYABLE:
+        raise ScriptedRepliesError(
+            f"{source}: reply {index} for path '{path}': error kind {kind!r} "
+            "needs a 'status'"
         )
     message = error.get("message")
     if message is not None and not isinstance(message, str):
@@ -115,7 +145,13 @@ def _parse_reply(entry: Any, *, path: str, index: int, source: Path) -> _Reply:
             f"{source}: reply {index} for path '{path}' must be a mapping"
         )
     if "error" in entry:
+        if "text" in entry:
+            raise ScriptedRepliesError(
+                f"{source}: reply {index} for path '{path}': exactly one of "
+                "'text' or 'error', not both"
+            )
         return _parse_error(entry, path=path, index=index, source=source)
+    _reject_unknown_keys(entry, _TEXT_REPLY_KEYS, path=path, index=index, source=source)
     text = entry.get("text")
     if not isinstance(text, str):
         raise ScriptedRepliesError(
@@ -124,9 +160,9 @@ def _parse_reply(entry: Any, *, path: str, index: int, source: Path) -> _Reply:
         )
     for key in ("tokens_sent", "tokens_received"):
         value = entry.get(key)
-        if value is not None and not isinstance(value, int):
+        if value is not None and (not _is_plain_int(value) or value < 0):
             raise ScriptedRepliesError(
-                f"{source}: reply {index} for path '{path}': '{key}' must be an int"
+                f"{source}: reply {index} for path '{path}': '{key}' must be an int >= 0"
             )
     finish_reason = entry.get("finish_reason")
     if finish_reason is not None and not isinstance(finish_reason, str):

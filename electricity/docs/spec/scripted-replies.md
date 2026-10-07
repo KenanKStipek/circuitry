@@ -11,10 +11,11 @@ the identical file — one case directory's fixture configures both engines.
 
 Both engines' conformance suite needs model replies that are deterministic and
 identical, with no real network call. A **replies file** is a YAML or JSON document that
-answers every `prompt`/`expect: {mode: model}` call an orchestration run makes, keyed by
-the calling effect's own state path — never by the order calls happen to arrive in, which
-a `flow: tree` loop or dynamic makes nondeterministic (its branches dispatch in whatever
-order their worker threads happen to run).
+answers every model call an orchestration run makes — a `prompt` effect, a `tool`/`use`
+effect's `expect: {mode: model}`, and an `if`/`while` effect's own `mode: model`
+condition — keyed by the calling effect's own state path — never by the order calls
+happen to arrive in, which a `flow: tree` loop or dynamic makes nondeterministic (its
+branches dispatch in whatever order their worker threads happen to run).
 
 ## 2. File shape
 
@@ -49,9 +50,20 @@ same path a reader would use to locate the effect's `value`/`meta` in the run's 
 its `describe` body effect.
 
 A `use` child's or a decomposition's generated plan's effects are namespaced the same way
-the run's own state nests them — including the child orchestration's own implicit `prime`
-root, so a prompt named `answer` inside a `use` effect named `first` is keyed
-`prime.first.prime.answer`, not `prime.first.answer`.
+the run's own state nests them: a prompt named `answer` inside a `use` effect named
+`first` is keyed `prime.first.answer` — the child orchestration's own implicit `prime`
+root is stripped, exactly as it is for the run's own observability (OTel-style spans,
+runtime plugins' `effect_path`) and the final `--out` state, so a replies-file key is
+always the same string a reader would use to locate that same effect's value there.
+
+An `if`/`while` effect's own `mode: model` decision is not a separately named
+sub-effect — a *named* one (`name: review`) is keyed at its own node, `prime.review`; an
+unnamed (transparent) one is keyed at the path of the container it sits in directly (its
+enclosing node — the loop or conditional writes no node of its own to nest under). Every
+pass of an *unnamed* `flow: tree` loop's model-mode `while` check, or every one of several
+sibling unnamed model-mode `if`s in the same container, therefore shares that one path —
+replies queued there are still consumed strictly in order, just not matched to a
+particular pass or sibling by index.
 
 Every reply queued for one path is consumed strictly in the order it appears in the
 list — covering a prompt effect's retries (the same effect dispatches again, at the same
@@ -61,7 +73,12 @@ never matched by substring or prefix; it must match exactly.
 
 ## 4. One reply
 
-A reply is a mapping, and is exactly one of:
+A reply is a mapping, and is exactly one of a text reply or an error reply — never both,
+and never neither. Every key not listed under the shape that applies (4.1 or 4.2) is a
+load-time error, the same as a misspelled one (`token_sent` for `tokens_sent`) silently
+dropping what it meant to set. A boolean is never accepted where an int is expected
+(`status: true`, `tokens_sent: false`) — Python's `bool` is a subtype of `int`, so this is
+checked explicitly, not left to `isinstance(x, int)` alone.
 
 ### 4.1 A text reply
 
@@ -108,14 +125,22 @@ fallback-chain logic treats a scripted failure identically to a real one:
 legal — the retryable/not-retryable classification still follows `status`, not the kind
 name, for every kind except `timeout`/`connection`, which carry no status and are always
 retryable (they model a failure that never got an HTTP response to classify in the first
-place).
+place). An explicit `status: null` is only legal for `timeout`/`connection`; every other
+kind needs one (its own default, or an override), checked at load time rather than left
+to fail the call itself with no path named.
 
 ## 5. What is not in scope here
 
-This file only ever answers a *model* call — `prompt` effects and a `tool`/`use` effect's
-`expect: {mode: model}`. Tool fakes (a process-backed tool's recorded stdout/exit code, an
-HTTP-family tool's mock server) are a separate mechanism (§12 of `electricity/DESIGN.md`),
-not part of this file.
+This file only ever answers a *model* call — `prompt` effects, a `tool`/`use` effect's
+`expect: {mode: model}`, and an `if`/`while` effect's own `mode: model` condition. Tool
+fakes (a process-backed tool's recorded stdout/exit code, an HTTP-family tool's mock
+server) are a separate mechanism (§12 of `electricity/DESIGN.md`), not part of this file.
+
+The adapter also adds one warning to `meta.warnings` for any prompt effect that sets
+`params`, `messages`, or `images` — `scripted` has no model behind it to honour them, the
+same as any other adapter asked for an option it does not support
+(`ignored_options_warning`). When `runtime.adapters.scripted.replies_file` is unset, it
+defaults to `scripted-replies.yaml`, resolved the same way an explicit relative path is.
 
 ## 6. Unmatched calls and leftover replies
 

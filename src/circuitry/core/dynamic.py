@@ -426,7 +426,10 @@ class DynamicRuntime:
                         # dynamic's own absolute path — pushed here, before
                         # ``submit_with_context`` copies the submitting
                         # thread's contextvars into the worker (#362).
-                        with nested_container(store, self.defn.name):
+                        # ``child_store`` directly, not ``self.defn.name`` on
+                        # the outer ``store`` — see loop.py's own tree-flow
+                        # dispatch for why (#370 review F2).
+                        with nested_container(child_store, None):
                             futures: dict = {
                                 submit_with_context(
                                     executor,

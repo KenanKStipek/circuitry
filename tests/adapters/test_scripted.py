@@ -79,6 +79,9 @@ def test_tree_dynamic_matches_by_path_not_call_order(tmp_path: Path) -> None:
     assert result.ok, result.error
     assert result.state["prime"]["left"]["value"] == "left-reply"
     assert result.state["prime"]["right"]["value"] == "right-reply"
+    totals = result.state["runtime"]["last_run"]["totals"]
+    assert totals["tokens_sent"] == 8
+    assert totals["tokens_received"] == 3
     assert adapter.leftover_replies() == {}
 
 
@@ -110,6 +113,9 @@ def test_retries_consume_replies_in_order(tmp_path: Path) -> None:
     assert node["meta"]["retries_used"] == 1
     assert node["meta"]["tokens_sent_total"] == 4
     assert node["meta"]["tokens_received_total"] == 6
+    totals = result.state["runtime"]["last_run"]["totals"]
+    assert totals["tokens_sent"] == 4
+    assert totals["tokens_received"] == 6
     assert adapter.leftover_replies() == {}
 
 
@@ -180,6 +186,82 @@ def test_expect_model_mode_reask_consumes_in_order(tmp_path: Path) -> None:
     assert node["value"] == 2
     assert node["meta"]["retries_used"] == 1
     assert node["meta"]["expect"]["result"] is True
+    assert adapter.leftover_replies() == {}
+
+
+def test_if_model_mode_condition_wired(tmp_path: Path) -> None:
+    """An `if` effect's own `mode: model` decision dispatches through the
+    runtime's model-call identity, keyed at the conditional's own path
+    (#370 review F1 — previously ``conditional.py`` called the adapter
+    directly, outside any ``model_call``, so ``scripted`` failed naming no
+    path at all).
+    """
+    orch = {
+        "adapter": "scripted",
+        "model": "test",
+        "effects": [
+            {
+                "type": "if",
+                "name": "gate",
+                "if": {"mode": "model", "template": "Is 2 > 1?"},
+                "then": [_prompt("yes_branch")],
+                "else": [_prompt("no_branch")],
+            }
+        ],
+    }
+    orch_path = _write_orch(tmp_path, orch)
+    replies_path = _write_replies(
+        tmp_path,
+        {
+            "prime.gate": [{"text": "yes"}],
+            "prime.gate.yes_branch": [{"text": "yes-run"}],
+        },
+    )
+    adapter = ScriptedAdapter(replies_file=str(replies_path))
+
+    result = _run(orch_path, adapter)
+
+    assert result.ok, result.error
+    node = result.state["prime"]["gate"]
+    assert node["meta"]["branch"] == "then"
+    assert node["meta"]["answer"] == "yes"
+    assert node["yes_branch"]["value"] == "yes-run"
+    assert adapter.leftover_replies() == {}
+
+
+def test_while_model_mode_condition_wired(tmp_path: Path) -> None:
+    """A loop's own `while: {mode: model}` re-check dispatches through the
+    runtime's model-call identity the same way (#370 review F1); each check
+    re-asks at the loop's own path, consumed in order like a retry.
+    """
+    orch = {
+        "adapter": "scripted",
+        "model": "test",
+        "effects": [
+            {
+                "type": "loop",
+                "name": "lp",
+                "while": {"mode": "model", "template": "Continue?"},
+                "body": [_prompt("step")],
+            }
+        ],
+    }
+    orch_path = _write_orch(tmp_path, orch)
+    replies_path = _write_replies(
+        tmp_path,
+        {
+            "prime.lp": [{"text": "yes"}, {"text": "no"}],
+            "prime.lp.iter_0.step": [{"text": "hi"}],
+        },
+    )
+    adapter = ScriptedAdapter(replies_file=str(replies_path))
+
+    result = _run(orch_path, adapter)
+
+    assert result.ok, result.error
+    node = result.state["prime"]["lp"]
+    assert node["meta"]["answer"] == "no"
+    assert node["iter_0"]["step"]["value"] == "hi"
     assert adapter.leftover_replies() == {}
 
 
@@ -256,6 +338,38 @@ def test_named_tree_loop_path_includes_iter_index(tmp_path: Path) -> None:
     assert adapter.leftover_replies() == {}
 
 
+def test_unnamed_tree_loop_path_has_no_none_segment(tmp_path: Path) -> None:
+    """An unnamed `flow: tree` loop's body is keyed at the enclosing
+    container's own path, not ``<prefix>.None.<body>`` (#370 review F2 —
+    previously ``nested_container(store, self.defn.name)`` formatted the
+    loop's ``None`` name straight into the path). A single-item collection
+    keeps this deterministic: every pass of an *unnamed* tree loop shares
+    one path by design, so a multi-item version would not reliably pick a
+    particular reply.
+    """
+    orch = {
+        "adapter": "scripted",
+        "model": "test",
+        "effects": [
+            {
+                "type": "loop",
+                "flow": "tree",
+                "each": {"in": "input.items", "as": "item"},
+                "body": [_prompt("describe", template="{{item}}")],
+            }
+        ],
+    }
+    orch_path = _write_orch(tmp_path, orch)
+    replies_path = _write_replies(tmp_path, {"prime.describe": [{"text": "shot"}]})
+    adapter = ScriptedAdapter(replies_file=str(replies_path))
+
+    result = _run(orch_path, adapter, initial_state={"input": {"items": ["x"]}})
+
+    assert result.ok, result.error
+    assert result.state["prime"]["describe"]["value"] == "shot"
+    assert adapter.leftover_replies() == {}
+
+
 def test_use_children_namespace_identical_prompt_names(tmp_path: Path) -> None:
     child_yaml = yaml.dump({"effects": [_prompt("answer")]}, sort_keys=False)
     orch = {
@@ -271,8 +385,8 @@ def test_use_children_namespace_identical_prompt_names(tmp_path: Path) -> None:
     replies_path = _write_replies(
         tmp_path,
         {
-            "prime.first.prime.answer": [{"text": "from-first"}],
-            "prime.second.prime.answer": [{"text": "from-second"}],
+            "prime.first.answer": [{"text": "from-first"}],
+            "prime.second.answer": [{"text": "from-second"}],
         },
     )
     adapter = ScriptedAdapter(replies_file=str(replies_path))
@@ -305,6 +419,39 @@ def test_unknown_error_kind_rejected_at_load(tmp_path: Path) -> None:
     result = adapter.check()
     assert not result.ok
     assert "nonsense" in (result.message or "")
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"text": "ok", "tokens_sent": -1},
+        {"text": "ok", "tokens_received": True},
+        {"text": "ok", "token_sent": 3},
+        {"text": "ok", "error": {"kind": "timeout"}},
+        {"error": {"kind": "rate_limited", "status": True}},
+        {"error": {"kind": "rate_limited", "status": None}},
+        {"error": {"kind": "timeout", "unexpected": 1}},
+    ],
+    ids=[
+        "negative-tokens_sent",
+        "bool-tokens_received",
+        "unknown-key-typo",
+        "both-text-and-error",
+        "bool-status",
+        "null-status-on-a-status-bearing-kind",
+        "unknown-error-key",
+    ],
+)
+def test_check_rejects_malformed_reply_entries(tmp_path: Path, entry: dict[str, Any]) -> None:
+    """#370 review F5: a fixture ``check()`` accepts must not then crash
+    with an unnamed ``AssertionError`` during the run — booleans, negative
+    token counts, unknown keys, a ``text``+``error`` entry and an explicit
+    ``status: null`` on a kind that needs one are all rejected at load time.
+    """
+    path = _write_replies(tmp_path, {"prime.x": [entry]})
+    adapter = ScriptedAdapter(replies_file=str(path))
+    result = adapter.check()
+    assert not result.ok
 
 
 def test_config_resolves_relative_replies_file_against_cwd(
