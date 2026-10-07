@@ -36,8 +36,11 @@
 # ─── TRANSCRIPT ──────────────────────────────────────────────────────────────
 #
 #   A markdown file, written once at the start and appended to after every
-#   pass. Default: $TMPDIR/circuitry-agent-loop/<uuid>.md (/tmp when TMPDIR is
-#   unset) — never inside workdir. Pass `transcript` to choose the path.
+#   pass. Default: $TMPDIR/circuitry-agent-loop-<uuid>.md (/tmp when TMPDIR is
+#   unset) — never inside workdir. The random name is what keeps another user
+#   from claiming or swapping it in a shared /tmp; the file itself gets your
+#   umask's permissions, so on a shared host pass `transcript` with a private
+#   path. A `transcript` that already exists is overwritten.
 #
 # ─── INPUTS / OUTPUTS ────────────────────────────────────────────────────────
 #
@@ -77,7 +80,7 @@ interface:
     transcript:
       type: string
       default: ""
-      description: Path of the transcript file. Empty means $TMPDIR/circuitry-agent-loop/<uuid>.md — never inside workdir.
+      description: Path of the transcript file, overwritten if it exists. Empty means $TMPDIR/circuitry-agent-loop-<uuid>.md — never inside workdir.
   outputs:
     answer:
       path: prime.answer.value
@@ -89,7 +92,16 @@ interface:
       description: Path of the transcript file the loop appended every step to.
 
 effects:
-  # ─── Setup: choose and create the transcript file ──────────────────────────
+  # ─── Setup: check workdir, then choose and create the transcript file ──────
+  # Fails the run before any model call when workdir is not a directory; a
+  # typo would otherwise fail every tool and still spend max_steps calls.
+  - type: tool
+    name: workdir_check
+    provider: fs
+    params:
+      mode: list
+      path: "{{{input.workdir}}}"
+
   # env_vars and uuid only compute values; nothing here touches workdir.
   - type: tool
     name: tmpdir
@@ -106,14 +118,16 @@ effects:
       hex: true
 
   # fs write returns the path it wrote, so prime.transcript_file.value is the
-  # transcript's path from here on.
+  # transcript's path from here on. The default is a file directly in TMPDIR
+  # with an unguessable name, not a fixed subdirectory another user could
+  # create (or point elsewhere) first.
   - type: tool
     name: transcript_file
     provider: fs
     params:
       mode: write
       path: >-
-        {{#input.transcript}}{{{input.transcript}}}{{/input.transcript}}{{^input.transcript}}{{{prime.tmpdir.value}}}/circuitry-agent-loop/{{prime.run_id.value}}.md{{/input.transcript}}
+        {{#input.transcript}}{{{input.transcript}}}{{/input.transcript}}{{^input.transcript}}{{{prime.tmpdir.value}}}/circuitry-agent-loop-{{prime.run_id.value}}.md{{/input.transcript}}
       content: |
         # Agent transcript
 

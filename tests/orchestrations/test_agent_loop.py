@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -242,6 +243,17 @@ def test_stops_at_max_steps_without_an_answer(tmp_path: Path, workdir: Path) -> 
     assert "## Step 2" not in text
 
 
+def test_missing_workdir_fails_before_any_model_call(tmp_path: Path) -> None:
+    transcript = tmp_path / "transcript.md"
+    model = ScriptedModel(replies=[_step("list_dir")])
+
+    result = _run(model, workdir=tmp_path / "no-such-dir", transcript=transcript)
+
+    assert not result.ok
+    assert model.prompts == []
+    assert not transcript.exists()
+
+
 def test_unknown_tool_is_reported_back_to_the_model(tmp_path: Path, workdir: Path) -> None:
     transcript = tmp_path / "transcript.md"
     before = _files(workdir)
@@ -365,8 +377,10 @@ def test_default_transcript_is_in_tmpdir_not_workdir(
 
     assert result.ok, result.error
     transcript = Path(_output(result, "transcript"))
-    assert transcript.parent == tmpdir / "circuitry-agent-loop"
-    assert transcript.suffix == ".md"
+    # Directly in TMPDIR under an unguessable name: no shared subdirectory
+    # that another user could create, or point elsewhere, first.
+    assert transcript.parent == tmpdir
+    assert re.fullmatch(r"circuitry-agent-loop-[0-9a-f]{32}\.md", transcript.name)
     assert "## Step 1" in transcript.read_text(encoding="utf-8")
     assert _files(workdir) == before
 

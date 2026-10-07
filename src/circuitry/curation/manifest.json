@@ -562,7 +562,7 @@
         "transcript": {
           "type": "string",
           "required": false,
-          "description": "Transcript file path. Default $TMPDIR/circuitry-agent-loop/<uuid>.md, never inside workdir."
+          "description": "Transcript file path, overwritten if it exists. Default $TMPDIR/circuitry-agent-loop-<uuid>.md, never inside workdir."
         }
       },
       "outputs": {

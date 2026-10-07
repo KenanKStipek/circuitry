@@ -17,7 +17,7 @@ cof eject agents/agent_loop --out my_agent.yml   # a local copy to change
 | `task` | required | What the agent should find out. |
 | `workdir` | `.` | The directory the tools may read. Every path the model names is resolved inside it. |
 | `max_steps` | `8` | The most passes the loop runs. Each pass makes one model call. The loop also has a fixed ceiling of 50 (`max_iterations`). |
-| `transcript` | `""` | The path of the transcript file. If you leave it empty, the file is `$TMPDIR/circuitry-agent-loop/<uuid>.md` (`/tmp` when `TMPDIR` is unset), never a path inside `workdir`. |
+| `transcript` | `""` | The path of the transcript file. If you leave it empty, the file is `$TMPDIR/circuitry-agent-loop-<uuid>.md` (`/tmp` when `TMPDIR` is unset), never a path inside `workdir`. A file that already exists at the path you give is overwritten. |
 
 | Output | Path | Meaning |
 |---|---|---|
@@ -34,13 +34,17 @@ one JSON object for each request, so a very small local model can stop more
 often on schema retries than a larger one.
 
 If your access to a model is a subscription that you use through a
-coding-agent CLI's own login, and not an API key, the CLI-backed adapters
-`pi` and `claude_code` ([#366](https://github.com/KenanKStipek/circuitry/issues/366))
-send each `prompt` through that CLI with the CLI's own tools turned off. They
-work here like any other adapter: `cof run agents/agent_loop --adapter claude_code ...`.
-`cof list --extensions` shows the adapters that your installed version has.
+coding-agent CLI's own login, and not an API key, the planned CLI-backed
+adapters `pi` and `claude_code` ([#366](https://github.com/KenanKStipek/circuitry/issues/366))
+send each `prompt` through that CLI with the CLI's own tools turned off. Once
+they are in your installed version (`cof list --extensions` shows the adapters
+that it has), they work here like any other adapter:
+`cof run agents/agent_loop --adapter claude_code ...`.
 
 ## One pass
+
+Before the loop, the run lists `workdir` once, without `on_error`. A `workdir`
+that is not a directory fails the run there, before any model call.
 
 Each pass of the `agent` loop runs four steps in order:
 
@@ -131,14 +135,17 @@ The document fixes everything else:
 The only file that the run writes is the transcript, outside `workdir`
 by default.
 
-**Circuitry's allowlists remain the boundary.** The dispatch above is the
-document's own allowlist. The host's allowlists are a level above it:
+**Circuitry's allowlists remain the boundary, but at plugin level.** The
+dispatch above is the document's own allowlist, and it is the only thing that
+keeps this agent read-only. The host's allowlists are a level above it:
 `enabled_tools` in config.json limits the tool plugins that any run may
 build. This document needs `env_vars`, `uuid`, `fs`, `json`, `ripgrep` and
 `git`, so `"enabled_tools": ["env_vars", "uuid", "fs", "json", "ripgrep", "git"]`
-lets this agent run and blocks every other plugin, also in a copy that someone
-changed. See [Threat Model](threat-model.md) and
-[Configuration](guidebook/04-configuration.md).
+lets this agent run and blocks every other plugin. It does not keep a changed
+copy read-only: `fs` can also write and delete, and the `git` plugin runs any
+subcommand it is given. A copy with a `write_file` branch or a `git commit`
+branch passes the same `enabled_tools` list. See [Threat Model](threat-model.md)
+and [Configuration](guidebook/04-configuration.md).
 
 ## Limits
 
@@ -158,13 +165,26 @@ changed. See [Threat Model](threat-model.md) and
   fixed note as `answer`. Read the transcript to see how far it got.
 - **What the path check does not catch.** `fs` follows symbolic links, so a link
   inside `workdir` that points outside it is readable. ripgrep does not follow
-  links unless told to. The check is for POSIX paths. git finds the repository
-  that contains `workdir`, which can be a parent directory.
+  links while it walks a directory, but a `path` argument that is itself a link
+  is searched at its target, the same exposure as `fs`. The check is for POSIX
+  paths. git finds the repository that contains `workdir`, which can be a
+  parent directory.
+- **What the git flags do not stop.** A filter driver (`filter.<name>.clean` or
+  `filter.<name>.process` in the repository's git config, selected by its
+  `.gitattributes`) runs a program when `git status` or `git diff` compares
+  working-tree files. No flag turns that off. Point the git tools only at a
+  repository whose `.git/config` you trust.
 - **The transcript holds what the agent read.** File contents go into the
   transcript, and the transcript goes to the model provider on every pass. The
   default location is your temporary directory, and the file is not removed
-  after the run. Use `transcript` to put it somewhere else, and do not point the
-  agent at secrets that you would not send to that provider.
+  after the run. Do not point the agent at secrets that you would not send to
+  that provider.
+- **The transcript's permissions are your umask's.** The default file has a
+  random name directly in `$TMPDIR`, so another user cannot create it first or
+  swap it for a link. It is created with your umask's permissions, though, and
+  in a shared `/tmp` that usually means other users can read it. On a shared
+  host, set `transcript` to a path in a directory only you can read. A
+  `transcript` that already exists is overwritten.
 - **Prompt injection.** A file that the agent reads can contain instructions
   for the model. With read-only tools the worst result is a wrong answer or a
   misdirected read inside `workdir`.
@@ -219,10 +239,13 @@ What this changes about safety:
   `allowed_commands` runs with your user's permissions, and many commands can
   start others: `pytest` runs the project's code, `git` runs hooks and config
   commands. Allow only the commands that you would run on untrusted input.
-- **Capability consent applies.** `fs` is tagged `fs-write` and `shell` is
-  tagged `shell` (see the
-  [orchestration reference](orchestration-reference.md#tool)). A document
-  that pulls your agent in with `use: ref:`, or a library copy run with
-  `cof run-library`, must get an explicit yes before those effects run.
+- **Capability consent does not tell the two apart.** Consent is per
+  plugin capability (see the
+  [orchestration reference](orchestration-reference.md#tool)), and the
+  read-only document already needs all the ones a write tool adds: `fs-write`
+  for the transcript, `shell` and `network` for `git` and `ripgrep`. A
+  document that pulls your agent in with `use: ref:`, or a library copy run
+  with `cof run-library`, asks the same question whether or not the agent can
+  change your files. Only reading the dispatch tells you which it is.
 - **Lower `max_steps`.** With write tools, each step can change a file, and
   is no longer only a cost.
