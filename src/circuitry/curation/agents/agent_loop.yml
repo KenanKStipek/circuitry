@@ -1,0 +1,453 @@
+# Agent loop
+# ─────────────────────────────────────────────────────────────────────────────
+# A small tool-using agent built from Circuitry's own primitives: a `while`
+# loop, a `prompt` with `prompt_type: json`, `if` dispatch to `tool` effects,
+# and an `fs` transcript. The orchestration IS the agent — no agent framework,
+# no hidden memory.
+#
+# Each pass:
+#   1. read_transcript — fs reads the transcript file (everything so far).
+#   2. decide         — the model returns strict JSON
+#                       {thought, tool, args, done, answer}.
+#   3. dispatch       — flat CEL `if`s run at most one read-only tool inside
+#                       `workdir`. An unknown tool name, or a path that leaves
+#                       `workdir`, is answered with a message, never run.
+#   4. record         — fs appends the step and its observation to the
+#                       transcript, which the next pass reads back.
+#
+# The loop ends when the model sets `done: true`, or after `max_steps` passes.
+#
+# ─── TOOLS (read-only, confined to workdir) ──────────────────────────────────
+#
+#   list_dir    {path}      fs list   <workdir>/<path>
+#   read_file   {path}      fs read   <workdir>/<path>
+#   search      {pattern, path}  rg --no-config ... --regexp=<pattern> -- <path>
+#   git_status  {}          git status --short --branch
+#   git_log     {rev}       git log --oneline -n 20 <rev, default HEAD>
+#   git_diff    {rev}       git diff <rev, default HEAD>   (working tree vs rev)
+#   git_show    {rev}       git show <rev, default HEAD>
+#
+#   The model only ever chooses a branch and fills in an argument; the
+#   subcommand, the fs mode and every flag are written in this file. A `path`
+#   that is absolute or contains a `..` segment is refused. Revisions follow
+#   git's `--end-of-options`, so a value such as `--output=<file>` is read as a
+#   revision name, not an option.
+#
+# ─── TRANSCRIPT ──────────────────────────────────────────────────────────────
+#
+#   A markdown file, written once at the start and appended to after every
+#   pass. Default: $TMPDIR/circuitry-agent-loop/<uuid>.md (/tmp when TMPDIR is
+#   unset) — never inside workdir. Pass `transcript` to choose the path.
+#
+# ─── INPUTS / OUTPUTS ────────────────────────────────────────────────────────
+#
+#   task        string   What the agent should find out.        (required)
+#   workdir     string   Directory the tools may read.           (default ".")
+#   max_steps   integer  Most passes to run (hard ceiling 50).   (default 8)
+#   transcript  string   Transcript file path; "" = default.     (default "")
+#
+#   answer      prime.answer.value           — the final answer, or a note
+#                                              that max_steps ran out
+#   transcript  prime.transcript_file.value  — the transcript file's path
+#
+# ─── RUN ─────────────────────────────────────────────────────────────────────
+#
+#   cof run agents/agent_loop -e task="Where is the retry backoff capped?" \
+#       -e workdir=. -e max_steps=6
+#
+#   No adapter or model is pinned: the run uses your configured default (or
+#   --adapter / --model). See docs/agent-loop.md for the walkthrough, its
+#   limits, and how to add write tools.
+# ─────────────────────────────────────────────────────────────────────────────
+
+interface:
+  inputs:
+    task:
+      type: string
+      required: true
+      description: What the agent should find out or answer.
+    workdir:
+      type: string
+      default: "."
+      description: Directory the read-only tools may look at. Every path the model names is resolved inside it.
+    max_steps:
+      type: integer
+      default: 8
+      description: Most loop passes (one model call each) before the run stops without an answer. Capped at 50.
+    transcript:
+      type: string
+      default: ""
+      description: Path of the transcript file. Empty means $TMPDIR/circuitry-agent-loop/<uuid>.md — never inside workdir.
+  outputs:
+    answer:
+      path: prime.answer.value
+      type: string
+      description: The model's final answer, or a note that max_steps ran out first.
+    transcript:
+      path: prime.transcript_file.value
+      type: string
+      description: Path of the transcript file the loop appended every step to.
+
+effects:
+  # ─── Setup: choose and create the transcript file ──────────────────────────
+  # env_vars and uuid only compute values; nothing here touches workdir.
+  - type: tool
+    name: tmpdir
+    provider: env_vars
+    params:
+      mode: get
+      name: TMPDIR
+      default: /tmp
+
+  - type: tool
+    name: run_id
+    provider: uuid
+    params:
+      hex: true
+
+  # fs write returns the path it wrote, so prime.transcript_file.value is the
+  # transcript's path from here on.
+  - type: tool
+    name: transcript_file
+    provider: fs
+    params:
+      mode: write
+      path: >-
+        {{#input.transcript}}{{{input.transcript}}}{{/input.transcript}}{{^input.transcript}}{{{prime.tmpdir.value}}}/circuitry-agent-loop/{{prime.run_id.value}}.md{{/input.transcript}}
+      content: |
+        # Agent transcript
+
+        Task: {{{input.task}}}
+        Workdir: {{{input.workdir}}}
+
+  # ─── The loop ──────────────────────────────────────────────────────────────
+  # min_iterations: 1 — the first pass runs without a check (there is no
+  # decision to read yet). After that the loop continues while the model has
+  # not said done and fewer than max_steps passes have run.
+  - type: loop
+    name: agent
+    max_iterations: 50
+    min_iterations: 1
+    while:
+      mode: cel
+      expr: "state.prime.decide.value.done != true && state.iter.count < state.input.max_steps"
+    body:
+      - type: tool
+        name: read_transcript
+        provider: fs
+        params:
+          mode: read
+          path: "{{{prime.transcript_file.value}}}"
+
+      - type: prompt
+        name: decide
+        prompt_type: json
+        retries: {max_attempts: 3, backoff_ms: 500}
+        schema:
+          type: object
+          properties:
+            thought: {type: string}
+            tool: {type: string}
+            args:
+              type: object
+              properties:
+                path: {type: string}
+                pattern: {type: string}
+                rev: {type: string}
+            done: {type: boolean}
+            answer: {type: string}
+          required: [thought, tool, args, done, answer]
+        template: |
+          You are a careful agent working on a task. You can look at the files in
+          one directory by calling one tool per turn. You remember nothing except
+          the transcript below: it holds every tool call you made and what it
+          returned.
+
+          Task: {{{input.task}}}
+
+          Tools (paths are relative to the working directory; "." is the directory itself):
+          - list_dir   args {"path": "."}                     list the names in a directory
+          - read_file  args {"path": "src/app.py"}            read a text file
+          - search     args {"pattern": "regex", "path": "."} ripgrep for a regex; prints file:line:text
+          - git_status args {}                                git status
+          - git_log    args {"rev": "HEAD"}                   the last 20 commits reachable from rev
+          - git_diff   args {"rev": "HEAD"}                   working tree compared with rev
+          - git_show   args {"rev": "HEAD"}                   one commit (or object) in full
+
+          Paths must stay inside the working directory: no absolute paths, no "..".
+
+          Transcript so far:
+          <<< BEGIN TRANSCRIPT >>>
+          {{{prime.read_transcript.value}}}
+          <<< END TRANSCRIPT >>>
+
+          Reply with ONLY one JSON object, no markdown:
+          {"thought": "<why this step>", "tool": "<tool name, or empty when done>", "args": {...}, "done": <true|false>, "answer": "<the final answer when done, else empty>"}
+
+          Set "done" to true, with your answer in "answer", as soon as the transcript
+          holds enough to answer the task. Do not repeat a call whose result is
+          already in the transcript.
+
+      # ─── Argument check ──────────────────────────────────────────────────
+      # True unless `path` is absolute or has a `..` segment, or a search has
+      # no pattern. Unnamed `if`, so both branches write prime.args_ok.value.
+      - type: if
+        if:
+          mode: cel
+          expr: >-
+            (!has(state.prime.decide.value.args.path)
+              || (!state.prime.decide.value.args.path.startsWith('/')
+                  && !state.prime.decide.value.args.path.matches('(^|/)[.][.](/|$)')))
+            && (state.prime.decide.value.tool != 'search'
+                || (has(state.prime.decide.value.args.pattern)
+                    && state.prime.decide.value.args.pattern != ''))
+        then:
+          - type: tool
+            name: args_ok
+            provider: json
+            params: {mode: parse, input: "true"}
+        else:
+          - type: tool
+            name: args_ok
+            provider: json
+            params: {mode: parse, input: "false"}
+
+      # ─── Dispatch ────────────────────────────────────────────────────────
+      # Flat, unnamed `if`s: exactly one of them fires each pass, and every
+      # branch writes prime.observation, which `record` appends below. Tool
+      # failures (a missing file, a bad revision) are recorded with
+      # on_error: continue and shown to the model, not raised.
+      - type: if
+        if:
+          mode: cel
+          expr: "state.prime.decide.value.done == true"
+        then:
+          - type: tool
+            name: observation
+            provider: json
+            params: {mode: parse, input: '"Finished: final answer given."'}
+
+      - type: if
+        if:
+          mode: cel
+          expr: >-
+            state.prime.decide.value.done != true
+            && state.prime.decide.value.tool in ['list_dir', 'read_file', 'search']
+            && state.prime.args_ok.value != true
+        then:
+          - type: tool
+            name: observation
+            provider: json
+            params:
+              mode: parse
+              input: '"Refused: path must be relative to the working directory, with no .. segment, and search needs a non-empty pattern."'
+
+      - type: if
+        if:
+          mode: cel
+          expr: "state.prime.decide.value.done != true && state.prime.args_ok.value == true && state.prime.decide.value.tool == 'list_dir'"
+        then:
+          - type: tool
+            name: observation
+            provider: fs
+            on_error: continue
+            params:
+              mode: list
+              path: "{{{input.workdir}}}/{{{prime.decide.value.args.path}}}"
+
+      - type: if
+        if:
+          mode: cel
+          expr: "state.prime.decide.value.done != true && state.prime.args_ok.value == true && state.prime.decide.value.tool == 'read_file'"
+        then:
+          - type: tool
+            name: observation
+            provider: fs
+            on_error: continue
+            params:
+              mode: read
+              path: "{{{input.workdir}}}/{{{prime.decide.value.args.path}}}"
+
+      # --no-config: no ripgreprc can add flags such as --pre (which runs a
+      # command per file). The pattern is one --regexp= argument and the path
+      # follows --, so neither can be read as an option. Exit 1 (no match) is
+      # not a failure here: allow_nonzero, and the exit code is recorded.
+      - type: if
+        if:
+          mode: cel
+          expr: "state.prime.decide.value.done != true && state.prime.args_ok.value == true && state.prime.decide.value.tool == 'search'"
+        then:
+          - type: tool
+            name: observation
+            provider: ripgrep
+            on_error: continue
+            params:
+              cwd: "{{{input.workdir}}}"
+              allow_nonzero: true
+              args:
+                - --no-config
+                - --line-number
+                - --no-heading
+                - --color=never
+                - --max-count=50
+                - --max-columns=300
+                - "--regexp={{{prime.decide.value.args.pattern}}}"
+                - --
+                - "{{#prime.decide.value.args.path}}{{{prime.decide.value.args.path}}}{{/prime.decide.value.args.path}}{{^prime.decide.value.args.path}}.{{/prime.decide.value.args.path}}"
+
+      # git: the subcommand and flags are fixed here. --no-optional-locks keeps
+      # status from refreshing the index; core.fsmonitor=false and
+      # log.showSignature=false keep a repository's own config from starting
+      # a hook or a signature program; --no-ext-diff/--no-textconv do the same
+      # for diff drivers. A model-supplied rev follows --end-of-options.
+      - type: if
+        if:
+          mode: cel
+          expr: "state.prime.decide.value.done != true && state.prime.decide.value.tool == 'git_status'"
+        then:
+          - type: tool
+            name: observation
+            provider: git
+            on_error: continue
+            params:
+              cwd: "{{{input.workdir}}}"
+              args: [--no-optional-locks, -c, core.fsmonitor=false, status, --short, --branch]
+
+      - type: if
+        if:
+          mode: cel
+          expr: "state.prime.decide.value.done != true && state.prime.decide.value.tool == 'git_log'"
+        then:
+          - type: tool
+            name: observation
+            provider: git
+            on_error: continue
+            params:
+              cwd: "{{{input.workdir}}}"
+              args:
+                - --no-optional-locks
+                - -c
+                - core.fsmonitor=false
+                - -c
+                - log.showSignature=false
+                - log
+                - --oneline
+                - --no-color
+                - "-n"
+                - "20"
+                - --end-of-options
+                - "{{#prime.decide.value.args.rev}}{{{prime.decide.value.args.rev}}}{{/prime.decide.value.args.rev}}{{^prime.decide.value.args.rev}}HEAD{{/prime.decide.value.args.rev}}"
+
+      - type: if
+        if:
+          mode: cel
+          expr: "state.prime.decide.value.done != true && state.prime.decide.value.tool == 'git_diff'"
+        then:
+          - type: tool
+            name: observation
+            provider: git
+            on_error: continue
+            params:
+              cwd: "{{{input.workdir}}}"
+              args:
+                - --no-optional-locks
+                - -c
+                - core.fsmonitor=false
+                - diff
+                - --no-ext-diff
+                - --no-textconv
+                - --no-color
+                - --end-of-options
+                - "{{#prime.decide.value.args.rev}}{{{prime.decide.value.args.rev}}}{{/prime.decide.value.args.rev}}{{^prime.decide.value.args.rev}}HEAD{{/prime.decide.value.args.rev}}"
+
+      - type: if
+        if:
+          mode: cel
+          expr: "state.prime.decide.value.done != true && state.prime.decide.value.tool == 'git_show'"
+        then:
+          - type: tool
+            name: observation
+            provider: git
+            on_error: continue
+            params:
+              cwd: "{{{input.workdir}}}"
+              args:
+                - --no-optional-locks
+                - -c
+                - core.fsmonitor=false
+                - -c
+                - log.showSignature=false
+                - show
+                - --no-ext-diff
+                - --no-textconv
+                - --no-color
+                - --end-of-options
+                - "{{#prime.decide.value.args.rev}}{{{prime.decide.value.args.rev}}}{{/prime.decide.value.args.rev}}{{^prime.decide.value.args.rev}}HEAD{{/prime.decide.value.args.rev}}"
+
+      # Anything else is reported back, so the next pass can correct itself.
+      - type: if
+        if:
+          mode: cel
+          expr: >-
+            state.prime.decide.value.done != true
+            && !(state.prime.decide.value.tool in ['list_dir', 'read_file', 'search',
+                 'git_status', 'git_log', 'git_diff', 'git_show'])
+        then:
+          - type: tool
+            name: observation
+            provider: json
+            params:
+              mode: parse
+              input: '"Unknown tool. Use one of: list_dir, read_file, search, git_status, git_log, git_diff, git_show."'
+
+      # ─── Record ──────────────────────────────────────────────────────────
+      # Append this pass to the transcript: the decision, then the tool's
+      # output — or its error — so the next pass's read_transcript sees it.
+      - type: tool
+        name: record
+        provider: fs
+        params:
+          mode: append
+          path: "{{{prime.transcript_file.value}}}"
+          content: |
+
+            ## Step {{_loop_index}}
+            thought: {{{prime.decide.value.thought}}}
+            tool: {{{prime.decide.value.tool}}}
+            args: {{{prime.decide.value.args}}}
+            {{#prime.decide.value.done}}
+            answer: {{{prime.decide.value.answer}}}
+            {{/prime.decide.value.done}}
+            observation:
+            {{#prime.observation.meta.error}}
+            error: {{{prime.observation.meta.error}}}
+            {{/prime.observation.meta.error}}
+            {{^prime.observation.meta.error}}
+            {{{prime.observation.value}}}
+            {{/prime.observation.meta.error}}
+            {{#prime.observation.meta.exit_code}}
+            exit code {{prime.observation.meta.exit_code}} {{{prime.observation.meta.stderr}}}
+            {{/prime.observation.meta.exit_code}}
+
+  # ─── Answer ────────────────────────────────────────────────────────────────
+  # The last pass's answer when the model finished; otherwise say why there is
+  # none. Unnamed `if`, so both branches write prime.answer.value.
+  - type: if
+    if:
+      mode: cel
+      expr: "state.prime.agent.last.decide.value.done == true"
+    then:
+      - type: tool
+        name: answer
+        provider: json
+        params:
+          mode: extract
+          input: {from: prime.agent.last.decide.value}
+          path: answer
+    else:
+      - type: tool
+        name: answer
+        provider: json
+        params:
+          mode: parse
+          input: '"No answer: max_steps ran out before the model finished. The transcript shows how far it got."'
