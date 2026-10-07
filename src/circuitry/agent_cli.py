@@ -60,6 +60,14 @@ PI_ATTACHED_PROMPT_INSTRUCTION = (
     "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
 )
 
+#: The property a non-object schema is wrapped in for Claude Code's
+#: ``--json-schema`` (see :func:`claude_json_schema`).
+CLAUDE_SCHEMA_VALUE_KEY = "value"
+
+#: Top-level schema keywords that stay at the root when a schema is wrapped,
+#: so a ``#/$defs/...`` reference still resolves.
+_SCHEMA_ROOT_KEYWORDS = ("$defs", "definitions")
+
 #: How much of a failed CLI's stderr an error message carries.
 _STDERR_TAIL_CHARS = 2000
 
@@ -158,18 +166,25 @@ def claude_command(
     session_id: str | None = None,
     persist_session: bool = False,
     extra_args: Sequence[str] = (),
+    strict_mcp: bool = True,
 ) -> list[str]:
     """argv for ``claude -p --output-format json``; the prompt goes on stdin.
 
     ``model`` is left to Claude Code's default when empty. ``json_schema``
-    adds ``--json-schema`` (the answer then arrives as ``structured_output``).
-    ``tools=False`` adds ``--tools ""``. ``session_id`` resumes that session
-    (``--resume``); without one, ``persist_session=False`` adds
+    adds ``--json-schema`` as :func:`claude_json_schema` sends it (the answer
+    then arrives as ``structured_output``; pass the same schema to
+    :func:`parse_claude_output`). ``tools=False`` adds ``--tools ""``, which
+    turns off only Claude Code's built-in tools. ``strict_mcp=True`` adds
+    ``--strict-mcp-config``: with no ``--mcp-config`` no MCP server starts,
+    neither the user's nor a project ``.mcp.json``. ``session_id`` resumes
+    that session (``--resume``); without one, ``persist_session=False`` adds
     ``--no-session-persistence``. ``extra_args`` go last.
     """
     cmd = [binary, "-p", "--output-format", "json"]
     if not tools:
         cmd += ["--tools", ""]
+    if strict_mcp:
+        cmd.append("--strict-mcp-config")
     if session_id:
         cmd += ["--resume", session_id]
     elif not persist_session:
@@ -177,9 +192,40 @@ def claude_command(
     if model:
         cmd += ["--model", model]
     if json_schema is not None:
-        cmd += ["--json-schema", json.dumps(json_schema)]
+        cmd += ["--json-schema", json.dumps(claude_json_schema(json_schema))]
     cmd += list(extra_args)
     return cmd
+
+
+def claude_wraps_schema(schema: Mapping[str, Any]) -> bool:
+    """Whether :func:`claude_json_schema` wraps ``schema``: its top-level
+    ``type`` is not ``"object"``."""
+    return schema.get("type") != "object"
+
+
+def claude_json_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """The schema to send as Claude Code's ``--json-schema``.
+
+    Claude Code sends it as a tool's input schema, which the API rejects
+    unless its top-level ``type`` is ``"object"``. An object schema is sent
+    unchanged; any other is wrapped as the one required property
+    :data:`CLAUDE_SCHEMA_VALUE_KEY` of an object, and
+    :func:`parse_claude_output` unwraps the answer again. ``$defs`` and
+    ``definitions`` move to the wrapper so ``#/...`` references still resolve.
+    """
+    if not claude_wraps_schema(schema):
+        return dict(schema)
+    inner = {key: value for key, value in schema.items() if key not in _SCHEMA_ROOT_KEYWORDS}
+    wrapper: dict[str, Any] = {
+        "type": "object",
+        "properties": {CLAUDE_SCHEMA_VALUE_KEY: inner},
+        "required": [CLAUDE_SCHEMA_VALUE_KEY],
+        "additionalProperties": False,
+    }
+    for key in _SCHEMA_ROOT_KEYWORDS:
+        if key in schema:
+            wrapper[key] = schema[key]
+    return wrapper
 
 
 def run_agent_cli(
@@ -284,13 +330,19 @@ def parse_pi_output(proc: subprocess.CompletedProcess[str]) -> AgentCliResult:
     )
 
 
-def parse_claude_output(proc: subprocess.CompletedProcess[str]) -> AgentCliResult:
+def parse_claude_output(
+    proc: subprocess.CompletedProcess[str],
+    *,
+    json_schema: Mapping[str, Any] | None = None,
+) -> AgentCliResult:
     """Read ``claude --output-format json``'s single result object.
 
     ``is_error`` raises :class:`AgentCliError` carrying Claude Code's own
     ``result`` text (e.g. "... version 2.1.280 or newer is required"). With
     ``--json-schema``, the answer is ``structured_output`` and ``text`` is
-    that value as JSON.
+    that value as JSON; ``json_schema`` is the schema given to
+    :func:`claude_command`, so a wrapped answer is unwrapped. Otherwise
+    ``text`` is the result text, stripped.
     """
     raw = _last_json_object(proc.stdout or "")
     if raw is None:
@@ -298,15 +350,27 @@ def parse_claude_output(proc: subprocess.CompletedProcess[str]) -> AgentCliResul
     result_text = raw.get("result")
     text = result_text if isinstance(result_text, str) else ""
     if raw.get("is_error") is True:
+        # Claude Code reports an API error as an error result whose subtype
+        # is still "success", which says nothing.
         subtype = raw.get("subtype")
-        label = f" ({subtype})" if isinstance(subtype, str) and subtype else ""
+        shown = isinstance(subtype, str) and subtype not in ("", "success")
+        label = f" ({subtype})" if shown else ""
         raise AgentCliError(f"claude failed{label}: {text or 'no message'}")
     if proc.returncode != 0:
         raise AgentCliError(_no_answer_message("claude", proc))
 
     structured = raw.get("structured_output")
     if structured is not None:
+        if (
+            json_schema is not None
+            and claude_wraps_schema(json_schema)
+            and isinstance(structured, dict)
+            and CLAUDE_SCHEMA_VALUE_KEY in structured
+        ):
+            structured = structured[CLAUDE_SCHEMA_VALUE_KEY]
         text = json.dumps(structured)
+    else:
+        text = text.strip()
     usage = raw.get("usage")
     usage = usage if isinstance(usage, dict) else {}
     usage_totals = _UsageTotals()

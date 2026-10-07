@@ -19,12 +19,14 @@ from .base import GenerateOptions, GenerateResult
 class ClaudeCodeAdapter:
     """One completion through the Claude Code CLI (``claude``) and its own login.
 
-    Runs ``claude -p --output-format json --no-session-persistence --tools ""``
-    with the prompt on stdin, in a fresh temporary directory so no project's
-    ``CLAUDE.md`` is picked up. A JSON prompt with a ``schema`` adds
-    ``--json-schema`` and takes Claude Code's ``structured_output`` as the
-    answer. Tokens and cost come from Claude Code's result. Generation
-    options Claude Code has no flag for are ignored, with a warning.
+    Runs ``claude -p --output-format json --no-session-persistence --tools ""
+    --strict-mcp-config`` with the prompt on stdin, in a fresh temporary
+    directory so no project's ``CLAUDE.md`` is picked up. A JSON prompt with
+    a ``schema`` adds ``--json-schema`` and takes Claude Code's
+    ``structured_output`` as the answer (a schema whose top level is not an
+    object is wrapped, see ``agent_cli.claude_json_schema``). Tokens and cost
+    come from Claude Code's result. Generation options Claude Code has no
+    flag for are ignored, with a warning.
     """
 
     name: str = "claude_code"
@@ -41,10 +43,11 @@ class ClaudeCodeAdapter:
         timeout_seconds: int = 120,
         options: GenerateOptions | None = None,
     ) -> GenerateResult:
+        json_schema = options.json_schema if options is not None else None
         cmd = claude_command(
             binary=self.binary,
             model=model or self.default_model,
-            json_schema=options.json_schema if options is not None else None,
+            json_schema=json_schema,
             extra_args=self.extra_args,
         )
         with tempfile.TemporaryDirectory(prefix="circuitry-claude-") as workdir:
@@ -56,7 +59,7 @@ class ClaudeCodeAdapter:
                     input=prompt,
                     cwd=workdir,
                 )
-                result = parse_claude_output(proc)
+                result = parse_claude_output(proc, json_schema=json_schema)
         return generate_result(self.name, result, options)
 
     def check(self) -> CheckResult:

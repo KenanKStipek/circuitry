@@ -13,6 +13,7 @@ import pytest
 import typer.testing
 import yaml
 from agent_cli_test_support import (
+    CLAUDE_JSON_SCHEMA_TOOL,
     SPAWN_CHILD_AND_HANG,
     claude_result,
     pi_events,
@@ -174,8 +175,9 @@ def test_pi_timeout_stops_the_cli_and_its_children_and_is_retryable(
     pid_file = tmp_path / "child.pid"
     monkeypatch.setenv("FAKE_CLI_CHILD_PID", str(pid_file))
     fake = write_fake_cli(tmp_path, "fake-pi", body=SPAWN_CHILD_AND_HANG)
-    with pytest.raises(AdapterCallError, match="did not finish within 1s") as caught:
-        PiAdapter(binary=str(fake)).generate(model="", prompt="p", timeout_seconds=1)
+    # Long enough for the fake's Python to start and write the pid file under load.
+    with pytest.raises(AdapterCallError, match="did not finish within 3s") as caught:
+        PiAdapter(binary=str(fake)).generate(model="", prompt="p", timeout_seconds=3)
     assert caught.value.retry_info.retryable is True
     assert wait_until_dead(int(pid_file.read_text()))
 
@@ -208,8 +210,8 @@ def test_claude_code_prompt_effect_sends_the_prompt_on_stdin(
     seen = read_record(record)
     assert seen["stdin"] == "Capital of France?"
     assert seen["argv"] == [
-        "-p", "--output-format", "json", "--tools", "", "--no-session-persistence",
-        "--model", "claude-sonnet-4-5",
+        "-p", "--output-format", "json", "--tools", "", "--strict-mcp-config",
+        "--no-session-persistence", "--model", "claude-sonnet-4-5",
     ]  # fmt: skip
     assert not Path(seen["cwd"]).exists()
     assert "CLAUDE_CODE_ENTRYPOINT" not in seen["env"]
@@ -234,6 +236,67 @@ def test_claude_code_json_prompt_passes_the_schema_and_uses_structured_output(
     assert node["value"] == {"count": 4}
     argv = read_record(record)["argv"]
     assert json.loads(argv[argv.index("--json-schema") + 1]) == SCHEMA
+
+
+@pytest.mark.parametrize("prompt_type", ["array", "json"])
+def test_claude_code_array_schema_is_wrapped_in_an_object_and_unwrapped(
+    tmp_path: Path, record: Path, monkeypatch: pytest.MonkeyPatch, prompt_type: str
+) -> None:
+    schema = {"type": "array", "items": {"type": "string"}}
+    fake = write_fake_cli(tmp_path, "fake-claude", body=CLAUDE_JSON_SCHEMA_TOOL)
+    monkeypatch.setenv("FAKE_CLAUDE_STRUCTURED_OUTPUT", json.dumps({"value": ["a", "b"]}))
+    node = _run(
+        tmp_path,
+        "claude_code",
+        {"binary": str(fake)},
+        {"type": "prompt", "name": "n", "template": "two letters",
+         "prompt_type": prompt_type, "schema": schema},
+    )  # fmt: skip
+    assert node["meta"]["error"] is None
+    assert node["value"] == ["a", "b"]
+    argv = read_record(record)["argv"]
+    assert json.loads(argv[argv.index("--json-schema") + 1]) == {
+        "type": "object",
+        "properties": {"value": schema},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+
+
+def test_claude_code_object_schema_is_sent_unchanged_to_the_schema_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = write_fake_cli(tmp_path, "fake-claude", body=CLAUDE_JSON_SCHEMA_TOOL)
+    monkeypatch.setenv("FAKE_CLAUDE_STRUCTURED_OUTPUT", json.dumps({"count": 2}))
+    node = _run(
+        tmp_path,
+        "claude_code",
+        {"binary": str(fake)},
+        {"type": "prompt", "name": "n", "template": "count", "prompt_type": "json", "schema": SCHEMA},
+    )
+    assert node["meta"]["error"] is None
+    assert node["value"] == {"count": 2}
+
+
+def test_claude_code_text_answer_is_stripped(tmp_path: Path) -> None:
+    fake = write_fake_cli(tmp_path, "fake-claude", stdout=claude_result(result="\n Paris \n"))
+    result = ClaudeCodeAdapter(binary=str(fake)).generate(model="", prompt="q", timeout_seconds=30)
+    assert result.text == "Paris"
+
+
+def test_claude_code_api_error_does_not_show_the_success_subtype(tmp_path: Path) -> None:
+    message = "API Error: 400 tools.0.custom.input_schema.type: Input should be 'object'"
+    fake = write_fake_cli(
+        tmp_path,
+        "fake-claude",
+        stdout=claude_result(is_error=True, subtype="success", result=message),
+        exit_code=1,
+    )
+    node = _run(
+        tmp_path, "claude_code", {"binary": str(fake)}, {"type": "prompt", "name": "ask", "template": "q"}
+    )
+    assert f"claude failed: {message}" in node["meta"]["error"]
+    assert "(success)" not in node["meta"]["error"]
 
 
 def test_claude_code_version_error_is_passed_through(tmp_path: Path) -> None:

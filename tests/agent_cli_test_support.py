@@ -86,6 +86,25 @@ time.sleep(60)
 """
 
 
+#: A ``body`` that answers like Claude Code's ``--json-schema``, which it
+#: implements as a tool: a schema whose top-level ``type`` is not
+#: ``"object"`` fails with the API's 400 error, otherwise the answer is the
+#: JSON in ``FAKE_CLAUDE_STRUCTURED_OUTPUT`` as ``structured_output``.
+CLAUDE_JSON_SCHEMA_TOOL = """\
+schema = json.loads(sys.argv[sys.argv.index("--json-schema") + 1])
+result = {"type": "result", "subtype": "success", "session_id": "sess-2"}
+if schema.get("type") != "object":
+    result.update(is_error=True, result="API Error: 400 tools.0.custom.input_schema.type: "
+                  "Input should be 'object'")
+    print(json.dumps(result))
+    sys.exit(1)
+structured = json.loads(os.environ["FAKE_CLAUDE_STRUCTURED_OUTPUT"])
+result.update(is_error=False, result="", structured_output=structured)
+print(json.dumps(result))
+sys.exit(0)
+"""
+
+
 def pid_alive(pid: int) -> bool:
     """Whether ``pid`` is running; a killed but not yet reaped (zombie)
     process counts as dead where ``/proc`` can tell."""
