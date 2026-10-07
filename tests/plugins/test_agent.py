@@ -486,3 +486,47 @@ def test_check_is_ok_when_one_engine_is_available(
 
 def test_agent_needs_shell_fs_write_and_network_consent() -> None:
     assert capabilities_of("agent") == frozenset({SHELL, FS_WRITE, NETWORK})
+
+
+def test_tool_effect_lands_value_and_raw_in_state_without_the_transcript(
+    tmp_path: Path, workdir: Path
+) -> None:
+    from unittest.mock import MagicMock
+
+    from circuitry.core.compiler import compile_orchestration
+    from circuitry.core.dynamic import DynamicRuntime
+    from circuitry.core.store import Store
+
+    fake = write_fake_cli(tmp_path, "pi", body=FAKE_AGENT_BODY)
+    orch = {
+        "effects": [
+            {
+                "type": "tool",
+                "name": "delegate",
+                "provider": "agent",
+                "timeout_ms": 30000,
+                "params": {
+                    "prompt": "Task: {{input.task}}",
+                    "cwd": str(workdir),
+                    "env": _env(tmp_path, workdir, FAKE_RESULT_FIRST='{"summary": "s", "files": 3}'),
+                    "result_file": "result.json",
+                    "result_schema": SCHEMA,
+                },
+            }
+        ]
+    }
+    store = Store(state={"input": {"task": "rename the module"}})
+    DynamicRuntime(
+        compile_orchestration(orch=orch),
+        adapter=MagicMock(),
+        model="test",
+        runtime_config={"plugins": {"agent": {"pi": {"binary": str(fake)}}}},
+    ).execute(store=store)
+    node = store.state["prime"]["delegate"]
+    assert node["meta"]["error"] is None
+    assert node["value"] == {"summary": "s", "files": 3}
+    assert node["meta"]["raw"]["session_id"] == "sess-abc"
+    assert node["meta"]["raw"]["tool_calls"] == 1
+    assert "Task: rename the module" in _calls(tmp_path)[0]["attachments"][0]
+    assert "reply all done" not in json.dumps(store.state["prime"], default=str)
+    assert "reply all done" in Path(node["meta"]["raw"]["transcript"]).read_text()
