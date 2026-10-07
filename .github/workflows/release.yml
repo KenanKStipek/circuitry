@@ -63,8 +63,15 @@ jobs:
             echo "::error::tag $tag does not match pyproject.toml version $py_version"
             exit 1
           fi
-          if [[ "$tag" != "$cargo_version" ]]; then
-            echo "::error::tag $tag does not match electricity/Cargo.toml workspace version $cargo_version"
+          # Cargo requires valid semver, so a pre-release tag's PEP 440 form
+          # (X.Y.ZrcN) maps to Cargo's semver pre-release form (X.Y.Z-rc.N)
+          # before comparing (see RELEASING.md's "Pre-releases" section).
+          cargo_expected="$tag"
+          if [[ "$tag" =~ ^([0-9]+\.[0-9]+\.[0-9]+)rc([0-9]+)$ ]]; then
+            cargo_expected="${BASH_REMATCH[1]}-rc.${BASH_REMATCH[2]}"
+          fi
+          if [[ "$cargo_expected" != "$cargo_version" ]]; then
+            echo "::error::tag $tag expects electricity/Cargo.toml workspace version $cargo_expected, found $cargo_version"
             exit 1
           fi
           echo "version=$tag" >> "$GITHUB_OUTPUT"
@@ -74,10 +81,7 @@ jobs:
     needs: verify-version
     permissions:
       contents: read
-      packages: write
     uses: ./.github/workflows/electricity-release-build.yml
-    with:
-      publish: true
 
   build:
     name: Build wheel + sdist
@@ -102,6 +106,45 @@ jobs:
         with:
           name: dist
           path: dist/
+
+  publish-image:
+    name: Publish electricity container image
+    runs-on: ubuntu-latest
+    # Waits for both builds, not just electricity-build: the image must not
+    # reach ghcr.io before the Python wheel/sdist are known to build too (#359).
+    needs: [build, electricity-build]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download electricity musl archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "electricity-*-unknown-linux-musl"
+          path: electricity/dist
+          merge-multiple: true
+      - name: Unpack binaries for the image build context
+        working-directory: electricity
+        run: |
+          version="${{ needs.electricity-build.outputs.version }}"
+          mkdir -p dist/linux/amd64 dist/linux/arm64
+          tar xzf "dist/electricity-${version}-x86_64-unknown-linux-musl.tar.gz" -C dist/linux/amd64 --strip-components=1
+          tar xzf "dist/electricity-${version}-aarch64-unknown-linux-musl.tar.gz" -C dist/linux/arm64 --strip-components=1
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: electricity
+          file: electricity/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/kenankstipek/electricity:${{ needs.electricity-build.outputs.version }}
 
   publish-pypi:
     name: Publish to PyPI
@@ -134,7 +177,7 @@ jobs:
   github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [publish-pypi, verify-version, electricity-build]
+    needs: [publish-pypi, publish-image, verify-version, electricity-build]
     permissions:
       contents: write
     steps:
@@ -171,7 +214,8 @@ jobs:
             echo ""
             echo "---"
             echo ""
-            echo "electricity's binaries and container image (\`ghcr.io/kenankstipek/electricity:$version\`) are attached below as a **preview**: they cannot run orchestrations yet."
+            image_version="${{ needs.electricity-build.outputs.version }}"
+            echo "electricity's binaries and container image (\`ghcr.io/kenankstipek/electricity:$image_version\`) are attached below as a **preview**: they cannot run orchestrations yet."
           } >> "$notes_file"
           {
             echo "notes_file=$notes_file"

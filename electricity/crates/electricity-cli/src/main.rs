@@ -21,6 +21,11 @@ enum Action {
     UsageError(String),
 }
 
+/// Run flags the usage text advertises (`-e key=value`, `--out`, `--profile`):
+/// recognized in any position, so a request using them is a run request
+/// (exit 1), not a usage error (exit 2).
+const KNOWN_RUN_FLAGS: &[&str] = &["-e", "--out", "--profile"];
+
 fn classify(args: &[String]) -> Action {
     if args.iter().any(|a| a == "--version" || a == "-V") {
         return Action::Version;
@@ -30,7 +35,7 @@ fn classify(args: &[String]) -> Action {
     }
     match args.first() {
         None => Action::UsageError("no config file or orchestration given".to_string()),
-        Some(first) if first.starts_with('-') => {
+        Some(first) if first.starts_with('-') && !KNOWN_RUN_FLAGS.contains(&first.as_str()) => {
             Action::UsageError(format!("unrecognized option '{first}'"))
         }
         Some(_) => Action::Run,
@@ -38,7 +43,12 @@ fn classify(args: &[String]) -> Action {
 }
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // `args_os` + lossy conversion instead of `args()`, which panics on a
+    // non-UTF-8 argument.
+    let args: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
     match classify(&args) {
         Action::Version => {
             println!("{}", electricity::version_string());
@@ -95,6 +105,28 @@ mod unit_tests {
     fn positional_args_are_a_run_request() {
         assert!(matches!(
             classify(&["config.json".to_string(), "orchestration.yml".to_string()]),
+            Action::Run
+        ));
+    }
+
+    #[test]
+    fn known_run_flag_in_first_position_is_a_run_request() {
+        assert!(matches!(
+            classify(&[
+                "-e".to_string(),
+                "k=v".to_string(),
+                "config.json".to_string(),
+                "orchestration.yml".to_string()
+            ]),
+            Action::Run
+        ));
+        assert!(matches!(
+            classify(&[
+                "--profile".to_string(),
+                "p".to_string(),
+                "config.json".to_string(),
+                "orchestration.yml".to_string()
+            ]),
             Action::Run
         ));
     }

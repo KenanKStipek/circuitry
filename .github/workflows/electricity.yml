@@ -78,5 +78,3 @@ jobs:
     uses: ./.github/workflows/electricity-release-build.yml
     permissions:
       contents: read
-    with:
-      publish: false

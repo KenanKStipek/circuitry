@@ -9,11 +9,13 @@ publishing, and creates a GitHub Release with the changelog excerpt.
 
 The same tag also covers `electricity/`, the preview Rust runner in this
 repository: the workflow builds its release archives (Linux x86_64/aarch64
-musl, macOS aarch64) and a multi-arch container image
-(`ghcr.io/kenankstipek/electricity`) in parallel with the Python build, and
-attaches them to the same GitHub release, marked as a **preview**. Nothing
-publishes — neither to PyPI nor to the GitHub release — unless both builds
-succeed.
+musl, macOS aarch64) in parallel with the Python build, and attaches them
+to the same GitHub release, marked as a **preview**. The container image
+(`ghcr.io/kenankstipek/electricity`) is only pushed to ghcr.io once *both*
+the Python wheel/sdist and every electricity archive have built
+successfully (a dedicated `publish-image` job waits on both) — nothing
+publishes anywhere (PyPI, ghcr.io, the GitHub release) unless every
+artifact built.
 
 ## One-time setup (per repository)
 
@@ -38,6 +40,11 @@ up, every release publishes without storing any secret in this repo.
    no protection rules required.
 
 That's it — no API tokens, no GitHub secrets needed.
+
+The first push to `ghcr.io/kenankstipek/electricity` creates that package
+as **private** by default; make it public once from the package's GitHub
+settings (Package settings → Change visibility) so `docker pull` works
+without authentication.
 
 ## Cutting a release
 
@@ -69,6 +76,12 @@ version = "0.2.0"   # was 0.1.0
 [workspace.package]
 version = "0.2.0"   # was 0.1.0
 ```
+
+For a release-candidate tag, the two files spell the version differently:
+`pyproject.toml` uses PEP 440 (`0.2.0rc1`), but Cargo requires valid semver,
+so `electricity/Cargo.toml` uses `0.2.0-rc.1`. The release workflow's
+`verify-version` job and `tests/test_electricity_version.py` both map one
+form to the other before comparing — see the "Pre-releases" section below.
 
 Decide the bump per [SemVer](https://semver.org/) — with the alpha
 caveat documented in [`docs/stability.md`](docs/stability.md) that 0.x
@@ -131,9 +144,10 @@ The workflow then:
    `electricity/Cargo.toml`'s version (catches forgot-to-bump tags before
    they ship).
 3. Builds wheel + sdist and runs `twine check` on them, and in parallel
-   builds electricity's release archives and container image.
-4. Uploads to PyPI via OIDC trusted publishing (only once both builds
-   succeed).
+   builds electricity's release archives and validates its container image
+   (without pushing it yet).
+4. Once both builds succeed: uploads to PyPI via OIDC trusted publishing,
+   and separately pushes the container image to ghcr.io.
 5. Creates a GitHub Release with the changelog excerpt, the Python
    artifacts, and electricity's archives/checksums, all attached.
 
@@ -153,6 +167,10 @@ Use an `rcN` suffix for release candidates:
 git tag v0.2.0rc1
 git push origin v0.2.0rc1
 ```
+
+Bump `pyproject.toml` to `0.2.0rc1` and `electricity/Cargo.toml` to
+`0.2.0-rc.1` (see step 2 above) — the tag itself always matches
+`pyproject.toml`'s spelling.
 
 The workflow marks these as `--prerelease` on GitHub. PyPI accepts the
 release but `pip install circuitry-cof` won't pick it up by default

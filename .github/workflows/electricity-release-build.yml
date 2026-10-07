@@ -1,32 +1,20 @@
 name: electricity release build
 
 # Reusable workflow: builds electricity's release archives (musl Linux
-# x86_64/aarch64 via cargo-zigbuild, macOS aarch64 natively) and the
-# multi-arch container image built from the two musl binaries. Never
-# publishes anything unless the caller sets `publish: true` — a PR calls
-# this with `publish: false` so it exercises exactly the build a release
-# tag runs; the release workflow calls it with `publish: true`.
+# x86_64/aarch64 via cargo-zigbuild, macOS aarch64 natively) and validates
+# the multi-arch container image built from the two musl binaries. This
+# workflow never pushes anything, on a PR or on a release tag: the
+# container image only reaches ghcr.io from release.yml's own
+# `publish-image` job, which runs after every build here AND the Python
+# wheel/sdist have succeeded, so a failed Python build can never leave a
+# published image behind (#359).
 
 on:
   workflow_call:
-    inputs:
-      publish:
-        description: "Push the ghcr.io image for this version"
-        required: false
-        type: boolean
-        default: false
     outputs:
       version:
         description: "electricity workspace version that was built"
         value: ${{ jobs.version.outputs.version }}
-
-# No top-level `permissions:` here: a called workflow's jobs may only
-# downgrade the caller's token, never elevate it, so a job here that needs
-# more than the caller granted (packages: write, below) would make the
-# whole run fail at startup rather than just that job. Each job below
-# declares the permissions it actually needs; build-image declares none, so
-# it inherits exactly what the calling job granted (contents: read only
-# from electricity.yml, contents: read + packages: write from release.yml).
 
 jobs:
   version:
@@ -115,9 +103,11 @@ jobs:
           if-no-files-found: error
 
   build-image:
-    name: container image
+    name: container image (build only, never pushed)
     needs: [version, build-archives]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -137,18 +127,9 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
-        if: inputs.publish
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - uses: docker/build-push-action@v6
         with:
           context: electricity
           file: electricity/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ inputs.publish }}
-          tags: ghcr.io/kenankstipek/electricity:${{ needs.version.outputs.version }}
+          push: false
