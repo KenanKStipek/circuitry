@@ -160,7 +160,11 @@ own login. The prompt goes on stdin (`claude_code`) or in a file inside a
 fresh temporary directory, private to the user and removed after the call
 (`pi`) — never on argv. The child's environment drops `ANTHROPIC_API_KEY`
 and `ANTHROPIC_AUTH_TOKEN` by default (`unset_env`), so a key exported for
-another adapter is not handed to the CLI. Which binary runs is
+another adapter is not handed to the CLI. `claude_code` passes
+`--strict-mcp-config`, because `--tools ""` turns off only Claude Code's
+built-in tools: without it, MCP servers from the user's Claude Code config
+or a project `.mcp.json` would start and their tools would be offered to
+the model. Which binary runs is
 `runtime.adapters.<name>.binary`, a host setting a limited document cannot
 set (see [What a document can set](guidebook/04-configuration.md#what-a-document-can-set)).
 

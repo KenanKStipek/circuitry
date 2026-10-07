@@ -7,7 +7,7 @@
   "properties": {
     "adapter": {
       "type": "string",
-      "description": "Adapter to use for model invocations, e.g. ollama, openai, anthropic, litellm, cyberdiner (job queue), host_claude (MCP-only). Full compiled-in list: cof list --extensions. Optional — can be set in config.json."
+      "description": "Adapter to use for model invocations, e.g. ollama, openai, anthropic, litellm, cyberdiner (job queue), pi / claude_code (a coding-agent CLI through its own login), host_claude (MCP-only). Full compiled-in list: cof list --extensions. Optional — can be set in config.json."
     },
     "model": {
       "type": "string",
