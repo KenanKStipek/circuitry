@@ -53,8 +53,8 @@ jobs:
         working-directory: electricity
         run: cargo test --workspace
 
-  value-corpus:
-    name: electricity-value golden corpus is up to date
+  generated-files:
+    name: generated files are up to date
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,13 +63,18 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: regenerate the Unicode printable-ranges table and check it is unchanged
+      # Every generator under electricity/scripts/ is named generate_*.py and
+      # supports --check (regenerate in memory, fail if the committed file
+      # differs). New generators are picked up here without editing this file.
+      - name: regenerate every generated file and check it is unchanged
         working-directory: electricity
-        run: python3 scripts/generate_unicode_printable_ranges.py --check
-
-      - name: regenerate the golden corpus and check it is unchanged
-        working-directory: electricity
-        run: python3 scripts/generate_value_corpus.py --check
+        run: |
+          set -euo pipefail
+          for script in scripts/generate_*.py; do
+            echo "::group::$script --check"
+            python3 "$script" --check
+            echo "::endgroup::"
+          done
 
   msrv:
     name: MSRV check
