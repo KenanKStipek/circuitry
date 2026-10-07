@@ -29,6 +29,21 @@ class FakeProc:
     stdout: str = ""
     stderr: str = ""
 
+    # run_tracked (#356) uses `subprocess.Popen` + `communicate`, not
+    # `subprocess.run` — this fake stands in for the former now.
+    def communicate(self, input: Any = None, timeout: Any = None) -> tuple[str, str]:
+        return (self.stdout, self.stderr)
+
+    def __enter__(self) -> FakeProc:
+        return self
+
+    def __exit__(self, *exc: Any) -> bool:
+        return False
+
+    # `CancellationToken.track` adds the proc to a `set` (#356) — a plain
+    # (non-frozen) dataclass has no default `__hash__`.
+    __hash__ = object.__hash__
+
 
 def _fake_run_ok(*args: Any, **kwargs: Any) -> FakeProc:
     del args, kwargs
@@ -36,7 +51,7 @@ def _fake_run_ok(*args: Any, **kwargs: Any) -> FakeProc:
 
 
 def test_ffmpeg_executes_successfully(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", _fake_run_ok)
+    monkeypatch.setattr("subprocess.Popen", _fake_run_ok)
 
     plugin = FfmpegPlugin()
     result = plugin.execute(
@@ -55,7 +70,7 @@ def test_ffmpeg_injects_y_flag(monkeypatch: pytest.MonkeyPatch) -> None:
         captured_cmd.append(cmd)
         return FakeProc(returncode=0)
 
-    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     FfmpegPlugin().execute(params={"input": "a.mp4", "output": "b.mp4"})
 
@@ -73,7 +88,7 @@ def test_ffmpeg_includes_flags(monkeypatch: pytest.MonkeyPatch) -> None:
         captured_cmd.append(cmd)
         return FakeProc(returncode=0)
 
-    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     FfmpegPlugin().execute(
         params={
@@ -117,7 +132,7 @@ def test_ffmpeg_raises_runtime_error_on_nonzero_exit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "circuitry.plugins.ffmpeg.subprocess.run",
+        "subprocess.Popen",
         lambda *a, **kw: FakeProc(returncode=1, stderr="encoding failed"),
     )
 
@@ -129,7 +144,7 @@ def test_ffmpeg_raises_when_not_installed(monkeypatch: pytest.MonkeyPatch) -> No
     def raise_not_found(*args: Any, **kwargs: Any) -> Any:
         raise FileNotFoundError("ffmpeg not found")
 
-    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", raise_not_found)
+    monkeypatch.setattr("subprocess.Popen", raise_not_found)
 
     with pytest.raises(RuntimeError, match="not installed"):
         FfmpegPlugin().execute(params={"input": "a.mp4", "output": "b.mp4"})
@@ -238,7 +253,7 @@ def test_ffmpeg_extra_inputs_adds_multiple_i_flags(monkeypatch: pytest.MonkeyPat
         captured_cmd.append(cmd)
         return FakeProc(returncode=0)
 
-    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     FfmpegPlugin().execute(
         params={
@@ -263,7 +278,7 @@ def test_ffmpeg_extra_inputs_adds_multiple_i_flags(monkeypatch: pytest.MonkeyPat
 
 
 def test_ffmpeg_filter_complex_allows_semicolons(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", _fake_run_ok)
+    monkeypatch.setattr("subprocess.Popen", _fake_run_ok)
     # semicolons are valid in ffmpeg filter graph syntax — must not raise
     FfmpegPlugin().execute(
         params={
@@ -295,7 +310,7 @@ def test_ffmpeg_vf_drawtext_builds_drawtext_filter(monkeypatch: pytest.MonkeyPat
         captured_cmd.append(cmd)
         return FakeProc(returncode=0)
 
-    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     FfmpegPlugin().execute(
         params={
@@ -332,7 +347,7 @@ def test_ffmpeg_vf_drawtext_escapes_colon_and_apostrophe(monkeypatch: pytest.Mon
         captured_cmd.append(cmd)
         return FakeProc(returncode=0)
 
-    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     FfmpegPlugin().execute(
         params={
@@ -357,7 +372,7 @@ def test_ffmpeg_vf_drawtext_strips_surrounding_quotes(monkeypatch: pytest.Monkey
         captured_cmd.append(cmd)
         return FakeProc(returncode=0)
 
-    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     for text_with_quotes in ['"Should I be concerned?"', "'Nailed it.'"]:
         captured_cmd.clear()
@@ -380,7 +395,7 @@ def test_ffmpeg_vf_drawtext_strips_quote_before_trailing_period(
         captured_cmd.append(cmd)
         return FakeProc(returncode=0)
 
-    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     FfmpegPlugin().execute(
         params={"input": "p.png", "vf_drawtext": {"text": '"I have no regrets."'}, "output": "o.png"}
@@ -399,7 +414,7 @@ def test_ffmpeg_vf_drawtext_collapses_newlines(monkeypatch: pytest.MonkeyPatch) 
         captured_cmd.append(cmd)
         return FakeProc(returncode=0)
 
-    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     FfmpegPlugin().execute(
         params={
@@ -432,7 +447,7 @@ def test_ffmpeg_vf_drawtext_apostrophe_with_newline(monkeypatch: pytest.MonkeyPa
         captured_cmd.append(cmd)
         return FakeProc(returncode=0)
 
-    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     FfmpegPlugin().execute(
         params={
@@ -471,7 +486,7 @@ def test_ffmpeg_vf_drawtext_sanitizes_non_text_fields(monkeypatch: pytest.Monkey
         captured_cmd.append(cmd)
         return FakeProc(returncode=0)
 
-    monkeypatch.setattr("circuitry.plugins.ffmpeg.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     FfmpegPlugin().execute(
         params={

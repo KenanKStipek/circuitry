@@ -38,6 +38,41 @@ class FakeProc:
     stdout: str = ""
     stderr: str = ""
 
+    # run_curl/run_binary are tracked for cancellation (`core.cancellation
+    # .run_tracked`, #356) via `subprocess.Popen` + `communicate`, not
+    # `subprocess.run` — this fake stands in for the former now.
+    def communicate(self, input: object = None, timeout: object = None) -> tuple[str, str]:
+        return (self.stdout, self.stderr)
+
+    def __enter__(self) -> FakeProc:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+
+class _RecordingProc:
+    """Wraps a FakeProc, capturing communicate()'s ``input`` into
+    *sink[key]* — the old ``kwargs.get('input')`` capture point moved from
+    the Popen call to the communicate() call (run_tracked, #356)."""
+
+    def __init__(self, proc: FakeProc, sink: dict[str, Any], key: str = "input") -> None:
+        self._proc, self._sink, self._key = proc, sink, key
+
+    @property
+    def returncode(self) -> int:
+        return self._proc.returncode
+
+    def communicate(self, input: Any = None, timeout: Any = None) -> tuple[str, str]:
+        self._sink[self._key] = input
+        return self._proc.communicate(input=input, timeout=timeout)
+
+    def __enter__(self) -> _RecordingProc:
+        return self
+
+    def __exit__(self, *exc: Any) -> bool:
+        return False
+
 
 def test_openai_canary_key_and_prompt_never_touch_argv(
     monkeypatch: pytest.MonkeyPatch,
@@ -48,16 +83,18 @@ def test_openai_canary_key_and_prompt_never_touch_argv(
 
     captured: dict[str, Any] = {}
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
         captured["cmd"] = cmd
         captured["headers"] = read_config_headers(cmd)
-        captured["input"] = kwargs.get("input")
-        return FakeProc(
-            returncode=0,
-            stdout=json.dumps({"choices": [{"message": {"content": "hi"}}]}),
+        return _RecordingProc(
+            FakeProc(
+                returncode=0,
+                stdout=json.dumps({"choices": [{"message": {"content": "hi"}}]}),
+            ),
+            captured,
         )
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     OpenAIAdapter().generate(model="gpt-4o-mini", prompt=canary_prompt)
 
     assert_q_first(captured["cmd"])
@@ -76,7 +113,7 @@ def test_openai_curl_failure_message_has_no_argv_and_no_secret(
         del args, kwargs
         return FakeProc(returncode=22, stderr="HTTP 401")
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     with pytest.raises(RuntimeError) as exc:
         OpenAIAdapter().generate(model="gpt-4o-mini", prompt="x")
     message = str(exc.value)
@@ -93,16 +130,18 @@ def test_anthropic_canary_key_and_prompt_never_touch_argv(
 
     captured: dict[str, Any] = {}
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
         captured["cmd"] = cmd
         captured["headers"] = read_config_headers(cmd)
-        captured["input"] = kwargs.get("input")
-        return FakeProc(
-            returncode=0,
-            stdout=json.dumps({"content": [{"type": "text", "text": "hi"}]}),
+        return _RecordingProc(
+            FakeProc(
+                returncode=0,
+                stdout=json.dumps({"content": [{"type": "text", "text": "hi"}]}),
+            ),
+            captured,
         )
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     AnthropicAdapter().generate(model="claude-sonnet-5", prompt=canary_prompt)
 
     assert_q_first(captured["cmd"])
@@ -122,7 +161,7 @@ def test_anthropic_curl_failure_message_has_no_argv_and_no_secret(
         del args, kwargs
         return FakeProc(returncode=22, stderr="HTTP 401")
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     with pytest.raises(RuntimeError) as exc:
         AnthropicAdapter().generate(model="claude-sonnet-5", prompt="x")
     message = str(exc.value)
@@ -137,15 +176,17 @@ def test_ollama_canary_prompt_never_touches_argv(
 
     captured: dict[str, Any] = {}
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
         captured["cmd"] = cmd
         captured["headers"] = read_config_headers(cmd)
-        captured["input"] = kwargs.get("input")
-        return FakeProc(
-            returncode=0, stdout=json.dumps({"response": "hi", "done_reason": "stop"})
+        return _RecordingProc(
+            FakeProc(
+                returncode=0, stdout=json.dumps({"response": "hi", "done_reason": "stop"})
+            ),
+            captured,
         )
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     OllamaAdapter().generate(model="phi3", prompt=canary_prompt)
 
     assert_q_first(captured["cmd"])
@@ -161,7 +202,7 @@ def test_ollama_curl_failure_message_has_no_argv(
         del args, kwargs
         return FakeProc(returncode=7, stderr="curl: (7) Failed to connect")
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     with pytest.raises(RuntimeError) as exc:
         OllamaAdapter().generate(model="phi3", prompt="x")
     assert "cmd=" not in str(exc.value)
@@ -192,13 +233,13 @@ def test_openai_end_to_end_against_local_server(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("OPENAI_API_KEY", secret)
 
     calls: list[list[str]] = []
-    real_run = subprocess.run
+    real_popen = subprocess.Popen
 
     def spying_run(cmd: list[str], **kwargs: Any) -> Any:
         calls.append(cmd)
-        return real_run(cmd, **kwargs)
+        return real_popen(cmd, **kwargs)
 
-    monkeypatch.setattr("subprocess.run", spying_run)
+    monkeypatch.setattr("subprocess.Popen", spying_run)
 
     with local_server(_OpenAIShapedHandler) as base_url:
         adapter = OpenAIAdapter(base_url=base_url)

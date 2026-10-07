@@ -85,6 +85,7 @@ def sigterm_as_interrupt() -> Iterator[None]:
 
     token = get_token()
     token.reset()
+    token.arm()
     previous_sigint = signal.signal(signal.SIGINT, _make_handler(KeyboardInterrupt))
     previous_sigterm = signal.signal(signal.SIGTERM, _make_handler(SigTermInterrupt))
     try:
@@ -92,4 +93,5 @@ def sigterm_as_interrupt() -> Iterator[None]:
     finally:
         signal.signal(signal.SIGINT, previous_sigint)
         signal.signal(signal.SIGTERM, previous_sigterm)
+        token.disarm()
         token.reset()

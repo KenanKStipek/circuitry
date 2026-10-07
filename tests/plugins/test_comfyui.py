@@ -29,6 +29,39 @@ def _curl_present(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(shutil, "which", lambda n: "/usr/bin/curl" if n == "curl" else None)
 
 
+class _FakePopen:
+    """Wraps a `subprocess.CompletedProcess`-shaped fake result as a
+    Popen-shaped one — run_tracked (#356) uses `subprocess.Popen` +
+    `communicate`, not `subprocess.run`. ``on_communicate``, when given, is
+    called with the `input` `communicate()` receives (the old
+    `kwargs.get("input")` capture point, which moved from the Popen call
+    to the communicate() call).
+    """
+
+    def __init__(
+        self,
+        completed: subprocess.CompletedProcess[Any],
+        on_communicate: Any = None,
+    ) -> None:
+        self._completed = completed
+        self._on_communicate = on_communicate
+
+    @property
+    def returncode(self) -> int:
+        return self._completed.returncode
+
+    def communicate(self, input: Any = None, timeout: Any = None) -> Any:
+        if self._on_communicate is not None:
+            self._on_communicate(input)
+        return (self._completed.stdout, self._completed.stderr)
+
+    def __enter__(self) -> _FakePopen:
+        return self
+
+    def __exit__(self, *exc: Any) -> bool:
+        return False
+
+
 def test_curl_json_post_sends_body_on_stdin_not_argv(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -38,10 +71,12 @@ def test_curl_json_post_sends_body_on_stdin_not_argv(
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
         captured["cmd"] = cmd
-        captured["input"] = kwargs.get("input")
-        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"ok": True}), stderr="")
+        return _FakePopen(
+            subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"ok": True}), stderr=""),
+            lambda input: captured.__setitem__("input", input),
+        )
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
     plugin = ComfyUIPlugin(base_url="http://localhost:8188")
     result = plugin._curl_json(
         url="http://localhost:8188/prompt",
@@ -59,11 +94,15 @@ def test_curl_json_large_body_over_200kib_works(monkeypatch: pytest.MonkeyPatch)
     large_payload = {"image_b64": "a" * (250 * 1024)}
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
-        body = kwargs.get("input") or ""
-        assert len(body) > 200 * 1024
-        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"ok": True}), stderr="")
+        def _check_body(input: Any) -> None:
+            assert len(input or "") > 200 * 1024
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+        return _FakePopen(
+            subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"ok": True}), stderr=""),
+            _check_body,
+        )
+
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
     plugin = ComfyUIPlugin(base_url="http://localhost:8188")
     result = plugin._curl_json(
         url="http://localhost:8188/prompt",
@@ -76,9 +115,9 @@ def test_curl_json_large_body_over_200kib_works(monkeypatch: pytest.MonkeyPatch)
 
 def test_curl_json_failure_does_not_echo_cmd(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
-        return subprocess.CompletedProcess(cmd, 22, stdout="", stderr="HTTP 500")
+        return _FakePopen(subprocess.CompletedProcess(cmd, 22, stdout="", stderr="HTTP 500"))
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
     plugin = ComfyUIPlugin(base_url="http://localhost:8188")
     with pytest.raises(RuntimeError) as exc:
         plugin._curl_json(
@@ -92,9 +131,9 @@ def test_curl_json_failure_does_not_echo_cmd(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_curl_bytes_failure_does_not_echo_cmd(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
-        return subprocess.CompletedProcess(cmd, 22, stdout=b"", stderr=b"HTTP 404")
+        return _FakePopen(subprocess.CompletedProcess(cmd, 22, stdout=b"", stderr=b"HTTP 404"))
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
     plugin = ComfyUIPlugin(base_url="http://localhost:8188")
     with pytest.raises(RuntimeError) as exc:
         plugin._curl_bytes(url="http://localhost:8188/view?x=1", timeout_seconds=10)
@@ -106,9 +145,9 @@ def test_curl_bytes_uses_q_first(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
         captured["cmd"] = cmd
-        return subprocess.CompletedProcess(cmd, 0, stdout=b"bytes", stderr=b"")
+        return _FakePopen(subprocess.CompletedProcess(cmd, 0, stdout=b"bytes", stderr=b""))
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
     plugin = ComfyUIPlugin(base_url="http://localhost:8188")
     plugin._curl_bytes(url="http://localhost:8188/view?x=1", timeout_seconds=10)
     assert_q_first(captured["cmd"])
@@ -119,9 +158,9 @@ def test_check_uses_q_first(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
         captured["cmd"] = cmd
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return _FakePopen(subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""))
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
     plugin = ComfyUIPlugin(base_url="http://localhost:8188")
     plugin.check()
     assert_q_first(captured["cmd"])
@@ -134,9 +173,9 @@ def test_upload_image_failure_does_not_echo_cmd(
     image.write_bytes(b"\x89PNG\r\n\x1a\n")
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
-        return subprocess.CompletedProcess(cmd, 22, stdout="", stderr="HTTP 500")
+        return _FakePopen(subprocess.CompletedProcess(cmd, 22, stdout="", stderr="HTTP 500"))
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
     plugin = ComfyUIPlugin(base_url="http://localhost:8188")
     with pytest.raises(RuntimeError) as exc:
         plugin._upload_image(image_path=str(image), timeout_seconds=10)
@@ -152,11 +191,13 @@ def test_upload_image_uses_q_first(
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
         captured["cmd"] = cmd
-        return subprocess.CompletedProcess(
-            cmd, 0, stdout=json.dumps({"name": "ref.png"}), stderr=""
+        return _FakePopen(
+            subprocess.CompletedProcess(
+                cmd, 0, stdout=json.dumps({"name": "ref.png"}), stderr=""
+            )
         )
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
     plugin = ComfyUIPlugin(base_url="http://localhost:8188")
     plugin._upload_image(image_path=str(image), timeout_seconds=10)
     assert_q_first(captured["cmd"])
@@ -240,13 +281,13 @@ def test_execute_end_to_end_against_local_server_with_large_prompt(
     assert len(large_prompt.encode()) > 200 * 1024
 
     calls: list[list[str]] = []
-    real_run = subprocess.run
+    real_popen = subprocess.Popen
 
     def spying_run(cmd: list[str], **kwargs: Any) -> Any:
         calls.append(cmd)
-        return real_run(cmd, **kwargs)
+        return real_popen(cmd, **kwargs)
 
-    monkeypatch.setattr(subprocess, "run", spying_run)
+    monkeypatch.setattr(subprocess, "Popen", spying_run)
     monkeypatch.chdir(tmp_path)
 
     with _fake_comfyui_server() as base_url:

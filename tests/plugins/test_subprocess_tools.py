@@ -51,6 +51,17 @@ class FakeProc:
     stdout: str = ""
     stderr: str = ""
 
+    # run_tracked (#356) uses `subprocess.Popen` + `communicate`, not
+    # `subprocess.run` — this fake stands in for the former now.
+    def communicate(self, input: Any = None, timeout: Any = None) -> tuple[str, str]:
+        return (self.stdout, self.stderr)
+
+    def __enter__(self) -> FakeProc:
+        return self
+
+    def __exit__(self, *exc: Any) -> bool:
+        return False
+
 
 class FakePopen:
     """Stand-in for ``subprocess.Popen`` in tests exercising ``run_binary``'s
@@ -570,12 +581,26 @@ def test_gpg_encrypt_calls_binary_with_recipient(
 
     captured: dict[str, Any] = {}
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
         captured["cmd"] = cmd
-        captured["input"] = kwargs.get("input")
-        return FakeProc(returncode=0, stdout="-----BEGIN PGP MESSAGE-----\n...")
+        proc = FakeProc(returncode=0, stdout="-----BEGIN PGP MESSAGE-----\n...")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+        class _Proc:
+            returncode = proc.returncode
+
+            def communicate(self, input: Any = None, timeout: Any = None) -> tuple[str, str]:
+                captured["input"] = input
+                return proc.communicate(input=input, timeout=timeout)
+
+            def __enter__(self) -> _Proc:
+                return self
+
+            def __exit__(self, *exc: Any) -> bool:
+                return False
+
+        return _Proc()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
 
     r = GpgPlugin().execute(
         params={"mode": "encrypt", "recipient": "alice@x", "input": "secret"}
@@ -594,7 +619,7 @@ def test_gpg_verify_returns_bool_via_exit_code(
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         return FakeProc(returncode=1, stderr="BAD signature")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
 
     r = GpgPlugin().execute(
         params={
@@ -614,7 +639,7 @@ def test_gpg_passphrase_masked_in_error(monkeypatch: pytest.MonkeyPatch) -> None
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         return FakeProc(returncode=2, stderr=f"bad pass {secret}")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
 
     with pytest.raises(RuntimeError) as exc:
         GpgPlugin().execute(
@@ -701,7 +726,7 @@ def test_web_search_calls_duckduckgo_with_format_json(
             stdout=_json.dumps({"AbstractText": "Yaml is a data language"}),
         )
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
 
     r = WebSearchPlugin().execute(params={"query": "yaml"})
     assert r.value["AbstractText"] == "Yaml is a data language"
@@ -723,7 +748,7 @@ def test_web_search_curl_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None
     def fake_run(*a: Any, **k: Any) -> FakeProc:
         return FakeProc(returncode=22, stderr="HTTP 503")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
     with pytest.raises(RuntimeError, match="web_search request failed"):
         WebSearchPlugin().execute(params={"query": "x"})
 
@@ -748,7 +773,7 @@ def test_web_search_uses_q_first_and_no_headers_on_argv(
         captured["cmd"] = cmd
         return FakeProc(returncode=0, stdout=_json.dumps({"AbstractText": "x"}))
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
     WebSearchPlugin().execute(params={"query": "yaml"})
     assert_q_first(captured["cmd"])
 
@@ -766,7 +791,7 @@ def test_web_search_canary_key_in_extra_params_never_leaks(
     def fake_run(*a: Any, **k: Any) -> FakeProc:
         return FakeProc(returncode=22, stderr="HTTP 401")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
     with pytest.raises(RuntimeError) as exc:
         WebSearchPlugin().execute(
             params={"query": "yaml", "extra_params": {"key": secret}}
@@ -785,7 +810,7 @@ def test_web_search_user_pass_base_url_masked_in_error(
     def fake_run(*a: Any, **k: Any) -> FakeProc:
         return FakeProc(returncode=22, stderr="HTTP 401")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
     with pytest.raises(RuntimeError) as exc:
         WebSearchPlugin().execute(
             params={
@@ -811,7 +836,7 @@ def test_weather_default_returns_text(monkeypatch: pytest.MonkeyPatch) -> None:
         captured["url"] = read_config_url(cmd)
         return FakeProc(returncode=0, stdout="Boston: ☀ +60°F\n")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
     r = WeatherPlugin().execute(params={"location": "Boston"})
     assert "Boston" in r.value
     url = captured["url"]
@@ -827,7 +852,7 @@ def test_weather_json_mode_returns_parsed(monkeypatch: pytest.MonkeyPatch) -> No
     def fake_run(*a: Any, **k: Any) -> FakeProc:
         return FakeProc(returncode=0, stdout=_json.dumps(payload))
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
     r = WeatherPlugin().execute(params={"location": "Boston", "json": True})
     assert r.value == payload
 
@@ -851,7 +876,7 @@ def test_weather_format_string_appended_to_url(
         captured["url"] = read_config_url(cmd)
         return FakeProc(returncode=0, stdout="Cloudy")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
     WeatherPlugin().execute(params={"location": "Boston", "format": "%C"})
     url = captured["url"] or ""
     assert "format=%25C" in url or "format=%C" in url
@@ -869,7 +894,7 @@ def test_weather_uses_q_first_and_header_off_argv(
         captured["headers"] = read_config_headers(cmd)
         return FakeProc(returncode=0, stdout="Cloudy")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
     WeatherPlugin().execute(params={"location": "Boston"})
     assert_q_first(captured["cmd"])
     assert captured["headers"]["Accept-Language"] == "en"
@@ -884,7 +909,7 @@ def test_weather_curl_failure_does_not_echo_cmd(
     def fake_run(*a: Any, **k: Any) -> FakeProc:
         return FakeProc(returncode=22, stderr="HTTP 503")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
     with pytest.raises(RuntimeError) as exc:
         WeatherPlugin().execute(params={"location": "Boston"})
     assert "cmd=" not in str(exc.value)

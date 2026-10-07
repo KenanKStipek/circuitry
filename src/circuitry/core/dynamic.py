@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal, Union
 from ..adapters import Adapter
 from ..output import console as _console
 from ..output import live_region as _live_region
-from .cancellation import get_token
+from .cancellation import get_token, submit_with_context
 from .disabled import is_enabled, write_disabled_node
 from .prompt import PromptDefinition, PromptRuntime
 from .resume import effect_completed_ok
@@ -411,7 +411,8 @@ class DynamicRuntime:
                 with live_ctx:
                     with ThreadPoolExecutor(max_workers=max_workers) as executor:
                         futures: dict = {
-                            executor.submit(
+                            submit_with_context(
+                                executor,
                                 self._execute_branch,
                                 effect,
                                 store=isolated_stores[idx],
@@ -467,19 +468,26 @@ class DynamicRuntime:
         finally_exc: BaseException | None = None
         if self.defn.finally_effects:
             try:
-                self._execute_chain(
-                    self.defn.finally_effects,
-                    store=store,
-                    child_store=child_store,
-                    ctx=ctx,
-                    # No distinct 'finally' label segment: a finally effect
-                    # writes into the same child_store namespace as the body
-                    # (same state path a same-named body effect would have),
-                    # so the wrapped error's path should match the state
-                    # tree it actually names, not a '.finally.' segment that
-                    # isn't really there (#272 review).
-                    label=self.defn.name,
-                )
+                # Suppress this run's own cancellation check for the
+                # duration of `finally:` (#356 review F1) — a `finally:`
+                # must still run in full after Ctrl-C/SIGTERM, including
+                # any nested dynamic/loop/use/conditional it contains, not
+                # abort the moment one of them polls the already-cancelled
+                # token. See CancellationToken.cleanup.
+                with get_token().cleanup():
+                    self._execute_chain(
+                        self.defn.finally_effects,
+                        store=store,
+                        child_store=child_store,
+                        ctx=ctx,
+                        # No distinct 'finally' label segment: a finally effect
+                        # writes into the same child_store namespace as the body
+                        # (same state path a same-named body effect would have),
+                        # so the wrapped error's path should match the state
+                        # tree it actually names, not a '.finally.' segment that
+                        # isn't really there (#272 review).
+                        label=self.defn.name,
+                    )
             except BaseException as fe:
                 finally_exc = fe
 

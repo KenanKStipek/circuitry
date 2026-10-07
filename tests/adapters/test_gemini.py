@@ -35,6 +35,41 @@ class FakeProc:
     stdout: str = ""
     stderr: str = ""
 
+    # run_curl/run_binary are tracked for cancellation (`core.cancellation
+    # .run_tracked`, #356) via `subprocess.Popen` + `communicate`, not
+    # `subprocess.run` — this fake stands in for the former now.
+    def communicate(self, input: object = None, timeout: object = None) -> tuple[str, str]:
+        return (self.stdout, self.stderr)
+
+    def __enter__(self) -> FakeProc:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+
+class _RecordingProc:
+    """Wraps a FakeProc, capturing communicate()'s ``input`` into
+    *sink[key]* — the old ``kwargs.get('input')`` capture point moved from
+    the Popen call to the communicate() call (run_tracked, #356)."""
+
+    def __init__(self, proc: FakeProc, sink: dict[str, Any], key: str = "input") -> None:
+        self._proc, self._sink, self._key = proc, sink, key
+
+    @property
+    def returncode(self) -> int:
+        return self._proc.returncode
+
+    def communicate(self, input: Any = None, timeout: Any = None) -> tuple[str, str]:
+        self._sink[self._key] = input
+        return self._proc.communicate(input=input, timeout=timeout)
+
+    def __enter__(self) -> _RecordingProc:
+        return self
+
+    def __exit__(self, *exc: Any) -> bool:
+        return False
+
 
 def _ok_payload(text: str = "hello", *, sent: int = 5, recv: int = 3) -> str:
     return json.dumps(
@@ -53,13 +88,14 @@ def test_chat_completion_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
 
     captured: dict[str, Any] = {}
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
         captured["cmd"] = cmd
-        captured["input"] = kwargs.get("input")
         captured["url"], captured["headers"] = read_config(cmd)
-        return FakeProc(returncode=0, stdout=_ok_payload("hi from gemini"))
+        return _RecordingProc(
+            FakeProc(returncode=0, stdout=_ok_payload("hi from gemini")), captured
+        )
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     cfg = OpenAICompatibleConfig(
         base_url="https://example.test/v1",
@@ -104,7 +140,7 @@ def test_chat_completion_no_auth_for_self_hosted(
         assert "Authorization" not in read_config_headers(cmd)
         return FakeProc(returncode=0, stdout=_ok_payload())
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     cfg = OpenAICompatibleConfig(
         base_url="http://localhost:8000/v1",
@@ -125,7 +161,7 @@ def test_chat_completion_curl_failure_masks_api_key(
         del args, kwargs
         return FakeProc(returncode=22, stderr="HTTP 401 Unauthorized")
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     cfg = OpenAICompatibleConfig(
         base_url="https://example.test/v1",
@@ -154,7 +190,7 @@ def test_chat_completion_curl_failure_masks_extra_header_secret(
             stderr="curl: (22) The requested URL returned error: 401",
         )
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     cfg = OpenAICompatibleConfig(
         base_url="https://example.test/v1",
@@ -188,7 +224,7 @@ def test_chat_completion_curl_failure_does_not_mask_short_header_values(
             stderr="curl: (22) The requested URL returned error: 401",
         )
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     cfg = OpenAICompatibleConfig(
         base_url="https://example.test/v1",
@@ -214,7 +250,7 @@ def test_chat_completion_curl_failure_does_not_leak_base_url_credentials(
         del args, kwargs
         return FakeProc(returncode=22, stderr="HTTP 401 Unauthorized")
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     cfg = OpenAICompatibleConfig(
         base_url="https://user:canarypw@example.test/v1",
@@ -236,7 +272,7 @@ def test_chat_completion_non_json_response_raises(
         del args, kwargs
         return FakeProc(returncode=0, stdout="<html>503</html>")
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     cfg = OpenAICompatibleConfig(
         base_url="https://example.test/v1",
@@ -256,7 +292,7 @@ def test_chat_completion_empty_choices_returns_empty_text(
         del args, kwargs
         return FakeProc(returncode=0, stdout=json.dumps({"choices": []}))
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     cfg = OpenAICompatibleConfig(
         base_url="https://example.test/v1",
@@ -278,7 +314,7 @@ def test_gemini_adapter_conformance(monkeypatch: pytest.MonkeyPatch) -> None:
         del args, kwargs
         return FakeProc(returncode=0, stdout=_ok_payload("hi"))
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = GeminiAdapter()
     result = adapter.generate(model="gemini-2.5-flash", prompt="ping")

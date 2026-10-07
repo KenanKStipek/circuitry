@@ -383,6 +383,153 @@ effects:
     assert proc.returncode == 130, (stdout, stderr)
     assert elapsed < _STOP_BOUND_SECONDS
     assert "Traceback" not in stderr, stderr
+    # Isolates this test from the first signal's own (uninterrupted)
+    # cleanup path (#356 review F6): `os._exit` skips writing `--out`
+    # entirely, so its presence would mean this test actually exercised a
+    # plain re-raised KeyboardInterrupt from inside cleanup rather than
+    # the second-signal path it's named for.
+    assert not out_path.exists()
+
+
+@requires_bash
+def test_cancel_loop_body_on_error_continue_does_not_start_next_effect(
+    tmp_path: Path,
+) -> None:
+    """A branch-level `on_error: continue` must not let a cancelled run's
+    worker start the body's next effect (#356 review F3): `a`'s killed
+    subprocess is a nonzero exit that `on_error: continue` swallows
+    (ToolRuntime.execute returns normally instead of raising), so only an
+    explicit cancellation check before `b` — not `a`'s own exception path
+    — can stop this loop body from dispatching a second subprocess
+    nothing would ever track or kill.
+    """
+    a_started = tmp_path / "a_started"
+    a_pidfile = tmp_path / "a_pid"
+    b_started = tmp_path / "b_started"
+    body = f"""
+effects:
+  - type: loop
+    name: lp
+    flow: tree
+    max_concurrency: 1
+    each: {{in: input.items, as: x}}
+    body:
+      - type: tool
+        name: a
+        provider: shell
+        on_error: continue
+        params:
+          command: bash
+          args: ["-c", "echo $$ > {a_pidfile}; touch {a_started}; sleep {_BRANCH_SLEEP_SECONDS}"]
+          allowed_commands: ["bash"]
+      - type: tool
+        name: b
+        provider: shell
+        params:
+          command: bash
+          args: ["-c", "touch {b_started}; sleep {_BRANCH_SLEEP_SECONDS}"]
+          allowed_commands: ["bash"]
+""".lstrip("\n")
+    orch = tmp_path / "loop_on_error_continue.yml"
+    orch.write_text(body, encoding="utf-8")
+    state_path = tmp_path / "initial_state.json"
+    state_path.write_text(json.dumps({"input": {"items": [1]}}), encoding="utf-8")
+    out_path = tmp_path / "out.json"
+    proc = _run_cof(orch, out_path=out_path, state_path=state_path)
+
+    try:
+        _wait_for_paths([a_started])
+    except TimeoutError:
+        proc.kill()
+        proc.communicate(timeout=15)
+        raise
+
+    t0 = time.monotonic()
+    proc.send_signal(signal.SIGINT)
+    try:
+        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise
+    elapsed = time.monotonic() - t0
+
+    assert proc.returncode == 130, (stdout, stderr)
+    assert elapsed < _STOP_BOUND_SECONDS, (
+        f"took {elapsed:.1f}s to stop; a sleeps {_BRANCH_SLEEP_SECONDS}s"
+    )
+    assert "Traceback" not in stderr, stderr
+
+    pid = int(a_pidfile.read_text(encoding="utf-8").strip())
+    assert not _pid_alive(pid), f"pid {pid} survived cancellation"
+    # The fix under test: on_error: continue swallowing a's failure must
+    # not let this cancelled run dispatch b at all.
+    assert not b_started.exists()
+
+
+@requires_bash
+def test_cancel_finally_with_nested_container_still_runs(tmp_path: Path) -> None:
+    """A `finally:` containing its own container (dynamic/loop/use/
+    conditional) must still run in full after a signal (#356 review F1) —
+    not abort the moment that nested container's own cancellation check
+    sees the already-cancelled token and raises past the rest of the
+    `finally:` list.
+    """
+    started = tmp_path / "started"
+    finally_marker = tmp_path / "finally_marker"
+    body = f"""
+effects:
+  - type: dynamic
+    name: d1
+    flow: tree
+    effects:
+      - type: tool
+        name: b0
+        provider: shell
+        params:
+          command: bash
+          args: ["-c", "touch {started}; sleep {_BRANCH_SLEEP_SECONDS}"]
+          allowed_commands: ["bash"]
+    finally:
+      - type: dynamic
+        name: cleanup_tree
+        flow: tree
+        effects:
+          - type: tool
+            name: c0
+            provider: shell
+            params:
+              command: bash
+              args: ["-c", "touch {finally_marker}"]
+              allowed_commands: ["bash"]
+""".lstrip("\n")
+    orch = tmp_path / "finally_nested_container.yml"
+    orch.write_text(body, encoding="utf-8")
+    out_path = tmp_path / "out.json"
+    proc = _run_cof(orch, out_path=out_path)
+
+    try:
+        _wait_for_paths([started])
+    except TimeoutError:
+        proc.kill()
+        proc.communicate(timeout=15)
+        raise
+
+    t0 = time.monotonic()
+    proc.send_signal(signal.SIGINT)
+    try:
+        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise
+    elapsed = time.monotonic() - t0
+
+    assert proc.returncode == 130, (stdout, stderr)
+    assert elapsed < _STOP_BOUND_SECONDS
+    assert "Traceback" not in stderr, stderr
+    # The fix under test: the nested dynamic inside `finally:` ran to
+    # completion instead of raising RunCancelledBySignal on its own first
+    # cancellation check.
+    assert finally_marker.exists()
 
 
 def _interrupted_dynamic_orchestration(tmp_path: Path) -> tuple[Path, Path]:

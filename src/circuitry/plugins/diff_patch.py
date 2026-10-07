@@ -20,12 +20,12 @@ Params:
 from __future__ import annotations
 
 import difflib
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..core.cancellation import run_tracked
 from ..preflight import CheckResult
 from ._subprocess import resolve_binary
 from .base import ToolResult, _as_bool
@@ -100,12 +100,9 @@ class DiffPatchPlugin:
             tf.write(patch_text)
             patch_file = tf.name
         try:
-            proc = subprocess.run(
+            proc = run_tracked(
                 [binary, "-p0", "-i", patch_file, str(target)],
-                capture_output=True,
-                text=True,
                 timeout=int(timeout_seconds),
-                check=False,
             )
         finally:
             Path(patch_file).unlink(missing_ok=True)

@@ -33,6 +33,8 @@ import urllib.parse
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
+from .core.cancellation import run_tracked
+
 # Strips userinfo (`user[:pass]@`) out of any `scheme://user:pass@host`
 # substring in the final message, not just a `url=` field on its own: a
 # configured base_url can also show up unmasked in adapter-built hint text
@@ -199,13 +201,17 @@ _RETRY_AFTER_WRITE_OUT_FORMAT = (
 )
 _RETRY_AFTER_LINE_RE = re.compile(re.escape(_RETRY_AFTER_MARKER) + r"(.*)")
 
-#: The real `subprocess.run`, captured at import time. The curl-version
-#: probe below must always exercise the actual installed curl, never a
-#: test's faked response for the request call `run_curl` itself makes —
-#: tests commonly `monkeypatch.setattr("subprocess.run", fake_run)` for
-#: exactly one call's shape, and a second, unexpected `curl --version` call
-#: routed through that same fake would break them.
-_real_subprocess_run = subprocess.run
+#: The real `subprocess.Popen` class, captured at import time. The
+#: curl-version probe below must always exercise the actual installed
+#: curl, never a test's faked response for the request call `run_curl`
+#: itself makes — tests commonly `monkeypatch.setattr("subprocess.Popen",
+#: fake_popen)` for exactly one call's shape, and a second, unexpected
+#: `curl --version` call routed through that same fake would break them.
+#: A captured *class* reference, not `subprocess.run` (which internally
+#: resolves `Popen` by a live module-attribute lookup at call time, so a
+#: test patching `subprocess.Popen` would still reach it even through a
+#: captured `subprocess.run` reference).
+_real_popen_cls = subprocess.Popen
 
 
 @functools.lru_cache(maxsize=1)
@@ -214,12 +220,14 @@ def _curl_supports_retry_after_header() -> bool:
     ``--write-out`` (added in curl 7.84.0). Cached: this runs curl once per
     process, not once per request."""
     try:
-        proc = _real_subprocess_run(
-            ["curl", "--version"], capture_output=True, text=True, check=False, timeout=5
+        proc = _real_popen_cls(
+            ["curl", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
+        with proc:
+            stdout, _stderr = proc.communicate(timeout=5)
     except (OSError, subprocess.SubprocessError):
         return False
-    match = re.match(r"curl (\d+)\.(\d+)\.(\d+)", proc.stdout or "")
+    match = re.match(r"curl (\d+)\.(\d+)\.(\d+)", stdout or "")
     if not match:
         return False
     version = tuple(int(g) for g in match.groups())
@@ -260,12 +268,9 @@ def _run_curl_posix(
     try:
         os.write(write_fd, config_bytes)
         os.close(write_fd)
-        return subprocess.run(
+        return run_tracked(
             [*cmd, "--config", f"/dev/fd/{read_fd}"],
             input=data,
-            capture_output=True,
-            text=True,
-            check=False,
             pass_fds=(read_fd,),
         )
     finally:
@@ -283,13 +288,7 @@ def _run_curl_windows(
     try:
         with os.fdopen(fd, "wb") as config_file:
             config_file.write(config_bytes)
-        return subprocess.run(
-            [*cmd, "--config", path],
-            input=data,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        return run_tracked([*cmd, "--config", path], input=data)
     finally:
         os.remove(path)
 

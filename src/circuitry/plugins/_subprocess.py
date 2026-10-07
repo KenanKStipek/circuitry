@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..core.cancellation import get_token, kill_process_group
+from ..core.cancellation import run_tracked
 from ..preflight import CheckResult
 from .base import ToolResult, _as_bool
 
@@ -187,55 +187,18 @@ def run_binary(
     """
     cmd = [binary, *_validate_args(args)]
     try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            # Only pipe stdin when there's input to write — matching
-            # subprocess.run's own input= semantics: unset, the child
-            # inherits this process's real stdin rather than getting an
-            # immediate EOF.
-            stdin=subprocess.PIPE if stdin is not None else None,
-            text=True,
-            cwd=cwd,
-            env=env,
-            # Its own process group (POSIX), not just its own pid, so a
-            # cancelled run (#356) can kill whatever this binary spawns
-            # underneath it, not just the immediate child.
-            start_new_session=(os.name == "posix"),
-        )
+        proc = run_tracked(cmd, input=stdin, timeout=int(timeout_seconds), cwd=cwd, env=env)
     except FileNotFoundError as exc:
         hint = not_found_hint or "override the plugin's binary path"
         raise RuntimeError(
             f"binary not found: {binary!r} (install it or {hint})."
         ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"{binary!r} exceeded timeout of {timeout_seconds}s"
+        ) from exc
 
-    # ``with proc`` (not a bare reference): closes stdout/stderr/stdin and
-    # reaps the process on the way out, success or exception, the same as
-    # subprocess.run's own ``with Popen(...) as process:``. Tracked for
-    # the run's whole lifetime it's actually running, not just the call to
-    # communicate() below — a signal (and so a ``CancellationToken.request``)
-    # can land at any point while this thread is blocked here (#356);
-    # untracked the instant this binary's own call returns either way.
-    with proc, get_token().track(proc):
-        try:
-            stdout, stderr = proc.communicate(input=stdin, timeout=int(timeout_seconds))
-        except subprocess.TimeoutExpired as exc:
-            kill_process_group(proc)
-            proc.wait()
-            raise RuntimeError(
-                f"{binary!r} exceeded timeout of {timeout_seconds}s"
-            ) from exc
-        except BaseException:
-            # Cancellation (SIGINT/SIGTERM) already killed this process's
-            # group from the signal handler (see ``core.cancellation``);
-            # this is the fallback for anything else that unwinds through
-            # here (e.g. this thread's own KeyboardInterrupt, on the main
-            # thread under chain flow — the behavior #356 says to reuse).
-            kill_process_group(proc)
-            proc.wait()
-            raise
-
+    stdout, stderr = proc.stdout, proc.stderr
     returncode = proc.returncode
     if returncode != 0 and not allow_nonzero:
         err = (stderr or stdout or "").strip()

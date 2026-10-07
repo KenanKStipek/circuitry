@@ -40,6 +40,41 @@ class FakeProc:
     stdout: str = ""
     stderr: str = ""
 
+    # run_curl/run_binary are tracked for cancellation (`core.cancellation
+    # .run_tracked`, #356) via `subprocess.Popen` + `communicate`, not
+    # `subprocess.run` — this fake stands in for the former now.
+    def communicate(self, input: object = None, timeout: object = None) -> tuple[str, str]:
+        return (self.stdout, self.stderr)
+
+    def __enter__(self) -> FakeProc:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+
+class _RecordingProc:
+    """Wraps a FakeProc, capturing communicate()'s ``input`` into
+    *sink[key]* — the old ``kwargs.get('input')`` capture point moved from
+    the Popen call to the communicate() call (run_tracked, #356)."""
+
+    def __init__(self, proc: FakeProc, sink: dict[str, Any], key: str = "input") -> None:
+        self._proc, self._sink, self._key = proc, sink, key
+
+    @property
+    def returncode(self) -> int:
+        return self._proc.returncode
+
+    def communicate(self, input: Any = None, timeout: Any = None) -> tuple[str, str]:
+        self._sink[self._key] = input
+        return self._proc.communicate(input=input, timeout=timeout)
+
+    def __enter__(self) -> _RecordingProc:
+        return self
+
+    def __exit__(self, *exc: Any) -> bool:
+        return False
+
 
 # ---------------------------------------------------------------------------
 # azure-openai
@@ -70,7 +105,7 @@ def test_azure_url_includes_deployment_and_api_version(
         captured["url"], captured["headers"] = read_config(cmd)
         return FakeProc(returncode=0, stdout=_ok_chat_payload("azure"))
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = build_adapter(adapter_name="azure-openai", runtime={})
     result = adapter.generate(model="my-deployment", prompt="ping")
@@ -112,7 +147,7 @@ def test_azure_curl_failure_masks_api_key_sent_via_extra_headers(
             stderr="curl: (22) The requested URL returned error: 404",
         )
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = build_adapter(adapter_name="azure-openai", runtime={})
     with pytest.raises(RuntimeError) as exc:
@@ -147,7 +182,7 @@ def test_azure_runtime_overrides_api_version(
         captured["url"] = read_config_url(cmd)
         return FakeProc(returncode=0, stdout=_ok_chat_payload())
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = build_adapter(
         adapter_name="azure-openai",
@@ -182,7 +217,7 @@ def test_cloudflare_resolves_account_id_from_env(
         captured["url"] = read_config_url(cmd)
         return FakeProc(returncode=0, stdout=_ok_chat_payload("cf"))
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = build_adapter(adapter_name="cloudflare-workers-ai", runtime={})
     result = adapter.generate(model="@cf/meta/llama-3.3", prompt="ping")
@@ -218,7 +253,7 @@ def test_cloudflare_runtime_account_id_overrides_env(
         captured["url"] = read_config_url(cmd)
         return FakeProc(returncode=0, stdout=_ok_chat_payload())
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = build_adapter(
         adapter_name="cloudflare-workers-ai",
@@ -251,7 +286,7 @@ def test_databricks_resolves_host_from_env(
         captured["url"] = read_config_url(cmd)
         return FakeProc(returncode=0, stdout=_ok_chat_payload("db"))
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     adapter = build_adapter(adapter_name="databricks", runtime={})
     adapter.generate(model="endpoint-name", prompt="p")
     assert (
@@ -294,7 +329,7 @@ def test_replicate_synchronous_succeeded(
         captured["url"], captured["headers"] = read_config(cmd)
         return FakeProc(returncode=0, stdout=json.dumps(payload))
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = build_adapter(adapter_name="replicate", runtime={})
     result = adapter.generate(model="meta/meta-llama-3-70b-instruct", prompt="hi")
@@ -322,7 +357,7 @@ def test_replicate_still_processing_raises_with_id(
         del args, kwargs
         return FakeProc(returncode=0, stdout=json.dumps(payload))
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     adapter = build_adapter(adapter_name="replicate", runtime={})
     with pytest.raises(RuntimeError, match="p123"):
         adapter.generate(model="meta/m", prompt="hi")
@@ -358,7 +393,7 @@ def test_replicate_curl_failure_masks_token(
         del args, kwargs
         return FakeProc(returncode=22, stderr="HTTP 401")
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     adapter = build_adapter(adapter_name="replicate", runtime={})
     with pytest.raises(RuntimeError) as exc:
         adapter.generate(model="meta/m", prompt="p")
@@ -375,15 +410,17 @@ def test_replicate_large_input_over_200kib_sent_on_stdin_not_argv(
 
     captured: dict[str, Any] = {}
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
         captured["cmd"] = cmd
-        captured["input"] = kwargs.get("input")
-        return FakeProc(
-            returncode=0,
-            stdout=json.dumps({"id": "abc", "status": "succeeded", "output": ["ok"]}),
+        return _RecordingProc(
+            FakeProc(
+                returncode=0,
+                stdout=json.dumps({"id": "abc", "status": "succeeded", "output": ["ok"]}),
+            ),
+            captured,
         )
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     adapter = build_adapter(adapter_name="replicate", runtime={})
     adapter.generate(model="meta/m", prompt=large_prompt)
     assert len(captured["input"]) > 200 * 1024
@@ -408,13 +445,13 @@ def test_replicate_end_to_end_against_local_server(
     monkeypatch.setenv("REPLICATE_API_TOKEN", secret)
 
     calls: list[list[str]] = []
-    real_run = subprocess.run
+    real_popen = subprocess.Popen
 
     def spying_run(cmd: list[str], **kwargs: Any) -> Any:
         calls.append(cmd)
-        return real_run(cmd, **kwargs)
+        return real_popen(cmd, **kwargs)
 
-    monkeypatch.setattr("subprocess.run", spying_run)
+    monkeypatch.setattr("subprocess.Popen", spying_run)
 
     with local_server(_ReplicateHandler) as base_url:
         adapter = build_adapter(
@@ -484,7 +521,7 @@ def test_watsonx_two_step_iam_then_generate(
             ),
         )
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     adapter = build_adapter(adapter_name="watsonx", runtime={})
     result = adapter.generate(model="meta-llama/llama-3-3-70b-instruct", prompt="ping")
     assert result.text == "from watsonx"
@@ -524,7 +561,7 @@ def test_watsonx_token_cache_avoids_second_iam_call(
             stdout=json.dumps({"results": [{"generated_text": "ok"}]}),
         )
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     adapter = build_adapter(adapter_name="watsonx", runtime={})
     adapter.generate(model="m", prompt="a")
     adapter.generate(model="m", prompt="b")
@@ -558,7 +595,7 @@ def test_watsonx_iam_failure_masks_api_key(
         del args, kwargs
         return FakeProc(returncode=22, stderr=f"HTTP 401: bad key {secret}")
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     adapter = build_adapter(adapter_name="watsonx", runtime={})
     with pytest.raises(RuntimeError) as exc:
         adapter.generate(model="m", prompt="p")
@@ -580,15 +617,17 @@ def test_watsonx_iam_apikey_form_field_never_touches_argv(
 
     captured: dict[str, Any] = {}
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
         captured["cmd"] = cmd
-        captured["input"] = kwargs.get("input")
-        return FakeProc(
-            returncode=0,
-            stdout=json.dumps({"access_token": "tok", "expires_in": 3600}),
+        return _RecordingProc(
+            FakeProc(
+                returncode=0,
+                stdout=json.dumps({"access_token": "tok", "expires_in": 3600}),
+            ),
+            captured,
         )
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     watsonx_mod._get_token(secret, timeout_seconds=10)
     assert_q_first(captured["cmd"])
     assert_not_in_argv(captured["cmd"], secret)
@@ -604,20 +643,23 @@ def test_watsonx_large_prompt_over_200kib_sent_on_stdin_not_argv(
 
     calls: list[dict[str, Any]] = []
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        calls.append({"cmd": cmd, "input": kwargs.get("input")})
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        entry: dict[str, Any] = {"cmd": cmd, "input": None}
+        calls.append(entry)
         url = read_config_url(cmd) or ""
         if "iam.cloud.ibm.com" in url:
-            return FakeProc(
+            proc = FakeProc(
                 returncode=0,
                 stdout=json.dumps({"access_token": "tok", "expires_in": 3600}),
             )
-        return FakeProc(
-            returncode=0,
-            stdout=json.dumps({"results": [{"generated_text": "ok"}]}),
-        )
+        else:
+            proc = FakeProc(
+                returncode=0,
+                stdout=json.dumps({"results": [{"generated_text": "ok"}]}),
+            )
+        return _RecordingProc(proc, entry)
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     adapter = build_adapter(adapter_name="watsonx", runtime={})
     adapter.generate(model="m", prompt=large_prompt)
 
@@ -650,13 +692,13 @@ def test_watsonx_generation_end_to_end_against_local_server(
     large_prompt = "canary prompt " * 20000
 
     calls: list[list[str]] = []
-    real_run = subprocess.run
+    real_popen = subprocess.Popen
 
     def spying_run(cmd: list[str], **kwargs: Any) -> Any:
         calls.append(cmd)
-        return real_run(cmd, **kwargs)
+        return real_popen(cmd, **kwargs)
 
-    monkeypatch.setattr("subprocess.run", spying_run)
+    monkeypatch.setattr("subprocess.Popen", spying_run)
 
     with local_server(_WatsonXGenerationHandler) as base_url:
         adapter = build_adapter(
@@ -698,7 +740,7 @@ def test_watsonx_iam_429_classifies_as_retryable(
             stderr="curl: (22) The requested URL returned error: 429",
         )
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     adapter = build_adapter(adapter_name="watsonx", runtime={})
     with pytest.raises(AdapterCallError) as exc:
         adapter.generate(model="m", prompt="p")
@@ -738,7 +780,7 @@ def test_watsonx_iam_failure_retries_through_the_prompt_retry_loop(
             stdout=json.dumps({"results": [{"generated_text": "ok"}]}),
         )
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = build_adapter(adapter_name="watsonx", runtime={})
     orch = {

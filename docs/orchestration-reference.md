@@ -1617,16 +1617,25 @@ else, but faster: a branch that hasn't started yet never starts at all (no
 node, no hooks — the same shape `stop_on_error` already gives a not-yet-
 started sibling), and a branch already running is stopped outright — its
 child process (the whole process group a tool like `shell` spawns, not
-just its own pid) is killed, and an in-flight MCP call is cancelled where
-the server's own client allows it. A step's own `finally:` still runs
-(and reruns on `--resume`, like any other `finally:`); a running parallel
-step is never merged into its parent — exactly as if it had never run —
-so neither a killed branch nor one that never started leaves any trace
-behind for `--resume` to see, consistent with every other way a tree-flow
-branch disappears on cancellation. A *second* SIGINT/SIGTERM while this
-cleanup is still running ends the process at once, with the same exit
-code and no traceback, rather than waiting for cleanup to finish or
-escaping as an uncaught exception from inside it.
+just its own pid) is killed. This covers every `shell`/binary-wrapping
+tool plugin and every HTTP call that goes through curl (every model
+adapter's own prompt, `web_search`, `weather`, ComfyUI's REST calls) —
+an in-flight MCP call is not cancelled; the MCP client does not watch
+for cancellation, so a branch blocked in one keeps running until the
+server responds (or its own timeout) regardless of the signal. A step's
+own `finally:` still runs in full (and reruns on `--resume`, like any
+other `finally:`) even though the run it is cleaning up from was already
+cancelled; a running parallel step is never merged into its parent —
+exactly as if it had never run — so neither a killed branch nor one that
+never started leaves any trace behind for `--resume` to see, consistent
+with every other way a tree-flow branch disappears on cancellation. A
+*second* SIGINT/SIGTERM while this cleanup is still running ends the
+process at once, with the same exit code and no traceback, rather than
+waiting for cleanup to finish or escaping as an uncaught exception from
+inside it — that immediate exit skips writing `--out`, the `--last`
+stash and `runtime.persistence` the same way a SIGKILL would, so
+`--resume` has only whatever the run's last completed step already
+saved.
 
 A resumed run writes its own `--out` back to the file its state came from
 by default when neither `--out` nor a profile's `out:` says otherwise —

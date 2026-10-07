@@ -14,7 +14,7 @@ from ..adapters import Adapter
 from ..output import console as _console
 from ..output import live_region as _live_region
 from .answers import parse_boolean_answer
-from .cancellation import get_token
+from .cancellation import get_token, submit_with_context
 from .disabled import is_disabled_node, is_enabled
 from .scope import local_writes as _local_writes_state
 from .scope import scope_ctx as _scope_ctx
@@ -579,7 +579,8 @@ class LoopRuntime:
                             max_workers=self.defn.max_concurrency
                         ) as executor:
                             future_to_idx = {
-                                executor.submit(
+                                submit_with_context(
+                                    executor,
                                     self._execute_body,
                                     store=isolated_stores[idx],
                                     ctx=iter_ctx,
@@ -1338,6 +1339,14 @@ Should the loop continue? Answer (yes/no):"""
         # would freeze whatever the enclosing scope looked like one step ago.
         base_ctx = ctx
         for effect in self.defn.body:
+            # A cancelled run (#356 review F3) must not start the next
+            # body effect either — the check at this method's own entry
+            # only guards the first one. A body effect whose own
+            # ``on_error: continue``/``skip`` swallows a killed branch's
+            # failure (ToolRuntime.execute et al. return normally instead
+            # of raising) would otherwise let this loop start the next
+            # effect's subprocess with nothing left to kill it.
+            get_token().check()
             effect_record = {
                 "type": type(effect).__name__,
                 "name": getattr(effect, "name", None),

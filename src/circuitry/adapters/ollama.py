@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
+from ..core.cancellation import run_tracked
 from ..curl_support import curl_failure_message, parse_error_body, run_curl
 from ..preflight import CheckResult
 from ._retry import AdapterCallError, classify_curl_exit
@@ -225,7 +225,7 @@ class OllamaAdapter:
             # Probe the Ollama daemon. Failure here is non-fatal at validate
             # time; doctor surfaces it as actionable.
             try:
-                proc = subprocess.run(
+                proc = run_tracked(
                     [
                         "curl",
                         "-q",
@@ -235,9 +235,6 @@ class OllamaAdapter:
                         "--head",
                         self.base_url.rstrip("/") + "/api/tags",
                     ],
-                    capture_output=True,
-                    text=True,
-                    check=False,
                 )
                 if proc.returncode != 0:
                     missing.append(f"host:{self.base_url}")

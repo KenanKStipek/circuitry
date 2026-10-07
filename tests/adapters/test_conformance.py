@@ -24,6 +24,18 @@ class FakeProc:
     stdout: str = ""
     stderr: str = ""
 
+    # run_curl/run_binary are tracked for cancellation (`core.cancellation
+    # .run_tracked`, #356) via `subprocess.Popen` + `communicate`, not
+    # `subprocess.run` — this fake stands in for the former now.
+    def communicate(self, input: object = None, timeout: object = None) -> tuple[str, str]:
+        return (self.stdout, self.stderr)
+
+    def __enter__(self) -> FakeProc:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
 
 def test_openai_adapter_conformance_with_mocked_transport(
     monkeypatch: pytest.MonkeyPatch,
@@ -39,7 +51,7 @@ def test_openai_adapter_conformance_with_mocked_transport(
         del args, kwargs
         return FakeProc(returncode=0, stdout=json.dumps(payload))
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = OpenAIAdapter()
     result = adapter.generate(model="gpt-4o-mini", prompt="ping")
@@ -62,7 +74,7 @@ def test_anthropic_adapter_conformance_with_mocked_transport(
         del args, kwargs
         return FakeProc(returncode=0, stdout=json.dumps(payload))
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = AnthropicAdapter()
     result = adapter.generate(model="claude-sonnet-4-20250514", prompt="ping")
@@ -84,7 +96,7 @@ def test_ollama_adapter_conformance_with_mocked_transport(
         del args, kwargs
         return FakeProc(returncode=0, stdout=json.dumps(payload))
 
-    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = OllamaAdapter()
     result = adapter.generate(model="phi3:mini", prompt="ping")
@@ -156,7 +168,7 @@ def test_direct_provider_errors_are_actionable(
         del args, kwargs
         return FakeProc(returncode=28, stderr="operation timed out")
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     with pytest.raises(RuntimeError) as exc:
         adapter.generate(model="model", prompt="ping")
@@ -195,7 +207,7 @@ def test_direct_provider_curl_failure_masks_api_key(
             stderr="curl: (22) The requested URL returned error: 401",
         )
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     with pytest.raises(RuntimeError) as exc:
         adapter.generate(model="model", prompt="ping")
@@ -278,7 +290,7 @@ def test_a_429_response_raises_a_retryable_adapter_call_error(
             stderr="curl: (22) The requested URL returned error: 429",
         )
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     with pytest.raises(AdapterCallError) as exc:
         adapter.generate(model="model", prompt="ping")
@@ -308,7 +320,7 @@ def test_a_404_response_raises_a_non_retryable_adapter_call_error(
             stderr="curl: (22) The requested URL returned error: 404",
         )
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     with pytest.raises(AdapterCallError) as exc:
         adapter.generate(model="model", prompt="ping")
@@ -329,7 +341,7 @@ def test_ollama_a_connection_failure_raises_a_retryable_adapter_call_error(
         del args, kwargs
         return FakeProc(returncode=7, stderr="curl: (7) Failed to connect")
 
-    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     with pytest.raises(AdapterCallError) as exc:
         OllamaAdapter().generate(model="model", prompt="ping")
@@ -386,7 +398,7 @@ def test_non_json_html_response_raises_runtime_error(
         del args, kwargs
         return FakeProc(returncode=0, stdout=html_body)
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = adapter_cls()
     with pytest.raises(RuntimeError, match="non-JSON response"):
@@ -403,7 +415,7 @@ def test_ollama_non_json_html_response_raises_runtime_error(
         del args, kwargs
         return FakeProc(returncode=0, stdout=html_body)
 
-    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = OllamaAdapter()
     with pytest.raises(RuntimeError, match="non-JSON response"):
@@ -427,7 +439,7 @@ def test_openai_empty_choices_returns_empty_text(
         del args, kwargs
         return FakeProc(returncode=0, stdout=json.dumps(payload))
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = OpenAIAdapter()
     result = adapter.generate(model="gpt-4o-mini", prompt="ping")
@@ -446,7 +458,7 @@ def test_openai_missing_message_key_returns_empty_text(
         del args, kwargs
         return FakeProc(returncode=0, stdout=json.dumps(payload))
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = OpenAIAdapter()
     result = adapter.generate(model="gpt-4o-mini", prompt="ping")
@@ -465,7 +477,7 @@ def test_openai_missing_usage_returns_none_tokens(
         del args, kwargs
         return FakeProc(returncode=0, stdout=json.dumps(payload))
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = OpenAIAdapter()
     result = adapter.generate(model="gpt-4o-mini", prompt="ping")
@@ -486,7 +498,7 @@ def test_anthropic_empty_content_returns_empty_text(
         del args, kwargs
         return FakeProc(returncode=0, stdout=json.dumps(payload))
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = AnthropicAdapter()
     result = adapter.generate(model="claude-sonnet-4-20250514", prompt="ping")
@@ -505,7 +517,7 @@ def test_anthropic_missing_usage_returns_none_tokens(
         del args, kwargs
         return FakeProc(returncode=0, stdout=json.dumps(payload))
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = AnthropicAdapter()
     result = adapter.generate(model="claude-sonnet-4-20250514", prompt="ping")
@@ -524,7 +536,7 @@ def test_ollama_missing_response_key_returns_empty_text(
         del args, kwargs
         return FakeProc(returncode=0, stdout=json.dumps(payload))
 
-    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = OllamaAdapter()
     result = adapter.generate(model="phi3:mini", prompt="ping")
@@ -557,7 +569,7 @@ def test_curl_not_installed_raises_actionable_error(
         del args, kwargs
         raise FileNotFoundError("No such file or directory: 'curl'")
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = adapter_cls()
     with pytest.raises(RuntimeError, match="curl is not installed"):
@@ -573,7 +585,7 @@ def test_ollama_curl_not_installed_raises_actionable_error(
         del args, kwargs
         raise FileNotFoundError("No such file or directory: 'curl'")
 
-    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = OllamaAdapter()
     with pytest.raises(RuntimeError, match="curl is not installed"):
@@ -596,7 +608,7 @@ def test_ollama_curl_cmd_carries_the_requested_timeout(
         captured["cmd"] = cmd
         return FakeProc(returncode=0, stdout=json.dumps({"response": "ok"}))
 
-    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = OllamaAdapter()
     adapter.generate(model="qwen3.8:27b", prompt="ping", timeout_seconds=300)
@@ -614,7 +626,7 @@ def test_ollama_exit_7_hint_says_not_reachable(
         del args, kwargs
         return FakeProc(returncode=7, stderr="curl: (7) Failed to connect")
 
-    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = OllamaAdapter()
     with pytest.raises(RuntimeError) as exc_info:
@@ -638,7 +650,7 @@ def test_ollama_exit_7_hint_does_not_leak_base_url_credentials(
         del args, kwargs
         return FakeProc(returncode=7, stderr="curl: (7) Failed to connect")
 
-    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = OllamaAdapter(base_url="http://user:canarypw@example.test:11434")
     with pytest.raises(RuntimeError) as exc_info:
@@ -660,7 +672,7 @@ def test_ollama_exit_28_hint_says_timed_out(
         del args, kwargs
         return FakeProc(returncode=28, stderr="curl: (28) Operation timed out")
 
-    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = OllamaAdapter()
     with pytest.raises(RuntimeError) as exc_info:
@@ -691,7 +703,7 @@ def test_ollama_404_model_not_found_includes_body_and_pull_hint(
             stderr="curl: (22) The requested URL returned error: 404",
         )
 
-    monkeypatch.setattr("circuitry.adapters.ollama.subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = OllamaAdapter()
     with pytest.raises(RuntimeError) as exc_info:
@@ -749,7 +761,7 @@ def test_api_key_not_leaked_in_error_message(
         del args, kwargs
         return FakeProc(returncode=22, stderr="HTTP 401 Unauthorized")
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = adapter_cls()
     with pytest.raises(RuntimeError) as exc:
