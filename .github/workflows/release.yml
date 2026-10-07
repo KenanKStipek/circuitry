@@ -110,9 +110,11 @@ jobs:
   publish-image:
     name: Publish electricity container image
     runs-on: ubuntu-latest
-    # Waits for both builds, not just electricity-build: the image must not
-    # reach ghcr.io before the Python wheel/sdist are known to build too (#359).
-    needs: [build, electricity-build]
+    # Waits for both builds and for the PyPI upload: the image must not reach
+    # ghcr.io before every artifact has built (#359), and the PyPI upload (which
+    # can never be repeated for the same version) goes first, so a failed upload
+    # leaves no image behind without a release.
+    needs: [build, electricity-build, publish-pypi]
     permissions:
       contents: read
       packages: write

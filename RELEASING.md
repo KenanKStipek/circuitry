@@ -11,11 +11,11 @@ The same tag also covers `electricity/`, the preview Rust runner in this
 repository: the workflow builds its release archives (Linux x86_64/aarch64
 musl, macOS aarch64) in parallel with the Python build, and attaches them
 to the same GitHub release, marked as a **preview**. The container image
-(`ghcr.io/kenankstipek/electricity`) is only pushed to ghcr.io once *both*
-the Python wheel/sdist and every electricity archive have built
-successfully (a dedicated `publish-image` job waits on both) — nothing
-publishes anywhere (PyPI, ghcr.io, the GitHub release) unless every
-artifact built.
+(`ghcr.io/kenankstipek/electricity`) is pushed by a dedicated
+`publish-image` job only after the Python wheel/sdist and every
+electricity archive have built and the PyPI upload has succeeded —
+nothing publishes anywhere (PyPI, ghcr.io, the GitHub release) unless
+every artifact built, and a failed PyPI upload leaves no image behind.
 
 ## One-time setup (per repository)
 
@@ -147,7 +147,7 @@ The workflow then:
    builds electricity's release archives and validates its container image
    (without pushing it yet).
 4. Once both builds succeed: uploads to PyPI via OIDC trusted publishing,
-   and separately pushes the container image to ghcr.io.
+   then pushes the container image to ghcr.io.
 5. Creates a GitHub Release with the changelog excerpt, the Python
    artifacts, and electricity's archives/checksums, all attached.
 
