@@ -87,13 +87,20 @@ time.sleep(60)
 
 
 def pid_alive(pid: int) -> bool:
+    """Whether ``pid`` is running; a killed but not yet reaped (zombie)
+    process counts as dead where ``/proc`` can tell."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
-    return True
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as handle:
+            state = handle.read().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        return True
+    return state not in ("Z", "X")
 
 
 def wait_until_dead(pid: int, *, seconds: float = 5.0) -> bool:
