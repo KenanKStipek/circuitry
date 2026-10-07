@@ -87,7 +87,7 @@ _BOOT_TIME_TOLERANCE_SECONDS = 5
 _HELPER_TIMEOUT_SECONDS = 10
 #: ``ps``/``lsof`` output that never depends on the caller's locale or zone,
 #: so a start time recorded by one run compares equal in the next.
-_HELPER_ENV = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LC_ALL": "C", "TZ": "UTC"}
+_HELPER_ENV_OVERRIDES = {"LC_ALL": "C", "TZ": "UTC"}
 
 #: Leaders this interpreter started: reaped here, so a leader that exits
 #: while this process is still running does not linger as a zombie that
@@ -114,7 +114,7 @@ def _helper(cmd: list[str]) -> subprocess.CompletedProcess[str] | None:
             capture_output=True,
             text=True,
             timeout=_HELPER_TIMEOUT_SECONDS,
-            env=_HELPER_ENV,
+            env={**os.environ, **_HELPER_ENV_OVERRIDES},
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
