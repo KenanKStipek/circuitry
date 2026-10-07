@@ -34,6 +34,7 @@ Start with the [README](../README.md) for install, first run, and the mental mod
 - [`surrealdb` tool plugin](./plugins/surrealdb.md) — SurrealQL and record operations, env-only credentials, readiness and error mapping.
 - [Runtime Plugin Catalog](./runtime-plugins.md) — per-plugin schema, redaction, and connection/auth docs for the bundled persistence runtime plugins.
 - [Binary tool plugins: `binary` and `env`](./plugins/binary-tools.md) — a machine-specific executable path and environment for `imagemagick`, `ffmpeg`, and the other subprocess-wrapping tool plugins.
+- [`agent` tool plugin](./plugins/agent.md) — a delegated pi or Claude Code session as a tool effect: params, the result-file contract and its repair turn, what lands in state, and why it is not sandboxed.
 
 ## Project
 

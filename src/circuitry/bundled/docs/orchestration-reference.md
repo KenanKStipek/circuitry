@@ -699,6 +699,7 @@ Not every plugin can actually be bounded by it:
 | Subprocess timeout (`subprocess.run(timeout=...)` or curl `--max-time`) | Every binary-wrapping plugin: `ffmpeg`, `shell`, `git`, `gh`, `ripgrep`, `sed`, `awk`, `pandoc`, `imagemagick`, `exiftool`, `gpg`, `docker`, `kubectl`, and the rest of that family. `comfyui` and `web_search`/`weather` apply it to their own curl calls |
 | Own network call | `web_fetch` (its own `params.timeout_ms`, when set, shortens it for that call — never extends past the effect's budget), `rss`, `wikipedia` (retries disabled so it can't multiply the budget), `whois`, `http`, `slack`, `notion`, `jira`, `github`, `gdrive`, `gcalendar`, `s3`, `linear`, `email_smtp`, `webhook`, `dns`, `mcp_client`, `playwright`, `screenshot`, `discord` (via a background thread with a deadline, since discord.py's webhook send has no timeout parameter of its own). These apply the timeout per socket operation (connect, each read, etc.), not to the whole call. |
 | Sandboxed child process, killed on overrun | `python_eval` |
+| Process-group timeout: the whole group is killed on overrun, the CLI and everything it started | `agent` (one budget for the whole session, its repair turn included) |
 | Ignored — pure in-memory, nothing to bound | `json`, `xml`, `csv`, `regex`, `hash`, `hex`, `uuid`, `base64`, `gzip`, `zip`, `tar`, `fs`, `env_vars`, `validate_yaml`, `html_extract`, `pdf_extract`, `math`, `clock`, `system_info`, `process_list` |
 | Ignored — has its own, separate bound instead | `port_check` (`params.timeout_ms`, socket-level, default 2s), `surrealdb` (the SDK's own socket timeout), `embed`/`rerank`/`vector_search` (local inference; the first call per model can also trigger an unbounded download) |
 
@@ -724,10 +725,10 @@ for the CLI walkthrough. Each provider's capability tag
 
 | Capability | Providers |
 |---|---|
-| `shell` | `shell`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ripgrep`, `pytest`, `awk`, `sed`, `pandoc`, `mediainfo`, `imagemagick`, `exiftool`, `7z`, `ping`, `traceroute`, `linter`, `ocr`, `gpg`, `diff_patch`, `pdf_render`, `ffmpeg` |
+| `shell` | `shell`, `agent`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ripgrep`, `pytest`, `awk`, `sed`, `pandoc`, `mediainfo`, `imagemagick`, `exiftool`, `7z`, `ping`, `traceroute`, `linter`, `ocr`, `gpg`, `diff_patch`, `pdf_render`, `ffmpeg` |
 | `python_eval` | `python_eval` |
-| `fs-write` | `fs`, `tar`, `zip`, `gzip`, `vector_search`, `gdrive`, `screenshot` |
-| `network` | `comfyui`, `http`, `email_smtp`, `port_check`, `dns`, `whois`, `rss`, `wikipedia`, `webhook`, `web_fetch`, `web_search`, `weather`, `s3`, `surrealdb`, `mcp`, `linear`, `slack`, `discord`, `github`, `jira`, `notion`, `gcalendar`, `gdrive`, `playwright`, `screenshot`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ping`, `traceroute` |
+| `fs-write` | `agent`, `fs`, `tar`, `zip`, `gzip`, `vector_search`, `gdrive`, `screenshot` |
+| `network` | `agent`, `comfyui`, `http`, `email_smtp`, `port_check`, `dns`, `whois`, `rss`, `wikipedia`, `webhook`, `web_fetch`, `web_search`, `weather`, `s3`, `surrealdb`, `mcp`, `linear`, `slack`, `discord`, `github`, `jira`, `notion`, `gcalendar`, `gdrive`, `playwright`, `screenshot`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ping`, `traceroute` |
 
 A provider absent from every row needs no consent: it only reads its own
 parameters and returns a value (`math`, `regex`, `json`, `clock`, `hash`,
