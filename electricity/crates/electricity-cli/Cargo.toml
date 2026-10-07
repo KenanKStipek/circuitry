@@ -1,0 +1,15 @@
+[package]
+name = "electricity-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "electricity CLI binary (preview)"
+
+[[bin]]
+name = "electricity"
+path = "src/main.rs"
+
+[dependencies]
+electricity = { path = "../electricity" }

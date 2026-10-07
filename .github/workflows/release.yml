@@ -49,19 +49,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: extract
-        name: Compare git tag to pyproject.toml version
+        name: Compare git tag to pyproject.toml and electricity/Cargo.toml versions
         run: |
           tag="${GITHUB_REF#refs/tags/v}"
           # tomllib lives in stdlib for Python 3.11+; the runner has
           # 3.x already so this is portable.
           py_version="$(python3 -c 'import tomllib, sys; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          cargo_version="$(grep -m1 '^version = ' electricity/Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
           echo "tag=$tag"
           echo "pyproject=$py_version"
+          echo "electricity=$cargo_version"
           if [[ "$tag" != "$py_version" ]]; then
             echo "::error::tag $tag does not match pyproject.toml version $py_version"
             exit 1
           fi
+          if [[ "$tag" != "$cargo_version" ]]; then
+            echo "::error::tag $tag does not match electricity/Cargo.toml workspace version $cargo_version"
+            exit 1
+          fi
           echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+  electricity-build:
+    name: Build electricity (release)
+    needs: verify-version
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/electricity-release-build.yml
+    with:
+      publish: true
 
   build:
     name: Build wheel + sdist
@@ -90,7 +106,7 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, electricity-build]
     environment:
       name: pypi
       url: https://pypi.org/p/circuitry-cof
@@ -118,7 +134,7 @@ jobs:
   github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [publish-pypi, verify-version]
+    needs: [publish-pypi, verify-version, electricity-build]
     permissions:
       contents: write
     steps:
@@ -130,6 +146,12 @@ jobs:
         with:
           name: dist
           path: dist/
+      - name: Download electricity archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "electricity-*"
+          path: electricity-dist/
+          merge-multiple: true
       - name: Extract changelog section
         id: changelog
         run: |
@@ -145,6 +167,12 @@ jobs:
           else
             echo "(No CHANGELOG section for v$version yet — see commit history.)" > "$notes_file"
           fi
+          {
+            echo ""
+            echo "---"
+            echo ""
+            echo "electricity's binaries and container image (\`ghcr.io/kenankstipek/electricity:$version\`) are attached below as a **preview**: they cannot run orchestrations yet."
+          } >> "$notes_file"
           {
             echo "notes_file=$notes_file"
           } >> "$GITHUB_OUTPUT"
@@ -163,4 +191,5 @@ jobs:
             --title "v$version" \
             --notes-file "${{ steps.changelog.outputs.notes_file }}" \
             $prerelease_flag \
-            dist/*
+            dist/* \
+            electricity-dist/*

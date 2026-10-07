@@ -1,0 +1,148 @@
+name: electricity release build
+
+# Reusable workflow: builds electricity's release archives (musl Linux
+# x86_64/aarch64 via cargo-zigbuild, macOS aarch64 natively) and the
+# multi-arch container image built from the two musl binaries. Never
+# publishes anything unless the caller sets `publish: true` — a PR calls
+# this with `publish: false` so it exercises exactly the build a release
+# tag runs; the release workflow calls it with `publish: true`.
+
+on:
+  workflow_call:
+    inputs:
+      publish:
+        description: "Push the ghcr.io image for this version"
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      version:
+        description: "electricity workspace version that was built"
+        value: ${{ jobs.version.outputs.version }}
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Read workspace version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.extract.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: extract
+        run: |
+          version="$(grep -m1 '^version = ' electricity/Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build-archives:
+    name: build (${{ matrix.target }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            zigbuild: true
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-latest
+            zigbuild: true
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            zigbuild: false
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: electricity
+          key: ${{ matrix.target }}
+
+      - name: Install zig
+        if: matrix.zigbuild
+        uses: mlugg/setup-zig@v1
+
+      - name: Install cargo-zigbuild
+        if: matrix.zigbuild
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Build (cargo-zigbuild)
+        if: matrix.zigbuild
+        working-directory: electricity
+        run: cargo zigbuild --release --target ${{ matrix.target }} -p electricity-cli
+
+      - name: Build (cargo)
+        if: ${{ !matrix.zigbuild }}
+        working-directory: electricity
+        run: cargo build --release --target ${{ matrix.target }} -p electricity-cli
+
+      - name: Package archive
+        working-directory: electricity
+        run: |
+          version="${{ needs.version.outputs.version }}"
+          stage="electricity-${version}-${{ matrix.target }}"
+          mkdir -p "$stage"
+          cp "target/${{ matrix.target }}/release/electricity" "$stage/"
+          cp ../LICENSE "$stage/"
+          cp README.md "$stage/"
+          tar czf "$stage.tar.gz" "$stage"
+          shasum -a 256 "$stage.tar.gz" > "$stage.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: electricity-${{ matrix.target }}
+          path: |
+            electricity/electricity-*.tar.gz
+            electricity/electricity-*.tar.gz.sha256
+          if-no-files-found: error
+
+  build-image:
+    name: container image
+    needs: [version, build-archives]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "electricity-*-unknown-linux-musl"
+          path: electricity/dist
+          merge-multiple: true
+
+      - name: Unpack binaries for the image build context
+        working-directory: electricity
+        run: |
+          version="${{ needs.version.outputs.version }}"
+          mkdir -p dist/linux/amd64 dist/linux/arm64
+          tar xzf "dist/electricity-${version}-x86_64-unknown-linux-musl.tar.gz" -C dist/linux/amd64 --strip-components=1
+          tar xzf "dist/electricity-${version}-aarch64-unknown-linux-musl.tar.gz" -C dist/linux/arm64 --strip-components=1
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: inputs.publish
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: electricity
+          file: electricity/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ inputs.publish }}
+          tags: ghcr.io/kenankstipek/electricity:${{ needs.version.outputs.version }}
