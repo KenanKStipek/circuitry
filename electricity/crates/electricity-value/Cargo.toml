@@ -1,0 +1,28 @@
+[package]
+name = "electricity-value"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Python-semantics Value type for electricity: Eq/Hash/ordering, py_str/py_repr"
+
+[dependencies]
+# Ordered map for Dict: insertion order must survive, and keys are Value
+# itself (not String) since YAML/JSON can produce bool/int dict keys.
+indexmap = "2"
+# Python ints are unbounded; the i64 fast path falls back to this for
+# anything that overflows it. Actively maintained, the de facto standard
+# bigint crate, no unsafe in the arithmetic we use.
+num-bigint = "0.5"
+# Traits (ToPrimitive/Signed/Zero) used to move between IntValue's i64 fast
+# path and its BigInt fallback without duplicating the conversion logic.
+num-traits = "0.2"
+# date/datetime: NaiveDate/NaiveDateTime plus FixedOffset is exactly the
+# naive-or-fixed-offset split PyYAML's timestamp resolver needs (§3.2 of
+# ../../DESIGN.md); no timezone database is required for that.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
