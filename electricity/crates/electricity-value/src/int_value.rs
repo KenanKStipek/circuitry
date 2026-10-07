@@ -55,6 +55,7 @@ impl IntValue {
         }
     }
 
+    /// `true` iff the value is `0`.
     pub fn is_zero(&self) -> bool {
         match self {
             IntValue::Small(n) => *n == 0,
@@ -62,6 +63,7 @@ impl IntValue {
         }
     }
 
+    /// `true` iff the value is strictly less than `0`.
     pub fn is_negative(&self) -> bool {
         match self {
             IntValue::Small(n) => *n < 0,

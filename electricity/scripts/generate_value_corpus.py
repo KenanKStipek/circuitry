@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import math
 import random
 import struct
 import sys
@@ -109,9 +110,11 @@ def hand_picked_cases() -> list[dict]:
         0.1,
         0.5,
         100.0,
-        1e16,
+        9999999999999998.0,  # just below the switch to exponent notation
+        1e16,  # the switch to exponent notation
         1e15,
-        0.0001,
+        0.0001,  # the lowest magnitude still in fixed notation
+        0.00009999,  # just below that switch, now exponential
         0.00001,
         5e-324,
         sys.float_info.max,
@@ -121,6 +124,7 @@ def hand_picked_cases() -> list[dict]:
         "",
         "hello",
         "it's",
+        '"',  # only a double quote: must stay single-quoted
         'both\' and "',
         "tab\tnewline\nreturn\r",
         "".join(chr(c) for c in range(0x20)),
@@ -180,10 +184,14 @@ def random_float_cases(rng: random.Random, count: int) -> list[dict]:
         f = struct.unpack("<d", struct.pack("<Q", bits))[0]
         cases.append(case(f))
     # A few additional floats sampled from realistic magnitude ranges, not
-    # just raw bit patterns (which skew towards huge exponents).
+    # just raw bit patterns (which skew towards huge exponents). Built with
+    # `math.ldexp` (exact binary scaling) rather than `10**magnitude`
+    # (`pow()`, whose last bit isn't guaranteed to match between the
+    # platform that regenerates this file and the one that checks it),
+    # so the file is byte-identical across platforms.
     for _ in range(count // 4):
-        magnitude = rng.uniform(-300, 300)
-        f = rng.uniform(-1, 1) * (10**magnitude)
+        sign = rng.choice((-1.0, 1.0))
+        f = sign * math.ldexp(rng.random(), rng.randint(-1000, 1000))
         cases.append(case(f))
     return cases
 
@@ -234,16 +242,63 @@ def sample_codepoints_by_category() -> dict[str, list[int]]:
     return table
 
 
+# Hand-verified Cf/Cn codepoints above the Basic Multilingual Plane (astral
+# plane), against Unicode 14.0.0 (the database Python 3.11 ships): U+E0001
+# LANGUAGE TAG and U+E0020 TAG SPACE are Cf; U+2FFFE, U+3FFFE and U+10FFFE
+# are unassigned noncharacters (Cn). Hand-picking rather than scanning for
+# these keeps the generator itself simple; the generated
+# `unicode_nonprintable_ranges.rs` table is still built from a full scan
+# (`generate_unicode_printable_ranges.py`), so these are only samples of it.
+ASTRAL_CF_CN_CODEPOINTS = [0xE0001, 0xE0020, 0x2FFFE, 0x3FFFE, 0x10FFFE]
+
+
+def c0_c1_control_codepoints() -> list[int]:
+    return list(range(0x20)) + list(range(0x80, 0xA0))
+
+
+def random_codepoint(rng: random.Random) -> int:
+    """A codepoint drawn from the whole assigned range, skipping surrogates
+
+    (which `chr()` accepts but which can't round-trip through UTF-8, the
+    encoding this corpus file is written in).
+    """
+    while True:
+        cp = rng.randrange(0x110000)
+        if not (0xD800 <= cp <= 0xDFFF):
+            return cp
+
+
 def random_string_cases(rng: random.Random, count: int) -> list[dict]:
     by_category = sample_codepoints_by_category()
-    pool = [cp for cps in by_category.values() for cp in cps]
+    category_pool = [cp for cps in by_category.values() for cp in cps]
     ascii_pool = list(range(0x20, 0x7F))
+    control_pool = c0_c1_control_codepoints()
+    # Weighted so every pool gets exercised across `count` strings: ASCII
+    # and the category pool stay common, while control chars, astral Cf/Cn,
+    # and whole-range draws (which sample the generated Unicode table's
+    # range boundaries directly, not just its hand-picked representatives)
+    # each get a meaningful share.
+    weighted_pools = [
+        (0.35, ascii_pool),
+        (0.20, category_pool),
+        (0.15, control_pool),
+        (0.15, ASTRAL_CF_CN_CODEPOINTS),
+    ]
     cases = []
     for _ in range(count):
         length = rng.randint(0, 12)
         chars = []
         for _ in range(length):
-            cp = rng.choice(ascii_pool) if rng.random() < 0.5 else rng.choice(pool)
+            roll = rng.random()
+            cumulative = 0.0
+            cp = None
+            for weight, pool in weighted_pools:
+                cumulative += weight
+                if roll < cumulative:
+                    cp = rng.choice(pool)
+                    break
+            if cp is None:
+                cp = random_codepoint(rng)
             chars.append(chr(cp))
         cases.append(case("".join(chars)))
     return cases

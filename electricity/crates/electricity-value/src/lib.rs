@@ -29,6 +29,7 @@ pub use int_value::IntValue;
 use chrono::{Duration, FixedOffset, NaiveDate, NaiveDateTime};
 use indexmap::IndexMap;
 use num_bigint::BigInt;
+use num_traits::ToPrimitive;
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -45,15 +46,28 @@ pub type Dict = IndexMap<Value, Value>;
 /// through the same resolver as any other value.
 #[derive(Debug, Clone)]
 pub enum Value {
+    /// Python's `None`.
     None,
+    /// Python's `bool`. Part of the numeric tower: `True`/`False` compare,
+    /// hash, and dict-key-collide with `1`/`0` and `1.0`/`0.0`.
     Bool(bool),
     /// Python ints are unbounded; see [`IntValue`].
     Int(IntValue),
+    /// Python's `float`, an IEEE-754 double. Part of the numeric tower.
     Float(f64),
+    /// Python's `str`, a sequence of Unicode codepoints.
     Str(String),
+    /// Python's `bytes`, a sequence of raw bytes. Never equal to a `Str`,
+    /// even one with the same content decoded.
     Bytes(Vec<u8>),
+    /// Python's `list`. Unlike `Dict`/`Str`/`Bytes`, Python lists aren't
+    /// hashable, but this `Value::List` still has a total `Hash` impl
+    /// (see the [`Hash`] impl below) so `Value` itself always implements
+    /// `Hash`.
     List(Vec<Value>),
+    /// Python's `dict`, insertion-ordered like CPython's since 3.7.
     Dict(Dict),
+    /// Python's `datetime.date`.
     Date(NaiveDate),
     /// A naive date-time plus an optional fixed UTC offset. `None` means
     /// naive (no `tzinfo`), exactly as PyYAML's timestamp resolver
@@ -159,10 +173,12 @@ impl Value {
         }
     }
 
+    /// `true` iff this is `Value::None` (Python's `value is None`).
     pub fn is_none(&self) -> bool {
         matches!(self, Value::None)
     }
 
+    /// The underlying `bool`, or `None` if this isn't a `Value::Bool`.
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Value::Bool(b) => Some(*b),
@@ -170,6 +186,7 @@ impl Value {
         }
     }
 
+    /// The underlying [`IntValue`], or `None` if this isn't a `Value::Int`.
     pub fn as_int(&self) -> Option<&IntValue> {
         match self {
             Value::Int(i) => Some(i),
@@ -177,6 +194,7 @@ impl Value {
         }
     }
 
+    /// The underlying `f64`, or `None` if this isn't a `Value::Float`.
     pub fn as_float(&self) -> Option<f64> {
         match self {
             Value::Float(f) => Some(*f),
@@ -184,6 +202,7 @@ impl Value {
         }
     }
 
+    /// The underlying string slice, or `None` if this isn't a `Value::Str`.
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::Str(s) => Some(s),
@@ -191,6 +210,7 @@ impl Value {
         }
     }
 
+    /// The underlying byte slice, or `None` if this isn't a `Value::Bytes`.
     pub fn as_bytes(&self) -> Option<&[u8]> {
         match self {
             Value::Bytes(b) => Some(b),
@@ -198,6 +218,7 @@ impl Value {
         }
     }
 
+    /// The underlying item slice, or `None` if this isn't a `Value::List`.
     pub fn as_list(&self) -> Option<&[Value]> {
         match self {
             Value::List(items) => Some(items),
@@ -205,6 +226,8 @@ impl Value {
         }
     }
 
+    /// A mutable reference to the underlying items, or `None` if this
+    /// isn't a `Value::List`.
     pub fn as_list_mut(&mut self) -> Option<&mut Vec<Value>> {
         match self {
             Value::List(items) => Some(items),
@@ -212,6 +235,7 @@ impl Value {
         }
     }
 
+    /// The underlying [`Dict`], or `None` if this isn't a `Value::Dict`.
     pub fn as_dict(&self) -> Option<&Dict> {
         match self {
             Value::Dict(d) => Some(d),
@@ -219,6 +243,8 @@ impl Value {
         }
     }
 
+    /// A mutable reference to the underlying [`Dict`], or `None` if this
+    /// isn't a `Value::Dict`.
     pub fn as_dict_mut(&mut self) -> Option<&mut Dict> {
         match self {
             Value::Dict(d) => Some(d),
@@ -226,6 +252,7 @@ impl Value {
         }
     }
 
+    /// The underlying [`NaiveDate`], or `None` if this isn't a `Value::Date`.
     pub fn as_date(&self) -> Option<&NaiveDate> {
         match self {
             Value::Date(d) => Some(d),
@@ -233,6 +260,8 @@ impl Value {
         }
     }
 
+    /// The underlying naive date-time plus its UTC offset (`None` for a
+    /// naive date-time), or `None` if this isn't a `Value::DateTime`.
     pub fn as_datetime(&self) -> Option<(&NaiveDateTime, Option<&FixedOffset>)> {
         match self {
             Value::DateTime(naive, offset) => Some((naive, offset.as_ref())),
@@ -249,17 +278,21 @@ impl Value {
 // Equality (Python dict-key semantics)
 // ---------------------------------------------------------------------
 
-/// The numeric tower (`bool`/`int`/`float`) reduced to one of two exact
-/// representations for cross-variant comparison.
+/// The numeric tower (`bool`/`int`/`float`) reduced to one of three exact
+/// representations for cross-variant comparison. `I64` is the fast path
+/// for `Bool` and a fitting `Int`: no `BigInt` allocation for the common
+/// case of two small ints.
 enum Num {
+    I64(i64),
     Int(BigInt),
     Float(f64),
 }
 
 fn to_num(v: &Value) -> Num {
     match v {
-        Value::Bool(b) => Num::Int(BigInt::from(if *b { 1 } else { 0 })),
-        Value::Int(i) => Num::Int(i.to_bigint()),
+        Value::Bool(b) => Num::I64(if *b { 1 } else { 0 }),
+        Value::Int(IntValue::Small(n)) => Num::I64(*n),
+        Value::Int(IntValue::Big(n)) => Num::Int(n.clone()),
         Value::Float(f) => Num::Float(*f),
         _ => unreachable!("to_num called on a non-numeric-tower Value"),
     }
@@ -267,8 +300,11 @@ fn to_num(v: &Value) -> Num {
 
 fn numeric_eq(a: &Value, b: &Value) -> bool {
     match (to_num(a), to_num(b)) {
+        (Num::I64(x), Num::I64(y)) => x == y,
         (Num::Int(x), Num::Int(y)) => x == y,
         (Num::Float(x), Num::Float(y)) => x == y,
+        (Num::I64(x), Num::Int(y)) | (Num::Int(y), Num::I64(x)) => BigInt::from(x) == y,
+        (Num::I64(x), Num::Float(y)) | (Num::Float(y), Num::I64(x)) => numeric::i64_eq_f64(x, y),
         (Num::Int(x), Num::Float(y)) | (Num::Float(y), Num::Int(x)) => {
             numeric::bigint_eq_f64(&x, y)
         }
@@ -277,8 +313,13 @@ fn numeric_eq(a: &Value, b: &Value) -> bool {
 
 fn numeric_partial_cmp(a: &Value, b: &Value) -> Option<Ordering> {
     match (to_num(a), to_num(b)) {
+        (Num::I64(x), Num::I64(y)) => Some(x.cmp(&y)),
         (Num::Int(x), Num::Int(y)) => Some(x.cmp(&y)),
         (Num::Float(x), Num::Float(y)) => x.partial_cmp(&y),
+        (Num::I64(x), Num::Int(y)) => Some(BigInt::from(x).cmp(&y)),
+        (Num::Int(x), Num::I64(y)) => Some(x.cmp(&BigInt::from(y))),
+        (Num::I64(x), Num::Float(y)) => numeric::i64_cmp_f64(x, y),
+        (Num::Float(x), Num::I64(y)) => numeric::i64_cmp_f64(y, x).map(Ordering::reverse),
         (Num::Int(x), Num::Float(y)) => numeric::bigint_cmp_f64(&x, y),
         (Num::Float(x), Num::Int(y)) => numeric::bigint_cmp_f64(&y, x).map(Ordering::reverse),
     }
@@ -343,8 +384,9 @@ impl Hash for Value {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
             Value::None => state.write_u8(0),
-            Value::Bool(b) => hash_numeric_bigint(&BigInt::from(if *b { 1 } else { 0 }), state),
-            Value::Int(i) => hash_numeric_bigint(&i.to_bigint(), state),
+            Value::Bool(b) => hash_small_int(if *b { 1 } else { 0 }, state),
+            Value::Int(IntValue::Small(n)) => hash_small_int(*n, state),
+            Value::Int(IntValue::Big(n)) => hash_numeric_bigint(n, state),
             Value::Float(f) => hash_float(*f, state),
             Value::Str(s) => {
                 state.write_u8(1);
@@ -365,13 +407,24 @@ impl Hash for Value {
                 }
             }
             Value::Dict(entries) => {
-                // Likewise unhashable in Python; kept total and consistent
-                // with `py_eq` rather than panicking.
+                // Likewise unhashable in Python; kept total rather than
+                // panicking. `py_eq` treats dicts as equal regardless of
+                // key order, so this can only combine per-entry hashes
+                // order-independently (here: XOR) rather than folding them
+                // into the `Hasher`'s running state in iteration order,
+                // or two dicts with the same entries in different
+                // insertion order would hash differently despite being
+                // equal.
                 state.write_u8(4);
+                state.write_usize(entries.len());
+                let mut combined: u64 = 0;
                 for (k, v) in entries {
-                    k.hash(state);
-                    v.hash(state);
+                    let mut entry_hasher = std::collections::hash_map::DefaultHasher::new();
+                    k.hash(&mut entry_hasher);
+                    v.hash(&mut entry_hasher);
+                    combined ^= entry_hasher.finish();
                 }
+                state.write_u64(combined);
             }
             Value::Date(d) => {
                 state.write_u8(5);
@@ -395,8 +448,23 @@ impl Hash for Value {
 }
 
 /// Shared by `Bool`/`Int`/integral `Float` so `True`, `1`, and `1.0` hash
-/// identically (required: they are the same dict key).
+/// identically (required: they are the same dict key), and always through
+/// [`hash_small_int`] whenever the value fits an `i64` so that `Small`,
+/// `Big`, and a `Float`'s [`numeric::exact_integer_value`] never diverge
+/// just because they reached this function by different routes.
 fn hash_numeric_bigint<H: Hasher>(n: &BigInt, state: &mut H) {
+    match n.to_i64() {
+        Some(small) => hash_small_int(small, state),
+        None => {
+            state.write_u8(10);
+            n.hash(state);
+        }
+    }
+}
+
+/// The `i64` fast path for [`hash_numeric_bigint`]: no `BigInt` allocation
+/// for `Bool` or an `Int::Small` (the common case).
+fn hash_small_int<H: Hasher>(n: i64, state: &mut H) {
     state.write_u8(10);
     n.hash(state);
 }
@@ -433,6 +501,13 @@ pub enum CompareError {
     },
     /// One `datetime.datetime` is naive and the other is timezone-aware.
     NaiveAwareMismatch,
+    /// A bare `datetime.date` compared against a `datetime.datetime`, in
+    /// either operand order. CPython raises this distinct message rather
+    /// than the usual `IncomparableTypes` one because `datetime.datetime`
+    /// subclasses `datetime.date` — without this variant, callers
+    /// couldn't tell this pair apart from truly unrelated types to
+    /// reproduce CPython's exact `TypeError` text.
+    DateDateTimeMismatch,
 }
 
 impl fmt::Display for CompareError {
@@ -443,6 +518,9 @@ impl fmt::Display for CompareError {
             }
             CompareError::NaiveAwareMismatch => {
                 write!(f, "can't compare offset-naive and offset-aware datetimes")
+            }
+            CompareError::DateDateTimeMismatch => {
+                write!(f, "can't compare datetime.datetime to datetime.date")
             }
         }
     }
@@ -496,6 +574,9 @@ impl Value {
             (Value::DateTime(an, ao), Value::DateTime(bn, bo)) => {
                 datetime_partial_cmp(an, ao, bn, bo)
             }
+            (Value::Date(_), Value::DateTime(..)) | (Value::DateTime(..), Value::Date(_)) => {
+                Err(CompareError::DateDateTimeMismatch)
+            }
             _ => Err(CompareError::IncomparableTypes {
                 left: self.type_name(),
                 right: other.type_name(),
@@ -536,6 +617,14 @@ impl Value {
 
 impl Value {
     /// Python `str(value)`.
+    ///
+    /// Known difference from CPython 3.11: CPython raises `ValueError:
+    /// Exceeds the limit (4300 digits) for integer string conversion`
+    /// converting an `int` with more than 4300 decimal digits to a string
+    /// ([PEP 0, `sys.set_int_max_str_digits`](https://docs.python.org/3.11/library/stdtypes.html#int-max-str-digits)).
+    /// `py_str`/`py_repr` always print the digits; later lanes building
+    /// Python-exact error behavior need to decide whether to reproduce
+    /// the limit.
     pub fn py_str(&self) -> String {
         match self {
             Value::None => "None".to_string(),
@@ -551,6 +640,9 @@ impl Value {
     }
 
     /// Python `repr(value)`.
+    ///
+    /// See [`Value::py_str`] for a known difference from CPython 3.11 on
+    /// very large integers.
     pub fn py_repr(&self) -> String {
         match self {
             Value::None => "None".to_string(),
@@ -593,15 +685,15 @@ mod tests {
         Value::Int(IntValue::Small(n))
     }
 
+    fn hash_of(v: &Value) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        let mut h = DefaultHasher::new();
+        v.hash(&mut h);
+        h.finish()
+    }
+
     #[test]
     fn numeric_tower_equality_and_hash() {
-        use std::collections::hash_map::DefaultHasher;
-        fn hash_of(v: &Value) -> u64 {
-            let mut h = DefaultHasher::new();
-            v.hash(&mut h);
-            h.finish()
-        }
-
         let t = Value::Bool(true);
         let one = int(1);
         let one_f = Value::Float(1.0);
@@ -643,8 +735,25 @@ mod tests {
         let huge: BigInt = "100000000000000000000".parse().unwrap();
         let huge_val = Value::from(huge.clone());
         assert!(huge_val.py_eq(&Value::Float(1e20)));
+        assert_eq!(hash_of(&huge_val), hash_of(&Value::Float(1e20)));
         let huge_plus_one = Value::from(huge + BigInt::from(1));
         assert!(!huge_plus_one.py_eq(&Value::Float(1e20)));
+    }
+
+    #[test]
+    fn dicts_with_different_insertion_order_are_equal_and_hash_equal() {
+        let mut a: Dict = Dict::new();
+        a.insert(int(1), Value::Str("one".into()));
+        a.insert(Value::Str("two".into()), int(2));
+
+        let mut b: Dict = Dict::new();
+        b.insert(Value::Str("two".into()), int(2));
+        b.insert(int(1), Value::Str("one".into()));
+
+        let a = Value::Dict(a);
+        let b = Value::Dict(b);
+        assert!(a.py_eq(&b));
+        assert_eq!(hash_of(&a), hash_of(&b));
     }
 
     #[test]
@@ -661,6 +770,29 @@ mod tests {
             a.py_partial_cmp(&b),
             Err(CompareError::NaiveAwareMismatch)
         ));
+    }
+
+    #[test]
+    fn date_vs_datetime_is_a_dedicated_compare_error() {
+        use chrono::NaiveDate;
+        let date = Value::Date(NaiveDate::from_ymd_opt(2020, 1, 1).unwrap());
+        let naive = NaiveDate::from_ymd_opt(2020, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        let datetime = Value::DateTime(naive, None);
+        assert_eq!(
+            date.py_partial_cmp(&datetime),
+            Err(CompareError::DateDateTimeMismatch)
+        );
+        assert_eq!(
+            datetime.py_partial_cmp(&date),
+            Err(CompareError::DateDateTimeMismatch)
+        );
+        assert_eq!(
+            CompareError::DateDateTimeMismatch.to_string(),
+            "can't compare datetime.datetime to datetime.date"
+        );
     }
 
     #[test]
