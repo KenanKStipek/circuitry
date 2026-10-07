@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 import threading
 from collections.abc import Callable, Generator
@@ -41,6 +42,14 @@ class ResilientConsole(Console):
     ``BrokenPipeError``, leaving a plain ``OSError`` (EIO) from a hung-up
     tty to escape uncaught from inside a spinner's ``with`` block, before
     `cli.app` ever reaches its own ``--out``/``--last`` writes.
+
+    Only ``EIO``/``EPIPE`` (the gone-terminal/closed-pipe-reader cases
+    above) are swallowed here -- not every ``OSError``. ``self.file`` can
+    just as well be a redirected regular file or a non-blocking pipe, where
+    ``ENOSPC``/``EDQUOT`` (disk full) or a transient ``EAGAIN`` is a real
+    failure a caller like ``cof run --json > out.json`` needs to see, not
+    one this best-effort fallback should turn into a silent, exit-0 loss of
+    output (#357 review finding 4).
     """
 
     def _check_buffer(self) -> None:
@@ -49,7 +58,9 @@ class ResilientConsole(Console):
             return
         try:
             self._write_buffer()
-        except OSError:
+        except OSError as exc:
+            if exc.errno not in (errno.EIO, errno.EPIPE):
+                raise
             self._give_up_on_write()
 
     def _give_up_on_write(self) -> None:

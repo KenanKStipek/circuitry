@@ -230,6 +230,17 @@ def test_double_sighup_back_to_back_does_not_abort_cleanup(tmp_path: Path) -> No
     cleanup before it finishes. Sending two SIGHUPs back to back from here
     (no real terminal needed) is the direct-subprocess version of that;
     `test_run_sighup_pty.py` drives the same thing through a real pty.
+
+    Not the deterministic regression guard for the no-op rule itself: two
+    back-to-back `send_signal` calls this close together usually land
+    before the interpreter runs the Python-level handler for the first
+    one, so the two deliveries typically collapse into a single handler
+    call here. `test_interrupts.py`'s own
+    `test_repeated_sighup_while_installed_is_a_no_op_not_a_second_signal`
+    (calling the installed handler directly, twice, with no process
+    involved) and the real pty test are what actually exercise two
+    separate handler invocations; this test stays as an end-to-end check
+    that the common case still exits cleanly.
     """
     orch, pidfile, started = _interrupted_tree_dynamic_orchestration(tmp_path)
     out_path = tmp_path / "out.json"

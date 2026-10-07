@@ -1652,9 +1652,9 @@ simply ignored rather than racing the first one's own cleanup to that
 immediate exit — a second SIGINT/SIGTERM still ends it at once as above.
 SIGHUP stays ignored (not restored to whatever it was before) for the
 rest of the process once any signal has cancelled a run, so a hangup
-arriving after that point — while `--out`, the `--last` stash and
-`runtime.persistence` are still being written — cannot kill `cof` before
-that finishes.
+arriving after that point — while `--out` and the `--last` stash are
+still being written (`runtime.persistence` is already written by this
+point) — cannot kill `cof` before that finishes.
 
 A resumed run writes its own `--out` back to the file its state came from
 by default when neither `--out` nor a profile's `out:` says otherwise —

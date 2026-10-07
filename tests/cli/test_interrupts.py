@@ -13,6 +13,7 @@ against a real subprocess by `tests/cli/test_run_sighup.py` and
 
 from __future__ import annotations
 
+import os
 import signal
 from types import FrameType
 
@@ -103,3 +104,42 @@ def test_sighup_after_a_first_sigterm_is_also_a_no_op() -> None:
             sigterm_handler(signal.SIGTERM, None)
         sighup_handler = signal.getsignal(signal.SIGHUP)
         assert sighup_handler(signal.SIGHUP, None) is None
+
+
+class _FakeExit(BaseException):
+    """Stands in for `os._exit`, which never returns -- the mock must
+    raise, not just record, or the handler falls through to its own
+    unconditional `raise exc` below the `os._exit` call, which only ever
+    happens in a real process because that call never comes back."""
+
+
+def test_second_sigint_exits_on_a_platform_without_sighup(monkeypatch) -> None:
+    """On a platform with no `signal.SIGHUP` at all (Windows), a second
+    SIGINT/SIGTERM during cleanup must still reach `os._exit` -- the
+    handler's own SIGHUP check used to compare against `signal.SIGHUP`
+    unconditionally, raising `AttributeError` here instead (#357 review
+    finding 1)."""
+    exit_codes: list[int] = []
+
+    def _fake_exit(code: int) -> None:
+        exit_codes.append(code)
+        raise _FakeExit
+
+    monkeypatch.setattr(os, "_exit", _fake_exit)
+
+    had_sighup = hasattr(signal, "SIGHUP")
+    previous_sighup = signal.SIGHUP if had_sighup else None
+    if had_sighup:
+        del signal.SIGHUP
+    try:
+        with sigterm_as_interrupt():
+            handler = signal.getsignal(signal.SIGINT)
+            with pytest.raises(KeyboardInterrupt):
+                handler(signal.SIGINT, None)
+            with pytest.raises(_FakeExit):
+                handler(signal.SIGINT, None)
+    finally:
+        if had_sighup:
+            signal.SIGHUP = previous_sighup
+
+    assert exit_codes == [130]

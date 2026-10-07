@@ -279,9 +279,16 @@ def _run_sandboxed(
     same child independently via :meth:`CancellationToken.track_process`)
     and could crash (:func:`kill_tracked_process`'s ``is_alive()`` raises
     outside a child's own ``multiprocessing`` bookkeeping) (#357 review).
+    A signal already ``SIG_IGN`` on entry is left that way rather than
+    reset to ``SIG_DFL``: under `nohup`, the parent's SIGHUP (and an
+    embedder that ignores SIGINT) is ``SIG_IGN`` precisely so a hangup
+    cannot kill it, and this child shares that process group -- resetting
+    an inherited ``SIG_IGN`` to ``SIG_DFL`` would make the same hangup
+    kill this step's child when the run itself should carry on (#357
+    review finding 2).
     """
     for sig in (signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGHUP", None)):
-        if sig is not None:
+        if sig is not None and signal.getsignal(sig) is not signal.SIG_IGN:
             signal.signal(sig, signal.SIG_DFL)
     try:
         _run_sandboxed_inner(code, mode, inputs, cpu_seconds, result_conn)

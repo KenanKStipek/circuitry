@@ -49,11 +49,12 @@ duration of one run:
     This scope also leaves SIGHUP set to ``SIG_IGN`` — instead of
     restoring whatever handler it found on entry — when it exits with
     cancellation already requested, so a SIGHUP arriving after `cof`
-    stops watching for it (while `--out`/the `--last` stash/
-    ``runtime.persistence`` are being written) cannot kill the process
-    before that finishes; it is never set to ``SIG_IGN`` any earlier than
-    that, since a step can still start a child in here and a child
-    inherits ``SIG_IGN`` across ``exec`` the same way `nohup` relies on.
+    stops watching for it (while `--out`/the `--last` stash are still
+    being written — ``runtime.persistence`` is already written by this
+    point, inside the run itself) cannot kill the process before that
+    finishes; it is never set to ``SIG_IGN`` any earlier than that, since
+    a step can still start a child in here and a child inherits
+    ``SIG_IGN`` across ``exec`` the same way `nohup` relies on.
     A second SIGINT/SIGTERM still ends the process at once as above.
 
 Only `cof run`/`run-library` install this, only while they run, and only on
@@ -97,7 +98,7 @@ def _make_handler(exc: type[BaseException]):
         del frame
         first = get_token().request(signum=signum)
         if not first:
-            if signum == signal.SIGHUP:
+            if signum == getattr(signal, "SIGHUP", None):
                 # Every further SIGHUP is a no-op once cancellation has
                 # already been requested by any signal (#357 follow-up) —
                 # never the `os._exit` a second SIGINT/SIGTERM takes, so a
@@ -153,15 +154,16 @@ def sigterm_as_interrupt() -> Iterator[None]:
         signal.signal(signal.SIGINT, previous_sigint)
         signal.signal(signal.SIGTERM, previous_sigterm)
         if install_sighup:
-            # A cancelled run still has `--out`, the `--last` stash and
-            # `runtime.persistence` to write after this scope exits
-            # (`cli.app`, outside this `with`) — a SIGHUP landing in that
-            # window must not revert to whatever handler was here before
-            # (SIG_DFL would kill the process outright) and undo that
-            # write. Set SIG_IGN only now, once no step can start a new
-            # child to inherit it — never inside the handler itself, see
-            # the module docstring. An uncancelled run restores exactly
-            # what it found, as always.
+            # A cancelled run still has `--out` and the `--last` stash to
+            # write after this scope exits (`cli.app`, outside this
+            # `with`) — `runtime.persistence` is already written by this
+            # point, inside `run()` while these handlers were still
+            # installed. A SIGHUP landing in that window must not revert
+            # to whatever handler was here before (SIG_DFL would kill the
+            # process outright) and undo that write. Set SIG_IGN only now,
+            # once no step can start a new child to inherit it — never
+            # inside the handler itself, see the module docstring. An
+            # uncancelled run restores exactly what it found, as always.
             signal.signal(
                 signal.SIGHUP, signal.SIG_IGN if cancelled else previous_sighup
             )
