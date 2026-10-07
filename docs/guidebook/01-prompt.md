@@ -43,7 +43,7 @@ prime.kind.meta     # adapter, model, model_reason, prompt_type, prompt_sent,
 
 ## Templates and messages
 
-`template` is a [Mustache](https://mustache.github.io/) string. Anything in double braces is looked up in the shadow state: `{{input.issue}}` reads a caller-supplied value, `{{prime.kind.value}}` reads an earlier effect's output. Triple-stache `{{{…}}}` skips HTML escaping, which matters when you interpolate code or markup. [Shadow state](03-state.md) covers the full addressing rules; the short version is that every reference starts with `input.`, `prime.`, or `runtime.`.
+`template` is a [Mustache](https://mustache.github.io/) string. Anything in double braces is looked up in the shadow state: `{{input.issue}}` reads a caller-supplied value, `{{prime.kind.value}}` reads an earlier effect's output. Triple-stache `{{{…}}}` skips HTML escaping, which matters when you interpolate code or markup. [Shadow state](03-state.md) covers the full addressing rules; the short version is that every reference starts with `input.`, `prime.`, or `runtime.`. Circuitry does not support partials. A `{{> name}}` tag is an error: `cof check` reports it, and at run time the render fails without reading any file. (chevron, the renderer Circuitry uses, would otherwise read `name.mustache` from the working directory.) One that only appears at run time (a generated plan, a `use: inline` child) fails the render the same way, instead of touching the file system.
 
 `messages` is the role-based alternative for models that expect a conversation:
 

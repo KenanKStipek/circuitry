@@ -8,6 +8,8 @@ the effect's own ``on_error`` instead of falling back to the unrendered text.
 
 from __future__ import annotations
 
+import io
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +31,7 @@ from circuitry.core.templates import (
 )
 
 BROKEN = "topic={{input.topic}"
+PARTIAL = "{{> evil}}"
 
 
 @dataclass
@@ -54,10 +57,39 @@ def test_syntax_error_reasons() -> None:
     assert template_syntax_error("{{}}") is not None
 
 
+def test_syntax_error_reports_a_partial_tag_naming_it() -> None:
+    assert template_syntax_error(PARTIAL) == "partials are not supported: {{> evil}}"
+    # Detected by chevron's tokenizer (token type "partial"), not a regex: a
+    # triple-stache or an ampersand-escaped tag (token type "no escape") is
+    # unaffected.
+    assert template_syntax_error("{{{x}}}") is None
+    assert template_syntax_error("{{& x}}") is None
+
+
 def test_render_template_raises_instead_of_returning_raw_text() -> None:
     assert render_template("hi {{a}}", {"a": 1}) == "hi 1"
     with pytest.raises(TemplateError, match=r"^params\.input: malformed Mustache template"):
         render_template(BROKEN, {}, label="params.input")
+
+
+def test_render_template_refuses_a_partial_and_never_reads_the_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A partial would read ``name.mustache`` from the cwd (#354); it must not."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "x.mustache").write_text("LEAKED", encoding="utf-8")
+    real_open = io.open
+
+    def _guard_open(path: Any, *args: Any, **kwargs: Any) -> Any:
+        if "x.mustache" in str(path):
+            raise AssertionError("render_template must not read x.mustache")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(io, "open", _guard_open)
+    with pytest.raises(
+        TemplateError, match=r"^label: malformed Mustache template: partials are not supported"
+    ):
+        render_template("{{> x}}", {}, label="label")
 
 
 @pytest.mark.parametrize(
@@ -91,12 +123,60 @@ def test_render_template_raises_instead_of_returning_raw_text() -> None:
         ),
         ({"type": "use", "name": "u", "path": "x.yml", "inputs": {"q": BROKEN}}, "inputs.q"),
         ({"type": "use", "name": "u", "inline": "effects: {{x}"}, "inline"),
+        ({**_tool(), "expect": {"mode": "model", "template": BROKEN}}, "expect.template"),
     ],
 )
 def test_compile_rejects_malformed_template(effect: dict, field_path: str) -> None:
     with pytest.raises(
         ValueError,
         match=re.escape(f"prime.effects[0].{field_path}: malformed Mustache template"),
+    ):
+        compile_orchestration(orch={"effects": [effect]})
+
+
+@pytest.mark.parametrize(
+    ("effect", "field_path"),
+    [
+        (_tool(mode="stringify", input=PARTIAL), "params.input"),
+        (_tool(nested={"list": ["ok", PARTIAL]}), "params.nested.list[1]"),
+        ({**_tool(), "params_json": '{"a": "{{> evil}}"}'}, "params_json"),
+        ({**_tool(), "prompt": PARTIAL}, "prompt"),
+        ({"type": "prompt", "name": "p", "template": PARTIAL}, "template"),
+        (
+            {"type": "prompt", "name": "p", "messages": [{"role": "user", "content": PARTIAL}]},
+            "messages[0].content",
+        ),
+        (
+            {
+                "type": "prompt",
+                "name": "p",
+                "template": "Describe it.",
+                "assets": [{"kind": "image", "ref": PARTIAL}],
+            },
+            "assets[0].ref",
+        ),
+        (
+            {"type": "if", "if": {"mode": "model", "template": PARTIAL}, "then": [_tool()]},
+            "if.template",
+        ),
+        (
+            {"type": "loop", "while": {"mode": "model", "template": PARTIAL}, "body": [_tool()]},
+            "while.template",
+        ),
+        ({"type": "use", "name": "u", "path": "x.yml", "inputs": {"q": PARTIAL}}, "inputs.q"),
+        ({"type": "use", "name": "u", "inline": "effects: " + PARTIAL}, "inline"),
+        ({**_tool(), "expect": {"mode": "model", "template": PARTIAL}}, "expect.template"),
+    ],
+)
+def test_compile_rejects_a_partial_tag_naming_the_field_and_tag(
+    effect: dict, field_path: str
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            f"prime.effects[0].{field_path}: malformed Mustache template: "
+            "partials are not supported: {{> evil}}"
+        ),
     ):
         compile_orchestration(orch={"effects": [effect]})
 
@@ -322,3 +402,119 @@ def test_use_inline_that_fails_to_render_honours_on_error_skip() -> None:
     )
     assert store.get("prime.u.value") is None
     assert "inline: malformed Mustache template" in store.get("prime.u.meta.error")
+
+
+@pytest.mark.usefixtures("unchecked_templates")
+def test_a_partial_tag_the_compiler_never_vetted_fails_at_render_and_reads_no_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A template that only exists at run time — a generated reflector/decompose
+    plan, or a `use: inline` child's own effects — never passes through
+    `cof check`'s static templates walk, so the refusal has to live in
+    `render_template` itself, not only in the compiler (#354)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "evil.mustache").write_text("LEAKED", encoding="utf-8")
+    real_open = io.open
+
+    def _guard_open(path: Any, *args: Any, **kwargs: Any) -> Any:
+        if "evil.mustache" in str(path):
+            raise AssertionError("rendering must not read evil.mustache")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(io, "open", _guard_open)
+
+    store = _run(
+        {
+            "effects": [
+                {**_tool(mode="stringify", input=PARTIAL), "on_error": "skip"},
+            ]
+        }
+    )
+    assert store.get("prime.t.value") is None
+    error = store.get("prime.t.meta.error")
+    assert "partials are not supported" in error
+    assert "LEAKED" not in error
+
+
+# --- run time: a `use: inline` child, no compiler check disabled -----------
+
+#: The child's own effect text has no literal partial tag — `{{{input.payload}}}`
+#: is an unescaped variable reference (a plain `{{input.payload}}` would come
+#: back HTML-escaped, turning `{{> evil}}` into `{{&gt; evil}}` and breaking
+#: the exploit, not catching it). The parent's own `inputs.payload` carries a
+#: by-reference value (`{from: ...}`), which is never template-checked (see
+#: `test_use_reference_input_is_not_a_template`) and never rendered, so the
+#: partial tag only becomes literal child-effect text once `inline` renders —
+#: a real run neither `cof check` nor a monkeypatched compiler check stands in
+#: for (#354).
+INLINE_CHILD_ECHOES_INPUT = (
+    "effects: [{type: tool, name: c, provider: json,"
+    " params: {mode: stringify, input: '{{{input.payload}}}'}}]"
+)
+
+
+def _use_inline_with_partial_input(**extra: Any) -> dict[str, Any]:
+    return {
+        "type": "use",
+        "name": "u",
+        "inline": INLINE_CHILD_ECHOES_INPUT,
+        "inputs": {"payload": {"from": "input.payload"}},
+        **extra,
+    }
+
+
+def test_use_inline_child_partial_produced_at_run_time_fails_through_the_real_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "evil.mustache").write_text("LEAKED", encoding="utf-8")
+    real_open = io.open
+
+    def _guard_open(path: Any, *args: Any, **kwargs: Any) -> Any:
+        if "evil.mustache" in str(path):
+            raise AssertionError("must not read evil.mustache")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(io, "open", _guard_open)
+
+    store = Store({"input": {"payload": PARTIAL}})
+    with pytest.raises(RuntimeError, match=r"partials are not supported"):
+        DynamicRuntime(
+            compile_orchestration(orch={"effects": [_use_inline_with_partial_input()]}),
+            adapter=RecordingAdapter(),
+            model="m",
+        ).execute(store=store)
+
+
+def test_use_inline_child_partial_produced_at_run_time_honours_on_error_continue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "evil.mustache").write_text("LEAKED", encoding="utf-8")
+    real_open = io.open
+
+    def _guard_open(path: Any, *args: Any, **kwargs: Any) -> Any:
+        if "evil.mustache" in str(path):
+            raise AssertionError("must not read evil.mustache")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(io, "open", _guard_open)
+
+    store = Store({"input": {"payload": PARTIAL}})
+    DynamicRuntime(
+        compile_orchestration(
+            orch={
+                "effects": [
+                    _use_inline_with_partial_input(on_error="continue"),
+                    {**_tool(mode="stringify", input="after"), "name": "after"},
+                ]
+            }
+        ),
+        adapter=RecordingAdapter(),
+        model="m",
+    ).execute(store=store)
+
+    error = store.get("prime.u.meta.error")
+    assert "partials are not supported" in error
+    assert store.get("prime.after.value") == '"after"'
+    assert "LEAKED" not in json.dumps(store.state)

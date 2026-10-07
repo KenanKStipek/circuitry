@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -582,3 +584,53 @@ def test_reflector_invalid_plan_records_error() -> None:
 
     planner = store.state["prime"]["planner"]
     assert planner["value"] is False
+
+
+def test_reflector_generated_plan_with_a_partial_fails_and_reads_no_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A generated plan is model output, never written to a file `cof check`
+    could walk statically — the refusal has to come from the real run, not a
+    monkeypatched compiler check (#354)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "evil.mustache").write_text("LEAKED", encoding="utf-8")
+    real_open = io.open
+
+    def _guard_open(path: object, *args: object, **kwargs: object) -> object:
+        if "evil.mustache" in str(path):
+            raise AssertionError("rendering must not read evil.mustache")
+        return real_open(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(io, "open", _guard_open)
+
+    plan_yaml = yaml.dump({
+        "done": False,
+        "effects": [{"type": "prompt", "name": "generated_step", "template": "{{> evil}}"}],
+    })
+    adapter = _mock_adapter(plan_yaml)
+
+    orch = {
+        "effects": [
+            {
+                "type": "reflector",
+                "name": "planner",
+                "effects": [
+                    {
+                        "type": "prompt",
+                        "name": "propose_steps",
+                        "template": "Generate a plan.",
+                    }
+                ],
+            }
+        ]
+    }
+
+    root = compile_orchestration(orch=orch)
+    store = Store(state={})
+
+    with pytest.raises(RuntimeError, match=r"partials are not supported"):
+        DynamicRuntime(root, adapter=adapter, model="test-model").execute(store=store)
+
+    planner = store.state["prime"]["planner"]
+    assert planner["value"] is False
+    assert "LEAKED" not in str(store.state)

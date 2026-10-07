@@ -29,20 +29,47 @@ def _describe(exc: Exception) -> str:
     return " ".join(str(exc).split()) or type(exc).__name__
 
 
+def _reject_partials(template: str) -> None:
+    """Raise :class:`ChevronError` if *template* contains a partial tag.
+
+    Checked with chevron's own tokenizer (token type ``"partial"``), not a
+    regex, so ``{{{ }}}`` and ``{{& }}`` (both tokenize as ``"no escape"``)
+    are unaffected — only ``{{> name}}`` is a partial. Partials are not
+    supported: a template is rendered with chevron's defaults, so ``{{>
+    name}}`` would read ``name.mustache`` from the process's working
+    directory.
+    """
+    for token_type, value in chevron.tokenizer.tokenize(template):
+        if token_type == "partial":
+            raise ChevronError(f"partials are not supported: {{{{> {value}}}}}")
+
+
 def template_syntax_error(template: str) -> str | None:
     """Why *template* is not valid Mustache, or ``None`` when it parses."""
     try:
-        for _ in chevron.tokenizer.tokenize(template):
-            pass
+        _reject_partials(template)
     except Exception as exc:  # chevron raises ChevronError, and IndexError on '{{}}'
         return _describe(exc)
     return None
 
 
 def render_template(template: str, ctx: Any, *, label: str = "template") -> str:
-    """Render *template* against *ctx*; raise :class:`TemplateError` if it cannot."""
+    """Render *template* against *ctx*; raise :class:`TemplateError` if it cannot.
+
+    Fails before rendering — and never touches the file system — for a
+    template containing a partial tag, rather than handing it to chevron:
+    this is the only render path (:func:`chevron.render` is never called
+    elsewhere in this codebase), so it covers templates that exist only at
+    run time — generated reflector/decompose plans, ``use: inline``
+    children — not just ones ``cof check`` sees statically. ``partials_dict``
+    and ``partials_path`` are also pinned so a partial tag reintroduced by a
+    future chevron version still can't reach the file system.
+    """
     try:
-        return str(chevron.render(template, ctx))
+        _reject_partials(template)
+        return str(
+            chevron.render(template, ctx, partials_dict={}, partials_path=None)
+        )
     except ChevronError as exc:
         raise TemplateError(
             f"{label}: malformed Mustache template: {_describe(exc)}"
