@@ -102,11 +102,11 @@ Seventy-odd ship in-tree. By purpose:
 | Sandboxed execution | `python_eval`, `shell` |
 | Text processing | `awk`, `sed`, `diff_patch` |
 | Network | `dns`, `whois`, `ping`, `traceroute`, `port_check` |
-| System | `system_info`, `process_list`, `env_vars` |
+| System | `system_info`, `process_list`, `env_vars`, `service` |
 | Crypto / markup | `gpg`, `xml`, `html_extract` |
 | MCP | `mcp` — any tool on any MCP server |
 
-`cof list --extensions` prints the exact compiled-in set. Plugins that need optional PyPI packages or external binaries lazy-import; `cof doctor` reports each one's readiness, and `pip install circuitry-cof[<plugin>]` (`[playwright]`, `[github]`, `[embed]`, …) pulls what a plugin needs. `docs/plugins/` documents the media plugins' parameters in full.
+`service` is the one tool whose work outlives its call: it starts a background process (a dev server, a local API), waits until it is ready, and later stops exactly the process group it started — see [Errors → `finally`](./05-errors.md#finally--cleanup-that-always-runs) for stopping it when the run ends. `cof list --extensions` prints the exact compiled-in set. Plugins that need optional PyPI packages or external binaries lazy-import; `cof doctor` reports each one's readiness, and `pip install circuitry-cof[<plugin>]` (`[playwright]`, `[github]`, `[embed]`, …) pulls what a plugin needs. `docs/plugins/` documents the media plugins' parameters in full.
 
 The plugins that wrap a command-line program (`git`, `gh`, `ripgrep`, `pytest`, `ffmpeg`, `imagemagick`, and the other subprocess tools) search `PATH` for it by default. Config can name the exact executable and add to its environment — both machine-specific, so both stay out of the document. Here the agent's `pytest` is the one in the project's own virtual environment, so the tests run against the project's dependencies:
 

@@ -262,6 +262,32 @@ A named container that executes child effects sequentially (`chain`) or in paral
 ```
 Before `finally` existed, the only way to guarantee `stop_server` always ran was to mark `generate_image` itself `on_error: continue` — which also meant a real failure there no longer stopped the run. `finally` separates the two concerns: `generate_image` keeps `on_error: fail` (the default), and `stop_server` still runs either way.
 
+**Example — a background server the run starts itself (`service`):** the `service` tool starts a long-running process in its own process group, waits until it is ready, and records that it owns it; `action: stop` stops that process group and nothing else. A service outlives the run unless something stops it, so the stop goes in `finally:` — there is no separate end-of-run hook:
+```yaml
+- type: dynamic
+  name: with_web
+  effects:
+    - type: tool
+      name: start_web
+      provider: service
+      params:
+        action: start
+        name: web
+        command: [python3, -m, http.server, "8000", --bind, 127.0.0.1]
+        ports: [8000]
+        ready: "http://127.0.0.1:8000/"
+    - type: tool
+      name: page
+      provider: http
+      params: {url: "http://127.0.0.1:8000/"}
+  finally:
+    - type: tool
+      name: stop_web
+      provider: service
+      params: {action: stop, name: web}
+```
+`start` refuses a port held by a process it did not start (reporting its pid, command and working directory, and never signalling it), and fails with the tail of the log if the process exits before it is ready. `stop` sends SIGTERM to the group, then SIGKILL to whatever is left after `grace_ms`, and waits for the ports to be free. An `https://` readiness URL is checked with certificate verification off, for local dev certificates. See [`service` tool plugin](./plugins/service.md) for every param, the ownership record and its state directory.
+
 ---
 
 ### `if`
@@ -700,7 +726,7 @@ Not every plugin can actually be bounded by it:
 | Own network call | `web_fetch` (its own `params.timeout_ms`, when set, shortens it for that call — never extends past the effect's budget), `rss`, `wikipedia` (retries disabled so it can't multiply the budget), `whois`, `http`, `slack`, `notion`, `jira`, `github`, `gdrive`, `gcalendar`, `s3`, `linear`, `email_smtp`, `webhook`, `dns`, `mcp_client`, `playwright`, `screenshot`, `discord` (via a background thread with a deadline, since discord.py's webhook send has no timeout parameter of its own). These apply the timeout per socket operation (connect, each read, etc.), not to the whole call. |
 | Sandboxed child process, killed on overrun | `python_eval` |
 | Ignored — pure in-memory, nothing to bound | `json`, `xml`, `csv`, `regex`, `hash`, `hex`, `uuid`, `base64`, `gzip`, `zip`, `tar`, `fs`, `env_vars`, `validate_yaml`, `html_extract`, `pdf_extract`, `math`, `clock`, `system_info`, `process_list` |
-| Ignored — has its own, separate bound instead | `port_check` (`params.timeout_ms`, socket-level, default 2s), `surrealdb` (the SDK's own socket timeout), `embed`/`rerank`/`vector_search` (local inference; the first call per model can also trigger an unbounded download) |
+| Ignored — has its own, separate bound instead | `service` (its readiness wait, `params.ready_timeout_ms`, default 60s, is capped by the effect's budget; the process it starts is not bounded by it — it is meant to outlive the call), `port_check` (`params.timeout_ms`, socket-level, default 2s), `surrealdb` (the SDK's own socket timeout), `embed`/`rerank`/`vector_search` (local inference; the first call per model can also trigger an unbounded download) |
 
 **Capability consent (#275):** a document that did not come from the user's
 own disk — a `cof run-library`/`run_shared_orchestration` asset, a remote
@@ -724,10 +750,10 @@ for the CLI walkthrough. Each provider's capability tag
 
 | Capability | Providers |
 |---|---|
-| `shell` | `shell`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ripgrep`, `pytest`, `awk`, `sed`, `pandoc`, `mediainfo`, `imagemagick`, `exiftool`, `7z`, `ping`, `traceroute`, `linter`, `ocr`, `gpg`, `diff_patch`, `pdf_render`, `ffmpeg` |
+| `shell` | `shell`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ripgrep`, `pytest`, `awk`, `sed`, `pandoc`, `mediainfo`, `imagemagick`, `exiftool`, `7z`, `ping`, `traceroute`, `linter`, `ocr`, `gpg`, `diff_patch`, `pdf_render`, `ffmpeg`, `service` |
 | `python_eval` | `python_eval` |
 | `fs-write` | `fs`, `tar`, `zip`, `gzip`, `vector_search`, `gdrive`, `screenshot` |
-| `network` | `comfyui`, `http`, `email_smtp`, `port_check`, `dns`, `whois`, `rss`, `wikipedia`, `webhook`, `web_fetch`, `web_search`, `weather`, `s3`, `surrealdb`, `mcp`, `linear`, `slack`, `discord`, `github`, `jira`, `notion`, `gcalendar`, `gdrive`, `playwright`, `screenshot`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ping`, `traceroute` |
+| `network` | `comfyui`, `http`, `email_smtp`, `port_check`, `dns`, `whois`, `rss`, `wikipedia`, `webhook`, `web_fetch`, `web_search`, `weather`, `s3`, `surrealdb`, `mcp`, `linear`, `slack`, `discord`, `github`, `jira`, `notion`, `gcalendar`, `gdrive`, `playwright`, `screenshot`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ping`, `traceroute`, `service` |
 
 A provider absent from every row needs no consent: it only reads its own
 parameters and returns a value (`math`, `regex`, `json`, `clock`, `hash`,
