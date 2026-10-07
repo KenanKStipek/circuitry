@@ -75,12 +75,17 @@ jobs:
       - name: regenerate every generated file and check it is unchanged
         working-directory: electricity
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          failed=0
           for script in scripts/generate_*.py; do
             echo "::group::$script --check"
-            python3 "$script" --check
+            if ! python3 "$script" --check; then
+              echo "::error::$script: generated output is stale (run it without --check and commit the result)"
+              failed=1
+            fi
             echo "::endgroup::"
           done
+          exit "$failed"
 
   msrv:
     name: MSRV check
