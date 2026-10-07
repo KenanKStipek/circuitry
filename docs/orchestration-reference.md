@@ -1639,13 +1639,22 @@ cancelled; a running parallel step is never merged into its parent —
 exactly as if it had never run — so neither a killed branch nor one that
 never started leaves any trace behind for `--resume` to see, consistent
 with every other way a tree-flow branch disappears on cancellation. A
-*second* SIGINT/SIGTERM/SIGHUP while this cleanup is still running ends the
+*second* SIGINT/SIGTERM while this cleanup is still running ends the
 process at once, with the same exit code and no traceback, rather than
 waiting for cleanup to finish or escaping as an uncaught exception from
 inside it — that immediate exit skips writing `--out`, the `--last`
 stash and `runtime.persistence` the same way a SIGKILL would, so
 `--resume` has only whatever the run's last completed step already
-saved.
+saved. SIGHUP never counts as that second signal: closing a terminal can
+deliver SIGHUP to `cof`'s foreground job twice in quick succession rather
+than once, and a further hangup, while the run is already stopping, is
+simply ignored rather than racing the first one's own cleanup to that
+immediate exit — a second SIGINT/SIGTERM still ends it at once as above.
+SIGHUP stays ignored (not restored to whatever it was before) for the
+rest of the process once any signal has cancelled a run, so a hangup
+arriving after that point — while `--out`, the `--last` stash and
+`runtime.persistence` are still being written — cannot kill `cof` before
+that finishes.
 
 A resumed run writes its own `--out` back to the file its state came from
 by default when neither `--out` nor a profile's `out:` says otherwise —

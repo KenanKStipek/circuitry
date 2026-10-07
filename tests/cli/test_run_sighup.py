@@ -222,6 +222,141 @@ def test_sighup_mid_run_kills_branch_runs_finally_and_is_resumable(
 
 @requires_bash
 @requires_sighup
+def test_double_sighup_back_to_back_does_not_abort_cleanup(tmp_path: Path) -> None:
+    """A closed terminal can deliver SIGHUP to a foreground `cof run` job
+    twice, about a millisecond apart (#357 follow-up), not once — the
+    second one must not hit the "second signal" `os._exit` rule a real
+    second SIGINT/SIGTERM takes, which would abort the first SIGHUP's own
+    cleanup before it finishes. Sending two SIGHUPs back to back from here
+    (no real terminal needed) is the direct-subprocess version of that;
+    `test_run_sighup_pty.py` drives the same thing through a real pty.
+    """
+    orch, pidfile, started = _interrupted_tree_dynamic_orchestration(tmp_path)
+    out_path = tmp_path / "out.json"
+    proc = _run_cof_popen(orch, out_path=out_path)
+
+    try:
+        _wait_for_paths([started])
+    except TimeoutError:
+        proc.kill()
+        proc.communicate(timeout=15)
+        raise
+
+    t0 = time.monotonic()
+    proc.send_signal(signal.SIGHUP)
+    proc.send_signal(signal.SIGHUP)
+    try:
+        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise
+    elapsed = time.monotonic() - t0
+
+    assert proc.returncode == 129, (stdout, stderr)
+    assert elapsed < _STOP_BOUND_SECONDS, (
+        f"took {elapsed:.1f}s to stop; branch sleeps {_BRANCH_SLEEP_SECONDS}s"
+    )
+    assert "Traceback" not in stderr, stderr
+
+    pid = int(pidfile.read_text(encoding="utf-8").strip())
+    assert not _pid_alive(pid), f"pid {pid} survived the double hangup"
+
+    assert out_path.exists()
+    state = json.loads(out_path.read_text(encoding="utf-8"))
+    d1 = state["prime"]["d1"]
+    assert d1["meta"]["completed_at"]
+    assert d1["meta"]["error"] == "Interrupted (SIGHUP)"
+    assert d1["cleanup"]["meta"]["completed_at"]
+    assert state["runtime"]["last_run"]["completed_at"]
+    home = orch.parent / "home"
+    assert (home / ".config" / "circuitry" / "last-run.json").exists()
+
+    _resume_reruns_unfinished_work(orch, out_path)
+
+
+@requires_bash
+@requires_sighup
+@pytest.mark.parametrize("sig,expected_code", [(signal.SIGINT, 130), (signal.SIGTERM, 143)])
+def test_second_sigint_or_sigterm_after_first_sighup_exits_immediately(
+    tmp_path: Path, sig: int, expected_code: int
+) -> None:
+    """SIGHUP never counts as the "already cancelled" signal that lets a
+    later SIGINT/SIGTERM end the process at once (#357 follow-up) — the
+    other direction from `test_double_sighup_back_to_back_does_not_abort_
+    cleanup`: a first SIGHUP starts cancellation exactly like a first
+    SIGINT/SIGTERM would, so a genuine second signal (SIGINT or SIGTERM,
+    not another SIGHUP) arriving while its cleanup is still running must
+    still take the immediate `os._exit` path, same as it would after a
+    first SIGINT/SIGTERM of its own.
+    """
+    pidfile = tmp_path / "pid_0"
+    started = tmp_path / "started_0"
+    cleanup_started = tmp_path / "cleanup_started"
+    body = f"""
+effects:
+  - type: dynamic
+    name: d1
+    flow: tree
+    max_concurrency: 1
+    effects:
+      - type: tool
+        name: b0
+        provider: shell
+        params:
+          command: bash
+          args: ["-c", "echo $$ > {pidfile}; touch {started}; sleep {_BRANCH_SLEEP_SECONDS}"]
+          allowed_commands: ["bash"]
+    finally:
+      - type: tool
+        name: cleanup
+        provider: shell
+        params:
+          command: bash
+          args: ["-c", "touch {cleanup_started}; sleep 5"]
+          allowed_commands: ["bash"]
+""".lstrip("\n")
+    orch = tmp_path / "second_signal_after_sighup.yml"
+    orch.write_text(body, encoding="utf-8")
+    out_path = tmp_path / "out.json"
+    proc = _run_cof_popen(orch, out_path=out_path)
+
+    try:
+        _wait_for_paths([started])
+    except TimeoutError:
+        proc.kill()
+        proc.communicate(timeout=15)
+        raise
+
+    t0 = time.monotonic()
+    proc.send_signal(signal.SIGHUP)
+    try:
+        _wait_for_paths([cleanup_started], timeout=10.0)
+    except TimeoutError:
+        proc.kill()
+        proc.communicate(timeout=15)
+        raise
+    # cleanup's own `sleep 5` is still running — exactly the "cleanup still
+    # in progress" window the second signal must cut through at once.
+    proc.send_signal(sig)
+    try:
+        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise
+    elapsed = time.monotonic() - t0
+
+    assert proc.returncode == expected_code, (stdout, stderr)
+    assert elapsed < _STOP_BOUND_SECONDS
+    assert "Traceback" not in stderr, stderr
+    # Isolates this from the first SIGHUP's own (uninterrupted) cleanup
+    # path: `os._exit` skips writing `--out` entirely, so its presence
+    # would mean the second signal was itself silently ignored instead of
+    # cutting through cleanup the way a second SIGINT/SIGTERM must.
+    assert not out_path.exists()
+
+
+@requires_bash
+@requires_sighup
 def test_sighup_with_closed_stdout_stderr_still_cleans_up(tmp_path: Path) -> None:
     """Same scenario, but the terminal is well and truly gone: our own read
     ends of the child's stdout/stderr pipes are closed before the signal

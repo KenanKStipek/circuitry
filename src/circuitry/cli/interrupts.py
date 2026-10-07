@@ -35,10 +35,26 @@ duration of one run:
     signal.SIG_IGN`` — e.g. launched under ``nohup``, which is exactly the
     mechanism by which a caller opts out of this), and skipped entirely on
     a platform with no SIGHUP (Windows).
-  - A *second* SIGINT/SIGTERM/SIGHUP, while the first one's cleanup
+  - A *second* SIGINT/SIGTERM, while the first one's cleanup
     (``finally:`` blocks, state persistence) is still running, ends the
     process at once via ``os._exit`` — the same exit code, no traceback —
     rather than escaping as an uncaught exception from inside that cleanup.
+  - SIGHUP never counts as that second signal (#357 follow-up): a closed
+    terminal can deliver SIGHUP to a foreground job twice, a millisecond
+    or so apart (observed from an interactive zsh; a plain `kill -HUP`
+    or macOS's own bash only ever send one), and the second one landing
+    inside this same signal-handling window must not race the first
+    one's own cleanup to ``os._exit``. Once cancellation has already been
+    requested by *any* signal, every further SIGHUP here is a pure no-op.
+    This scope also leaves SIGHUP set to ``SIG_IGN`` — instead of
+    restoring whatever handler it found on entry — when it exits with
+    cancellation already requested, so a SIGHUP arriving after `cof`
+    stops watching for it (while `--out`/the `--last` stash/
+    ``runtime.persistence`` are being written) cannot kill the process
+    before that finishes; it is never set to ``SIG_IGN`` any earlier than
+    that, since a step can still start a child in here and a child
+    inherits ``SIG_IGN`` across ``exec`` the same way `nohup` relies on.
+    A second SIGINT/SIGTERM still ends the process at once as above.
 
 Only `cof run`/`run-library` install this, only while they run, and only on
 the main thread: ``signal.signal`` itself raises off the main thread, and
@@ -59,11 +75,12 @@ from types import FrameType
 from ..core.cancellation import get_token
 
 #: Conventional POSIX exit code for each signal (128 + signal number) —
-#: what a second signal during cleanup exits with, matching the code the
-#: first signal's own (uninterrupted) cleanup path would have produced.
+#: what a second SIGINT/SIGTERM during cleanup exits with, matching the
+#: code the first signal's own (uninterrupted) cleanup path would have
+#: produced. No SIGHUP entry: SIGHUP never takes this path (#357
+#: follow-up) — its own first-signal exit code (129) is computed in
+#: `cli.app` instead, from `result.sighup`.
 _EXIT_CODES: dict[int, int] = {signal.SIGINT: 130, signal.SIGTERM: 143}
-if hasattr(signal, "SIGHUP"):
-    _EXIT_CODES[signal.SIGHUP] = 129
 
 
 class SigTermInterrupt(KeyboardInterrupt):
@@ -80,6 +97,13 @@ def _make_handler(exc: type[BaseException]):
         del frame
         first = get_token().request(signum=signum)
         if not first:
+            if signum == signal.SIGHUP:
+                # Every further SIGHUP is a no-op once cancellation has
+                # already been requested by any signal (#357 follow-up) —
+                # never the `os._exit` a second SIGINT/SIGTERM takes, so a
+                # closed terminal's own double-hangup can't race the first
+                # one's cleanup.
+                return
             # A second SIGINT/SIGTERM while cleanup from the first is still
             # running ends the run at once, same exit code, no traceback
             # (#356) — the first signal's own cleanup gets no further say.
@@ -122,9 +146,24 @@ def sigterm_as_interrupt() -> Iterator[None]:
     try:
         yield
     finally:
+        # Read before `token.reset()` clears it below: whether *this* run
+        # was cancelled by any signal, not just SIGHUP, decides whether
+        # SIGHUP is left ignored past this point (#357 follow-up).
+        cancelled = token.is_set()
         signal.signal(signal.SIGINT, previous_sigint)
         signal.signal(signal.SIGTERM, previous_sigterm)
         if install_sighup:
-            signal.signal(signal.SIGHUP, previous_sighup)
+            # A cancelled run still has `--out`, the `--last` stash and
+            # `runtime.persistence` to write after this scope exits
+            # (`cli.app`, outside this `with`) — a SIGHUP landing in that
+            # window must not revert to whatever handler was here before
+            # (SIG_DFL would kill the process outright) and undo that
+            # write. Set SIG_IGN only now, once no step can start a new
+            # child to inherit it — never inside the handler itself, see
+            # the module docstring. An uncancelled run restores exactly
+            # what it found, as always.
+            signal.signal(
+                signal.SIGHUP, signal.SIG_IGN if cancelled else previous_sighup
+            )
         token.disarm()
         token.reset()
