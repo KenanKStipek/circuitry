@@ -5,7 +5,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import time
 import urllib.parse
 import uuid
@@ -14,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..core.cancellation import run_tracked
 from ..curl_support import curl_failure_message, run_curl
 from ..preflight import CheckResult
 from .base import ToolResult
@@ -157,7 +157,7 @@ class ComfyUIPlugin:
         ]
 
         try:
-            proc = subprocess.run(cmd, capture_output=True, check=False)
+            proc = run_tracked(cmd, text=False)
         except FileNotFoundError as e:
             raise RuntimeError("curl is not installed or not on PATH") from e
 
@@ -200,7 +200,7 @@ class ComfyUIPlugin:
             url,
         ]
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            proc = run_tracked(cmd)
         except FileNotFoundError as e:
             raise RuntimeError("curl is not installed or not on PATH") from e
 
@@ -464,7 +464,7 @@ class ComfyUIPlugin:
             missing.append("binary:curl")
         else:
             try:
-                proc = subprocess.run(
+                proc = run_tracked(
                     [
                         "curl",
                         "-q",
@@ -474,9 +474,6 @@ class ComfyUIPlugin:
                         "--head",
                         self.base_url.rstrip("/") + "/system_stats",
                     ],
-                    capture_output=True,
-                    text=True,
-                    check=False,
                 )
                 if proc.returncode != 0:
                     missing.append(f"host:{self.base_url}")

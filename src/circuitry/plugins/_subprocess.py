@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..core.cancellation import run_tracked
 from ..preflight import CheckResult
 from .base import ToolResult, _as_bool
 
@@ -186,16 +187,7 @@ def run_binary(
     """
     cmd = [binary, *_validate_args(args)]
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=int(timeout_seconds),
-            cwd=cwd,
-            env=env,
-            input=stdin,
-            check=False,
-        )
+        proc = run_tracked(cmd, input=stdin, timeout=int(timeout_seconds), cwd=cwd, env=env)
     except FileNotFoundError as exc:
         hint = not_found_hint or "override the plugin's binary path"
         raise RuntimeError(
@@ -206,18 +198,20 @@ def run_binary(
             f"{binary!r} exceeded timeout of {timeout_seconds}s"
         ) from exc
 
-    if proc.returncode != 0 and not allow_nonzero:
-        err = (proc.stderr or proc.stdout or "").strip()
+    stdout, stderr = proc.stdout, proc.stderr
+    returncode = proc.returncode
+    if returncode != 0 and not allow_nonzero:
+        err = (stderr or stdout or "").strip()
         raise RuntimeError(
-            f"{binary} failed (exit {proc.returncode}): {err}"
+            f"{binary} failed (exit {returncode}): {err}"
         )
 
     return ToolResult(
-        value=proc.stdout,
+        value=stdout,
         raw={"args": list(cmd[1:]), "cwd": cwd, "binary": binary},
-        stdout=proc.stdout,
-        stderr=proc.stderr,
-        exit_code=proc.returncode,
+        stdout=stdout,
+        stderr=stderr,
+        exit_code=returncode,
     )
 
 

@@ -28,6 +28,18 @@ class FakeProc:
     stdout: str = ""
     stderr: str = ""
 
+    # run_curl/run_binary are tracked for cancellation (`core.cancellation
+    # .run_tracked`, #356) via `subprocess.Popen` + `communicate`, not
+    # `subprocess.run` — this fake stands in for the former now.
+    def communicate(self, input: object = None, timeout: object = None) -> tuple[str, str]:
+        return (self.stdout, self.stderr)
+
+    def __enter__(self) -> FakeProc:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
 
 def _ok_payload(text: str = "hello") -> str:
     return json.dumps(
@@ -113,7 +125,7 @@ def test_generate_with_mocked_transport_passes_conformance(
         captured["headers"] = read_config_headers(cmd)
         return FakeProc(returncode=0, stdout=_ok_payload(f"hi from {name}"))
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = build_adapter(adapter_name=name, runtime={})
     result = adapter.generate(model="any-model", prompt="ping")
@@ -162,7 +174,7 @@ def test_self_hosted_generate_succeeds_without_api_key(
         captured["headers"] = read_config_headers(cmd)
         return FakeProc(returncode=0, stdout=_ok_payload("local-llm"))
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = build_adapter(adapter_name="vllm", runtime={})
     result = adapter.generate(model="my-local-model", prompt="ping")
@@ -185,7 +197,7 @@ def test_nvidia_nim_can_disable_auth_via_runtime_override(
         captured["headers"] = read_config_headers(cmd)
         return FakeProc(returncode=0, stdout=_ok_payload("ok"))
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
     adapter = build_adapter(
         adapter_name="nvidia-nim",

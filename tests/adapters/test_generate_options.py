@@ -49,6 +49,18 @@ class FakeProc:
     stdout: str = ""
     stderr: str = ""
 
+    # run_curl/run_binary are tracked for cancellation (`core.cancellation
+    # .run_tracked`, #356) via `subprocess.Popen` + `communicate`, not
+    # `subprocess.run` — this fake stands in for the former now.
+    def communicate(self, input: object = None, timeout: object = None) -> tuple[str, str]:
+        return (self.stdout, self.stderr)
+
+    def __enter__(self) -> FakeProc:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
 
 class CurlRecorder:
     """Stands in for ``subprocess.run``; keeps the command and the JSON body
@@ -60,15 +72,34 @@ class CurlRecorder:
         self.stdin: str | None = None
         self.config_url: str | None = None
 
-    def __call__(self, cmd: list[str], **kwargs: Any) -> FakeProc:
+    def __call__(self, cmd: list[str], **kwargs: Any) -> Any:
         self.cmd = cmd
-        self.stdin = kwargs.get("input")
         # The `--config` fd is only open for the duration of this call (its
         # `run_curl` caller closes it in a `finally` right after
-        # `subprocess.run` returns), so the URL has to be read synchronously
-        # here, not lazily from a `.url` property accessed after the fact.
+        # `subprocess.Popen` returns), so the URL has to be read
+        # synchronously here, not lazily from a `.url` property accessed
+        # after the fact.
         self.config_url = read_config_url(cmd)
-        return FakeProc(returncode=0, stdout=json.dumps(self.response))
+        recorder = self
+        proc = FakeProc(returncode=0, stdout=json.dumps(self.response))
+
+        class _Proc:
+            returncode = proc.returncode
+
+            def communicate(self, input: Any = None, timeout: Any = None) -> tuple[str, str]:
+                # `stdin` is only known once `communicate()` is actually
+                # called (run_tracked, #356, moved the request body from a
+                # `Popen(..., input=...)` kwarg to `communicate(input=...)`).
+                recorder.stdin = input
+                return proc.communicate(input=input, timeout=timeout)
+
+            def __enter__(self) -> _Proc:
+                return self
+
+            def __exit__(self, *exc: Any) -> bool:
+                return False
+
+        return _Proc()
 
     @property
     def body(self) -> dict[str, Any]:
@@ -88,7 +119,7 @@ class CurlRecorder:
 
 def _record(monkeypatch: pytest.MonkeyPatch, response: dict[str, Any]) -> CurlRecorder:
     recorder = CurlRecorder(response)
-    monkeypatch.setattr("subprocess.run", recorder)
+    monkeypatch.setattr("subprocess.Popen", recorder)
     return recorder
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import signal
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -13,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal, Union
 from ..adapters import Adapter
 from ..output import console as _console
 from ..output import live_region as _live_region
+from .cancellation import get_token, submit_with_context
 from .disabled import is_enabled, write_disabled_node
 from .prompt import PromptDefinition, PromptRuntime
 from .resume import effect_completed_ok
@@ -52,6 +54,42 @@ class TreeExecutionError(RuntimeError):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _error_text(exc: BaseException) -> str:
+    """Human-readable text for *exc* on this dynamic's own ``meta.error`` —
+    never empty.
+
+    A bare ``KeyboardInterrupt``/``SigTermInterrupt``/``SigHupInterrupt``/
+    ``RunCancelledBySignal``
+    (what a real signal, or a cancelled worker-thread wait, raises — see
+    ``core.cancellation``) stringifies to ``''``. Left as ``str(exc)``, an
+    interrupted dynamic's own ``meta.error`` would then be falsy — exactly
+    what ``core.resume.effect_completed_ok`` (``completed_at`` set *and* no
+    ``error``) reads as "finished cleanly" — so `cof run --resume` would
+    skip its still-unfinished children as if this dynamic had completed
+    normally (#356 follow-up). Same wording ``runtime_shim.run``'s own
+    top-level ``RunResult.error`` already uses for the identical case, so a
+    container's `meta.error` and the run's own top-level error read the
+    same way for the same interrupt.
+    """
+    text = str(exc)
+    if text:
+        return text
+    if isinstance(exc, Exception):
+        return repr(exc)
+    from ..cli.interrupts import SigHupInterrupt, SigTermInterrupt
+
+    signum = get_token().signum
+    sigterm = isinstance(exc, SigTermInterrupt) or signum == signal.SIGTERM
+    sighup = isinstance(exc, SigHupInterrupt) or (
+        signum is not None and signum == getattr(signal, "SIGHUP", None)
+    )
+    if sigterm:
+        return "Interrupted (SIGTERM)"
+    if sighup:
+        return "Interrupted (SIGHUP)"
+    return "Interrupted (Ctrl-C/SIGINT)"
 
 
 EffectDef = Union[
@@ -255,6 +293,11 @@ class DynamicRuntime:
                 # regardless of resume, not a sign the position is stale.
                 resume_active = self.resume
                 for idx, effect in enumerate(self.defn.effects):
+                    # A cancelled run must not start the chain's next effect
+                    # (#356) — the only way this chain itself ever notices,
+                    # when it is running on a tree-flow worker thread rather
+                    # than the main thread a real signal interrupts directly.
+                    get_token().check()
                     effect_path = self._effect_path(effect=effect, index=idx)
                     try:
                         outcome = self._execute_effect(
@@ -377,7 +420,8 @@ class DynamicRuntime:
                 with live_ctx:
                     with ThreadPoolExecutor(max_workers=max_workers) as executor:
                         futures: dict = {
-                            executor.submit(
+                            submit_with_context(
+                                executor,
                                 self._execute_branch,
                                 effect,
                                 store=isolated_stores[idx],
@@ -387,42 +431,27 @@ class DynamicRuntime:
                             ): idx
                             for idx, effect in enumerate(self.defn.effects)
                         }
-                        for future in as_completed(futures):
-                            idx = futures[future]
-                            try:
-                                future.result()
-                            except Exception as e:
-                                # Name the failing child's path, same as chain
-                                # flow does (#289), so a tree container's own
-                                # meta.error is a breadcrumb into the child
-                                # either way.
-                                effect_path = self._effect_path(
-                                    effect=self.defn.effects[idx], index=idx
-                                )
-                                wrapped = RuntimeError(f"{effect_path}: {e}")
-                                wrapped.__cause__ = e
-                                tree_errors.append(wrapped)
-                                if self.defn.stop_on_error:
-                                    # stop_event (set in _execute_branch) is
-                                    # what actually keeps a freed worker from
-                                    # picking up the next queued child; this
-                                    # cancel() is a second line of defense
-                                    # for a future the pool hasn't dequeued
-                                    # at all yet. Neither can kill an
-                                    # already-running thread — the executor's
-                                    # own shutdown, below, still waits for
-                                    # whatever was already running to finish
-                                    # before the isolated stores are merged.
-                                    for pending in futures:
-                                        if pending is not future:
-                                            pending.cancel()
-                            finally:
-                                # This branch is done, whether or not it ever
-                                # registered a prompt — one fewer settle
-                                # point a listener still needs to see (#237).
-                                store.fire_branch_settled(self.defn.name)
-                            if self.defn.stop_on_error and tree_errors:
-                                break
+                        try:
+                            self._await_tree_branches(
+                                futures, tree_errors=tree_errors, store=store
+                            )
+                        except BaseException:
+                            # Cancellation (SIGINT/SIGTERM): a future the
+                            # pool has not yet dequeued must never start
+                            # (#356) — ``cancel_futures`` is what makes that
+                            # true; leaving the ``with`` block below to its
+                            # default ``shutdown(wait=True)`` alone would
+                            # instead run every queued branch to completion
+                            # before this dynamic could ever exit. Already-
+                            # running branches are stopped separately, by
+                            # the signal handler killing their tracked
+                            # subprocess's whole process group (see
+                            # ``core.cancellation``) — by the time that
+                            # handler's own exception reaches here, they are
+                            # already exiting, so the ``with`` block's own
+                            # (still-``wait=True``) shutdown returns quickly.
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            raise
 
                 # Merge isolated stores back into child_store sequentially
                 for idx in range(len(self.defn.effects)):
@@ -448,33 +477,40 @@ class DynamicRuntime:
         finally_exc: BaseException | None = None
         if self.defn.finally_effects:
             try:
-                self._execute_chain(
-                    self.defn.finally_effects,
-                    store=store,
-                    child_store=child_store,
-                    ctx=ctx,
-                    # No distinct 'finally' label segment: a finally effect
-                    # writes into the same child_store namespace as the body
-                    # (same state path a same-named body effect would have),
-                    # so the wrapped error's path should match the state
-                    # tree it actually names, not a '.finally.' segment that
-                    # isn't really there (#272 review).
-                    label=self.defn.name,
-                )
+                # Suppress this run's own cancellation check for the
+                # duration of `finally:` (#356 review F1) — a `finally:`
+                # must still run in full after Ctrl-C/SIGTERM, including
+                # any nested dynamic/loop/use/conditional it contains, not
+                # abort the moment one of them polls the already-cancelled
+                # token. See CancellationToken.cleanup.
+                with get_token().cleanup():
+                    self._execute_chain(
+                        self.defn.finally_effects,
+                        store=store,
+                        child_store=child_store,
+                        ctx=ctx,
+                        # No distinct 'finally' label segment: a finally effect
+                        # writes into the same child_store namespace as the body
+                        # (same state path a same-named body effect would have),
+                        # so the wrapped error's path should match the state
+                        # tree it actually names, not a '.finally.' segment that
+                        # isn't really there (#272 review).
+                        label=self.defn.name,
+                    )
             except BaseException as fe:
                 finally_exc = fe
 
         if body_exc is not None:
             dyn["value"] = False
-            meta["error"] = str(body_exc)
+            meta["error"] = _error_text(body_exc)
             if finally_exc is not None:
                 # The body's own failure is reported as-is; a finally
                 # failure on top of it is a second note, never the thing
                 # that hides the original (#272).
-                meta["finally_error"] = str(finally_exc)
+                meta["finally_error"] = _error_text(finally_exc)
         elif finally_exc is not None:
             dyn["value"] = False
-            meta["error"] = str(finally_exc)
+            meta["error"] = _error_text(finally_exc)
         else:
             dyn["value"] = True
 
@@ -528,6 +564,57 @@ class DynamicRuntime:
                 self.defn.on_error,
             )
             return
+
+    def _await_tree_branches(
+        self,
+        futures: dict[Any, int],
+        *,
+        tree_errors: list[Exception],
+        store: Store,
+    ) -> None:
+        """Drain *futures* as they complete, recording each branch's own
+        (ordinary) failure on *tree_errors*.
+
+        Split out from ``execute()`` so a cancellation escaping this loop
+        (``as_completed``/``future.result()`` re-raising a real
+        ``BaseException`` that is not one of these per-branch ``Exception``
+        failures) reaches the caller's own ``except BaseException`` —
+        which cancels every not-yet-started future (#356) — instead of
+        being swallowed by the ordinary per-branch handling below.
+        """
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                future.result()
+            except Exception as e:
+                # Name the failing child's path, same as chain flow does
+                # (#289), so a tree container's own meta.error is a
+                # breadcrumb into the child either way.
+                effect_path = self._effect_path(
+                    effect=self.defn.effects[idx], index=idx
+                )
+                wrapped = RuntimeError(f"{effect_path}: {e}")
+                wrapped.__cause__ = e
+                tree_errors.append(wrapped)
+                if self.defn.stop_on_error:
+                    # stop_event (set in _execute_branch) is what actually
+                    # keeps a freed worker from picking up the next queued
+                    # child; this cancel() is a second line of defense for
+                    # a future the pool hasn't dequeued at all yet. Neither
+                    # can kill an already-running thread — the executor's
+                    # own shutdown, at the call site, still waits for
+                    # whatever was already running to finish before the
+                    # isolated stores are merged.
+                    for pending in futures:
+                        if pending is not future:
+                            pending.cancel()
+            finally:
+                # This branch is done, whether or not it ever registered a
+                # prompt — one fewer settle point a listener still needs to
+                # see (#237).
+                store.fire_branch_settled(self.defn.name)
+            if self.defn.stop_on_error and tree_errors:
+                break
 
     def _execute_chain(
         self,
@@ -590,9 +677,17 @@ class DynamicRuntime:
         branch that has not started yet when it checks returns without
         running at all, rather than racing the main thread's own
         cancellation of futures a free worker hasn't picked up yet.
+
+        A cancelled run (#356) is checked here too: ``shutdown(wait=False,
+        cancel_futures=True)`` at the call site already stops a future
+        still sitting in the pool's own work queue from ever reaching this
+        method, but this closes the narrow race where a worker has already
+        dequeued the work item (so cancel_futures can no longer stop it)
+        the instant cancellation is requested.
         """
         if stop_event is not None and stop_event.is_set():
             return
+        get_token().check()
         try:
             self._execute_effect(effect, store=store, ctx=ctx, tracker=tracker)
         except Exception:

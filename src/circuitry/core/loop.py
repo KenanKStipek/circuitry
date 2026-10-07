@@ -14,6 +14,7 @@ from ..adapters import Adapter
 from ..output import console as _console
 from ..output import live_region as _live_region
 from .answers import parse_boolean_answer
+from .cancellation import get_token, submit_with_context
 from .disabled import is_disabled_node, is_enabled
 from .scope import local_writes as _local_writes_state
 from .scope import scope_ctx as _scope_ctx
@@ -578,7 +579,8 @@ class LoopRuntime:
                             max_workers=self.defn.max_concurrency
                         ) as executor:
                             future_to_idx = {
-                                executor.submit(
+                                submit_with_context(
+                                    executor,
                                     self._execute_body,
                                     store=isolated_stores[idx],
                                     ctx=iter_ctx,
@@ -590,42 +592,54 @@ class LoopRuntime:
                                 ): idx
                                 for idx, iter_ctx in iter_ctxs
                             }
-                            _tree_done = 0
-                            for future in as_completed(future_to_idx):
-                                i = future_to_idx[future]
-                                try:
-                                    results[i] = future.result()[0]
-                                except Exception as exc:
-                                    errors[i] = exc
-                                finally:
-                                    _tree_done += 1
-                                    _tree_progress = _loop_progress(
-                                        _loop_t0, _tree_done, _progress_total
-                                    )
-                                    if meta is not None:
-                                        # Mutates the same dict `child_store`'s
-                                        # branch publishers read `self.state`
-                                        # from (see Store.parallel_branches) —
-                                        # it rides along on the next branch's
-                                        # own publish (or the merge-then-
-                                        # publish below, for the last one) and
-                                        # must NOT publish here itself: at this
-                                        # point `store.root_state` is still the
-                                        # pre-merge snapshot (this iteration's
-                                        # own isolated-store write hasn't been
-                                        # folded into `child_store.state` yet),
-                                        # so publishing it would overwrite the
-                                        # correct, already-published snapshot
-                                        # with a stale one that's missing the
-                                        # pass that just finished.
-                                        meta["progress"] = _tree_progress
-                                    if tree_tracker is not None:
-                                        tree_tracker.set_progress(_tree_progress)
-                                    # This iteration is done, whether or not
-                                    # it ever registered a prompt — one fewer
-                                    # settle point a listener still needs to
-                                    # see (#237).
-                                    store.fire_branch_settled(self.defn.name)
+                            try:
+                                _tree_done = 0
+                                for future in as_completed(future_to_idx):
+                                    i = future_to_idx[future]
+                                    try:
+                                        results[i] = future.result()[0]
+                                    except Exception as exc:
+                                        errors[i] = exc
+                                    finally:
+                                        _tree_done += 1
+                                        _tree_progress = _loop_progress(
+                                            _loop_t0, _tree_done, _progress_total
+                                        )
+                                        if meta is not None:
+                                            # Mutates the same dict `child_store`'s
+                                            # branch publishers read `self.state`
+                                            # from (see Store.parallel_branches) —
+                                            # it rides along on the next branch's
+                                            # own publish (or the merge-then-
+                                            # publish below, for the last one) and
+                                            # must NOT publish here itself: at this
+                                            # point `store.root_state` is still the
+                                            # pre-merge snapshot (this iteration's
+                                            # own isolated-store write hasn't been
+                                            # folded into `child_store.state` yet),
+                                            # so publishing it would overwrite the
+                                            # correct, already-published snapshot
+                                            # with a stale one that's missing the
+                                            # pass that just finished.
+                                            meta["progress"] = _tree_progress
+                                        if tree_tracker is not None:
+                                            tree_tracker.set_progress(_tree_progress)
+                                        # This iteration is done, whether or not
+                                        # it ever registered a prompt — one fewer
+                                        # settle point a listener still needs to
+                                        # see (#237).
+                                        store.fire_branch_settled(self.defn.name)
+                            except BaseException:
+                                # Cancellation (SIGINT/SIGTERM): a pass the
+                                # pool has not yet dequeued must never start
+                                # (#356), the same fix as dynamic.py's own
+                                # tree flow — see its longer comment on the
+                                # identical call. Already-running passes are
+                                # stopped separately, by the signal handler
+                                # killing their tracked subprocess's whole
+                                # process group (``core.cancellation``).
+                                executor.shutdown(wait=False, cancel_futures=True)
+                                raise
 
                     # Merge isolated stores back into child_store sequentially
                     for idx in range(total):
@@ -1290,6 +1304,13 @@ Should the loop continue? Answer (yes/no):"""
         latter so a while-condition can be evaluated against the pass that
         just finished.
         """
+        # A cancelled run (#356) must not start a new iteration — chain flow
+        # calls this once per pass from the main thread (where a real
+        # signal already raises directly), but tree flow's own
+        # ``cancel_futures`` only stops a pass still in the pool's work
+        # queue; this closes the race where a worker already dequeued one
+        # the instant cancellation was requested.
+        get_token().check()
         from .conditional import ConditionalDefinition, ConditionalRuntime
         from .dynamic import DynamicDefinition, DynamicRuntime, _effect_type_label
         from .prompt import PromptDefinition, PromptRuntime
@@ -1318,6 +1339,14 @@ Should the loop continue? Answer (yes/no):"""
         # would freeze whatever the enclosing scope looked like one step ago.
         base_ctx = ctx
         for effect in self.defn.body:
+            # A cancelled run (#356 review F3) must not start the next
+            # body effect either — the check at this method's own entry
+            # only guards the first one. A body effect whose own
+            # ``on_error: continue``/``skip`` swallows a killed branch's
+            # failure (ToolRuntime.execute et al. return normally instead
+            # of raising) would otherwise let this loop start the next
+            # effect's subprocess with nothing left to kill it.
+            get_token().check()
             effect_record = {
                 "type": type(effect).__name__,
                 "name": getattr(effect, "name", None),

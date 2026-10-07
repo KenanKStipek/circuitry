@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..core.cancellation import run_tracked
 from ..preflight import CheckResult
 from ._subprocess import check_binary, resolve_binary
 from .base import ToolResult, _as_bool
@@ -107,10 +108,7 @@ class GpgPlugin:
                         "gpg: from_path=True requires params['input'] path."
                     )
                 cmd.append(str(Path(src).expanduser()))
-                proc = subprocess.run(
-                    cmd, capture_output=True, text=True,
-                    timeout=int(timeout_seconds), check=False,
-                )
+                proc = run_tracked(cmd, timeout=int(timeout_seconds))
             else:
                 payload = params.get("input")
                 if payload is None:
@@ -119,10 +117,7 @@ class GpgPlugin:
                     raise ValueError(
                         "gpg in-memory mode: params['input'] must be str."
                     )
-                proc = subprocess.run(
-                    cmd, capture_output=True, text=True,
-                    timeout=int(timeout_seconds), input=payload, check=False,
-                )
+                proc = run_tracked(cmd, timeout=int(timeout_seconds), input=payload)
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(
                 f"gpg exceeded timeout of {timeout_seconds}s"
@@ -168,10 +163,7 @@ def _run_verify(
         cmd.append(sig_path)
         if data_path:
             cmd.append(data_path)
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True,
-            timeout=int(timeout_seconds), check=False,
-        )
+        proc = run_tracked(cmd, timeout=int(timeout_seconds))
     # gpg --verify exits 0 on good sig, non-zero on bad. We surface this
     # as exit_code rather than raising — orchestration decides.
     return ToolResult(

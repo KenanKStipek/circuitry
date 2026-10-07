@@ -6,6 +6,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Any
 
+from ..core.cancellation import run_tracked
 from ..preflight import CheckResult
 from ._subprocess import check_binary, merged_env, resolve_plugin_binary
 from .base import ToolResult
@@ -146,11 +147,8 @@ class FfmpegPlugin:
         cmd[0] = binary
 
         try:
-            proc = subprocess.run(
+            proc = run_tracked(
                 cmd,
-                capture_output=True,
-                text=True,
-                check=False,
                 timeout=timeout_seconds,
                 env=merged_env(self.env),
             )

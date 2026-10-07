@@ -23,7 +23,11 @@ def _patch_plugin(monkeypatch: pytest.MonkeyPatch, plugin: MagicMock) -> None:
     monkeypatch.setattr(
         "circuitry.plugins.factory.build_plugin", lambda **kw: plugin
     )
-    monkeypatch.setattr("circuitry.core.tool.time.sleep", lambda s: None)
+    # Retry backoff is a cancellation-aware wait (#356), not a bare
+    # time.sleep — patch that instead so these tests don't actually block.
+    from circuitry.core.cancellation import get_token
+
+    monkeypatch.setattr(get_token(), "sleep_or_raise", lambda s: None)
 
 
 # ---------------------------------------------------------------------------

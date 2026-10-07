@@ -16,12 +16,12 @@ Params:
 
 from __future__ import annotations
 
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..core.cancellation import run_tracked
 from ..preflight import CheckResult
 from ._subprocess import resolve_binary
 from .base import ToolResult, _as_bool
@@ -71,10 +71,7 @@ class PdfRenderPlugin:
                 cmd.insert(1, "--base-url")
                 cmd.insert(2, str(params["base_url"]))
 
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True,
-                timeout=int(timeout_seconds), check=False,
-            )
+            proc = run_tracked(cmd, timeout=int(timeout_seconds))
 
         if proc.returncode != 0:
             raise RuntimeError(

@@ -8,6 +8,7 @@ assignment (issue #208), and the comprehension-scope fix for ``inputs``.
 from __future__ import annotations
 
 import os
+import threading
 import time
 import types
 from dataclasses import dataclass
@@ -191,3 +192,90 @@ class TestTimeout:
         result = _run("'x' * 2_000_000", timeout_seconds=10)
         assert result.value == "x" * 2_000_000
         assert time.monotonic() - start < 10
+
+
+class TestCancellation:
+    def test_long_running_eval_stops_promptly_when_cancelled(self):
+        # #357 follow-up: the sandboxed child is a multiprocessing.Process
+        # the cancellation token didn't track, so a cancelled run used to
+        # wait out this whole 30s budget instead of stopping at once.
+        from circuitry.core.cancellation import get_token
+
+        token = get_token()
+        token.reset()
+        errors: list[BaseException] = []
+
+        def worker() -> None:
+            try:
+                _run(
+                    "sleep_fn(30)",
+                    mode="exec",
+                    inputs={"sleep_fn": time.sleep},
+                    timeout_seconds=30,
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=worker)
+        start = time.monotonic()
+        try:
+            thread.start()
+            # Generous: just needs the child to have forked and reached its
+            # own sleep call before cancellation is requested.
+            time.sleep(0.5)
+            token.request()
+            thread.join(timeout=10)
+        finally:
+            token.reset()
+
+        assert not thread.is_alive()
+        assert time.monotonic() - start < 10
+        assert errors, "cancellation should have ended the sandboxed child, not timed out"
+
+
+class TestSignalResetSkipsAlreadyIgnored:
+    def test_forked_child_leaves_an_inherited_sig_ign_ignored(self, monkeypatch):
+        """#357 review finding 2: under `nohup`, `cof`'s own SIGHUP is
+        `SIG_IGN` on entry, and the sandboxed child shares its process
+        group, so a hangup reaches the child too -- the child must leave
+        an already-ignored signal ignored rather than resetting it to
+        `SIG_DFL`, or the same hangup `nohup` is meant to survive kills
+        this step instead of letting the run carry on."""
+        import signal
+
+        from circuitry.plugins import python_eval as pe
+
+        if pe._FORK_CONTEXT is None:
+            pytest.skip("no fork start method on this platform")
+
+        def _fake_inner(code, mode, inputs, cpu_seconds, result_conn):
+            del code, mode, inputs, cpu_seconds
+            pe._put_result(
+                result_conn,
+                "ok",
+                signal.getsignal(signal.SIGHUP) is signal.SIG_IGN,
+            )
+
+        monkeypatch.setattr(pe, "_run_sandboxed_inner", _fake_inner)
+
+        read_conn, write_conn = pe._FORK_CONTEXT.Pipe(duplex=False)
+        previous = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        try:
+            proc = pe._FORK_CONTEXT.Process(
+                target=pe._run_sandboxed,
+                args=("", "eval", {}, 5, write_conn),
+                daemon=True,
+            )
+            proc.start()
+        finally:
+            signal.signal(signal.SIGHUP, previous)
+        write_conn.close()
+        try:
+            assert read_conn.poll(5)
+            status, payload = read_conn.recv()
+        finally:
+            read_conn.close()
+            proc.join(2)
+
+        assert status == "ok"
+        assert payload is True

@@ -20,6 +20,13 @@ from circuitry.core.dynamic import DynamicRuntime
 from circuitry.core.store import Store
 
 
+def _patch_sleep(monkeypatch: pytest.MonkeyPatch, fn) -> None:
+    """Patch the cancellation-aware retry wait (#356), not a bare time.sleep."""
+    from circuitry.core.cancellation import get_token
+
+    monkeypatch.setattr(get_token(), "sleep_or_raise", fn)
+
+
 @dataclass
 class ScriptedRetryAdapter:
     """Raises ``AdapterCallError`` per ``failures``, then succeeds."""
@@ -95,7 +102,7 @@ def test_backoff_honours_retry_after_seconds(monkeypatch: pytest.MonkeyPatch) ->
     store = Store({})
 
     sleeps: list[float] = []
-    monkeypatch.setattr("circuitry.core.prompt.time.sleep", sleeps.append)
+    _patch_sleep(monkeypatch, sleeps.append)
 
     DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
 
@@ -121,7 +128,7 @@ def test_backoff_without_retry_after_grows_and_is_capped(
     store = Store({})
 
     sleeps: list[float] = []
-    monkeypatch.setattr("circuitry.core.prompt.time.sleep", sleeps.append)
+    _patch_sleep(monkeypatch, sleeps.append)
 
     DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
 
@@ -149,7 +156,7 @@ def test_backoff_at_a_large_attempt_index_stays_at_the_cap(
     store = Store({})
 
     sleeps: list[float] = []
-    monkeypatch.setattr("circuitry.core.prompt.time.sleep", sleeps.append)
+    _patch_sleep(monkeypatch, sleeps.append)
 
     DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
 

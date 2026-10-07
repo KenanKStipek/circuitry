@@ -199,19 +199,22 @@ def test_run_curl_on_windows_sends_the_config_via_a_temp_file_and_removes_it(
     before = set(glob.glob(pattern))
 
     monkeypatch.setattr(os, "name", "nt")
-    real_run = subprocess.run
+    real_popen = subprocess.Popen
     seen_config_paths: list[str] = []
 
-    def spying_run(cmd: list[str], **kwargs: Any) -> Any:
+    def spying_popen(cmd: list[str], **kwargs: Any) -> Any:
         config_path = cmd[cmd.index("--config") + 1]
         seen_config_paths.append(config_path)
         # The windows branch must actually have run: the config is a real
         # file under the temp dir, not `/dev/fd/<n>` (the POSIX path).
         assert os.path.isfile(config_path)
         assert os.path.dirname(config_path) == tempfile.gettempdir()
-        return real_run(cmd, **kwargs)
+        return real_popen(cmd, **kwargs)
 
-    monkeypatch.setattr("subprocess.run", spying_run)
+    # run_curl is tracked (`core.cancellation.run_tracked`, #356) via
+    # `subprocess.Popen` + `communicate`, not `subprocess.run` — patching
+    # the latter here would no longer intercept anything.
+    monkeypatch.setattr("subprocess.Popen", spying_popen)
     with local_server(_RecordingHandler) as base_url:
         proc = run_curl(
             url=base_url + "/x",
@@ -237,7 +240,7 @@ def test_run_curl_on_windows_removes_the_temp_file_even_when_curl_is_missing(
     monkeypatch.setattr(os, "name", "nt")
     seen_config_paths: list[str] = []
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+    def fake_popen(cmd: list[str], **kwargs: Any) -> Any:
         config_path = cmd[cmd.index("--config") + 1]
         seen_config_paths.append(config_path)
         # Prove the Windows branch (and not the POSIX one) actually ran
@@ -245,7 +248,7 @@ def test_run_curl_on_windows_removes_the_temp_file_even_when_curl_is_missing(
         assert os.path.isfile(config_path)
         raise FileNotFoundError("curl")
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
     with pytest.raises(FileNotFoundError):
         run_curl(url="https://example.test/x", timeout_seconds=5)
     assert seen_config_paths and "/dev/fd/" not in seen_config_paths[0]
@@ -261,13 +264,15 @@ def test_run_curl_delivers_headers_and_body_without_putting_them_on_argv(
     body = '{"prompt": "canary prompt text"}'
 
     calls: list[list[str]] = []
-    real_run = subprocess.run
+    real_popen = subprocess.Popen
 
-    def spying_run(cmd: list[str], **kwargs: Any) -> Any:
+    def spying_popen(cmd: list[str], **kwargs: Any) -> Any:
         calls.append(cmd)
-        return real_run(cmd, **kwargs)
+        return real_popen(cmd, **kwargs)
 
-    monkeypatch.setattr("subprocess.run", spying_run)
+    # run_curl is tracked (`core.cancellation.run_tracked`, #356) via
+    # `subprocess.Popen` + `communicate`, not `subprocess.run`.
+    monkeypatch.setattr("subprocess.Popen", spying_popen)
 
     with local_server(_RecordingHandler) as base_url:
         proc = run_curl(
@@ -328,15 +333,22 @@ def test_run_curl_closes_its_pipe_fd(monkeypatch: pytest.MonkeyPatch) -> None:
     """The header pipe's read end must not leak across calls."""
     open_fds_before = len(os.listdir("/dev/fd"))
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+    def fake_popen(cmd: list[str], **kwargs: Any) -> Any:
         class _Proc:
             returncode = 0
-            stdout = ""
-            stderr = ""
+
+            def communicate(self, input: Any = None, timeout: Any = None) -> Any:
+                return "", ""
+
+            def __enter__(self) -> _Proc:
+                return self
+
+            def __exit__(self, *exc: Any) -> bool:
+                return False
 
         return _Proc()
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
     for _ in range(20):
         run_curl(
             url="http://example.invalid/x",
@@ -361,13 +373,13 @@ def test_run_curl_query_string_credential_never_touches_argv(
     travels through `--config` instead of being curl's final argument."""
     secret = "canary-query-key-789"
     calls: list[list[str]] = []
-    real_run = subprocess.run
+    real_popen = subprocess.Popen
 
-    def spying_run(cmd: list[str], **kwargs: Any) -> Any:
+    def spying_popen(cmd: list[str], **kwargs: Any) -> Any:
         calls.append(cmd)
-        return real_run(cmd, **kwargs)
+        return real_popen(cmd, **kwargs)
 
-    monkeypatch.setattr("subprocess.run", spying_run)
+    monkeypatch.setattr("subprocess.Popen", spying_popen)
 
     with local_server(_RecordingHandler) as base_url:
         proc = run_curl(url=f"{base_url}/x?key={secret}", timeout_seconds=5)
@@ -383,13 +395,13 @@ def test_run_curl_userinfo_url_never_touches_argv(monkeypatch: pytest.MonkeyPatc
     """Regression for #314: `user:pass@host` (e.g. a `base_url` set that
     way) must not land on argv either."""
     calls: list[list[str]] = []
-    real_run = subprocess.run
+    real_popen = subprocess.Popen
 
-    def spying_run(cmd: list[str], **kwargs: Any) -> Any:
+    def spying_popen(cmd: list[str], **kwargs: Any) -> Any:
         calls.append(cmd)
-        return real_run(cmd, **kwargs)
+        return real_popen(cmd, **kwargs)
 
-    monkeypatch.setattr("subprocess.run", spying_run)
+    monkeypatch.setattr("subprocess.Popen", spying_popen)
 
     with local_server(_RecordingHandler) as base_url:
         host_port = base_url.removeprefix("http://")
@@ -451,15 +463,46 @@ def test_curl_failure_message_never_includes_the_retry_after_marker() -> None:
     assert "circuitry-retry-after" not in message
 
 
+class _FakePopen:
+    """Stands in for the real `subprocess.Popen` the curl-version probe
+    calls directly (`circuitry.curl_support._real_popen_cls`, #356) —
+    `communicate()` either returns the canned stdout or raises *raises*."""
+
+    def __init__(self, returncode: int, stdout: str, raises: Exception | None = None) -> None:
+        self.returncode = returncode
+        self._stdout = stdout
+        self._raises = raises
+        self.killed = False
+        self.waited = False
+
+    def communicate(self, input: Any = None, timeout: Any = None) -> tuple[str, str]:
+        if self._raises is not None:
+            raise self._raises
+        return (self._stdout, "")
+
+    def kill(self) -> None:
+        self.killed = True
+
+    def wait(self, timeout: Any = None) -> int:
+        self.waited = True
+        return self.returncode
+
+    def __enter__(self) -> _FakePopen:
+        return self
+
+    def __exit__(self, *exc: Any) -> bool:
+        return False
+
+
 def test_curl_supports_retry_after_header_true_on_modern_curl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _curl_supports_retry_after_header.cache_clear()
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
-        return subprocess.CompletedProcess(cmd, 0, stdout="curl 7.84.0 (x86_64)\n", stderr="")
+    def fake_popen(cmd: list[str], **kwargs: Any) -> Any:
+        return _FakePopen(0, "curl 7.84.0 (x86_64)\n")
 
-    monkeypatch.setattr("circuitry.curl_support._real_subprocess_run", fake_run)
+    monkeypatch.setattr("circuitry.curl_support._real_popen_cls", fake_popen)
     try:
         assert _curl_supports_retry_after_header() is True
     finally:
@@ -471,10 +514,10 @@ def test_curl_supports_retry_after_header_false_on_older_curl(
 ) -> None:
     _curl_supports_retry_after_header.cache_clear()
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
-        return subprocess.CompletedProcess(cmd, 0, stdout="curl 7.83.1 (x86_64)\n", stderr="")
+    def fake_popen(cmd: list[str], **kwargs: Any) -> Any:
+        return _FakePopen(0, "curl 7.83.1 (x86_64)\n")
 
-    monkeypatch.setattr("circuitry.curl_support._real_subprocess_run", fake_run)
+    monkeypatch.setattr("circuitry.curl_support._real_popen_cls", fake_popen)
     try:
         assert _curl_supports_retry_after_header() is False
     finally:
@@ -485,15 +528,23 @@ def test_curl_supports_retry_after_header_false_when_probe_times_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A hung `curl --version` (SubprocessError, e.g. TimeoutExpired) must
-    not escape the probe and break `run_curl` for every caller."""
+    not escape the probe and break `run_curl` for every caller — and must
+    not block forever either (#357 review N3): a bare `TimeoutExpired`
+    propagating out of `communicate()` through `with proc:` would hit
+    `Popen.__exit__`'s own unbounded `self.wait()`, since `__exit__` only
+    special-cases `KeyboardInterrupt`, not `TimeoutExpired`. The fix kills
+    the child itself, inside the `with`, before that can happen."""
     _curl_supports_retry_after_header.cache_clear()
+    proc = _FakePopen(0, "", raises=subprocess.TimeoutExpired("curl", 5))
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
-        raise subprocess.TimeoutExpired(cmd, 5)
+    def fake_popen(cmd: list[str], **kwargs: Any) -> Any:
+        return proc
 
-    monkeypatch.setattr("circuitry.curl_support._real_subprocess_run", fake_run)
+    monkeypatch.setattr("circuitry.curl_support._real_popen_cls", fake_popen)
     try:
         assert _curl_supports_retry_after_header() is False
+        assert proc.killed is True
+        assert proc.waited is True
     finally:
         _curl_supports_retry_after_header.cache_clear()
 

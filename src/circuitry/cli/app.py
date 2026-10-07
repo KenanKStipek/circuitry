@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import typer
-from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
@@ -19,6 +18,7 @@ from typer.core import TyperGroup
 from ..core.resume import document_sha256
 from ..core.saved_state import dumps_saved_state
 from ..core.store import build_persistence_backend
+from ..output import ResilientConsole
 
 # The wizard host (chat's transcript, verdict, and save logic) — `cof wizard`
 # drives the exact same functions `circuitry.tui.chat.ChatScreen` does, so the
@@ -74,8 +74,12 @@ from .shared_library import (
 from .state_merge import apply_inline_overrides
 from .trust import register_trust
 
-console = Console()
-err_console = Console(stderr=True)
+#: ``ResilientConsole``, not a bare ``Console`` (#356 follow-up): reporting a
+#: run's own interruption is exactly the moment the terminal reading it may
+#: already be gone (SIGHUP, a closed pipe), and that print failing must
+#: never stop the --out write or the exit code that still have to follow.
+console = ResilientConsole()
+err_console = ResilientConsole(stderr=True)
 
 
 # `.runtime_shim` pulls in `core.compiler` -> `core.cel_eval` (a full CEL
@@ -1380,8 +1384,17 @@ def run_cmd(
         # distinct from an ordinary failure's 1, even though both wrote the
         # same --out/--last record above and are equally resumable (#270 F6).
         # SIGTERM gets its own, 143 (128 + SIGTERM), for the same reason
-        # (#338).
-        raise typer.Exit(code=143 if result.sigterm else 130 if result.interrupted else 1)
+        # (#338); a terminal hangup (SIGHUP) gets 129 (128 + SIGHUP), for the
+        # same reason (#357 follow-up).
+        raise typer.Exit(
+            code=143
+            if result.sigterm
+            else 129
+            if result.sighup
+            else 130
+            if result.interrupted
+            else 1
+        )
 
     if tail:
         val = _find_last_effect_value(result.state)
@@ -1720,7 +1733,17 @@ def run_library_cmd(
             )
             if totals_line:
                 console.print(f"[bold]Totals:[/bold] {totals_line}")
-        raise typer.Exit(code=143 if result.sigterm else 130 if result.interrupted else 1)
+        # Same exit-code mapping as `cof run` (SIGTERM 143, SIGHUP 129,
+        # Ctrl-C/SIGINT 130, else 1) — see its own comment for why.
+        raise typer.Exit(
+            code=143
+            if result.sigterm
+            else 129
+            if result.sighup
+            else 130
+            if result.interrupted
+            else 1
+        )
 
     # Stash for --last, the same shape `cof run` writes — so `cof run --last`
     # can replay a run-library run too. The resolved asset file (not the

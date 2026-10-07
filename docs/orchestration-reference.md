@@ -1595,21 +1595,66 @@ wrote:
 | `--resume last` | the most recent run's own `--out` file, found through the `--last` stash (`~/.config/circuitry/last-run.json`); that file already carries its own resolved `input.*`, so nothing from the stash's `-e` args is replayed on top of it |
 | `--resume <run-id>` | looked up in the orchestration's configured `runtime.persistence` backend, scoped to that same orchestration path — a run that *failed* is looked up and found here too, not only one that succeeded |
 
-A run interrupted by Ctrl-C/SIGINT, or killed by SIGTERM (`kill <pid>`, a
-process manager, a system shutdown), is handled the same way a crash or an
+A run interrupted by Ctrl-C/SIGINT, killed by SIGTERM (`kill <pid>`, a
+process manager, a system shutdown), or hung up by SIGHUP (closing the
+terminal window, an SSH disconnect), is handled the same way a crash or an
 ordinary failure is: `--out`, the `--last` stash, and `runtime.persistence`
 (if configured) are all written before the process exits, so it is
 resumable through any of the three sources above exactly like a run that
-failed outright (the CLI still exits `130` for Ctrl-C/SIGINT or `143` for
-SIGTERM, not `1`, so a script can tell them apart). SIGTERM is only caught
-this way for the duration of `cof run`/`run-library` themselves, on the
-CLI's own main thread — an embedder (the SDK, the MCP server, the REST
-host) driving a run from its own process/thread keeps its own SIGTERM
-handling untouched. A run that saved nothing usable for any of these — no
-`--out`, no persistence, a state file missing `runtime.last_run` (and so
-no `document_hash` to check against) — fails `--resume` with a message
-naming exactly what's missing, rather than silently starting fresh or
-skipping the content-hash check.
+failed outright (the CLI still exits `130` for Ctrl-C/SIGINT, `143` for
+SIGTERM, or `129` for SIGHUP, not `1`, so a script can tell them apart).
+SIGTERM/SIGHUP are only caught this way for the duration of `cof run`/
+`run-library` themselves, on the CLI's own main thread — an embedder (the
+SDK, the MCP server, the REST host) driving a run from its own
+process/thread keeps its own signal handling untouched. SIGHUP already
+ignored (`SIG_IGN`) when `cof run`/`run-library` starts — e.g. launched
+under `nohup`, which is exactly what sets that — is left alone entirely:
+no handler is installed for it, so a hangup after that point does nothing,
+the same as it would for any other `nohup`-launched process. A run that
+saved nothing usable for any of these — no `--out`, no persistence, a
+state file missing `runtime.last_run` (and so no `document_hash` to check
+against) — fails `--resume` with a message naming exactly what's missing,
+rather than silently starting fresh or skipping the content-hash check.
+
+**Stopping a parallel step promptly.** The first SIGINT/SIGTERM/SIGHUP stops a
+`flow: tree` `dynamic`/parallel `loop` the same way it stops anything
+else, but faster: a branch that hasn't started yet never starts at all (no
+node, no hooks — the same shape `stop_on_error` already gives a not-yet-
+started sibling), and a branch already running is stopped outright — its
+child process (the whole process group a tool like `shell` spawns, not
+just its own pid) is killed. This covers every `shell`/binary-wrapping
+tool plugin and every HTTP call that goes through curl (every model
+adapter's own prompt, `web_search`, `weather`, ComfyUI's REST calls) —
+an in-flight MCP call is not cancelled; the MCP client does not watch
+for cancellation, so a branch blocked in one keeps running until the
+server responds (or its own timeout) regardless of the signal. A killed
+child is sent SIGKILL directly, not the SIGINT/SIGTERM the signal itself
+carried, so a tool with its own graceful-shutdown handling (`ffmpeg`
+finalizing a partial output) never gets the chance; running detached from
+the terminal this way also means a step that needs one (an `ssh`/`sudo`
+credential prompt, gpg's pinentry-curses) cannot use it. A step's
+own `finally:` still runs in full (and reruns on `--resume`, like any
+other `finally:`) even though the run it is cleaning up from was already
+cancelled; a running parallel step is never merged into its parent —
+exactly as if it had never run — so neither a killed branch nor one that
+never started leaves any trace behind for `--resume` to see, consistent
+with every other way a tree-flow branch disappears on cancellation. A
+*second* SIGINT/SIGTERM while this cleanup is still running ends the
+process at once, with the same exit code and no traceback, rather than
+waiting for cleanup to finish or escaping as an uncaught exception from
+inside it — that immediate exit skips writing `--out`, the `--last`
+stash and `runtime.persistence` the same way a SIGKILL would, so
+`--resume` has only whatever the run's last completed step already
+saved. SIGHUP never counts as that second signal: closing a terminal can
+deliver SIGHUP to `cof`'s foreground job twice in quick succession rather
+than once, and a further hangup, while the run is already stopping, is
+simply ignored rather than racing the first one's own cleanup to that
+immediate exit — a second SIGINT/SIGTERM still ends it at once as above.
+SIGHUP stays ignored (not restored to whatever it was before) for the
+rest of the process once any signal has cancelled a run, so a hangup
+arriving after that point — while `--out` and the `--last` stash are
+still being written (`runtime.persistence` is already written by this
+point) — cannot kill `cof` before that finishes.
 
 A resumed run writes its own `--out` back to the file its state came from
 by default when neither `--out` nor a profile's `out:` says otherwise —

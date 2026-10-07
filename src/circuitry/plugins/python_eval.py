@@ -51,9 +51,17 @@ but fail at runtime with ``ImportError`` because ``__import__`` isn't in
 the sandboxed builtins.
 
 The compile + eval/exec step runs in a forked child process so the
-effect's ``timeout_ms`` budget can be enforced from outside: a tight
-``while True: pass`` loop (or anything else that never returns control)
-is killed on overrun instead of hanging the run forever. The parent and
+effect's ``timeout_ms`` budget can be enforced from outside, and so a
+cancelled run (Ctrl-C/SIGTERM/SIGHUP, #357 follow-up) kills it at once
+instead of waiting out that same budget: the parent registers the child
+with ``core.cancellation.get_token().track_process`` for exactly as long
+as it is blocked waiting on the result, so ``request()`` (called from the
+signal handler, on whichever thread actually holds the cancellation
+token — a tree-flow branch running this on a worker thread never sees a
+signal directly) can kill it from there, by pid only, never its process
+group (it shares cof's own). A tight ``while True: pass`` loop (or
+anything else that never returns control) is killed on overrun instead
+of hanging the run forever either way. The parent and
 child talk over an explicit ``Pipe`` (not a ``SimpleQueue``): the parent
 closes its copy of the write end right after starting the child, and
 reads with a ``poll()``/``recv()`` deadline *before* joining. Both parts
@@ -87,9 +95,11 @@ import keyword
 import math
 import multiprocessing
 import operator
+import signal
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from ..core.cancellation import get_token
 from ..preflight import CheckResult
 from .base import ToolResult
 
@@ -259,7 +269,27 @@ def _run_sandboxed(
     to re-raise, unchanged, in the parent). *result_conn* is closed before
     returning either way, so the parent's read reliably sees EOF once this
     function is done, instead of relying on process exit alone.
+
+    Resets SIGINT/SIGTERM/SIGHUP to ``SIG_DFL`` first: this is a forked
+    child, sharing the parent's own process group, so a terminal Ctrl-C or
+    hangup reaches it too, and it would otherwise inherit `cli.interrupts`'
+    handlers along with its own *copies* of the parent's
+    ``CancellationToken`` tracked-process sets -- a ``request()`` run from
+    inside the child would have nothing useful to do (the parent kills this
+    same child independently via :meth:`CancellationToken.track_process`)
+    and could crash (:func:`kill_tracked_process`'s ``is_alive()`` raises
+    outside a child's own ``multiprocessing`` bookkeeping) (#357 review).
+    A signal already ``SIG_IGN`` on entry is left that way rather than
+    reset to ``SIG_DFL``: under `nohup`, the parent's SIGHUP (and an
+    embedder that ignores SIGINT) is ``SIG_IGN`` precisely so a hangup
+    cannot kill it, and this child shares that process group -- resetting
+    an inherited ``SIG_IGN`` to ``SIG_DFL`` would make the same hangup
+    kill this step's child when the run itself should carry on (#357
+    review finding 2).
     """
+    for sig in (signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGHUP", None)):
+        if sig is not None and signal.getsignal(sig) is not signal.SIG_IGN:
+            signal.signal(sig, signal.SIG_DFL)
     try:
         _run_sandboxed_inner(code, mode, inputs, cpu_seconds, result_conn)
     finally:
@@ -413,31 +443,41 @@ class PythonEvalPlugin:
         # the child dies without ever sending a result.
         write_conn.close()
 
-        # Poll-then-recv, not join()-then-recv: draining the pipe while the
-        # child is still writing is what lets a result bigger than the OS
-        # pipe buffer (tens of KiB) get through instead of deadlocking the
-        # child's write for the whole budget.
-        if not read_conn.poll(wall_seconds):
-            read_conn.close()
-            proc.terminate()
-            proc.join(2)
-            if proc.is_alive():
-                proc.kill()
-                proc.join()
-            raise RuntimeError(f"python_eval: exceeded timeout of {wall_seconds}s")
+        # Registered only for the stretch where the parent is actually
+        # blocked waiting on it -- a cancelled run's signal handler
+        # (whichever thread holds the token; this call itself may be on a
+        # tree-flow branch's own worker thread, which a signal never
+        # reaches directly) kills this process the moment cancellation is
+        # requested rather than waiting out `wall_seconds` (#357 follow-up).
+        # Killing the child closes its copy of `write_conn`, which is what
+        # unblocks `poll()`/`recv()` below -- the existing timeout/EOF
+        # handling after it covers the rest.
+        with get_token().track_process(proc):
+            # Poll-then-recv, not join()-then-recv: draining the pipe while
+            # the child is still writing is what lets a result bigger than
+            # the OS pipe buffer (tens of KiB) get through instead of
+            # deadlocking the child's write for the whole budget.
+            if not read_conn.poll(wall_seconds):
+                read_conn.close()
+                proc.terminate()
+                proc.join(2)
+                if proc.is_alive():
+                    proc.kill()
+                    proc.join()
+                raise RuntimeError(f"python_eval: exceeded timeout of {wall_seconds}s")
 
-        try:
-            status, payload = read_conn.recv()
-        except EOFError as exc:
-            read_conn.close()
-            proc.join(2)
-            if proc.is_alive():
-                proc.kill()
-                proc.join()
-            raise RuntimeError(
-                "python_eval: sandboxed process exited unexpectedly "
-                f"(exit code {proc.exitcode})."
-            ) from exc
+            try:
+                status, payload = read_conn.recv()
+            except EOFError as exc:
+                read_conn.close()
+                proc.join(2)
+                if proc.is_alive():
+                    proc.kill()
+                    proc.join()
+                raise RuntimeError(
+                    "python_eval: sandboxed process exited unexpectedly "
+                    f"(exit code {proc.exitcode})."
+                ) from exc
 
         read_conn.close()
         # Bounded, not unbounded: a live callable passed in via `inputs`
