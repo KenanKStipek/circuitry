@@ -46,6 +46,7 @@ POSIX only (process groups, ``flock``).
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
@@ -90,8 +91,7 @@ _HELPER_TIMEOUT_SECONDS = 10
 _HELPER_ENV_OVERRIDES = {"LC_ALL": "C", "TZ": "UTC"}
 
 #: Leaders this interpreter started: reaped here, so a leader that exits
-#: while this process is still running does not linger as a zombie that
-#: keeps its process group alive.
+#: while this process is still running does not linger as a zombie.
 _started: dict[int, subprocess.Popen[bytes]] = {}
 _started_lock = threading.Lock()
 
@@ -171,29 +171,58 @@ def process_start_time(pid: int) -> str | None:
 
 
 def _reap(pid: int) -> None:
-    """Collect *pid*'s exit status if it is a child of this interpreter."""
+    """Collect *pid*'s exit status if this interpreter started it as a
+    service leader. Never any other child: its exit status belongs to
+    whoever started it."""
     with _started_lock:
         proc = _started.get(pid)
-    if proc is not None:
-        if proc.poll() is not None:
-            with _started_lock:
-                _started.pop(pid, None)
-        return
-    try:
-        os.waitpid(pid, os.WNOHANG)
-    except (ChildProcessError, OSError):
-        pass
+    if proc is not None and proc.poll() is not None:
+        with _started_lock:
+            _started.pop(pid, None)
+
+
+def _group_has_running_member(pgid: int) -> bool:
+    """Whether group *pgid* has a member that is not a zombie. A leader's
+    zombie stays in its group until its parent — the run that started it,
+    maybe not this one — reaps it."""
+    if _is_linux_proc():
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                stat = (entry / "stat").read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            # Field 3 (state) and field 5 (pgrp), after the ')' of comm.
+            fields = stat[stat.rindex(")") + 2 :].split()
+            if len(fields) > 2 and fields[2] == str(pgid) and fields[0] not in ("Z", "X"):
+                return True
+        return False
+    proc = _helper(["ps", "-A", "-o", "pgid=,stat="])
+    if proc is None or proc.returncode != 0:
+        return True  # cannot tell: never call a group gone without proof
+    for line in proc.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == str(pgid) and not parts[1].startswith("Z"):
+            return True
+    return False
 
 
 def _group_exists(pgid: int) -> bool:
+    """Whether process group *pgid* still has a running (non-zombie)
+    member. ``killpg(pgid, 0)`` alone counts zombies: it succeeds on Linux
+    and fails with EPERM on macOS for a group of zombies only."""
     _reap(pgid)
     try:
         os.killpg(pgid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
+        pass
+    if _group_has_running_member(pgid):
         return True
-    return True
+    _reap(pgid)  # its leader may have become a zombie since the first reap
+    return False
 
 
 @dataclass(frozen=True)
@@ -218,17 +247,17 @@ def check_ownership(record: dict[str, Any]) -> Ownership:
         return Ownership(False, "the machine has rebooted since it was started")
     _reap(pgid)
     start = process_start_time(pgid)
+    if start is not None and start != recorded_start:
+        return Ownership(
+            False,
+            f"pid {pgid} now belongs to a different process "
+            f"(started {start!r}, recorded {recorded_start!r})",
+        )
+    if not _group_exists(pgid):
+        return Ownership(False, "its process group no longer exists")
     if start is not None:
-        if start != recorded_start:
-            return Ownership(
-                False,
-                f"pid {pgid} now belongs to a different process "
-                f"(started {start!r}, recorded {recorded_start!r})",
-            )
         return Ownership(True, "its group leader is running")
-    if _group_exists(pgid):
-        return Ownership(True, "its group leader exited; members of its process group remain")
-    return Ownership(False, "its process group no longer exists")
+    return Ownership(True, "its group leader exited; members of its process group remain")
 
 
 def _describe_holder(pid: int, port: int) -> dict[str, Any]:
@@ -302,7 +331,7 @@ def _probe_ready(ready: dict[str, Any]) -> bool:
             return int(response.status) < 500
     except urllib.error.HTTPError as exc:
         return int(exc.code) < 500
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):
         return False
 
 
@@ -621,7 +650,7 @@ class ServicePlugin:
         except BaseException:
             # Cancelled (Ctrl-C/SIGTERM) while waiting: stop what we just started.
             if started:
-                self._stop(name, grace_seconds=grace)
+                self._stop(name, grace_seconds=grace, expected_pgid=int(record["pgid"]))
             raise
         value = {
             "name": name,
@@ -637,7 +666,7 @@ class ServicePlugin:
             return ToolResult(value=value, raw={"action": "start", **value})
         tail = _log_tail(Path(str(record.get("log"))), log_offset)
         if started:
-            self._stop(name, grace_seconds=grace)
+            self._stop(name, grace_seconds=grace, expected_pgid=int(record["pgid"]))
             value["running"] = False
         message = f"service {name!r}: {outcome}" + (
             f"\n--- log tail ({record.get('log')}) ---\n{tail}" if tail else ""
@@ -678,38 +707,40 @@ class ServicePlugin:
         """SIGTERM *pgid*'s group, wait up to *grace_seconds*, then SIGKILL
         what is left. Returns (gone, last signal sent)."""
         sent: str | None = None
-        try:
-            os.killpg(pgid, signal.SIGTERM)
-            sent = "SIGTERM"
-        except ProcessLookupError:
-            return True, None
-        deadline = time.monotonic() + grace_seconds
-        while time.monotonic() < deadline:
+        for sig, wait_seconds in ((signal.SIGTERM, grace_seconds), (signal.SIGKILL, _SETTLE_SECONDS)):
             if not _group_exists(pgid):
                 return True, sent
-            time.sleep(_POLL_SECONDS)
-        if not _group_exists(pgid):
-            return True, sent
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-            sent = "SIGKILL"
-        except ProcessLookupError:
-            return True, sent
-        deadline = time.monotonic() + _SETTLE_SECONDS
-        while time.monotonic() < deadline:
-            if not _group_exists(pgid):
+            try:
+                os.killpg(pgid, sig)
+            except ProcessLookupError:
                 return True, sent
-            time.sleep(_POLL_SECONDS)
+            except PermissionError:
+                # Only zombies left (macOS answers EPERM), or not ours to signal.
+                return not _group_exists(pgid), sent
+            sent = sig.name
+            deadline = time.monotonic() + wait_seconds
+            while time.monotonic() < deadline:
+                if not _group_exists(pgid):
+                    return True, sent
+                time.sleep(_POLL_SECONDS)
         return not _group_exists(pgid), sent
 
-    def _stop(self, name: str, *, grace_seconds: float) -> ToolResult:
+    def _stop(
+        self, name: str, *, grace_seconds: float, expected_pgid: int | None = None
+    ) -> ToolResult:
+        """Stop *name*. With *expected_pgid* (a start cleaning up after
+        itself), only when the record still names that group: another run
+        may have stopped and restarted the service meanwhile."""
         with self._locked() as state_dir:
             record, stale_reason = self._live_record(state_dir, name)
+            if record is not None and expected_pgid not in (None, int(record["pgid"])):
+                record = None
             if record is None:
                 value: dict[str, Any] = {
                     "name": name,
                     "stopped": False,
                     "running": False,
+                    "pgid": None,
                     "signal": None,
                     "ports_free": True,
                     "port_holders": [],
@@ -719,7 +750,11 @@ class ServicePlugin:
             pgid = int(record["pgid"])
             gone, sent = self._terminate_group(pgid, grace_seconds=grace_seconds)
             if not gone:
-                message = f"service {name!r}: process group {pgid} survived SIGKILL."
+                message = (
+                    f"service {name!r}: process group {pgid} survived SIGKILL."
+                    if sent == "SIGKILL"
+                    else f"service {name!r}: not permitted to signal process group {pgid}."
+                )
                 return ToolResult(
                     value=None,
                     raw={"action": "stop", "name": name, "pgid": pgid, "signal": sent},

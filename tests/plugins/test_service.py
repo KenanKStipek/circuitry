@@ -181,6 +181,7 @@ def test_start_ready_status_stop_against_a_local_http_server(
     # Idempotent: stopping again, and asking for status, are not errors.
     again = plugin.execute(params={"action": "stop", "name": "web"})
     assert again.ok and again.value["stopped"] is False
+    assert again.value["pgid"] is None
     status = plugin.execute(params={"action": "status", "name": "web"})
     assert status.value["running"] is False and status.value["ready"] is False
 
@@ -246,6 +247,36 @@ def test_a_port_held_by_a_foreign_process_fails_start_and_leaves_it_running(
     time.sleep(0.3)
     assert holder.poll() is None
     assert _port_open(port)
+
+
+def test_without_lsof_a_foreign_port_holder_is_still_detected_and_left_running(
+    plugin: ServicePlugin,
+    state_dir: Path,
+    tmp_path: Path,
+    foreign: list[subprocess.Popen[bytes]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_which = shutil.which
+    monkeypatch.setattr(
+        service_mod.shutil,
+        "which",
+        lambda cmd, *a, **k: None if cmd == "lsof" else real_which(cmd, *a, **k),
+    )
+    port = _free_port()
+    holder = _start_foreign(foreign, _http_server(port), tmp_path / "holder")
+    assert _wait_until(lambda: _port_open(port))
+
+    result = _start(plugin, "web", port)
+
+    assert result.ok is False
+    assert result.raw["port_holders"] == [
+        {"port": port, "pid": None, "pgid": None, "command": None, "cwd": None}
+    ]
+    assert "install lsof" in (result.stderr or "")
+    assert not (state_dir / "web.json").exists()
+    assert "lsof not found" in (plugin.check().message or "")
+    time.sleep(0.3)
+    assert holder.poll() is None
 
 
 def test_a_port_claimed_by_another_service_fails_start(plugin: ServicePlugin) -> None:
@@ -352,6 +383,136 @@ def test_a_record_from_before_a_reboot_is_never_signalled(
     assert not path.exists()
     time.sleep(0.3)
     assert proc.poll() is None
+
+
+def test_a_group_whose_leader_exited_is_still_ours_and_stopped(
+    plugin: ServicePlugin, state_dir: Path, tmp_path: Path
+) -> None:
+    member_pid_file = tmp_path / "member.pid"
+    started = plugin.execute(
+        params={
+            "action": "start",
+            "name": "orphans",
+            "shell": True,
+            "command": f"sleep 600 & echo $! > '{member_pid_file}'; sleep 0.5; exit 0",
+        }
+    )
+    assert started.ok, started.stderr
+    pgid = started.value["pgid"]
+    leader = service_mod._started[pgid]
+    assert _wait_until(lambda: leader.poll() is not None)
+    member_pid = int(member_pid_file.read_text())
+    assert os.getpgid(member_pid) == pgid
+
+    record = json.loads((state_dir / "orphans.json").read_text())
+    ownership = service_mod.check_ownership(record)
+    assert ownership.ours, ownership.reason
+    assert "members of its process group remain" in ownership.reason
+    assert plugin.execute(params={"action": "status", "name": "orphans"}).value["running"]
+
+    stopped = plugin.execute(params={"action": "stop", "name": "orphans"})
+
+    assert stopped.ok, stopped.stderr
+    assert stopped.value["stopped"] is True
+    assert _wait_until(lambda: not _pid_alive(member_pid))
+    assert not (state_dir / "orphans.json").exists()
+
+
+_START_AND_STAY = textwrap.dedent(
+    """
+    import json, sys, time
+    from circuitry.plugins.service import ServicePlugin
+    port = int(sys.argv[2])
+    result = ServicePlugin(state_dir=sys.argv[1]).execute(params={
+        "action": "start", "name": "web", "ports": [port],
+        "command": [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
+        "ready": f"http://127.0.0.1:{port}/", "ready_timeout_ms": 20000,
+    })
+    print(json.dumps({"ok": result.ok, "stderr": result.stderr,
+                      "pgid": (result.value or {}).get("pgid")}), flush=True)
+    time.sleep(600)
+    """
+)
+
+
+def test_stop_of_a_service_another_still_running_run_started(
+    plugin: ServicePlugin,
+    state_dir: Path,
+    tmp_path: Path,
+    foreign: list[subprocess.Popen[bytes]],
+) -> None:
+    """The leader's parent is the other run, so once stopped it lingers as
+    that run's zombie — which must not count as a running group here."""
+    port = _free_port()
+    script = tmp_path / "start_and_stay.py"
+    script.write_text(_START_AND_STAY)
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("OPENAI_API_KEY", "CYBERDINER_TOKEN", "CYBERDINER_EXPO_URL")
+    }
+    other_run = subprocess.Popen(
+        [sys.executable, str(script), str(state_dir), str(port)],
+        cwd=tmp_path,
+        env={**env, "HOME": str(tmp_path / "home")},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        start_new_session=True,
+    )
+    foreign.append(other_run)
+    assert other_run.stdout is not None
+    started = json.loads(other_run.stdout.readline())
+    assert started["ok"], started["stderr"]
+    pgid = started["pgid"]
+    assert _group_alive(pgid)
+    assert plugin.execute(params={"action": "status", "name": "web"}).value["running"]
+
+    stopped = plugin.execute(params={"action": "stop", "name": "web"})
+
+    assert other_run.poll() is None, "the starting run must still be running"
+    assert stopped.ok, stopped.stderr
+    assert stopped.value["stopped"] is True
+    assert stopped.value["signal"] == "SIGTERM"
+    assert stopped.value["ports_free"] is True
+    assert not (state_dir / "web.json").exists()
+    status = plugin.execute(params={"action": "status", "name": "web"})
+    assert status.value["running"] is False
+
+
+def test_a_start_cleaning_up_never_stops_a_group_it_did_not_start(
+    plugin: ServicePlugin, state_dir: Path
+) -> None:
+    """Another run stopped and restarted the service while this start was
+    waiting: its cleanup must leave the new group and its record alone."""
+    port = _free_port()
+    restarted = _start(plugin, "web", port)
+    assert restarted.ok, restarted.stderr
+    pgid = restarted.value["pgid"]
+
+    cleanup = plugin._stop("web", grace_seconds=1, expected_pgid=pgid + 1)
+
+    assert cleanup.ok and cleanup.value["stopped"] is False
+    assert _group_alive(pgid)
+    assert (state_dir / "web.json").exists()
+    assert plugin.execute(params={"action": "stop", "name": "web"}).value["stopped"]
+
+
+def test_a_malformed_http_response_counts_as_not_ready() -> None:
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen()
+        port = server.getsockname()[1]
+
+        def _answer_garbage() -> None:
+            conn, _ = server.accept()
+            with conn:
+                conn.recv(4096)
+                conn.sendall(b"not http at all\r\n\r\n")
+
+        thread = threading.Thread(target=_answer_garbage)
+        thread.start()
+        assert service_mod._probe_ready({"url": f"http://127.0.0.1:{port}/"}) is False
+        thread.join(timeout=10)
 
 
 _STUBBORN_CHILD = textwrap.dedent(
