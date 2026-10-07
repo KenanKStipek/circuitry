@@ -22,6 +22,7 @@ from ..cli.redaction import redact
 from ..output import console as _console
 from ..output import live_region as _live_region
 from ..plugins.base import ToolResult
+from .cancellation import get_token
 from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .expect import ExpectDef, evaluate_expect, expect_failure_summary
 from .prompt import RetryPolicyDef
@@ -592,7 +593,9 @@ class ToolRuntime:
         next_delay_ms = backoff_ms
         for attempt_index in range(max_attempts):
             if attempt_index > 0:
-                time.sleep(next_delay_ms / 1000)
+                # Cancellation-aware, not a bare time.sleep — see core.use's
+                # identical comment (#356).
+                get_token().sleep_or_raise(next_delay_ms / 1000)
                 if self.verbose:
                     retry_line = (
                         f"{indent}[yellow]↺[/yellow] [white]⚙[/white]"

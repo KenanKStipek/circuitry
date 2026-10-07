@@ -15,6 +15,7 @@ from typing import Any, Literal
 from ..adapters import Adapter
 from ..adapters._retry import RetryInfo, next_backoff_delay_ms
 from ..output import console as _console
+from .cancellation import get_token
 from .document_check import structural_errors
 from .expect import ExpectDef, evaluate_expect, expect_failure_summary
 from .interface_inputs import check_interface_inputs
@@ -754,7 +755,11 @@ class UseRuntime:
 
             for attempt_index in range(max_attempts):
                 if attempt_index > 0:
-                    time.sleep(next_delay_ms / 1000)
+                    # Cancellation-aware, not a bare time.sleep: a real
+                    # signal never interrupts a worker thread directly, so
+                    # a tree-flow branch retrying here must poll the
+                    # cancellation token itself to stop promptly (#356).
+                    get_token().sleep_or_raise(next_delay_ms / 1000)
                     if self.verbose:
                         retry_line = (
                             f"{indent}[yellow]↺[/yellow] [green]⊕[/green]"

@@ -19,6 +19,8 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
+from .cancellation import get_token
+
 #: The dict key under which the run's one :class:`RunConcurrencyLimiter` (if
 #: any) rides inside every ``runtime_config`` — see the module docstring.
 RUNTIME_CONFIG_KEY = "_concurrency_limiter"
@@ -184,8 +186,14 @@ class RunConcurrencyLimiter:
             for sem in reversed(held):
                 sem.release()
 
-    @staticmethod
+    #: How often a blocked acquire re-checks cancellation (#356) — short
+    #: enough that a cancelled run's waiting leaf stops promptly, long
+    #: enough that polling costs nothing noticeable against a real wait.
+    _POLL_SECONDS = 0.2
+
+    @classmethod
     def _acquire_one(
+        cls,
         sem: threading.Semaphore,
         label: str,
         on_wait: Callable[[str], None] | None,
@@ -195,6 +203,12 @@ class RunConcurrencyLimiter:
             return
         if on_wait is not None:
             on_wait(label)
-        sem.acquire(blocking=True)
+        token = get_token()
+        while not sem.acquire(timeout=cls._POLL_SECONDS):
+            # A blocked wait for a concurrency slot is itself a place a
+            # cancelled run must not let a new effect start (#356) — the
+            # main thread's own KeyboardInterrupt/SigTermInterrupt never
+            # reaches a worker thread blocked here.
+            token.check()
         if on_acquired is not None:
             on_acquired()

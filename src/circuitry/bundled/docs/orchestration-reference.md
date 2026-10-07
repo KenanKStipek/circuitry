@@ -1611,6 +1611,23 @@ no `document_hash` to check against) — fails `--resume` with a message
 naming exactly what's missing, rather than silently starting fresh or
 skipping the content-hash check.
 
+**Stopping a parallel step promptly.** The first SIGINT/SIGTERM stops a
+`flow: tree` `dynamic`/parallel `loop` the same way it stops anything
+else, but faster: a branch that hasn't started yet never starts at all (no
+node, no hooks — the same shape `stop_on_error` already gives a not-yet-
+started sibling), and a branch already running is stopped outright — its
+child process (the whole process group a tool like `shell` spawns, not
+just its own pid) is killed, and an in-flight MCP call is cancelled where
+the server's own client allows it. A step's own `finally:` still runs
+(and reruns on `--resume`, like any other `finally:`); a running parallel
+step is never merged into its parent — exactly as if it had never run —
+so neither a killed branch nor one that never started leaves any trace
+behind for `--resume` to see, consistent with every other way a tree-flow
+branch disappears on cancellation. A *second* SIGINT/SIGTERM while this
+cleanup is still running ends the process at once, with the same exit
+code and no traceback, rather than waiting for cleanup to finish or
+escaping as an uncaught exception from inside it.
+
 A resumed run writes its own `--out` back to the file its state came from
 by default when neither `--out` nor a profile's `out:` says otherwise —
 so `--state run.json --resume x` (with no `--out` of its own) still saves

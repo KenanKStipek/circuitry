@@ -15,6 +15,13 @@ from circuitry.core.store import Store
 from circuitry.core.use import UseDefinition, UseRuntime
 
 
+def _patch_sleep(monkeypatch: pytest.MonkeyPatch, fn) -> None:
+    """Patch the cancellation-aware retry wait (#356), not a bare time.sleep."""
+    from circuitry.core.cancellation import get_token
+
+    monkeypatch.setattr(get_token(), "sleep_or_raise", fn)
+
+
 def _write_orch(tmp_path: Path, name: str, content: dict) -> Path:
     path = tmp_path / name
     path.write_text(yaml.dump(content), encoding="utf-8")
@@ -87,7 +94,7 @@ def test_use_retries_the_whole_child_run(tmp_path, monkeypatch: pytest.MonkeyPat
             ]
         },
     )
-    monkeypatch.setattr("circuitry.core.use.time.sleep", lambda s: None)
+    _patch_sleep(monkeypatch, lambda s: None)
 
     defn = UseDefinition(
         name="run_child",
@@ -117,7 +124,7 @@ def test_use_exhausts_retries_and_fails(tmp_path, monkeypatch: pytest.MonkeyPatc
             ]
         },
     )
-    monkeypatch.setattr("circuitry.core.use.time.sleep", lambda s: None)
+    _patch_sleep(monkeypatch, lambda s: None)
 
     defn = UseDefinition(
         name="run_child",
@@ -137,7 +144,7 @@ def test_use_missing_path_is_not_retried(tmp_path, monkeypatch: pytest.MonkeyPat
     finding 9). A retry sleeps before each attempt after the first, so zero
     sleeps proves this failed on the first attempt."""
     sleep = MagicMock()
-    monkeypatch.setattr("circuitry.core.use.time.sleep", sleep)
+    _patch_sleep(monkeypatch, sleep)
 
     defn = UseDefinition(
         name="run_child",
@@ -156,7 +163,7 @@ def test_use_cycle_is_not_retried(tmp_path, monkeypatch: pytest.MonkeyPatch) -> 
     """A cycle (`use` referencing an ancestor of its own call stack) never
     resolves differently on a second attempt (#273 review, finding 9)."""
     sleep = MagicMock()
-    monkeypatch.setattr("circuitry.core.use.time.sleep", sleep)
+    _patch_sleep(monkeypatch, sleep)
 
     child_path = _write_orch(
         tmp_path,
@@ -201,7 +208,7 @@ def test_use_retries_used_is_reset_on_a_reused_node(
             ]
         },
     )
-    monkeypatch.setattr("circuitry.core.use.time.sleep", lambda s: None)
+    _patch_sleep(monkeypatch, lambda s: None)
 
     defn = UseDefinition(
         name="run_child",
@@ -275,7 +282,7 @@ def test_use_expect_cel_fails_and_retries_then_succeeds(
             ]
         },
     )
-    monkeypatch.setattr("circuitry.core.use.time.sleep", lambda s: None)
+    _patch_sleep(monkeypatch, lambda s: None)
 
     defn = UseDefinition(
         name="run_child",

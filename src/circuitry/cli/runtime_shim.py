@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import signal
 import threading
 import time
 from collections.abc import Callable
@@ -16,6 +17,7 @@ from ..adapters import Adapter, build_adapter
 from ..adapters.factory import ADAPTER_REGISTRY, configured_timeout_seconds
 from ..allowlist_gate import AllowlistError, install_allowlists, require_adapter
 from ..capability_gate import install_capability_ceiling
+from ..core.cancellation import RunCancelledBySignal, get_token
 from ..core.compiler import (
     apply_effect_overrides,
     compile_orchestration,
@@ -1016,7 +1018,7 @@ def run(req: RunRequest) -> RunResult:
 
         return RunResult(ok=True, state=state, warnings=warnings, out_path=resolved_out)
 
-    except (Exception, KeyboardInterrupt) as e:
+    except (Exception, KeyboardInterrupt, RunCancelledBySignal) as e:
         # Ctrl-C/SIGINT during a long effect dispatch reaches here exactly
         # like any other failure (KeyboardInterrupt isn't an Exception
         # subclass, hence the explicit tuple): the same cleanup records
@@ -1028,8 +1030,16 @@ def run(req: RunRequest) -> RunResult:
         # raises in place of the interpreter's default (process-killing,
         # state-losing) SIGTERM handling — so `interrupted` still covers it,
         # and `sigterm` lets the caller tell the two apart for the exit code.
-        interrupted = isinstance(e, KeyboardInterrupt)
-        sigterm = isinstance(e, SigTermInterrupt)
+        # A cancelled run (#356) can instead surface here as `RunCancelledBySignal`
+        # — a tree-flow branch's own worker thread noticing the run was
+        # cancelled (a retry backoff, a concurrency-slot wait) before the
+        # main thread's own blocked wait got interrupted by the signal
+        # itself; `interrupted`/`sigterm` read the signal that actually
+        # caused it from the shared `CancellationToken` either way.
+        interrupted = isinstance(e, (KeyboardInterrupt, RunCancelledBySignal))
+        sigterm = isinstance(e, SigTermInterrupt) or (
+            isinstance(e, RunCancelledBySignal) and get_token().signum == signal.SIGTERM
+        )
         error_message = (
             "Interrupted (SIGTERM)"
             if sigterm

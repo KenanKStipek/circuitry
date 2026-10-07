@@ -52,6 +52,79 @@ class FakeProc:
     stderr: str = ""
 
 
+class FakePopen:
+    """Stand-in for ``subprocess.Popen`` in tests exercising ``run_binary``'s
+    communicate()-based path (#356) without spawning a real process.
+
+    ``captured``, when given, records this call's ``cmd``/``kwargs`` the
+    same way the old ``fake_run(cmd, **kwargs)`` monkeypatches did.
+    """
+
+    def __init__(
+        self,
+        cmd: list[str],
+        *,
+        fake_returncode: int = 0,
+        fake_stdout: str = "",
+        fake_stderr: str = "",
+        captured: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self.args = cmd
+        self.pid = 999999
+        self.returncode: int | None = None
+        self._returncode = fake_returncode
+        self._stdout = fake_stdout
+        self._stderr = fake_stderr
+        self._captured = captured
+        if captured is not None:
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+
+    def communicate(
+        self, input: str | None = None, timeout: float | None = None
+    ) -> tuple[str, str]:
+        if self._captured is not None:
+            self._captured["communicate_kwargs"] = {"input": input, "timeout": timeout}
+        self.returncode = self._returncode
+        return self._stdout, self._stderr
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def wait(self, timeout: float | None = None) -> int | None:
+        return self.returncode
+
+    def __enter__(self) -> FakePopen:
+        return self
+
+    def __exit__(self, *exc_info: Any) -> None:
+        return None
+
+
+def _patch_popen(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    returncode: int = 0,
+    stdout: str = "",
+    stderr: str = "",
+    captured: dict[str, Any] | None = None,
+    raises: BaseException | None = None,
+) -> None:
+    """Replace ``subprocess.Popen`` with one that returns/raises as given,
+    recording the call on *captured* like the old ``fake_run`` did."""
+
+    def fake_popen(cmd: list[str], **kwargs: Any) -> FakePopen:
+        if raises is not None:
+            raise raises
+        return FakePopen(
+            cmd, fake_returncode=returncode, fake_stdout=stdout, fake_stderr=stderr,
+            captured=captured, **kwargs,
+        )
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+
 # ---------------------------------------------------------------------------
 # _subprocess helper
 # ---------------------------------------------------------------------------
@@ -78,29 +151,21 @@ def test_check_binary_reports_missing(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_run_binary_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
+    _patch_popen(monkeypatch, returncode=0, stdout="out", stderr="warn", captured=captured)
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        captured["cmd"] = cmd
-        captured["kwargs"] = kwargs
-        return FakeProc(returncode=0, stdout="out", stderr="warn")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
     r = run_binary(binary="/usr/bin/echo", args=["hi"], timeout_seconds=5)
     assert r.value == "out"
     assert r.exit_code == 0
     assert validate_tool_result(r, plugin_name="generic") == []
     assert captured["cmd"] == ["/usr/bin/echo", "hi"]
-    assert captured["kwargs"]["timeout"] == 5
+    assert captured["communicate_kwargs"]["timeout"] == 5
     assert captured["kwargs"]["text"] is True
 
 
 def test_run_binary_raises_on_nonzero_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_run(*a: Any, **k: Any) -> FakeProc:
-        return FakeProc(returncode=2, stderr="boom")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    _patch_popen(monkeypatch, returncode=2, stderr="boom")
     with pytest.raises(RuntimeError, match="exit 2"):
         run_binary(binary="/x", args=[])
 
@@ -108,10 +173,7 @@ def test_run_binary_raises_on_nonzero_by_default(
 def test_run_binary_allow_nonzero_returns_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_run(*a: Any, **k: Any) -> FakeProc:
-        return FakeProc(returncode=1, stderr="oops")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    _patch_popen(monkeypatch, returncode=1, stderr="oops")
     r = run_binary(binary="/x", args=[], allow_nonzero=True)
     assert r.exit_code == 1
     assert r.stderr == "oops"
@@ -120,10 +182,7 @@ def test_run_binary_allow_nonzero_returns_result(
 def test_run_binary_translates_filenotfound_to_runtimeerror(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_run(*a: Any, **k: Any) -> Any:
-        raise FileNotFoundError("no such")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    _patch_popen(monkeypatch, raises=FileNotFoundError("no such"))
     with pytest.raises(RuntimeError, match="binary not found"):
         run_binary(binary="/missing", args=[])
 
@@ -131,10 +190,17 @@ def test_run_binary_translates_filenotfound_to_runtimeerror(
 def test_run_binary_translates_timeout_to_runtimeerror(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_run(*a: Any, **k: Any) -> Any:
-        raise subprocess.TimeoutExpired(cmd=["x"], timeout=1)
+    class _TimingOutPopen(FakePopen):
+        def communicate(
+            self, input: str | None = None, timeout: float | None = None
+        ) -> tuple[str, str]:
+            raise subprocess.TimeoutExpired(cmd=["x"], timeout=1)
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+        def wait(self, timeout: float | None = None) -> int | None:
+            self.returncode = -9
+            return self.returncode
+
+    monkeypatch.setattr(subprocess, "Popen", _TimingOutPopen)
     with pytest.raises(RuntimeError, match="exceeded timeout"):
         run_binary(binary="/x", args=[], timeout_seconds=1)
 
@@ -159,12 +225,7 @@ def test_generic_tool_runs_resolved_binary(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(shutil, "which", lambda n: f"/usr/bin/{n}" if n == "rg" else None)
 
     captured: dict[str, Any] = {}
-
-    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        captured["cmd"] = cmd
-        return FakeProc(returncode=0, stdout="match\n")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    _patch_popen(monkeypatch, returncode=0, stdout="match\n", captured=captured)
 
     plugin = GenericSubprocessTool(name="ripgrep", binary_candidates=("rg",))
     r = plugin.execute(params={"args": ["TODO", "src/"]})
@@ -250,13 +311,7 @@ def test_generic_tool_configured_binary_bypasses_path_search(
     monkeypatch.setattr(shutil, "which", lambda n: None)
 
     captured: dict[str, Any] = {}
-
-    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        captured["cmd"] = cmd
-        captured["env"] = kwargs.get("env")
-        return FakeProc(returncode=0, stdout="ok")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    _patch_popen(monkeypatch, returncode=0, stdout="ok", captured=captured)
     monkeypatch.setattr(Path, "is_file", lambda self: True)
     monkeypatch.setattr(os, "access", lambda path, mode: True)
 
@@ -351,11 +406,7 @@ def test_generic_tool_not_found_message_names_the_setting(
     real setting."""
 
     monkeypatch.setattr(shutil, "which", lambda n: "/usr/bin/magick" if n == "magick" else None)
-
-    def raise_not_found(*a: Any, **k: Any) -> Any:
-        raise FileNotFoundError("no such file")
-
-    monkeypatch.setattr(subprocess, "run", raise_not_found)
+    _patch_popen(monkeypatch, raises=FileNotFoundError("no such file"))
 
     plugin = GenericSubprocessTool(name="imagemagick", binary_candidates=("magick",))
     with pytest.raises(RuntimeError, match=r"runtime\.plugins\.imagemagick\.binary"):
@@ -428,12 +479,7 @@ def test_shell_default_allowlist_runs_ls(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(shutil, "which", lambda n: f"/bin/{n}" if n == "ls" else None)
 
     captured: dict[str, Any] = {}
-
-    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        captured["cmd"] = cmd
-        return FakeProc(returncode=0, stdout="a\nb\n")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    _patch_popen(monkeypatch, returncode=0, stdout="a\nb\n", captured=captured)
 
     r = ShellPlugin().execute(params={"command": "ls", "args": ["-la"]})
     assert r.value == "a\nb\n"
@@ -486,12 +532,7 @@ def test_shell_host_pin_narrows_default_allowlist(monkeypatch: pytest.MonkeyPatc
     """A host pin intersects with the default allowlist, not replaces it."""
     monkeypatch.setattr(shutil, "which", lambda n: f"/bin/{n}" if n == "ls" else None)
     captured: dict[str, Any] = {}
-
-    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        captured["cmd"] = cmd
-        return FakeProc(returncode=0, stdout="a\n")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    _patch_popen(monkeypatch, returncode=0, stdout="a\n", captured=captured)
 
     plugin = ShellPlugin(pinned_allowed_commands=("ls",))
     r = plugin.execute(params={"command": "ls"})

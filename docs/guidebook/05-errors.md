@@ -114,6 +114,8 @@ This replaces the `awk`-based `exit 1` guards a video pipeline otherwise writes 
 
 `finally:` is a list of cleanup effects, legal on the document root and on a `dynamic` effect, nowhere else. It runs after the main `effects` complete, whatever happened — success, a failure anywhere inside, or a best-effort run on Ctrl-C/SIGTERM/cancellation before the process exits — always sequentially, regardless of the enclosing `flow`. It sees state exactly as the body left it, so a `finally` step can read a value an earlier step produced (a started server's own output, a lock file's path) the normal way.
 
+A Ctrl-C/SIGTERM during a `flow: tree` `dynamic` or parallel `loop` stops it promptly, not just eventually: a branch not yet started never starts, a branch already running has its child process (the whole process group, not just the one pid) killed outright, and the step itself is never merged into its parent — `finally:` still runs regardless. A second signal while that cleanup is still running ends the process at once. See [Stopping a parallel step promptly](../orchestration-reference.md#resuming-a-run-cof-run---resume) in the reference.
+
 Before `finally` existed, the only way to guarantee a cleanup step always ran was to mark the step *before* it `on_error: continue` with a comment explaining why — which quietly changes that step's own error policy too, turning "this step's failure doesn't matter" into "run the next thing regardless of what happened here":
 
 ```yaml
