@@ -95,6 +95,7 @@ import keyword
 import math
 import multiprocessing
 import operator
+import signal
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -268,7 +269,20 @@ def _run_sandboxed(
     to re-raise, unchanged, in the parent). *result_conn* is closed before
     returning either way, so the parent's read reliably sees EOF once this
     function is done, instead of relying on process exit alone.
+
+    Resets SIGINT/SIGTERM/SIGHUP to ``SIG_DFL`` first: this is a forked
+    child, sharing the parent's own process group, so a terminal Ctrl-C or
+    hangup reaches it too, and it would otherwise inherit `cli.interrupts`'
+    handlers along with its own *copies* of the parent's
+    ``CancellationToken`` tracked-process sets -- a ``request()`` run from
+    inside the child would have nothing useful to do (the parent kills this
+    same child independently via :meth:`CancellationToken.track_process`)
+    and could crash (:func:`kill_tracked_process`'s ``is_alive()`` raises
+    outside a child's own ``multiprocessing`` bookkeeping) (#357 review).
     """
+    for sig in (signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGHUP", None)):
+        if sig is not None:
+            signal.signal(sig, signal.SIG_DFL)
     try:
         _run_sandboxed_inner(code, mode, inputs, cpu_seconds, result_conn)
     finally:

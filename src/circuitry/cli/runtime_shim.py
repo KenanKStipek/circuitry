@@ -1050,7 +1050,9 @@ def run(req: RunRequest) -> RunResult:
             isinstance(e, RunCancelledBySignal) and get_token().signum == signal.SIGTERM
         )
         sighup = isinstance(e, SigHupInterrupt) or (
-            isinstance(e, RunCancelledBySignal) and get_token().signum == _SIGHUP
+            isinstance(e, RunCancelledBySignal)
+            and _SIGHUP is not None
+            and get_token().signum == _SIGHUP
         )
         error_message = (
             "Interrupted (SIGTERM)"

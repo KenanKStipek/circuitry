@@ -22,7 +22,7 @@ THEME = Theme(
 
 
 class ResilientConsole(Console):
-    """A ``Console`` whose ``print`` tolerates a gone terminal (#356 follow-up).
+    """A ``Console`` that tolerates a gone terminal (#356 follow-up).
 
     A terminal hangup (SIGHUP) or a reader closing its end of a pipe makes
     the next write to stdout/stderr raise ``OSError`` (EIO) or
@@ -32,28 +32,25 @@ class ResilientConsole(Console):
     failure must never abort the rest of that cleanup. Best-effort: once
     nothing is reading, there is nothing useful left to do but drop the
     line and keep going.
+
+    Overriding ``_check_buffer`` (rather than ``print``) is what actually
+    covers this: it is the one place Rich funnels *every* write through --
+    ``print``, ``line``, ``control``, ``print_json``, and, critically, a
+    ``Live``/``Status`` region's own flush on ``__exit__`` (#357 review
+    finding 1) -- while Rich's own ``_check_buffer`` only ever catches
+    ``BrokenPipeError``, leaving a plain ``OSError`` (EIO) from a hung-up
+    tty to escape uncaught from inside a spinner's ``with`` block, before
+    `cli.app` ever reaches its own ``--out``/``--last`` writes.
     """
 
-    def print(self, *args: Any, **kwargs: Any) -> None:
+    def _check_buffer(self) -> None:
+        if self.quiet:
+            del self._buffer[:]
+            return
         try:
-            super().print(*args, **kwargs)
+            self._write_buffer()
         except OSError:
-            # A plain OSError (EIO: a genuine terminal hangup, not a
-            # closed pipe) never reaches `on_broken_pipe` below -- Rich's
-            # own `_check_buffer` only intercepts `BrokenPipeError`
-            # specifically. Treat it exactly the same way regardless, for
-            # the same reason (see `_give_up_on_write`'s own docstring).
             self._give_up_on_write()
-
-    def on_broken_pipe(self) -> None:
-        """Rich's own default (``Console.on_broken_pipe``) catches a
-        ``BrokenPipeError`` from this same write and turns it into
-        ``raise SystemExit(1)`` -- bypassing the plain ``except OSError``
-        above entirely, since ``SystemExit`` isn't one, and overriding
-        whatever exit code the caller (`cli.app`'s own SIGTERM/SIGHUP
-        mapping) was about to raise instead. See `_give_up_on_write`.
-        """
-        self._give_up_on_write()
 
     def _give_up_on_write(self) -> None:
         """Stop this console from writing at all, and make sure nothing
@@ -73,6 +70,7 @@ class ResilientConsole(Console):
         Rich's own ``on_broken_pipe`` default is) makes that later
         shutdown flush a silent no-op instead of a second failure.
         """
+        del self._buffer[:]
         self.quiet = True
         try:
             devnull = os.open(os.devnull, os.O_WRONLY)

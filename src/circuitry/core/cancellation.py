@@ -1,4 +1,4 @@
-"""Run-wide cancellation: SIGINT/SIGTERM stop a run promptly (#356).
+"""Run-wide cancellation: SIGINT/SIGTERM/SIGHUP stop a run promptly (#356).
 
 A real SIGINT/SIGTERM only ever raises ``KeyboardInterrupt``/
 ``SigTermInterrupt`` (see ``cli.interrupts``) in the *main* thread — that is
@@ -24,12 +24,15 @@ instead:
     real ``KeyboardInterrupt`` already does, and is recognized as a
     cancellation (not an ordinary failure) by their shared
     ``is_cancellation = not isinstance(exc, Exception)`` check.
-  - :meth:`track` registers a subprocess (started with
-    ``start_new_session=True``, so it is its own process-group leader,
-    whenever a SIGINT/SIGTERM handler is actually installed — see
-    :attr:`CancellationToken.armed` — so that :meth:`request` can kill
-    its whole group the moment cancellation is requested, regardless of
-    which thread started it.)
+  - :meth:`track` registers a subprocess so that :meth:`request` can kill
+    it the moment cancellation is requested, regardless of which thread
+    started it — its whole process group, via :func:`kill_process_group`,
+    when it was started with ``start_new_session=True`` and so is its own
+    process-group leader (:func:`run_tracked`, whenever a SIGINT/SIGTERM
+    handler is actually installed — see :attr:`CancellationToken.armed`);
+    just the process itself otherwise, since ``killpg`` on a process still
+    sharing this interpreter's own process group would take this process
+    down with it (#357 review N1).
 
 A queued-but-not-yet-started ``ThreadPoolExecutor`` future is handled
 separately, by ``executor.shutdown(cancel_futures=True)`` at each tree-flow
@@ -304,11 +307,14 @@ class CancellationToken:
     def track(
         self, proc: subprocess.Popen[str] | subprocess.Popen[bytes]
     ) -> Iterator[None]:
-        """Register *proc* so :meth:`request` kills its process group too.
+        """Register *proc* so :meth:`request` kills it too.
 
-        *proc* must have been started with ``start_new_session=True`` (POSIX)
-        for the group-kill to reach only this process's own descendants, not
-        this interpreter's own process group.
+        Killed via :func:`kill_process_group`, which only ``killpg``'s
+        *proc*'s whole process group when it is that group's own leader
+        (POSIX, started with ``start_new_session=True``) — otherwise it
+        falls back to killing just *proc* itself, since *proc* sharing this
+        interpreter's own process group would mean a group-kill took this
+        process down with it too (#357 review N1).
 
         :func:`run_tracked` already calls :meth:`check` before ``Popen``,
         but cancellation can still be requested in the gap between that
