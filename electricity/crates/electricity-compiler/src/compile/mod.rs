@@ -36,7 +36,7 @@ pub fn compile_document(
     origin: &DocumentOrigin,
 ) -> Result<Program, CompileError> {
     let declared_prompts = prompt_files::compile_declared_prompts(document, origin)?;
-    compose::check_prompt_composition(document, &declared_prompts)?;
+    compose::check_prompt_composition(document, &declared_prompts, origin)?;
     // Lane C fills in the gap here: every effect in document order,
     // via `containers`/`leaves`, building `root`/`effect_names` below.
     Err(CompileError(not_implemented("compile_document", "C")))
