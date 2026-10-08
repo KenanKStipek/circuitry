@@ -38,27 +38,42 @@ requires_sighup = pytest.mark.skipif(
 _BRANCH_SLEEP_SECONDS = 60
 
 #: How long a cancelled run may take to actually exit — loose on purpose,
-#: what matters is "nowhere near _BRANCH_SLEEP_SECONDS" (half of it, at
-#: most), not a few seconds of wall time (#385): under heavy machine load
-#: (several full test runs in parallel, or `pytest -n` with many workers),
-#: the main thread may sit starved of CPU for well over 10s before it
-#: ever gets to run the signal handler that kills the tracked child —
-#: observed in CI itself once, and reproduced locally well over half the
-#: time under enough concurrent load, with the stuck child's own stack (a
-#: stdlib `subprocess.communicate` `select.poll()` and a lock wait,
-#: nothing resembling a real deadlock) confirming scheduling starvation
-#: rather than a stuck signal/cleanup path.
-_STOP_BOUND_SECONDS = 30.0
+#: what matters is "nowhere near _BRANCH_SLEEP_SECONDS", not a tight bound
+#: (#356's own rationale), derived from it rather than a literal so the
+#: two can't quietly drift apart (#385 review). #385 first widened this to
+#: 30s to tolerate what looked like scheduling starvation under heavy
+#: machine load; investigating the one real CI failure found a genuine
+#: bug instead — a signal landing on a tree-flow/parallel-loop *worker*
+#: thread (not this process's main thread) was never noticed until the
+#: branch finished on its own, because `as_completed()` sat in one
+#: unbounded wait the whole time (now fixed: `core.cancellation.
+#: as_completed_promptly`, used by `core.dynamic`/`core.loop`). With that
+#: fixed, this goes back to a tight-ish bound — `test_run_sighup_pty.py`'s
+#: own 20.0 has never been reported flaky even under load.
+_STOP_BOUND_SECONDS = _BRANCH_SLEEP_SECONDS / 3
 
 #: How long `communicate()`/`wait()` are given to actually observe the
 #: child exit before a timeout here is treated as a real failure — wider
-#: than `_STOP_BOUND_SECONDS` itself (#385), but still well under
-#: `_BRANCH_SLEEP_SECONDS` so a run that was never actually cancelled
-#: (the real bug this would catch) still fails here rather than quietly
-#: passing once the branch finishes on its own; `elapsed <
-#: _STOP_BOUND_SECONDS` below is what actually proves promptness once the
-#: child does exit.
-_COMMUNICATE_TIMEOUT_SECONDS = _STOP_BOUND_SECONDS + 20.0
+#: than `_STOP_BOUND_SECONDS` itself, so a genuinely slow (not hung)
+#: machine gets a little headroom to actually read the exit before the
+#: test gives up; `elapsed < _STOP_BOUND_SECONDS` below is what actually
+#: proves promptness once the child does exit. Still well under
+#: `_BRANCH_SLEEP_SECONDS` (asserted below) so a run that was genuinely
+#: never cancelled still fails here rather than quietly waiting it out.
+#: The headroom above `_STOP_BOUND_SECONDS` also covers
+#: `core.cancellation.wait_for_cancelled_branches`'s own bounded grace
+#: period (a second, narrower #385 follow-up: a killed branch's worker
+#: thread noticing and returning races `cli.interrupts.
+#: sigterm_as_interrupt`'s own cleanup once this process actually exits
+#: normally — Python's interpreter shutdown unconditionally joins every
+#: `ThreadPoolExecutor` worker thread ever created, with no timeout of
+#: its own, so a worker that's still mid-dispatch when that grace period
+#: itself expires can still delay process exit past it). On an idle
+#: machine none of this is ever reached; the residual risk under
+#: genuinely extreme CPU starvation is a diagnosable timeout here, not
+#: the original unbounded hang.
+_COMMUNICATE_TIMEOUT_SECONDS = _STOP_BOUND_SECONDS + 10.0
+assert _COMMUNICATE_TIMEOUT_SECONDS < _BRANCH_SLEEP_SECONDS
 
 _CREDENTIAL_ENV_VARS = (
     "OPENAI_API_KEY",
@@ -76,15 +91,24 @@ _CREDENTIAL_ENV_VARS = (
 
 def _sandboxed_env(tmp_path: Path) -> dict[str, str]:
     """A child-process env with a fake $HOME (CLAUDE.md hermeticity) and no
-    credentials — this suite has no adapter to use them, real or fake."""
+    credentials — this suite has no adapter to use them, real or fake.
+
+    ``PYTHONFAULTHANDLER=1`` costs nothing on a run that exits normally —
+    it only matters the moment something here times out (see
+    ``_diagnose_and_fail``): it lets a SIGABRT sent to a stuck child dump
+    every thread's Python stack to stderr before it dies, instead of a
+    bare `TimeoutExpired`/`TimeoutError` with nothing to debug a future
+    CI failure from (#385 review).
+    """
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     env = {k: v for k, v in os.environ.items() if k not in _CREDENTIAL_ENV_VARS}
     env["HOME"] = str(home)
+    env["PYTHONFAULTHANDLER"] = "1"
     return env
 
 
-def _wait_for_paths(paths: list[Path], *, timeout: float = 30.0) -> None:
+def _wait_for_paths(paths: list[Path], *, timeout: float = 20.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if all(p.exists() for p in paths):
@@ -92,6 +116,89 @@ def _wait_for_paths(paths: list[Path], *, timeout: float = 30.0) -> None:
         time.sleep(0.02)
     missing = [str(p) for p in paths if not p.exists()]
     raise TimeoutError(f"never started within {timeout}s: {missing}")
+
+
+def _diagnosis_header(
+    *, label: str, timeout: float, elapsed: float | None, pid: int | None
+) -> str:
+    """The part of a timeout failure that's the same whether or not
+    stdout/stderr could be read back (#385 review: every timeout failure
+    here states how long it actually waited and whether the branch's own
+    subprocess is still alive, not just that something eventually gave
+    up)."""
+    bits = [f"after {timeout:.0f}s"]
+    if elapsed is not None:
+        bits.append(f"elapsed={elapsed:.1f}s")
+    if pid is not None:
+        bits.append(f"branch pid {pid} alive={_pid_alive(pid)}")
+    return f"{label}: child still running ({', '.join(bits)})"
+
+
+def _diagnose_and_fail(
+    proc: subprocess.Popen[str],
+    *,
+    timeout: float,
+    label: str,
+    elapsed: float | None = None,
+    pid: int | None = None,
+) -> None:
+    """Fail the test with everything needed to debug a stuck `cof run`
+    child: its own stdout/stderr, plus (via SIGABRT + this module's own
+    `PYTHONFAULTHANDLER=1`) a dump of every thread's Python stack — never
+    a bare `TimeoutExpired`/`TimeoutError` with none of that (#385
+    review).
+
+    SIGABRT, not SIGKILL: faulthandler installs itself for exactly the
+    signals a fatal crash would send (SIGABRT included), dumps first,
+    then lets the signal's own default disposition finish the job — so
+    the child still exits, just not silently. Falls back to SIGKILL only
+    if SIGABRT itself doesn't finish the job in time.
+    """
+    if proc.poll() is None:
+        proc.send_signal(signal.SIGABRT)
+        try:
+            stdout, stderr = proc.communicate(timeout=10.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate(timeout=10.0)
+    else:
+        stdout, stderr = proc.communicate(timeout=10.0)
+    header = _diagnosis_header(label=label, timeout=timeout, elapsed=elapsed, pid=pid)
+    pytest.fail(
+        f"{header}\n"
+        f"--- stdout ---\n{stdout}\n"
+        "--- stderr (includes a PYTHONFAULTHANDLER stack dump of every "
+        "thread, from SIGABRT, if the child was still alive) ---\n"
+        f"{stderr}"
+    )
+
+
+def _diagnose_and_fail_no_pipes(
+    proc: subprocess.Popen[str],
+    *,
+    timeout: float,
+    label: str,
+    elapsed: float | None = None,
+    pid: int | None = None,
+) -> None:
+    """Like `_diagnose_and_fail`, for the one scenario where stdout/stderr
+    can't be read here at all: this test closed its own read end of both
+    pipes already, to simulate a closed terminal."""
+    if proc.poll() is None:
+        proc.send_signal(signal.SIGABRT)
+        try:
+            returncode = proc.wait(timeout=10.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            returncode = proc.wait(timeout=10.0)
+    else:
+        returncode = proc.returncode
+    header = _diagnosis_header(label=label, timeout=timeout, elapsed=elapsed, pid=pid)
+    pytest.fail(
+        f"{header} "
+        f"(stdout/stderr already closed by this test; returncode after "
+        f"SIGABRT+kill: {returncode})"
+    )
 
 
 def _pid_alive(pid: int) -> bool:
@@ -206,17 +313,20 @@ def test_sighup_mid_run_kills_branch_runs_finally_and_is_resumable(
     try:
         _wait_for_paths([started])
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for the branch to start")
 
     t0 = time.monotonic()
     proc.send_signal(signal.SIGHUP)
     try:
         stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+        _diagnose_and_fail(
+            proc,
+            timeout=_COMMUNICATE_TIMEOUT_SECONDS,
+            label="waiting for SIGHUP to stop the run",
+            elapsed=time.monotonic() - t0,
+            pid=int(pidfile.read_text(encoding="utf-8").strip()),
+        )
     elapsed = time.monotonic() - t0
 
     assert proc.returncode == 129, (stdout, stderr)
@@ -268,9 +378,7 @@ def test_double_sighup_back_to_back_does_not_abort_cleanup(tmp_path: Path) -> No
     try:
         _wait_for_paths([started])
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for the branch to start")
 
     t0 = time.monotonic()
     proc.send_signal(signal.SIGHUP)
@@ -278,8 +386,13 @@ def test_double_sighup_back_to_back_does_not_abort_cleanup(tmp_path: Path) -> No
     try:
         stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+        _diagnose_and_fail(
+            proc,
+            timeout=_COMMUNICATE_TIMEOUT_SECONDS,
+            label="waiting for the double SIGHUP to stop the run",
+            elapsed=time.monotonic() - t0,
+            pid=int(pidfile.read_text(encoding="utf-8").strip()),
+        )
     elapsed = time.monotonic() - t0
 
     assert proc.returncode == 129, (stdout, stderr)
@@ -353,26 +466,33 @@ effects:
     try:
         _wait_for_paths([started])
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for the branch to start")
 
     t0 = time.monotonic()
     proc.send_signal(signal.SIGHUP)
     try:
         _wait_for_paths([cleanup_started])
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(
+            proc,
+            timeout=20.0,
+            label="waiting for cleanup to start after the first SIGHUP",
+            elapsed=time.monotonic() - t0,
+            pid=int(pidfile.read_text(encoding="utf-8").strip()),
+        )
     # cleanup's own `sleep 5` is still running — exactly the "cleanup still
     # in progress" window the second signal must cut through at once.
     proc.send_signal(sig)
     try:
         stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+        _diagnose_and_fail(
+            proc,
+            timeout=_COMMUNICATE_TIMEOUT_SECONDS,
+            label="waiting for the second signal to end the run",
+            elapsed=time.monotonic() - t0,
+            pid=int(pidfile.read_text(encoding="utf-8").strip()),
+        )
     elapsed = time.monotonic() - t0
 
     assert proc.returncode == expected_code, (stdout, stderr)
@@ -401,13 +521,7 @@ def test_sighup_with_closed_stdout_stderr_still_cleans_up(tmp_path: Path) -> Non
     try:
         _wait_for_paths([started])
     except TimeoutError:
-        proc.kill()
-        if proc.stdout is not None:
-            proc.stdout.close()
-        if proc.stderr is not None:
-            proc.stderr.close()
-        proc.wait(timeout=15)
-        raise
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for the branch to start")
 
     assert proc.stdout is not None
     assert proc.stderr is not None
@@ -419,8 +533,13 @@ def test_sighup_with_closed_stdout_stderr_still_cleans_up(tmp_path: Path) -> Non
     try:
         returncode = proc.wait(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+        _diagnose_and_fail_no_pipes(
+            proc,
+            timeout=_COMMUNICATE_TIMEOUT_SECONDS,
+            label="waiting for SIGHUP to stop the run (pipes closed)",
+            elapsed=time.monotonic() - t0,
+            pid=int(pidfile.read_text(encoding="utf-8").strip()),
+        )
     elapsed = time.monotonic() - t0
 
     assert returncode == 129
@@ -498,16 +617,15 @@ effects:
     try:
         _wait_for_paths([started])
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for the (unignored) step to start")
 
     proc.send_signal(signal.SIGHUP)
     try:
         stdout, stderr = proc.communicate(timeout=15)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+        _diagnose_and_fail(
+            proc, timeout=15.0, label="waiting for the ignored-SIGHUP run to finish"
+        )
 
     assert proc.returncode == 0, (stdout, stderr)
     assert "Traceback" not in stderr, stderr

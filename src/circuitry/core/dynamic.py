@@ -5,7 +5,7 @@ import signal
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -14,7 +14,12 @@ from typing import TYPE_CHECKING, Any, Literal, Union
 from ..adapters import Adapter
 from ..output import console as _console
 from ..output import live_region as _live_region
-from .cancellation import get_token, submit_with_context
+from .cancellation import (
+    as_completed_promptly,
+    get_token,
+    submit_with_context,
+    wait_for_cancelled_branches,
+)
 from .disabled import is_enabled, write_disabled_node
 from .effect_identity import nested_container
 from .prompt import PromptDefinition, PromptRuntime
@@ -419,7 +424,24 @@ class DynamicRuntime:
                 )
 
                 with live_ctx:
-                    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    # Deliberately not ``with ThreadPoolExecutor(...) as
+                    # executor:`` — ``Executor.__exit__`` unconditionally
+                    # calls ``shutdown(wait=True)`` on the way out of a
+                    # ``with`` block, exception or not. That would silently
+                    # re-block the main thread on every already-running
+                    # branch's own worker thread even after the
+                    # cancellation path below already called
+                    # ``shutdown(wait=False, cancel_futures=True)`` — for
+                    # as long as it takes that branch's killed subprocess to
+                    # actually be noticed, which is ordinarily instant but,
+                    # under heavy CPU load, is itself just another
+                    # unbounded wait while this run is armed (#385 follow-
+                    # up: load-testing the as_completed fix caught exactly
+                    # this). Managing shutdown explicitly means the
+                    # cancellation path's own non-blocking shutdown is the
+                    # only one that ever runs.
+                    executor = ThreadPoolExecutor(max_workers=max_workers)
+                    try:
                         # Each branch's own ``isolated_stores[idx]`` resets
                         # its path prefix (Store.parallel_branches), so a
                         # model call inside it would otherwise lose this
@@ -442,27 +464,41 @@ class DynamicRuntime:
                                 ): idx
                                 for idx, effect in enumerate(self.defn.effects)
                             }
-                        try:
-                            self._await_tree_branches(
-                                futures, tree_errors=tree_errors, store=store
-                            )
-                        except BaseException:
-                            # Cancellation (SIGINT/SIGTERM): a future the
-                            # pool has not yet dequeued must never start
-                            # (#356) — ``cancel_futures`` is what makes that
-                            # true; leaving the ``with`` block below to its
-                            # default ``shutdown(wait=True)`` alone would
-                            # instead run every queued branch to completion
-                            # before this dynamic could ever exit. Already-
-                            # running branches are stopped separately, by
-                            # the signal handler killing their tracked
-                            # subprocess's whole process group (see
-                            # ``core.cancellation``) — by the time that
-                            # handler's own exception reaches here, they are
-                            # already exiting, so the ``with`` block's own
-                            # (still-``wait=True``) shutdown returns quickly.
-                            executor.shutdown(wait=False, cancel_futures=True)
-                            raise
+                        self._await_tree_branches(
+                            futures, tree_errors=tree_errors, store=store
+                        )
+                    except BaseException:
+                        # Cancellation (SIGINT/SIGTERM): a future the
+                        # pool has not yet dequeued must never start
+                        # (#356) — ``cancel_futures`` is what makes that
+                        # true. Not ``wait=True`` (see above: unbounded,
+                        # and risks the hang #385 found) — but not a bare
+                        # ``wait=False`` with no wait at all either:
+                        # ``_wait_futures`` below gives an already-running
+                        # branch's worker thread a bounded window to
+                        # actually notice its just-killed subprocess and
+                        # return before this re-raises. Without that
+                        # window, a worker still mid-dispatch here can
+                        # race ``sigterm_as_interrupt``'s own
+                        # ``token.reset()`` (``cli.interrupts``, once this
+                        # whole run has unwound the rest of the way out)
+                        # and lose: finding the flag already cleared at
+                        # its *own* next ``get_token().check()``, it would
+                        # start a further effect cancellation no longer
+                        # protects at all (#385 follow-up — load-testing
+                        # this fix's own first draft, which omitted this
+                        # wait entirely, caught exactly that race).
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        wait_for_cancelled_branches(futures.keys())
+                        raise
+                    else:
+                        # No cancellation: every future is already done by
+                        # the time ``_await_tree_branches`` returns (it only
+                        # returns once ``as_completed_promptly`` has drained
+                        # every one of them), so this just reaps already-
+                        # finished worker threads — unlike the exceptional
+                        # path above, never a wait on a still-running one.
+                        executor.shutdown(wait=True)
 
                 # Merge isolated stores back into child_store sequentially
                 for idx in range(len(self.defn.effects)):
@@ -587,13 +623,18 @@ class DynamicRuntime:
         (ordinary) failure on *tree_errors*.
 
         Split out from ``execute()`` so a cancellation escaping this loop
-        (``as_completed``/``future.result()`` re-raising a real
+        (``as_completed_promptly``/``future.result()`` re-raising a real
         ``BaseException`` that is not one of these per-branch ``Exception``
         failures) reaches the caller's own ``except BaseException`` —
         which cancels every not-yet-started future (#356) — instead of
         being swallowed by the ordinary per-branch handling below.
+
+        ``as_completed_promptly``, not stdlib ``as_completed``: a signal
+        landing on a worker thread rather than this one must still wake
+        this thread promptly enough to run its pending handler (#385
+        follow-up) — see that function's own docstring.
         """
-        for future in as_completed(futures):
+        for future in as_completed_promptly(futures):
             idx = futures[future]
             try:
                 future.result()

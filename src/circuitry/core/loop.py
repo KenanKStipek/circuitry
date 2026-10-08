@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 from collections.abc import Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -14,7 +14,12 @@ from ..adapters import Adapter
 from ..output import console as _console
 from ..output import live_region as _live_region
 from .answers import parse_boolean_answer
-from .cancellation import get_token, submit_with_context
+from .cancellation import (
+    as_completed_promptly,
+    get_token,
+    submit_with_context,
+    wait_for_cancelled_branches,
+)
 from .disabled import is_disabled_node, is_enabled
 from .effect_identity import model_call, nested_container
 from .scope import local_writes as _local_writes_state
@@ -576,9 +581,23 @@ class LoopRuntime:
                         live_ctx = nullcontext()
 
                     with live_ctx:
-                        with ThreadPoolExecutor(
+                        # Deliberately not ``with ThreadPoolExecutor(...) as
+                        # executor:`` — ``Executor.__exit__`` unconditionally
+                        # calls ``shutdown(wait=True)`` on the way out of a
+                        # ``with`` block, exception or not, which would
+                        # silently re-block the main thread on an already-
+                        # running pass's own worker thread even after the
+                        # cancellation path below already called
+                        # ``shutdown(wait=False, cancel_futures=True)``
+                        # (#385 follow-up, same fix as dynamic.py's own tree
+                        # flow — see its longer comment). Managing shutdown
+                        # explicitly means the cancellation path's own
+                        # non-blocking shutdown is the only one that ever
+                        # runs.
+                        executor = ThreadPoolExecutor(
                             max_workers=self.defn.max_concurrency
-                        ) as executor:
+                        )
+                        try:
                             # Each branch's own ``isolated_stores[idx]`` resets
                             # its path prefix (Store.parallel_branches), so a
                             # model call inside it would otherwise lose this
@@ -605,54 +624,72 @@ class LoopRuntime:
                                     ): idx
                                     for idx, iter_ctx in iter_ctxs
                                 }
-                            try:
-                                _tree_done = 0
-                                for future in as_completed(future_to_idx):
-                                    i = future_to_idx[future]
-                                    try:
-                                        results[i] = future.result()[0]
-                                    except Exception as exc:
-                                        errors[i] = exc
-                                    finally:
-                                        _tree_done += 1
-                                        _tree_progress = _loop_progress(
-                                            _loop_t0, _tree_done, _progress_total
-                                        )
-                                        if meta is not None:
-                                            # Mutates the same dict `child_store`'s
-                                            # branch publishers read `self.state`
-                                            # from (see Store.parallel_branches) —
-                                            # it rides along on the next branch's
-                                            # own publish (or the merge-then-
-                                            # publish below, for the last one) and
-                                            # must NOT publish here itself: at this
-                                            # point `store.root_state` is still the
-                                            # pre-merge snapshot (this iteration's
-                                            # own isolated-store write hasn't been
-                                            # folded into `child_store.state` yet),
-                                            # so publishing it would overwrite the
-                                            # correct, already-published snapshot
-                                            # with a stale one that's missing the
-                                            # pass that just finished.
-                                            meta["progress"] = _tree_progress
-                                        if tree_tracker is not None:
-                                            tree_tracker.set_progress(_tree_progress)
-                                        # This iteration is done, whether or not
-                                        # it ever registered a prompt — one fewer
-                                        # settle point a listener still needs to
-                                        # see (#237).
-                                        store.fire_branch_settled(self.defn.name)
-                            except BaseException:
-                                # Cancellation (SIGINT/SIGTERM): a pass the
-                                # pool has not yet dequeued must never start
-                                # (#356), the same fix as dynamic.py's own
-                                # tree flow — see its longer comment on the
-                                # identical call. Already-running passes are
-                                # stopped separately, by the signal handler
-                                # killing their tracked subprocess's whole
-                                # process group (``core.cancellation``).
-                                executor.shutdown(wait=False, cancel_futures=True)
-                                raise
+                            _tree_done = 0
+                            # as_completed_promptly, not stdlib
+                            # as_completed: a signal landing on a
+                            # worker thread rather than this one must
+                            # still wake this thread promptly enough
+                            # to run its pending handler (#385
+                            # follow-up, mirrors dynamic.py's own
+                            # tree-flow fix) — see that function's own
+                            # docstring.
+                            for future in as_completed_promptly(future_to_idx):
+                                i = future_to_idx[future]
+                                try:
+                                    results[i] = future.result()[0]
+                                except Exception as exc:
+                                    errors[i] = exc
+                                finally:
+                                    _tree_done += 1
+                                    _tree_progress = _loop_progress(
+                                        _loop_t0, _tree_done, _progress_total
+                                    )
+                                    if meta is not None:
+                                        # Mutates the same dict `child_store`'s
+                                        # branch publishers read `self.state`
+                                        # from (see Store.parallel_branches) —
+                                        # it rides along on the next branch's
+                                        # own publish (or the merge-then-
+                                        # publish below, for the last one) and
+                                        # must NOT publish here itself: at this
+                                        # point `store.root_state` is still the
+                                        # pre-merge snapshot (this iteration's
+                                        # own isolated-store write hasn't been
+                                        # folded into `child_store.state` yet),
+                                        # so publishing it would overwrite the
+                                        # correct, already-published snapshot
+                                        # with a stale one that's missing the
+                                        # pass that just finished.
+                                        meta["progress"] = _tree_progress
+                                    if tree_tracker is not None:
+                                        tree_tracker.set_progress(_tree_progress)
+                                    # This iteration is done, whether or not
+                                    # it ever registered a prompt — one fewer
+                                    # settle point a listener still needs to
+                                    # see (#237).
+                                    store.fire_branch_settled(self.defn.name)
+                        except BaseException:
+                            # Cancellation (SIGINT/SIGTERM): a pass the
+                            # pool has not yet dequeued must never start
+                            # (#356), the same fix as dynamic.py's own
+                            # tree flow — see its longer comment on the
+                            # identical call, including
+                            # ``wait_for_cancelled_branches``'s own bounded
+                            # (not ``wait=True``, not no-wait-at-all) grace
+                            # period for an already-running pass's worker
+                            # thread.
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            wait_for_cancelled_branches(future_to_idx.keys())
+                            raise
+                        else:
+                            # No cancellation: every future is already done
+                            # by the time the loop above over
+                            # ``as_completed_promptly`` ends (it only ends
+                            # once every one of them has been drained), so
+                            # this just reaps already-finished worker
+                            # threads — unlike the exceptional path above,
+                            # never a wait on a still-running one.
+                            executor.shutdown(wait=True)
 
                     # Merge isolated stores back into child_store sequentially
                     for idx in range(total):
@@ -686,7 +723,7 @@ class LoopRuntime:
                         failed_passes.extend(sorted(errors))
                         if self.defn.on_error == "fail":
                             termination_reason = "error"
-                            # `errors` fills in completion order (as_completed),
+                            # `errors` fills in completion order (as_completed_promptly),
                             # not iteration order — every pass is already
                             # running under tree flow, so raising whichever
                             # thread happened to fail first is nondeterministic

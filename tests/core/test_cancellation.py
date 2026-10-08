@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import os
 import signal
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -22,6 +24,7 @@ from circuitry.core import cancellation
 from circuitry.core.cancellation import (
     CancellationToken,
     RunCancelledBySignal,
+    as_completed_promptly,
     kill_process_group,
     kill_tracked_process,
     submit_with_context,
@@ -284,3 +287,63 @@ def test_request_kills_every_tracked_mp_process() -> None:
     with token.track_process(proc):  # type: ignore[arg-type]
         token.request()
         assert proc.killed is True
+
+
+@pytest.mark.skipif(
+    not hasattr(signal, "pthread_kill"), reason="signal.pthread_kill is POSIX-only"
+)
+def test_as_completed_promptly_notices_a_signal_delivered_to_a_worker_thread() -> None:
+    """#385 follow-up: deterministic regression for the real hang the #385
+    investigation found underneath the test-timing symptom.
+
+    POSIX may deliver a process-directed signal to any thread that
+    doesn't block it, not necessarily the thread actually waiting on it —
+    forced here with `signal.pthread_kill` at the worker thread, the same
+    way `tests/cli/test_run_sighup.py`'s stuck child's own stack dump
+    showed it happening for real (main thread blocked in a lock acquire,
+    worker thread blocked in `poll()`). Plain `concurrent.futures.
+    as_completed` sits in one unbounded wait the whole time, so the main
+    thread never returns from it to run the pending signal handler until
+    the future it's waiting on happens to finish on its own —
+    `as_completed_promptly` must notice and run it within about one poll
+    interval instead.
+    """
+    worker_tid: dict[str, int] = {}
+    worker_ready = threading.Event()
+    t0 = time.monotonic()
+    interrupted_at: list[float] = []
+
+    def handler(signum: int, frame: Any) -> None:
+        interrupted_at.append(time.monotonic() - t0)
+        raise KeyboardInterrupt
+
+    def worker() -> str:
+        worker_tid["tid"] = threading.get_ident()
+        worker_ready.set()
+        time.sleep(2.0)
+        return "done"
+
+    def deliver() -> None:
+        time.sleep(0.3)
+        signal.pthread_kill(worker_tid["tid"], signal.SIGUSR1)
+
+    previous = signal.signal(signal.SIGUSR1, handler)
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = executor.submit(worker)
+        assert worker_ready.wait(timeout=5.0), "worker thread never started"
+        threading.Thread(target=deliver, daemon=True).start()
+
+        with pytest.raises(KeyboardInterrupt):
+            for _ in as_completed_promptly([future], poll_seconds=0.1):
+                pass
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+        signal.signal(signal.SIGUSR1, previous)
+
+    assert interrupted_at, "the signal handler never ran at all"
+    assert interrupted_at[0] < 1.0, (
+        f"handler ran at {interrupted_at[0]:.2f}s, not within ~1s of the "
+        "0.3s delivery -- as_completed_promptly isn't polling the main "
+        "thread back in; it waited for the 2s future instead"
+    )

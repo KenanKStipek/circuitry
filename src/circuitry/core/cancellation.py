@@ -49,8 +49,9 @@ import signal
 import subprocess
 import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from concurrent.futures import Executor, Future
+from concurrent.futures import wait as _wait_futures
 from contextlib import contextmanager
 from multiprocessing.process import BaseProcess
 from typing import Any, TypeVar
@@ -394,6 +395,125 @@ def submit_with_context(
     """
     ctx = contextvars.copy_context()
     return executor.submit(ctx.run, fn, *args, **kwargs)
+
+
+#: How often :func:`as_completed_promptly` wakes the main thread up to
+#: check for a pending signal — see that function's own docstring for why
+#: this can't just be ``concurrent.futures.as_completed``'s own unbounded
+#: wait.
+_SIGNAL_POLL_SECONDS = 0.2
+
+
+def as_completed_promptly(
+    futures: Iterable[Future[Any]], *, poll_seconds: float = _SIGNAL_POLL_SECONDS
+) -> Iterator[Future[Any]]:
+    """``concurrent.futures.as_completed``, but never blocks the main
+    thread in one single, unbounded wait (#385 follow-up).
+
+    POSIX delivers a process-directed signal (SIGINT/SIGTERM/SIGHUP) to
+    *any* thread that doesn't have it blocked — not necessarily the main
+    thread, and not necessarily every thread. CPython only ever runs the
+    registered Python-level handler on the main thread, so when a signal
+    lands on a tree-flow/parallel-loop worker thread instead, the C-level
+    handler just records that the signal is pending; the main thread still
+    has to notice and actually call it. It does that either by executing
+    bytecode (checking the eval-loop's own "pending calls" flag) or by its
+    own blocking call being interrupted and retrying. Plain
+    ``as_completed(futures)`` with no timeout sits in exactly one such
+    blocking call the whole time — a ``threading.Condition.wait()`` with
+    no timeout, underneath a ``lock.acquire()`` that blocks in the kernel
+    (``pthread_cond_wait``) until some *other* thread notifies it. If the
+    signal never reaches the main thread's own blocking call, nothing
+    wakes it: it just keeps waiting, oblivious, until whichever branch
+    it's waiting on happens to finish on its own. In production that
+    silently delays Ctrl-C/`kill`/a hangup for as long as the running
+    branch takes; a repro that force-delivers a signal to a worker thread
+    (``signal.pthread_kill``) while the main thread sits in
+    ``as_completed`` confirms the handler then only runs once the future
+    completes, however long that takes.
+
+    The fix is the same one a blocking ``lock.acquire()`` already gets for
+    free when the signal *does* land on the main thread: never wait
+    unboundedly. ``add_done_callback`` (not ``concurrent.futures.wait``,
+    which this deliberately avoids calling in a loop — see below) plus a
+    private, bounded ``threading.Event.wait(poll_seconds)`` means the main
+    thread returns from its own blocking call every *poll_seconds*
+    regardless of which thread the signal landed on, executes a few
+    bytecodes, and so picks up a pending signal within *poll_seconds*
+    instead of only when a future happens to complete.
+
+    Deliberately not ``concurrent.futures.wait(pending, timeout=...)`` in
+    a loop (an earlier draft of this, and the shape ``as_completed``
+    itself polls with when given a ``timeout``): both route every call
+    through ``_AcquireFutures``, which acquires *every* pending future's
+    own ``_condition`` lock in one Python-level loop, with no
+    ``try/finally`` of its own, before doing anything else — if a signal
+    is handled (raises) partway through that loop, the futures already
+    locked in earlier iterations are never released, wedging any worker
+    thread that later calls ``set_result``/``set_exception`` on one of
+    them. ``as_completed`` only risks that once per call; calling
+    ``wait()`` every *poll_seconds* would re-enter it continuously for as
+    long as this run keeps going, for every still-pending future each
+    time. Registering a callback up front instead touches each future's
+    own lock at most once (the same single-lock exposure any ordinary
+    ``Future.result()``/``add_done_callback`` call already has, signal or
+    not), and the repeating part of this loop — waiting on a private
+    ``threading.Event`` nothing else ever locks — carries none of that
+    multi-future risk no matter how many times it polls.
+    """
+    fs = list(futures)
+    ready: list[Future[Any]] = []
+    ready_lock = threading.Lock()
+    wake = threading.Event()
+
+    def _on_done(f: Future[Any]) -> None:
+        with ready_lock:
+            ready.append(f)
+        wake.set()
+
+    for f in fs:
+        f.add_done_callback(_on_done)
+
+    remaining = len(fs)
+    while remaining:
+        wake.wait(poll_seconds)
+        wake.clear()
+        with ready_lock:
+            batch, ready[:] = ready[:], []
+        remaining -= len(batch)
+        yield from batch
+
+
+#: How long a tree-flow/parallel-loop's cancellation path (see
+#: :func:`wait_for_cancelled_branches`) waits for an already-running
+#: branch's worker thread to actually notice its just-killed subprocess
+#: and return, before giving up and letting the cancellation propagate
+#: anyway (#385 follow-up).
+#:
+#: Bounded, not ``executor.shutdown(wait=True)``'s unbounded join — a
+#: worker slow to notice under heavy CPU load must not hang this
+#: dynamic/loop forever (what the #385 review's own load-testing of the
+#: ``as_completed`` fix above actually found). But *some* wait is still
+#: required, or a worker that hasn't reached its own next
+#: ``get_token().check()`` yet races ``cli.interrupts.
+#: sigterm_as_interrupt``'s own ``token.reset()`` (once this whole run
+#: has unwound the rest of the way out) and can lose: finding the
+#: cancellation flag already cleared, it would start a further effect
+#: with nothing left to track or kill it — load-testing this fix's own
+#: first draft, which waited not at all, caught exactly that race.
+_CANCEL_GRACE_SECONDS = 5.0
+
+
+def wait_for_cancelled_branches(futures: Iterable[Future[Any]]) -> None:
+    """Give already-running branches a bounded window to notice they were
+    just killed, before a tree-flow dynamic/parallel loop's own
+    cancellation path re-raises past them.
+
+    Call this right after ``executor.shutdown(wait=False,
+    cancel_futures=True)`` in that path — see :data:`_CANCEL_GRACE_SECONDS`
+    for why neither ``wait=True`` nor no wait at all is safe there.
+    """
+    _wait_futures(list(futures), timeout=_CANCEL_GRACE_SECONDS)
 
 
 def run_tracked(
