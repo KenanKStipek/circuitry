@@ -9,6 +9,7 @@ description = "Load-and-check pipeline + compiler for electricity orchestrations
 
 [dependencies]
 indexmap = { version = "2", features = ["serde"] }
+sha2 = "0.10"
 electricity-value = { path = "../electricity-value" }
 electricity-yaml = { path = "../electricity-yaml" }
 electricity-json = { path = "../electricity-json" }

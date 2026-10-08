@@ -202,13 +202,18 @@ fn first_partial(tokens: &[Tag]) -> Option<&str> {
 /// replays that ordering by checking the tokens produced *before* a
 /// failure (if any) for a partial first, and only falling back to the
 /// failure itself when none is found.
-fn validate_and_reject_partials(template: &str) -> Result<Vec<Tag>, ValidateFailure> {
+fn validate_and_reject_partials(
+    template: &str,
+    allow_partials: bool,
+) -> Result<Vec<Tag>, ValidateFailure> {
     match tokenizer::tokenize(template) {
         Ok(tokens) => {
-            if let Some(name) = first_partial(&tokens) {
-                return Err(ValidateFailure::Syntax(format!(
-                    "partials are not supported: {{{{> {name}}}}}"
-                )));
+            if !allow_partials {
+                if let Some(name) = first_partial(&tokens) {
+                    return Err(ValidateFailure::Syntax(format!(
+                        "partials are not supported: {{{{> {name}}}}}"
+                    )));
+                }
             }
             Ok(tokens)
         }
@@ -216,10 +221,12 @@ fn validate_and_reject_partials(template: &str) -> Result<Vec<Tag>, ValidateFail
             failure,
             tokens_before_failure,
         }) => {
-            if let Some(name) = first_partial(&tokens_before_failure) {
-                return Err(ValidateFailure::Syntax(format!(
-                    "partials are not supported: {{{{> {name}}}}}"
-                )));
+            if !allow_partials {
+                if let Some(name) = first_partial(&tokens_before_failure) {
+                    return Err(ValidateFailure::Syntax(format!(
+                        "partials are not supported: {{{{> {name}}}}}"
+                    )));
+                }
             }
             match failure {
                 TokenizeFailure::Syntax(_) => Err(ValidateFailure::Syntax(failure.describe())),
@@ -254,10 +261,125 @@ fn validate_and_reject_partials(template: &str) -> Result<Vec<Tag>, ValidateFail
 /// genuine syntax error later in the same template that stopping early
 /// would have hidden.
 pub fn template_syntax_error(template: &str) -> Option<String> {
-    match validate_and_reject_partials(template) {
+    template_syntax_error_with(template, SyntaxCheck::default())
+}
+
+/// Options for [`template_syntax_error_with`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SyntaxCheck {
+    /// Lets a well-formed `{{> name}}` tag pass this syntax gate instead
+    /// of being rejected outright -- `core/templates.py`'s
+    /// `template_syntax_error(..., allow_partials=...)`'s own parameter
+    /// (the compile-time half of #406): set only by a caller checking
+    /// one of the fields `{{> name}}` composition reaches
+    /// (`core.prompt_compose`); whether the name itself resolves is a
+    /// separate, later check, and [`render_template`] still always
+    /// rejects a partial unconditionally regardless of this flag (#396
+    /// expands every `{{> name}}` before a template ever reaches it).
+    pub allow_partials: bool,
+}
+
+/// [`template_syntax_error`], with [`SyntaxCheck::allow_partials`]
+/// controlling whether a well-formed `{{> name}}` tag passes --
+/// `core/templates.py::template_syntax_error(..., allow_partials=...)`.
+/// [`template_syntax_error`] itself is this function called with
+/// `SyntaxCheck::default()` (`allow_partials: false`), unchanged by
+/// this addition.
+pub fn template_syntax_error_with(template: &str, check: SyntaxCheck) -> Option<String> {
+    match validate_and_reject_partials(template, check.allow_partials) {
         Ok(_) | Err(ValidateFailure::Depth(_)) => None,
         Err(ValidateFailure::Syntax(msg)) => Some(msg),
         Err(ValidateFailure::Other(msg)) => Some(msg),
+    }
+}
+
+/// One token of a tokenized Mustache template -- chevron's own token
+/// kinds (`chevron.tokenizer.tokenize`'s `(tag_type, tag_key)` pairs),
+/// exposed publicly for a caller that needs to scan a template's raw
+/// tokens itself (the compile-time half of #406's set-delimiter scan
+/// and `{{> name}}` partial resolution) rather than go through
+/// [`render_template`]/[`template_syntax_error`]'s own, higher-level
+/// checks. `Literal` carries raw template text; every other variant
+/// carries the tag's (already-stripped) key -- the same shape as the
+/// crate-private `Tag` this is built from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TokenKind {
+    Literal(String),
+    Variable(String),
+    NoEscape(String),
+    Section(String),
+    InvertedSection(String),
+    End(String),
+    Partial(String),
+    SetDelimiter(String),
+}
+
+impl From<Tag> for TokenKind {
+    fn from(tag: Tag) -> Self {
+        match tag {
+            Tag::Literal(s) => TokenKind::Literal(s),
+            Tag::Variable(s) => TokenKind::Variable(s),
+            Tag::NoEscape(s) => TokenKind::NoEscape(s),
+            Tag::Section(s) => TokenKind::Section(s),
+            Tag::InvertedSection(s) => TokenKind::InvertedSection(s),
+            Tag::End(s) => TokenKind::End(s),
+            Tag::Partial(s) => TokenKind::Partial(s),
+            Tag::SetDelimiter(s) => TokenKind::SetDelimiter(s),
+        }
+    }
+}
+
+/// Why [`tokens`] failed to tokenize a template -- the same three
+/// failure shapes [`TemplateError`] wraps with a field label, kept
+/// unlabeled here: a caller scanning raw tokens supplies its own label
+/// when it turns this into a user-facing message (mirroring how
+/// `core/compiler.py`'s various call sites each supply their own
+/// `effect_path`/`field` around a shared check).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TokensError {
+    /// A malformed tag: an unclosed/mismatched section, an unclosed
+    /// tag, or similar.
+    Syntax(String),
+    /// Any other tokenizing failure (in practice, only an empty `{{}}`).
+    Render(String),
+    /// Nested past [`MAX_SECTION_DEPTH`].
+    TooDeeplyNested(usize),
+}
+
+impl std::fmt::Display for TokensError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TokensError::Syntax(msg) | TokensError::Render(msg) => write!(f, "{msg}"),
+            TokensError::TooDeeplyNested(depth) => write!(
+                f,
+                "template nesting too deep ({depth} levels, max {MAX_SECTION_DEPTH})."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TokensError {}
+
+/// Tokenizes *template* with chevron's own tokenizer, exposing every
+/// token kind raw -- unlike [`template_syntax_error`]/[`render_template`],
+/// this neither rejects nor treats a partial tag specially; a caller
+/// doing its own scan (the set-delimiter check and `{{> name}}`
+/// resolution the compile-time half of #406 needs) decides what to do
+/// with each kind itself.
+///
+/// # Errors
+///
+/// The same three failure shapes [`template_syntax_error`]'s own
+/// tokenizing can hit: an unclosed/mismatched tag, an empty `{{}}`, or
+/// nesting past [`MAX_SECTION_DEPTH`] -- see [`TokensError`].
+pub fn tokens(template: &str) -> Result<Vec<TokenKind>, TokensError> {
+    match tokenizer::tokenize(template) {
+        Ok(tags) => Ok(tags.into_iter().map(TokenKind::from).collect()),
+        Err(TokenizeError { failure, .. }) => Err(match failure {
+            TokenizeFailure::Syntax(_) => TokensError::Syntax(failure.describe()),
+            TokenizeFailure::Index(_) => TokensError::Render(failure.describe()),
+            TokenizeFailure::Depth(depth) => TokensError::TooDeeplyNested(depth),
+        }),
     }
 }
 
@@ -275,7 +397,7 @@ pub fn render_template(
     ctx: &dyn SpliceCtx,
     label: &str,
 ) -> Result<String, TemplateError> {
-    let tokens = match validate_and_reject_partials(template) {
+    let tokens = match validate_and_reject_partials(template, false) {
         Ok(tokens) => tokens,
         Err(ValidateFailure::Syntax(msg)) => {
             return Err(TemplateError {
@@ -315,6 +437,59 @@ mod tests {
             d.insert(Value::Str(k.to_string()), v);
         }
         Value::Dict(d)
+    }
+
+    #[test]
+    fn template_syntax_error_with_rejects_a_partial_by_default() {
+        assert_eq!(
+            template_syntax_error("{{> greeting}}"),
+            Some("partials are not supported: {{> greeting}}".to_string())
+        );
+    }
+
+    #[test]
+    fn template_syntax_error_with_allows_a_well_formed_partial_when_asked() {
+        assert_eq!(
+            template_syntax_error_with(
+                "{{> greeting}}",
+                SyntaxCheck {
+                    allow_partials: true
+                }
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn template_syntax_error_with_still_rejects_a_malformed_template_with_partials_allowed() {
+        let check = SyntaxCheck {
+            allow_partials: true,
+        };
+        assert!(template_syntax_error_with("{{#a}}", check).is_some());
+    }
+
+    #[test]
+    fn tokens_reports_every_kind() {
+        let kinds = tokens("a{{b}}{{{c}}}{{#d}}{{/d}}{{^e}}{{/e}}{{>f}}{{=<% %>=}}").unwrap();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Literal("a".to_string()),
+                TokenKind::Variable("b".to_string()),
+                TokenKind::NoEscape("c".to_string()),
+                TokenKind::Section("d".to_string()),
+                TokenKind::End("d".to_string()),
+                TokenKind::InvertedSection("e".to_string()),
+                TokenKind::End("e".to_string()),
+                TokenKind::Partial("f".to_string()),
+                TokenKind::SetDelimiter("<% %>".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn tokens_reports_a_syntax_failure() {
+        assert!(matches!(tokens("{{#a}}"), Err(TokensError::Syntax(_))));
     }
 
     #[test]

@@ -467,6 +467,126 @@ pub fn evaluate_expect(
     Ok(truthy(&result))
 }
 
+/// Why a `mode: cel` expression failed electricity-compiler's
+/// compile-time syntax check ([`validate_syntax`]) -- ported from
+/// `core/cel_eval.py`'s `validate_cel_syntax`, minus the
+/// `effect_path`/`label` context a caller (electricity-compiler's own
+/// `state_ns` module) wraps around this error itself: that's
+/// compiler-specific addressing context, not generic CEL, so it isn't
+/// reproduced here -- see [`CelSyntaxError::is_parse_error`] for how a
+/// caller reconstructs Python's own `"... . Expression: {expr!r}"` suffix,
+/// present only on the parse-failure variants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CelSyntaxError {
+    Empty,
+    TooLong(usize),
+    /// Not reachable from `core/cel_eval.py` parity (Python's own
+    /// `validate_cel_syntax` has no nesting-depth check) -- a Rust-only
+    /// safety addition, the same reason [`CelError::is_too_deeply_nested`]
+    /// exists, so a compile-time syntax check can't itself stack-overflow
+    /// on deeply nested input.
+    TooDeeplyNested(usize),
+    Parse(String),
+}
+
+impl CelSyntaxError {
+    /// Whether a caller should append Python's own `". Expression:
+    /// {expr!r}"` suffix (`core/cel_eval.py`'s own `validate_cel_syntax`
+    /// only appends it for an expression that fails to parse, not for
+    /// the empty/too-long cases, which already show the whole problem
+    /// without quoting the expression back).
+    pub fn is_parse_error(&self) -> bool {
+        matches!(
+            self,
+            CelSyntaxError::Parse(_) | CelSyntaxError::TooDeeplyNested(_)
+        )
+    }
+}
+
+impl fmt::Display for CelSyntaxError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CelSyntaxError::Empty => write!(f, "expression is empty."),
+            CelSyntaxError::TooLong(len) => write!(
+                f,
+                "expression is too long ({len} chars, max {MAX_EXPR_LENGTH})."
+            ),
+            CelSyntaxError::TooDeeplyNested(depth) => write!(
+                f,
+                "expression nesting too deep ({depth} levels, max {MAX_NESTING_DEPTH})."
+            ),
+            CelSyntaxError::Parse(msg) => write!(f, "expression does not parse ({msg})."),
+        }
+    }
+}
+
+impl std::error::Error for CelSyntaxError {}
+
+/// Compile-time syntax check for a single `mode: cel` expression: the
+/// 4096-character limit, an empty/whitespace-only expression, and
+/// whether it parses -- `core/cel_eval.py`'s `validate_cel_syntax`,
+/// minus the `effect_path`/`label`/`effect_name` context a caller wraps
+/// around this error itself (see [`CelSyntaxError`]'s own docs for why
+/// that context isn't reproduced in this crate).
+///
+/// # Errors
+///
+/// [`CelSyntaxError::Empty`]/[`CelSyntaxError::TooLong`]/
+/// [`CelSyntaxError::Parse`] mirror Python's own three raises, in the
+/// same order (empty is checked before length, matching
+/// `core/cel_eval.py`'s own `if not expr ... ; if len(expr) > ...`).
+/// [`CelSyntaxError::TooDeeplyNested`] has no Python counterpart (see
+/// its own docs).
+pub fn validate_syntax(expr: &str) -> Result<(), CelSyntaxError> {
+    if expr.trim().is_empty() {
+        return Err(CelSyntaxError::Empty);
+    }
+    let len = expr.chars().count();
+    if len > MAX_EXPR_LENGTH {
+        return Err(CelSyntaxError::TooLong(len));
+    }
+    let depth = nesting::max_nesting_depth(expr);
+    if depth > MAX_NESTING_DEPTH {
+        return Err(CelSyntaxError::TooDeeplyNested(depth));
+    }
+    let env = stdlib_env();
+    env.compile(expr)
+        .map_err(|e| CelSyntaxError::Parse(e.to_string()))?;
+    Ok(())
+}
+
+/// Every `state.` path *expr* reads, from the parse tree -- including
+/// one that appears only as a `has(...)` argument (a guard is still a
+/// reference) -- ported from `core/cel_eval.py`'s `state_paths`.
+///
+/// Deliberately has no length pre-check, matching Python's own
+/// `state_paths`, which calls straight into `_compile` with none either
+/// (only `evaluate_cel`/`evaluate_cel_expect`/`validate_cel_syntax`
+/// check length) -- callers that need the length cap enforced too
+/// (none do today: `core/state_ns.py`'s `validate_cel_expr` calls
+/// `state_paths` to police the `state.<namespace>` grammar, and
+/// separately calls `validate_cel_syntax`, which does check it) get it
+/// from [`validate_syntax`] instead.
+///
+/// # Errors
+///
+/// An expression that doesn't parse returns `Err`, the same way
+/// `core/cel_eval.py`'s own `state_paths` raises `CelValidationError` --
+/// a caller checking only `state.<namespace>` usage, not syntax, is
+/// expected to swallow this (`core/state_ns.py`'s own `validate_cel_expr`
+/// does exactly that: `except CelError: return`); syntax is a separate
+/// check, via [`validate_syntax`].
+pub fn state_paths(expr: &str) -> Result<Vec<String>, CelError> {
+    check_nesting_depth(expr)?;
+    let env = stdlib_env();
+    let program = compile(&env, expr)?;
+    Ok(paths::collect_state_paths(program.expression())
+        .paths
+        .into_iter()
+        .map(|p| p.path)
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -707,6 +827,49 @@ mod tests {
             Value::List(vec![Value::from(1_i64), Value::from(2_i64)]),
         )]);
         assert!(evaluate_condition("state.l[0.0] == 1", &state, false).is_err());
+    }
+
+    #[test]
+    fn validate_syntax_accepts_a_well_formed_expression() {
+        assert_eq!(validate_syntax("state.input.ok == true"), Ok(()));
+    }
+
+    #[test]
+    fn validate_syntax_rejects_empty() {
+        assert_eq!(validate_syntax(""), Err(CelSyntaxError::Empty));
+        assert_eq!(validate_syntax("   "), Err(CelSyntaxError::Empty));
+        assert_eq!(
+            validate_syntax("").unwrap_err().to_string(),
+            "expression is empty."
+        );
+    }
+
+    #[test]
+    fn validate_syntax_rejects_too_long() {
+        let expr = "state.x == 'a'".to_string() + &" && state.x == 'a'".repeat(500);
+        let err = validate_syntax(&expr).unwrap_err();
+        assert!(matches!(err, CelSyntaxError::TooLong(_)));
+        assert!(err.to_string().contains("too long"));
+        assert!(!err.is_parse_error());
+    }
+
+    #[test]
+    fn validate_syntax_rejects_a_malformed_expression() {
+        let err = validate_syntax("state.a ==").unwrap_err();
+        assert!(matches!(err, CelSyntaxError::Parse(_)));
+        assert!(err.to_string().starts_with("expression does not parse ("));
+        assert!(err.is_parse_error());
+    }
+
+    #[test]
+    fn state_paths_collects_has_guarded_and_plain_reads() {
+        let paths = state_paths("has(state.input.n) && state.prime.x.value == 1").unwrap();
+        assert_eq!(paths, vec!["state.input.n", "state.prime.x.value"]);
+    }
+
+    #[test]
+    fn state_paths_errors_on_a_malformed_expression() {
+        assert!(state_paths("state.a ==").is_err());
     }
 
     #[test]
