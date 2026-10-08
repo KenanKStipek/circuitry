@@ -34,6 +34,12 @@ pub enum ReadError {
     /// A JSON object defines the same key twice — `message` matches
     /// `core/json_load.py`'s `DuplicateKeyError` word for word.
     DuplicateKey { message: String },
+    /// Nesting beyond [`crate::MAX_DEPTH`] `{`/`[` levels deep. `pos` is
+    /// the index of the opening bracket that would have exceeded the
+    /// limit. Distinct from [`ReadError::Syntax`] on purpose — see the
+    /// crate's module docs on why a caller must not treat the two the
+    /// same way CPython's `RecursionError` and `JSONDecodeError` differ.
+    Depth { pos: usize },
 }
 
 impl fmt::Display for ReadError {
@@ -41,6 +47,11 @@ impl fmt::Display for ReadError {
         match self {
             ReadError::Syntax { message, pos } => write!(f, "{message}: char {pos}"),
             ReadError::DuplicateKey { message } => write!(f, "{message}"),
+            ReadError::Depth { pos } => write!(
+                f,
+                "exceeded the maximum nesting depth of {} at char {pos}",
+                crate::MAX_DEPTH
+            ),
         }
     }
 }
@@ -75,7 +86,7 @@ fn parse(text: &str) -> Result<Raw, ReadError> {
     let chars: Vec<char> = text.chars().collect();
     let parser = Parser { chars: &chars };
     let start = parser.skip_ws(0);
-    let (raw, end) = parser.parse_value(start)?;
+    let (raw, end) = parser.parse_value(start, 0)?;
     let end = parser.skip_ws(end);
     if end != chars.len() {
         return Err(parser.syntax("Extra data", end));
@@ -193,8 +204,11 @@ impl Parser<'_> {
     /// `json.scanner._scan_once`: dispatches on the first character, then
     /// the `NUMBER_RE` match, then the `NaN`/`Infinity`/`-Infinity`
     /// literals (outside the JSON spec, but `json.loads` accepts them by
-    /// default).
-    fn parse_value(&self, idx: usize) -> Result<(Raw, usize), ReadError> {
+    /// default). `depth` is the current `{`/`[` nesting depth, threaded
+    /// through to [`Parser::parse_object`]/[`Parser::parse_array`] so
+    /// nesting past [`crate::MAX_DEPTH`] returns [`ReadError::Depth`]
+    /// instead of recursing further (DESIGN.md's depth-limit decision).
+    fn parse_value(&self, idx: usize, depth: usize) -> Result<(Raw, usize), ReadError> {
         let Some(&c) = self.chars.get(idx) else {
             return Err(self.syntax("Expecting value", idx));
         };
@@ -203,8 +217,8 @@ impl Parser<'_> {
                 let (s, end) = self.parse_string(idx + 1)?;
                 Ok((Raw::Str(s), end))
             }
-            '{' => self.parse_object(idx + 1),
-            '[' => self.parse_array(idx + 1),
+            '{' => self.parse_object(idx + 1, depth),
+            '[' => self.parse_array(idx + 1, depth),
             'n' if self.starts_with(idx, "null") => Ok((Raw::Null, idx + 4)),
             't' if self.starts_with(idx, "true") => Ok((Raw::Bool(true), idx + 4)),
             'f' if self.starts_with(idx, "false") => Ok((Raw::Bool(false), idx + 5)),
@@ -320,10 +334,11 @@ impl Parser<'_> {
                                 idx = next2;
                                 continue;
                             }
-                            // A lone (or unpaired) surrogate: valid in a Python
-                            // `str`, not representable in a Rust `String` (not
-                            // a Unicode scalar value). Known limitation, same
-                            // spirit as electricity-value's int-str-digits gap.
+                            // A lone (or unpaired) surrogate: valid in a
+                            // Python `str`, not representable in a Rust
+                            // `String` (not a Unicode scalar value). See the
+                            // crate's module docs for what this diverges on
+                            // downstream (every write path Circuitry uses).
                             result.push('\u{fffd}');
                             continue;
                         }
@@ -411,15 +426,20 @@ impl Parser<'_> {
     /// trailing comma here loops back into [`Parser::parse_value`] at
     /// the `]`, which rejects it as "Expecting value", exactly like
     /// 3.11 itself, confirmed directly). `start` is right after the
-    /// opening `[`.
-    fn parse_array(&self, start: usize) -> Result<(Raw, usize), ReadError> {
+    /// opening `[`; `depth` is this array's own nesting depth (0 for a
+    /// top-level array), checked against [`crate::MAX_DEPTH`] before any
+    /// of its elements are parsed.
+    fn parse_array(&self, start: usize, depth: usize) -> Result<(Raw, usize), ReadError> {
+        if depth >= crate::MAX_DEPTH {
+            return Err(ReadError::Depth { pos: start - 1 });
+        }
         let mut idx = self.skip_ws(start);
         if self.chars.get(idx) == Some(&']') {
             return Ok((Raw::List(Vec::new()), idx + 1));
         }
         let mut items = Vec::new();
         loop {
-            let (value, next) = self.parse_value(idx)?;
+            let (value, next) = self.parse_value(idx, depth + 1)?;
             items.push(value);
             idx = self.skip_ws(next);
             match self.chars.get(idx) {
@@ -433,8 +453,13 @@ impl Parser<'_> {
     /// `json.decoder.JSONObject` (see [`Parser::parse_array`] on 3.11's
     /// lack of a trailing-comma special case: here it surfaces as
     /// "Expecting property name enclosed in double quotes" at the `}`,
-    /// confirmed directly). `start` is right after the opening `{`.
-    fn parse_object(&self, start: usize) -> Result<(Raw, usize), ReadError> {
+    /// confirmed directly). `start` is right after the opening `{`;
+    /// `depth` is this object's own nesting depth, checked the same way
+    /// as [`Parser::parse_array`]'s.
+    fn parse_object(&self, start: usize, depth: usize) -> Result<(Raw, usize), ReadError> {
+        if depth >= crate::MAX_DEPTH {
+            return Err(ReadError::Depth { pos: start - 1 });
+        }
         let mut idx = self.skip_ws(start);
         if self.chars.get(idx) == Some(&'}') {
             return Ok((Raw::Object(Vec::new()), idx + 1));
@@ -450,7 +475,7 @@ impl Parser<'_> {
                 return Err(self.syntax("Expecting ':' delimiter", idx));
             }
             idx = self.skip_ws(idx + 1);
-            let (value, next) = self.parse_value(idx)?;
+            let (value, next) = self.parse_value(idx, depth + 1)?;
             pairs.push((key, value));
             idx = self.skip_ws(next);
             match self.chars.get(idx) {

@@ -149,6 +149,13 @@ def build_corpus() -> list[dict]:
         # comparing them, or comparing one against an ordinary key.
         {float("nan"): "a", 1.0: 2},
         {float("nan"): "a", float("nan"): 1},
+        # A NaN key that isn't adjacent to the key sort_keys moves past it:
+        # CPython's count_run finds the ascending run [5.0, 6.0, 7.0, NaN,
+        # 8.0] (NaN < x and x < NaN are both always False, so neither ever
+        # breaks the run), then binarysort binary-inserts 1.0 at the front,
+        # giving 1.0, 5.0, 6.0, 7.0, NaN, 8.0 -- not the order a plain
+        # comparison sort that folds NaN comparisons to "equal" would give.
+        {5.0: "a", 6.0: "b", 7.0: "c", float("nan"): "d", 8.0: "e", 1.0: "f"},
         # Mixed key types: compact succeeds (no sort needed), pretty must
         # raise sort_keys=True comparing an int to a str.
         {0: "int-key", "s": "str-key"},

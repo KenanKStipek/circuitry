@@ -64,6 +64,11 @@ pub enum WriteError {
         left: &'static str,
         right: &'static str,
     },
+    /// Nesting beyond [`crate::MAX_DEPTH`] levels deep. Distinct from the
+    /// other variants above (all of which mirror a CPython `TypeError`)
+    /// for the same reason [`crate::ReadError::Depth`] is distinct from
+    /// [`crate::ReadError::Syntax`] — see the crate's module docs.
+    Depth,
 }
 
 impl fmt::Display for WriteError {
@@ -88,6 +93,13 @@ impl fmt::Display for WriteError {
                 write!(
                     f,
                     "'<' not supported between instances of '{left}' and '{right}'"
+                )
+            }
+            WriteError::Depth => {
+                write!(
+                    f,
+                    "exceeded the maximum nesting depth of {}",
+                    crate::MAX_DEPTH
                 )
             }
         }
@@ -176,6 +188,9 @@ fn write_list(
     on_unsupported: OnUnsupported,
     out: &mut String,
 ) -> Result<(), WriteError> {
+    if level >= crate::MAX_DEPTH {
+        return Err(WriteError::Depth);
+    }
     out.push('[');
     if !items.is_empty() {
         for (i, item) in items.iter().enumerate() {
@@ -198,6 +213,9 @@ fn write_dict(
     on_unsupported: OnUnsupported,
     out: &mut String,
 ) -> Result<(), WriteError> {
+    if level >= crate::MAX_DEPTH {
+        return Err(WriteError::Depth);
+    }
     out.push('{');
     let entries: Vec<(&Value, &Value)> = if mode.sort_keys {
         sorted_items(dict)?
@@ -274,50 +292,182 @@ fn float_to_json(f: f64) -> String {
 /// pair a comparison-sort happens to compare first when several
 /// incomparable pairs exist is an implementation detail this doesn't try
 /// to match (the message text doesn't have to, either — DESIGN.md §1/§12).
+///
+/// Dispatches on whether any key is a `NaN` float, since that's the only
+/// way `py_partial_cmp` ever returns `Ok(None)` ("unordered", not an
+/// error) for a `Dict`'s keys, and the only case CPython's own sort
+/// doesn't reduce to a plain total order:
+/// - no `NaN` key: every key pair has a real order (or raises), so a
+///   single stable O(n log n) sort reproduces CPython's output exactly
+///   — any correct stable sort over a total order gives the same result.
+/// - a `NaN` key, fewer than 64 entries: CPython never promotes such a
+///   short list to a full merge sort, so [`cpython_small_sort`] ports its
+///   `count_run`/`binarysort` faithfully instead.
+/// - a `NaN` key, 64 or more entries: a documented divergence (below).
 fn sorted_items(dict: &Dict) -> Result<Vec<(&Value, &Value)>, WriteError> {
-    // A hand-written stable insertion sort, not `[T]::sort_by`: `py_cmp`
-    // folds an incomparable `NaN` pair to `Ordering::Equal` (below) so the
-    // *result* matches CPython's own output (a `NaN` key is never swapped
-    // past, keeping its original position — confirmed directly against
-    // CPython for every case in the golden corpus), but that fold isn't a
-    // real total order (it isn't transitive once a third, orderable key
-    // is involved), and std's `sort_by` documents that it may panic for a
-    // comparator that isn't one. Insertion sort never relies on that
-    // contract for safety — it only ever does pairwise comparisons and
-    // array shifts — so it can't panic no matter what `py_cmp` returns,
-    // while still producing CPython's exact output for every realistic
-    // (small) dict. O(n^2) is for that safety property, not speed; dict
-    // sizes this writes are never large enough for it to matter.
-    let mut items: Vec<(&Value, &Value)> = Vec::with_capacity(dict.len());
-    for entry in dict.iter() {
-        let mut pos = items.len();
-        while pos > 0 {
-            if py_cmp(entry.0, items[pos - 1].0)? == Ordering::Less {
-                pos -= 1;
-            } else {
-                break;
-            }
-        }
-        items.insert(pos, entry);
+    let mut items: Vec<(&Value, &Value)> = dict.iter().collect();
+    let has_nan_key = items
+        .iter()
+        .any(|(key, _)| matches!(key, Value::Float(f) if f.is_nan()));
+    if !has_nan_key {
+        sort_total_order(&mut items)?;
+    } else if items.len() < 64 {
+        cpython_small_sort(&mut items)?;
+    } else {
+        // Known divergence: CPython's full timsort merge for 64+ elements
+        // with a NaN key isn't ported here. This produces *some* stable,
+        // defined order (every NaN key compares equal to everything, as
+        // in the under-64 port's spirit) rather than reproducing CPython's
+        // exact key order for this case.
+        sort_with_nan_as_equal(&mut items)?;
     }
     Ok(items)
 }
 
-/// A total order over `Value` for sort purposes: `Ok(None)` (one side is
-/// `NaN`, numerically unordered — the only way two distinct `Dict` keys
-/// can compare Python-equal, see [`sorted_items`]) is folded to
-/// `Ordering::Equal` so [`sorted_items`]' insertion sort never needs to
-/// move a `NaN` key past another entry — Python's own sort order for a
-/// `NaN` key is itself not a meaningful contract to reproduce beyond
-/// that.
-fn py_cmp(a: &Value, b: &Value) -> Result<Ordering, WriteError> {
+/// Python `<` between two dict keys, for sort purposes: `Ok(false)` both
+/// when `a` is genuinely not less than `b` and when the pair is `NaN`-
+/// unordered (`py_partial_cmp` returning `Ok(None)`) — matching Python's
+/// own `<` on a `NaN` operand, which is always `False`, never a raise.
+fn py_lt(a: &Value, b: &Value) -> Result<bool, WriteError> {
     match a.py_partial_cmp(b) {
-        Ok(Some(ordering)) => Ok(ordering),
-        Ok(None) => Ok(Ordering::Equal),
+        Ok(ordering) => Ok(ordering == Some(Ordering::Less)),
         Err(_) => Err(WriteError::IncomparableKeys {
             left: a.type_name(),
             right: b.type_name(),
         }),
+    }
+}
+
+/// A single stable O(n log n) sort by key, for a dict with no `NaN` key:
+/// every key pair then has a real order or raises, so any correct stable
+/// sort reproduces CPython's own `sorted(dct.items())` key order exactly.
+/// `sort_by`'s comparator can't itself return a `Result`, so an
+/// incomparable pair is recorded in `error` and all later comparisons
+/// return `Ordering::Equal` (making the rest of the sort a no-op) rather
+/// than panicking — the final key order is discarded by returning `Err`.
+fn sort_total_order(items: &mut [(&Value, &Value)]) -> Result<(), WriteError> {
+    let mut error: Option<WriteError> = None;
+    items.sort_by(|a, b| {
+        if error.is_some() {
+            return Ordering::Equal;
+        }
+        match a.0.py_partial_cmp(b.0) {
+            Ok(Some(ordering)) => ordering,
+            Ok(None) => unreachable!("sort_total_order called with no NaN key present"),
+            Err(_) => {
+                error = Some(WriteError::IncomparableKeys {
+                    left: a.0.type_name(),
+                    right: b.0.type_name(),
+                });
+                Ordering::Equal
+            }
+        }
+    });
+    match error {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
+/// A faithful port of CPython 3.11's `listobject.c` `count_run` then
+/// `binarysort` — the exact algorithm `list.sort`/`sorted()` use for a
+/// list short enough (under 64 elements) to never need a full timsort
+/// merge, confirmed directly against CPython for the `NaN`-key
+/// counterexample this is written for (DESIGN.md's sort-algorithm
+/// decision for #377/#384): keys in insertion order `5.0, 6.0, 7.0, NaN,
+/// 8.0, 1.0` sort to `1.0, 5.0, 6.0, 7.0, NaN, 8.0` — `count_run` finds
+/// the initial run `[5.0, 6.0, 7.0, NaN, 8.0]` (ascending, since `NaN <
+/// x` and `x < NaN` are both always `False`, so neither comparison ever
+/// breaks the run), then `binarysort` binary-inserts `1.0` at the front.
+/// A plain comparison-sort comparator (as in [`sort_total_order`]) can't
+/// reproduce this: it would stop at `1.0 < NaN` being `False` and treat
+/// the two as adjacent-equal, landing `1.0` right before `8.0` instead.
+fn cpython_small_sort(items: &mut [(&Value, &Value)]) -> Result<(), WriteError> {
+    let n = items.len();
+    if n < 2 {
+        return Ok(());
+    }
+    let run = count_run(items)?;
+    binary_insertion_sort(items, run)
+}
+
+/// `count_run`: the length of the initial monotone run starting at index
+/// 0 — strictly descending (then reversed in place) or non-decreasing,
+/// decided by comparing the first two elements, exactly as CPython's own
+/// `count_run` does.
+fn count_run(items: &mut [(&Value, &Value)]) -> Result<usize, WriteError> {
+    let n = items.len();
+    if n < 2 {
+        return Ok(n);
+    }
+    if py_lt(items[1].0, items[0].0)? {
+        let mut run = 2;
+        while run < n && py_lt(items[run].0, items[run - 1].0)? {
+            run += 1;
+        }
+        items[0..run].reverse();
+        Ok(run)
+    } else {
+        let mut run = 2;
+        while run < n && !py_lt(items[run].0, items[run - 1].0)? {
+            run += 1;
+        }
+        Ok(run)
+    }
+}
+
+/// `binarysort`: given that `items[..ok_as_is]` is already sorted, insert
+/// each remaining element with a one-sided binary search for its
+/// insertion point (stable: an element lands after every already-placed
+/// element it isn't strictly less than), exactly as CPython's own
+/// `binarysort` does.
+fn binary_insertion_sort(
+    items: &mut [(&Value, &Value)],
+    ok_as_is: usize,
+) -> Result<(), WriteError> {
+    let n = items.len();
+    for a in ok_as_is..n {
+        let pivot = items[a];
+        let mut l = 0usize;
+        let mut r = a;
+        while l < r {
+            let p = l + (r - l) / 2;
+            if py_lt(pivot.0, items[p].0)? {
+                r = p;
+            } else {
+                l = p + 1;
+            }
+        }
+        items.copy_within(l..a, l + 1);
+        items[l] = pivot;
+    }
+    Ok(())
+}
+
+/// Known divergence (see [`sorted_items`]): for a dict with 64 or more
+/// keys including a `NaN` key, every `NaN` key sorts as equal to every
+/// other key — a stable sort, but not CPython's own order for this case.
+fn sort_with_nan_as_equal(items: &mut [(&Value, &Value)]) -> Result<(), WriteError> {
+    let mut error: Option<WriteError> = None;
+    items.sort_by(|a, b| {
+        if error.is_some() {
+            return Ordering::Equal;
+        }
+        match a.0.py_partial_cmp(b.0) {
+            Ok(Some(ordering)) => ordering,
+            Ok(None) => Ordering::Equal,
+            Err(_) => {
+                error = Some(WriteError::IncomparableKeys {
+                    left: a.0.type_name(),
+                    right: b.0.type_name(),
+                });
+                Ordering::Equal
+            }
+        }
+    });
+    match error {
+        Some(e) => Err(e),
+        None => Ok(()),
     }
 }
 

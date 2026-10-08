@@ -630,6 +630,46 @@
     "text": "{\"a\": {\"b\": {\"b\": 1, \"b\": 2}}}"
   },
   {
+    "entry": "loads",
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "int",
+              "v": "3"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "b"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ]
+        ]
+      }
+    },
+    "text": "{\"a\": 1, \"b\": 2, \"a\": 3}"
+  },
+  {
+    "entry": "load_json",
+    "expect": {
+      "kind": "duplicate_key",
+      "message": "duplicate key 'a' in top level; JSON would silently keep only the last one"
+    },
+    "text": "{\"a\": 1, \"b\": 2, \"a\": 3}"
+  },
+  {
     "entry": "both",
     "expect": {
       "kind": "syntax",
@@ -836,5 +876,27 @@
       "pos": 2
     },
     "text": "\"a\u0001b\""
+  },
+  {
+    "entry": "both",
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "str",
+        "v": "�"
+      }
+    },
+    "text": "\"\\ud800\""
+  },
+  {
+    "entry": "both",
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "str",
+        "v": "�"
+      }
+    },
+    "text": "\"\\udc00\""
   }
 ]

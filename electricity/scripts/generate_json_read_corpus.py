@@ -13,7 +13,9 @@ input; Circuitry's own ``DuplicateKeyError`` message, word for word, for a
 repeated object key (``core/json_load.py``); or, for malformed JSON, only
 the character position CPython's ``json.JSONDecodeError.pos`` reports — the
 message text there is CPython's own, not Circuitry's, so electricity-json
-only has to fail at the same position (DESIGN.md §1/§12).
+only has to fail at the same position (DESIGN.md §1/§12). Two cases (a
+lone UTF-16 surrogate escape) are a documented *divergence* instead: see
+``divergent_lone_surrogate_case``.
 
 Must be run with Python 3.11 (see ``generate_value_corpus.py``). Usage:
 python3 generate_json_read_corpus.py [--check]
@@ -98,6 +100,24 @@ def syntax_error_case(text: str) -> dict:
     raise AssertionError(f"expected a JSONDecodeError for {text!r}")
 
 
+def divergent_lone_surrogate_case(text: str) -> dict:
+    """A documented divergence (lib.rs's module docs), not a CPython
+    parity assertion: CPython's ``json.loads`` keeps a lone UTF-16
+    surrogate in the resulting ``str`` (confirmed directly -- ``len(v) ==
+    1`` for each of these texts), which electricity-json can't represent
+    in a Rust ``String`` and decodes to U+FFFD instead. Hand-writes the
+    *electricity* side's own expected value rather than CPython's, since
+    CPython's actual result -- a Python ``str`` holding an unpaired
+    surrogate -- can't itself survive being written into this corpus file
+    as UTF-8 JSON."""
+    json.loads(text)  # still confirms CPython accepts the text at all
+    return {
+        "text": text,
+        "entry": "both",
+        "expect": {"kind": "ok", "value": encode("\ufffd")},
+    }
+
+
 def build_corpus() -> list[dict]:
     valid_texts = [
         "null",
@@ -134,6 +154,9 @@ def build_corpus() -> list[dict]:
         '{"a": 1, "nested": {"x": 1, "x": 2}}',
         '{"items": [{"a": 1}, {"a": 1, "a": 2}]}',
         '{"a": {"b": {"b": 1, "b": 2}}}',
+        # The repeated key keeps its *first* position, not its last --
+        # CPython gives {"a": 3, "b": 2} in that order, not {"b": 2, "a": 3}.
+        '{"a": 1, "b": 2, "a": 3}',
     ]
     syntax_error_texts = [
         "",
@@ -163,10 +186,15 @@ def build_corpus() -> list[dict]:
         '"\\ud800\\udc00',  # same, mid-surrogate-pair
         '"a\x01b"',  # an unescaped control character inside a string
     ]
+    lone_surrogate_texts = [
+        '"\\ud800"',  # a lone high surrogate, with nothing following it
+        '"\\udc00"',  # a lone low surrogate
+    ]
     cases = [valid_case(t) for t in valid_texts]
     for t in duplicate_key_texts:
         cases += duplicate_key_cases(t)
     cases += [syntax_error_case(t) for t in syntax_error_texts]
+    cases += [divergent_lone_surrogate_case(t) for t in lone_surrogate_texts]
     return cases
 
 
