@@ -16,18 +16,38 @@
 //! `config.json` itself (lane B's own job, building
 //! [`crate::DocumentOrigin`]).
 //!
-//! # Known divergence
+//! # Known divergences
 //!
-//! `core/prompt_files.py::resolve_prompt_file_path` lets a confinement
-//! root's own `Path.resolve(strict=False)` raise an *uncaught* `OSError`
-//! (only the candidate path's own resolve is wrapped in a
-//! `PromptFileError`) — effectively a latent bug, reachable only by a
-//! confinement root itself behind a broken symlink chain. This port
-//! wraps both the same way, as a `CompileError` rather than an uncaught
-//! panic, since Rust has no equivalent of letting an arbitrary exception
-//! type propagate out of a `Result`-returning function. Not pinned by a
-//! corpus case: the exact OS error text this produces is errno-message
-//! dependent even in CPython itself.
+//! - `core/prompt_files.py::resolve_prompt_file_path` lets a
+//!   confinement root's own `Path.resolve(strict=False)` raise an
+//!   *uncaught* `RuntimeError` (only the candidate path's own resolve
+//!   is wrapped in a `PromptFileError`) — effectively a latent bug,
+//!   reachable only by a confinement root itself behind a symlink
+//!   *loop* (on CPython 3.11, that is the only case `resolve(strict=
+//!   False)` raises in at all; a merely dangling/broken chain with no
+//!   cycle resolves fine, leaving the missing target as a literal
+//!   trailing path segment — see [`resolve_non_strict`]'s own tests).
+//!   This port wraps both the same way, as a `CompileError` rather than
+//!   an uncaught panic, since Rust has no equivalent of letting an
+//!   arbitrary exception type propagate out of a `Result`-returning
+//!   function. Not pinned by a corpus case: the exact OS error text
+//!   this produces is errno-message dependent even in CPython itself.
+//! - [`resolve_non_strict`] caps a symlink chain at 40 hops (looping or
+//!   not), failing with "too many levels of symbolic links" past that —
+//!   an approximation of the OS's own `ELOOP`, not a byte-for-byte port
+//!   of CPython's own structural loop detection (which raises
+//!   `RuntimeError` as soon as it revisits a path, regardless of chain
+//!   length) or its error text.
+//! - [`resolve_prompt_file`]'s "could not be read" message reports the
+//!   OS error text verbatim after that prefix — `std::io::Error`'s own
+//!   `Display`, never a byte-for-byte match for Python's
+//!   `OSError.__str__` (Rust's `Permission denied (os error 13)` vs.
+//!   Python's `[Errno 13] Permission denied: '<path>'`, say). Only the
+//!   Circuitry-owned prefix in front of it is pinned exactly by a
+//!   corpus case (`tests/golden_compose.rs`'s own
+//!   `prompts_file_unreadable_matches_circuitrys_own_prefix`); the
+//!   OS-specific suffix is compared by location only (DESIGN.md §1,
+//!   §12).
 
 use crate::{CompileError, DocumentOrigin};
 use electricity_value::Value;
