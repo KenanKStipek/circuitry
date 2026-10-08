@@ -617,6 +617,33 @@ mod tests {
         assert!(err.is_err());
     }
 
+    #[test]
+    fn compiles_a_real_document_into_a_plan_end_to_end() {
+        // K3/#424 review: the no-plan fallback is covered everywhere
+        // else in this file via hand-built `Program`s, which never
+        // exercises `compile`'s own real path through `electricity-
+        // compiler::check_for_run` — a stub that failed on every
+        // document until lanes B/C (#415, #417) landed. Now that they
+        // have, a real document should compile into a real plan.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("do.yml");
+        std::fs::write(
+            &doc,
+            "effects:\n  - name: first\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"one\"]\n  - name: gate\n    type: if\n    if:\n      mode: cel\n      expr: \"true\"\n    then:\n      - name: chosen\n        type: tool\n        provider: shell\n        params:\n          command: echo\n          args: [\"then\"]\n    else:\n      - name: chosen\n        type: tool\n        provider: shell\n        params:\n          command: echo\n          args: [\"else\"]\n",
+        )
+        .unwrap();
+
+        let program =
+            compile(&doc).expect("a real document should compile now lanes B/C have landed");
+        let plan = PlanTree::from_program(&program);
+        assert!(plan.has_plan());
+        assert!(plan.match_path("prime.first").is_some());
+        let gate = plan
+            .match_path("prime.gate.chosen")
+            .expect("then/else merge");
+        assert_eq!(gate.entries.len(), 2);
+    }
+
     fn document_info(dir: &Path) -> electricity_bytecode::DocumentInfo {
         electricity_bytecode::DocumentInfo {
             path_as_given: dir.join("main.yml").to_string_lossy().into_owned(),
