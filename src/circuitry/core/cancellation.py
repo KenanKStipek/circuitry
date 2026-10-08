@@ -49,7 +49,7 @@ import signal
 import subprocess
 import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from concurrent.futures import Executor, Future
 from contextlib import contextmanager
 from multiprocessing.process import BaseProcess
@@ -100,6 +100,22 @@ def kill_process_group(proc: subprocess.Popen[str] | subprocess.Popen[bytes]) ->
     with the child — e.g. an unarmed timeout under the SDK, the MCP
     server, or any embedder that never installs ``cof run``'s signal
     handler. Guard against that case and kill just the child instead.
+
+    ``PermissionError`` is ignored the same as ``ProcessLookupError``
+    (#385 round 3, cause confirmed by the #385 review's own probe): once
+    this call's own ``killpg`` has killed the group's last live member,
+    that member is a zombie until something actually ``wait()``s on it
+    (:func:`_communicate_promptly`/``run_tracked``'s own cleanup, which
+    can run later than this) — on macOS, a further ``killpg`` at that
+    pgid before the reap raises ``EPERM``, not ``ESRCH``, even sending
+    the exact same signal to the exact same, still-correctly-owned pgid
+    (confirmed directly: ``killpg(pgid, SIGKILL)`` a second time on a
+    pgid whose one member a first ``SIGKILL`` already killed but nothing
+    has reaped yet reliably raises ``PermissionError``, every time, on
+    this platform). Not pgid reuse by some unrelated process: a reused
+    pgid would belong to this same user on an ordinary dev machine, and
+    ``killpg`` to a group you own does not raise ``EPERM`` — best-effort,
+    same as the rest of this function.
     """
     if proc.poll() is not None:
         return
@@ -116,12 +132,71 @@ def kill_process_group(proc: subprocess.Popen[str] | subprocess.Popen[bytes]) ->
     if pgid == os.getpgrp():
         try:
             proc.kill()
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
             pass
         return
     try:
         os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _isolated_pgid(
+    proc: subprocess.Popen[str] | subprocess.Popen[bytes],
+) -> int | None:
+    """*proc*'s own process-group id, only when it is isolated in one of
+    its own -- i.e. exactly the case :func:`kill_process_group` itself
+    already treats as safe to ``killpg`` -- else ``None`` (#385 round 3).
+
+    Captured once, right after ``Popen``, by :func:`run_tracked`: a pgid
+    can never be reused while any process in it is still alive, so this
+    stays valid for repeat kills for as long as the group has a single
+    member left, including one born from a fork after the first kill
+    (see :func:`_repeat_group_kill`).
+    """
+    if os.name != "posix":
+        return None
+    pid = getattr(proc, "pid", None)
+    if pid is None:
+        return None
+    try:
+        pgid = os.getpgid(pid)
     except ProcessLookupError:
+        return None
+    return None if pgid == os.getpgrp() else pgid
+
+
+def _repeat_group_kill(pgid: int | None) -> None:
+    """``os.killpg(pgid, SIGKILL)`` again, ignoring ``ProcessLookupError``
+    (the whole group is already gone) and ``PermissionError`` (the
+    group's last live member is now a zombie nothing has reaped yet --
+    see :func:`kill_process_group`'s own docstring for why that, not
+    pgid reuse, is what actually raises it here) (#385 round 3).
+
+    A real production race, not just a quirk of this suite's own test
+    scripts: ``bash -c "a; b"`` forks a *child* process to run a non-tail
+    command like ``b`` rather than exec'ing into it (macOS's /bin/bash
+    3.2 always does this; other shells can too for a background job, a
+    subshell, a pipeline stage). If a cancellation's own
+    :func:`kill_process_group` call (a single ``killpg``) lands in the
+    narrow window between that ``fork()`` and the new child actually
+    joining its parent's process group at the kernel level, the new
+    child is not yet a member of the group the signal was multicast to
+    and survives it, invisibly: it keeps running, and because it
+    inherited the same stdout/stderr pipes, ``_communicate_promptly``
+    never sees EOF until it does. Calling this again on every slice
+    while cancellation stays set (:func:`_communicate_promptly`) closes
+    that window within one poll interval regardless of when exactly the
+    fork lost the first race -- a pgid can never be reused while any
+    member of it is still alive, so repeating the same ``killpg`` is
+    always safe, never reaches a different, unrelated process, and never
+    needs its own total time limit.
+    """
+    if pgid is None:
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
         pass
 
 
@@ -264,12 +339,30 @@ class CancellationToken:
         :meth:`cleanup`, sleeps the full duration like plain ``time.sleep``
         instead — a retry backoff in a ``finally:`` must not abort early
         just because the run it's cleaning up from was already cancelled.
+
+        Polls :attr:`_event` in short slices rather than one single
+        ``wait(timeout=seconds)`` for the whole backoff (#385 follow-up,
+        same reasoning as :func:`as_completed_promptly`): a retry backoff
+        can run on the *main* thread too (a sequential chain's own retry,
+        not just a tree-flow worker's), and a single long wait there is
+        exactly the kind of blocking call that defers a signal delivered
+        to some *other* thread (a ``Live`` refresh thread, the MCP
+        client's own pool thread) until it returns on its own — this
+        thread never gets to execute the bytecode that would run the
+        pending handler until then. Slicing the wait means this thread
+        returns to bytecode at least every poll interval regardless of
+        which thread the signal reached.
         """
         if self.in_cleanup():
             time.sleep(max(0.0, seconds))
             return
-        if self._event.wait(timeout=max(0.0, seconds)):
-            raise RunCancelledBySignal("run cancelled during backoff")
+        remaining = max(0.0, seconds)
+        while True:
+            if self._event.wait(timeout=min(remaining, _SIGNAL_POLL_SECONDS)):
+                raise RunCancelledBySignal("run cancelled during backoff")
+            remaining -= _SIGNAL_POLL_SECONDS
+            if remaining <= 0:
+                break
 
     def in_cleanup(self) -> bool:
         """Whether the current context is inside this token's own
@@ -396,6 +489,327 @@ def submit_with_context(
     return executor.submit(ctx.run, fn, *args, **kwargs)
 
 
+#: How often :func:`as_completed_promptly` wakes the main thread up to
+#: check for a pending signal — see that function's own docstring for why
+#: this can't just be ``concurrent.futures.as_completed``'s own unbounded
+#: wait.
+_SIGNAL_POLL_SECONDS = 0.2
+
+
+def as_completed_promptly(
+    futures: Iterable[Future[Any]], *, poll_seconds: float = _SIGNAL_POLL_SECONDS
+) -> Iterator[Future[Any]]:
+    """``concurrent.futures.as_completed``, but never blocks the main
+    thread in one single, unbounded wait (#385 follow-up).
+
+    POSIX delivers a process-directed signal (SIGINT/SIGTERM/SIGHUP) to
+    *any* thread that doesn't have it blocked — not necessarily the main
+    thread, and not necessarily every thread. CPython only ever runs the
+    registered Python-level handler on the main thread, so when a signal
+    lands on a tree-flow/parallel-loop worker thread instead, the C-level
+    handler just records that the signal is pending; the main thread still
+    has to notice and actually call it. It does that either by executing
+    bytecode (checking the eval-loop's own "pending calls" flag) or by its
+    own blocking call being interrupted and retrying. Plain
+    ``as_completed(futures)`` with no timeout sits in exactly one such
+    blocking call the whole time — a ``threading.Condition.wait()`` with
+    no timeout, underneath a ``lock.acquire()`` that blocks in the kernel
+    (``pthread_cond_wait``) until some *other* thread notifies it. If the
+    signal never reaches the main thread's own blocking call, nothing
+    wakes it: it just keeps waiting, oblivious, until whichever branch
+    it's waiting on happens to finish on its own. In production that
+    silently delays Ctrl-C/`kill`/a hangup for as long as the running
+    branch takes; a repro that force-delivers a signal to a worker thread
+    (``signal.pthread_kill``) while the main thread sits in
+    ``as_completed`` confirms the handler then only runs once the future
+    completes, however long that takes.
+
+    The fix is the same one a blocking ``lock.acquire()`` already gets for
+    free when the signal *does* land on the main thread: never wait
+    unboundedly. ``add_done_callback`` (not ``concurrent.futures.wait``,
+    which this deliberately avoids calling in a loop — see below) plus a
+    private, bounded ``threading.Event.wait(poll_seconds)`` means the main
+    thread returns from its own blocking call every *poll_seconds*
+    regardless of which thread the signal landed on, executes a few
+    bytecodes, and so picks up a pending signal within *poll_seconds*
+    instead of only when a future happens to complete.
+
+    Deliberately not ``concurrent.futures.wait(pending, timeout=...)`` in
+    a loop (an earlier draft of this, and the shape ``as_completed``
+    itself polls with when given a ``timeout``): both route every call
+    through ``_AcquireFutures``, which acquires *every* pending future's
+    own ``_condition`` lock in one Python-level loop, with no
+    ``try/finally`` of its own, before doing anything else — if a signal
+    is handled (raises) partway through that loop, the futures already
+    locked in earlier iterations are never released, wedging any worker
+    thread that later calls ``set_result``/``set_exception`` on one of
+    them. ``as_completed`` only risks that once per call; calling
+    ``wait()`` every *poll_seconds* would re-enter it continuously for as
+    long as this run keeps going, for every still-pending future each
+    time. Registering a callback up front instead touches each future's
+    own lock at most once (the same single-lock exposure any ordinary
+    ``Future.result()``/``add_done_callback`` call already has, signal or
+    not), and the repeating part of this loop — waiting on a private
+    ``threading.Event`` nothing else ever locks — carries none of that
+    multi-future risk no matter how many times it polls.
+    """
+    fs = list(futures)
+    ready: list[Future[Any]] = []
+    ready_lock = threading.Lock()
+    wake = threading.Event()
+
+    def _on_done(f: Future[Any]) -> None:
+        with ready_lock:
+            ready.append(f)
+        wake.set()
+
+    for f in fs:
+        f.add_done_callback(_on_done)
+
+    remaining = len(fs)
+    while remaining:
+        wake.wait(poll_seconds)
+        wake.clear()
+        with ready_lock:
+            batch, ready[:] = ready[:], []
+        remaining -= len(batch)
+        yield from batch
+
+
+def wait_for_cancelled_branches(futures: Iterable[Future[Any]]) -> None:
+    """Wait for every already-running branch to actually finish, before a
+    tree-flow dynamic/parallel loop's own cancellation path re-raises past
+    them — with no total time limit, only :func:`as_completed_promptly`'s
+    own polled wait (#385 follow-up).
+
+    Call this right after ``executor.shutdown(wait=False,
+    cancel_futures=True)`` in that path. An earlier draft of this bounded
+    the wait to a fixed grace period instead: once it elapsed, this
+    function returned with a branch still running, the dynamic/loop
+    re-raised past it, and ``cli.interrupts.sigterm_as_interrupt`` went on
+    to call ``token.reset()`` on its way out of the run. A branch still
+    running at that point then found the cancellation flag already
+    cleared at its own next ``get_token().check()`` and started its next
+    effect with nothing left to track or kill it — silently undoing the
+    very cancellation this function exists to wait out. There is no safe
+    bound to pick instead: the flag must stay set until every branch's own
+    worker thread has actually returned. A second SIGINT/SIGTERM is still
+    handled within one poll interval no matter which thread it reaches,
+    exactly as :func:`as_completed_promptly` already guarantees for the
+    main loop — the only further cost a branch the kill cannot reach adds
+    here is delaying process exit until it returns, same as it already
+    does on an uncancelled run.
+    """
+    for _ in as_completed_promptly(futures):
+        pass
+
+
+def acquire_promptly(
+    sem: threading.Semaphore, *, poll_seconds: float = _SIGNAL_POLL_SECONDS
+) -> None:
+    """``sem.acquire()``, but in short polled slices rather than one
+    unbounded C-level wait (#385 follow-up).
+
+    Same reasoning as :func:`as_completed_promptly`/
+    :meth:`CancellationToken.sleep_or_raise`: a thread blocked here for an
+    adapter's own concurrency slot (e.g. ``adapters.cyberdiner``'s
+    ``max_in_flight``) must keep returning to bytecode, or a signal
+    delivered to some *other* thread goes unnoticed until whoever holds
+    the slot releases it, however long that takes.
+    """
+    while not sem.acquire(timeout=poll_seconds):
+        pass
+
+
+def poll_promptly(
+    conn: Any, timeout: float, *, poll_seconds: float = _SIGNAL_POLL_SECONDS
+) -> bool:
+    """``multiprocessing.connection.Connection.poll(timeout)``, but in
+    short polled slices rather than one single wait (#385 follow-up).
+
+    Same reasoning as :func:`as_completed_promptly`: ``plugins.python_eval``
+    calls this from whichever thread is running that step — a tree-flow
+    worker, or the main thread in a plain sequential chain — to wait for
+    its sandboxed child's result. A single ``poll(wall_seconds)`` is
+    bounded by the step's own timeout already, but that can still be
+    minutes long, during which this thread never returns to bytecode to
+    notice a signal delivered to some *other* thread. *timeout* is kept
+    exactly via a wall-clock deadline computed up front.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        if conn.poll(min(poll_seconds, remaining)):
+            return True
+
+
+def _feed_stdin(stdin: Any, data: bytes) -> None:
+    """Write the whole of *data* (already encoded to bytes by the caller)
+    to *stdin* and close it, from a thread of its own (#385 follow-up,
+    see ``_communicate_promptly``).
+
+    Always bytes, never ``str``: encoding happens in the calling thread,
+    before this thread starts, specifically so a ``UnicodeEncodeError``
+    (a lone surrogate, or a character the locale's own encoding can't
+    represent) raises synchronously there and fails the step the same
+    way it always has, rather than surfacing only as a traceback from
+    this thread's own excepthook while the child just sees EOF (#385
+    review P2).
+
+    ``BrokenPipeError`` means the reader (the child, or whatever still
+    held its read end) is gone — nothing left to write to, so this just
+    stops, the same as ``subprocess``'s own ``_stdin_write`` does.
+    """
+    try:
+        stdin.write(data)
+    except BrokenPipeError:
+        pass
+    finally:
+        try:
+            stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+
+
+def _communicate_promptly(
+    proc: subprocess.Popen[Any],
+    *,
+    input: str | bytes | None,
+    timeout: float | None,
+    pgid: int | None = None,
+    poll_seconds: float = _SIGNAL_POLL_SECONDS,
+) -> tuple[Any, Any]:
+    """``proc.communicate()``, but never in one single wait as long as
+    *timeout* itself (#385 follow-up).
+
+    A plain ``proc.communicate(timeout=timeout)`` sits in one ``select()``
+    bounded only by *timeout*, which can be minutes long for a slow curl/
+    ffmpeg step — exactly the kind of single blocking call that defers a
+    signal delivered to some *other* thread (ordinarily the main thread
+    here, in a plain sequential chain, with a Rich ``Live`` refresh thread
+    alive alongside it for the duration of the step) until it returns on
+    its own. Calling ``communicate`` repeatedly with a short *poll_seconds*
+    timeout instead returns this thread to bytecode that often, while
+    *timeout* — the step's own deadline — is kept exactly via a wall-clock
+    deadline computed up front, not reset by each retry.
+
+    *input* is never handed to ``communicate()`` itself (a regression:
+    CPython 3.11's POSIX ``Popen._communicate`` only ever registers
+    ``stdin`` for writing, and only ever closes it, on the *first* call —
+    ``self.stdin and input`` gates the selector registration, ``not
+    self._communication_started`` gates the close. Passing *input* again
+    on a retry raises ``ValueError: Cannot send input after starting
+    communication``, so an earlier version of this function passed it
+    only on the first call and ``None`` after — but then any input not
+    fully written inside that first short slice was simply never resumed
+    or closed, and a child that hadn't yet finished reading stdin waited
+    for EOF until *timeout* itself, or forever with no timeout). Instead,
+    if there is input to send *and* ``proc.stdin`` is a real pipe (a
+    ``subprocess.Popen`` always has one whenever ``run_tracked`` passed
+    ``input``; a bare duck-typed test double usually does not), a helper
+    thread (the same shape CPython's own Windows ``communicate`` uses for
+    stdin) writes and closes it on its own, and ``proc.stdin`` is set to
+    ``None`` first so ``communicate`` — now only ever called with
+    ``input=None`` — never touches it itself: stdout/stderr are its only
+    job here. The thread isn't joined: once the deadline is hit or the
+    process is killed, the reader going away unblocks a pending write
+    with ``BrokenPipeError`` on its own almost at once, and joining
+    unconditionally would reintroduce the exact unbounded-wait bug class
+    this module exists to close, this time inside the one place meant to
+    guarantee *timeout* itself. Without a real ``proc.stdin`` to hand to a
+    thread, this falls back to the pre-fix shape (*input* on the first
+    call, ``None`` after) — safe there only because none of this
+    catalog's own ``Popen`` test doubles actually model a retry losing
+    unwritten input.
+
+    *pgid*, when given (an isolated child -- see its own helper
+    ``_isolated_pgid``), is repeat-killed (``_repeat_group_kill``) after
+    every slice in which cancellation is still set outside
+    ``CancellationToken.cleanup``: the single ``killpg`` call
+    ``kill_process_group`` already sent from the signal handler can race
+    a child the tracked process forks right at that instant (see that
+    helper's own docstring), so this keeps retrying it, at the same
+    cadence as everything else here, until ``communicate`` actually sees
+    EOF.
+    """
+    # getattr, not proc.stdin: a Popen-like test double that never
+    # models a `stdin` attribute at all (most of this catalog's own
+    # subprocess.Popen fakes) must keep working exactly as before --
+    # for those, falling back to passing *input* to `communicate()` on
+    # the first call only (the pre-fix shape) is safe, since none of
+    # them actually exercise a retry that would lose it.
+    stdin = getattr(proc, "stdin", None)
+    threaded_stdin = input is not None and stdin is not None
+    if threaded_stdin:
+        # Encoded here, on the calling thread -- not inside `_feed_stdin`'s
+        # own thread -- so a `UnicodeEncodeError` surfaces synchronously
+        # and fails this step the same way it always has, instead of
+        # only ever printing from the writer thread's own excepthook
+        # while the child just sees EOF (#385 review P2). `text=True`
+        # gives a `TextIOWrapper` with its own `.buffer`, the raw byte
+        # stream `communicate()` itself writes/reads through -- the same
+        # invariant `subprocess.Popen.communicate` itself enforces (text
+        # mode takes `str` input, binary mode takes `bytes`) means *input*
+        # matches whichever of these two branches applies.
+        assert stdin is not None
+        is_text_mode = hasattr(stdin, "buffer")
+        if is_text_mode:
+            assert isinstance(input, str)
+            data: bytes = input.encode(stdin.encoding, stdin.errors)
+            # `detach()`, not a plain `.buffer` read (#385 review
+            # regression, confirmed by direct measurement): once this
+            # function returns, `stdin` -- the local name for the
+            # `TextIOWrapper` -- goes out of scope and is garbage
+            # collected almost at once. Its own finalizer still calls
+            # `close()`, which flushes *and closes the buffer it wraps*
+            # even though nothing was ever written through the wrapper
+            # itself -- on *this*, the main thread. That flush blocks for
+            # as long as the writer thread's own in-flight `write()` holds
+            # the buffer's internal lock (a pipe nothing reads never
+            # unblocks it), in C, where no pending signal is ever checked
+            # (measured: ~0.03s before this regression, ~6s after, with a
+            # SIGINT at 1.5s only surfacing at 6.08s). `detach()`
+            # disconnects the wrapper from its buffer first, so its own
+            # finalizer has nothing left to flush or close -- the writer
+            # thread becomes the buffer's only owner.
+            raw_stdin = stdin.detach()
+        else:
+            raw_stdin = stdin
+            assert isinstance(input, bytes)
+            data = input
+        proc.stdin = None
+        threading.Thread(
+            target=_feed_stdin, args=(raw_stdin, data), daemon=True
+        ).start()
+    if timeout is None:
+        deadline = None
+    else:
+        deadline = time.monotonic() + timeout
+        full_timeout = timeout
+    first = True
+    while True:
+        if deadline is None:
+            slice_timeout = poll_seconds
+        else:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(proc.args, full_timeout)
+            slice_timeout = min(poll_seconds, remaining)
+        try:
+            if threaded_stdin:
+                return proc.communicate(timeout=slice_timeout)
+            return proc.communicate(
+                input=input if first else None, timeout=slice_timeout
+            )
+        except subprocess.TimeoutExpired:
+            first = False
+            token = get_token()
+            if token.is_set() and not token.in_cleanup():
+                _repeat_group_kill(pgid)
+
+
 def run_tracked(
     cmd: Sequence[str],
     *,
@@ -451,12 +865,25 @@ def run_tracked(
         start_new_session=(os.name == "posix" and (token.armed or new_session)),
         **popen_kwargs,
     )
+    # Captured once, right after Popen, not re-derived later: a pgid
+    # can never be reused while any member of it is still alive, so
+    # this stays valid through every repeat kill below, including one
+    # needed because of a process this same pgid's own leader forked
+    # after this (#385 round 3, see _repeat_group_kill's own docstring).
+    pgid = _isolated_pgid(proc)
     with proc, token.track(proc):
         try:
-            stdout, stderr = proc.communicate(input=input, timeout=timeout)
+            stdout, stderr = _communicate_promptly(
+                proc, input=input, timeout=timeout, pgid=pgid
+            )
         except subprocess.TimeoutExpired:
             kill_process_group(proc)
             proc.wait()
+            # One more, after the process we were tracking has actually
+            # exited: a child it forked at the exact instant of the kill
+            # above must not be left running past a timed-out step
+            # either.
+            _repeat_group_kill(pgid)
             raise
         except BaseException:
             # Cancellation already killed this process's group from the
@@ -464,5 +891,6 @@ def run_tracked(
             # that unwinds through here, the same as ``run_binary``.
             kill_process_group(proc)
             proc.wait()
+            _repeat_group_kill(pgid)
             raise
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)

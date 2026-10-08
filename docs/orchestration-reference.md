@@ -1775,12 +1775,41 @@ else, but faster: a branch that hasn't started yet never starts at all (no
 node, no hooks — the same shape `stop_on_error` already gives a not-yet-
 started sibling), and a branch already running is stopped outright — its
 child process (the whole process group a tool like `shell` spawns, not
-just its own pid) is killed. This covers every `shell`/binary-wrapping
+just its own pid) is killed, and killed again on every short poll for as
+long as cancellation stays requested: a shell step whose own command
+forks a further child right as the first kill lands (a shell running
+more than one command, e.g. `cmd1; cmd2`, can do this even for a plain
+sequential pipeline) can rarely survive that single kill, since the new
+child joining its process group and the kill being delivered to it are
+racing each other at the kernel level — the repeated kill catches it
+within a fraction of a second regardless of which kill it survived.
+This covers every `shell`/binary-wrapping
 tool plugin and every HTTP call that goes through curl (every model
-adapter's own prompt, `web_search`, `weather`, ComfyUI's REST calls) —
-an in-flight MCP call is not cancelled; the MCP client does not watch
-for cancellation, so a branch blocked in one keeps running until the
-server responds (or its own timeout) regardless of the signal. A killed
+adapter's own prompt, `web_search`, `weather`, ComfyUI's REST calls). A
+few steps the kill genuinely cannot reach finish on their own instead,
+and only then does the run stop — the next step after one never starts,
+but that step itself is not interrupted: an in-flight `mcp` call (the MCP
+client does not watch for cancellation, so a branch blocked in one keeps
+running until the server responds or its own timeout, regardless of the
+signal), the `service` tool's own `start`/`stop` calls (a service is
+meant to outlive the run, so cancelling the run must not orphan a
+half-started or half-stopped one), and any plain Python-level step that
+never polls back in. Rarely, and only under very heavy CPU load on the
+machine running `cof` itself, a step can start after the run has already
+been reported cancelled, and not only on a branch with a step the kill
+cannot reach — Ctrl-C/SIGTERM/SIGHUP is only ever actually handled by
+this process's own main thread, and only once that thread's Python
+interpreter next checks for one, so *any* branch still running at that
+moment can reach its own next step first if that check is delayed long
+enough. Under adversarial contention (a synthetic load of three
+CPU-bound processes competing for the machine's own cores) this has been
+measured happening on roughly 3% of runs, with the main thread's own
+handler recorded running more than three seconds after the signal was
+sent; the run keeps going during that whole delay. What causes a delay
+that long is not yet pinned down — closing it is tracked as a redesign
+in #404, not something this orchestrator's own polling (which otherwise
+returns to that check several times a second) can paper over on its
+own. A killed
 child is sent SIGKILL directly, not the SIGINT/SIGTERM the signal itself
 carried, so a tool with its own graceful-shutdown handling (`ffmpeg`
 finalizing a partial output) never gets the chance; running detached from

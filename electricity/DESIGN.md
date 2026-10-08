@@ -487,46 +487,50 @@ dispatches (`prime.shots.iter_3.handle`); that concretized path is what the stat
 spans, and `--resume` key off, never the placeholder form. Control flow is nested **regions**,
 WASM-style, instead of arbitrary jumps:
 
+The authoritative definitions are the `electricity-bytecode` crate (issue #408, lane A); this is a
+shortened sketch of its shape, not a second source of truth — see that crate's own doc comments
+for the full field-for-field mapping back to Circuitry's `*Definition` dataclasses:
+
 ```rust
 enum Region {
-    Block(Vec<Op>),                                    // a dynamic's or document root's effects:
-    Loop { body: Box<Region>, mode: LoopMode },         // each/while; see LoopMode below
-    If { then_: Box<Region>, else_: Option<Box<Region>> },
+    Block { ops: Vec<Op>, overlay: bool },              // a dynamic's/root's effects, a loop body,
+                                                          // or an if branch; overlay is false for
+                                                          // the root/a dynamic, true for the other two
+    Loop { spec: LoopSpec, body: Box<Region>, flow: LoopFlow, max_concurrency: Option<u32>,
+           max_iterations: Option<u32>, min_iterations: u32, collect: Option<String> },
+    If { cond: Condition, then_: Box<Region>, else_: Option<Box<Region>>, threshold: f64 },
     TryFinally { body: Box<Region>, finally: Box<Region> },
-    Parallel(Vec<Region>),                              // a *statically known* branch list only —
+    Parallel { branches: Vec<Op>, max_concurrency: Option<u32>, stop_on_error: bool },
+                                                          // a *statically known* branch list only —
                                                           // `dynamic flow: tree`'s own effects, never
                                                           // a loop's runtime-sized pass set (below)
 }
 
-enum LoopMode {
-    EachChain,  // each, sequential
-    EachTree,   // each, flow: tree — one compiled `body`, replicated at run time once per element
-                // of the resolved collection and dispatched as a single parallel batch using the
-                // *same scheduling primitives* `Region::Parallel` uses (§6.2: shared snapshot,
-                // semaphore, stop_on_error) — but never materialized as a `Region::Parallel` IR
-                // node, since the branch count isn't known until the collection resolves. This is
-                // the fix for an earlier draft's ambiguity between representing a tree-mode `each`
-                // as `Loop{tree}` and as `Parallel`: it is always `Loop{mode: EachTree}` in the IR;
-                // `Parallel` is reserved for `dynamic flow: tree`'s fixed, compile-time branch list.
-    While,      // always sequential (runtime-semantics §5.5); no tree-mode `while` exists
-}
+// LoopSpec::Each{in_path, as_name, truncate}/While(Condition) replace the sketch's old LoopMode
+// enum; LoopFlow::{Chain, Tree} is `flow:`'s own chain/tree choice, carried as `Region::Loop`'s own
+// field rather than folded into LoopSpec, since a `while` loop still needs the field (always
+// `Chain` — runtime-semantics §5.5; no tree-mode `while` exists) even though only `each` ever varies
+// it. A tree-mode `each` is `Region::Loop { flow: Tree, .. }`, never a `Region::Parallel` — the
+// branch count isn't known until the collection resolves, exactly the ambiguity an earlier draft
+// of this document flagged (resolved the same way, just renamed).
 
-// A leaf effect's own payload — prompt/tool/use/reflector never contain a nested Region of their
-// own (a reflector's `inner` dynamic is a *sibling* field, compiled as an ordinary `Region`, not
-// folded into this enum — see the `reflector` row below).
+// A leaf effect's own payload — prompt/tool/use/yield/reflector never contain a nested Region of
+// their own (a reflector's `inner` dynamic is a *sibling* field, compiled as an ordinary `Region`,
+// not folded into this enum — see the `reflector` row below).
 enum LeafKind {
     Prompt(PromptOp),
     Tool(ToolOp),
     Use(UseOp),
+    Yield(YieldOp),
     Reflector(ReflectorOp),
 }
 
 // A compiled node is *either* a leaf effect *or* a control-flow region that owns its own path —
 // `loop`/`dynamic`/`if` compile directly to `NodeKind::Control`, never to a `LeafKind` variant
-// that then separately wraps a `Region`. This is the other half of the same earlier-draft
-// ambiguity's fix: a `Region` and the `Op` that names it are the same node, not two.
+// that then separately wraps a `Region`. `Leaf` is boxed: `LeafKind`'s largest variant otherwise
+// made this enum far larger than `Region` (clippy::large_enum_variant), with no change in meaning.
 enum NodeKind {
-    Leaf(LeafKind),
+    Leaf(Box<LeafKind>),
     Control(Region),
 }
 
@@ -534,8 +538,9 @@ struct Op {
     path: EffectPath,       // stable id (placeholder form inside a loop body, see above)
     name: Option<String>,   // None for an unnamed loop/conditional (transparent control)
     kind: NodeKind,
-    on_error: OnErrorPolicy,
+    on_error: OnError,
     labels: Option<Value>,
+    enabled: bool,
 }
 ```
 
@@ -550,8 +555,8 @@ A `dynamic`/document-root `finally:` list compiles into a `TryFinally` region wr
 | `prompt` | `NodeKind::Leaf(LeafKind::Prompt)` | Carries the resolved `(adapter, model)` attempt chain *shape* (not resolved values — those are runtime, scoring/routing-dependent) and the pre-rendered template/messages AST. |
 | `tool` | `NodeKind::Leaf(LeafKind::Tool)` | Carries the provider name, the params AST (template nodes + `{from:}` markers + the security-sensitive-key literal check already passed), and the `params_json` template (if any) tagged for `JsonAwareCtx` rendering (§3.3). |
 | `use` | `NodeKind::Leaf(LeafKind::Use)` | Carries the resolution mode (`path`/`inline`), the inputs AST, and — for `inline` — the **uncompiled** template text (compiled to an IR subtree only at *run time*, after rendering produces YAML text, §5.3). A `path:` child resolves in a fixed order — absolute path first, then relative to the current working directory, then relative to the **parent orchestration's own directory** — and that last fallback is re-rooted per nesting level: a `use` nested inside an already-loaded child resolves its own `path:` relative to *that child's* directory, not the original root document's, so composition can descend through several directories of `use` children without every one needing a path relative to wherever the top-level document happened to live. |
-| `loop` | `NodeKind::Control(Region::Loop { .. })` | `each`-chain/`each`-tree/`while` captured in `LoopMode` (above); an unnamed loop compiles identically but dispatches writes into the enclosing scope at run time rather than a child node. |
-| `dynamic` | `NodeKind::Control(Region::Block(..))` (chain) or `NodeKind::Control(Region::Parallel(..))` (tree), wrapped in `Region::TryFinally` if `finally:` is present | The document root itself is a `dynamic` named `"prime"` with no scope-overlay semantics (runtime-semantics §2.4's "top-level root is not a scope-overlay container" — compiled into the IR as a `Block` whose child ops read `ctx` by reference, never through `scope_ctx`). |
+| `loop` | `NodeKind::Control(Region::Loop { .. })` | `each`-chain/`each`-tree/`while` captured in `LoopSpec`/`LoopFlow` (above); an unnamed loop compiles identically but dispatches writes into the enclosing scope at run time rather than a child node. |
+| `dynamic` | `NodeKind::Control(Region::Block { .. })` (chain) or `NodeKind::Control(Region::Parallel { .. })` (tree), wrapped in `Region::TryFinally` if `finally:` is present | The document root itself is a `dynamic` named `"prime"` with no scope-overlay semantics (runtime-semantics §2.4's "top-level root is not a scope-overlay container" — compiled into the IR as a `Block` whose child ops read `ctx` by reference, never through `scope_ctx`). |
 | `if`/`conditional` | `NodeKind::Control(Region::If { .. })` | `mode: cel`'s expression and `mode: model`'s template are both pre-validated at compile time (§4); `threshold:` is carried through to `meta` but never consulted by the interpreter (runtime-semantics §5.6). |
 | `reflector` | `NodeKind::Leaf(LeafKind::Reflector)`, carrying its own `inner: Region` field | Compiles the reflector's own `effects:` (the `inner` dynamic) as an ordinary nested `Region` field on `ReflectorOp`, but the **generated plan** it produces at run time is never part of this compiled IR — see §5.3. |
 
@@ -618,8 +623,9 @@ frame (for scope-overlay rebuilding, §6.3).
 ### 6.2 Scheduling: tokio tasks for parallel branches
 
 Both a `dynamic flow: tree` (`Region::Parallel`, a statically-known branch list) and an `each
-flow: tree` loop (`Region::Loop { mode: LoopMode::EachTree, .. }`, one compiled body replicated
-once per resolved-collection element — §5.1) spawn one `tokio::task::spawn_local` task per
+flow: tree` loop (`Region::Loop { spec: LoopSpec::Each { .. }, flow: LoopFlow::Tree, .. }`, one
+compiled body replicated once per resolved-collection element — §5.1) spawn one
+`tokio::task::spawn_local` task per
 branch/pass, on the single-threaded `LocalSet` runtime (§6.1), through the same scheduling
 primitive, against a **shared, deterministic snapshot taken at the parallel
 dispatch's start** — a shallow copy of `ctx` at that instant (runtime-semantics §5.5) — never each
@@ -685,8 +691,9 @@ filling in detail an earlier draft of this design left to a one-line bytecode-ta
   passes of a `while` loop — the loop runs at least that many passes regardless of what the
   condition would have said on an earlier pass.
 - **`while` always runs sequentially**, even when the orchestration otherwise sets
-  `flow: tree` on it — there is no tree-mode `while` (reflected in `LoopMode::While` carrying no
-  tree variant at all, §5.1); only `each` has a tree/chain choice.
+  `flow: tree` on it — there is no tree-mode `while` (reflected in `LoopSpec::While` carrying no
+  `flow:` choice of its own; `Region::Loop`'s own `flow` field is always `LoopFlow::Chain` for it,
+  §5.1); only `each` has a tree/chain choice.
 - **`each.as`/the implicit `iter` bindings**: `each.as: <name>` binds the current element under
   that name, in addition to the implicit `iter.index`/`iter.count` carried in `ctx` (§6.3).
   **`as:` defaults to `item`, not to no binding at all** — an `each` loop with no `as:` still

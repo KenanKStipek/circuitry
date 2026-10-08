@@ -18,7 +18,6 @@ ends the process at once, with the same exit code and no traceback.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import signal
 import subprocess
@@ -27,6 +26,12 @@ import time
 from pathlib import Path
 
 import pytest
+from _signal_test_support import (
+    _diagnose_and_fail,
+    _pid_alive,
+    _sandboxed_env,
+    _wait_for_paths,
+)
 
 requires_bash = pytest.mark.skipif(
     shutil.which("bash") is None, reason="requires the 'bash' binary"
@@ -37,41 +42,60 @@ requires_bash = pytest.mark.skipif(
 #: the branch happened to complete on its own first.
 _BRANCH_SLEEP_SECONDS = 60
 
-#: How long a cancelled run may take to actually exit. Loose on purpose
-#: (#356 says "loosely bound... under 10s" for CI machines under load) —
-#: what matters is "nowhere near _BRANCH_SLEEP_SECONDS", not a tight bound.
-_STOP_BOUND_SECONDS = 10.0
+#: How long a cancelled run may take to actually exit. Loose on purpose —
+#: what matters is "nowhere near _BRANCH_SLEEP_SECONDS", not a tight bound
+#: (#356's own rationale), derived from it rather than a literal so the
+#: two can't quietly drift apart (#385 review). #385 first widened this to
+#: 30s to tolerate what looked like scheduling starvation under heavy
+#: machine load; investigating the one real CI failure found a genuine
+#: bug instead — a signal landing on a tree-flow/parallel-loop *worker*
+#: thread (not this process's main thread) was never noticed until the
+#: branch finished on its own, because `as_completed()` sat in one
+#: unbounded wait the whole time (now fixed: `core.cancellation.
+#: as_completed_promptly`, used by `core.dynamic`/`core.loop`). With that
+#: fixed, this goes back to a tight-ish bound — `test_run_sighup_pty.py`'s
+#: own 20.0 has never been reported flaky even under load.
+_STOP_BOUND_SECONDS = _BRANCH_SLEEP_SECONDS / 3
 
-#: Credential env vars that must never reach a spawned `cof run` here — this
-#: suite never configures an adapter, so none of them are needed, and their
-#: presence must not change anything it asserts (#356's own test plan).
-_CREDENTIAL_ENV_VARS = (
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "CYBERDINER_TOKEN",
-    "CYBERDINER_EXPO_URL",
-    "GH_TOKEN",
-    "GITHUB_TOKEN",
-    "NPM_TOKEN",
-)
-
-
-def _sandboxed_env(tmp_path: Path) -> dict[str, str]:
-    """A child-process env with a fake $HOME (CLAUDE.md hermeticity) and no
-    credentials — this suite has no adapter to use them, real or fake."""
-    home = tmp_path / "home"
-    home.mkdir(exist_ok=True)
-    env = {
-        k: v for k, v in os.environ.items() if k not in _CREDENTIAL_ENV_VARS
-    }
-    env["HOME"] = str(home)
-    return env
+#: How long `communicate()`/`wait()` are given to actually observe the
+#: child exit before a timeout here is treated as a real failure — wider
+#: than `_STOP_BOUND_SECONDS` itself, so a genuinely slow (not hung)
+#: machine gets a little headroom to actually read the exit before the
+#: test gives up; `elapsed < _STOP_BOUND_SECONDS` below is what actually
+#: proves promptness once the child does exit. Still well under
+#: `_BRANCH_SLEEP_SECONDS` (asserted below) so a run that was genuinely
+#: never cancelled still fails here rather than quietly waiting it out.
+#: `core.cancellation.wait_for_cancelled_branches` itself now waits with
+#: no total time limit of its own (#385 follow-up — an earlier revision's
+#: fixed grace period there let a branch outlive `token.reset()` and
+#: start a further effect uncancelled), so the only thing the headroom
+#: above `_STOP_BOUND_SECONDS` still covers is a killed branch's worker
+#: thread actually being scheduled and noticed, ordinarily near-instant.
+_COMMUNICATE_TIMEOUT_SECONDS = _STOP_BOUND_SECONDS + 10.0
+assert _COMMUNICATE_TIMEOUT_SECONDS < _BRANCH_SLEEP_SECONDS
 
 
 def _branch_tool(name: str, *, pidfile: Path, started: Path) -> str:
     """A `tool: shell` effect: records its own pid and a 'started' marker
     before sleeping, so a test can wait for (and later assert on) exactly
-    those two things without a fixed sleep of its own."""
+    those two things without a fixed sleep of its own.
+
+    Deliberately NOT `exec`'d (#385 round 3): macOS's /bin/bash (3.2)
+    forks a *child* process to run a non-tail command like this `sleep`
+    rather than exec'ing into it, so the pid recorded above is bash's
+    own, not the long-lived process -- a real production race, not a
+    quirk of this script: `kill_process_group`'s own `killpg` can race
+    the kernel's own registration of that just-forked child into the
+    group. `run_tracked`/`_communicate_promptly` now repeat that same
+    `killpg` on every slice while cancellation stays set
+    (`_repeat_group_kill`), which is exactly the production fix this
+    test (the suite's main tree-flow/parallel-loop cancellation tests)
+    exists to exercise for real under this module's own bounded-load
+    comparison -- see `_signal_test_support.py`'s
+    `_process_group_and_pipe_diagnostics` for how the race was found.
+    Other scripts in this file that only need a killable branch, not to
+    exercise this specific race, use `exec` instead.
+    """
     script = f"echo $$ > {pidfile}; touch {started}; sleep {_BRANCH_SLEEP_SECONDS}"
     return f"""
       - type: tool
@@ -125,7 +149,7 @@ def _parallel_loop_orchestration(
     pidfiles = [tmp_path / f"pid_{i}" for i in range(n_iterations)]
     started = [tmp_path / f"started_{i}" for i in range(n_iterations)]
     scripts = [
-        f"echo $$ > {pidfiles[i]}; touch {started[i]}; sleep {_BRANCH_SLEEP_SECONDS}"
+        f"echo $$ > {pidfiles[i]}; touch {started[i]}; exec sleep {_BRANCH_SLEEP_SECONDS}"
         for i in range(n_iterations)
     ]
     body = f"""
@@ -161,29 +185,6 @@ effects:
     return orch, state_path, pidfiles, started
 
 
-def _wait_for_paths(paths: list[Path], *, timeout: float = 15.0) -> None:
-    """Poll until every path in *paths* exists — no fixed sleep (#356's own
-    test plan): a branch's marker lands the instant it actually starts, and
-    nothing else tells us that reliably under load."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if all(p.exists() for p in paths):
-            return
-        time.sleep(0.02)
-    missing = [str(p) for p in paths if not p.exists()]
-    raise TimeoutError(f"never started within {timeout}s: {missing}")
-
-
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
 def _run_cof(orch: Path, *, out_path: Path, state_path: Path | None = None) -> subprocess.Popen[str]:
     tmp_path = orch.parent
     args = [sys.executable, "-m", "circuitry.cli.app", "run", str(orch)]
@@ -215,17 +216,22 @@ def test_cancel_tree_dynamic_stops_promptly(
     try:
         _wait_for_paths(started[:2])
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for the branches to start")
 
     t0 = time.monotonic()
     proc.send_signal(sig)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+        _diagnose_and_fail(
+            proc,
+            timeout=_COMMUNICATE_TIMEOUT_SECONDS,
+            label="waiting for the signal to stop the run",
+            elapsed=time.monotonic() - t0,
+            pid=int(pidfiles[0].read_text(encoding="utf-8").strip())
+            if pidfiles[0].exists()
+            else None,
+        )
     elapsed = time.monotonic() - t0
 
     assert proc.returncode == expected_code, (stdout, stderr)
@@ -283,17 +289,22 @@ def test_cancel_parallel_loop_stops_promptly(
     try:
         _wait_for_paths(started[:2])
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for the passes to start")
 
     t0 = time.monotonic()
     proc.send_signal(sig)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+        _diagnose_and_fail(
+            proc,
+            timeout=_COMMUNICATE_TIMEOUT_SECONDS,
+            label="waiting for the signal to stop the run",
+            elapsed=time.monotonic() - t0,
+            pid=int(pidfiles[0].read_text(encoding="utf-8").strip())
+            if pidfiles[0].exists()
+            else None,
+        )
     elapsed = time.monotonic() - t0
 
     assert proc.returncode == expected_code, (stdout, stderr)
@@ -339,7 +350,7 @@ effects:
         provider: shell
         params:
           command: bash
-          args: ["-c", "echo $$ > {pidfile}; touch {started}; sleep {_BRANCH_SLEEP_SECONDS}"]
+          args: ["-c", "echo $$ > {pidfile}; touch {started}; exec sleep {_BRANCH_SLEEP_SECONDS}"]
           allowed_commands: ["bash"]
     finally:
       - type: tool
@@ -347,7 +358,7 @@ effects:
         provider: shell
         params:
           command: bash
-          args: ["-c", "touch {cleanup_started}; sleep 5"]
+          args: ["-c", "touch {cleanup_started}; exec sleep 5"]
           allowed_commands: ["bash"]
 """.lstrip("\n")
     orch = tmp_path / "second_signal.yml"
@@ -358,26 +369,33 @@ effects:
     try:
         _wait_for_paths([started])
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for the branch to start")
 
     t0 = time.monotonic()
     proc.send_signal(signal.SIGINT)
     try:
-        _wait_for_paths([cleanup_started], timeout=10.0)
+        _wait_for_paths([cleanup_started])
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(
+            proc,
+            timeout=20.0,
+            label="waiting for cleanup to start after the first signal",
+            elapsed=time.monotonic() - t0,
+            pid=int(pidfile.read_text(encoding="utf-8").strip()),
+        )
     # cleanup's own `sleep 5` is still running — exactly the "cleanup still
     # in progress" window the second signal must cut through at once.
     proc.send_signal(signal.SIGINT)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+        _diagnose_and_fail(
+            proc,
+            timeout=_COMMUNICATE_TIMEOUT_SECONDS,
+            label="waiting for the second signal to end the run",
+            elapsed=time.monotonic() - t0,
+            pid=int(pidfile.read_text(encoding="utf-8").strip()),
+        )
     elapsed = time.monotonic() - t0
 
     assert proc.returncode == 130, (stdout, stderr)
@@ -420,14 +438,14 @@ effects:
         on_error: continue
         params:
           command: bash
-          args: ["-c", "echo $$ > {a_pidfile}; touch {a_started}; sleep {_BRANCH_SLEEP_SECONDS}"]
+          args: ["-c", "echo $$ > {a_pidfile}; touch {a_started}; exec sleep {_BRANCH_SLEEP_SECONDS}"]
           allowed_commands: ["bash"]
       - type: tool
         name: b
         provider: shell
         params:
           command: bash
-          args: ["-c", "touch {b_started}; sleep {_BRANCH_SLEEP_SECONDS}"]
+          args: ["-c", "touch {b_started}; exec sleep {_BRANCH_SLEEP_SECONDS}"]
           allowed_commands: ["bash"]
 """.lstrip("\n")
     orch = tmp_path / "loop_on_error_continue.yml"
@@ -440,17 +458,22 @@ effects:
     try:
         _wait_for_paths([a_started])
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for a to start")
 
     t0 = time.monotonic()
     proc.send_signal(signal.SIGINT)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+        _diagnose_and_fail(
+            proc,
+            timeout=_COMMUNICATE_TIMEOUT_SECONDS,
+            label="waiting for the signal to stop the run",
+            elapsed=time.monotonic() - t0,
+            pid=int(a_pidfile.read_text(encoding="utf-8").strip())
+            if a_pidfile.exists()
+            else None,
+        )
     elapsed = time.monotonic() - t0
 
     assert proc.returncode == 130, (stdout, stderr)
@@ -487,7 +510,7 @@ effects:
         provider: shell
         params:
           command: bash
-          args: ["-c", "touch {started}; sleep {_BRANCH_SLEEP_SECONDS}"]
+          args: ["-c", "touch {started}; exec sleep {_BRANCH_SLEEP_SECONDS}"]
           allowed_commands: ["bash"]
     finally:
       - type: dynamic
@@ -510,17 +533,19 @@ effects:
     try:
         _wait_for_paths([started])
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for the branch to start")
 
     t0 = time.monotonic()
     proc.send_signal(signal.SIGINT)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+        _diagnose_and_fail(
+            proc,
+            timeout=_COMMUNICATE_TIMEOUT_SECONDS,
+            label="waiting for the signal to stop the run",
+            elapsed=time.monotonic() - t0,
+        )
     elapsed = time.monotonic() - t0
 
     assert proc.returncode == 130, (stdout, stderr)
@@ -550,7 +575,7 @@ def _interrupted_dynamic_orchestration(tmp_path: Path) -> tuple[Path, Path]:
     started = tmp_path / "slow_started"
     script = (
         f"if [ -f {started} ]; then exit 0; fi; "
-        f"touch {started}; sleep {_BRANCH_SLEEP_SECONDS}"
+        f"touch {started}; exec sleep {_BRANCH_SLEEP_SECONDS}"
     )
     body = f"""
 effects:
@@ -593,16 +618,19 @@ def test_resume_after_cancel_reruns_an_interrupted_dynamics_children(
     try:
         _wait_for_paths([started])
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for step_b to start")
 
+    t0 = time.monotonic()
     proc.send_signal(signal.SIGINT)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+        _diagnose_and_fail(
+            proc,
+            timeout=_COMMUNICATE_TIMEOUT_SECONDS,
+            label="waiting for the signal to stop the run",
+            elapsed=time.monotonic() - t0,
+        )
     assert proc.returncode == 130, (stdout, stderr)
 
     before = json.loads(out_path.read_text(encoding="utf-8"))

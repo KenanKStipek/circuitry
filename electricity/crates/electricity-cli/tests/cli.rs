@@ -100,3 +100,46 @@ fn unknown_flag_is_a_usage_error_with_exit_code_two() {
     let output = cmd.arg("--bogus").output().unwrap();
     assert_eq!(output.status.code(), Some(2));
 }
+
+/// `--dump-ir` wiring (issue #408's CLI section): until lane B lands,
+/// `electricity-compiler::check_for_run` is a stub that always fails, so
+/// this is the exact text `--dump-ir` reports for any document today --
+/// not Circuitry's own error for this particular file, which lane A
+/// never reaches.
+#[test]
+fn dump_ir_reports_the_lane_a_stub_error_and_exits_one() {
+    let (mut cmd, home) = command("dump-ir");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .args(["config.json", doc.to_str().unwrap(), "--dump-ir"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not implemented in lane A"));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn dump_ir_flag_before_positionals_is_also_recognized() {
+    let (mut cmd, home) = command("dump-ir-first");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .args(["--dump-ir", "config.json", doc.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not implemented in lane A"));
+}
+
+#[test]
+fn help_mentions_dump_ir_is_unstable() {
+    let (mut cmd, _home) = command("help-dump-ir");
+    let output = cmd.arg("--help").output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--dump-ir"));
+    assert!(stdout.contains("Unstable"));
+}

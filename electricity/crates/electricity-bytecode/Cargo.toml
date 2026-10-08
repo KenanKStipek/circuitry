@@ -1,0 +1,20 @@
+[package]
+name = "electricity-bytecode"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Compiled IR for electricity orchestrations: Program/Op/Region (electricity-bytecode)"
+
+[dependencies]
+electricity-value = { path = "../electricity-value" }
+# Ordered maps that round-trip through Serialize in document order: a
+# document's prompts: map and a compiled `use`'s normalized outputs: both
+# keep the order they were declared in, same as electricity-value's own
+# `Dict`.
+indexmap = { version = "2", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

@@ -1,0 +1,143 @@
+{
+  "PromptDefinition": [
+    "name",
+    "template",
+    "messages",
+    "prompt_type",
+    "schema",
+    "model",
+    "provider",
+    "provider_fallbacks",
+    "routing_override",
+    "params",
+    "timeout_ms",
+    "deterministic",
+    "inputs",
+    "assets",
+    "retries",
+    "on_error",
+    "description",
+    "enabled",
+    "group"
+  ],
+  "MessageDef": [
+    "role",
+    "content"
+  ],
+  "AssetRefDef": [
+    "kind",
+    "ref"
+  ],
+  "RetryPolicyDef": [
+    "max_attempts",
+    "backoff_ms"
+  ],
+  "ToolDefinition": [
+    "name",
+    "provider",
+    "params",
+    "params_json",
+    "prompt",
+    "model",
+    "timeout_ms",
+    "on_error",
+    "description",
+    "retries",
+    "expect",
+    "enabled",
+    "group"
+  ],
+  "ExpectDef": [
+    "mode",
+    "expr",
+    "template"
+  ],
+  "UseDefinition": [
+    "name",
+    "ref",
+    "path",
+    "orchestration",
+    "inline",
+    "inputs",
+    "outputs",
+    "validate",
+    "on_error",
+    "description",
+    "retries",
+    "expect",
+    "enabled"
+  ],
+  "YieldDefinition": [
+    "name",
+    "template",
+    "inputs",
+    "on_error",
+    "description",
+    "enabled"
+  ],
+  "ReflectorDefinition": [
+    "name",
+    "inner",
+    "plan_from_step",
+    "max_iterations",
+    "generated_key",
+    "stop_on_done",
+    "prime_template",
+    "max_effects",
+    "enabled"
+  ],
+  "DynamicDefinition": [
+    "name",
+    "effects",
+    "flow",
+    "finally_effects",
+    "max_concurrency",
+    "stop_on_error",
+    "on_error",
+    "labels",
+    "enabled",
+    "prompts",
+    "effect_names"
+  ],
+  "ConditionalDefinition": [
+    "name",
+    "condition",
+    "then_effects",
+    "else_effects",
+    "threshold",
+    "on_error",
+    "enabled",
+    "labels"
+  ],
+  "ConditionDef": [
+    "mode",
+    "template",
+    "expr",
+    "strict"
+  ],
+  "LoopDefinition": [
+    "name",
+    "body",
+    "while_def",
+    "each_def",
+    "max_iterations",
+    "min_iterations",
+    "on_error",
+    "collect",
+    "flow",
+    "max_concurrency",
+    "enabled",
+    "labels"
+  ],
+  "LoopWhileDef": [
+    "mode",
+    "template",
+    "expr",
+    "strict"
+  ],
+  "LoopEachDef": [
+    "in_path",
+    "as_name",
+    "truncate"
+  ]
+}
