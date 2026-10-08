@@ -1,0 +1,1281 @@
+[
+  {
+    "name": "prompts_not_a_mapping",
+    "files": {
+      "doc.yml": "prompts: nope\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prompts: 'nope' is not of type 'object'"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - prompts: 'nope' is not of type 'object'",
+    "definition": null,
+    "definition_error": "ValueError: 'prompts' must be a mapping of name to template.",
+    "digest": "3a49bcacaf06de8050f18bb93eca2bbf556a2df91e43491a9bd12fd3709fe45d",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompts_key_dotted",
+    "files": {
+      "doc.yml": "prompts:\n  a.b: hi\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "'prompts' key 'a.b' must be a valid name ([A-Za-z_][A-Za-z0-9_]*, no '.')."
+      ],
+      "warnings": []
+    },
+    "run_error": "'prompts' key 'a.b' must be a valid name ([A-Za-z_][A-Za-z0-9_]*, no '.').",
+    "definition": null,
+    "definition_error": "ValueError: 'prompts' key 'a.b' must be a valid name ([A-Za-z_][A-Za-z0-9_]*, no '.').",
+    "digest": "e64dc512eae8a20bd6004f9ed9871cc152280f0d77eb3b553f16f8f648c4d879",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompts_key_non_string",
+    "files": {
+      "doc.yml": "prompts:\n  5: hi\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "'prompts' key 5 must be a valid name ([A-Za-z_][A-Za-z0-9_]*, no '.')."
+      ],
+      "warnings": []
+    },
+    "run_error": "'prompts' key 5 must be a valid name ([A-Za-z_][A-Za-z0-9_]*, no '.').",
+    "definition": null,
+    "definition_error": "ValueError: 'prompts' key 5 must be a valid name ([A-Za-z_][A-Za-z0-9_]*, no '.').",
+    "digest": "6f18e051b3b4828f5c316b02997a774677ad30fbc6c8e1fa642cfc0b5316987c",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompts_value_wrong_shape",
+    "files": {
+      "doc.yml": "prompts:\n  voice: 5\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prompts.voice: 5 is not valid under any of the given schemas (5 is not of type 'string')"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - prompts.voice: 5 is not valid under any of the given schemas (5 is not of type 'string')",
+    "definition": null,
+    "definition_error": "PromptFileError: prompts.voice must be a string or {file: <path>}.",
+    "digest": "00d9a062a09863bbe829f3894af6d8b95003b523d8a00fe7ccd8e2122b225974",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompts_file_non_string",
+    "files": {
+      "doc.yml": "prompts:\n  voice: {file: 5}\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prompts.voice: value is not valid under any of the given schemas ({'file': 5} is not of type 'string')"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - prompts.voice: value is not valid under any of the given schemas ({'file': 5} is not of type 'string')",
+    "definition": null,
+    "definition_error": "PromptFileError: prompts.voice: 'file' must be a non-empty string path.",
+    "digest": "abc634ae4ddfeb153c0667a60f54d9f7273edf9c68a31144fcddd7c56cbee161",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompts_file_absolute_path",
+    "files": {
+      "doc.yml": "prompts:\n  voice: {file: /etc/passwd}\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prompts.voice: 'file' must be a relative path, got absolute path '/etc/passwd'."
+      ],
+      "warnings": []
+    },
+    "run_error": "prompts.voice: 'file' must be a relative path, got absolute path '/etc/passwd'.",
+    "definition": null,
+    "definition_error": "PromptFileError: prompts.voice: 'file' must be a relative path, got absolute path '/etc/passwd'.",
+    "digest": "6b3b2013f1f2913fc2ea1c7f382c2eae4ff6a778f23f1212d5affd90b26d03bc",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompts_file_template_tag",
+    "files": {
+      "doc.yml": "prompts:\n  voice: {file: '{{input.name}}.md'}\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prompts.voice: 'file' must be a literal path — it cannot contain a template tag: '{{input.name}}.md'."
+      ],
+      "warnings": []
+    },
+    "run_error": "prompts.voice: 'file' must be a literal path — it cannot contain a template tag: '{{input.name}}.md'.",
+    "definition": null,
+    "definition_error": "PromptFileError: prompts.voice: 'file' must be a literal path — it cannot contain a template tag: '{{input.name}}.md'.",
+    "digest": "5baae75fd0a49d50b5e3e77a5748d7ae153bb4aa55cdb57940540f43c5b4806d",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompts_file_missing",
+    "files": {
+      "doc.yml": "prompts:\n  voice: {file: nope.md}\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prompts.voice: 'file' 'nope.md' does not exist."
+      ],
+      "warnings": []
+    },
+    "run_error": "prompts.voice: 'file' 'nope.md' does not exist.",
+    "definition": null,
+    "definition_error": "PromptFileError: prompts.voice: 'file' 'nope.md' does not exist.",
+    "digest": "43c9fa63514a66a74688c8e18ac7d37a8328574305f63dab93bfbbd321af539d",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompts_file_not_a_regular_file",
+    "files": {
+      "doc.yml": "prompts:\n  voice: {file: sub}\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n",
+      "sub/placeholder.md": "x"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prompts.voice: 'file' 'sub' is not a regular file."
+      ],
+      "warnings": []
+    },
+    "run_error": "prompts.voice: 'file' 'sub' is not a regular file.",
+    "definition": null,
+    "definition_error": "PromptFileError: prompts.voice: 'file' 'sub' is not a regular file.",
+    "digest": "ffb39189fc4596043a73cd8b36051635b5782fe5d3b2d889c9374d34396a3e3c",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompts_file_over_size_limit",
+    "files": {
+      "doc.yml": "prompts:\n  voice: {file: big.md}\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n",
+      "big.md": {
+        "repeat": "x",
+        "count": 1048577
+      }
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prompts.voice: 'file' 'big.md' is 1048577 bytes, over the 1048576-byte limit for a prompt file."
+      ],
+      "warnings": []
+    },
+    "run_error": "prompts.voice: 'file' 'big.md' is 1048577 bytes, over the 1048576-byte limit for a prompt file.",
+    "definition": null,
+    "definition_error": "PromptFileError: prompts.voice: 'file' 'big.md' is 1048577 bytes, over the 1048576-byte limit for a prompt file.",
+    "digest": "1bed0099abc64b6a394d7cdabcdb45f9178ff1518dcdf74043c1e1742384faa3",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompts_file_not_utf8",
+    "files": {
+      "doc.yml": "prompts:\n  voice: {file: bad.md}\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n",
+      "bad.md": {
+        "bytes_hex": "616263ff64"
+      }
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prompts.voice: 'file' 'bad.md' is not valid UTF-8: 'utf-8' codec can't decode byte 0xff in position 3: invalid start byte"
+      ],
+      "warnings": []
+    },
+    "run_error": "prompts.voice: 'file' 'bad.md' is not valid UTF-8: 'utf-8' codec can't decode byte 0xff in position 3: invalid start byte",
+    "definition": null,
+    "definition_error": "PromptFileError: prompts.voice: 'file' 'bad.md' is not valid UTF-8: 'utf-8' codec can't decode byte 0xff in position 3: invalid start byte",
+    "digest": "9224689499612ab76a0fc80730ba25a325845425aab5a9e994e94c042846fa21",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompts_file_unreadable",
+    "files": {
+      "doc.yml": "prompts:\n  voice: {file: secret.md}\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n",
+      "secret.md": {
+        "bytes_hex": "6869",
+        "mode": "000"
+      }
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prompts.voice: 'file' 'secret.md' could not be read: [Errno 13] Permission denied: '<root>/secret.md'"
+      ],
+      "warnings": []
+    },
+    "run_error": "prompts.voice: 'file' 'secret.md' could not be read: [Errno 13] Permission denied: '<root>/secret.md'",
+    "definition": null,
+    "definition_error": "PromptFileError: prompts.voice: 'file' 'secret.md' could not be read: [Errno 13] Permission denied: '<root>/secret.md'",
+    "digest": "3a046d7259e40a94e4ddc10a48761d56890cc0f52a85cfa4386593fb67173359",
+    "comparison": {
+      "validate_errors": [
+        "location"
+      ],
+      "run_error": "location"
+    }
+  },
+  {
+    "name": "prompts_file_crlf_translated",
+    "files": {
+      "doc.yml": "prompts:\n  voice: {file: voice.md}\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n",
+      "voice.md": "line one\r\nline two\rline three\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "x",
+          "template": "hi",
+          "inputs": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {
+        "voice": "line one\nline two\nline three\n"
+      },
+      "effect_names": [
+        "x"
+      ]
+    },
+    "definition_error": null,
+    "digest": "2480d05ff24ffb7cf171d2ba853ab8d074f6a4c6b4b81c7d21fca3f9bc4c1082",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "prompts_file_symlink_escapes_the_project",
+    "files": {
+      "doc.yml": "prompts:\n  voice: {file: escape.md}\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n",
+      "escape.md": {
+        "symlink": "/nonexistent-outside-project/x.md"
+      }
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prompts.voice: 'file' 'escape.md' resolves outside the project (<root>) — 'file:' paths must stay inside it."
+      ],
+      "warnings": []
+    },
+    "run_error": "prompts.voice: 'file' 'escape.md' resolves outside the project (<root>) — 'file:' paths must stay inside it.",
+    "definition": null,
+    "definition_error": "PromptFileError: prompts.voice: 'file' 'escape.md' resolves outside the project (<root>) — 'file:' paths must stay inside it.",
+    "digest": "7fd5c7a78c0fd09055778da81eb445910f7418f0d35625d1aafe1b1e3fce56d5",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompts_file_dotdot_escapes_the_project",
+    "files": {
+      "proj/doc.yml": "prompts:\n  voice: {file: ../outside.md}\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n",
+      "outside.md": "shh"
+    },
+    "entry": "proj/doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prompts.voice: 'file' '../outside.md' resolves outside the project (<root>/proj) — 'file:' paths must stay inside it."
+      ],
+      "warnings": []
+    },
+    "run_error": "prompts.voice: 'file' '../outside.md' resolves outside the project (<root>/proj) — 'file:' paths must stay inside it.",
+    "definition": null,
+    "definition_error": "PromptFileError: prompts.voice: 'file' '../outside.md' resolves outside the project (<root>/proj) — 'file:' paths must stay inside it.",
+    "digest": "410591ce4796e64ee121363132f1d01518ddbf1459675c25b4a02406fd04d368",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompts_file_symlink_loop_could_not_resolve",
+    "files": {
+      "doc.yml": "prompts:\n  voice: {file: loopA.md}\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n",
+      "loopA.md": {
+        "symlink": "loopB.md"
+      },
+      "loopB.md": {
+        "symlink": "loopA.md"
+      }
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Symlink loop from '<root>/loopA.md'"
+      ],
+      "warnings": []
+    },
+    "run_error": "Symlink loop from '<root>/loopA.md'",
+    "definition": null,
+    "definition_error": "RuntimeError: Symlink loop from '<root>/loopA.md'",
+    "digest": "0bfe28e3c9d5cb36c24b29cb17e64c949a344a1eded71bbe124086cc38ce0e9d",
+    "comparison": {
+      "validate_errors": [
+        "location"
+      ],
+      "run_error": "location"
+    }
+  },
+  {
+    "name": "effect_template_file_source",
+    "files": {
+      "doc.yml": "effects:\n  - type: yield\n    name: x\n    template: {file: body.md}\n",
+      "body.md": "hi {{> nope}}"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
+    "digest": "b33cbf3e03be4590908c6705ea0741577f501813996105abbee1c522789ac2af",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "effect_messages_content_file_source",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: p1\n    messages:\n      - role: user\n        content: {file: msg.md}\n",
+      "msg.md": "hi {{> nope}}"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
+    "digest": "2c9c5cbe4a078c04f278e90dd0e2748d9f375367330f4b232f3703d653f3ebad",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "unknown_partial_name",
+    "files": {
+      "doc.yml": "effects:\n  - type: yield\n    name: x\n    template: 'hi {{> nope}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
+    "digest": "9ee411be2e06d3afd486f96dc19db4888b6602475388b6a9fa4c36bcb1a0efe4",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "declared_prompt_and_effect_name_collide",
+    "files": {
+      "doc.yml": "prompts:\n  x: hi\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - 'x' is both a declared prompt and an effect name — '{{> x}}' would be ambiguous."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - 'x' is both a declared prompt and an effect name — '{{> x}}' would be ambiguous.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - 'x' is both a declared prompt and an effect name — '{{> x}}' would be ambiguous.",
+    "digest": "0f160dc38022bc0a19287c34ecdf387d45f4597125a6b59bf01c8ffb825993a6",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "reference_to_a_non_text_effect",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: t1\n    provider: process\n    params: {command: 'echo hi'}\n  - type: yield\n    name: x\n    template: 'hi {{> t1}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - effects[1]: '{{> t1}}' names effect 't1' (type 'tool'), which is neither a 'yield' nor a text 'prompt'."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - effects[1]: '{{> t1}}' names effect 't1' (type 'tool'), which is neither a 'yield' nor a text 'prompt'.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - effects[1]: '{{> t1}}' names effect 't1' (type 'tool'), which is neither a 'yield' nor a text 'prompt'.",
+    "digest": "d9bcda7d7ed3cc1bcffac09fed9ab0bd922beabf90eabcc7b0cce73fca89828f",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "reference_to_a_json_prompt_is_not_text_producing",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: p1\n    prompt_type: json\n    template: 'give json'\n    schema: {type: object}\n  - type: yield\n    name: x\n    template: 'hi {{> p1}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - effects[1]: '{{> p1}}' names effect 'p1' (type 'prompt'), which is neither a 'yield' nor a text 'prompt'."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - effects[1]: '{{> p1}}' names effect 'p1' (type 'prompt'), which is neither a 'yield' nor a text 'prompt'.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - effects[1]: '{{> p1}}' names effect 'p1' (type 'prompt'), which is neither a 'yield' nor a text 'prompt'.",
+    "digest": "f12ecbb501a6d8ecca8bb10ade41888bab4cb6b2ef315cf889b0756b6056f771",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "cycle_among_declared_prompts",
+    "files": {
+      "doc.yml": "prompts:\n  a: '{{> b}}'\n  b: '{{> a}}'\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - cycle among declared prompts: a -> b -> a"
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - cycle among declared prompts: a -> b -> a",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - cycle among declared prompts: a -> b -> a",
+    "digest": "5134d1a8c1366fcd2ede396d0f6c5f25235348c989c02ffc063e07eadd91195e",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "invalid_partial_name_shape",
+    "files": {
+      "doc.yml": "effects:\n  - type: yield\n    name: x\n    template: 'hi {{> 1bad}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - effects[0]: '{{> 1bad}}' is not a valid name."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - effects[0]: '{{> 1bad}}' is not a valid name.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - effects[0]: '{{> 1bad}}' is not a valid name.",
+    "digest": "5ef47edf19c8301e389a4a3c1ca2b9c3e46ac1c23769a7ba9bf96fc2d59f8992",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "set_delimiter_inside_a_declared_prompt",
+    "files": {
+      "doc.yml": "prompts:\n  a: '{{=<% %>=}}'\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - prompts.a: '{{=...=}}' (set-delimiter) is not allowed inside a declared prompt — it would change the delimiters of the template that includes it."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - prompts.a: '{{=...=}}' (set-delimiter) is not allowed inside a declared prompt — it would change the delimiters of the template that includes it.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - prompts.a: '{{=...=}}' (set-delimiter) is not allowed inside a declared prompt — it would change the delimiters of the template that includes it.",
+    "digest": "d8270163fc2b4a2954b94c29ffe7f90e37b5dc35480101c06eaa282ff2c24984",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "malformed_declared_prompt",
+    "files": {
+      "doc.yml": "prompts:\n  a: '{{#open}}'\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - prompts.a: malformed Mustache template: Unexpected EOF the tag \"open\" was never closed was opened at line 1"
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - prompts.a: malformed Mustache template: Unexpected EOF the tag \"open\" was never closed was opened at line 1",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - prompts.a: malformed Mustache template: Unexpected EOF the tag \"open\" was never closed was opened at line 1",
+    "digest": "eb7d07b7ded229a53cc7ce926f8d430812f91e7ec9bd2a9f621c987af77fd07c",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "bare_reference_does_not_cross_a_named_if_boundary",
+    "files": {
+      "doc.yml": "effects:\n  - type: if\n    name: branch\n    if: {mode: cel, expr: 'true'}\n    then:\n      - type: yield\n        name: inner\n        template: 'hi'\n  - type: yield\n    name: outer\n    template: '{{> inner}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - effects[1]: '{{> inner}}' does not name a declared prompt or effect."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - effects[1]: '{{> inner}}' does not name a declared prompt or effect.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - effects[1]: '{{> inner}}' does not name a declared prompt or effect.",
+    "digest": "1d7519988097ac91e9055e533937d261759a292d5503759bc267ad5e5642d736",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "dotted_reference_reaches_into_a_named_if_from_anywhere",
+    "files": {
+      "doc.yml": "effects:\n  - type: if\n    name: branch\n    if: {mode: cel, expr: 'true'}\n    then:\n      - type: yield\n        name: inner\n        template: 'hi'\n  - type: yield\n    name: outer\n    template: '{{> branch.inner}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "branch",
+          "condition": {
+            "mode": "cel",
+            "template": null,
+            "expr": "true",
+            "strict": false
+          },
+          "then_effects": [
+            {
+              "name": "inner",
+              "template": "hi",
+              "inputs": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true
+            }
+          ],
+          "else_effects": [],
+          "threshold": 0.5,
+          "on_error": "fail",
+          "enabled": true,
+          "labels": null
+        },
+        {
+          "name": "outer",
+          "template": "{{> branch.inner}}",
+          "inputs": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "branch",
+        "inner",
+        "outer"
+      ]
+    },
+    "definition_error": null,
+    "digest": "7cf621e5f3427b97ed8ecf761a6ae7628e89ad860f0bcce33abc6fcee5a9347b",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "dotted_self_reference_from_inside_the_same_named_if",
+    "files": {
+      "doc.yml": "effects:\n  - type: if\n    name: branch\n    if: {mode: cel, expr: 'true'}\n    then:\n      - type: yield\n        name: inner\n        template: 'hi'\n      - type: yield\n        name: inner2\n        template: '{{> branch.inner}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "branch",
+          "condition": {
+            "mode": "cel",
+            "template": null,
+            "expr": "true",
+            "strict": false
+          },
+          "then_effects": [
+            {
+              "name": "inner",
+              "template": "hi",
+              "inputs": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true
+            },
+            {
+              "name": "inner2",
+              "template": "{{> branch.inner}}",
+              "inputs": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true
+            }
+          ],
+          "else_effects": [],
+          "threshold": 0.5,
+          "on_error": "fail",
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "branch",
+        "inner",
+        "inner2"
+      ]
+    },
+    "definition_error": null,
+    "digest": "68aec12e36570655d5c55214957aede45cca4cedb52580cd5859d049aefb1d61",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "dotted_self_reference_from_inside_a_named_dynamic",
+    "files": {
+      "doc.yml": "effects:\n  - type: dynamic\n    name: loop_ns\n    effects:\n      - type: yield\n        name: inner\n        template: 'hi'\n      - type: yield\n        name: inner2\n        template: '{{> loop_ns.inner}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "loop_ns",
+          "effects": [
+            {
+              "name": "inner",
+              "template": "hi",
+              "inputs": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true
+            },
+            {
+              "name": "inner2",
+              "template": "{{> loop_ns.inner}}",
+              "inputs": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true
+            }
+          ],
+          "flow": "chain",
+          "finally_effects": [],
+          "max_concurrency": null,
+          "stop_on_error": false,
+          "on_error": "fail",
+          "labels": null,
+          "enabled": true,
+          "prompts": {},
+          "effect_names": []
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "inner",
+        "inner2",
+        "loop_ns"
+      ]
+    },
+    "definition_error": null,
+    "digest": "00ae0d7556605e09e2f3ccc1891d010308b9e73d0ce78ffa96f0029fc41c045b",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "dotted_reference_inside_a_named_if_to_a_non_root_name",
+    "files": {
+      "doc.yml": "effects:\n  - type: if\n    name: branch\n    if: {mode: cel, expr: 'true'}\n    then:\n      - type: yield\n        name: inner\n        template: 'hi'\n      - type: yield\n        name: inner2\n        template: '{{> inner.x}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - effects[0].then[1]: '{{> inner.x}}' does not name a declared prompt or effect."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - effects[0].then[1]: '{{> inner.x}}' does not name a declared prompt or effect.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - effects[0].then[1]: '{{> inner.x}}' does not name a declared prompt or effect.",
+    "digest": "16b78ad49128051ad726b550af89ffd3b28c9732aff148144a360009e54f1416",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "tool_params_partial_reference_is_checked",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: t1\n    provider: process\n    params: {command: 'echo {{> nope}}'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
+    "digest": "97d419e04fe850278da2c7b3eaff02441e3082997923931a25c4c1b1795c5f6d",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "dotted_reference_to_a_declared_prompt",
+    "files": {
+      "doc.yml": "prompts:\n  greeting: hi\neffects:\n  - type: yield\n    name: ref\n    template: '{{> greeting.x}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - effects[0]: '{{> greeting.x}}' names declared prompt 'greeting', which has no nested state — a declared prompt is plain text, never dotted."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - effects[0]: '{{> greeting.x}}' names declared prompt 'greeting', which has no nested state — a declared prompt is plain text, never dotted.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - effects[0]: '{{> greeting.x}}' names declared prompt 'greeting', which has no nested state — a declared prompt is plain text, never dotted.",
+    "digest": "0fd5d947b8c73caa2024a5d6fed8a880b3feb13e7f38fae9eb5b219421c1d2d9",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "dotted_reference_to_a_missing_segment_under_a_named_if",
+    "files": {
+      "doc.yml": "effects:\n  - type: if\n    name: branch\n    if: {mode: cel, expr: 'true'}\n    then:\n      - type: yield\n        name: inner\n        template: 'hi'\n  - type: yield\n    name: outer\n    template: '{{> branch.missing}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - effects[1]: '{{> branch.missing}}' does not name a declared prompt or effect."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - effects[1]: '{{> branch.missing}}' does not name a declared prompt or effect.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - effects[1]: '{{> branch.missing}}' does not name a declared prompt or effect.",
+    "digest": "1edd64e8d31d386a0c092aa3f25a6c0b76d01b65e3324d3961469969f3a21066",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "digest_with_no_prompt_files",
+    "files": {
+      "doc.yml": "effects:\n  - type: yield\n    name: x\n    template: 'hi'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "x",
+          "template": "hi",
+          "inputs": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "x"
+      ]
+    },
+    "definition_error": null,
+    "digest": "b45f4338c1d6788f6b50e624560e3d28f747b74c140f6c7a0783e099b4f004db",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "digest_includes_a_referenced_prompt_file",
+    "files": {
+      "doc.yml": "prompts:\n  voice: {file: voice.md}\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n",
+      "voice.md": "be nice"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "x",
+          "template": "hi",
+          "inputs": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {
+        "voice": "be nice"
+      },
+      "effect_names": [
+        "x"
+      ]
+    },
+    "definition_error": null,
+    "digest": "255201180dc93797f3c20b3c39d97b1d963e884886d014d0260f59a73b9c73d7",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "digest_includes_a_parent_directory_prompt_file",
+    "files": {
+      "config.json": "{}",
+      "docs/doc.yml": "prompts:\n  voice: {file: ../shared/voice.md}\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n",
+      "shared/voice.md": "shared voice"
+    },
+    "entry": "docs/doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "x",
+          "template": "hi",
+          "inputs": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {
+        "voice": "shared voice"
+      },
+      "effect_names": [
+        "x"
+      ]
+    },
+    "definition_error": null,
+    "digest": "e2688e557e4125b92b749975838d2a0fef746962a78a3da41416e8828485d985",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  }
+]

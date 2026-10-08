@@ -17,8 +17,31 @@ use std::path::Path;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum FileContent {
-    Symlink { symlink: String },
-    BytesHex { bytes_hex: String },
+    Symlink {
+        symlink: String,
+    },
+    BytesHex {
+        bytes_hex: String,
+        /// An octal permission string (e.g. `"000"`) applied with
+        /// `chmod` after the file is written -- `_compiler_corpus.py`'s
+        /// own optional `"mode"` key, for a lane D case exercising an
+        /// unreadable prompt file (`core/prompt_files.py`'s "could not
+        /// be read" branch). Not meaningful on Windows; a case that
+        /// needs it is Unix-only by nature, same as a symlink-escape
+        /// case already is -- see `support::corpus::materialize`.
+        #[serde(default)]
+        mode: Option<String>,
+    },
+    /// *repeat* written *count* times -- `_compiler_corpus.py`'s own
+    /// `{"repeat": text, "count": int}`, a generated-content spec for
+    /// a case whose file content is large and uniform (a lane D case
+    /// one byte over the prompt-file size limit, say), so the golden
+    /// file records the short spec rather than the file's own megabyte
+    /// of bytes.
+    Repeat {
+        repeat: String,
+        count: usize,
+    },
     Text(String),
 }
 
