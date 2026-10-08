@@ -374,6 +374,12 @@ def test_claude_code_isolates_repository_settings_by_default(
     assert result.raw["permission_mode"] is None
 
 
+_PROJECT_SECTION = (
+    "\n\n---\n\nProject instructions from the repository's CLAUDE.md "
+    "(Claude Code does not load it in this session):\n\n"
+)
+
+
 def test_claude_code_appends_the_repository_claude_md_to_the_first_prompt(
     tmp_path: Path, workdir: Path
 ) -> None:
@@ -390,13 +396,83 @@ def test_claude_code_appends_the_repository_claude_md_to_the_first_prompt(
     )
     assert result.ok, result.stderr
     (call,) = _calls(tmp_path)
-    section = (
-        "\n\n---\n\nProject instructions from the repository's CLAUDE.md "
-        "(Claude Code does not load it in this session):\n\nUse pytest.\n"
-    )
-    assert call["stdin"].startswith("Task." + section)
-    assert "When you have finished" in call["stdin"]
+    stdin = call["stdin"]
+    assert stdin.startswith("Task." + _PROJECT_SECTION + "Use pytest.\n")
+    prompt_at = stdin.index("Task.")
+    section_at = stdin.index(_PROJECT_SECTION)
+    contract_at = stdin.index("When you have finished")
+    assert prompt_at < section_at < contract_at
     assert result.raw["project_instructions"] == str((workdir / "CLAUDE.md").resolve())
+
+
+def test_claude_code_appends_the_claude_md_to_the_prompt_without_a_result_file(
+    tmp_path: Path, workdir: Path
+) -> None:
+    (workdir / ".git").mkdir()
+    (workdir / "CLAUDE.md").write_text("Use pytest.\n", encoding="utf-8")
+    result = _run_claude(tmp_path, workdir)
+    assert result.ok, result.stderr
+    (call,) = _calls(tmp_path)
+    assert call["stdin"] == "Task." + _PROJECT_SECTION + "Use pytest.\n"
+
+
+def test_claude_code_appends_a_claude_md_that_is_not_utf8_with_replacement_characters(
+    tmp_path: Path, workdir: Path
+) -> None:
+    (workdir / ".git").mkdir()
+    (workdir / "CLAUDE.md").write_bytes(b"Use \xff pytest.\n")
+    result = _run_claude(tmp_path, workdir)
+    assert result.ok, result.stderr
+    (call,) = _calls(tmp_path)
+    assert call["stdin"] == "Task." + _PROJECT_SECTION + "Use \ufffd pytest.\n"
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["directory", "empty", "whitespace", "dangling_symlink", "unreadable", "subdirectory_only"],
+)
+def test_claude_code_runs_without_appending_a_root_claude_md_it_cannot_use(
+    tmp_path: Path, workdir: Path, case: str
+) -> None:
+    (workdir / ".git").mkdir()
+    cwd = workdir
+    if case == "directory":
+        (workdir / "CLAUDE.md").mkdir()
+    elif case == "empty":
+        (workdir / "CLAUDE.md").write_text("", encoding="utf-8")
+    elif case == "whitespace":
+        (workdir / "CLAUDE.md").write_text(" \n\t\n", encoding="utf-8")
+    elif case == "dangling_symlink":
+        (workdir / "CLAUDE.md").symlink_to(tmp_path / "missing.md")
+    elif case == "unreadable":
+        if os.name != "posix" or os.geteuid() == 0:
+            pytest.skip("needs a POSIX user that cannot read a file it owns")
+        unreadable = workdir / "CLAUDE.md"
+        unreadable.write_text("Use pytest.\n", encoding="utf-8")
+        unreadable.chmod(0)
+    else:
+        cwd = workdir / "sub"
+        cwd.mkdir()
+        (cwd / "CLAUDE.md").write_text("Use pytest.\n", encoding="utf-8")
+    result = _run_claude(tmp_path, workdir, cwd=cwd)
+    assert result.ok, result.stderr
+    (call,) = _calls(tmp_path)
+    assert call["stdin"] == "Task."
+    assert result.raw["project_instructions"] is None
+
+
+@pytest.mark.parametrize(
+    ("value", "trusted"),
+    [("false", False), (" FALSE ", False), ("true", True), (" True ", True)],
+)
+def test_claude_code_trust_project_settings_accepts_the_strings_true_and_false(
+    tmp_path: Path, workdir: Path, value: str, trusted: bool
+) -> None:
+    result = _run_claude(tmp_path, workdir, trust_project_settings=value)
+    assert result.ok, result.stderr
+    (call,) = _calls(tmp_path)
+    assert ("--setting-sources" not in call["argv"]) is trusted
+    assert result.raw["project_settings"] == ("trusted" if trusted else "isolated")
 
 
 def test_claude_code_repair_turn_does_not_repeat_the_claude_md(
@@ -737,8 +813,13 @@ def test_cancelled_run_stops_the_session_and_its_child(
         ({"prompt": "x", "env": {"OTHER": None}}, "is null; unset_env removes"),
         ({"prompt": "x", "trust_project_settings": True}, "'claude_code' only"),
         ({"prompt": "x", "engine": "claude_code", "trust_project_settings": "yes"}, "must be true or false"),
+        ({"prompt": "x", "engine": "claude_code", "trust_project_settings": "none"}, "must be true or false"),
         ({"prompt": "x", "tools": []}, "'tools'\\] is empty"),
         ({"prompt": "x", "engine": "claude_code", "tools": []}, "'tools'\\] is empty"),
+        ({"prompt": "x", "tools": ["read", " "]}, "'tools'\\]\\[1\\] is blank"),
+        ({"prompt": "x", "engine": "claude_code", "tools": ["Read", ""]}, "'tools'\\]\\[1\\] is blank"),
+        ({"prompt": "x", "exclude_tools": ["read", ""]}, "'exclude_tools'\\]\\[1\\] is blank"),
+        ({"prompt": "x", "engine": "claude_code", "exclude_tools": [" "]}, "'exclude_tools'\\]\\[0\\] is blank"),
     ],
 )
 def test_invalid_params_are_rejected_before_the_cli_runs(

@@ -592,6 +592,14 @@ def _str_list(params: Mapping[str, Any], key: str) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _tool_names(params: Mapping[str, Any], key: str) -> tuple[str, ...]:
+    names = _str_list(params, key)
+    for index, name in enumerate(names):
+        if not name.strip():
+            raise ValueError(f"agent: params['{key}'][{index}] is blank.")
+    return names
+
+
 def _str_mapping(params: Mapping[str, Any], key: str) -> dict[str, str]:
     value = params.get(key)
     if value is None:
@@ -610,6 +618,8 @@ def _trust_project_settings(params: Mapping[str, Any], engine_name: str) -> bool
     value = params.get("trust_project_settings")
     if value is None:
         return False
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        value = value.strip().lower() == "true"
     if not isinstance(value, bool):
         raise ValueError("agent: params['trust_project_settings'] must be true or false.")
     if engine_name != CLAUDE_CODE:
@@ -629,14 +639,17 @@ def _repository_root(cwd: Path) -> Path:
 
 def _project_instructions(cwd: Path) -> tuple[str, str] | None:
     """The repository root's CLAUDE.md as (path, text), or None when none is to be appended."""
-    root = _repository_root(cwd)
-    path = root / "CLAUDE.md"
-    if not path.exists():
+    try:
+        root = _repository_root(cwd)
+        path = root / "CLAUDE.md"
+        if not path.exists():
+            return None
+        target = path.resolve()
+        if not target.is_file() or not target.is_relative_to(root):
+            return None
+        text = target.read_text(encoding="utf-8", errors="replace")
+    except OSError:
         return None
-    target = path.resolve()
-    if not target.is_file() or not target.is_relative_to(root):
-        return None
-    text = target.read_text(encoding="utf-8", errors="replace")
     if not text.strip():
         return None
     return str(path), text
@@ -674,11 +687,12 @@ class AgentPlugin:
                 "agent: params['permission_mode'] applies to engine 'claude_code' only."
             )
         trust_project_settings = _trust_project_settings(params, engine_name)
-        tools = _str_list(params, "tools")
+        tools = _tool_names(params, "tools")
         if params.get("tools") is not None and not tools:
             raise ValueError(
                 "agent: params['tools'] is empty; leave it out to keep the engine's default tools."
             )
+        exclude_tools = _tool_names(params, "exclude_tools")
         if engine_name == CLAUDE_CODE and tools and not permission_mode:
             permission_mode = _TOOLS_PERMISSION_MODE
         result_file_param = _optional_str(params, "result_file")
@@ -710,7 +724,7 @@ class AgentPlugin:
             env={**child_env(unset_env), **_str_mapping(params, "env")},
             model=_optional_str(params, "model"),
             tools=tools,
-            exclude_tools=_str_list(params, "exclude_tools"),
+            exclude_tools=exclude_tools,
             extra_args=_str_list(params, "extra_args"),
         )
         engine: AgentEngine = (
