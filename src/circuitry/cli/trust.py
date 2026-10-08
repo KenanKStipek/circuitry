@@ -73,21 +73,26 @@ def _trust_document(path: Path, *, yes: bool, store: Path, config: Path | None) 
     from .config import resolve_config
     from .document_consent import (
         consented_capabilities,
-        document_digest,
         record_consent,
         required_capabilities,
     )
     from .orchestration_loader import load_orchestration_file
 
     try:
-        data = path.read_bytes()
         orch = load_orchestration_file(path)
     except (OSError, ValueError) as exc:
         raise _fail(str(exc)) from exc
 
     cfg = resolve_config(explicit_path=config)
     needed = required_capabilities(orch, root_path=path, runtime=cfg.runtime)
-    digest = document_digest(data)
+    # Shared with `cli.document_consent`/`core.use` (#396) — includes every
+    # `{file: ...}` prompt source *orch* references, so editing one of those
+    # (not just the orchestration YAML itself) asks again, and so a `ref:`
+    # child trusted here is found by the run-time check in `core.use`, which
+    # hashes the same way.
+    from ..core.prompt_compose import document_content_digest
+
+    digest = document_content_digest(path, orch)
     consented = consented_capabilities(digest, store_path=store)
 
     console.print(f"[bold]Orchestration:[/bold] {escape(str(path.resolve()))}")

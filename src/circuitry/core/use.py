@@ -479,26 +479,19 @@ class UseRuntime:
         references (#396) — capability consent (``cof trust``) is recorded
         by this digest, so editing a referenced prompt file must ask again
         exactly as editing the orchestration YAML itself already does.
-        Best-effort, like ``core.resume.document_sha256``: a document that
-        fails to parse here (it will fail again, loudly, moments later)
-        just falls back to the file's own bytes.
+        Delegates to ``core.prompt_compose.document_content_digest``, the
+        same function ``cof trust``/``cli.document_consent`` use, so a
+        ``ref:`` child consented to from either surface is found by the
+        other at run time (#396 — the two must hash identically).
         """
-        from .prompt_compose import referenced_prompt_file_paths
+        from .prompt_compose import document_content_digest
 
-        hasher = hashlib.sha256()
-        hasher.update(resolved_path.read_bytes())
-        try:
-            document_dir = resolved_path.resolve().parent
-            paths = referenced_prompt_file_paths(
-                child_orch,
-                document_dir=document_dir,
-                confinement_root=self._confinement_root_for(document_dir),
-            )
-            for prompt_file in sorted(set(paths)):
-                hasher.update(prompt_file.read_bytes())
-        except Exception:
-            pass
-        return hasher.hexdigest()
+        document_dir = resolved_path.resolve().parent
+        return document_content_digest(
+            resolved_path,
+            child_orch,
+            confinement_root=self._confinement_root_for(document_dir),
+        )
 
     def _check_interface(
         self,
