@@ -23,6 +23,7 @@ Start with the [README](../README.md) for install, first run, and the mental mod
 - [Library Sources](./library-sources.md) — `runtime.library.sources`: curation, folder, and GitHub sources behind `cof list/info/run/eject`.
 - [Shared Library](./shared-library.md) · [Contributions](./shared-library-contributions.md) · [Growth](./shared-library-growth.md) — the publish-by-PR shared library and `cof fetch` / `cof run-library`.
 - [CyberDiner Demo Runbook](./cyberdiner-demo-runbook.md) — a job-queue broker adapter, end to end.
+- [The Agent Loop](./agent-loop.md) — `agents/agent_loop`: a tool-using agent made of a loop, a JSON prompt and read-only tool effects; its limits, and how to add write tools.
 
 ## Extending
 

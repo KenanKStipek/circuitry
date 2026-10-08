@@ -221,6 +221,16 @@ cof run issue_to_pr.yml -e issue="parse_duration fails on 1h30m" -e repo=. --exp
 
 The short prompts — `error`, `diagnose` — route to the small model; `plan`, reading across everything the agent gathered, scores higher and routes up; and if `plan` ever grows past the threshold, it decomposes into parts of its own and merges back at `prime.plan.value`, where the patch loop reads it unchanged. A patch is only as long as the plan it carries out, so it can score low; to send every `patch` to the capable model whatever it scores, pin it in a [profile](04-configuration.md): `effects: {patch: {routing: heavy}}`.
 
+## When the model chooses the next tool
+
+This agent's plan is in the document: search, then read the history, then diagnose, patch and test. The model fills in each step, but the document decides which step comes next. The other kind of agent lets the model choose the next tool on each turn, and Circuitry can express that too, with the same parts. The bundled `agents/agent_loop` is one `while` loop. Each pass reads a transcript file, asks for one `prompt_type: json` decision (`{thought, tool, args, done, answer}`), dispatches it through CEL `if` effects to one read-only tool inside a working directory (`fs` list and read, `ripgrep`, `git status`/`log`/`diff`/`show`), and appends the step to the transcript:
+
+```bash
+cof run agents/agent_loop -e task="Why does parse_duration reject 1h30m?" -e workdir=. -e max_steps=6
+```
+
+The transcript is the agent's only memory, every pass costs one model call whose prompt holds the whole transcript, and the dispatch branches are the only tools it can call. [The agent loop](../agent-loop.md) walks through a pass, its limits, and what adding write tools changes.
+
 ## What the agent demonstrates
 
 | Chapter | In the document |

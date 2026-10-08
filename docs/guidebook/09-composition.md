@@ -168,7 +168,7 @@ The `use` node keeps a record of the call either way. `meta.inputs` is what the 
 | `utilities/` | composable, single-output orchestrations with interfaces: `summarize`, `critique`, `refine`, `judge`, `classify`, `decompose`, `extract`, `route` |
 | `patterns/` | multi-primitive templates: `critique_refine_loop`, `parallel_then_judge`, `classify_then_route`, `all_primitives` |
 | `recipes/` | full workflows: `article_summarizer`, `research_brief`, `code_review`, `meeting_notes`, `comic_strip` |
-| `agents/` | orchestrations that build or improve orchestrations: `wizard`, `meta_orchestrator`, `improver`, `improver_judge`, `decompose` |
+| `agents/` | orchestrations that build or improve orchestrations: `wizard`, `meta_orchestrator`, `improver`, `improver_judge`, `decompose`; and `agent_loop`, a tool-using agent made of a loop, a prompt and tool effects |
 
 `cof list` browses it; `cof info recipes/article_summarizer` shows an entry's interface; `cof eject recipes/article_summarizer` copies it into the working directory for editing; `cof run utilities/critique -e content=… -e criteria=…` runs one directly.
 
