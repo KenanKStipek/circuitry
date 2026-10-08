@@ -31,7 +31,11 @@ import struct
 import sys
 from pathlib import Path
 
-from circuitry.core.templates import TemplateError, render_template, template_syntax_error
+from circuitry.core.templates import (
+    TemplateError,
+    render_template,
+    template_syntax_error,
+)
 from circuitry.core.tool import _json_aware_ctx
 
 OUTPUT = (
