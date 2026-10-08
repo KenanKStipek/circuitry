@@ -1678,10 +1678,16 @@ started sibling), and a branch already running is stopped outright — its
 child process (the whole process group a tool like `shell` spawns, not
 just its own pid) is killed. This covers every `shell`/binary-wrapping
 tool plugin and every HTTP call that goes through curl (every model
-adapter's own prompt, `web_search`, `weather`, ComfyUI's REST calls) —
-an in-flight MCP call is not cancelled; the MCP client does not watch
-for cancellation, so a branch blocked in one keeps running until the
-server responds (or its own timeout) regardless of the signal. A killed
+adapter's own prompt, `web_search`, `weather`, ComfyUI's REST calls). A
+few steps the kill genuinely cannot reach finish on their own instead,
+and only then does the run stop — the next step after one never starts,
+but that step itself is not interrupted: an in-flight `mcp` call (the MCP
+client does not watch for cancellation, so a branch blocked in one keeps
+running until the server responds or its own timeout, regardless of the
+signal), the `service` tool's own `start`/`stop` calls (a service is
+meant to outlive the run, so cancelling the run must not orphan a
+half-started or half-stopped one), and any plain Python-level step that
+never polls back in. A killed
 child is sent SIGKILL directly, not the SIGINT/SIGTERM the signal itself
 carried, so a tool with its own graceful-shutdown handling (`ffmpeg`
 finalizing a partial output) never gets the chance; running detached from
