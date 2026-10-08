@@ -19,7 +19,7 @@
 /// pairs. `Literal` carries raw template text; every other variant carries
 /// the tag's (already-stripped) key.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Tag {
+pub enum Tag {
     Literal(String),
     Variable(String),
     NoEscape(String),
