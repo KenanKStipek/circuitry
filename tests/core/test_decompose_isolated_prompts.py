@@ -3,11 +3,11 @@
 `root.effect_names` from `compile_orchestration(orch=<the plan's own
 dict>)` — never inherited from the parent document that generated it: the
 plan is compiled from its own dict alone, so there is structurally nothing
-for the parent's declared prompts to leak through. Decompose/reflector
-plans aren't taught `prompts:`/`{{> name}}` at all (so `root.prompts` is
-ordinarily empty for one), but a plan that happens to be self-consistent —
-declares its own and only ever references them — must run the way it
-compiled, not fail at run time for a name `cof check` already accepted.
+for the parent's declared prompts to leak through. The planner (taught
+`prompts:`/`{{> name}}` via `WIZARD_PRIME_V1`) may generate a plan that is
+self-consistent — declares its own and only ever references them — which
+must run the way it compiled, not fail at run time for a name `cof check`
+already accepted.
 """
 
 from __future__ import annotations
