@@ -479,6 +479,18 @@ class DynamicRuntime:
                         self._await_tree_branches(
                             futures, tree_errors=tree_errors, store=store
                         )
+                        # ``stop_on_error`` breaks out of that drain after
+                        # the first failure (#385 review F1) while other
+                        # branches can still be running — their futures
+                        # are only *cancelled* if the pool hasn't dequeued
+                        # them yet, never force-stopped. Waiting for them
+                        # here, inside this ``try``, means a signal that
+                        # lands on one of those still-running workers
+                        # reaches the ``except BaseException`` below
+                        # instead of escaping past the ``else`` clause's
+                        # own unbounded ``executor.shutdown(wait=True)``,
+                        # which the matching ``except`` doesn't cover.
+                        wait_for_cancelled_branches(futures.keys())
                     except BaseException:
                         # Cancellation (SIGINT/SIGTERM): a future the
                         # pool has not yet dequeued must never start
@@ -496,12 +508,14 @@ class DynamicRuntime:
                         wait_for_cancelled_branches(futures.keys())
                         raise
                     else:
-                        # No cancellation: every future is already done by
-                        # the time ``_await_tree_branches`` returns (it only
-                        # returns once ``as_completed_promptly`` has drained
-                        # every one of them), so this just reaps already-
-                        # finished worker threads — unlike the exceptional
-                        # path above, never a wait on a still-running one.
+                        # No cancellation: every future is already done —
+                        # ``_await_tree_branches`` only returns once
+                        # ``as_completed_promptly`` has drained every one of
+                        # them for the ordinary (non-``stop_on_error``) case,
+                        # and the ``wait_for_cancelled_branches`` call above
+                        # covers the ``stop_on_error`` early-break case — so
+                        # this just reaps already-finished worker threads,
+                        # never an additional wait on a still-running one.
                         executor.shutdown(wait=True)
 
                 # Merge isolated stores back into child_store sequentially
