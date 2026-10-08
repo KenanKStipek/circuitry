@@ -30,7 +30,7 @@ from pathlib import Path
 
 # Generators may import Circuitry itself so duplicate-key expectations come
 # from Circuitry's own loader, never a re-implementation (see
-# .github/workflows/electricity.yml's "generated-files" job).
+# .github/workflows/electricity-generated.yml).
 from circuitry.core.json_load import DuplicateKeyError, load_json
 
 OUTPUT = (

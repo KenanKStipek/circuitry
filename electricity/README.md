@@ -33,10 +33,16 @@ Every folder under `crates/` is a workspace member (`members = ["crates/*"]`): a
 crate needs no edit to the member list, and a stray folder there without a
 `Cargo.toml` breaks every cargo command.
 
-Generators in `scripts/generate_*.py` write checked-in expected outputs from
-Circuitry's own Python code. Each one supports `--check`, and CI runs all of
-them (`pip install -e .` from the repository root first, then
-`python3 scripts/generate_<name>.py --check` from `electricity/`).
+Generators in `scripts/generate_*.py` write checked-in files from Circuitry's
+own Python code: copies of its schemas, and expected outputs from its real
+loaders, renderers and evaluators. Each one supports `--check`. CI runs all of
+them (`pip install -e . -c electricity/scripts/generator-constraints.txt` from
+the repository root first, with Python 3.11, then
+`python3 scripts/generate_<name>.py --check` from `electricity/`) in
+`.github/workflows/electricity-generated.yml`, for any change to Circuitry's
+Python package as well as to `electricity/`, because a change on either side
+can make a committed file stale. When one is stale, run that generator
+without `--check` and commit the result; the Rust tests then replay it.
 
 ## Read more
 
