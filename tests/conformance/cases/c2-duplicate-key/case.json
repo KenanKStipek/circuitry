@@ -1,0 +1,7 @@
+{
+  "spec_case": "C2",
+  "description": "A duplicate top-level YAML key raises Circuitry's own DuplicateKeyError with both locations named, instead of YAML silently keeping only the last one (electricity/docs/spec/runtime-semantics.md §1.1).",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

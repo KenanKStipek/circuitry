@@ -1,0 +1,7 @@
+{
+  "spec_case": "C3",
+  "description": "Two effects named 'step' in the same scope raise Circuitry's own compile-time duplicate-name ValueError, naming both locations (electricity/docs/spec/runtime-semantics.md §1.4).",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}
