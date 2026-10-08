@@ -236,4 +236,35 @@ mod tests {
             "child should have been killed when SupervisedChild was dropped"
         );
     }
+
+    #[test]
+    fn a_panic_while_a_child_is_alive_still_kills_it() {
+        // osp must never leave the engine behind on *any* exit path,
+        // panics included (issue #424's lane decisions): a
+        // `SupervisedChild` held across a panicking scope is dropped
+        // during unwind the same way a normal early return drops it, so
+        // this exercises the same `Drop` impl through a real unwind,
+        // not just a plain `drop()` call.
+        let dir = tempfile::tempdir().unwrap();
+        let pid = {
+            let mut cmd = Command::new("sleep");
+            cmd.arg("5");
+            let (child, _rx) =
+                SupervisedChild::spawn(cmd, &dir.path().join("out"), &dir.path().join("err"))
+                    .unwrap();
+            let pid = child.pid;
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _keep_alive = &child;
+                panic!("deliberate panic to exercise Drop during unwind");
+            }));
+            assert!(result.is_err());
+            pid
+        };
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let alive = unsafe { libc::kill(pid, 0) == 0 };
+        assert!(
+            !alive,
+            "child should have been killed when the panic unwound past SupervisedChild"
+        );
+    }
 }

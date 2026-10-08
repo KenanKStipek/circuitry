@@ -255,8 +255,7 @@ def scrub(text: str, *scrub_paths: Path) -> str:
     text = re.sub(r"/home/[^/\s\"']+", "<SCRUBBED>", text)
     text = re.sub(r"/var/folders/[^\s\"']+", "<SCRUBBED>", text)
     text = re.sub(r"/private/[^\s\"']+", "<SCRUBBED>", text)
-    text = re.sub(r"/tmp/[^\s\"']+", "<SCRUBBED>", text)
-    return text
+    return re.sub(r"/tmp/[^\s\"']+", "<SCRUBBED>", text)
 
 
 def write_fixture(
