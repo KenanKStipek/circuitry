@@ -128,15 +128,19 @@ _PARTIAL_TAG = re.compile(r"(?<!\{)\{\{>([^}]*)\}\}")
 _TEXT_PRODUCING_TYPES = frozenset({"yield", "prompt"})
 
 #: Effect types whose named children nest under the container's own name in
-#: real state (``prime.<name>.<child>.value``) — and so, for ``{{> name}}``
-#: name resolution, introduce a new scope a dotted name must cross into
-#: explicitly. A named ``loop`` is deliberately excluded: inside its body,
-#: ``prime.<step>.value`` already means "this pass's own sibling", the same
-#: "short sibling path" precedence a named ``dynamic`` gives its own
-#: children from the inside (``core.dynamic``/``core.loop`` — see
-#: ``core.primes``' "WITHIN A LOOP BODY"). ``use`` is excluded too: its
-#: children are a wholly separate document, compiled on its own; nothing in
-#: *this* document's effect tree corresponds to its internal effect names.
+#: real state (``prime.<name>.<child>.value``), so a bare ``{{> child}}``
+#: NEVER resolves to one — not even from a sibling inside the very same
+#: container — only the dotted form (``{{> name.child}}``) does, from
+#: anywhere in the document (``core.dynamic``'s own ``ctx`` is always
+#: rooted at the document's real ``prime``, never rebound per container;
+#: only a loop's body gets the ``ctx_override`` that rebinds "this pass's
+#: own sibling" bare — see ``core.loop``/``core.primes``' "WITHIN A LOOP
+#: BODY"). A named ``loop`` is excluded from this set for exactly that
+#: reason: its own body children stay bare-visible, the same "short
+#: sibling path" shorthand its own runtime container gives them. ``use`` is
+#: excluded too: its children are a wholly separate document, compiled on
+#: its own; nothing in *this* document's effect tree corresponds to its
+#: internal effect names.
 _SCOPE_INTRODUCING_TYPES = frozenset({"if", "dynamic"})
 
 
@@ -476,14 +480,18 @@ def check_prompt_composition(
     neither a ``yield`` nor a text ``prompt``, and a cycle among declared
     prompts.
 
-    Name resolution is scope-aware: a named ``if``/``dynamic`` nests its own
-    children under its name (``prime.<name>.<child>``, reachable from
-    outside only via the dotted form, ``{{> name.child}}``); anything else
-    (an unnamed container, or a named ``loop``/``use``/``reflector``) keeps
-    its children bare-visible in the enclosing scope, the same "short
-    sibling path" precedence their own runtime containers already give them
-    (``core.dynamic``/``core.loop``). A dotted name that resolves past a
-    container this module does not model that way (a loop's own iteration
+    Name resolution mirrors the one real distinction this codebase's own
+    runtime state tree makes (``core.dynamic``/``core.loop``): a named
+    ``if``/``dynamic`` nests its children's VALUES under its own name
+    (``prime.<name>.<child>``), and that nesting is never undone by
+    position — a bare ``{{> child}}`` does not resolve even from a sibling
+    inside the very same named container, only the dotted form
+    (``{{> name.child}}``) does, from anywhere in the document. Everything
+    else (an unnamed ``if``/``dynamic``, a ``loop``, a ``reflector``) writes
+    at whatever level it itself sits at, so its own children stay
+    bare-visible there — including a loop's documented "this pass's own
+    sibling" shorthand inside its body. A dotted name that resolves past a
+    container this module does not follow that way (a loop's own iteration
     wrapping, say) is trusted rather than rejected — the same shallow-path
     trust ``{{prime.x.y}}`` already gets elsewhere in this codebase; what it
     exposes at run time is that effect's own concern.
@@ -499,17 +507,14 @@ def check_prompt_composition(
 
     root: dict[str, dict[str, Any]] = {}
 
-    def check_name(name: str, *, where: str, scope_chain: list[dict[str, dict[str, Any]]]) -> None:
+    def check_name(name: str, *, where: str) -> None:
         head = name.split(".", 1)[0]
         if head in declared:
             return  # declared always wins; collision already reported once, above
-        visible: dict[str, dict[str, Any]] = {}
-        for scope in scope_chain:
-            visible.update(scope)
-        if head not in visible:
+        if head not in root:
             errors.append(f"{where}: '{{{{> {name}}}}}' does not name a declared prompt or effect.")
             return
-        node = visible[head]
+        node = root[head]
         segments = name.split(".")
         for seg in segments[1:]:
             children = node.get("children") or {}
@@ -523,12 +528,7 @@ def check_prompt_composition(
                 "text 'prompt'."
             )
 
-    def walk(
-        effects: Any,
-        container_path: str,
-        scope_chain: list[dict[str, dict[str, Any]]],
-        out: dict[str, dict[str, Any]],
-    ) -> None:
+    def walk(effects: Any, container_path: str, out: dict[str, dict[str, Any]]) -> None:
         if not isinstance(effects, list):
             return
         for effect in effects:
@@ -555,29 +555,30 @@ def check_prompt_composition(
                             f"{effect_path}: '{{{{> {name}}}}}' is not a valid name."
                         )
                         continue
-                    check_name(name, where=effect_path, scope_chain=scope_chain)
+                    check_name(name, where=effect_path)
             name = effect.get("name")
             etype = str(effect.get("type") or "").strip().lower()
+            # Only the nested dict a named if/dynamic was just given above
+            # (its own real state namespace) is NOT where its own children's
+            # checks continue from — those are walked with THAT dict as
+            # `out`, so nested names land there (dotted-reachable from
+            # anywhere), never merged back up into the enclosing scope.
             introduces_scope = (
                 isinstance(name, str) and bool(name) and etype in _SCOPE_INTRODUCING_TYPES
             )
-            next_scope_chain, next_out = scope_chain, out
-            if introduces_scope:
-                child_children = out[name]["children"]
-                next_scope_chain = [*scope_chain, child_children]
-                next_out = child_children
+            next_out = out[name]["children"] if introduces_scope else out
             for field in _CHILD_LISTS:
-                walk(effect.get(field), f"{effect_path}.{field}", next_scope_chain, next_out)
+                walk(effect.get(field), f"{effect_path}.{field}", next_out)
 
-    walk(orch.get("effects") or orch.get("steps") or [], "effects", [root], root)
-    walk(orch.get("finally") or [], "finally", [root], root)
+    walk(orch.get("effects") or orch.get("steps") or [], "effects", root)
+    walk(orch.get("finally") or [], "finally", root)
 
     for prompt_name, text in declared.items():
         for name in sorted(partial_references(text)):
             if not _NAME_SHAPE.match(name):
                 errors.append(f"prompts.{prompt_name}: '{{{{> {name}}}}}' is not a valid name.")
                 continue
-            check_name(name, where=f"prompts.{prompt_name}", scope_chain=[root])
+            check_name(name, where=f"prompts.{prompt_name}")
 
     errors.extend(_declared_prompt_cycles(declared))
     return errors

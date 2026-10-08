@@ -15,7 +15,7 @@ from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.runtime_shim import RunRequest, run
 from circuitry.core.compiler import compile_orchestration
 from circuitry.core.dynamic import DynamicRuntime
-from circuitry.core.prompt_compose import RUNTIME_CONFIG_KEY
+from circuitry.core.prompt_compose import EFFECT_NAMES_RUNTIME_KEY, RUNTIME_CONFIG_KEY
 from circuitry.core.store import Store
 
 
@@ -42,7 +42,10 @@ def _run(
     root = compile_orchestration(
         orch=orch, document_dir=document_dir, confinement_root=confinement_root
     )
-    runtime_config = {RUNTIME_CONFIG_KEY: root.prompts}
+    runtime_config = {
+        RUNTIME_CONFIG_KEY: root.prompts,
+        EFFECT_NAMES_RUNTIME_KEY: root.effect_names,
+    }
     store = Store(initial_state or {"input": {}})
     DynamicRuntime(
         root, adapter=adapter or _mock_adapter(), model="m", runtime_config=runtime_config
@@ -309,6 +312,170 @@ def test_cycle_among_declared_prompts_is_a_compile_error() -> None:
                 "effects": [{"type": "yield", "name": "y", "template": "{{> a}}"}],
             }
         )
+
+
+def test_a_dotted_name_reaches_into_a_named_dynamics_own_child() -> None:
+    """`{{> pipeline.outline}}` where `pipeline` is a named `dynamic` names
+    the nested yield at `prime.pipeline.outline`, not `pipeline` itself (a
+    container, neither a yield nor a text prompt) -- the dotted form must
+    not be type-checked against the container's own type."""
+    store = _run(
+        {
+            "effects": [
+                {
+                    "type": "dynamic",
+                    "name": "pipeline",
+                    "effects": [
+                        {"type": "yield", "name": "outline", "template": "The plan."}
+                    ],
+                },
+                {"type": "yield", "name": "summary", "template": "{{> pipeline.outline}}"},
+            ]
+        }
+    )
+    assert store.get("prime.summary.value") == "The plan."
+
+
+def test_a_bare_name_nested_inside_a_named_dynamic_is_not_visible_outside_it() -> None:
+    """The inverse of the above: a bare `{{> outline}}`, written OUTSIDE the
+    named dynamic that nests it, must not resolve -- `outline` only exists at
+    `prime.pipeline.outline`, never at the document's own top level."""
+    with pytest.raises(ValueError, match=r"'\{\{> outline\}\}' does not name"):
+        compile_orchestration(
+            orch={
+                "effects": [
+                    {
+                        "type": "dynamic",
+                        "name": "pipeline",
+                        "effects": [
+                            {"type": "yield", "name": "outline", "template": "The plan."}
+                        ],
+                    },
+                    {"type": "yield", "name": "summary", "template": "{{> outline}}"},
+                ]
+            }
+        )
+
+
+def test_a_bare_name_nested_inside_a_named_dynamic_is_rejected_even_from_inside_it() -> None:
+    """A named `dynamic`'s children are never bare-visible, even to a
+    sibling inside the very same dynamic -- `core.dynamic`'s own `ctx` is
+    always rooted at the document's real `prime`, never rebound per
+    container (unlike a loop body's documented shorthand), so a value
+    written at `prime.pipeline.outline` is only ever reachable, from
+    anywhere, as `{{> pipeline.outline}}`."""
+    with pytest.raises(ValueError, match=r"'\{\{> outline\}\}' does not name"):
+        compile_orchestration(
+            orch={
+                "effects": [
+                    {
+                        "type": "dynamic",
+                        "name": "pipeline",
+                        "effects": [
+                            {"type": "yield", "name": "outline", "template": "The plan."},
+                            {"type": "yield", "name": "recap", "template": "{{> outline}}!"},
+                        ],
+                    }
+                ]
+            }
+        )
+
+
+def test_a_dotted_name_resolves_the_same_way_from_inside_its_own_container() -> None:
+    """The dotted form works from anywhere, including from a sibling
+    inside the very same named dynamic it names."""
+    store = _run(
+        {
+            "effects": [
+                {
+                    "type": "dynamic",
+                    "name": "pipeline",
+                    "effects": [
+                        {"type": "yield", "name": "outline", "template": "The plan."},
+                        {
+                            "type": "yield",
+                            "name": "recap",
+                            "template": "{{> pipeline.outline}}!",
+                        },
+                    ],
+                }
+            ]
+        }
+    )
+    assert store.get("prime.pipeline.recap.value") == "The plan.!"
+
+
+def test_an_untaken_if_branchs_effect_renders_empty_not_an_error() -> None:
+    """`{{> name}}` names a real effect in the document, but the branch that
+    would have written it never ran -- renders "", exactly like a bare
+    `{{{prime.name.value}}}` miss, not a run-time error."""
+    store = _run(
+        {
+            "effects": [
+                {
+                    "type": "if",
+                    "if": {"mode": "cel", "expr": "false"},
+                    "then": [{"type": "yield", "name": "only_if_true", "template": "x"}],
+                    "else": [],
+                },
+                {"type": "yield", "name": "after", "template": "[{{> only_if_true}}]"},
+            ]
+        }
+    )
+    assert store.get("prime.after.value") == "[]"
+
+
+def test_an_effect_referenced_before_it_runs_renders_empty_not_an_error() -> None:
+    """A forward reference -- valid as a NAME (checked at compile time
+    regardless of position) -- but not yet written when the referencing
+    effect runs, also renders ""."""
+    store = _run(
+        {
+            "effects": [
+                {"type": "yield", "name": "before", "template": "[{{> later}}]"},
+                {"type": "yield", "name": "later", "template": "x"},
+            ]
+        }
+    )
+    assert store.get("prime.before.value") == "[]"
+    assert store.get("prime.later.value") == "x"
+
+
+def test_an_unknown_name_inside_a_file_sourced_template_is_a_compile_error(
+    tmp_path: Path,
+) -> None:
+    _write(tmp_path / "draft.md", "{{> nope}}")
+    with pytest.raises(ValueError, match=r"'\{\{> nope\}\}' does not name"):
+        compile_orchestration(
+            orch={
+                "effects": [
+                    {"type": "yield", "name": "y", "template": {"file": "draft.md"}}
+                ]
+            },
+            document_dir=tmp_path,
+            confinement_root=tmp_path,
+        )
+
+
+def test_a_valid_name_inside_a_file_sourced_message_content_is_accepted(
+    tmp_path: Path,
+) -> None:
+    _write(tmp_path / "draft.md", "{{> voice}}")
+    store = _run(
+        {
+            "prompts": {"voice": "Plain, direct."},
+            "effects": [
+                {
+                    "type": "prompt",
+                    "name": "p",
+                    "messages": [{"role": "user", "content": {"file": "draft.md"}}],
+                }
+            ],
+        },
+        document_dir=tmp_path,
+        confinement_root=tmp_path,
+    )
+    assert store.get("prime.p.meta.error") is None
 
 
 # ── prompt files: `{file: <path>}` ──────────────────────────────────────────
