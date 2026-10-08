@@ -23,6 +23,7 @@ Start with the [README](../README.md) for install, first run, and the mental mod
 - [Library Sources](./library-sources.md) — `runtime.library.sources`: curation, folder, and GitHub sources behind `cof list/info/run/eject`.
 - [Shared Library](./shared-library.md) · [Contributions](./shared-library-contributions.md) · [Growth](./shared-library-growth.md) — the publish-by-PR shared library and `cof fetch` / `cof run-library`.
 - [CyberDiner Demo Runbook](./cyberdiner-demo-runbook.md) — a job-queue broker adapter, end to end.
+- [The Agent Loop](./agent-loop.md) — `agents/agent_loop`: a tool-using agent made of a loop, a JSON prompt and read-only tool effects; its limits, and how to add write tools.
 
 ## Extending
 
@@ -34,6 +35,8 @@ Start with the [README](../README.md) for install, first run, and the mental mod
 - [`surrealdb` tool plugin](./plugins/surrealdb.md) — SurrealQL and record operations, env-only credentials, readiness and error mapping.
 - [Runtime Plugin Catalog](./runtime-plugins.md) — per-plugin schema, redaction, and connection/auth docs for the bundled persistence runtime plugins.
 - [Binary tool plugins: `binary` and `env`](./plugins/binary-tools.md) — a machine-specific executable path and environment for `imagemagick`, `ffmpeg`, and the other subprocess-wrapping tool plugins.
+- [`agent` tool plugin](./plugins/agent.md) — a delegated pi or Claude Code session as a tool effect: params, the result-file contract and its repair turn, what lands in state, and why it is not sandboxed.
+- [`service` tool plugin](./plugins/service.md) — start a background process, wait until it is ready, and stop exactly what was started (ownership records, port holders, `finally:` stop).
 
 ## Project
 

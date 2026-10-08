@@ -406,6 +406,7 @@ def run_tracked(
     cwd: str | None = None,
     env: dict[str, str] | None = None,
     pass_fds: Sequence[int] = (),
+    new_session: bool = False,
 ) -> subprocess.CompletedProcess[Any]:
     """``subprocess.run``, but tracked by :func:`get_token` for the whole
     time the child can block (#356).
@@ -426,6 +427,11 @@ def run_tracked(
     unless called from inside :meth:`CancellationToken.cleanup` (a
     ``finally:`` block must still be able to run its own subprocess
     steps after the run it's cleaning up from was cancelled).
+
+    ``new_session=True`` starts the child in its own process group even
+    when the token is not armed, so a timeout or a cancellation kills
+    everything the child started — for a headless child that never needs
+    the controlling terminal (``agent_cli``'s coding-agent CLIs).
     """
     token = get_token()
     token.check()
@@ -441,7 +447,9 @@ def run_tracked(
     if pass_fds:
         popen_kwargs["pass_fds"] = tuple(pass_fds)
     proc = subprocess.Popen(
-        cmd, start_new_session=(os.name == "posix" and token.armed), **popen_kwargs
+        cmd,
+        start_new_session=(os.name == "posix" and (token.armed or new_session)),
+        **popen_kwargs,
     )
     with proc, token.track(proc):
         try:
