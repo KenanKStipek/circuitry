@@ -27,6 +27,19 @@ fn e2e_enabled() -> bool {
 /// doesn't inherit the same silent miss.
 const SCRIPTED_CONFIG: &str = r#"{"default_adapter":"scripted","default_model":"scripted-model"}"#;
 
+/// How long every signal test waits before sending its first signal.
+/// `osp` registers its signal handlers before anything else in
+/// `do_run` (F13), but that is a guarantee about *osp's own code*, not
+/// about how long the OS takes to finish loading and starting the
+/// process at all — a cold page cache under heavy memory pressure (a
+/// real, observed condition on a shared, multi-tenant dev machine) can
+/// push that past what used to be a merely-generous 500ms, and a
+/// signal arriving before `main` even runs always hits the OS default
+/// disposition no matter how early application code registers a
+/// handler. 1.5s is still well under what a human's own first Ctrl-C
+/// takes in practice.
+const SIGNAL_DELAY: Duration = Duration::from_millis(1500);
+
 fn which(bin: &str) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths)
@@ -194,7 +207,7 @@ fn a_single_sigint_forwards_and_osp_exits_130() {
         .expect("spawn osp");
     let pid = child.id() as i32;
 
-    std::thread::sleep(Duration::from_millis(500));
+    std::thread::sleep(SIGNAL_DELAY);
     unsafe {
         libc::kill(pid, libc::SIGINT);
     }
@@ -216,17 +229,24 @@ fn a_single_sigint_forwards_and_osp_exits_130() {
 }
 
 #[test]
-fn a_second_sigint_still_exits_cleanly_with_no_leftover_process() {
+fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
     if !e2e_enabled() {
         eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
+    // A `finally:` sleep gives the second SIGINT a real, generous
+    // window to land *during* cleanup — without one, `tail -f
+    // /dev/null` dies so fast from the first SIGINT alone that the
+    // second has nothing left to interrupt, making the exact landing
+    // moment a coin flip under whatever load the test runner is under
+    // (this is the same shape issue #424's review flagged for the
+    // golden fixtures, F12, fixed there with the same kind of sleep).
     let doc = write_doc(
         work.path(),
         "do.yml",
-        "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+        "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\nfinally:\n  - name: cleanup\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"10\"]\n      allowed_commands: [\"sleep\"]\n",
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
@@ -239,11 +259,11 @@ fn a_second_sigint_still_exits_cleanly_with_no_leftover_process() {
         .expect("spawn osp");
     let pid = child.id() as i32;
 
-    std::thread::sleep(Duration::from_millis(500));
+    std::thread::sleep(SIGNAL_DELAY);
     unsafe {
         libc::kill(pid, libc::SIGINT);
     }
-    std::thread::sleep(Duration::from_millis(100));
+    std::thread::sleep(Duration::from_millis(500));
     unsafe {
         libc::kill(pid, libc::SIGINT);
     }
@@ -257,14 +277,16 @@ fn a_second_sigint_still_exits_cleanly_with_no_leftover_process() {
         .unwrap();
     let status = wait_with_timeout(child, Duration::from_secs(30));
 
-    // `tail -f /dev/null` has no `finally:` to linger in, so the second
-    // SIGINT here lands after the engine has already died from the
-    // first — osp's own exit code is still the engine's (130), not a
-    // SIGKILL-after-10s path (DESIGN.md §4.1's own last-resort timer
-    // never has to fire). The real point of this test, per issue
-    // #424's review, is that forwarding a *second* signal is exercised
-    // end to end at all, and still leaves nothing running.
+    // The second SIGINT, landing while the `finally:` sleep is still
+    // running, makes `cof` call `os._exit` at once (`cli/interrupts
+    // .py`) — no final write, the same abort DESIGN.md §1.1 measures.
+    // osp's own exit code is still the engine's (130); the real point
+    // of this test, per issue #424's review, is that forwarding a
+    // *second* signal is exercised end to end at all, and still leaves
+    // nothing running regardless of which of the two paths the engine
+    // took.
     assert_eq!(status.code(), Some(130), "stdout:\n{stdout}");
+    assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 130"), "stdout:\n{stdout}");
 
     assert_no_leftover_process(work.path());
@@ -294,7 +316,7 @@ fn sigterm_forwards_and_osp_exits_143() {
         .expect("spawn osp");
     let pid = child.id() as i32;
 
-    std::thread::sleep(Duration::from_millis(500));
+    std::thread::sleep(SIGNAL_DELAY);
     unsafe {
         libc::kill(pid, libc::SIGTERM);
     }

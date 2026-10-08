@@ -109,6 +109,31 @@ fn is_container(meta: &Value) -> bool {
     meta.get("flow").is_some() || meta.get("mode").is_some()
 }
 
+/// Whether `path` is a container, for an `--events` line that has no
+/// `meta` of its own to check (DESIGN.md §1.4: `start`/`end` fire for
+/// the root, every *named* container, and every leaf alike — an
+/// unnamed `if`/loop is the only thing that never gets one). The plan
+/// answers this directly when there is one; with no plan at all, the
+/// latest state `diff` has already seen for the path is the only
+/// other source (same check `diff`'s own container suppression uses) —
+/// which answers correctly for everything except a container's own
+/// very first `start`, before any state write has landed for it yet
+/// (measured true for the document root specifically: DESIGN.md §1.1's
+/// first write is `0.4–0.9s` after launch, well after the root's own
+/// `start`). A no-plan run missing exactly that one line for the root
+/// is a narrower gap than printing it wrongly as a leaf every time.
+fn is_container_path(path: &str, plan: &PlanTree, last: &BTreeMap<String, NodeMeta>) -> bool {
+    if let Some(m) = plan.match_path(path) {
+        if let Some(entry) = m.entries.first() {
+            return !matches!(
+                entry.kind,
+                crate::plan::PlanEntryKind::Leaf | crate::plan::PlanEntryKind::Use
+            );
+        }
+    }
+    last.get(path).is_some_and(|n| is_container(&n.meta))
+}
+
 fn on_error_suffix(path: &str, plan: &PlanTree) -> &'static str {
     match plan
         .match_path(path)
@@ -174,6 +199,15 @@ impl Differ {
         match event {
             Event::Start { ts, path, .. } => {
                 self.event_sourced.insert(path.clone());
+                // A named container (the document root included) fires
+                // `start`/`end` the same as a leaf (DESIGN.md §1.4's
+                // probe notes), but gets no ▶/✓/✗ of its own — same
+                // rule `diff` already applies from state (F1 follow-up,
+                // caught once a real plan started compiling and
+                // `--events` started firing for more than leaves).
+                if is_container_path(path, plan, &self.last) {
+                    return Vec::new();
+                }
                 let summary = self
                     .last
                     .get(path)
@@ -193,6 +227,9 @@ impl Differ {
                 ..
             } => {
                 self.event_sourced.insert(path.clone());
+                if is_container_path(path, plan, &self.last) {
+                    return Vec::new();
+                }
                 let text = if *ok {
                     let duration = ms
                         .map(|m| format!("{:.1}s", m as f64 / 1000.0))
@@ -670,6 +707,95 @@ mod tests {
             lines.iter().any(|l| l.text == "↻ prime.flaky retry"),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn diff_event_emits_no_line_for_a_named_container() {
+        // DESIGN.md §1.4: `start`/`end` fire for the root and every
+        // *named* container the same as for a leaf, but a container
+        // gets no ▶/✓/✗ of its own — only visible once `--events` is
+        // actually flowing (#423) and firing for more than leaves,
+        // which the earlier hand-built-event-only tests never did.
+        use electricity_bytecode::{EffectPath, LeafKind, NodeKind, OnError, Op, Region, ToolOp};
+
+        let root_path = EffectPath::root();
+        let child_path = root_path.clone().push_name("step1");
+        let program = electricity_bytecode::Program {
+            root: Op {
+                path: root_path,
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops: vec![Op {
+                        path: child_path,
+                        name: Some("step1".to_string()),
+                        kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+                            provider: "shell".to_string(),
+                            params: electricity_bytecode::ParamNode::Literal(
+                                electricity_value::Value::None,
+                            ),
+                            params_json: None,
+                            prompt: None,
+                            model: None,
+                            timeout_ms: None,
+                            retries: Default::default(),
+                            expect: None,
+                            description: None,
+                            group: None,
+                        }))),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    }],
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            },
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = PlanTree::from_program(&program);
+
+        let mut differ = Differ::new();
+        let start = differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(1),
+                path: "prime".to_string(),
+            },
+            &plan,
+        );
+        assert!(start.is_empty(), "{start:?}");
+
+        let end = differ.diff_event(
+            &Event::End {
+                ts: "t1".to_string(),
+                id: Some(1),
+                path: "prime".to_string(),
+                ok: true,
+                ms: Some(5),
+                error: None,
+            },
+            &plan,
+        );
+        assert!(end.is_empty(), "{end:?}");
+
+        // A real leaf under that same plan still gets its lines.
+        let leaf_start = differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(2),
+                path: "prime.step1".to_string(),
+            },
+            &plan,
+        );
+        assert_eq!(leaf_start.len(), 1);
     }
 
     #[test]

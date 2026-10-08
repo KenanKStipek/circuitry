@@ -405,6 +405,42 @@ fn read_stdout_json_error(path: &Path) -> Option<String> {
 /// first) — shared between `do_run` and `do_watch`. Returns the
 /// freshly polled live-state snapshot, if there was one, so a caller
 /// that needs to check `run_ended` doesn't have to poll a second time.
+/// One tick's lines, from whichever of events and state had something
+/// new, merged and sorted by their own timestamps — split out from
+/// [`drain_observations`] so it can be unit-tested without a real
+/// `stdout` lock.
+fn observe_tick(
+    live_poller: &mut LiveStatePoller,
+    events_tailer: &mut EventsTailer,
+    differ: &mut Differ,
+    model: &mut RunModel,
+    plan: &PlanTree,
+) -> (
+    Vec<oscilloscope_core::diff::LogLine>,
+    Option<serde_json::Value>,
+) {
+    // Events first, then the state diff (not the order either was
+    // originally polled in): `diff_event` marks a path event-sourced
+    // as it goes, and `diff` needs that already set for *this* tick to
+    // skip its own line for a path whose state write landed in the
+    // very same tick as its event — this real race only starts
+    // mattering once `--events` is actually flowing (#423), which is
+    // when it first showed up as a genuine duplicate line.
+    let mut lines = Vec::new();
+    for raw_event in events_tailer.poll() {
+        if let Some(event) = parse_event(&raw_event) {
+            model.observe_event(&event);
+            lines.extend(differ.diff_event(&event, plan));
+        }
+    }
+    let state = live_poller.poll();
+    if let Some(state) = &state {
+        lines.extend(differ.diff(state, plan));
+    }
+    oscilloscope_core::diff::sort_log_lines(&mut lines);
+    (lines, state)
+}
+
 fn drain_observations(
     out: &mut std::io::StdoutLock<'_>,
     clock: &mut Clock,
@@ -414,18 +450,7 @@ fn drain_observations(
     model: &mut RunModel,
     plan: &PlanTree,
 ) -> Option<serde_json::Value> {
-    let mut lines = Vec::new();
-    let state = live_poller.poll();
-    if let Some(state) = &state {
-        lines.extend(differ.diff(state, plan));
-    }
-    for raw_event in events_tailer.poll() {
-        if let Some(event) = parse_event(&raw_event) {
-            model.observe_event(&event);
-            lines.extend(differ.diff_event(&event, plan));
-        }
-    }
-    oscilloscope_core::diff::sort_log_lines(&mut lines);
+    let (lines, state) = observe_tick(live_poller, events_tailer, differ, model, plan);
     for line in lines {
         print_line(out, clock, line.ts.as_deref(), &line.text);
     }
@@ -721,6 +746,46 @@ mod tests {
     #[test]
     fn effective_log_mode_is_true_when_explicitly_requested() {
         assert!(effective_log_mode(true));
+    }
+
+    #[test]
+    fn a_leaf_completing_in_the_same_tick_as_its_event_prints_once_not_twice() {
+        // Once `--events` is actually flowing (#423), a fast effect's
+        // `start`/`end` and its own state write can land in the same
+        // 100ms poll tick. `diff_event` must run first and mark the
+        // path event-sourced before `diff` looks at the same state, or
+        // both emit the same ✓ line.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("state.live.json"),
+            r#"{"prime": {"value": true, "meta": {"completed_at": "t1", "error": null, "flow": "chain"},
+                "hello": {"value": "hi\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell", "stdout": "hi\n"}}
+            }}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("events.jsonl"),
+            "{\"v\":1,\"seq\":0,\"ts\":\"t0\",\"ev\":\"start\",\"id\":1,\"path\":\"prime.hello\"}\n\
+             {\"v\":1,\"seq\":1,\"ts\":\"t1\",\"ev\":\"end\",\"id\":1,\"path\":\"prime.hello\",\"ok\":true,\"ms\":5}\n",
+        )
+        .unwrap();
+
+        let mut live_poller = LiveStatePoller::new(dir.path().join("state.live.json"));
+        let mut events_tailer = EventsTailer::new(dir.path().join("events.jsonl"));
+        let mut differ = Differ::new();
+        let mut model = RunModel::new();
+        let (lines, _state) = observe_tick(
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &PlanTree::empty(),
+        );
+        let done: Vec<_> = lines
+            .iter()
+            .filter(|l| l.text.starts_with("✓ prime.hello"))
+            .collect();
+        assert_eq!(done.len(), 1, "{lines:?}");
     }
 
     #[test]
