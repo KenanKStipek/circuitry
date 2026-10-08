@@ -1588,6 +1588,72 @@ split likely collapses, but the **effective merge semantics** (document
 `runtime:` keys layered over config, key-by-key, not whole-block replacement)
 is still the behavior to match when a document *is* trusted.
 
+### 8.7 Event stream (`--events`)
+
+Required for VM milestone **M0-H** (`electricity-vm`'s `fire_effect_start`/
+`fire_effect_complete` are exactly the two call sites this stream reads) —
+electricity's own `--live-state` does not land until M3-B (#419, #418 Q2), so
+until M3 this is the VM's only live channel.
+
+`cof run --events <file>` (also `run-library`) writes a JSONL stream of
+effect starts and ends: one complete JSON object per line, UTF-8, created
+(or truncated) at `cli/events.py` `EventLog.__init__` before the first
+effect. Every event is one `write()` of one whole line, flushed at once,
+under one lock (`EventLog`'s own `threading.Lock`) — a reader tailing the
+file never sees a torn line except a trailing one still being written.
+
+```json
+{"v":1,"seq":0,"ts":"2026-10-08T19:56:22.433Z","ev":"run_start","run_id":"…","orchestration":"do-thing.yml","engine":"cof 0.2.0","pid":4242}
+{"v":1,"seq":7,"ts":"…","ev":"dispatch","path":"prime.each_tree","branches":3}
+{"v":1,"seq":8,"ts":"…","ev":"start","id":8,"path":"prime.each_tree.iter_0.t_nap"}
+{"v":1,"seq":12,"ts":"…","ev":"end","id":8,"path":"prime.each_tree.iter_0.t_nap","ok":true,"ms":1008}
+{"v":1,"seq":20,"ts":"…","ev":"end","id":15,"path":"prime.always_fails","ok":false,"ms":5,"error":"/bin/ls failed (exit 1): ls: …"}
+{"v":1,"seq":99,"ts":"…","ev":"run_end","ok":false,"error":"Interrupted (Ctrl-C/SIGINT)","signal":"SIGINT"}
+```
+
+| Field | Meaning |
+|---|---|
+| `v` | Format version, `1`. |
+| `seq` | Strictly increasing in file order, starting at `0`. |
+| `ts` | Wall-clock UTC, millisecond precision, `isoformat(timespec="milliseconds")` with the `+00:00` suffix replaced by `Z`. |
+| `ev` | `run_start`, `dispatch`, `start`, `end` or `run_end`. |
+| `id` | Present on `start`/`end` only. Unique per effect *instance* — a loop pass or a tree branch each get their own — from one counter, incremented under the same lock as every write. An unnamed loop's repeated pass, or several `flow: tree` branches sharing one path, still pair `start` with the right `end`: `EventLog` keeps a per-thread stack keyed by path (`threading.local`), since one effect instance's `start` and `end` always arrive on the same thread (including nested instances) — `on_start` pushes, `on_complete` pops. |
+| `path` | The absolute dotted state path, exactly as in `--live-state` and in scripted-replies keys (`electricity/docs/spec/scripted-replies.md`). |
+| `dispatch` | `path`/`branches` only. Sent once by a tree loop or tree `dynamic` before its branches start — the reference composes this with the pre-existing `Store.concurrent_dispatch` callback (`RunRequest.concurrent_dispatch_observer`) rather than replacing it; both observers fire. |
+| `ok` | On `end`: `node["meta"]["error"] is None`. On `run_end`: whether the run succeeded. |
+| `error` | Present only when `ok` is `false`: the first 500 characters of the effect's (`end`) or the run's (`run_end`) error text — the exact same string already in `meta.error`/`RunResult.error`, never a new message. |
+| `signal` | `run_end` only, present only after an interruption: `"SIGINT"`, `"SIGTERM"` or `"SIGHUP"` — read from `core.cancellation.CancellationToken.signum` (the same signal `--live-state`'s own `interrupted`/`sigterm`/`sighup` flags already distinguish, §6.5). |
+
+**Ordering.**
+- `run_start` is always the first line.
+- A container's `start` comes before any of its children's `start`s; every
+  child's `end` comes before its container's `end` — true for `dynamic`,
+  named `loop`, `if`, `reflector` and `use`, since each fires its own
+  `fire_effect_start`/`fire_effect_complete` bracketing everything it runs
+  (§5's per-effect-type sections; `disabled.py`'s `enabled: false` skip
+  fires both with no gap, same pairing). Tree-flow siblings may interleave
+  freely with each other.
+- `run_end` is always the last line, and is written only *after*
+  `--live-state`'s own final write (`LiveStateMirror.close`, in `run()`'s
+  `finally:`) — seeing `run_end` means that final snapshot is already on
+  disk.
+
+**Failures never fail the run.** A failure to open the file at construction,
+or any later `OSError` writing a line, is logged once (a warning) and then
+ignored for the rest of that run — exactly the same contract
+`--live-state` already has. `run()` folds that into one warning on
+`RunResult.warnings`, the same way a `--live-state` write failure does.
+
+**Abort.** A second SIGINT/SIGTERM/SIGHUP during cleanup ends the process at
+once via `os._exit` (`cli/interrupts.py`, §6.5) — before `run()`'s own
+`finally:` (and so before `run_end`) ever runs. A reader sees end-of-file
+with no `run_end`, plus a dead process, and treats that as aborted, not as a
+clean failure.
+
+What the format leaves out, deliberately: no effect `value`, no prompt text,
+no effect *kind* (a reader gets that from the compiled plan, or from the
+shape of `meta` for a generated child) — those stay in `--live-state`/`--out`.
+
 ---
 
 ## 9. Quirks and apparent bugs
