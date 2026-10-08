@@ -3,14 +3,7 @@
 //! `validate(...)`, and `check_for_run`'s text against `run(...)`'s own
 //! `RunResult.error`. Every case here fails before `compile_orchestration`
 //! ever runs (a load, structural, or concurrency-configuration error), so
-//! every one is fully checkable against this lane alone -- with one
-//! exception: `validate()`'s own concurrency-configuration check runs
-//! *after* a document compiles, so the `check_report` side of the two
-//! `*_concurrency_config_error` cases still needs a real compile (lane C);
-//! `Case::check_report_needs` marks that, and [`assert_check_report`] only
-//! asserts `ok: false` plus the lane C marker for those two, while still
-//! fully checking `check_for_run` (whose own concurrency check runs
-//! *before* structural checks even start, needing nothing further).
+//! every one is fully checkable against this lane alone.
 
 mod support;
 
@@ -36,24 +29,6 @@ fn assert_check_report(case: &Case, root: &std::path::Path, entry: &std::path::P
         "case {:?}: check_report warnings",
         case.name
     );
-
-    if let Some(lane) = &case.check_report_needs {
-        assert!(
-            !report.ok,
-            "case {:?}: expected ok: false, got {report:?}",
-            case.name
-        );
-        assert!(
-            report
-                .errors
-                .iter()
-                .any(|e| e.contains("not implemented in lane")),
-            "case {:?}: expected a lane {lane} stub marker, got {:?}",
-            case.name,
-            report.errors
-        );
-        return;
-    }
 
     assert_eq!(
         report.ok, case.validate.ok,

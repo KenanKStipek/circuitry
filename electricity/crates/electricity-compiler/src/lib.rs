@@ -8,14 +8,11 @@
 //! ([`compose`], [`prompt_files`], [`digest`]), and the two entry points
 //! that reproduce Circuitry's two surfaces ([`pipeline`]).
 //!
-//! # Lane A (this lane): the stable public API
+//! # Lanes (issue #408)
 //!
-//! Every function and type below exists with its final signature in
-//! this PR; every body is a stub that returns a clear "not implemented
-//! in lane A" error (never a `todo!()`/panic) until the lane named in
-//! its module's header fills it in. Lanes B, C and D fill in disjoint
-//! files — see each module's own header for which lane owns it and
-//! which Circuitry source it ports:
+//! Lanes A (this crate's stable public API), B, C and D each filled in
+//! disjoint files and have all landed — see each module's own header
+//! for which lane owns it and which Circuitry source it ports:
 //!
 //! | Module | Lane | Circuitry source |
 //! |---|---|---|
@@ -85,6 +82,39 @@
 //!   violations by `(location, message)`, not Circuitry's own `str(err)`
 //!   order (third-party `jsonschema` text from a different
 //!   implementation) -- see that function's own doc comment.
+//! - [`compile::containers`]'s [`compile::containers::compile_effects_in_scope`]
+//!   rejects more than `MAX_COMPILE_DEPTH` (128) nested effect
+//!   containers with its own distinct error. Circuitry has no fixed
+//!   limit of its own: its YAML loader and its schema-instance check
+//!   each raise Python's `RecursionError` at a caller-dependent depth,
+//!   well before `compile_orchestration`'s own stack frames would
+//!   (`compile::containers`'s own module docs have the measured
+//!   numbers).
+//! - [`cycles`]'s own non-UTF-8-content gap: a `use` child that isn't
+//!   valid UTF-8 is treated as unreadable (an empty document, never a
+//!   cycle edge through it), where Circuitry's own `load_orch` raises
+//!   an uncaught `UnicodeDecodeError` ([`cycles`]'s own module docs).
+//! - [`compile::coerce::py_int`]/[`compile::coerce::py_float`]: a value
+//!   of the wrong Python type (one schema validation -- lane B -- would
+//!   already have rejected) coerces to `0`/`0.0` rather than raising,
+//!   so this compiler never panics on it ([`compile::coerce`]'s own
+//!   module docs).
+//! - A handful of narrower whitespace/Unicode divergences, declined as
+//!   out of scope for this lane (PR #415's review, finding 19): the
+//!   `\x1c`-`\x1f` control characters Python's `str.strip()`/`.isspace()`
+//!   treat as whitespace but Rust's `char::is_whitespace` does not
+//!   ([`compose`]'s own module docs); [`compile::names`]'s own
+//!   `iter_<n>`-reserved-pattern check is ASCII-digit-only, where
+//!   Circuitry's `re.fullmatch(r"iter_\d+", name)` matches any Unicode
+//!   decimal digit; [`state_ns`]'s own `iter_template_strings` silently
+//!   drops a non-string leaf under a checked field rather than
+//!   reporting it, matching `core/state_ns.py::_iter_template_strings`'s
+//!   own `isinstance(str)` guard exactly, but still a narrower overall
+//!   behavior than Circuitry's, since nothing later reports that leaf
+//!   either; a declared `use.inputs: {}` and an absent `inputs` compile
+//!   identically here, where Circuitry's schema instance (lane B)
+//!   distinguishes the two; and an unknown chat-message `role` value
+//!   (unreachable today -- the schema's `role` is a closed enum).
 //! - [`prompt_files`]'s confinement-root resolve: `core/prompt_files.py::
 //!   resolve_prompt_file_path` lets the confinement root's own `Path.
 //!   resolve(strict=False)` raise an *uncaught* `RuntimeError` (only the
@@ -240,14 +270,4 @@ pub struct CheckReport {
     pub ok: bool,
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
-}
-
-/// `program` reused by every stub so the exact wording stays
-/// consistent, and so finding it (ripgrep this crate for the string
-/// below) always lands on the right lane/issue.
-pub(crate) fn not_implemented(function: &str, lane: &str) -> String {
-    format!(
-        "electricity-compiler: `{function}` is not implemented in lane A \
-         (see issue #408, lane {lane})"
-    )
 }

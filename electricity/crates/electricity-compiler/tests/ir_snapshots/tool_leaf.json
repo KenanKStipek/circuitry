@@ -1,0 +1,80 @@
+{
+  "adapter": null,
+  "document": null,
+  "effect_names": [
+    "fetch"
+  ],
+  "interface": null,
+  "model": null,
+  "prompts": {},
+  "root": {
+    "enabled": true,
+    "kind": {
+      "Control": {
+        "Block": {
+          "ops": [
+            {
+              "enabled": true,
+              "kind": {
+                "Leaf": {
+                  "Tool": {
+                    "description": null,
+                    "expect": null,
+                    "group": null,
+                    "model": null,
+                    "params": {
+                      "Map": {
+                        "cmd": {
+                          "Template": {
+                            "composable": true,
+                            "escape": "Html",
+                            "source": "echo {{input.x}}"
+                          }
+                        },
+                        "n": {
+                          "From": {
+                            "default": null,
+                            "path": "input.n"
+                          }
+                        }
+                      }
+                    },
+                    "params_json": null,
+                    "prompt": null,
+                    "provider": "shell",
+                    "retries": {
+                      "backoff_ms": 1000,
+                      "max_attempts": 1
+                    },
+                    "timeout_ms": null
+                  }
+                }
+              },
+              "labels": null,
+              "name": "fetch",
+              "on_error": "Fail",
+              "path": [
+                {
+                  "Name": "prime"
+                },
+                {
+                  "Name": "fetch"
+                }
+              ]
+            }
+          ],
+          "overlay": false
+        }
+      }
+    },
+    "labels": null,
+    "name": "prime",
+    "on_error": "Fail",
+    "path": [
+      {
+        "Name": "prime"
+      }
+    ]
+  },
+  "runtime_block": null
+}

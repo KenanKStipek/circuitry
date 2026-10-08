@@ -318,6 +318,7 @@ name = "electricity-cli"
 version = "0.1.0"
 dependencies = [
  "electricity",
+ "serde_json",
 ]
 
 [[package]]
@@ -333,6 +334,8 @@ dependencies = [
  "electricity-value",
  "electricity-yaml",
  "indexmap",
+ "num-traits",
+ "regex",
  "serde",
  "serde_json",
  "sha2",

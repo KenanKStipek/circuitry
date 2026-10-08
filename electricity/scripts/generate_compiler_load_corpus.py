@@ -6,13 +6,13 @@
 Every case here fails before `compile_orchestration` -- a load error, a
 structural error, or (for `check_for_run` specifically) a concurrency-
 configuration error -- so every case is fully checkable against this
-lane alone, with one narrow exception: `validate()`'s own concurrency-
-configuration check runs *after* a document compiles (confirmed
-directly against `cli/runtime_shim.py`), so the two
-`*_concurrency_config_error` cases' `check_report` side still needs a
-real compile (lane C) even though their `check_for_run` side -- which
-checks the same configuration *before* structural checks even start --
-needs nothing further; `check_report_needs` marks that.
+lane alone. `validate()`'s own concurrency-configuration check runs
+*after* a document compiles (confirmed directly against
+`cli/runtime_shim.py`), so the two `*_concurrency_config_error` cases'
+`check_report` side is recorded against a real compile (lane C has
+landed) even though their `check_for_run` side -- which checks the
+same configuration *before* structural checks even start -- never
+needed one.
 
 Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
 3.11 in CI). Usage: python3 generate_compiler_load_corpus.py [--check]
@@ -239,22 +239,16 @@ CASES: list[dict[str, Any]] = [
         # before structural checks even start (F1).
         "files": {"doc.yml": "runtime: 5\neffects: []\n"},
         "entry": "doc.yml",
-        # Schema-valid and structurally clean -- `check_report`'s own
-        # path only diverges from `check_for_run` once it reaches a real
-        # compile, lane C's (`compile_document` is still a stub here).
-        "check_report_needs": "C",
     },
     {
         "name": "plugins_not_a_list_is_a_run_only_error",
         "files": {"doc.yml": "plugins: foo\neffects: []\n"},
         "entry": "doc.yml",
-        "check_report_needs": "C",
     },
     {
         "name": "plugins_entry_not_a_string_is_a_run_only_error",
         "files": {"doc.yml": "plugins: [1]\neffects: []\n"},
         "entry": "doc.yml",
-        "check_report_needs": "C",
     },
     {
         "name": "missing_required_interface_input_is_a_run_only_error",
@@ -271,7 +265,6 @@ CASES: list[dict[str, Any]] = [
             )
         },
         "entry": "doc.yml",
-        "check_report_needs": "C",
     },
     {
         "name": "missing_entry_file_with_an_unsupported_suffix",
@@ -309,7 +302,6 @@ CASES: list[dict[str, Any]] = [
             ),
         },
         "entry": "doc.yml",
-        "check_report_needs": "C",
     },
     {
         "name": "invalid_concurrency_groups_config_error",
@@ -322,19 +314,12 @@ CASES: list[dict[str, Any]] = [
             ),
         },
         "entry": "doc.yml",
-        "check_report_needs": "C",
     },
 ]
 
 
 def main() -> int:
-    results = []
-    for case in CASES:
-        check_report_needs = case.pop("check_report_needs", None)
-        result = run_case(case)
-        if check_report_needs is not None:
-            result["check_report_needs"] = check_report_needs
-        results.append(result)
+    results = [run_case(case) for case in CASES]
     text = render_corpus(results)
     return write_or_check(OUTPUT, text, check="--check" in sys.argv[1:])
 

@@ -158,12 +158,17 @@ mod tests {
 
         let outcome = run_orchestration(&config, &doc);
         let message = outcome.to_string();
-        // `effects: []` is structurally valid and has no `runtime:`
-        // configuration error, so it reaches `compile_document` --
-        // still a lane C stub today, hence `CheckFailed`, not
-        // `PreviewRefusal`, until that lane lands.
-        assert!(matches!(outcome, RunOutcome::CheckFailed(_)), "{outcome:?}");
-        assert!(message.contains("not implemented in lane"), "{message}");
+        // `effects: []` is structurally valid, has no `runtime:`
+        // configuration error, and compiles cleanly, so this preview's
+        // one unconditional refusal is the only outcome left.
+        assert!(
+            matches!(outcome, RunOutcome::PreviewRefusal(_)),
+            "{outcome:?}"
+        );
+        assert!(
+            message.contains("is a preview and cannot run orchestrations yet"),
+            "{message}"
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

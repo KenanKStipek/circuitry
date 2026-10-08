@@ -6,4 +6,5 @@
 //! produces ([`reference`]).
 
 pub mod corpus;
+pub mod projection;
 pub mod reference;

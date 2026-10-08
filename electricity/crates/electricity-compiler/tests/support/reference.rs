@@ -84,22 +84,6 @@ pub struct Case {
     #[serde(default)]
     pub digest: Option<String>,
     pub comparison: Comparison,
-    /// Names the lane whose stub the `check_report`/`validate` side of
-    /// this case still runs into even once this lane's own
-    /// `check_for_run` fully agrees with Circuitry -- e.g. a
-    /// concurrency-configuration case: `validate()` only parses
-    /// `runtime.max_concurrency`/`concurrency_groups` *after* a
-    /// document compiles, so a case that exercises it needs a real
-    /// compile on the `check_report` side even though `run()` (and so
-    /// `check_for_run`) checks the same configuration *before*
-    /// structural checks even start and needs no such thing (lane B's
-    /// own `pipeline.rs` docs explain the asymmetry). Absent/`None` for
-    /// every case lane B owns outright on both surfaces. Not written by
-    /// `_compiler_corpus.py` (that helper has no notion of a
-    /// surface-specific gap); set by hand in `generate_compiler_load_
-    /// corpus.py`'s own `CASES` list for the handful that need it.
-    #[serde(default)]
-    pub check_report_needs: Option<String>,
 }
 
 impl Case {

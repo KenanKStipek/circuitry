@@ -1,0 +1,67 @@
+{
+  "adapter": null,
+  "document": null,
+  "effect_names": [
+    "sub"
+  ],
+  "interface": null,
+  "model": null,
+  "prompts": {},
+  "root": {
+    "enabled": true,
+    "kind": {
+      "Control": {
+        "Block": {
+          "ops": [
+            {
+              "enabled": true,
+              "kind": {
+                "Leaf": {
+                  "Use": {
+                    "description": null,
+                    "expect": null,
+                    "inputs": null,
+                    "outputs": null,
+                    "retries": {
+                      "backoff_ms": 1000,
+                      "max_attempts": 1
+                    },
+                    "source": {
+                      "Inline": {
+                        "composable": true,
+                        "escape": "Html",
+                        "source": "effects: []"
+                      }
+                    },
+                    "validate": true
+                  }
+                }
+              },
+              "labels": null,
+              "name": "sub",
+              "on_error": "Fail",
+              "path": [
+                {
+                  "Name": "prime"
+                },
+                {
+                  "Name": "sub"
+                }
+              ]
+            }
+          ],
+          "overlay": false
+        }
+      }
+    },
+    "labels": null,
+    "name": "prime",
+    "on_error": "Fail",
+    "path": [
+      {
+        "Name": "prime"
+      }
+    ]
+  },
+  "runtime_block": null
+}
