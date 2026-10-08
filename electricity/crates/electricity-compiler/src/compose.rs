@@ -337,10 +337,23 @@ pub(crate) fn check_prompt_composition(
 
 /// Each declared prompt validated on its own, before it is ever spliced
 /// anywhere -- `core/prompt_compose.py::_declared_prompt_syntax_errors`.
+///
+/// A template nested past [`electricity_template`]'s own section-depth
+/// limit ([`electricity_template::TokensError::TooDeeplyNested`]) is
+/// not reported here: Circuitry has no such limit at all (`cof check`
+/// tokenizes a 65-deep declared prompt exactly like any other and
+/// passes it; electricity's own render-time limit is the documented
+/// #403 divergence), so treating it as a compile-time error here would
+/// make this check stricter than Circuitry's own -- the same reasoning
+/// [`electricity_template::template_syntax_error`] already documents
+/// for its own `Depth` case. The set-delimiter scan below simply has no
+/// tokens to look at for such a prompt (tokenizing stopped at the
+/// depth limit before producing any).
 fn declared_prompt_syntax_errors(declared: &IndexMap<String, String>) -> Vec<String> {
     let mut errors = Vec::new();
     for (name, text) in declared {
         match electricity_template::tokens(text) {
+            Err(electricity_template::TokensError::TooDeeplyNested(_)) => {}
             Err(reason) => {
                 errors.push(format!(
                     "prompts.{name}: malformed Mustache template: {reason}"
@@ -349,7 +362,7 @@ fn declared_prompt_syntax_errors(declared: &IndexMap<String, String>) -> Vec<Str
             Ok(tokens) => {
                 if tokens
                     .iter()
-                    .any(|tag| matches!(tag, electricity_template::Tag::SetDelimiter(_)))
+                    .any(|tag| matches!(tag, electricity_template::TokenKind::SetDelimiter(_)))
                 {
                     errors.push(format!(
                         "prompts.{name}: '{{{{=...=}}}}' (set-delimiter) is not \
@@ -1235,6 +1248,22 @@ mod tests {
             "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not \
              name a declared prompt or effect."
         );
+    }
+
+    #[test]
+    fn a_declared_prompt_nested_past_the_depth_limit_is_not_a_compile_time_error() {
+        // Circuitry has no section-depth limit at all; electricity's
+        // own render-time limit (MAX_SECTION_DEPTH) is the documented
+        // #403 divergence -- reporting it here would make this check
+        // stricter than Circuitry's own, exactly like `template_syntax_
+        // error`'s own `Depth` handling.
+        let n = electricity_template::MAX_SECTION_DEPTH + 1;
+        let open: String = (0..n).map(|_| "{{#a}}").collect();
+        let close: String = (0..n).map(|_| "{{/a}}").collect();
+        let text = format!("{open}x{close}");
+        let decl = declared(&[("deep", text.as_str())]);
+        let doc = document(vec![]);
+        assert_eq!(check_prompt_composition(&doc, &decl, &origin()), Ok(()));
     }
 
     #[test]
