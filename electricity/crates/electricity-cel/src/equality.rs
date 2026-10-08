@@ -45,6 +45,38 @@
 //! functions for `cel`'s own `_==_`/`_!=_`/`@in`, the same way it does
 //! for [`crate::ordering`]'s.
 //!
+//! `in` over a bare `string`/`bytes` operand (not a `list`/`map`) is
+//! celpy's own `for c in container` (`evaluation.py`), which iterates a
+//! `str` one Unicode character at a time and a `bytes` one `int` at a
+//! time — `cel`'s own `@in` has no indexer for either at all (fourth
+//! review finding 1). [`strict_in_fn`]'s `elements` covers both the
+//! same way the `list`/`map` arms already did.
+//!
+//! A nested `list`/`map` comparison — reachable only through `in`,
+//! since a top-level `==` already falls back to [`spec_eq`] — must
+//! compare *every* element before deciding, not stop at the first one
+//! that raises: celpy's own `ListType`/`MapType.__eq__` (`celtypes.py`)
+//! fold the per-element comparisons with CEL's own error-absorbing
+//! `&&`, where a `false` anywhere wins over an error anywhere else, so
+//! `[1, 2] in [[1.0, 3]]` is `false` (the second pair, `2 == 3`,
+//! decides it) rather than raising on the first pair's numeric
+//! mismatch. [`strict_eq`]'s `List`/`Map` arms used to return the
+//! first `Err` the `?` operator reached, including through a
+//! `HashMap`'s own unspecified iteration order for `Map` — a `false`
+//! result could flip to an error from one run to the next depending on
+//! which key happened to be visited first (fourth review finding 6).
+//! They now scan every element, deciding `false` immediately if any
+//! comparison is `Ok(false)` (nothing later can undo that) and only
+//! raising if every comparison that completed was `Ok(true)` or `Err`
+//! and at least one was `Err`. `Map`'s own arm checks both maps hold
+//! the *same key set* before comparing a single value, exactly the
+//! "keys first" rule celpy's own dict comparison already gets for
+//! free (a `dict`'s `==` is `False` outright for a mismatched key set,
+//! with no value comparison, hence no chance for one to raise) —
+//! without it, a value comparison for a key present in both maps could
+//! still raise before the key-set mismatch that should have decided
+//! `false` on its own was ever noticed.
+//!
 //! celpy's own asymmetry for `bool` on the *left* of `int`/`uint` *is*
 //! reproduced: `BoolType` has no `__eq__` override, so Python's dispatch
 //! tries it first and resolves via the plain `int` it subclasses —
@@ -130,24 +162,40 @@ fn strict_eq(a: &Value, b: &Value) -> Result<bool, ()> {
             if x.len() != y.len() {
                 return Ok(false);
             }
+            // Scans every pair before raising (module docs, finding
+            // 6): a `false` pair anywhere wins over an `Err` anywhere
+            // else, matching celpy's own error-absorbing `&&` fold.
+            let mut saw_error = false;
             for (xi, yi) in x.iter().zip(y.iter()) {
-                if !strict_eq(xi, yi)? {
-                    return Ok(false);
+                match strict_eq(xi, yi) {
+                    Ok(true) => {}
+                    Ok(false) => return Ok(false),
+                    Err(()) => saw_error = true,
                 }
             }
-            Ok(true)
+            if saw_error { Err(()) } else { Ok(true) }
         }
         (Value::Map(x), Value::Map(y)) => {
             if x.map.len() != y.map.len() {
                 return Ok(false);
             }
+            // Key sets compared first, independently of any value
+            // (module docs, finding 6): a differing key set decides
+            // `false` on its own, the same way celpy's own dict `==`
+            // never even reaches a value comparison for one.
+            if x.map.keys().any(|key| !y.map.contains_key(key)) {
+                return Ok(false);
+            }
+            let mut saw_error = false;
             for (key, value) in x.map.iter() {
-                match y.map.get(key) {
-                    Some(other) if strict_eq(value, other)? => {}
-                    _ => return Ok(false),
+                let other = y.map.get(key).expect("same key set checked above");
+                match strict_eq(value, other) {
+                    Ok(true) => {}
+                    Ok(false) => return Ok(false),
+                    Err(()) => saw_error = true,
                 }
             }
-            Ok(true)
+            if saw_error { Err(()) } else { Ok(true) }
         }
         _ if raises_on_mismatch(a, b) => Err(()),
         _ => Ok(false),
@@ -203,13 +251,22 @@ fn strict_ne_fn(Arguments(args): Arguments) -> Result<Value, ExecutionError> {
 /// is found; otherwise, the type error the scan hit along the way if it
 /// hit one, else `false`. Unlike `==`/`!=`, there's no top-level fallback
 /// here — `1 in [1.0]` and `state.x in ['a', 'b']` with `x` an int both
-/// raise in celpy (finding 5), not just decide `false`.
+/// raise in celpy (finding 5), not just decide `false`. A bare `string`
+/// or `bytes` operand iterates its characters or bytes the same way a
+/// `for c in container` loop over a celpy `str`/`bytes` does (module
+/// docs, fourth review finding 1) — `'lo' in 'hello'` is `false` (no
+/// single character equals the two-character item), not an error.
 fn strict_in_fn(Arguments(args): Arguments) -> Result<Value, ExecutionError> {
     let item = &args[0];
     let container = &args[1];
     let elements: Vec<Value> = match container {
         Value::List(items) => items.iter().cloned().collect(),
         Value::Map(map) => map.map.keys().map(Value::from).collect(),
+        Value::String(s) => s
+            .chars()
+            .map(|c| Value::String(std::sync::Arc::new(c.to_string())))
+            .collect(),
+        Value::Bytes(b) => b.iter().map(|byte| Value::Int(i64::from(*byte))).collect(),
         _ => {
             return Err(ExecutionError::ValuesNotComparable(
                 item.clone(),
@@ -242,13 +299,14 @@ mod tests {
     use std::sync::Arc;
 
     fn eval(expr: &str) -> Result<Value, String> {
-        let env = Arc::new(cel::Env::stdlib());
+        let env = Arc::new(crate::macros::env());
         let program = env.compile(expr).unwrap();
         let mut tree = program.expression().clone();
         paths::rewrite(&mut tree);
         let mut ctx = Context::with_env(Arc::clone(&env));
         register(&mut ctx);
         crate::ordering::register(&mut ctx);
+        crate::macros::register(&mut ctx);
         Value::resolve(&tree, &ctx).map_err(|e| e.to_string())
     }
 
@@ -319,5 +377,52 @@ mod tests {
         assert_eq!(eval("true == 1.0"), Ok(Value::Bool(false)));
         assert_eq!(eval("1 in [true]"), Ok(Value::Bool(true)));
         assert!(eval("true in [1]").is_err());
+    }
+
+    #[test]
+    fn in_over_a_string_iterates_characters() {
+        // fourth review finding 1: `cel`'s own `@in` has no indexer for
+        // a bare string; celpy's `operator_in` loops over its
+        // characters.
+        assert_eq!(eval("'h' in 'hello'"), Ok(Value::Bool(true)));
+        assert_eq!(eval("'lo' in 'hello'"), Ok(Value::Bool(false)));
+        assert!(eval("1 in 'hello'").is_err());
+    }
+
+    #[test]
+    fn in_over_bytes_iterates_ints() {
+        assert_eq!(eval("97 in b'abc'"), Ok(Value::Bool(true)));
+        assert_eq!(eval("200 in b'abc'"), Ok(Value::Bool(false)));
+    }
+
+    #[test]
+    fn nested_list_equality_does_not_depend_on_which_pair_raises_first() {
+        // fourth review finding 6: the second pair (`2 == 3`) decides
+        // `false` on its own; a version that stopped at the first
+        // raising pair (`1 == 1.0`) would raise instead.
+        assert_eq!(eval("[1, 2] in [[1.0, 3]]"), Ok(Value::Bool(false)));
+    }
+
+    #[test]
+    fn nested_map_equality_checks_key_sets_before_any_value() {
+        // fourth review finding 6: a mismatched key set decides `false`
+        // without comparing any value, so this can never raise
+        // regardless of a `HashMap`'s own iteration order.
+        for _ in 0..20 {
+            assert_eq!(
+                eval("{'a': 1, 'b': 2} in [{'a': 1.0, 'c': 2}]"),
+                Ok(Value::Bool(false))
+            );
+        }
+    }
+
+    #[test]
+    fn nested_map_equality_does_not_depend_on_which_pair_raises_first() {
+        for _ in 0..20 {
+            assert_eq!(
+                eval("{'a': 1, 'b': 2} in [{'a': 1.0, 'b': 3}]"),
+                Ok(Value::Bool(false))
+            );
+        }
     }
 }

@@ -79,37 +79,54 @@
 //! raises `convert::Overflow` instead of being dropped, matching every
 //! other big-int read.
 //!
-//! `has(...)` is rewritten into `cel`'s own safe-navigation primitives
-//! plus this crate's own, Python-semantics list index (`paths::rewrite`,
-//! `indexing`), matching cel-python's own rule — "the argument evaluated
-//! without error" — for a missing key, an out-of-range or wrongly-typed
-//! list index, a selection through the wrong type, a chain rooted at any
-//! identifier (including a comprehension's own loop variable), and a
-//! chain rooted at a macro or function-call result. Two narrower cases
-//! are a known, undocumented-elsewhere divergence instead of being made
-//! safe: an *index expression* that itself fails to evaluate
-//! (`has(state.m[state.k].x)` with `k` unset raises, rather than
-//! reporting `false` the way a missing `m` does), and a chain rooted at
-//! an identifier that isn't bound in the current mode at all
-//! (`has(meta.x)` in `evaluate_condition`, which only ever binds
-//! `state`, raises the same way). Both are narrow: the former only
-//! matters for an index key that is itself unreliable (most are
-//! literals or another `state.`-rooted read, already covered), the
-//! latter only for a typo'd or wrong-mode root name.
+//! `has(X)` is rewritten, at parse time, into
+//! `!@not_strictly_false(__electricity_false(X))` (`macros` module
+//! docs) — exactly cel-python's own rule, "the argument evaluated
+//! without error", for *any* `X`: a missing key, an out-of-range or
+//! wrongly-typed list index, a selection through the wrong type, a
+//! failing index *expression*, a chain rooted at any identifier
+//! (including one not bound in the current mode, or a comprehension's
+//! own loop variable) or at a macro/function-call result, and an
+//! argument that was never a field selection to begin with
+//! (`has(state.items[0])`, which `cel`'s own `has()` macro fails to
+//! even *parse*). Nothing here is a narrower, undocumented divergence
+//! the way an earlier safe-navigation-based rewrite's two gaps were —
+//! this rewrite doesn't walk `X` step by step at all, so there's
+//! nothing for it to leave a gap in.
 //!
-//! List indexing (`state.l[i]`, inside `has()` or not) is celpy's own
-//! `list.__getitem__`: a negative *i* wraps from the end, a `bool` is
-//! `0`/`1`, and a `double` is rejected outright, even a whole-number one
-//! — all different from `cel`'s own, native list indexing, which rejects
-//! negative and accepts a whole-number `double` (`indexing` module
-//! docs). Map indexing keeps `cel`'s own behavior unchanged — it already
-//! matches cel-python's `MapType.__getitem__`/`valid_key_type` (`int`/
-//! `uint`/`bool`/`string` keys only, with the same implicit int/uint
-//! cross-conversion).
+//! Indexing (`state.l[i]`, a string or bytes, inside `has()` or not) is
+//! celpy's own `__getitem__`: for a `list`/`string`/`bytes`, a negative
+//! *i* wraps from the end, a `bool` is `0`/`1`, and a `double` is
+//! rejected outright, even a whole-number one — all different from
+//! `cel`'s own, native indexing, which rejects negative and accepts a
+//! whole-number `double`, and has no indexer at all for a bare string
+//! or byte string (`indexing` module docs). Map indexing uses a strict
+//! (non-cross-converting) key match, unlike `cel`'s own
+//! [`cel::objects::Map::get`]: celpy's own `MapType.__getitem__` raises
+//! on an int/uint key mismatch rather than finding the entry
+//! (`indexing` module docs). One narrower case stays a known,
+//! documented divergence: a `bool` key against an `int`/`uint` lookup
+//! (or the reverse) doesn't reproduce celpy's own asymmetry — found
+//! only when an `int`/`uint` probes a `bool`-keyed entry, not the
+//! reverse (`indexing` module docs, pinned by a Rust unit test rather
+//! than the differential corpus, which can't express it either).
+//!
+//! `in` over a bare `string`/`bytes` operand iterates its characters or
+//! bytes, matching celpy's own `for c in container`; `cel`'s own `@in`
+//! has no indexer for either at all (`equality` module docs). A nested
+//! `list`/`map` comparison (reachable only through `in`) compares every
+//! element before deciding, rather than stopping at the first one that
+//! raises — celpy's own container equality folds its elements with
+//! CEL's error-absorbing `&&`, where a `false` anywhere wins over an
+//! error anywhere else, and a `Map` comparison checks both sides hold
+//! the same key set before comparing any value, so neither result can
+//! depend on a `HashMap`'s own unspecified iteration order
+//! (`equality` module docs).
 
 mod convert;
 mod equality;
 mod indexing;
+mod macros;
 mod ordering;
 mod paths;
 
@@ -178,7 +195,7 @@ impl std::error::Error for CelError {}
 
 fn stdlib_env() -> Arc<Env> {
     static ENV: OnceLock<Arc<Env>> = OnceLock::new();
-    Arc::clone(ENV.get_or_init(|| Arc::new(Env::stdlib())))
+    Arc::clone(ENV.get_or_init(|| Arc::new(macros::env())))
 }
 
 /// Rejects an empty/whitespace-only or over-long expression with
@@ -306,6 +323,7 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
     ordering::register(&mut ctx);
     equality::register(&mut ctx);
     indexing::register(&mut ctx);
+    macros::register(&mut ctx);
     ctx.add_variable_from_value(
         "state",
         convert::to_cel(&projected_state).map_err(|_| overflow_err(expr))?,
@@ -350,6 +368,7 @@ pub fn evaluate_expect(
     ordering::register(&mut ctx);
     equality::register(&mut ctx);
     indexing::register(&mut ctx);
+    macros::register(&mut ctx);
     ctx.add_variable_from_value(
         "value",
         convert::to_cel(value).map_err(|_| overflow_err(expr))?,

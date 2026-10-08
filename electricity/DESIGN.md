@@ -1256,11 +1256,37 @@ regardless of which underlying crate is used:
   matching cel-python's own, stricter, exact-type-inside-a-container `ListType`/`MapType.__eq__`
   rather than `cel`'s more permissive native one) — the two levels disagree in cel-python itself,
   and both must be reproduced, not just the outer one.
-- **List indexing** is cel-python's own `list.__getitem__`, not `cel`'s native one: a negative
-  index wraps from the end, a `bool` index is `0`/`1`, and a `double` index (even a whole-number
-  one) is rejected — `cel`'s own native indexing instead rejects negative and accepts a
-  whole-number `double`. Map indexing needs no such override; `cel`'s own already matches
-  cel-python's `MapType.__getitem__` (`int`/`uint`/`bool`/`string` keys only).
+- **Indexing** is cel-python's own `__getitem__`, not `cel`'s native one: on a `list`, a
+  negative index wraps from the end, a `bool` index is `0`/`1`, and a `double` index (even a
+  whole-number one) is rejected — `cel`'s own native indexing instead rejects negative and
+  accepts a whole-number `double`. A bare `string`/`bytes` operand indexes by Unicode character
+  or by byte the same way, something `cel`'s own `_[_]` has no indexer for at all. Map indexing
+  needs its own strict (non-cross-converting) key match: cel-python's own `IntType`/
+  `UintType.__eq__` raises on the *other* integer type as a key rather than finding the entry
+  the way `cel`'s own, cross-converting map indexing does; a `bool` key against an `int`/`uint`
+  lookup (or the reverse) is a narrower, known divergence this does not reproduce either way
+  (electricity-cel's own crate docs; pinned by a Rust unit test, since the differential corpus
+  can't express an intentional non-match).
+- **`has(X)`** is rewritten, at parse time, into `!@not_strictly_false(__electricity_false(X))`:
+  `@not_strictly_false` is one of `cel`'s own built-in operators, never raising itself, true
+  unless its argument evaluates (without error) to the literal `false`; a *registered* function's
+  arguments are evaluated eagerly, before its body ever runs, so a registered function that
+  always returns `false` is only ever reached once `X` itself has evaluated without raising. This
+  reproduces cel-python's own rule for `has()` — "the argument evaluated without error" — for
+  *any* expression `X`, including one that was never a field selection to begin with
+  (`has(state.items[0])`, which `cel`'s own `has()` macro fails to even parse): replacing `cel`'s
+  own `has` macro this way means not using `Env::stdlib()` at all, since it bundles `has`
+  together with the five other standard macros as one shared, immutable set that rejects a second
+  macro for the same call shape — the other five are added back unchanged (electricity-cel's own
+  `macros` module docs).
+- **`in` over a `string`/`bytes` operand** iterates its characters or bytes, matching cel-python's
+  own `for c in container`; `cel`'s own `@in` has no indexer for either. A nested `list`/`map`
+  comparison (reachable only through `in`, since a top-level `==` already falls back to the
+  heterogeneous rule above) compares every element before deciding, rather than stopping at the
+  first one that raises — cel-python's own container equality folds its elements with CEL's
+  error-absorbing `&&`, where a `false` element anywhere wins over a raising one anywhere else,
+  and a `map` comparison checks both sides hold the same key set before comparing any value, so
+  neither result can depend on a `HashMap`'s own unspecified iteration order.
 - **The absent-path convention** (runtime-semantics §4.4): reading an unset `state.` path is
   **not** an evaluation error inside `if`/`while` CEL — it is decided *structurally*, by walking
   the parse tree for every dotted `state.` read before evaluating, and makes the whole expression

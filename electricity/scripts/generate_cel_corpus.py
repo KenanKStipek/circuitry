@@ -665,6 +665,93 @@ def build_corpus() -> list[dict]:
         ),
     ]
 
+    # --- fourth review of #379, finding 1: a bare `string`/`bytes`
+    # operand indexes by character/byte, and `in` iterates it the same
+    # way, matching celpy's own `str`/`bytes.__getitem__` and
+    # `for c in container` -- `cel`'s own `_[_]`/`@in` have no indexer
+    # for either at all.
+    cases += [
+        condition("state.code[0] == 'A'", {"code": "ABC"}),
+        condition("state.s[-1] == 'c'", {"s": "abc"}),
+        condition("state.grade in 'ABC'", {"grade": "A"}),
+        condition("'lo' in state.s", {"s": "hello"}),
+        condition("1 in state.s", {"s": "hello"}),
+        condition("state.b[0] == 97", {"b": b"abc"}),
+        condition("97 in state.b", {"b": b"abc"}),
+    ]
+
+    # --- fourth review of #379, findings 2 and 3: `has(X)` is "X
+    # evaluated without error", for *any* `X` -- an argument that was
+    # never a field selection (`cel`'s own `has()` macro fails to even
+    # parse this), and a root that is itself a macro/function-call result
+    # which fails to evaluate (not just one that succeeds but indexes
+    # into an empty result, already covered above).
+    cases += [
+        condition("has(state.items[0])", {"items": [1]}),
+        condition("has(state.items[0])", {"items": []}),
+        condition("has(state.results.filter(r, r.ok)[0].id)", {}),
+    ]
+
+    # --- fourth review of #379, finding 6: a nested `list`/`map`
+    # comparison inside `in` must compare every element before deciding,
+    # not stop at the first one that raises -- celpy's own container
+    # equality folds its elements with CEL's error-absorbing `&&`, where
+    # a `false` element anywhere wins over a raising one anywhere else.
+    cases += [
+        condition("[1, 2] in [[1.0, 3]]", {}),
+        condition("{'a': 1, 'b': 2} in [{'a': 1.0, 'b': 3}]", {}),
+    ]
+
+    # --- fourth review of #379, finding 1/5: celpy's own `IntType`/
+    # `UintType.__eq__` is `@type_matched` and raises on the other
+    # integer type as a map key rather than finding the entry the way
+    # `cel`'s own cross-converting map indexing does.
+    cases += [
+        condition("state.m[1u] == 'a'", {"m": {1: "a"}}),
+    ]
+
+    # --- fourth review of #379: shapes the third review's own list of
+    # uncovered cases named but no corpus case exercised yet.
+    cases += [
+        # A `null` list element partway down a `has()` chain.
+        condition("has(state.l[0].x)", {"l": [None]}),
+        # An `int`/`bool` partway down, not just a `string`/`list`.
+        condition("has(state.a.n.x)", {"a": {"n": 5}}),
+        condition("has(state.a.n.x)", {"a": {"n": True}}),
+        # A negative index still out of range after wrapping.
+        condition("state.l[-3] == 1", {"l": [1, 2]}),
+        # A `double` index outside `has()` too (not just guarded by one).
+        condition("state.l[0.0] == 1", {"l": [1, 2]}),
+        # A wrong-type map key, outside and inside `has()`.
+        condition("state.m[1] == 'a'", {"m": {"a": "a"}}),
+        condition("has(state.m[1].x)", {"m": {"a": {"x": 1}}}),
+        # A present key whose value is itself `null`.
+        condition("has(state.x.value)", {"x": {"value": None}}),
+        # `meta` as a `has()` root in condition mode, where only `state`
+        # is ever bound.
+        condition("has(meta.x)", {}),
+        # `meta`/`state` as the root of a `has()` in expect mode.
+        expect("has(meta.x)", meta={}),
+        expect("has(meta.x)", meta={"x": 1}),
+        expect("has(state.input.n)", state={}),
+        # `has()` nested inside the other five standard macros.
+        condition("state.rows.exists(r, has(r.a.b))", {"rows": [{}, {"a": {"b": 1}}]}),
+        condition("state.rows.exists_one(r, has(r.a))", {"rows": [{"a": 1}, {}]}),
+        condition(
+            "size(state.rows.filter(r, has(r.a.b))) == 1",
+            {"rows": [{"a": {"b": 1}}, {"a": 1}]},
+        ),
+        condition("state.rows.map(r, has(r.a)) == [true, false]", {"rows": [{"a": 1}, {}]}),
+        # Expect mode, `!has(value.error)` with a value that isn't a map
+        # at all.
+        expect("!has(value.error)", value="ok"),
+        expect("!has(value.error)", value=None),
+        expect("!has(value.error)", value=[1]),
+        # A failing index *expression* (not just the lookup it performs)
+        # inside `has()`.
+        condition("has(state.m[state.k].x)", {"m": {"a": {"x": 1}}}),
+    ]
+
     return cases
 
 

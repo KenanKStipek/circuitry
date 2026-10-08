@@ -1,7 +1,11 @@
 //! The structural absent-path walk behind `evaluate_condition`
 //! (runtime-semantics.md §4.4, ports `_collect_state_paths`/
 //! `_first_unresolved`, `core/cel_eval.py`), and the AST rewrite behind
-//! `has()` and strict-type operators (DESIGN.md §7.2).
+//! strict-type operators (DESIGN.md §7.2). `has()` itself is
+//! [`crate::macros`]'s own rewrite, expanded at parse time rather than
+//! here — this module's own [`walk`] recognizes its expansion
+//! ([`crate::macros::is_has_guard`]) to decide what it guards, the same
+//! way it used to recognize a field selection's `test` flag.
 //!
 //! Reading an unset `state.` path is decided *before* evaluation, by
 //! walking the parsed expression for every dotted `state.` read, not by
@@ -9,11 +13,10 @@
 //! time, and a genuinely malformed expression must still raise rather
 //! than silently resolve to "absent".
 
-use cel::common::ast::{CallExpr, EntryExpr, Expr, IdedExpr, LiteralValue};
-use cel::common::types::CelString;
+use cel::common::ast::{EntryExpr, Expr, IdedExpr};
 use electricity_value::{Dict, Value};
 
-use crate::{equality, indexing, ordering};
+use crate::{equality, indexing, macros, ordering};
 
 /// A `state.`-rooted dotted read the parse tree contains, and whether it
 /// is guarded by `has(...)`.
@@ -64,6 +67,11 @@ fn dotted_chain(expr: &Expr) -> Option<Vec<&str>> {
 /// anything else that argument reads along the way (`state.k` in
 /// `has(state.m[state.k].x)`), matching `_collect_state_paths`'s own
 /// `guarded` parameter in `core/cel_eval.py`, threaded the same way.
+/// `has(X)` has already been expanded, at parse time, into a call to
+/// [`macros::is_has_guard`]'s marker function wrapping `X`
+/// (`crate::macros`) by the time this walks the tree, so that marker
+/// is what turns `guarded` on for everything under it, in place of a
+/// field selection's `test` flag.
 fn walk(expr: &Expr, out: &mut Collected, guarded: bool) {
     match expr {
         Expr::Ident(name) => {
@@ -75,13 +83,14 @@ fn walk(expr: &Expr, out: &mut Collected, guarded: bool) {
             Some(segments) if segments[0] == "state" => {
                 out.paths.push(StatePath {
                     path: segments.join("."),
-                    guarded: guarded || select.test,
+                    guarded,
                 });
             }
             Some(_) => {}
-            None => walk(&select.operand.expr, out, guarded || select.test),
+            None => walk(&select.operand.expr, out, guarded),
         },
         Expr::Call(call) => {
+            let guarded = guarded || macros::is_has_guard(&call.func_name);
             if let Some(target) = &call.target {
                 walk(&target.expr, out, guarded);
             }
@@ -121,51 +130,15 @@ fn walk(expr: &Expr, out: &mut Collected, guarded: bool) {
 }
 
 /// Rewrites *node*'s parse tree in place so `cel` never has to evaluate
-/// a `has(...)` call or a strict-type operator the way it natively would
-/// (DESIGN.md §7.2):
-///
-/// - Every `has(...)` call becomes `<safe-navigation chain>.hasValue()`
-///   (see [`to_optional`]): `has(a.b[c].d)` becomes `(a.?b[?c].?d).hasValue()`,
-///   built from `cel`'s own optional-select (`_?._`) for a field and this
-///   crate's own, Python-semantics optional index ([`indexing::opt_index`])
-///   for `[...]`, rather than `cel`'s own, native `has()`. A missing key,
-///   an out-of-range or wrongly-typed list index, or a selection through
-///   the wrong type all become `optional.none()` along the way
-///   (`objects.rs`'s `unwrap_optional`, [`indexing`]'s own
-///   `python_index`), matching cel-python's own rule for `has()`: "the
-///   argument evaluated without error" (`evaluation.py`'s `ident_arg`
-///   `has`), not "the last segment alone resolves gracefully" the way
-///   `cel`'s own, native `has()` treats it. Because every step becomes
-///   ordinary evaluation under `?.`/`[?]` — not a Rust-side walk against
-///   a snapshot of `state`/`value`/`meta` taken before evaluation — this
-///   handles a chain rooted at *any* expression, including a
-///   comprehension's own loop variable (`value.items.all(value, has(value.x))`
-///   correctly tests the inner, loop-bound `value`, not the outer root a
-///   prior, name-matching version of this rewrite confused it for) and a
-///   macro or function-call result (`has(state.xs.filter(x, x.ok)[0].id)`).
-///   Two things [`to_optional`] still leaves to `cel`'s/celpy's own,
-///   non-graceful evaluation, undocumented anywhere else: an *index
-///   expression* that itself fails to evaluate (`has(state.m[state.k].x)`
-///   with `k` unset raises, rather than reporting `false` the way a
-///   missing `m` or a missing key under it does), and a root identifier
-///   that isn't bound at all (`has(meta.x)` in condition mode, where only
-///   `state` is ever bound, raises the same way).
-/// - Every `_<_`/`_<=_`/`_>_`/`_>=_`/`_==_`/`_!=_`/`@in`/`_[_]` call
-///   becomes a call to [`ordering`]'s, [`equality`]'s or [`indexing`]'s
-///   own functions, which reproduce celpy's exact rules (comment on each
-///   module) rather than `cel`'s own, more permissive ones.
+/// a strict-type operator the way it natively would (DESIGN.md §7.2):
+/// every `_<_`/`_<=_`/`_>_`/`_>=_`/`_==_`/`_!=_`/`@in`/`_[_]` call
+/// becomes a call to [`ordering`]'s, [`equality`]'s or [`indexing`]'s
+/// own functions, which reproduce celpy's exact rules (comment on each
+/// module) rather than `cel`'s own, more permissive ones. `has(...)` is
+/// already handled by the time this runs — [`crate::macros`]'s own
+/// `has` macro expands it at parse time, into an ordinary call this
+/// function recurses into like any other.
 pub fn rewrite(node: &mut IdedExpr) {
-    if let Expr::Select(select) = &node.expr {
-        if select.test {
-            let chain = opt_select(to_optional(&select.operand.expr), &select.field);
-            node.expr = Expr::Call(CallExpr {
-                func_name: "hasValue".to_string(),
-                target: Some(Box::new(IdedExpr { id: 0, expr: chain })),
-                args: Vec::new(),
-            });
-            return;
-        }
-    }
     if let Expr::Call(call) = &mut node.expr {
         if call.target.is_none() && call.args.len() == 2 {
             if let Some(name) = ordering::strict_function_name(&call.func_name)
@@ -215,69 +188,6 @@ pub fn rewrite(node: &mut IdedExpr) {
         }
         Expr::Ident(_) | Expr::Literal(_) | Expr::Unspecified => {}
     }
-}
-
-/// *expr* rewritten into CEL's safe-navigation form: `_?._` for a field
-/// selection, this crate's own, Python-semantics [`indexing::opt_index`]
-/// for `[...]`, and *expr* itself — run back through [`rewrite`] first,
-/// so a nested strict operator or `has()` inside it still gets handled —
-/// for anything else (an identifier, a literal, or a macro/function-call
-/// result `has()`'s argument wasn't previously allowed to chain off of,
-/// issue #379 review finding 2). Every `.?`/`[?]` step this builds never
-/// raises on its own account: a missing key, an out-of-range or wrongly-
-/// typed list index, or a selection through the wrong type all become
-/// `optional.none()`, and a later step chains off that by simply
-/// propagating it, never re-evaluating. What this does *not* make safe:
-/// the expression at the chain's root still has to evaluate without
-/// raising on its own (an undeclared identifier, a macro that itself
-/// fails), and an index *expression* (as opposed to the lookup it
-/// performs) still evaluates outside any `?` — both are real, documented
-/// divergences from cel-python's own, unconditionally-swallow-everything
-/// `has()` (`lib.rs`'s crate docs), not something this chain papers over.
-fn to_optional(expr: &Expr) -> Expr {
-    match expr {
-        Expr::Select(select) if !select.test => {
-            opt_select(to_optional(&select.operand.expr), &select.field)
-        }
-        Expr::Call(call)
-            if call.target.is_none()
-                && call.args.len() == 2
-                && call.func_name == cel::common::ast::operators::INDEX =>
-        {
-            let operand = to_optional(&call.args[0].expr);
-            let mut key = call.args[1].clone();
-            rewrite(&mut key);
-            indexing::opt_index(operand, key.expr)
-        }
-        _ => {
-            let mut cloned = IdedExpr {
-                id: 0,
-                expr: expr.clone(),
-            };
-            rewrite(&mut cloned);
-            cloned.expr
-        }
-    }
-}
-
-/// `*operand*.?*field*` (`_?._`), the optional-select `cel` already
-/// implements — a missing field, or a selection through a type that
-/// doesn't support one, both become `optional.none()`.
-fn opt_select(operand: Expr, field: &str) -> Expr {
-    Expr::Call(CallExpr {
-        func_name: cel::common::ast::operators::OPT_SELECT.to_string(),
-        target: None,
-        args: vec![
-            IdedExpr {
-                id: 0,
-                expr: operand,
-            },
-            IdedExpr {
-                id: 0,
-                expr: Expr::Literal(LiteralValue::String(CelString::from(field.to_string()))),
-            },
-        ],
-    })
 }
 
 /// A minimal `Value::Dict` carrying just the subtrees *paths* names out
@@ -395,12 +305,12 @@ pub fn first_unresolved<'a>(paths: &'a [StatePath], state: &Value) -> Option<&'a
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cel::{Context, Env};
+    use cel::Context;
     use electricity_value::Dict;
     use std::sync::Arc;
 
     fn compile(expr: &str) -> IdedExpr {
-        Env::stdlib().compile(expr).unwrap().expression().clone()
+        macros::env().compile(expr).unwrap().expression().clone()
     }
 
     #[test]
@@ -479,7 +389,7 @@ mod tests {
     }
 
     fn eval(expr: &str, state: &Value) -> cel::Value {
-        let env = Arc::new(Env::stdlib());
+        let env = Arc::new(macros::env());
         let program = env.compile(expr).unwrap();
         let mut tree = program.expression().clone();
         rewrite(&mut tree);
@@ -487,6 +397,7 @@ mod tests {
         ordering::register(&mut ctx);
         equality::register(&mut ctx);
         indexing::register(&mut ctx);
+        macros::register(&mut ctx);
         ctx.add_variable_from_value("state", crate::convert::to_cel(state).unwrap());
         cel::Value::resolve(&tree, &ctx).unwrap()
     }
