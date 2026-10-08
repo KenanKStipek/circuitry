@@ -49,16 +49,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: extract
-        name: Compare git tag to pyproject.toml and electricity/Cargo.toml versions
+        name: Compare git tag to pyproject.toml, electricity/Cargo.toml and oscilloscope/Cargo.toml versions
         run: |
           tag="${GITHUB_REF#refs/tags/v}"
           # tomllib lives in stdlib for Python 3.11+; the runner has
           # 3.x already so this is portable.
           py_version="$(python3 -c 'import tomllib, sys; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
-          cargo_version="$(grep -m1 '^version = ' electricity/Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
           echo "tag=$tag"
           echo "pyproject=$py_version"
-          echo "electricity=$cargo_version"
           if [[ "$tag" != "$py_version" ]]; then
             echo "::error::tag $tag does not match pyproject.toml version $py_version"
             exit 1
@@ -70,10 +68,14 @@ jobs:
           if [[ "$tag" =~ ^([0-9]+\.[0-9]+\.[0-9]+)rc([0-9]+)$ ]]; then
             cargo_expected="${BASH_REMATCH[1]}-rc.${BASH_REMATCH[2]}"
           fi
-          if [[ "$cargo_expected" != "$cargo_version" ]]; then
-            echo "::error::tag $tag expects electricity/Cargo.toml workspace version $cargo_expected, found $cargo_version"
-            exit 1
-          fi
+          for workspace in electricity oscilloscope; do
+            cargo_version="$(grep -m1 '^version = ' "$workspace/Cargo.toml" | sed -E 's/version = "(.*)"/\1/')"
+            echo "$workspace=$cargo_version"
+            if [[ "$cargo_expected" != "$cargo_version" ]]; then
+              echo "::error::tag $tag expects $workspace/Cargo.toml workspace version $cargo_expected, found $cargo_version"
+              exit 1
+            fi
+          done
           echo "version=$tag" >> "$GITHUB_OUTPUT"
 
   electricity-build:
@@ -81,7 +83,24 @@ jobs:
     needs: verify-version
     permissions:
       contents: read
-    uses: ./.github/workflows/electricity-release-build.yml
+    uses: ./.github/workflows/rust-release-build.yml
+    with:
+      workspace-dir: electricity
+      binary-crate: electricity-cli
+      binary-name: electricity
+      build-image: true
+
+  osp-build:
+    name: Build osp (release, preview)
+    needs: verify-version
+    permissions:
+      contents: read
+    uses: ./.github/workflows/rust-release-build.yml
+    with:
+      workspace-dir: oscilloscope
+      binary-crate: oscilloscope
+      binary-name: osp
+      build-image: false
 
   build:
     name: Build wheel + sdist
@@ -151,7 +170,7 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    needs: [build, electricity-build]
+    needs: [build, electricity-build, osp-build]
     environment:
       name: pypi
       url: https://pypi.org/p/circuitry-cof
@@ -179,7 +198,7 @@ jobs:
   github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [publish-pypi, publish-image, verify-version, electricity-build]
+    needs: [publish-pypi, publish-image, verify-version, electricity-build, osp-build]
     permissions:
       contents: write
     steps:
@@ -196,6 +215,12 @@ jobs:
         with:
           pattern: "electricity-*"
           path: electricity-dist/
+          merge-multiple: true
+      - name: Download osp archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "osp-*"
+          path: osp-dist/
           merge-multiple: true
       - name: Extract changelog section
         id: changelog
@@ -218,6 +243,7 @@ jobs:
             echo ""
             image_version="${{ needs.electricity-build.outputs.version }}"
             echo "electricity's binaries and container image (\`ghcr.io/kenankstipek/electricity:$image_version\`) are attached below as a **preview**: they cannot run orchestrations yet."
+            echo "osp's (oscilloscope's) binaries are attached below as a **preview**: it cannot watch or launch orchestrations yet."
           } >> "$notes_file"
           {
             echo "notes_file=$notes_file"
@@ -238,4 +264,5 @@ jobs:
             --notes-file "${{ steps.changelog.outputs.notes_file }}" \
             $prerelease_flag \
             dist/* \
-            electricity-dist/*
+            electricity-dist/* \
+            osp-dist/*

@@ -1,0 +1,83 @@
+name: oscilloscope
+
+on:
+  pull_request:
+    paths:
+      - "oscilloscope/**"
+      - "electricity/crates/**"
+      - ".github/workflows/oscilloscope.yml"
+      - ".github/workflows/rust-release-build.yml"
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "oscilloscope/**"
+      - "electricity/crates/**"
+      - ".github/workflows/oscilloscope.yml"
+      - ".github/workflows/rust-release-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  fmt-clippy-test:
+    name: fmt, clippy, test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: oscilloscope
+
+      - name: cargo fmt --check
+        working-directory: oscilloscope
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        working-directory: oscilloscope
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        working-directory: oscilloscope
+        run: cargo test --workspace
+
+  msrv:
+    name: MSRV check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: msrv
+        working-directory: oscilloscope
+        run: |
+          msrv="$(grep -m1 '^rust-version = ' Cargo.toml | sed -E 's/rust-version = "(.*)"/\1/')"
+          echo "msrv=$msrv" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.msrv }}
+
+      - name: cargo check --workspace (MSRV)
+        working-directory: oscilloscope
+        run: cargo check --workspace
+
+  build:
+    name: release build (no publish)
+    uses: ./.github/workflows/rust-release-build.yml
+    permissions:
+      contents: read
+    with:
+      workspace-dir: oscilloscope
+      binary-crate: oscilloscope
+      binary-name: osp
+      build-image: false
