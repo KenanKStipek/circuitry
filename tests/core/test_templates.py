@@ -137,15 +137,6 @@ def test_compile_rejects_malformed_template(effect: dict, field_path: str) -> No
 @pytest.mark.parametrize(
     ("effect", "field_path"),
     [
-        (_tool(mode="stringify", input=PARTIAL), "params.input"),
-        (_tool(nested={"list": ["ok", PARTIAL]}), "params.nested.list[1]"),
-        ({**_tool(), "params_json": '{"a": "{{> evil}}"}'}, "params_json"),
-        ({**_tool(), "prompt": PARTIAL}, "prompt"),
-        ({"type": "prompt", "name": "p", "template": PARTIAL}, "template"),
-        (
-            {"type": "prompt", "name": "p", "messages": [{"role": "user", "content": PARTIAL}]},
-            "messages[0].content",
-        ),
         (
             {
                 "type": "prompt",
@@ -163,14 +154,17 @@ def test_compile_rejects_malformed_template(effect: dict, field_path: str) -> No
             {"type": "loop", "while": {"mode": "model", "template": PARTIAL}, "body": [_tool()]},
             "while.template",
         ),
-        ({"type": "use", "name": "u", "path": "x.yml", "inputs": {"q": PARTIAL}}, "inputs.q"),
-        ({"type": "use", "name": "u", "inline": "effects: " + PARTIAL}, "inline"),
         ({**_tool(), "expect": {"mode": "model", "template": PARTIAL}}, "expect.template"),
     ],
 )
 def test_compile_rejects_a_partial_tag_naming_the_field_and_tag(
     effect: dict, field_path: str
 ) -> None:
+    """``{{> name}}`` composition (#396) only reaches prompt/yield templates and
+    messages, declared prompts, tool params/prompt, and use inputs/inline —
+    everywhere else (an asset ref, an if/while model template, expect.template)
+    a partial tag is still unconditionally rejected, exactly as before #396.
+    """
     with pytest.raises(
         ValueError,
         match=re.escape(
@@ -178,6 +172,34 @@ def test_compile_rejects_a_partial_tag_naming_the_field_and_tag(
             "partials are not supported: {{> evil}}"
         ),
     ):
+        compile_orchestration(orch={"effects": [effect]})
+
+
+@pytest.mark.parametrize(
+    ("effect", "field_path"),
+    [
+        (_tool(mode="stringify", input=PARTIAL), "effects[0]"),
+        (_tool(nested={"list": ["ok", PARTIAL]}), "effects[0]"),
+        ({**_tool(), "params_json": '{"a": "{{> evil}}"}'}, "effects[0]"),
+        ({**_tool(), "prompt": PARTIAL}, "effects[0]"),
+        ({"type": "prompt", "name": "p", "template": PARTIAL}, "effects[0]"),
+        (
+            {"type": "prompt", "name": "p", "messages": [{"role": "user", "content": PARTIAL}]},
+            "effects[0]",
+        ),
+        ({"type": "use", "name": "u", "path": "x.yml", "inputs": {"q": PARTIAL}}, "effects[0]"),
+        ({"type": "use", "name": "u", "inline": "effects: " + PARTIAL}, "effects[0]"),
+    ],
+)
+def test_compile_rejects_an_unknown_name_in_a_composable_field(
+    effect: dict, field_path: str
+) -> None:
+    """In a field ``{{> name}}`` composition (#396) reaches, ``{{> evil}}`` is a
+    ``cof check`` error naming the field — an unknown name, not a bare
+    "partials are not supported" — because these fields now accept a
+    declared-prompt/yield/text-prompt reference; ``evil`` just isn't one.
+    """
+    with pytest.raises(ValueError, match=re.escape(f"{field_path}: '{{{{> evil}}}}' does not name")):
         compile_orchestration(orch={"effects": [effect]})
 
 
@@ -207,7 +229,9 @@ def test_cof_check_reports_the_issue_repro(tmp_path: Path) -> None:
 @pytest.fixture
 def unchecked_templates(monkeypatch: pytest.MonkeyPatch) -> None:
     """Compile without the template check, as a directly-built definition would."""
-    monkeypatch.setattr(compiler, "template_syntax_error", lambda _text: None)
+    monkeypatch.setattr(
+        compiler, "template_syntax_error", lambda _text, **_kwargs: None
+    )
 
 
 def _run(orch: dict[str, Any], adapter: RecordingAdapter | None = None) -> Store:
@@ -405,35 +429,32 @@ def test_use_inline_that_fails_to_render_honours_on_error_skip() -> None:
 
 
 @pytest.mark.usefixtures("unchecked_templates")
-def test_a_partial_tag_the_compiler_never_vetted_fails_at_render_and_reads_no_file(
+def test_a_partial_tag_the_compiler_never_vetted_fails_at_compile_and_reads_no_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A template that only exists at run time — a generated reflector/decompose
-    plan, or a `use: inline` child's own effects — never passes through
-    `cof check`'s static templates walk, so the refusal has to live in
-    `render_template` itself, not only in the compiler (#354)."""
+    """An unknown ``{{> name}}`` in a composable field (#396) is a compile
+    error in its own right, independent of ``template_syntax_error`` (which
+    this fixture neuters to simulate a template `cof check`'s malformed-
+    template walk never vetted) — so it is caught before a tool ever runs,
+    and the file it would have named is never read.
+    """
     monkeypatch.chdir(tmp_path)
     (tmp_path / "evil.mustache").write_text("LEAKED", encoding="utf-8")
     real_open = io.open
 
     def _guard_open(path: Any, *args: Any, **kwargs: Any) -> Any:
         if "evil.mustache" in str(path):
-            raise AssertionError("rendering must not read evil.mustache")
+            raise AssertionError("compiling must not read evil.mustache")
         return real_open(path, *args, **kwargs)
 
     monkeypatch.setattr(io, "open", _guard_open)
 
-    store = _run(
-        {
-            "effects": [
-                {**_tool(mode="stringify", input=PARTIAL), "on_error": "skip"},
-            ]
-        }
-    )
-    assert store.get("prime.t.value") is None
-    error = store.get("prime.t.meta.error")
-    assert "partials are not supported" in error
-    assert "LEAKED" not in error
+    with pytest.raises(ValueError) as excinfo:
+        compile_orchestration(
+            orch={"effects": [{**_tool(mode="stringify", input=PARTIAL), "on_error": "skip"}]}
+        )
+    assert "'{{> evil}}' does not name" in str(excinfo.value)
+    assert "LEAKED" not in str(excinfo.value)
 
 
 # --- run time: a `use: inline` child, no compiler check disabled -----------
@@ -466,6 +487,10 @@ def _use_inline_with_partial_input(**extra: Any) -> dict[str, Any]:
 def test_use_inline_child_partial_produced_at_run_time_fails_through_the_real_runtime(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The child's own tool param is a composable field (#396): an unknown
+    ``{{> evil}}`` produced by the parent's ``inline`` template is a compile
+    error from the child's own ``compile_orchestration`` call, surfacing
+    through the ``use`` effect's failure — never a file read."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "evil.mustache").write_text("LEAKED", encoding="utf-8")
     real_open = io.open
@@ -478,7 +503,7 @@ def test_use_inline_child_partial_produced_at_run_time_fails_through_the_real_ru
     monkeypatch.setattr(io, "open", _guard_open)
 
     store = Store({"input": {"payload": PARTIAL}})
-    with pytest.raises(RuntimeError, match=r"partials are not supported"):
+    with pytest.raises(RuntimeError, match=re.escape("'{{> evil}}' does not name")):
         DynamicRuntime(
             compile_orchestration(orch={"effects": [_use_inline_with_partial_input()]}),
             adapter=RecordingAdapter(),
@@ -515,6 +540,6 @@ def test_use_inline_child_partial_produced_at_run_time_honours_on_error_continue
     ).execute(store=store)
 
     error = store.get("prime.u.meta.error")
-    assert "partials are not supported" in error
+    assert "'{{> evil}}' does not name" in error
     assert store.get("prime.after.value") == '"after"'
     assert "LEAKED" not in json.dumps(store.state)

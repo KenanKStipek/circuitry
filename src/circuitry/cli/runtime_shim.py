@@ -733,7 +733,17 @@ def run(req: RunRequest) -> RunResult:
                 "Orchestration validation failed:\n"
                 + "\n".join(f"  - {error}" for error in document_errors)
             )
-        root_def = compile_orchestration(orch=orch, root_name="prime")
+        from ..core.prompt_compose import RUNTIME_CONFIG_KEY as _PROMPTS_KEY
+        from ..core.prompt_files import default_project_root
+
+        _document_dir = req.orchestration_path.resolve().parent
+        root_def = compile_orchestration(
+            orch=orch,
+            root_name="prime",
+            document_dir=_document_dir,
+            confinement_root=default_project_root(_document_dir),
+        )
+        runtime_config[_PROMPTS_KEY] = root_def.prompts
 
         group_errors = unknown_concurrency_group_errors(
             root_def, concurrency_limiter.group_names
@@ -1288,7 +1298,15 @@ def validate(
                     "warnings": lint_warnings,
                 }
 
-        root_def = compile_orchestration(orch=orch, root_name="prime")
+        from ..core.prompt_files import default_project_root
+
+        _document_dir = orchestration_path.resolve().parent
+        root_def = compile_orchestration(
+            orch=orch,
+            root_name="prime",
+            document_dir=_document_dir,
+            confinement_root=default_project_root(_document_dir),
+        )
 
         # Same merge `run()` applies (document `runtime:` key by key over
         # config, trusted document keeps its whole block) — just enough to

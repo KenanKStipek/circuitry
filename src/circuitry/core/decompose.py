@@ -769,11 +769,19 @@ def _run_isolated(
         ),
         _lock=parent_store._lock,
     )
+    # A generated plan declares no prompts of its own (#396) — cleared
+    # rather than inherited, so it can't accidentally resolve a `{{> name}}`
+    # the parent document happens to declare; decompose/reflector plans
+    # aren't taught the composition syntax at all.
+    from .prompt_compose import RUNTIME_CONFIG_KEY as _PROMPTS_KEY
+
+    child_runtime_config = dict(runtime_config)
+    child_runtime_config[_PROMPTS_KEY] = {}
     DynamicRuntime(
         root,
         adapter=adapter,
         model=model,
-        runtime_config=runtime_config,
+        runtime_config=child_runtime_config,
         dry_run=False,
         timeout_seconds=timeout_seconds,
         verbose=verbose,

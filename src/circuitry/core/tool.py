@@ -27,8 +27,8 @@ from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .effect_identity import model_call
 from .expect import ExpectDef, evaluate_expect, expect_failure_summary
 from .prompt import RetryPolicyDef
+from .prompt_compose import declared_prompts, render_with_composition
 from .store import Store
-from .templates import render_template
 from .use import _resolve_reference
 
 logger = logging.getLogger(__name__)
@@ -162,7 +162,13 @@ def param_reference(value: Any) -> ParamReference | None:
     return None
 
 
-def _render_params(params: dict[str, Any], ctx: dict[str, Any], *, name: str) -> dict[str, Any]:
+def _render_params(
+    params: dict[str, Any],
+    ctx: dict[str, Any],
+    *,
+    name: str,
+    declared: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Resolve by-reference leaves, then Mustache-render every remaining string in params.
 
     A ``{from: <path>}`` leaf, at any depth in ``params`` (objects and lists),
@@ -188,7 +194,7 @@ def _render_params(params: dict[str, Any], ctx: dict[str, Any], *, name: str) ->
                 )
             return copy.deepcopy(resolved)
         if isinstance(v, str):
-            return render_template(v, ctx, label=path)
+            return render_with_composition(v, ctx, declared=declared, label=path)
         if isinstance(v, dict):
             return {k: _render_value(vv, f"{path}.{k}") for k, vv in v.items()}
         if isinstance(v, list):
@@ -233,7 +239,9 @@ def _json_aware_ctx(value: Any) -> Any:
     return value
 
 
-def _render_params_json(template: str, ctx: dict[str, Any]) -> dict[str, Any]:
+def _render_params_json(
+    template: str, ctx: dict[str, Any], *, declared: dict[str, str] | None = None
+) -> dict[str, Any]:
     """Mustache-render params_json, then parse the result as a JSON object.
 
     params_json exists so a runtime-built array/object (e.g. a list of symbols
@@ -241,7 +249,9 @@ def _render_params_json(template: str, ctx: dict[str, Any]) -> dict[str, Any]:
     or malformed JSON would run the tool with a different params object than
     the author wrote, which is worse than surfacing the error.
     """
-    rendered_text = render_template(template, _json_aware_ctx(ctx), label="params_json")
+    rendered_text = render_with_composition(
+        template, _json_aware_ctx(ctx), declared=declared, label="params_json"
+    )
     try:
         parsed = json.loads(rendered_text)
     except json.JSONDecodeError as e:
@@ -639,15 +649,20 @@ class ToolRuntime:
             try:
                 # Render top-level prompt/model, then merge with params (params take precedence)
                 top_level: dict[str, Any] = {}
+                declared = declared_prompts(self.runtime_config)
                 if self.defn.prompt is not None:
-                    top_level["prompt"] = render_template(self.defn.prompt, ctx, label="prompt")
+                    top_level["prompt"] = render_with_composition(
+                        self.defn.prompt, ctx, declared=declared, label="prompt"
+                    )
                 if self.defn.model is not None:
                     top_level["model"] = self.defn.model
 
                 _reject_templated_security_params(self.defn.params)
-                params = _render_params(self.defn.params, ctx, name=self.defn.name)
+                params = _render_params(self.defn.params, ctx, name=self.defn.name, declared=declared)
                 if self.defn.params_json is not None:
-                    params_json_overlay = _render_params_json(self.defn.params_json, ctx)
+                    params_json_overlay = _render_params_json(
+                        self.defn.params_json, ctx, declared=declared
+                    )
                     _reject_params_json_security_overrides(params_json_overlay)
                     params = _deep_merge_params(params, params_json_overlay)
 
