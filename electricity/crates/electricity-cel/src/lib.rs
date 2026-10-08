@@ -122,6 +122,18 @@
 //! the same key set before comparing any value, so neither result can
 //! depend on a `HashMap`'s own unspecified iteration order
 //! (`equality` module docs).
+//!
+//! The `map` macro only accepts the two-argument form
+//! (`target.map(x, transform)`): the `cel` crate's own copied expander
+//! (`macros` module docs) also accepts a third, filter argument
+//! (`target.map(x, predicate, transform)`), but cel-python's own `map`
+//! raises on three arguments, so this crate doesn't register that
+//! shape. The call still *parses* — `cel`'s own `env.compile` leaves
+//! it as an unexpanded, undeclared `map` call rather than rejecting the
+//! arity outright — but resolving it then fails, because the loop
+//! variable it names was never bound by any comprehension: an error
+//! raised when the expression is evaluated, matching cel-python's own
+//! outcome if not its exact wording or timing.
 
 mod convert;
 mod equality;

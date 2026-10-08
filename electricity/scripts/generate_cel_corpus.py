@@ -266,6 +266,14 @@ def build_corpus() -> list[dict]:
         condition("size(state.input.items.filter(i, i > 1)) == 2", macro_ctx),
         condition("state.input.empty.all(i, i > 0)", macro_ctx),
         condition("state.input.rows.exists(r, r.n > 4)", {"input": {"rows": [{"n": 1}, {"n": 5}]}}),
+        # cel-python's own `map` macro raises on the three-argument form
+        # (`target.map(x, predicate, transform)`) that the underlying
+        # `cel` crate's copied expander would otherwise accept
+        # (electricity-cel's `macros` module docs, issue #379): a real
+        # third-party failure (an undeclared-reference error once
+        # evaluated, not a parse-time rejection), not Circuitry's own
+        # wording, so no exact message.
+        condition("state.l.map(x, x > 1, x * 10) == [20]", {"l": [1, 2]}),
     ]
 
     # --- Heterogeneous equality (cel-spec #103) -------------------------

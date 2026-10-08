@@ -1998,6 +1998,39 @@
     "strict": false
   },
   {
+    "expr": "state.l.map(x, x > 1, x * 10) == [20]",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              },
+              {
+                "t": "int",
+                "v": "2"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
     "expr": "1 == true",
     "mode": "condition",
     "outcome": {

@@ -106,9 +106,21 @@ pub fn env() -> Env {
     .expect("name not already declared");
     env.add_macro(Macro::receiver("existsOne", 2, exists_one_macro_expander))
         .expect("name not already declared");
+    // Only the two-argument form of `map` is registered here: `cel`'s
+    // own `map_macro_expander` below (unchanged) accepts a third
+    // argument too (`target.map(x, predicate, transform)`), but
+    // celpy's own `map` macro raises on three arguments, and Circuitry
+    // evaluates through celpy. Not registering
+    // `Macro::receiver(operators::MAP, 3, ...)` leaves no macro or
+    // function named `map` with three arguments, so `map_macro_expander`
+    // is never reached for this shape — `cel`'s own `env.compile` still
+    // accepts the call (it leaves an unexpanded, undeclared `map` call
+    // in the tree rather than rejecting the arity there), but resolving
+    // it then fails, since the loop variable it names (`x`) was never
+    // bound by any comprehension. An error either way, raised when the
+    // expression is evaluated rather than when it is parsed (issue
+    // #379).
     env.add_macro(Macro::receiver(operators::MAP, 2, map_macro_expander))
-        .expect("name not already declared");
-    env.add_macro(Macro::receiver(operators::MAP, 3, map_macro_expander))
         .expect("name not already declared");
     env.add_macro(Macro::receiver(operators::FILTER, 2, filter_macro_expander))
         .expect("name not already declared");
@@ -161,6 +173,29 @@ fn has_macro_expander(
     }))))
 }
 
+// Copied from the `cel` crate (cel-rust) version 0.15.0, the version
+// pinned in electricity/Cargo.lock, `parser/macros.rs`:
+//
+// Copyright (c) 2022 Tom Forbes and Contributors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+//
 // --- Everything below is `cel`'s own `parser::macros` expanders
 // (MIT-licensed), copied unchanged but for their `Result` type (that
 // module's own `BuiltIn` expanders never decline, wrapped in `Some` by
@@ -512,5 +547,15 @@ mod tests {
         // evaluate (an undeclared identifier) must resolve to `false`,
         // not propagate the failure.
         assert_eq!(eval("has(nope.x)"), Ok(Value::Bool(false)));
+    }
+
+    #[test]
+    fn three_argument_map_is_rejected() {
+        // issue #379: cel-python's own `map` macro raises on three
+        // arguments, so this crate only registers the two-argument
+        // form. The call still *parses* (it is left as an unexpanded,
+        // undeclared `map` call), but resolving it fails: the loop
+        // variable it names was never bound by any comprehension.
+        assert!(eval("[1, 2].map(x, x > 1, x * 10)").is_err());
     }
 }
