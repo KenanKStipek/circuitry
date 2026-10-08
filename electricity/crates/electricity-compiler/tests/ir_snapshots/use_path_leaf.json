@@ -1,0 +1,73 @@
+{
+  "adapter": null,
+  "document": null,
+  "effect_names": [
+    "sub"
+  ],
+  "interface": null,
+  "model": null,
+  "prompts": {},
+  "root": {
+    "enabled": true,
+    "kind": {
+      "Control": {
+        "Block": {
+          "ops": [
+            {
+              "enabled": true,
+              "kind": {
+                "Leaf": {
+                  "Use": {
+                    "description": null,
+                    "expect": null,
+                    "inputs": {
+                      "Map": {
+                        "topic": {
+                          "Template": {
+                            "composable": true,
+                            "escape": "Html",
+                            "source": "{{input.topic}}"
+                          }
+                        }
+                      }
+                    },
+                    "outputs": null,
+                    "retries": {
+                      "backoff_ms": 1000,
+                      "max_attempts": 1
+                    },
+                    "source": {
+                      "Path": "child.yml"
+                    },
+                    "validate": true
+                  }
+                }
+              },
+              "labels": null,
+              "name": "sub",
+              "on_error": "Fail",
+              "path": [
+                {
+                  "Name": "prime"
+                },
+                {
+                  "Name": "sub"
+                }
+              ]
+            }
+          ],
+          "overlay": false
+        }
+      }
+    },
+    "labels": null,
+    "name": "prime",
+    "on_error": "Fail",
+    "path": [
+      {
+        "Name": "prime"
+      }
+    ]
+  },
+  "runtime_block": null
+}

@@ -1,0 +1,151 @@
+{
+  "adapter": null,
+  "document": null,
+  "effect_names": [
+    "a",
+    "b",
+    "group"
+  ],
+  "interface": null,
+  "model": null,
+  "prompts": {},
+  "root": {
+    "enabled": true,
+    "kind": {
+      "Control": {
+        "Block": {
+          "ops": [
+            {
+              "enabled": true,
+              "kind": {
+                "Control": {
+                  "Parallel": {
+                    "branches": [
+                      {
+                        "enabled": true,
+                        "kind": {
+                          "Leaf": {
+                            "Prompt": {
+                              "assets": [],
+                              "content": {
+                                "Template": {
+                                  "composable": true,
+                                  "escape": "None",
+                                  "source": "a"
+                                }
+                              },
+                              "description": null,
+                              "deterministic": false,
+                              "group": null,
+                              "inputs": null,
+                              "model": null,
+                              "model_params": null,
+                              "prompt_type": "Text",
+                              "provider": null,
+                              "provider_fallbacks": [],
+                              "retries": {
+                                "backoff_ms": 1000,
+                                "max_attempts": 1
+                              },
+                              "routing_override": null,
+                              "schema": null,
+                              "timeout_ms": null
+                            }
+                          }
+                        },
+                        "labels": null,
+                        "name": "a",
+                        "on_error": "Fail",
+                        "path": [
+                          {
+                            "Name": "prime"
+                          },
+                          {
+                            "Name": "group"
+                          },
+                          {
+                            "Name": "a"
+                          }
+                        ]
+                      },
+                      {
+                        "enabled": true,
+                        "kind": {
+                          "Leaf": {
+                            "Prompt": {
+                              "assets": [],
+                              "content": {
+                                "Template": {
+                                  "composable": true,
+                                  "escape": "None",
+                                  "source": "b"
+                                }
+                              },
+                              "description": null,
+                              "deterministic": false,
+                              "group": null,
+                              "inputs": null,
+                              "model": null,
+                              "model_params": null,
+                              "prompt_type": "Text",
+                              "provider": null,
+                              "provider_fallbacks": [],
+                              "retries": {
+                                "backoff_ms": 1000,
+                                "max_attempts": 1
+                              },
+                              "routing_override": null,
+                              "schema": null,
+                              "timeout_ms": null
+                            }
+                          }
+                        },
+                        "labels": null,
+                        "name": "b",
+                        "on_error": "Fail",
+                        "path": [
+                          {
+                            "Name": "prime"
+                          },
+                          {
+                            "Name": "group"
+                          },
+                          {
+                            "Name": "b"
+                          }
+                        ]
+                      }
+                    ],
+                    "max_concurrency": 2,
+                    "stop_on_error": true
+                  }
+                }
+              },
+              "labels": null,
+              "name": "group",
+              "on_error": "Fail",
+              "path": [
+                {
+                  "Name": "prime"
+                },
+                {
+                  "Name": "group"
+                }
+              ]
+            }
+          ],
+          "overlay": false
+        }
+      }
+    },
+    "labels": null,
+    "name": "prime",
+    "on_error": "Fail",
+    "path": [
+      {
+        "Name": "prime"
+      }
+    ]
+  },
+  "runtime_block": null
+}

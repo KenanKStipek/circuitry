@@ -1,0 +1,168 @@
+{
+  "adapter": null,
+  "document": null,
+  "effect_names": [
+    "branch",
+    "no_branch",
+    "yes_branch"
+  ],
+  "interface": null,
+  "model": null,
+  "prompts": {},
+  "root": {
+    "enabled": true,
+    "kind": {
+      "Control": {
+        "Block": {
+          "ops": [
+            {
+              "enabled": true,
+              "kind": {
+                "Control": {
+                  "If": {
+                    "cond": {
+                      "Cel": {
+                        "expr": "state.input.ok == true",
+                        "strict": false
+                      }
+                    },
+                    "else_": {
+                      "Block": {
+                        "ops": [
+                          {
+                            "enabled": true,
+                            "kind": {
+                              "Leaf": {
+                                "Prompt": {
+                                  "assets": [],
+                                  "content": {
+                                    "Template": {
+                                      "composable": true,
+                                      "escape": "None",
+                                      "source": "n"
+                                    }
+                                  },
+                                  "description": null,
+                                  "deterministic": false,
+                                  "group": null,
+                                  "inputs": null,
+                                  "model": null,
+                                  "model_params": null,
+                                  "prompt_type": "Text",
+                                  "provider": null,
+                                  "provider_fallbacks": [],
+                                  "retries": {
+                                    "backoff_ms": 1000,
+                                    "max_attempts": 1
+                                  },
+                                  "routing_override": null,
+                                  "schema": null,
+                                  "timeout_ms": null
+                                }
+                              }
+                            },
+                            "labels": null,
+                            "name": "no_branch",
+                            "on_error": "Fail",
+                            "path": [
+                              {
+                                "Name": "prime"
+                              },
+                              {
+                                "Name": "branch"
+                              },
+                              {
+                                "Name": "no_branch"
+                              }
+                            ]
+                          }
+                        ],
+                        "overlay": true
+                      }
+                    },
+                    "then_": {
+                      "Block": {
+                        "ops": [
+                          {
+                            "enabled": true,
+                            "kind": {
+                              "Leaf": {
+                                "Prompt": {
+                                  "assets": [],
+                                  "content": {
+                                    "Template": {
+                                      "composable": true,
+                                      "escape": "None",
+                                      "source": "y"
+                                    }
+                                  },
+                                  "description": null,
+                                  "deterministic": false,
+                                  "group": null,
+                                  "inputs": null,
+                                  "model": null,
+                                  "model_params": null,
+                                  "prompt_type": "Text",
+                                  "provider": null,
+                                  "provider_fallbacks": [],
+                                  "retries": {
+                                    "backoff_ms": 1000,
+                                    "max_attempts": 1
+                                  },
+                                  "routing_override": null,
+                                  "schema": null,
+                                  "timeout_ms": null
+                                }
+                              }
+                            },
+                            "labels": null,
+                            "name": "yes_branch",
+                            "on_error": "Fail",
+                            "path": [
+                              {
+                                "Name": "prime"
+                              },
+                              {
+                                "Name": "branch"
+                              },
+                              {
+                                "Name": "yes_branch"
+                              }
+                            ]
+                          }
+                        ],
+                        "overlay": true
+                      }
+                    },
+                    "threshold": 0.5
+                  }
+                }
+              },
+              "labels": null,
+              "name": "branch",
+              "on_error": "Fail",
+              "path": [
+                {
+                  "Name": "prime"
+                },
+                {
+                  "Name": "branch"
+                }
+              ]
+            }
+          ],
+          "overlay": false
+        }
+      }
+    },
+    "labels": null,
+    "name": "prime",
+    "on_error": "Fail",
+    "path": [
+      {
+        "Name": "prime"
+      }
+    ]
+  },
+  "runtime_block": null
+}
