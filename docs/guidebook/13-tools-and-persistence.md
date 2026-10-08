@@ -99,6 +99,7 @@ Seventy-odd ship in-tree. By purpose:
 | PDF / documents | `pdf_extract`, `pdf_render`, `pandoc` |
 | Embeddings / RAG | `embed`, `rerank`, `vector_search` |
 | Code / dev | `git`, `gh`, `ripgrep`, `pytest`, `linter`, `docker`, `kubectl` |
+| Coding agents | `agent` — a delegated pi or Claude Code session |
 | Sandboxed execution | `python_eval`, `shell` |
 | Text processing | `awk`, `sed`, `diff_patch` |
 | Network | `dns`, `whois`, `ping`, `traceroute`, `port_check` |
@@ -138,6 +139,37 @@ Two are gated on purpose. `shell` runs a single binary from an allowlist that is
   }
 }
 ```
+
+### Delegating to a coding agent
+
+A `prompt` is one model call. Some work needs an agent: read the code, edit it, run the tests, read the failure, try again — for minutes, sometimes hours, in a working directory. The `agent` provider runs one such session of pi or Claude Code as a tool effect, through the CLI's own login:
+
+```yaml
+- type: tool
+  name: fix_test
+  provider: agent
+  timeout_ms: 3600000
+  params:
+    engine: claude_code
+    cwd: "{{input.repo}}"
+    prompt: |
+      Make the failing test pass without changing the test itself.
+
+      {{prime.search.value}}
+    tools: [Read, Grep, Glob, Edit, Write, "Bash(pytest:*)"]
+    exclude_tools: [WebFetch, WebSearch]
+    result_file: .agent/result.json
+    result_schema:
+      type: object
+      properties:
+        summary: {type: string}
+        tests_pass: {type: boolean}
+      required: [summary, tests_pass]
+```
+
+The prompt goes to the CLI in a file (pi) or on stdin (Claude Code), never on the command line, so it can be as long as the task needs. `result_file` is the session's contract: the agent is told to write that JSON file, the plugin validates it against `result_schema`, and `prime.fix_test.value` is the parsed object — here a real `tests_pass` boolean a later `if` can branch on. A missing or invalid file gets exactly one repair turn in the same session, quoting the errors; still invalid, the effect fails with them. Without `result_file`, `value` is the agent's final reply. `meta.raw` records the session id (a later effect's `session` param resumes it), the turns, tool calls, tokens and cost, and the path of a compact transcript — the transcript itself stays out of state. The session runs in its own process group: `timeout_ms` (here an hour, for the whole session) or a cancelled run stops the CLI and everything the agent started.
+
+**The agent is not sandboxed.** It runs with your permissions: it can edit or delete any file you can, run any program, and reach the network. The engine's own tool lists are how you narrow it, and the two engines differ in detail. For pi, `tools` is an allowlist and `exclude_tools` a denylist (`--tools`/`--exclude-tools`). For Claude Code, `tools` (`--tools`, its entries also pre-approved with `--allowedTools`) is an allowlist: the session has only the built-in tools it names, and under the default `dontAsk` mode every other call is denied. `exclude_tools` (`--disallowedTools`) is a hard deny in every permission mode. The example lists what the session needs (file tools, and `Bash` limited to `pytest`) and leaves `permission_mode` out; `Write` is what lets it write `result_file` (`Edit` cannot create it: the file is deleted before the session starts). A Claude Code session also ignores its repository's own settings (hooks, the API key helper, project MCP servers) unless `trust_project_settings: true` is set, and gets the repository's root `CLAUDE.md` appended to its prompt. For the same reason `agent` carries the `shell`, `fs-write` and `network` capabilities, so a document that is not your own needs the same consent to run one as to run `shell`. Every param, the config block that picks the default engine and each CLI's binary, and the full result contract are in [`docs/plugins/agent.md`](../plugins/agent.md).
 
 ### MCP servers as tool providers
 
@@ -282,5 +314,5 @@ frame 250, and the adapter/tool calls for frames 0–249 never happen again.
 ## See also
 
 - [Plugin Extension Guide](../plugins.md) · [Adapter Conformance](../adapter-conformance.md) · [Postgres Persistence](../postgres-persistence.md).
-- [`docs/plugins/ffmpeg.md`](../plugins/ffmpeg.md) · [`docs/plugins/comfyui.md`](../plugins/comfyui.md) · [`docs/plugins/surrealdb.md`](../plugins/surrealdb.md) · [Binary tool plugins](../plugins/binary-tools.md) · [Runtime Plugin Catalog](../runtime-plugins.md).
+- [`docs/plugins/ffmpeg.md`](../plugins/ffmpeg.md) · [`docs/plugins/comfyui.md`](../plugins/comfyui.md) · [`docs/plugins/surrealdb.md`](../plugins/surrealdb.md) · [`docs/plugins/agent.md`](../plugins/agent.md) · [Binary tool plugins](../plugins/binary-tools.md) · [Runtime Plugin Catalog](../runtime-plugins.md).
 - [Threat Model](../threat-model.md).

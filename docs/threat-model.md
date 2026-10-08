@@ -110,6 +110,30 @@ Implementation: [`src/circuitry/plugins/shell.py`](../src/circuitry/plugins/shel
 [`src/circuitry/core/tool.py`](../src/circuitry/core/tool.py) (the
 `params_json`/templated rejection).
 
+**The `agent` tool is not sandboxed.** It runs a whole pi or Claude Code
+session with the user's own permissions: the agent can edit or delete any
+file the user can, run any program and reach the network, and its `cwd` is
+where it starts, not a boundary. The narrowing is the engine's own
+tool lists — pi's `--tools`/`--exclude-tools`; for Claude Code, `--tools`
+(an allowlist, its entries also pre-approved with `--allowedTools`) under
+`--permission-mode dontAsk` by default, where a specifier such as
+`Bash(pytest:*)` limits its tool only in that mode, and `--disallowedTools`,
+a hard deny in every mode — and, unlike `shell`'s allowlist, those params
+may be templated or come from `params_json`. `extra_args` come after these
+flags, so one of them (`--tools`, `--permission-mode`, `--setting-sources`) can
+override them and widen the session. A Claude Code session also
+ignores its repository's own settings (hooks, the API key helper, project MCP
+servers) unless `trust_project_settings` is set, and gets the repository
+root's `CLAUDE.md` appended to its prompt; without `tools`, Claude Code's own
+default mode (`auto`) decides which calls run. Circuitry therefore tags `agent` with the `shell`,
+`fs-write` and `network` capabilities, so a document that is not the
+user's own needs the same consent to run one as to run `shell` (see
+[Section 9](#9-capability-consent-for-a-document-that-is-not-the-users-own)),
+and `enabled_tools` can leave it out altogether. Like the coding-agent
+adapters below, it passes no credential and keeps the prompt off argv.
+Implementation: [`src/circuitry/plugins/agent.py`](../src/circuitry/plugins/agent.py);
+user-facing detail in [`docs/plugins/agent.md`](plugins/agent.md).
+
 **Residual risk.** A user-authored plugin not bundled with Circuitry has no
 forced sandbox and can do whatever Python lets it do. The `ToolPlugin`
 Protocol is contract, not enforcement. Users who load third-party plugins

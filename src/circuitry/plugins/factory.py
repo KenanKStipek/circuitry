@@ -4,6 +4,9 @@ from collections.abc import Callable
 from typing import Any
 
 from . import (
+    agent as _agent_mod,
+)
+from . import (
     awk as _awk_mod,
 )
 from . import (
@@ -325,6 +328,12 @@ def _build_shell(cfg: dict[str, Any]) -> ToolPlugin:
     return ShellPlugin(pinned_allowed_commands=pinned)
 
 
+# Delegated coding-agent session (pi / Claude Code). Reads the default
+# engine and each engine's binary from runtime.plugins.agent.
+def _build_agent(cfg: dict[str, Any]) -> ToolPlugin:
+    return _agent_mod.make_plugin(cfg)
+
+
 def _build_service(cfg: dict[str, Any]) -> ToolPlugin:
     state_dir = cfg.get("state_dir")
     if state_dir is not None and not isinstance(state_dir, str):
@@ -554,6 +563,7 @@ PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "linter": _build_linter,
     "ocr": _build_ocr,
     "shell": _build_shell,
+    "agent": _build_agent,
     "service": _build_service,
     "gpg": _build_gpg,
     "diff_patch": _build_diff_patch,
