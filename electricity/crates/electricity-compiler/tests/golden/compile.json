@@ -2435,6 +2435,1918 @@
     }
   },
   {
+    "name": "from_reference_rejects_state_prefixed",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    params:\n      n: {from: 'state.topic'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Tool effect 'x' param 'params.n' at 'prime.effects[0]': 'state.topic' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.state.topic' for caller-supplied values or 'prime.<effect>.value' for effect outputs."
+      ],
+      "warnings": []
+    },
+    "run_error": "Tool effect 'x' param 'params.n' at 'prime.effects[0]': 'state.topic' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.state.topic' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 'x' param 'params.n' at 'prime.effects[0]': 'state.topic' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.state.topic' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "digest": "54a5c814ac7ba9186becbf9102321190289b76a9475733ec1a26ea893fe73c3b",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "from_reference_rejects_empty",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    params:\n      n: {from: ''}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Tool effect 'x' param 'params.n' at 'prime.effects[0]': '{from: ...}' needs a non-empty path."
+      ],
+      "warnings": []
+    },
+    "run_error": "Tool effect 'x' param 'params.n' at 'prime.effects[0]': '{from: ...}' needs a non-empty path.",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 'x' param 'params.n' at 'prime.effects[0]': '{from: ...}' needs a non-empty path.",
+    "digest": "707c5287e7273e722f5080296814ca629092d2a4ed2bb9a801ae5f21a5a83119",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "use_input_from_reference_rejects_bare_key",
+    "files": {
+      "doc.yml": "effects:\n  - type: use\n    name: sub\n    path: child.yml\n    inputs:\n      n: {from: 'bogus'}\n",
+      "child.yml": "effects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Use effect 'sub' input 'n' at 'prime.effects[0]': 'bogus' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bogus' for caller-supplied values or 'prime.<effect>.value' for effect outputs."
+      ],
+      "warnings": []
+    },
+    "run_error": "Use effect 'sub' input 'n' at 'prime.effects[0]': 'bogus' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bogus' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "definition": null,
+    "definition_error": "ValueError: Use effect 'sub' input 'n' at 'prime.effects[0]': 'bogus' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bogus' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "digest": "29ae39091fe14f8f58ddd19aa60abfb445fa9fe6d3fb59d75e5b12ff59e71472",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "each_in_path_rejects_state_prefixed",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: it\n    each: {in: 'state.input.items'}\n    body:\n      - type: prompt\n        name: handle\n        template: x\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Loop each.in at 'prime.effects[0]': 'state.' is a CEL-only binding; outside CEL, paths are root-relative. Write 'input.items' instead of 'state.input.items'."
+      ],
+      "warnings": []
+    },
+    "run_error": "Loop each.in at 'prime.effects[0]': 'state.' is a CEL-only binding; outside CEL, paths are root-relative. Write 'input.items' instead of 'state.input.items'.",
+    "definition": null,
+    "definition_error": "ValueError: Loop each.in at 'prime.effects[0]': 'state.' is a CEL-only binding; outside CEL, paths are root-relative. Write 'input.items' instead of 'state.input.items'.",
+    "digest": "d069f4f798a014e07ddf19776e023f3029792e923b020e7f9891c3dd53d4b5b9",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "each_in_path_rejects_empty",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: it\n    each: {in: ''}\n    body:\n      - type: prompt\n        name: handle\n        template: x\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Loop each.in at 'prime.effects[0]' must be a dot path rooted at 'input.', 'prime.', or 'runtime.' (e.g. 'input.items'), or an enclosing loop binding (loop bindings in scope: none here)."
+      ],
+      "warnings": []
+    },
+    "run_error": "Loop each.in at 'prime.effects[0]' must be a dot path rooted at 'input.', 'prime.', or 'runtime.' (e.g. 'input.items'), or an enclosing loop binding (loop bindings in scope: none here).",
+    "definition": null,
+    "definition_error": "ValueError: Loop each.in at 'prime.effects[0]' must be a dot path rooted at 'input.', 'prime.', or 'runtime.' (e.g. 'input.items'), or an enclosing loop binding (loop bindings in scope: none here).",
+    "digest": "d92314ce4123a186edd1304214dfd3f54600e03ba5bcae90b3418641e489dea8",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "cel_expr_unknown_namespace_lists_loop_bindings",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: outer\n    each: {in: input.items, as: item}\n    body:\n      - type: if\n        if: {mode: cel, expr: 'state.bogus == 1'}\n        then: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "CEL expression at 'prime.effects[0].body[0]': 'state.bogus' does not name a state namespace ('state' binds to the state root). Write 'state.input.bogus' for caller-supplied values or 'state.prime.bogus' for effect outputs. Names bound by an enclosing loop here: item, iter."
+      ],
+      "warnings": []
+    },
+    "run_error": "CEL expression at 'prime.effects[0].body[0]': 'state.bogus' does not name a state namespace ('state' binds to the state root). Write 'state.input.bogus' for caller-supplied values or 'state.prime.bogus' for effect outputs. Names bound by an enclosing loop here: item, iter.",
+    "definition": null,
+    "definition_error": "ValueError: CEL expression at 'prime.effects[0].body[0]': 'state.bogus' does not name a state namespace ('state' binds to the state root). Write 'state.input.bogus' for caller-supplied values or 'state.prime.bogus' for effect outputs. Names bound by an enclosing loop here: item, iter.",
+    "digest": "50f586d264ae38c6c8fde6e54a364d945c50ecd94ddd5e3c2043e5b865cf1d1d",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "conditional_cel_whitespace_only_expression_is_empty",
+    "files": {
+      "doc.yml": "effects:\n  - type: if\n    if: {mode: cel, expr: '   '}\n    then: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "CEL expression at 'prime.effects[0]': expression is empty."
+      ],
+      "warnings": []
+    },
+    "run_error": "CEL expression at 'prime.effects[0]': expression is empty.",
+    "definition": null,
+    "definition_error": "CelValidationError: CEL expression at 'prime.effects[0]': expression is empty.",
+    "digest": "16b146078f3028666044fe25b0ac9a7ee2e553403773a4700862ac584d77aa29",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "cel_expression_too_long",
+    "files": {
+      "doc.yml": "effects:\n  - type: if\n    if: {mode: cel, expr: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'}\n    then: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "CEL expression at 'prime.effects[0]': expression is too long (5000 chars, max 4096)."
+      ],
+      "warnings": []
+    },
+    "run_error": "CEL expression at 'prime.effects[0]': expression is too long (5000 chars, max 4096).",
+    "definition": null,
+    "definition_error": "CelValidationError: CEL expression at 'prime.effects[0]': expression is too long (5000 chars, max 4096).",
+    "digest": "1343db2c4afd4ee62f7e25d2d0389b5a675e0c425c3623771d96e01b9657d26c",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "effects_must_be_a_list",
+    "files": {
+      "doc.yml": "effects: not-a-list\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects: 'not-a-list' is not of type 'array'"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects: 'not-a-list' is not of type 'array'",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects must be a list of effects.",
+    "digest": "d6b0ec6c8e5f1d87fdc5f2637a2673e4c52dc998af48c5224fe0c1ec1d1bec6c",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "effect_must_be_a_mapping",
+    "files": {
+      "doc.yml": "effects:\n  - - not-a-mapping\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0]: value is not of type 'object'",
+        "effects[0]: value is not of type 'object'",
+        "effects[0]: value is valid under each of {'required': ['messages']}, {'required': ['template']}"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0]: value is not of type 'object'\n  - effects[0]: value is not of type 'object'\n  - effects[0]: value is valid under each of {'required': ['messages']}, {'required': ['template']}",
+    "definition": null,
+    "definition_error": "ValueError: Effect at 'prime.effects[0]' must be an object/mapping, got list.",
+    "digest": "641f49150d502f8df0ca080f2bc3e3b207cb8b7e0a40d8208cdee32022306bb6",
+    "comparison": {
+      "validate_errors": [
+        "exact",
+        "exact",
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "loop_each_must_be_a_mapping",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: it\n    each: not-a-mapping\n    body: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].each: 'not-a-mapping' is not of type 'object'",
+        "effects[0].body: value should be non-empty"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].each: 'not-a-mapping' is not of type 'object'\n  - effects[0].body: value should be non-empty",
+    "definition": null,
+    "definition_error": "ValueError: Loop at 'prime.effects[0]': 'each' must be a mapping.",
+    "digest": "66c729555fe0d919534e6aa691081d489ff1288f15990963cee5a79d49835501",
+    "comparison": {
+      "validate_errors": [
+        "exact",
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "loop_while_model_missing_template",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: it\n    while: {mode: model}\n    body: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].while: 'template' is a required property",
+        "effects[0].body: value should be non-empty"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].while: 'template' is a required property\n  - effects[0].body: value should be non-empty",
+    "definition": null,
+    "definition_error": "ValueError: Loop while at 'prime.effects[0]': mode 'model' requires a 'template' field.",
+    "digest": "e241e69b5ce9e2950169d5536f11a39e08b102c38683e29c01f72e1be7c5f55e",
+    "comparison": {
+      "validate_errors": [
+        "exact",
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "loop_while_cel_missing_expr",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: poll\n    while: {mode: cel}\n    body: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].while: 'expr' is a required property",
+        "effects[0].body: value should be non-empty"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].while: 'expr' is a required property\n  - effects[0].body: value should be non-empty",
+    "definition": null,
+    "definition_error": "ValueError: Loop while at 'prime.effects[0]': mode 'cel' requires an 'expr' field.",
+    "digest": "edb10aa2ad867e2ef304238dd016281a003dab515882ba9bfa2e124324e15785",
+    "comparison": {
+      "validate_errors": [
+        "exact",
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "loop_while_cel_empty_expression_has_its_own_label",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: poll\n    while: {mode: cel, expr: '   '}\n    body: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].body: value should be non-empty"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].body: value should be non-empty",
+    "definition": null,
+    "definition_error": "CelValidationError: Loop while CEL expression at 'prime.effects[0]' (effect 'poll'): expression is empty.",
+    "digest": "a2c03aae200f6248a3d62e2c6b2779523c8efb4396ebdbf2552e77a779eff1a3",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "loop_while_cel_parse_error_has_its_own_label",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: poll\n    while: {mode: cel, expr: 'state.a =='}\n    body: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].body: value should be non-empty"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].body: value should be non-empty",
+    "definition": null,
+    "definition_error": "CelValidationError: Loop while CEL expression at 'prime.effects[0]' (effect 'poll'): expression does not parse (state.a ==\n        ^). Expression: 'state.a =='",
+    "digest": "3b75fdbc1751b40ae7d0eb6254cf63a7f8d3ade183f1cd658c5e8a140d077e28",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "location"
+    }
+  },
+  {
+    "name": "expect_bare_string_empty",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    expect: '   '\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "tool effect at 'prime.effects[0]': 'expect' must not be an empty string."
+      ],
+      "warnings": []
+    },
+    "run_error": "tool effect at 'prime.effects[0]': 'expect' must not be an empty string.",
+    "definition": null,
+    "definition_error": "ValueError: tool effect at 'prime.effects[0]': 'expect' must not be an empty string.",
+    "digest": "d046392fd3f344fd652441022a66c03e8aedee513cf25b604ac30671746429c8",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "expect_cel_missing_expr",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    expect: {mode: cel}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].expect: value is not valid under any of the given schemas ({'mode': 'cel'} is not of type 'string')"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].expect: value is not valid under any of the given schemas ({'mode': 'cel'} is not of type 'string')",
+    "definition": null,
+    "definition_error": "ValueError: tool effect at 'prime.effects[0]': expect mode 'cel' requires a non-empty 'expr' field.",
+    "digest": "41e1eabb5f8146f42b0362eb778f03e1043feaf2916867ab8590537c8c6c5a84",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "expect_model_missing_template",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    expect: {mode: model}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].expect: value is not valid under any of the given schemas ({'mode': 'model'} is not of type 'string')"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].expect: value is not valid under any of the given schemas ({'mode': 'model'} is not of type 'string')",
+    "definition": null,
+    "definition_error": "ValueError: tool effect at 'prime.effects[0]': expect mode 'model' requires a non-empty 'template' field.",
+    "digest": "64cb2fd91383eb82642e0bf49e25d382e321bc0d4f521e69e2871d60d66f7c3a",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "expect_invalid_shape",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    expect: 1\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].expect: 1 is not valid under any of the given schemas (1 is not of type 'string')"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].expect: 1 is not valid under any of the given schemas (1 is not of type 'string')",
+    "definition": null,
+    "definition_error": "ValueError: tool effect at 'prime.effects[0]': 'expect' must be a CEL string or a mapping with 'mode'.",
+    "digest": "435ae965eb3c4d823b8df024354c8f1815f136c8cf55aed922a9c358615e970b",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "expect_model_template_keeps_trailing_newline",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    expect:\n      mode: model\n      template: |\n        Is it ok?\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "x",
+          "provider": "shell",
+          "params": {},
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": {
+            "mode": "model",
+            "expr": null,
+            "template": "Is it ok?\n"
+          },
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "x"
+      ]
+    },
+    "definition_error": null,
+    "digest": "3989c787081fa8220873952c69dc482c29c8e86eb63b2f07a0900832996abe50",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "prompt_missing_name",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    template: x\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0]: 'name' is a required property"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0]: 'name' is a required property",
+    "definition": null,
+    "definition_error": "ValueError: Prompt effect at 'prime.effects[0]' is missing required field 'name'.",
+    "digest": "f0853ea0667b4b72a4e0d56b3b41b7e5e5002116b77341cdc85dc4e23765400b",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_template_wrong_type",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: 123\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].template: 123 is not valid under any of the given schemas (123 is not of type 'string')"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].template: 123 is not valid under any of the given schemas (123 is not of type 'string')",
+    "definition": null,
+    "definition_error": "PromptFileError: prime.effects[0].template must be a string or {file: <path>}.",
+    "digest": "67fdd0f99e4038797ff5789b5fd2a190baa088ce866a95fa1032cfb06f7d468b",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "yield_template_must_not_be_empty",
+    "files": {
+      "doc.yml": "effects:\n  - type: yield\n    name: x\n    template: '   '\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Yield effect 'x': 'template' must not be empty."
+      ],
+      "warnings": []
+    },
+    "run_error": "Yield effect 'x': 'template' must not be empty.",
+    "definition": null,
+    "definition_error": "ValueError: Yield effect 'x': 'template' must not be empty.",
+    "digest": "5aaf17cbdc7885f7019bc91de4216b0aa3655b2372974f64fd473414d0014bf8",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "malformed_params_json_template",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    params_json: '{{#bad'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].params_json: malformed Mustache template: unclosed tag at line 1"
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].params_json: malformed Mustache template: unclosed tag at line 1",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].params_json: malformed Mustache template: unclosed tag at line 1",
+    "digest": "01d401d8c94dadbc32bdea6d1d3562b8b4b23b7db0a9df120e18e1788da2adb1",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "malformed_tool_prompt_template",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    prompt: '{{#bad'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].prompt: malformed Mustache template: unclosed tag at line 1"
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].prompt: malformed Mustache template: unclosed tag at line 1",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].prompt: malformed Mustache template: unclosed tag at line 1",
+    "digest": "a4bf6e27806c3fdc69d5964ad74385ba3ffa624c82b812b1293e0f9e15e0d305",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "malformed_inline_template",
+    "files": {
+      "doc.yml": "effects:\n  - type: use\n    name: x\n    inline: '{{#bad'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].inline: malformed Mustache template: unclosed tag at line 1"
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].inline: malformed Mustache template: unclosed tag at line 1",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].inline: malformed Mustache template: unclosed tag at line 1",
+    "digest": "9e1824d07d27ad0b47493f5aff3a9e3b38d9529beb9379b7c2dba37b323c6805",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "malformed_message_content_template",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    messages:\n      - role: user\n        content: '{{#bad'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].messages[0].content: malformed Mustache template: unclosed tag at line 1"
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].messages[0].content: malformed Mustache template: unclosed tag at line 1",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].messages[0].content: malformed Mustache template: unclosed tag at line 1",
+    "digest": "78cd9b231695c2d7dbb715af3dea89957a300746e3d52638738f09323aacbaf7",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "malformed_asset_ref_template",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    assets:\n      - kind: image\n        ref: '{{#bad'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].assets[0].ref: malformed Mustache template: unclosed tag at line 1"
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].assets[0].ref: malformed Mustache template: unclosed tag at line 1",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].assets[0].ref: malformed Mustache template: unclosed tag at line 1",
+    "digest": "f0d238914d3d4e3d508a881e297fa02636db03d7eb4f2877edd5f9836a78acb9",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "malformed_if_template",
+    "files": {
+      "doc.yml": "effects:\n  - type: if\n    if: {template: '{{#bad'}\n    then: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].if: 'mode' is a required property"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].if: 'mode' is a required property",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].if.template: malformed Mustache template: unclosed tag at line 1",
+    "digest": "1c2feee3f667f5e42ac1e681939f8694cef3df53645faa1ff62551af75628d3f",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "malformed_while_template",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: it\n    while: {template: '{{#bad'}\n    body: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].while: 'mode' is a required property",
+        "effects[0].body: value should be non-empty"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].while: 'mode' is a required property\n  - effects[0].body: value should be non-empty",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].while.template: malformed Mustache template: unclosed tag at line 1",
+    "digest": "ddb2f23a1c65085edbe92a9b754ef8e4a619f5cec271f840f78d3e7c33c4a845",
+    "comparison": {
+      "validate_errors": [
+        "exact",
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "malformed_expect_template",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    expect: {mode: model, template: '{{#bad'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].expect.template: malformed Mustache template: unclosed tag at line 1"
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].expect.template: malformed Mustache template: unclosed tag at line 1",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].expect.template: malformed Mustache template: unclosed tag at line 1",
+    "digest": "f2ce24175e37e873045288a3a355ee89d3f04973cb03738aa785de1a1b3d4cac",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "outputs_must_be_a_mapping",
+    "files": {
+      "doc.yml": "effects:\n  - type: use\n    name: sub\n    path: child.yml\n    outputs: not-a-mapping\n",
+      "child.yml": "effects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].outputs: 'not-a-mapping' is not of type 'object'"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].outputs: 'not-a-mapping' is not of type 'object'",
+    "definition": null,
+    "definition_error": "ValueError: Use effect 'sub': outputs must be a mapping of name -> {path: <state path>}, not str.",
+    "digest": "e105acdb6f6e6f77eebc2d48d64b301b6b6af0669c90f49fce124b226b3e33c2",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "outputs_entry_empty_string",
+    "files": {
+      "doc.yml": "effects:\n  - type: use\n    name: sub\n    path: child.yml\n    outputs:\n      result: ''\n",
+      "child.yml": "effects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Use effect 'sub': output 'result' is an empty string. Give it a state path — result: {path: prime.<effect>.value}."
+      ],
+      "warnings": []
+    },
+    "run_error": "Use effect 'sub': output 'result' is an empty string. Give it a state path — result: {path: prime.<effect>.value}.",
+    "definition": null,
+    "definition_error": "ValueError: Use effect 'sub': output 'result' is an empty string. Give it a state path — result: {path: prime.<effect>.value}.",
+    "digest": "ac19e0c36b0e42a38f4ca121226fcd1ad3935b8453f6f9001d2bb2e2ff55731e",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "outputs_entry_missing_path",
+    "files": {
+      "doc.yml": "effects:\n  - type: use\n    name: sub\n    path: child.yml\n    outputs:\n      result: {}\n",
+      "child.yml": "effects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].outputs.result: value is not valid under any of the given schemas ({} is not of type 'string')"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].outputs.result: value is not valid under any of the given schemas ({} is not of type 'string')",
+    "definition": null,
+    "definition_error": "ValueError: Use effect 'sub': output 'result' has no 'path'. Canonical form is result: {path: prime.<effect>.value} (the bare string result: prime.<effect>.value is also accepted).",
+    "digest": "62b55967581eb305079c2f2c17b1005d79b74b367e47fe630982b1c2941052ce",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "outputs_entry_invalid_type",
+    "files": {
+      "doc.yml": "effects:\n  - type: use\n    name: sub\n    path: child.yml\n    outputs:\n      result: 5\n",
+      "child.yml": "effects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].outputs.result: 5 is not valid under any of the given schemas (5 is not of type 'object')"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].outputs.result: 5 is not valid under any of the given schemas (5 is not of type 'object')",
+    "definition": null,
+    "definition_error": "ValueError: Use effect 'sub': output 'result' must be an object with a 'path' key (canonical) or a bare state-path string (shorthand); got int.",
+    "digest": "0561ee9b1bc83548df6ed1e1d24d763c4570090527851291c0668c09e6322179",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "duplicate_name_between_body_and_finally",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: dup\n    provider: shell\nfinally:\n  - type: tool\n    name: dup\n    provider: shell\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Duplicate effect name 'dup' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.finally[0]'."
+      ],
+      "warnings": []
+    },
+    "run_error": "Duplicate effect name 'dup' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.finally[0]'.",
+    "definition": null,
+    "definition_error": "ValueError: Duplicate effect name 'dup' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.finally[0]'.",
+    "digest": "202fa8bbf13237278febd72a243f9daee7050271ddbb3b669e17bb1e9ddc7bd9",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "bare_input_ref_in_finally",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    topic: {type: string}\neffects: []\nfinally:\n  - type: prompt\n    name: x\n    template: 'about {{topic}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Template at 'finally[0].template': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'."
+      ],
+      "warnings": []
+    },
+    "run_error": "Template at 'finally[0].template': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
+    "definition": null,
+    "definition_error": "ValueError: Template at 'finally[0].template': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
+    "digest": "5779605d6a0e0386cb6734687ccb5dac7d88a228ce7d6aea9cd64732f13f9849",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "bare_input_ref_in_nested_params",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    topic: {type: string}\neffects:\n  - type: tool\n    name: x\n    provider: shell\n    params:\n      nested:\n        deep: 'about {{topic}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Template at 'effects[0].params.nested.deep': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'."
+      ],
+      "warnings": []
+    },
+    "run_error": "Template at 'effects[0].params.nested.deep': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
+    "definition": null,
+    "definition_error": "ValueError: Template at 'effects[0].params.nested.deep': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
+    "digest": "163ee83ffc42b07ba7cb228063f93d648fcf65260ce716e2e996744b6de40715",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "unknown_flow_value",
+    "files": {
+      "doc.yml": "effects: []\nflow: bogus\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "flow: 'bogus' is not one of ['chain', 'chain_of_thought', 'cot', 'tree', 'tree_of_thought', 'tot']"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - flow: 'bogus' is not one of ['chain', 'chain_of_thought', 'cot', 'tree', 'tree_of_thought', 'tot']",
+    "definition": null,
+    "definition_error": "ValueError: Unknown flow value 'bogus'. Valid values are: chain, chain_of_thought, cot, tot, tree, tree_of_thought.",
+    "digest": "1c33e713fd645d7d20bb7930e3feff015316cd41cedad9e759574dde856d6efb",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "tool_param_leaves_checked_before_security_sensitive_reference",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    params:\n      allowed_commands: {from: 'bogus'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Tool effect 'x' param 'params.allowed_commands' at 'prime.effects[0]': 'bogus' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bogus' for caller-supplied values or 'prime.<effect>.value' for effect outputs."
+      ],
+      "warnings": []
+    },
+    "run_error": "Tool effect 'x' param 'params.allowed_commands' at 'prime.effects[0]': 'bogus' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bogus' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 'x' param 'params.allowed_commands' at 'prime.effects[0]': 'bogus' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bogus' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "digest": "f78288432d5c18a9e9760cf2472e8beb5e8ef7658cf6bc923b0c4fd3630d021b",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "tool_param_leaves_checked_before_security_sensitive_literal",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    params:\n      a: '{{#bad'\n      allowed_commands: {from: 'input.c'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].params.a: malformed Mustache template: unclosed tag at line 1"
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].params.a: malformed Mustache template: unclosed tag at line 1",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].params.a: malformed Mustache template: unclosed tag at line 1",
+    "digest": "1b419978a53ee96a61e0dbfd6af86083155333b170e28020944c95c6dd1a341d",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "use_inputs_templates_checked_before_references",
+    "files": {
+      "doc.yml": "effects:\n  - type: use\n    name: x\n    path: child.yml\n    inputs:\n      a: {from: 'bogus'}\n      b: '{{#bad'\n",
+      "child.yml": "effects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].inputs.b: malformed Mustache template: unclosed tag at line 1"
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].inputs.b: malformed Mustache template: unclosed tag at line 1",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].inputs.b: malformed Mustache template: unclosed tag at line 1",
+    "digest": "e6579483c3f5335c6f02f2f7e0f94887fa801c30200654b526da69f7328de564",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "collect_empty_string_on_unnamed_loop_is_fine",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    each: {in: input.items}\n    collect: ''\n    body:\n      - type: prompt\n        name: handle\n        template: x\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": null,
+          "body": [
+            {
+              "name": "handle",
+              "template": "x",
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.items",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": "",
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "handle"
+      ]
+    },
+    "definition_error": null,
+    "digest": "a499093172e93ee5264acade87be644bf5243c8d42ba95a30457042758e7ec91",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "collect_whitespace_only_on_unnamed_loop_is_fine",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    each: {in: input.items}\n    collect: '   '\n    body:\n      - type: prompt\n        name: handle\n        template: x\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": null,
+          "body": [
+            {
+              "name": "handle",
+              "template": "x",
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.items",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": "",
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "handle"
+      ]
+    },
+    "definition_error": null,
+    "digest": "21184d571f4a3074ec9a5c29bd665f94dc64f5946c5723588eccc0a83ff0aa12",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "prompt_params_and_inputs_are_raw_values",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    inputs:\n      v: '{{#raw'\n      w: {from: 'bogus'}\n    params:\n      stop: ['{{']\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "x",
+          "template": "hi",
+          "messages": null,
+          "prompt_type": "text",
+          "schema": null,
+          "model": null,
+          "provider": null,
+          "provider_fallbacks": null,
+          "routing_override": null,
+          "params": {
+            "stop": [
+              "{{"
+            ]
+          },
+          "timeout_ms": null,
+          "deterministic": false,
+          "inputs": {
+            "v": "{{#raw",
+            "w": {
+              "from": "bogus"
+            }
+          },
+          "assets": null,
+          "retries": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "x"
+      ]
+    },
+    "definition_error": null,
+    "digest": "b2ec90b90e4d231c6e6bd7dccf2107689191f3624731e0c04dc9b743b19ab1dd",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "yield_inputs_are_raw_values",
+    "files": {
+      "doc.yml": "effects:\n  - type: yield\n    name: x\n    template: hi\n    inputs:\n      v: '{{#raw'\n      w: {from: 'bogus'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "x",
+          "template": "hi",
+          "inputs": {
+            "v": "{{#raw",
+            "w": {
+              "from": "bogus"
+            }
+          },
+          "on_error": "fail",
+          "description": null,
+          "enabled": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "x"
+      ]
+    },
+    "definition_error": null,
+    "digest": "602b40fc8df416f113afddd5561711fbf01dc829323576f397c0b4664282c4c8",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "prompt_inputs_in_a_loop_body_are_not_reference_checked",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: it\n    each: {in: input.items, as: item}\n    body:\n      - type: prompt\n        name: handle\n        template: hi\n        inputs:\n          v: {from: 'item.x'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "it",
+          "body": [
+            {
+              "name": "handle",
+              "template": "hi",
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": {
+                "v": {
+                  "from": "item.x"
+                }
+              },
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.items",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "handle",
+        "it"
+      ]
+    },
+    "definition_error": null,
+    "digest": "f99b3d0d68e5c121f54b26fc74e8d46ddb2a2e8de4acdef9326cde22ab6dd6b2",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "reflector_prime_template_is_never_mustache_checked",
+    "files": {
+      "doc.yml": "effects:\n  - type: reflector\n    name: think\n    prime_template: 'Plan {goal}: {{#unclosed'\n    effects:\n      - type: prompt\n        name: propose_steps\n        template: x\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "think",
+          "inner": {
+            "name": "inner",
+            "effects": [
+              {
+                "name": "propose_steps",
+                "template": "x",
+                "messages": null,
+                "prompt_type": "text",
+                "schema": null,
+                "model": null,
+                "provider": null,
+                "provider_fallbacks": null,
+                "routing_override": null,
+                "params": null,
+                "timeout_ms": null,
+                "deterministic": false,
+                "inputs": null,
+                "assets": null,
+                "retries": null,
+                "on_error": "fail",
+                "description": null,
+                "enabled": true,
+                "group": null
+              }
+            ],
+            "flow": "chain",
+            "finally_effects": [],
+            "max_concurrency": null,
+            "stop_on_error": false,
+            "on_error": "fail",
+            "labels": null,
+            "enabled": true,
+            "prompts": {},
+            "effect_names": []
+          },
+          "plan_from_step": "propose_steps",
+          "max_iterations": 1,
+          "generated_key": "generated",
+          "stop_on_done": true,
+          "prime_template": "Plan {goal}: {{#unclosed",
+          "max_effects": 8,
+          "enabled": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "propose_steps",
+        "think"
+      ]
+    },
+    "definition_error": null,
+    "digest": "ea1256a2e85fa48b054b10cd3404c0c8a425786c5dd077941b29a6ab770b3341",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "reflector_inner_duplicate_name_reports_the_inner_scope",
+    "files": {
+      "doc.yml": "effects:\n  - type: reflector\n    name: think\n    effects:\n      - type: prompt\n        name: a\n        template: x\n      - type: prompt\n        name: a\n        template: y\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Duplicate effect name 'a' in scope 'prime.think'. Seen at 'prime.effects[0].effects[0]' and 'prime.effects[0].effects[1]'."
+      ],
+      "warnings": []
+    },
+    "run_error": "Duplicate effect name 'a' in scope 'prime.think'. Seen at 'prime.effects[0].effects[0]' and 'prime.effects[0].effects[1]'.",
+    "definition": null,
+    "definition_error": "ValueError: Duplicate effect name 'a' in scope 'prime.think'. Seen at 'prime.effects[0].effects[0]' and 'prime.effects[0].effects[1]'.",
+    "digest": "a7cafdc5408cdc9d4855c9ca21dae398f7f3e439f68971823ae549cad2afec09",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "concurrency_group_references_everywhere_an_effect_can_set_one",
+    "files": {
+      "doc.yml": "runtime:\n  concurrency_groups:\n    io: 2\neffects:\n  - type: tool\n    name: fetch\n    provider: shell\n    group: io\n  - type: loop\n    name: it\n    each: {in: input.items}\n    body:\n      - type: prompt\n        name: ask\n        template: x\n        group: llm\n  - type: if\n    if: {mode: cel, expr: 'true'}\n    then:\n      - type: prompt\n        name: ask2\n        template: x\n        group: \"it's\"\n  - type: reflector\n    name: think\n    effects:\n      - type: prompt\n        name: propose_steps\n        template: x\n        group: llm\nfinally:\n  - type: prompt\n    name: cleanup\n    template: x\n    group: llm\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "group \"it's\" is not defined in runtime.concurrency_groups — known groups: io.",
+        "group 'llm' is not defined in runtime.concurrency_groups — known groups: io."
+      ],
+      "warnings": [
+        "Applied host settings from doc.yml: runtime.concurrency_groups.io"
+      ]
+    },
+    "run_error": "Orchestration validation failed:\n  - group \"it's\" is not defined in runtime.concurrency_groups — known groups: io.\n  - group 'llm' is not defined in runtime.concurrency_groups — known groups: io.",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "fetch",
+          "provider": "shell",
+          "params": {},
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": "io"
+        },
+        {
+          "name": "it",
+          "body": [
+            {
+              "name": "ask",
+              "template": "x",
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": "llm"
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.items",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        },
+        {
+          "name": null,
+          "condition": {
+            "mode": "cel",
+            "template": null,
+            "expr": "true",
+            "strict": false
+          },
+          "then_effects": [
+            {
+              "name": "ask2",
+              "template": "x",
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": "it's"
+            }
+          ],
+          "else_effects": [],
+          "threshold": 0.5,
+          "on_error": "fail",
+          "enabled": true,
+          "labels": null
+        },
+        {
+          "name": "think",
+          "inner": {
+            "name": "inner",
+            "effects": [
+              {
+                "name": "propose_steps",
+                "template": "x",
+                "messages": null,
+                "prompt_type": "text",
+                "schema": null,
+                "model": null,
+                "provider": null,
+                "provider_fallbacks": null,
+                "routing_override": null,
+                "params": null,
+                "timeout_ms": null,
+                "deterministic": false,
+                "inputs": null,
+                "assets": null,
+                "retries": null,
+                "on_error": "fail",
+                "description": null,
+                "enabled": true,
+                "group": "llm"
+              }
+            ],
+            "flow": "chain",
+            "finally_effects": [],
+            "max_concurrency": null,
+            "stop_on_error": false,
+            "on_error": "fail",
+            "labels": null,
+            "enabled": true,
+            "prompts": {},
+            "effect_names": []
+          },
+          "plan_from_step": "propose_steps",
+          "max_iterations": 1,
+          "generated_key": "generated",
+          "stop_on_done": true,
+          "prime_template": "<REFLECTOR_PRIME>",
+          "max_effects": 8,
+          "enabled": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [
+        {
+          "name": "cleanup",
+          "template": "x",
+          "messages": null,
+          "prompt_type": "text",
+          "schema": null,
+          "model": null,
+          "provider": null,
+          "provider_fallbacks": null,
+          "routing_override": null,
+          "params": null,
+          "timeout_ms": null,
+          "deterministic": false,
+          "inputs": null,
+          "assets": null,
+          "retries": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true,
+          "group": "llm"
+        }
+      ],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "ask",
+        "ask2",
+        "cleanup",
+        "fetch",
+        "it",
+        "propose_steps",
+        "think"
+      ]
+    },
+    "definition_error": null,
+    "digest": "42c1668dc5eabb8d303581c5a97abf9bbdcb13fa6fa292f7f73c17e3417d4271",
+    "comparison": {
+      "validate_errors": [
+        "exact",
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
     "name": "use_cycle_two_hop",
     "files": {
       "a.yml": "effects:\n  - type: use\n    name: s\n    path: b.yml\n",
@@ -2546,6 +4458,242 @@
     "comparison": {
       "validate_errors": [],
       "run_error": null
+    }
+  },
+  {
+    "name": "use_cycle_through_entry_document_entered_from_a",
+    "files": {
+      "a.yml": "effects:\n  - type: use\n    name: s\n    path: b.yml\n",
+      "b.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n"
+    },
+    "entry": "a.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Cycle: <root>/a.yml → <root>/b.yml → <root>/a.yml"
+      ],
+      "warnings": []
+    },
+    "run_error": "Cycle: <root>/a.yml → <root>/b.yml → <root>/a.yml",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "s",
+          "ref": null,
+          "path": "b.yml",
+          "orchestration": null,
+          "inline": null,
+          "inputs": null,
+          "outputs": null,
+          "validate": true,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "s"
+      ]
+    },
+    "definition_error": null,
+    "digest": "fe58f70ee020907997a898b3fe1d3f46f6047d3d6e744b62dede415e9d5a75e5",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "use_cycle_through_entry_document_entered_from_b",
+    "files": {
+      "a.yml": "effects:\n  - type: use\n    name: s\n    path: b.yml\n",
+      "b.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n"
+    },
+    "entry": "b.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Cycle: <root>/b.yml → <root>/a.yml → <root>/b.yml"
+      ],
+      "warnings": []
+    },
+    "run_error": "Cycle: <root>/b.yml → <root>/a.yml → <root>/b.yml",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "s",
+          "ref": null,
+          "path": "a.yml",
+          "orchestration": null,
+          "inline": null,
+          "inputs": null,
+          "outputs": null,
+          "validate": true,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "s"
+      ]
+    },
+    "definition_error": null,
+    "digest": "98dd97986d8c2733b217eb84b9ad590aeb1055440403658aad5d9c7f3c334d6f",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "use_cycle_document_uses_itself",
+    "files": {
+      "a.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n"
+    },
+    "entry": "a.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Cycle: <root>/a.yml → <root>/a.yml"
+      ],
+      "warnings": []
+    },
+    "run_error": "Cycle: <root>/a.yml → <root>/a.yml",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "s",
+          "ref": null,
+          "path": "a.yml",
+          "orchestration": null,
+          "inline": null,
+          "inputs": null,
+          "outputs": null,
+          "validate": true,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "s"
+      ]
+    },
+    "definition_error": null,
+    "digest": "98dd97986d8c2733b217eb84b9ad590aeb1055440403658aad5d9c7f3c334d6f",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "use_cycle_through_a_child_with_a_duplicate_key",
+    "files": {
+      "entry.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n",
+      "a.yml": "effects:\n  - type: use\n    name: s\n    name: s\n    path: b.yml\n",
+      "b.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n"
+    },
+    "entry": "entry.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Cycle: <root>/a.yml → <root>/b.yml → <root>/a.yml"
+      ],
+      "warnings": []
+    },
+    "run_error": "Cycle: <root>/a.yml → <root>/b.yml → <root>/a.yml",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "s",
+          "ref": null,
+          "path": "a.yml",
+          "orchestration": null,
+          "inline": null,
+          "inputs": null,
+          "outputs": null,
+          "validate": true,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "s"
+      ]
+    },
+    "definition_error": null,
+    "digest": "98dd97986d8c2733b217eb84b9ad590aeb1055440403658aad5d9c7f3c334d6f",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
     }
   }
 ]

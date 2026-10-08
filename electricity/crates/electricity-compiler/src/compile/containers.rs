@@ -74,7 +74,11 @@ const VALID_FLOWS: [(&str, &str); 6] = [
 
 /// Ports `core/compiler.py::_normalize_flow`.
 pub(crate) fn normalize_flow(raw: Option<&str>) -> Result<LoopFlow, CompileError> {
-    let key = raw.unwrap_or("chain").trim().to_lowercase();
+    // Python reprs the *un*-trimmed, un-lowercased argument it was
+    // called with (`flow!r`), not the normalized `key` the match below
+    // uses.
+    let flow = raw.unwrap_or("chain");
+    let key = flow.trim().to_lowercase();
     for (alias, canonical) in VALID_FLOWS {
         if key == alias {
             return Ok(if canonical == "tree" {
@@ -87,8 +91,8 @@ pub(crate) fn normalize_flow(raw: Option<&str>) -> Result<LoopFlow, CompileError
     let mut valid: Vec<&str> = VALID_FLOWS.iter().map(|(a, _)| *a).collect();
     valid.sort_unstable();
     Err(CompileError(format!(
-        "Unknown flow value {:?}. Valid values are: {}.",
-        key,
+        "Unknown flow value {}. Valid values are: {}.",
+        Value::Str(flow.to_string()).py_repr(),
         valid.join(", ")
     )))
 }

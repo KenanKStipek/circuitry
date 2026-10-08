@@ -79,10 +79,7 @@ fn collect_region_groups(region: &Region, groups: &mut BTreeSet<String>) {
 /// -- `runtime.concurrency_groups`'s own keys -- doesn't define,
 /// porting `core/compiler.py`'s `unknown_concurrency_group_errors`
 /// (and the `collect_effect_groups` walk it calls) field for field.
-pub(crate) fn unknown_group_errors(
-    program: &Program,
-    known_groups: &BTreeSet<String>,
-) -> Vec<String> {
+pub fn unknown_group_errors(program: &Program, known_groups: &BTreeSet<String>) -> Vec<String> {
     let mut used = BTreeSet::new();
     collect_effect_groups(&program.root, &mut used);
 

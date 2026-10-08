@@ -246,10 +246,7 @@ fn visit(
 /// so an entry document reached through a symlink still resolves a
 /// sibling reference against the symlink's own directory, the same
 /// directory the link's target's siblings are *not* necessarily in.
-pub(crate) fn detect_cycles(
-    document: &Value,
-    entry_path: Option<&Path>,
-) -> Result<(), CompileError> {
+pub fn detect_cycles(document: &Value, entry_path: Option<&Path>) -> Result<(), CompileError> {
     let root_identity = match entry_path {
         Some(path) => path
             .canonicalize()

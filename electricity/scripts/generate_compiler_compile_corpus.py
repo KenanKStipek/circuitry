@@ -627,6 +627,573 @@ add({
     "entry": "doc.yml",
 })
 
+add(doc(text=(
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: x\n"
+    "    provider: shell\n"
+    "    params:\n"
+    "      n: {from: 'state.topic'}\n"
+)))
+CASES[-1]["name"] = "from_reference_rejects_state_prefixed"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: x\n"
+    "    provider: shell\n"
+    "    params:\n"
+    "      n: {from: ''}\n"
+)))
+CASES[-1]["name"] = "from_reference_rejects_empty"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: use\n"
+    "    name: sub\n"
+    "    path: child.yml\n"
+    "    inputs:\n"
+    "      n: {from: 'bogus'}\n"
+)))
+CASES[-1]["files"]["child.yml"] = "effects: []\n"
+CASES[-1]["name"] = "use_input_from_reference_rejects_bare_key"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: loop\n"
+    "    name: it\n"
+    "    each: {in: 'state.input.items'}\n"
+    "    body:\n"
+    "      - type: prompt\n"
+    "        name: handle\n"
+    "        template: x\n"
+)))
+CASES[-1]["name"] = "each_in_path_rejects_state_prefixed"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: loop\n"
+    "    name: it\n"
+    "    each: {in: ''}\n"
+    "    body:\n"
+    "      - type: prompt\n"
+    "        name: handle\n"
+    "        template: x\n"
+)))
+CASES[-1]["name"] = "each_in_path_rejects_empty"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: loop\n"
+    "    name: outer\n"
+    "    each: {in: input.items, as: item}\n"
+    "    body:\n"
+    "      - type: if\n"
+    "        if: {mode: cel, expr: 'state.bogus == 1'}\n"
+    "        then: []\n"
+)))
+CASES[-1]["name"] = "cel_expr_unknown_namespace_lists_loop_bindings"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: if\n"
+    "    if: {mode: cel, expr: '   '}\n"
+    "    then: []\n"
+)))
+CASES[-1]["name"] = "conditional_cel_whitespace_only_expression_is_empty"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: if\n"
+    "    if: {mode: cel, expr: '" + ("x" * 5000) + "'}\n"
+    "    then: []\n"
+)))
+CASES[-1]["name"] = "cel_expression_too_long"
+
+
+# --- Compile errors: structure / dispatch, more shapes ---------------------
+
+add(doc(text="effects: not-a-list\n"))
+CASES[-1]["name"] = "effects_must_be_a_list"
+
+add(doc(text="effects:\n  - - not-a-mapping\n"))
+CASES[-1]["name"] = "effect_must_be_a_mapping"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: loop\n"
+    "    name: it\n"
+    "    each: not-a-mapping\n"
+    "    body: []\n"
+)))
+CASES[-1]["name"] = "loop_each_must_be_a_mapping"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: loop\n"
+    "    name: it\n"
+    "    while: {mode: model}\n"
+    "    body: []\n"
+)))
+CASES[-1]["name"] = "loop_while_model_missing_template"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: loop\n"
+    "    name: poll\n"
+    "    while: {mode: cel}\n"
+    "    body: []\n"
+)))
+CASES[-1]["name"] = "loop_while_cel_missing_expr"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: loop\n"
+    "    name: poll\n"
+    "    while: {mode: cel, expr: '   '}\n"
+    "    body: []\n"
+)))
+CASES[-1]["name"] = "loop_while_cel_empty_expression_has_its_own_label"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: loop\n"
+    "    name: poll\n"
+    "    while: {mode: cel, expr: 'state.a =='}\n"
+    "    body: []\n"
+)))
+CASES[-1]["name"] = "loop_while_cel_parse_error_has_its_own_label"
+CASES[-1]["error_modes"] = {"run_error": "location"}
+
+
+# --- Compile errors: expect (tool/use) --------------------------------------
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: x\n"
+    "    provider: shell\n"
+    "    expect: '   '\n"
+)))
+CASES[-1]["name"] = "expect_bare_string_empty"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: x\n"
+    "    provider: shell\n"
+    "    expect: {mode: cel}\n"
+)))
+CASES[-1]["name"] = "expect_cel_missing_expr"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: x\n"
+    "    provider: shell\n"
+    "    expect: {mode: model}\n"
+)))
+CASES[-1]["name"] = "expect_model_missing_template"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: x\n"
+    "    provider: shell\n"
+    "    expect: 1\n"
+)))
+CASES[-1]["name"] = "expect_invalid_shape"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: x\n"
+    "    provider: shell\n"
+    "    expect:\n"
+    "      mode: model\n"
+    "      template: |\n"
+    "        Is it ok?\n"
+)))
+CASES[-1]["name"] = "expect_model_template_keeps_trailing_newline"
+
+
+# --- Compile errors: prompt (more shapes) -----------------------------------
+
+add(doc(text="effects:\n  - type: prompt\n    template: x\n"))
+CASES[-1]["name"] = "prompt_missing_name"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: prompt\n"
+    "    name: x\n"
+    "    template: 123\n"
+)))
+CASES[-1]["name"] = "prompt_template_wrong_type"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: yield\n"
+    "    name: x\n"
+    "    template: '   '\n"
+)))
+CASES[-1]["name"] = "yield_template_must_not_be_empty"
+
+
+# --- Compile errors: templates (more fields) --------------------------------
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: x\n"
+    "    provider: shell\n"
+    "    params_json: '{{#bad'\n"
+)))
+CASES[-1]["name"] = "malformed_params_json_template"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: x\n"
+    "    provider: shell\n"
+    "    prompt: '{{#bad'\n"
+)))
+CASES[-1]["name"] = "malformed_tool_prompt_template"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: use\n"
+    "    name: x\n"
+    "    inline: '{{#bad'\n"
+)))
+CASES[-1]["name"] = "malformed_inline_template"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: prompt\n"
+    "    name: x\n"
+    "    messages:\n"
+    "      - role: user\n"
+    "        content: '{{#bad'\n"
+)))
+CASES[-1]["name"] = "malformed_message_content_template"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: prompt\n"
+    "    name: x\n"
+    "    template: hi\n"
+    "    assets:\n"
+    "      - kind: image\n"
+    "        ref: '{{#bad'\n"
+)))
+CASES[-1]["name"] = "malformed_asset_ref_template"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: if\n"
+    "    if: {template: '{{#bad'}\n"
+    "    then: []\n"
+)))
+CASES[-1]["name"] = "malformed_if_template"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: loop\n"
+    "    name: it\n"
+    "    while: {template: '{{#bad'}\n"
+    "    body: []\n"
+)))
+CASES[-1]["name"] = "malformed_while_template"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: x\n"
+    "    provider: shell\n"
+    "    expect: {mode: model, template: '{{#bad'}\n"
+)))
+CASES[-1]["name"] = "malformed_expect_template"
+
+
+# --- Compile errors: outputs -------------------------------------------------
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: use\n"
+    "    name: sub\n"
+    "    path: child.yml\n"
+    "    outputs: not-a-mapping\n"
+)))
+CASES[-1]["files"]["child.yml"] = "effects: []\n"
+CASES[-1]["name"] = "outputs_must_be_a_mapping"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: use\n"
+    "    name: sub\n"
+    "    path: child.yml\n"
+    "    outputs:\n"
+    "      result: ''\n"
+)))
+CASES[-1]["files"]["child.yml"] = "effects: []\n"
+CASES[-1]["name"] = "outputs_entry_empty_string"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: use\n"
+    "    name: sub\n"
+    "    path: child.yml\n"
+    "    outputs:\n"
+    "      result: {}\n"
+)))
+CASES[-1]["files"]["child.yml"] = "effects: []\n"
+CASES[-1]["name"] = "outputs_entry_missing_path"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: use\n"
+    "    name: sub\n"
+    "    path: child.yml\n"
+    "    outputs:\n"
+    "      result: 5\n"
+)))
+CASES[-1]["files"]["child.yml"] = "effects: []\n"
+CASES[-1]["name"] = "outputs_entry_invalid_type"
+
+
+# --- Compile errors: duplicate names / bare refs, more shapes --------------
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: dup\n"
+    "    provider: shell\n"
+    "finally:\n"
+    "  - type: tool\n"
+    "    name: dup\n"
+    "    provider: shell\n"
+)))
+CASES[-1]["name"] = "duplicate_name_between_body_and_finally"
+
+add({
+    "name": "bare_input_ref_in_finally",
+    "files": {"doc.yml": (
+        "interface:\n"
+        "  inputs:\n"
+        "    topic: {type: string}\n"
+        "effects: []\n"
+        "finally:\n"
+        "  - type: prompt\n"
+        "    name: x\n"
+        "    template: 'about {{topic}}'\n"
+    )},
+    "entry": "doc.yml",
+})
+
+add({
+    "name": "bare_input_ref_in_nested_params",
+    "files": {"doc.yml": (
+        "interface:\n"
+        "  inputs:\n"
+        "    topic: {type: string}\n"
+        "effects:\n"
+        "  - type: tool\n"
+        "    name: x\n"
+        "    provider: shell\n"
+        "    params:\n"
+        "      nested:\n"
+        "        deep: 'about {{topic}}'\n"
+    )},
+    "entry": "doc.yml",
+})
+
+
+# --- Compile errors: Unknown flow value -------------------------------------
+
+add(doc(text="effects: []\nflow: bogus\n"))
+CASES[-1]["name"] = "unknown_flow_value"
+
+
+# --- Findings 5/6: check order within a single effect -----------------------
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: x\n"
+    "    provider: shell\n"
+    "    params:\n"
+    "      allowed_commands: {from: 'bogus'}\n"
+)))
+CASES[-1]["name"] = "tool_param_leaves_checked_before_security_sensitive_reference"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: x\n"
+    "    provider: shell\n"
+    "    params:\n"
+    "      a: '{{#bad'\n"
+    "      allowed_commands: {from: 'input.c'}\n"
+)))
+CASES[-1]["name"] = "tool_param_leaves_checked_before_security_sensitive_literal"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: use\n"
+    "    name: x\n"
+    "    path: child.yml\n"
+    "    inputs:\n"
+    "      a: {from: 'bogus'}\n"
+    "      b: '{{#bad'\n"
+)))
+CASES[-1]["files"]["child.yml"] = "effects: []\n"
+CASES[-1]["name"] = "use_inputs_templates_checked_before_references"
+
+
+# --- Finding 7: collect '' on an unnamed loop is not rejected ---------------
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: loop\n"
+    "    each: {in: input.items}\n"
+    "    collect: ''\n"
+    "    body:\n"
+    "      - type: prompt\n"
+    "        name: handle\n"
+    "        template: x\n"
+)))
+CASES[-1]["name"] = "collect_empty_string_on_unnamed_loop_is_fine"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: loop\n"
+    "    each: {in: input.items}\n"
+    "    collect: '   '\n"
+    "    body:\n"
+    "      - type: prompt\n"
+    "        name: handle\n"
+    "        template: x\n"
+)))
+CASES[-1]["name"] = "collect_whitespace_only_on_unnamed_loop_is_fine"
+
+
+# --- Finding 8: prompt/yield params/inputs are raw, never checked ----------
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: prompt\n"
+    "    name: x\n"
+    "    template: hi\n"
+    "    inputs:\n"
+    "      v: '{{#raw'\n"
+    "      w: {from: 'bogus'}\n"
+    "    params:\n"
+    "      stop: ['{{']\n"
+)))
+CASES[-1]["name"] = "prompt_params_and_inputs_are_raw_values"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: yield\n"
+    "    name: x\n"
+    "    template: hi\n"
+    "    inputs:\n"
+    "      v: '{{#raw'\n"
+    "      w: {from: 'bogus'}\n"
+)))
+CASES[-1]["name"] = "yield_inputs_are_raw_values"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: loop\n"
+    "    name: it\n"
+    "    each: {in: input.items, as: item}\n"
+    "    body:\n"
+    "      - type: prompt\n"
+    "        name: handle\n"
+    "        template: hi\n"
+    "        inputs:\n"
+    "          v: {from: 'item.x'}\n"
+)))
+CASES[-1]["name"] = "prompt_inputs_in_a_loop_body_are_not_reference_checked"
+
+
+# --- Finding 9: a custom prime_template is never Mustache-checked ----------
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: reflector\n"
+    "    name: think\n"
+    "    prime_template: 'Plan {goal}: {{#unclosed'\n"
+    "    effects:\n"
+    "      - type: prompt\n"
+    "        name: propose_steps\n"
+    "        template: x\n"
+)))
+CASES[-1]["name"] = "reflector_prime_template_is_never_mustache_checked"
+
+
+# --- Finding 4: a reflector's inner scope is scope_child(scope, name) ------
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: reflector\n"
+    "    name: think\n"
+    "    effects:\n"
+    "      - type: prompt\n"
+    "        name: a\n"
+    "        template: x\n"
+    "      - type: prompt\n"
+    "        name: a\n"
+    "        template: y\n"
+)))
+CASES[-1]["name"] = "reflector_inner_duplicate_name_reports_the_inner_scope"
+
+
+# --- Finding 12: group references, checked against Circuitry ---------------
+
+add({
+    "name": "concurrency_group_references_everywhere_an_effect_can_set_one",
+    "files": {"doc.yml": (
+        "runtime:\n"
+        "  concurrency_groups:\n"
+        "    io: 2\n"
+        "effects:\n"
+        "  - type: tool\n"
+        "    name: fetch\n"
+        "    provider: shell\n"
+        "    group: io\n"
+        "  - type: loop\n"
+        "    name: it\n"
+        "    each: {in: input.items}\n"
+        "    body:\n"
+        "      - type: prompt\n"
+        "        name: ask\n"
+        "        template: x\n"
+        "        group: llm\n"
+        "  - type: if\n"
+        "    if: {mode: cel, expr: 'true'}\n"
+        "    then:\n"
+        "      - type: prompt\n"
+        "        name: ask2\n"
+        "        template: x\n"
+        "        group: \"it's\"\n"
+        "  - type: reflector\n"
+        "    name: think\n"
+        "    effects:\n"
+        "      - type: prompt\n"
+        "        name: propose_steps\n"
+        "        template: x\n"
+        "        group: llm\n"
+        "finally:\n"
+        "  - type: prompt\n"
+        "    name: cleanup\n"
+        "    template: x\n"
+        "    group: llm\n"
+    )},
+    "entry": "doc.yml",
+})
+
 
 # --- use cycles -------------------------------------------------------------
 
@@ -646,6 +1213,56 @@ add({
         "b.yml": "effects: []\n",
     },
     "entry": "a.yml",
+})
+
+add({
+    # Decision 1: a `use` cycle that loops back through the *entry*
+    # document itself, entered from the a.yml side.
+    "name": "use_cycle_through_entry_document_entered_from_a",
+    "files": {
+        "a.yml": "effects:\n  - type: use\n    name: s\n    path: b.yml\n",
+        "b.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n",
+    },
+    "entry": "a.yml",
+})
+
+add({
+    # Same two files, entered from the other side -- the cycle's own
+    # chain (and its rotation) differs by entry point.
+    "name": "use_cycle_through_entry_document_entered_from_b",
+    "files": {
+        "a.yml": "effects:\n  - type: use\n    name: s\n    path: b.yml\n",
+        "b.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n",
+    },
+    "entry": "b.yml",
+})
+
+add({
+    "name": "use_cycle_document_uses_itself",
+    "files": {
+        "a.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n",
+    },
+    "entry": "a.yml",
+})
+
+add({
+    # Finding 13: a duplicate key in a `use` *child* (never the entry
+    # document, which Circuitry's main loader -- not
+    # `core/cycle_check.py::load_orch`'s plain `yaml.safe_load` --
+    # reads) must not hide a cycle through it.
+    "name": "use_cycle_through_a_child_with_a_duplicate_key",
+    "files": {
+        "entry.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n",
+        "a.yml": (
+            "effects:\n"
+            "  - type: use\n"
+            "    name: s\n"
+            "    name: s\n"
+            "    path: b.yml\n"
+        ),
+        "b.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n",
+    },
+    "entry": "entry.yml",
 })
 
 

@@ -504,8 +504,11 @@ pub fn definitions_match(expected: &Json, actual: &Json) -> bool {
                     return false;
                 }
             }
+            // Every key in `expected_map` was already checked present
+            // (and equal) in `actual_map` by the loop above; an equal
+            // length is what rules out an *extra* key on the actual
+            // side that the loop never visits.
             expected_map.len() == actual_map.len()
-                || expected_map.keys().all(|k| actual_map.contains_key(k))
         }
         (Json::Array(expected_items), Json::Array(actual_items)) => {
             expected_items.len() == actual_items.len()
