@@ -270,6 +270,75 @@ CASES: list[dict] = [
         },
         "entry": "doc.yml",
     },
+    {
+        "name": "dotted_self_reference_from_inside_the_same_named_if",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: if\n"
+                "    name: branch\n"
+                "    if: {mode: cel, expr: 'true'}\n"
+                "    then:\n"
+                "      - type: yield\n"
+                "        name: inner\n"
+                "        template: 'hi'\n"
+                "      - type: yield\n"
+                "        name: inner2\n"
+                "        template: '{{> branch.inner}}'\n"
+            )
+        },
+        "entry": "doc.yml",
+    },
+    {
+        "name": "dotted_self_reference_from_inside_a_named_dynamic",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: dynamic\n"
+                "    name: loop_ns\n"
+                "    effects:\n"
+                "      - type: yield\n"
+                "        name: inner\n"
+                "        template: 'hi'\n"
+                "      - type: yield\n"
+                "        name: inner2\n"
+                "        template: '{{> loop_ns.inner}}'\n"
+            )
+        },
+        "entry": "doc.yml",
+    },
+    {
+        "name": "dotted_reference_inside_a_named_if_to_a_non_root_name",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: if\n"
+                "    name: branch\n"
+                "    if: {mode: cel, expr: 'true'}\n"
+                "    then:\n"
+                "      - type: yield\n"
+                "        name: inner\n"
+                "        template: 'hi'\n"
+                "      - type: yield\n"
+                "        name: inner2\n"
+                "        template: '{{> inner.x}}'\n"
+            )
+        },
+        "entry": "doc.yml",
+    },
+    {
+        "name": "tool_params_partial_reference_is_checked",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: tool\n"
+                "    name: t1\n"
+                "    provider: process\n"
+                "    params: {command: 'echo {{> nope}}'}\n"
+            )
+        },
+        "entry": "doc.yml",
+    },
     # -- digest -----------------------------------------------------------------
     {
         "name": "digest_with_no_prompt_files",

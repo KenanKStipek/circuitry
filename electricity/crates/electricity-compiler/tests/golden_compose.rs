@@ -158,6 +158,14 @@ run_error_case!(
     bare_reference_does_not_cross_a_named_if_boundary,
     "bare_reference_does_not_cross_a_named_if_boundary"
 );
+run_error_case!(
+    dotted_reference_inside_a_named_if_to_a_non_root_name,
+    "dotted_reference_inside_a_named_if_to_a_non_root_name"
+);
+run_error_case!(
+    tool_params_partial_reference_is_checked,
+    "tool_params_partial_reference_is_checked"
+);
 
 // -- cases whose document passes declared-prompts and composition, so they
 // -- reach lane C's own unconditional gap next (`compile_document`'s
@@ -190,6 +198,20 @@ fn prompts_file_crlf_translated_succeeds_against_circuitry() {
             un-ignore once lane C's compile_document lands"]
 fn dotted_reference_reaches_into_a_named_if_from_anywhere_succeeds_against_circuitry() {
     assert_compile_succeeds("dotted_reference_reaches_into_a_named_if_from_anywhere");
+}
+
+#[test]
+#[ignore = "passes composition and reaches lane C's own compile gap; \
+            un-ignore once lane C's compile_document lands"]
+fn dotted_self_reference_from_inside_the_same_named_if_succeeds_against_circuitry() {
+    assert_compile_succeeds("dotted_self_reference_from_inside_the_same_named_if");
+}
+
+#[test]
+#[ignore = "passes composition and reaches lane C's own compile gap; \
+            un-ignore once lane C's compile_document lands"]
+fn dotted_self_reference_from_inside_a_named_dynamic_succeeds_against_circuitry() {
+    assert_compile_succeeds("dotted_self_reference_from_inside_a_named_dynamic");
 }
 
 /// The digest itself can't be reached through `compile_document` either

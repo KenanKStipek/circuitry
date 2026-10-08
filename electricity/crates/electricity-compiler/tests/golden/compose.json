@@ -751,6 +751,206 @@
     }
   },
   {
+    "name": "dotted_self_reference_from_inside_the_same_named_if",
+    "files": {
+      "doc.yml": "effects:\n  - type: if\n    name: branch\n    if: {mode: cel, expr: 'true'}\n    then:\n      - type: yield\n        name: inner\n        template: 'hi'\n      - type: yield\n        name: inner2\n        template: '{{> branch.inner}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "branch",
+          "condition": {
+            "mode": "cel",
+            "template": null,
+            "expr": "true",
+            "strict": false
+          },
+          "then_effects": [
+            {
+              "name": "inner",
+              "template": "hi",
+              "inputs": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true
+            },
+            {
+              "name": "inner2",
+              "template": "{{> branch.inner}}",
+              "inputs": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true
+            }
+          ],
+          "else_effects": [],
+          "threshold": 0.5,
+          "on_error": "fail",
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "branch",
+        "inner",
+        "inner2"
+      ]
+    },
+    "definition_error": null,
+    "digest": "68aec12e36570655d5c55214957aede45cca4cedb52580cd5859d049aefb1d61",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "dotted_self_reference_from_inside_a_named_dynamic",
+    "files": {
+      "doc.yml": "effects:\n  - type: dynamic\n    name: loop_ns\n    effects:\n      - type: yield\n        name: inner\n        template: 'hi'\n      - type: yield\n        name: inner2\n        template: '{{> loop_ns.inner}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "loop_ns",
+          "effects": [
+            {
+              "name": "inner",
+              "template": "hi",
+              "inputs": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true
+            },
+            {
+              "name": "inner2",
+              "template": "{{> loop_ns.inner}}",
+              "inputs": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true
+            }
+          ],
+          "flow": "chain",
+          "finally_effects": [],
+          "max_concurrency": null,
+          "stop_on_error": false,
+          "on_error": "fail",
+          "labels": null,
+          "enabled": true,
+          "prompts": {},
+          "effect_names": []
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "inner",
+        "inner2",
+        "loop_ns"
+      ]
+    },
+    "definition_error": null,
+    "digest": "00ae0d7556605e09e2f3ccc1891d010308b9e73d0ce78ffa96f0029fc41c045b",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "dotted_reference_inside_a_named_if_to_a_non_root_name",
+    "files": {
+      "doc.yml": "effects:\n  - type: if\n    name: branch\n    if: {mode: cel, expr: 'true'}\n    then:\n      - type: yield\n        name: inner\n        template: 'hi'\n      - type: yield\n        name: inner2\n        template: '{{> inner.x}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - effects[0].then[1]: '{{> inner.x}}' does not name a declared prompt or effect."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - effects[0].then[1]: '{{> inner.x}}' does not name a declared prompt or effect.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - effects[0].then[1]: '{{> inner.x}}' does not name a declared prompt or effect.",
+    "digest": "16b78ad49128051ad726b550af89ffd3b28c9732aff148144a360009e54f1416",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "tool_params_partial_reference_is_checked",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: t1\n    provider: process\n    params: {command: 'echo {{> nope}}'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
+    "digest": "97d419e04fe850278da2c7b3eaff02441e3082997923931a25c4c1b1795c5f6d",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
     "name": "digest_with_no_prompt_files",
     "files": {
       "doc.yml": "effects:\n  - type: yield\n    name: x\n    template: 'hi'\n"

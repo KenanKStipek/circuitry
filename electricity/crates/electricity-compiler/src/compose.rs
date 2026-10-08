@@ -2,7 +2,9 @@
 //! fragment's syntax, set-delimiter tags refused, unknown names
 //! resolved scope-aware, collisions between declared prompts and
 //! effects, references to non-text effects, cycles among declared
-//! prompts, and the `type: yield` compile step.
+//! prompts. The `type: yield` effect's own compile step is lane C's;
+//! this module only handles its role in composition (a `yield` is
+//! text-producing, so it is a valid bare/dotted `{{> name}}` target).
 //!
 //! Called from `compile::compile_document` (lane C) right after
 //! [`crate::prompt_files::compile_declared_prompts`], matching
@@ -31,14 +33,15 @@ fn is_plain_identifier(segment: &str) -> bool {
     chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
-/// Every `{{> name}}` tag's name in *text*, in the same order chevron's
-/// own tokenizer would see them -- `core/prompt_compose.py`'s
-/// `_PARTIAL_TAG`/`partial_references`: the sigil must immediately
-/// follow `{{` with no leading whitespace, and `{{{>x}}}` (a "no
-/// escape" tag, not a partial) is excluded.
-fn partial_references(text: &str) -> Vec<String> {
+/// Every distinct name a `{{> name}}` tag in *text* names -- `core/
+/// prompt_compose.py`'s `_PARTIAL_TAG`/`partial_references`, which
+/// returns a `set[str]` (a name repeated in the same text, e.g. `'{{>
+/// nope}} {{> nope}}'`, is reported once, not once per occurrence): the
+/// sigil must immediately follow `{{` with no leading whitespace, and
+/// `{{{>x}}}` (a "no escape" tag, not a partial) is excluded.
+fn partial_references(text: &str) -> BTreeSet<String> {
     let bytes = text.as_bytes();
-    let mut names = Vec::new();
+    let mut names = BTreeSet::new();
     let mut i = 0;
     while let Some(offset) = text[i..].find("{{>") {
         let start = i + offset;
@@ -53,7 +56,7 @@ fn partial_references(text: &str) -> Vec<String> {
         match text[after..].find("}}") {
             Some(end_offset) => {
                 let name = text[after..after + end_offset].trim().to_string();
-                names.push(name);
+                names.insert(name);
                 i = after + end_offset + 2;
             }
             None => break,
@@ -278,11 +281,12 @@ pub(crate) fn check_prompt_composition(
         ));
     }
 
+    let (mut tree, root) = EffectTree::new();
     let ctx = WalkCtx {
         declared: declared_prompts,
         origin,
+        root,
     };
-    let (mut tree, root) = EffectTree::new();
     walk_effects(
         effects_or_steps(document),
         "effects",
@@ -303,9 +307,7 @@ pub(crate) fn check_prompt_composition(
     );
 
     for (prompt_name, text) in declared_prompts {
-        let mut names = partial_references(text);
-        names.sort();
-        for name in names {
+        for name in partial_references(text) {
             let where_ = format!("prompts.{prompt_name}");
             if !name_shape_matches(&name) {
                 errors.push(format!("{where_}: '{{{{> {name}}}}}' is not a valid name."));
@@ -361,20 +363,31 @@ fn declared_prompt_syntax_errors(declared: &IndexMap<String, String>) -> Vec<Str
     errors
 }
 
+/// The exact scalar fields `{{> name}}` composition is checked in,
+/// besides `messages[].content` (handled separately below) -- `core/
+/// prompt_compose.py`'s `_COMPOSABLE_SCALAR_FIELDS`. Only `template`
+/// may be `{file: ...}`-shaped among these (#396 §3); `prompt`/
+/// `inline`/`params_json` are always plain strings, so a non-string
+/// value there is simply skipped, exactly as Python's own
+/// `elif field == "template":` guard does.
+const COMPOSABLE_SCALAR_FIELDS: [&str; 4] = ["template", "prompt", "inline", "params_json"];
+
 /// Every string in *effect* that `{{> name}}` composition actually
-/// sees -- `core/prompt_compose.py::_iter_composable_strings`, minus
-/// `params`/`inputs` (a `tool`'s `params` and a `use`'s `inputs` are
-/// walked too in Circuitry; lane C's own template/CEL walk handles
-/// those non-text-field composable fields once it lands -- tracked
-/// alongside the rest of #406's render-time half, which this compile-
-/// time port does not need to reach).
+/// sees -- `core/prompt_compose.py::_iter_composable_strings`: the
+/// scalar fields above, every message's `content`, every string
+/// anywhere inside a tool's `params`, and -- only for a `use` effect --
+/// every string anywhere inside `inputs`.
 fn composable_strings(effect: &Value, origin: &DocumentOrigin) -> Vec<String> {
     let mut found = Vec::new();
-    if let Some(Value::Str(text)) = dict_get(effect, "template") {
-        found.push(text.clone());
-    } else if let Some(value) = dict_get(effect, "template") {
-        if let Ok(text) = resolve_text_or_file(value, "template", origin) {
-            found.push(text);
+    for field in COMPOSABLE_SCALAR_FIELDS {
+        match dict_get(effect, field) {
+            Some(Value::Str(text)) => found.push(text.clone()),
+            Some(value) if field == "template" => {
+                if let Ok(text) = resolve_text_or_file(value, "template", origin) {
+                    found.push(text);
+                }
+            }
+            _ => {}
         }
     }
     if let Some(Value::List(messages)) = dict_get(effect, "messages") {
@@ -390,7 +403,34 @@ fn composable_strings(effect: &Value, origin: &DocumentOrigin) -> Vec<String> {
             }
         }
     }
+    if let Some(params) = dict_get(effect, "params") {
+        walk_strings(params, &mut found);
+    }
+    if effect_type_of(effect) == "use" {
+        if let Some(inputs) = dict_get(effect, "inputs") {
+            walk_strings(inputs, &mut found);
+        }
+    }
     found
+}
+
+/// Every string anywhere inside *value*, recursing through any nesting
+/// of dicts/lists -- `core/prompt_compose.py::_walk_strings`.
+fn walk_strings(value: &Value, found: &mut Vec<String>) {
+    match value {
+        Value::Str(s) => found.push(s.clone()),
+        Value::Dict(dict) => {
+            for v in dict.values() {
+                walk_strings(v, found);
+            }
+        }
+        Value::List(items) => {
+            for v in items {
+                walk_strings(v, found);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Checks one `{{> name}}` reference, recording any error into *errors*
@@ -470,12 +510,19 @@ fn check_name(
     }
 }
 
-/// Bundles the two values that stay constant across every recursive
+/// Bundles the values that stay constant across every recursive
 /// [`walk_effects`] call, to keep its own argument count under
-/// clippy's `too_many_arguments` limit.
+/// clippy's `too_many_arguments` limit. *root* is the tree's own root
+/// index (always `0`, see [`EffectTree::new`]) -- carried here rather
+/// than derived from `out` at each call site, since a dotted lookup
+/// always resolves from the document root, never from the current
+/// container (`core/prompt_compose.py::check_name`'s own "Dotted lookup
+/// always resolves from `root`, regardless of where the reference
+/// itself sits").
 struct WalkCtx<'a> {
     declared: &'a IndexMap<String, String>,
     origin: &'a DocumentOrigin,
+    root: usize,
 }
 
 /// `core/prompt_compose.py::check_prompt_composition`'s nested `walk`.
@@ -502,9 +549,7 @@ fn walk_effects(
     for (idx, effect) in effects.iter().enumerate() {
         let effect_path = format!("{container_path}[{idx}]");
         for text in composable_strings(effect, ctx.origin) {
-            let mut names = partial_references(&text);
-            names.sort();
-            for name in names {
+            for name in partial_references(&text) {
                 if !name_shape_matches(&name) {
                     errors.push(format!(
                         "{effect_path}: '{{{{> {name}}}}}' is not a valid name."
@@ -515,7 +560,7 @@ fn walk_effects(
                     &name,
                     &effect_path,
                     tree,
-                    out,
+                    ctx.root,
                     bare_chain,
                     ctx.declared,
                     errors,
@@ -1047,5 +1092,159 @@ mod tests {
         let result = all_effect_names(&Value::Dict(doc));
 
         assert_eq!(result, names(&["s"]));
+    }
+
+    #[test]
+    fn dotted_self_reference_from_inside_the_same_named_if_resolves() {
+        // Regression for the dotted-lookup bug: `check_name`'s dotted
+        // branch must resolve from the document root, not from the
+        // current container -- otherwise `branch.inner`, referenced
+        // from a sibling inside `branch` itself, wrongly reports
+        // "does not name a declared prompt or effect".
+        let then_branch = vec![
+            template_effect("inner", "yield", "hi"),
+            template_effect("inner2", "yield", "{{> branch.inner}}"),
+        ];
+        let mut branch = effect("branch", "if", vec![]);
+        branch
+            .as_dict_mut()
+            .unwrap()
+            .insert(Value::Str("then".to_string()), Value::List(then_branch));
+        let doc = document(vec![branch]);
+        assert_eq!(
+            check_prompt_composition(&doc, &IndexMap::new(), &origin()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn dotted_self_reference_from_inside_a_named_dynamic_resolves() {
+        let body = vec![
+            template_effect("inner", "yield", "hi"),
+            template_effect("inner2", "yield", "{{> loop_ns.inner}}"),
+        ];
+        let mut dynamic_effect = effect("loop_ns", "dynamic", vec![]);
+        dynamic_effect
+            .as_dict_mut()
+            .unwrap()
+            .insert(Value::Str("effects".to_string()), Value::List(body));
+        let doc = document(vec![dynamic_effect]);
+        assert_eq!(
+            check_prompt_composition(&doc, &IndexMap::new(), &origin()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn dotted_reference_inside_a_named_if_to_a_non_root_name_is_rejected() {
+        // The reverse direction of the same bug: a dotted name must
+        // resolve from the root even when it happens to match a name
+        // nested only inside the current container -- `inner` here is
+        // `branch`'s own child, not a document-root name, so
+        // `{{> inner.x}}` must be rejected even from right beside it.
+        let then_branch = vec![
+            template_effect("inner", "yield", "hi"),
+            template_effect("inner2", "yield", "{{> inner.x}}"),
+        ];
+        let mut branch = effect("branch", "if", vec![]);
+        branch
+            .as_dict_mut()
+            .unwrap()
+            .insert(Value::Str("then".to_string()), Value::List(then_branch));
+        let doc = document(vec![branch]);
+        let err = check_prompt_composition(&doc, &IndexMap::new(), &origin()).unwrap_err();
+        assert_eq!(
+            err.0,
+            "Prompt composition errors:\n  - effects[0].then[1]: '{{> inner.x}}' \
+             does not name a declared prompt or effect."
+        );
+    }
+
+    #[test]
+    fn tool_params_partial_reference_is_checked() {
+        let mut t1 = effect("t1", "tool", vec![]);
+        let mut params = Dict::new();
+        params.insert(
+            Value::Str("command".to_string()),
+            Value::Str("echo {{> nope}}".to_string()),
+        );
+        t1.as_dict_mut()
+            .unwrap()
+            .insert(Value::Str("params".to_string()), Value::Dict(params));
+        let doc = document(vec![t1]);
+        let err = check_prompt_composition(&doc, &IndexMap::new(), &origin()).unwrap_err();
+        assert_eq!(
+            err.0,
+            "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not \
+             name a declared prompt or effect."
+        );
+    }
+
+    #[test]
+    fn use_inputs_partial_reference_is_checked() {
+        let mut u1 = effect("u1", "use", vec![]);
+        let mut inputs = Dict::new();
+        inputs.insert(
+            Value::Str("x".to_string()),
+            Value::Str("{{> nope}}".to_string()),
+        );
+        u1.as_dict_mut()
+            .unwrap()
+            .insert(Value::Str("inputs".to_string()), Value::Dict(inputs));
+        let doc = document(vec![u1]);
+        let err = check_prompt_composition(&doc, &IndexMap::new(), &origin()).unwrap_err();
+        assert_eq!(
+            err.0,
+            "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not \
+             name a declared prompt or effect."
+        );
+    }
+
+    #[test]
+    fn non_use_effects_inputs_field_is_not_composable() {
+        // `inputs` on a prompt/yield effect is a prompt-local value
+        // merged into context as-is, never a template -- only a `use`
+        // effect's own `inputs` are rendered/scanned.
+        let mut p1 = template_effect("p1", "yield", "hi");
+        let mut inputs = Dict::new();
+        inputs.insert(
+            Value::Str("x".to_string()),
+            Value::Str("{{> nope}}".to_string()),
+        );
+        p1.as_dict_mut()
+            .unwrap()
+            .insert(Value::Str("inputs".to_string()), Value::Dict(inputs));
+        let doc = document(vec![p1]);
+        assert_eq!(
+            check_prompt_composition(&doc, &IndexMap::new(), &origin()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn prompt_scalar_field_partial_reference_is_checked() {
+        let mut p1 = effect("p1", "reflector", vec![]);
+        p1.as_dict_mut().unwrap().insert(
+            Value::Str("prompt".to_string()),
+            Value::Str("hi {{> nope}}".to_string()),
+        );
+        let doc = document(vec![p1]);
+        let err = check_prompt_composition(&doc, &IndexMap::new(), &origin()).unwrap_err();
+        assert_eq!(
+            err.0,
+            "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not \
+             name a declared prompt or effect."
+        );
+    }
+
+    #[test]
+    fn a_repeated_partial_reference_in_one_text_is_reported_once() {
+        let doc = document(vec![template_effect("a", "yield", "{{> nope}} {{> nope}}")]);
+        let err = check_prompt_composition(&doc, &IndexMap::new(), &origin()).unwrap_err();
+        assert_eq!(
+            err.0,
+            "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not \
+             name a declared prompt or effect."
+        );
     }
 }
