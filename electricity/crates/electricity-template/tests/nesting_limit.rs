@@ -19,7 +19,18 @@
 //! limit itself cheap (measured at ~125ms) rather than merely
 //! stack-safe.
 
-use electricity_template::{MAX_SECTION_DEPTH, PlainCtx, Value, render_template};
+use electricity_template::{
+    MAX_SECTION_DEPTH, PlainCtx, Value, render_template, template_syntax_error,
+};
+
+fn run_on_2mib_stack<F: FnOnce() + Send + 'static>(f: F) {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(f)
+        .unwrap()
+        .join()
+        .unwrap();
+}
 
 fn nested_template(n: usize) -> String {
     let open: String = (0..n).map(|_| "{{#a}}").collect();
@@ -43,30 +54,49 @@ fn nested_ctx(n: usize) -> Value {
 }
 
 #[test]
-fn exactly_at_the_limit_renders() {
-    let template = nested_template(MAX_SECTION_DEPTH);
-    let ctx = nested_ctx(MAX_SECTION_DEPTH);
-    let out = render_template(&template, &ctx, &PlainCtx, "t")
-        .expect("nesting at exactly MAX_SECTION_DEPTH must still render");
-    assert_eq!(out, "x");
+fn exactly_at_the_limit_renders_on_a_2mib_stack() {
+    run_on_2mib_stack(|| {
+        let template = nested_template(MAX_SECTION_DEPTH);
+        let ctx = nested_ctx(MAX_SECTION_DEPTH);
+        let out = render_template(&template, &ctx, &PlainCtx, "t")
+            .expect("nesting at exactly MAX_SECTION_DEPTH must still render");
+        assert_eq!(out, "x");
+    });
 }
 
 #[test]
-fn one_past_the_limit_is_a_distinct_nesting_error() {
+fn one_past_the_limit_is_a_distinct_nesting_error_on_a_2mib_stack() {
+    run_on_2mib_stack(|| {
+        let template = nested_template(MAX_SECTION_DEPTH + 1);
+        let ctx = nested_ctx(MAX_SECTION_DEPTH + 1);
+        let err = render_template(&template, &ctx, &PlainCtx, "t").unwrap_err();
+        assert!(err.is_too_deeply_nested(), "got: {err}");
+    });
+}
+
+#[test]
+fn inverted_sections_count_toward_the_same_limit_on_a_2mib_stack() {
+    run_on_2mib_stack(|| {
+        let n = MAX_SECTION_DEPTH + 1;
+        let open: String = (0..n).map(|_| "{{^a}}").collect();
+        let close: String = (0..n).map(|_| "{{/a}}").collect();
+        let template = format!("{open}x{close}");
+        let err = render_template(&template, &Value::Bool(false), &PlainCtx, "t").unwrap_err();
+        assert!(err.is_too_deeply_nested(), "got: {err}");
+    });
+}
+
+/// `core/templates.py` has no section-depth limit at all, so its own
+/// `template_syntax_error` passes a too-deep template -- `cof check`
+/// never rejects it, only an eventual render does (`lib.rs`'s own docs
+/// on `template_syntax_error`). This port's `template_syntax_error`
+/// must agree, even though it tokenizes with its own `MAX_SECTION_DEPTH`
+/// check in the loop: reporting `Depth` here would make this crate's
+/// compile-time check stricter than Circuitry's own.
+#[test]
+fn template_syntax_error_does_not_reject_a_too_deep_template() {
     let template = nested_template(MAX_SECTION_DEPTH + 1);
-    let ctx = nested_ctx(MAX_SECTION_DEPTH + 1);
-    let err = render_template(&template, &ctx, &PlainCtx, "t").unwrap_err();
-    assert!(err.is_too_deeply_nested(), "got: {err}");
-}
-
-#[test]
-fn inverted_sections_count_toward_the_same_limit() {
-    let n = MAX_SECTION_DEPTH + 1;
-    let open: String = (0..n).map(|_| "{{^a}}").collect();
-    let close: String = (0..n).map(|_| "{{/a}}").collect();
-    let template = format!("{open}x{close}");
-    let err = render_template(&template, &Value::Bool(false), &PlainCtx, "t").unwrap_err();
-    assert!(err.is_too_deeply_nested(), "got: {err}");
+    assert_eq!(template_syntax_error(&template), None);
 }
 
 /// A too-deep template is rejected during tokenizing, before

@@ -236,14 +236,28 @@ fn validate_and_reject_partials(template: &str) -> Result<Vec<Tag>, ValidateFail
 /// whether the failure is chevron's own `ChevronError` or, in the one
 /// case chevron itself doesn't raise that type for (an empty tag,
 /// `{{}}`), a plain index-out-of-range message.
+///
+/// A section nested past MAX_SECTION_DEPTH is deliberately not reported
+/// here: core/templates.py has no section-depth limit at all
+/// (MAX_SECTION_DEPTH's own docs above), so Python's
+/// template_syntax_error tokenizes a 65-deep template exactly like any
+/// other and returns None -- cof check passes it, and the eventual
+/// failure (deep enough rendering) only ever surfaces from
+/// render_template, as "could not render", never as a syntax error.
+/// Reporting Depth here instead would make cof check reject a template
+/// electricity's own render_template would otherwise still attempt and
+/// fail with its own, more specific TemplateError::is_too_deeply_nested
+/// -- and would make this crate's compile-time check stricter than
+/// Circuitry's own, the one divergence this port otherwise avoids
+/// introducing on purpose. Letting tokenizing continue past a
+/// too-deep section, rather than stopping there, can also surface a
+/// genuine syntax error later in the same template that stopping early
+/// would have hidden.
 pub fn template_syntax_error(template: &str) -> Option<String> {
     match validate_and_reject_partials(template) {
-        Ok(_) => None,
+        Ok(_) | Err(ValidateFailure::Depth(_)) => None,
         Err(ValidateFailure::Syntax(msg)) => Some(msg),
         Err(ValidateFailure::Other(msg)) => Some(msg),
-        Err(ValidateFailure::Depth(depth)) => Some(format!(
-            "template nesting too deep ({depth} levels, max {MAX_SECTION_DEPTH})"
-        )),
     }
 }
 
