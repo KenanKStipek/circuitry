@@ -216,6 +216,33 @@ effects:
     assert "intro" in result.stdout
 
 
+def test_a_yield_effect_gets_its_own_row_not_an_unrecognised_type(tmp_path: Path) -> None:
+    orch = _write(
+        tmp_path,
+        "yielded.yml",
+        """\
+runtime:
+  complexity:
+    scoring:
+      enabled: true
+effects:
+  - type: yield
+    name: brief
+    template: "Topic: {{input.topic}}"
+""",
+    )
+    result = runner.invoke(
+        app, ["score", str(orch), "--config", str(_empty_config(tmp_path)), "--json"]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    row = next(r for r in payload["effects"] if r["path"] == "brief")
+    assert row["type"] == "yield"
+    assert "YieldDefinition" not in row["reason"]
+    assert "no model call" in row["reason"]
+
+
 def test_table_states_scores_are_estimates(tmp_path: Path) -> None:
     orch = _write(tmp_path, "simple.yml", SIMPLE_ORCH)
     result = runner.invoke(

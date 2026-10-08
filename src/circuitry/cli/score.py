@@ -58,6 +58,7 @@ if TYPE_CHECKING:
     from ..core.reflector import ReflectorDefinition
     from ..core.tool import ToolDefinition
     from ..core.use import UseDefinition
+    from ..core.yield_effect import YieldDefinition
 
 # Which signals "dominated" a score is a presentation question the TUI already
 # answered (#107), and a preview that disagreed with the run view about the
@@ -98,6 +99,7 @@ def _load_compiler_chain() -> None:
     from ..core.reflector import ReflectorDefinition
     from ..core.tool import ToolDefinition
     from ..core.use import UseDefinition
+    from ..core.yield_effect import YieldDefinition
 
     globals().update(
         apply_effect_overrides=apply_effect_overrides,
@@ -113,6 +115,7 @@ def _load_compiler_chain() -> None:
         ReflectorDefinition=ReflectorDefinition,
         ToolDefinition=ToolDefinition,
         UseDefinition=UseDefinition,
+        YieldDefinition=YieldDefinition,
     )
 err_console = Console(stderr=True)
 
@@ -142,6 +145,10 @@ USE_REASON = (
 TOOL_REASON = (
     "not a prompt: a tool effect calls a plugin rather than a model, so there "
     "is no prompt to score."
+)
+YIELD_REASON = (
+    "not a prompt: a yield effect renders a template and stores the text with "
+    "no model call, so there is no prompt to score."
 )
 DISABLED_REASON = "disabled for this run by the profile, so it will not execute."
 UNKNOWN_REASON = (
@@ -249,6 +256,17 @@ def _walk(
                 type="tool",
                 scoreable=False,
                 reason=DISABLED_REASON if node_disabled else TOOL_REASON,
+            )
+        )
+        return
+
+    if isinstance(node, YieldDefinition):
+        rows.append(
+            ScoredEffect(
+                path=own_path,
+                type="yield",
+                scoreable=False,
+                reason=DISABLED_REASON if node_disabled else YIELD_REASON,
             )
         )
         return

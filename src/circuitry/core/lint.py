@@ -40,7 +40,7 @@ __all__ = [
 
 #: Effect types as the docs, rules, and examples spell them.
 CANONICAL_EFFECT_TYPES = frozenset(
-    {"prompt", "dynamic", "if", "loop", "reflector", "tool", "use"}
+    {"prompt", "dynamic", "if", "loop", "reflector", "tool", "use", "yield"}
 )
 
 #: Still parsed, no longer taught. alias -> canonical.

@@ -510,6 +510,13 @@ def check_prompt_composition(
     def check_name(name: str, *, where: str) -> None:
         head = name.split(".", 1)[0]
         if head in declared:
+            if "." in name:
+                errors.append(
+                    f"{where}: '{{{{> {name}}}}}' names declared prompt '{head}', "
+                    "which has no nested state — a declared prompt is plain text, "
+                    "never dotted."
+                )
+                return
             return  # declared always wins; collision already reported once, above
         if head not in root:
             errors.append(f"{where}: '{{{{> {name}}}}}' does not name a declared prompt or effect.")

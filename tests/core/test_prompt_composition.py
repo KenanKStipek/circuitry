@@ -543,6 +543,18 @@ def test_a_dotted_name_resolves_the_same_way_from_inside_its_own_container() -> 
     assert store.get("prime.pipeline.recap.value") == "The plan.!"
 
 
+def test_a_dotted_name_into_a_declared_prompt_is_a_compile_error() -> None:
+    """A declared prompt is plain text, never a container — `{{> voice.x}}`
+    must fail at `cof check`, not pass there and fail only at run time."""
+    with pytest.raises(ValueError, match=r"declared prompt 'voice'.*no nested state"):
+        compile_orchestration(
+            orch={
+                "prompts": {"voice": "Plain, direct."},
+                "effects": [{"type": "yield", "name": "y", "template": "{{> voice.x}}"}],
+            }
+        )
+
+
 def test_an_untaken_if_branchs_effect_renders_empty_not_an_error() -> None:
     """`{{> name}}` names a real effect in the document, but the branch that
     would have written it never ran -- renders "", exactly like a bare

@@ -468,6 +468,7 @@ PRIMITIVES: tuple[str, ...] = (
     "tool",
     "use",
     "reflector",
+    "yield",
 )
 
 
