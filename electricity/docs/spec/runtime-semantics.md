@@ -106,7 +106,11 @@ call, in this order, and *any* non-empty result blocks the run with
    Draft7 validation against `schema/orchestration.schema.json`, reported as
    `<json-path>: <message>` with the deepest `oneOf` sub-error appended when
    one exists (effect-type dispatch uses nested `if/then`/`oneOf`, so the
-   top-level message is often uninformative alone).
+   top-level message is often uninformative alone). `electricity-schema`
+   (DESIGN.md §4 step 3, issue #380) matches `<json-path>: <message>`
+   exactly but does not append this suffix: the `jsonschema` crate version
+   it uses (0.26) carries no sub-error list on its `oneOf`/`anyOf` error
+   variants to pick the best match from, unlike Python's own `jsonschema`.
 3. **`group:` placement errors** (`core/document_check.py:211`
    `group_field_errors`) — `group:` is only legal on `tool`/`prompt` (leaf)
    effects; a container (`dynamic`/`loop`/`if`/`reflector`/`use`) never

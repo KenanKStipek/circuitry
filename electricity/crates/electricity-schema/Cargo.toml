@@ -1,0 +1,20 @@
+[package]
+name = "electricity-schema"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Offline JSON Schema (Draft 7) validation against Circuitry's own schemas (electricity-schema)"
+
+[dependencies]
+# default-features off: "resolve-http"/"resolve-file" pull in reqwest for
+# remote $ref fetching, which this crate never needs (DESIGN.md §4 step 3 —
+# offline only) and Circuitry's schemas only ever use local "#/$defs/..."
+# refs. fancy-regex (DESIGN.md §7.3) is already jsonschema's own, non-optional
+# dependency for the `pattern` keyword, so nothing further is added for it.
+jsonschema = { version = "0.26", default-features = false }
+serde_json = "1"
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
