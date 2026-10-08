@@ -1,0 +1,6 @@
+{
+  "spec_case": "C7",
+  "description": "if: {mode: cel, expr: \"'a' == 1\"} — cross-type == between non-numeric types is False (electricity/docs/spec/runtime-semantics.md §4.3). This is the 'if' half of C7 only; the 'while' half is out of scope for this lane.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

@@ -1,0 +1,7 @@
+{
+  "spec_case": "C6",
+  "description": "Same if: as c6-absent, run with x=0: has(state.input.x) is true, state.input.x > 1 is false (electricity/docs/spec/runtime-semantics.md §4.4).",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "x=0"]
+}

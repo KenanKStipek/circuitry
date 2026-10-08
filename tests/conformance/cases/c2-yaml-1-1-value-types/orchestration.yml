@@ -1,0 +1,21 @@
+name: c2-yaml-1-1-value-types
+base: &base
+  x: 1
+  y: 2
+effects:
+  - type: tool
+    name: types
+    provider: json
+    params:
+      mode: stringify
+      input:
+        bool_on: on
+        bool_off: off
+        bool_yes: yes
+        bool_no: no
+        hex: 0x1A
+        octal: 017
+        sexagesimal: 1:30:00
+        merged:
+          <<: *base
+          y: 3

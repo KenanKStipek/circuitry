@@ -1,0 +1,6 @@
+name: c3-reserved-effect-name
+effects:
+  - type: tool
+    name: value
+    provider: json
+    params: {mode: stringify, input: 1}
