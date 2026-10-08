@@ -406,6 +406,8 @@ def score_orchestration(
     *,
     settings: ComplexitySettings,
     profile: ProfileSettings | None = None,
+    document_dir: Path | None = None,
+    confinement_root: Path | None = None,
 ) -> list[ScoredEffect]:
     """Compile *orch* and score every prompt effect in the frozen tree.
 
@@ -413,10 +415,18 @@ def score_orchestration(
     scores. A *profile* is applied first, through the same
     :func:`~circuitry.core.compiler.apply_effect_overrides` a run uses, so the
     preview reflects the model/provider overrides and disabled effects that run
-    would see.
+    would see. *document_dir*/*confinement_root* are the document's own
+    directory and the project it must stay inside for a ``{file: ...}``
+    prompt source (#396) — omitted only for a document with no file of its
+    own, the same ``compile_orchestration`` contract every other caller
+    honours; a path-run document with a real file always has both, or this
+    preview rejects it with "this document has no file of its own" even
+    though ``cof run`` on the exact same file would not.
     """
     _load_compiler_chain()
-    root = compile_orchestration(orch=orch)
+    root = compile_orchestration(
+        orch=orch, document_dir=document_dir, confinement_root=confinement_root
+    )
     if profile is not None and profile.effects:
         root, _matched = apply_effect_overrides(root, profile.effects)
 
@@ -599,9 +609,16 @@ def register_score(app: typer.Typer) -> None:
                 err_console.print(f"[yellow]Scoring disabled.[/yellow] {message}")
             raise typer.Exit(code=1)
 
+        from ..core.prompt_files import default_project_root
+
+        _document_dir = orchestration.resolve().parent
         try:
             rows = score_orchestration(
-                orch, settings=settings, profile=profile_settings
+                orch,
+                settings=settings,
+                profile=profile_settings,
+                document_dir=_document_dir,
+                confinement_root=default_project_root(_document_dir),
             )
         except ValueError as exc:
             # A tree that will not compile cannot be previewed; report it the

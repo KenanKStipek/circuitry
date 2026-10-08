@@ -147,6 +147,26 @@ def test_selecting_an_orchestration_renders_its_effect_tree(
     assert "5 overridable effects" in status
 
 
+def test_a_file_sourced_prompt_compiles_cleanly(run_app: Any, tmp_path: Path) -> None:
+    """A valid `template: {file: ...}` document (#396) must compile exactly
+    like `cof run` would, not fail with "this document has no file of its
+    own" for lack of document_dir/confinement_root."""
+    (tmp_path / "brief.md").write_text("{{input.topic}}", encoding="utf-8")
+    filed = {
+        "name": "filed",
+        "effects": [
+            {"type": "prompt", "name": "intro", "template": {"file": "brief.md"}}
+        ],
+    }
+
+    async def scenario(pilot: Pilot[Any]) -> str:
+        screen = await _open(pilot, _screen(_write(tmp_path, filed)))
+        return screen.status_text
+
+    status = run_app(scenario)
+    assert "does not compile" not in status
+
+
 def test_an_orchestration_that_does_not_compile_says_so(
     run_app: Any, tmp_path: Path
 ) -> None:

@@ -494,7 +494,15 @@ def validate_report(
             issues.append(ValidationIssue("allowlist", str(exc)))
 
     try:
-        compile_orchestration(orch=orch, root_name="prime")
+        from ..core.prompt_files import default_project_root
+
+        _document_dir = path.resolve().parent
+        compile_orchestration(
+            orch=orch,
+            root_name="prime",
+            document_dir=_document_dir,
+            confinement_root=default_project_root(_document_dir),
+        )
     except Exception as exc:
         issues.append(ValidationIssue("compile", str(exc)))
 

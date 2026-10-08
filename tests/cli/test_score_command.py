@@ -188,6 +188,34 @@ def test_table_lists_every_effect_with_scores(tmp_path: Path) -> None:
     assert "decide.reject" in result.stdout
 
 
+def test_a_file_sourced_prompt_scores_like_any_other(tmp_path: Path) -> None:
+    """A valid `template: {file: ...}` document (#396) must score exactly
+    like `cof run` would compile it, not fail with "this document has no
+    file of its own" for lack of document_dir/confinement_root."""
+    (tmp_path / "brief.md").write_text("Summarize {{topic}}.", encoding="utf-8")
+    orch = _write(
+        tmp_path,
+        "filed.yml",
+        """\
+runtime:
+  complexity:
+    scoring:
+      enabled: true
+effects:
+  - type: prompt
+    name: intro
+    template:
+      file: brief.md
+""",
+    )
+    result = runner.invoke(
+        app, ["score", str(orch), "--config", str(_empty_config(tmp_path))]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "intro" in result.stdout
+
+
 def test_table_states_scores_are_estimates(tmp_path: Path) -> None:
     orch = _write(tmp_path, "simple.yml", SIMPLE_ORCH)
     result = runner.invoke(
