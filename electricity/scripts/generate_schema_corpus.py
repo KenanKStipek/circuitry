@@ -61,6 +61,26 @@ def _profile_locations(document: Any) -> list[str]:
     ]
 
 
+def _value_substituted_messages(document: Any) -> dict[str, str]:
+    """Orchestration-only: location -> message, for every error whose own
+    ``_describe_schema_error`` dropped a leading ``repr(err.instance)`` in
+    favour of ``"value"`` -- the one piece of Circuitry's own message text
+    electricity-schema's ``substitute_value_prefix`` also reproduces (issue
+    #380 review, finding 4). The Rust test checks only that its own
+    substituted message starts the same way Python's does; the third-party
+    text after that point is the carved-out part (DESIGN.md §1, §12) and is
+    never compared.
+    """
+    validator = jsonschema.Draft7Validator(document_check.orchestration_schema())
+    out: dict[str, str] = {}
+    for err in validator.iter_errors(document):
+        described = document_check._describe_schema_error(err)
+        location, _, message = described.partition(": ")
+        if message.startswith("value "):
+            out[location] = message
+    return out
+
+
 def _case(name: str, schema: str, document: Any) -> dict:
     locations = (
         _orchestration_locations(document)
@@ -73,6 +93,9 @@ def _case(name: str, schema: str, document: Any) -> dict:
         "document": document,
         "valid": not locations,
         "locations": sorted(locations),
+        "value_substituted_messages": (
+            _value_substituted_messages(document) if schema == "orchestration" else {}
+        ),
     }
 
 
@@ -313,6 +336,18 @@ def orchestration_cases() -> list[dict]:
             },
         ),
         (
+            # Python jsonschema's own json_path-compatible-property check
+            # (``_JSON_PATH_COMPATIBLE_PROPERTY_PATTERN``) ends in an
+            # unescaped "$", which matches just before a single trailing
+            # "\n" too -- a key ending in exactly one "\n" is still dotted
+            # (``interface.inputs.abc\n.type``), not bracket-quoted.
+            "interface_inputs_key_trailing_newline",
+            {
+                "interface": {"inputs": {"abc\n": {"type": 5}}},
+                "effects": [],
+            },
+        ),
+        (
             "name_bad_character",
             {"effects": [{"type": "tool", "name": "bad name", "provider": "ffmpeg"}]},
         ),
@@ -334,6 +369,29 @@ def orchestration_cases() -> list[dict]:
             # clauses -- two errors at the same location, not one.
             "name_iter_reserved_unicode_digit",
             {"effects": [{"type": "tool", "name": "iter_\u0663", "provider": "ffmpeg"}]},
+        ),
+        (
+            # Exercises the "$" rewrite inside a "not" sub-schema: "value\n"
+            # still matches the reserved-word pattern (Python re's "$" matches
+            # just before a single trailing "\n"), so the reserved-word check
+            # still rejects it on both sides.
+            "name_reserved_word_with_trailing_newline",
+            {"effects": [{"type": "tool", "name": "value\n", "provider": "ffmpeg"}]},
+        ),
+        (
+            # Exercises the "$" rewrite inside a "not" sub-schema together with
+            # the "\d" rewrite: "iter_3\n" still matches "^iter_\d+$", so the
+            # iter_<N> reserved check still rejects it on both sides.
+            "name_iter_reserved_with_trailing_newline",
+            {"effects": [{"type": "tool", "name": "iter_3\n", "provider": "ffmpeg"}]},
+        ),
+        (
+            # Over-acceptance guard: Python re's "$" matches before only a
+            # *single* trailing "\n", so a second trailing "\n" must still be
+            # rejected on both sides -- the rewritten "\n?$" must not become
+            # "\n*$" by accident.
+            "name_two_trailing_newlines_still_invalid",
+            {"effects": [{"type": "tool", "name": "fetch\n\n", "provider": "ffmpeg"}]},
         ),
         (
             "flow_enum_invalid",

@@ -9,7 +9,12 @@
 //! identically -- their disagreement would come only from third-party
 //! message text neither side has to match, `DESIGN.md` §1, §12) are
 //! compared; every message is checked non-empty but never compared to the
-//! Python `jsonschema` text it came from.
+//! Python `jsonschema` text it came from -- except for the one piece of
+//! message text Circuitry's own `_describe_schema_error` writes rather
+//! than quotes from `jsonschema`: the `repr(err.instance)` -> `"value"`
+//! substitution. For a case where that substitution fired on the Python
+//! side (`value_substituted_messages`), this crate's own message is
+//! checked to start the same way (issue #380 review, finding 4).
 //!
 //! The corpus is checked in (`tests/golden/corpus.json`); CI separately
 //! regenerates it (via Circuitry's own validation) and fails the build if
@@ -27,6 +32,8 @@ struct Case {
     document: Value,
     valid: bool,
     locations: Vec<String>,
+    #[serde(default)]
+    value_substituted_messages: std::collections::BTreeMap<String, String>,
 }
 
 #[test]
@@ -67,6 +74,35 @@ fn golden_corpus_matches_circuitry() {
                 failures.push(format!(
                     "case {:?}: error at {:?} has an empty message",
                     case.name, error.location
+                ));
+            }
+        }
+
+        // Circuitry's own "repr(instance) -> value" substitution (issue #380
+        // review, finding 4): where Python's _describe_schema_error dropped a
+        // leading instance rendering in favour of "value" (`python_message`
+        // always starts with "value " too, by construction -- see the
+        // generator), electricity-schema's own message for the same location
+        // must have made the same substitution. The wording *after* "value"
+        // is third-party text neither side has to match (`jsonschema` 0.26
+        // spells oneOf/anyOf failures differently from Python's own
+        // `jsonschema`, and Python additionally appends a best-matching
+        // sub-error suffix this crate doesn't produce) -- only the fact that
+        // both sides dropped the instance dump in favour of "value" is
+        // compared.
+        for (location, python_message) in &case.value_substituted_messages {
+            assert!(
+                python_message.starts_with("value "),
+                "generator bug: {python_message:?}"
+            );
+            let found = errors
+                .iter()
+                .any(|e| e.location == *location && e.message.starts_with("value "));
+            if !found {
+                failures.push(format!(
+                    "case {:?}: no error at {:?} starts with the substituted \"value\" prefix \
+                     the way Python's {:?} does (got: {:?})",
+                    case.name, location, python_message, errors
                 ));
             }
         }

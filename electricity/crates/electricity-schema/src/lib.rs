@@ -25,17 +25,41 @@
 //! `"{location}: {message}"` wrapping format itself
 //! ([`SchemaError::describe`]), the "dynamic-wrapped" format `DESIGN.md` §1
 //! names as needing to match word for word (distinct from the `{message}`
-//! text it wraps, which is the carved-out part). Two further pieces of
-//! `_describe_schema_error`'s own output are deliberately not replicated,
-//! because they transform *that* third-party message text rather than
-//! change the wrapping format: the `repr(err.instance)` -> `"value"`
-//! substitution (there is no equivalent Python `repr` text on this side to
-//! match against -- `jsonschema` 0.26 renders the instance as JSON, not a
-//! Python repr) and the best-matching `oneOf`/`anyOf` sub-error suffix
-//! (`jsonschema` 0.26's `ValidationErrorKind::OneOfNotValid`/`AnyOf` carry
-//! no sub-error list to pick from -- see `error.rs` in that crate -- so
-//! producing it would mean re-validating every branch by hand, a
-//! materially bigger feature than matching a message format).
+//! text it wraps, which is the carved-out part). One piece of
+//! `_describe_schema_error`'s own output is applied here too, because it
+//! transforms that third-party message text rather than changing the
+//! wrapping format: the `repr(err.instance)` -> `"value"` substitution
+//! ([`substitute_value_prefix`]) -- `jsonschema` 0.26 starts its own
+//! `type`/`enum`/`anyOf`/`oneOf` messages with `self.instance` rendered as
+//! JSON (`error.rs`'s `Display` impl in that crate) exactly where Python's
+//! message starts with `repr(err.instance)`, so the same prefix-replace
+//! applies even though the two renderings are spelled differently. The
+//! best-matching `oneOf`/`anyOf` sub-error suffix is **not** replicated and
+//! has no known-gap workaround short of re-validating every branch by hand:
+//! `jsonschema` 0.26's `ValidationErrorKind::OneOfNotValid`/`AnyOf` carry no
+//! sub-error list to pick from (`error.rs` in that crate). `DESIGN.md` §4
+//! step 2.2 and `docs/spec/runtime-semantics.md`'s "deepest `oneOf`
+//! sub-error appended" line describe Circuitry's own compile-time pipeline,
+//! which this crate's caller (not this crate) is responsible for keeping
+//! accurate against that gap.
+//!
+//! Two pieces of wrapping *text* this crate deliberately does not produce,
+//! because they belong to callers this crate doesn't have (and doesn't
+//! depend on): the `"Orchestration validation failed:\n  - ..."` prefix
+//! `DESIGN.md` §4 step 2 gives the compiler's structural-checks gate, and
+//! the `"Profile {name!r} at {path} failed schema validation:"` header
+//! plus its `"  - {location}: {message}"` lines `cli.profiles`'
+//! `_validate_profile_schema` writes (`DESIGN.md` §6.11). Both callers are
+//! meant to build that text themselves from [`SchemaError`]'s `location`
+//! and `message` (or [`SchemaError::describe`] for the per-line part) --
+//! the compiler lane (`DESIGN.md` §4 step 2, milestone M0-G) and the
+//! profile-loading lane (`DESIGN.md` §6.11, milestone M1-I) respectively,
+//! neither of which exists yet. A byte-exact header also can't be produced
+//! from this crate's output alone even once a caller exists: Python sorts
+//! profile errors by `str(err)` (`cli/profiles.py`), which is third-party
+//! `jsonschema` text this crate never has to match, so the *line order* of
+//! a multi-error profile failure is not reproducible from `SchemaError`
+//! data regardless of which crate assembles the header.
 //!
 //! `pattern` validation also gets two narrow, deliberate adjustments so
 //! `fancy-regex` agrees with Python's `re` on the exact cases Circuitry's
@@ -44,9 +68,24 @@
 //! `fancy-regex`'s is not), and `\d` is rewritten to the Unicode decimal
 //! digit class (Python `re`'s Unicode-aware default; the `jsonschema` crate
 //! itself rewrites a bare `\d` to ASCII `[0-9]` as part of its ECMA-262
-//! translation, `ecma.rs`). Nothing else about `fancy-regex` vs Python `re`
-//! is adjusted; a true Python-`re`-only construct neither engine supports
-//! is `DESIGN.md` §7.3's named, unclosed parity gap.
+//! translation, `ecma.rs`). Only the schema's own `"pattern"` keyword value
+//! is rewritten -- not a `"pattern"` string that happens to appear inside
+//! `enum`/`const`/`default`/`examples` *data*, which is walked but left
+//! untouched as opaque instance data, never a sub-schema.
+//!
+//! Nothing else about `fancy-regex` vs Python `re` is adjusted: `\D`, `\w`,
+//! `\W`, `\s`, `\S`, `\b`, `\B`, a `$` that isn't the pattern's last
+//! character, inline flags, and `patternProperties` keys all differ between
+//! the two engines in ways this crate does not correct, and both engines
+//! *support* every one of these constructs -- they just disagree on what it
+//! means, a materially different, more dangerous gap than a construct one
+//! engine lacks entirely, because it fails silently (both sides accept a
+//! pattern, but disagree on some inputs) rather than loudly. None of
+//! Circuitry's bundled schemas uses any of them today; the unit test
+//! `bundled_schema_patterns_use_only_corrected_constructs` fails the build
+//! the moment one does, so a future schema edit can't silently start
+//! disagreeing between engines even though `generate_schema_copy.py --check`
+//! would still pass.
 
 use std::sync::OnceLock;
 
@@ -93,13 +132,23 @@ fn normalize_pattern_schema(mut schema: Value) -> Value {
     schema
 }
 
+/// Keys whose value is literal instance *data* (an `enum` member list, a
+/// `const`/`default` value, `examples`), never a sub-schema -- walked no
+/// further, so a `"pattern"` key that happens to appear inside one of
+/// these (as ordinary JSON data, not the schema keyword) is never mistaken
+/// for a regex to rewrite.
+const SCHEMA_DATA_KEYS: [&str; 4] = ["enum", "const", "default", "examples"];
+
 fn normalize_pattern_schema_in_place(value: &mut Value) {
     match value {
         Value::Object(map) => {
             if let Some(Value::String(pattern)) = map.get_mut("pattern") {
                 *pattern = align_pattern_with_python_re(pattern);
             }
-            for child in map.values_mut() {
+            for (key, child) in map.iter_mut() {
+                if SCHEMA_DATA_KEYS.contains(&key.as_str()) {
+                    continue;
+                }
                 normalize_pattern_schema_in_place(child);
             }
         }
@@ -169,6 +218,73 @@ fn rewrite_trailing_dollar(pattern: &str) -> String {
     out
 }
 
+/// Every `pattern` keyword value and every `patternProperties` key in
+/// `schema`, collected the same way [`normalize_pattern_schema_in_place`]
+/// walks it (skipping [`SCHEMA_DATA_KEYS`]) -- used only by the guard test
+/// that keeps a future schema edit from silently using a regex construct
+/// `align_pattern_with_python_re` doesn't correct.
+#[cfg(test)]
+fn collect_patterns_for_guard(value: &Value, patterns: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::String(pattern)) = map.get("pattern") {
+                patterns.push(pattern.clone());
+            }
+            if let Some(Value::Object(pattern_properties)) = map.get("patternProperties") {
+                patterns.extend(pattern_properties.keys().cloned());
+            }
+            for (key, child) in map {
+                if SCHEMA_DATA_KEYS.contains(&key.as_str()) {
+                    continue;
+                }
+                collect_patterns_for_guard(child, patterns);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_patterns_for_guard(item, patterns);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `None` when `pattern` uses only constructs
+/// [`align_pattern_with_python_re`] corrects (or needs no correction for);
+/// otherwise names the uncorrected Python-`re`-vs-`fancy-regex` divergence
+/// it found -- `\D`/`\w`/`\W`/`\s`/`\S`/`\b`/`\B` (`ecma.rs` in the
+/// `jsonschema` crate rewrites these to fixed ASCII/odd sets, Python's own
+/// are Unicode-aware), a `$` that isn't the pattern's last character (only
+/// a trailing `$` is rewritten), or an inline flag group like `(?i)`
+/// (`fancy-regex` and Python `re` support different flag letters).
+#[cfg(test)]
+fn uncorrected_regex_divergence(pattern: &str) -> Option<String> {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\\' && i + 1 < chars.len() {
+            let escaped = chars[i + 1];
+            if matches!(escaped, 'D' | 'w' | 'W' | 's' | 'S' | 'b' | 'B') {
+                return Some(format!("\\{escaped}"));
+            }
+            i += 2;
+            continue;
+        }
+        if chars[i] == '$' && i != chars.len() - 1 {
+            return Some("$ that is not the pattern's last character".to_string());
+        }
+        if chars[i] == '('
+            && i + 2 < chars.len()
+            && chars[i + 1] == '?'
+            && matches!(chars[i + 2], 'i' | 'm' | 's' | 'x' | 'a' | 'L' | 'u')
+        {
+            return Some("an inline flag group".to_string());
+        }
+        i += 1;
+    }
+    None
+}
+
 fn orchestration_schema() -> &'static Value {
     static SCHEMA: OnceLock<Value> = OnceLock::new();
     SCHEMA.get_or_init(|| load_schema(include_str!("../schema/orchestration.schema.json")))
@@ -208,7 +324,7 @@ pub fn orchestration_errors(document: &Value) -> Vec<SchemaError> {
         .iter_errors(document)
         .map(|err| SchemaError {
             location: orchestration_location(document, err.instance_path.as_str()),
-            message: err.to_string(),
+            message: substitute_value_prefix(&err.instance, err.to_string()),
         })
         .collect()
 }
@@ -222,9 +338,28 @@ pub fn profile_errors(document: &Value) -> Vec<SchemaError> {
         .iter_errors(document)
         .map(|err| SchemaError {
             location: profile_location(err.instance_path.as_str()),
-            message: err.to_string(),
+            message: substitute_value_prefix(&err.instance, err.to_string()),
         })
         .collect()
+}
+
+/// `core.document_check._describe_schema_error`'s `repr(err.instance)` ->
+/// `"value"` substitution: when the failing instance is an object or array
+/// and `message` starts with that instance rendered as JSON (`jsonschema`
+/// 0.26's `Display` impl for `type`/`enum`/`anyOf`/`oneOf` messages starts
+/// exactly this way -- `error.rs` in that crate), replace the rendering
+/// with `"value"` so the path (already named by `location`) isn't repeated
+/// as a dump of the whole failing object, matching Python's own rule for
+/// when it drops `repr(err.instance)` the same way.
+fn substitute_value_prefix(instance: &Value, message: String) -> String {
+    if !matches!(instance, Value::Object(_) | Value::Array(_)) {
+        return message;
+    }
+    let rendered = instance.to_string();
+    match message.strip_prefix(rendered.as_str()) {
+        Some(rest) => format!("value{rest}"),
+        None => message,
+    }
 }
 
 /// `core.document_check._describe_schema_error`'s location: Python
@@ -320,9 +455,15 @@ fn unescape_json_pointer_segment(segment: &str) -> String {
 /// `jsonschema.exceptions._JSON_PATH_COMPATIBLE_PROPERTY_PATTERN`:
 /// `^[a-zA-Z][a-zA-Z0-9_]*$` (note: no leading underscore, unlike
 /// Circuitry's own orchestration `NamePattern` -- this is Python
-/// `jsonschema`'s own, unrelated pattern).
+/// `jsonschema`'s own, unrelated pattern). Python `re`'s unescaped `$`
+/// (used unanchored by `.match`, i.e. anywhere a prefix match succeeds)
+/// also matches just before a single trailing `\n`, so a property key
+/// ending in exactly one `\n` is still path-compatible on the Python side;
+/// strip one before checking the rest, the same rule `align_pattern_with_python_re`
+/// bakes into `pattern` validation itself.
 fn is_json_path_compatible_property(segment: &str) -> bool {
-    let mut chars = segment.chars();
+    let trimmed = segment.strip_suffix('\n').unwrap_or(segment);
+    let mut chars = trimmed.chars();
     match chars.next() {
         Some(c) if c.is_ascii_alphabetic() => {}
         _ => return false,
@@ -418,5 +559,66 @@ mod tests {
         let errors = profile_errors(&doc);
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].location, "<root>");
+    }
+
+    #[test]
+    fn rewrite_digit_class_leaves_an_escaped_backslash_then_d_alone() {
+        assert_eq!(rewrite_digit_class(r"\\d"), r"\\d");
+    }
+
+    #[test]
+    fn rewrite_trailing_dollar_leaves_an_escaped_dollar_alone() {
+        assert_eq!(rewrite_trailing_dollar(r"a\$"), r"a\$");
+    }
+
+    #[test]
+    fn rewrite_trailing_dollar_rewrites_past_an_escaped_backslash() {
+        assert_eq!(rewrite_trailing_dollar(r"a\\$"), "a\\\\\\n?$");
+    }
+
+    #[test]
+    fn value_prefix_is_substituted_for_a_failing_object_instance() {
+        let doc = json!({"effects": [{}]});
+        let errors = orchestration_errors(&doc);
+        let oneof_error = errors
+            .iter()
+            .find(|e| e.location == "effects[0]" && e.message.starts_with("value "))
+            .expect("one error at effects[0] starts with the substituted value prefix");
+        assert!(!oneof_error.message.contains('{'));
+    }
+
+    #[test]
+    fn property_key_ending_in_single_newline_still_uses_dotted_form() {
+        let doc = json!({
+            "interface": {"inputs": {"abc\n": {"type": 5}}},
+            "effects": []
+        });
+        let errors = orchestration_errors(&doc);
+        let locations: Vec<&str> = errors.iter().map(|e| e.location.as_str()).collect();
+        assert!(
+            locations.contains(&"interface.inputs.abc\n.type"),
+            "{locations:?}"
+        );
+    }
+
+    #[test]
+    fn bundled_schema_patterns_use_only_corrected_constructs() {
+        let schemas: [&str; 3] = [
+            include_str!("../schema/orchestration.schema.json"),
+            include_str!("../schema/profile.schema.json"),
+            include_str!("../schema/curation-manifest.schema.json"),
+        ];
+        for text in schemas {
+            let schema: Value = serde_json::from_str(text).expect("bundled schema is valid JSON");
+            let mut patterns = Vec::new();
+            collect_patterns_for_guard(&schema, &mut patterns);
+            for pattern in &patterns {
+                assert_eq!(
+                    uncorrected_regex_divergence(pattern),
+                    None,
+                    "pattern {pattern:?} uses a Python-re-vs-fancy-regex divergence this crate doesn't correct"
+                );
+            }
+        }
     }
 }
