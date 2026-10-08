@@ -5,8 +5,8 @@
 //!
 //! The corpus is checked in (`tests/golden/corpus.json`); CI separately
 //! regenerates it with Python 3.11 and fails the build if it differs
-//! (`.github/workflows/electricity.yml`), so this test only needs to
-//! trust the committed file.
+//! (`.github/workflows/electricity-generated.yml`), so this test only
+//! needs to trust the committed file.
 
 use chrono::{FixedOffset, NaiveDate, NaiveDateTime};
 use electricity_template::{JsonAwareCtx, PlainCtx, Value, render_template, template_syntax_error};

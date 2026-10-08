@@ -5,8 +5,8 @@
 //! The corpus is checked in (`tests/golden/read_corpus.json`); CI
 //! separately regenerates it with Python 3.11 (and Circuitry's own
 //! `core.json_load.load_json` for the duplicate-key cases) and fails the
-//! build if it differs (`.github/workflows/electricity.yml`), so this test
-//! only needs to trust the committed file.
+//! build if it differs (`.github/workflows/electricity-generated.yml`), so
+//! this test only needs to trust the committed file.
 
 use electricity_json::{ReadError, load_json, loads};
 use electricity_value::{Dict, IntValue, Value};
