@@ -89,6 +89,53 @@ pub fn load_yaml(text: &str) -> Result<Value, YamlError> {
     }
 }
 
+/// [`load_yaml`], but a repeated mapping key keeps its last value
+/// instead of erroring -- plain `yaml.safe_load`'s own behaviour (no
+/// `_UniqueKeyLoader`), for a caller reading a child document the way
+/// `core/cycle_check.py::load_orch` does rather than the way
+/// `core/yaml_load.py::load_yaml` does. Everything else (document
+/// structure, scalar resolution, non-printable-character rejection) is
+/// identical to [`load_yaml`].
+pub fn load_yaml_last_key_wins(text: &str) -> Result<Value, YamlError> {
+    reject_non_printable(text)?;
+    let text = strip_leading_bom(text);
+    let mut parser = Parser::new_from_str(text);
+    let mut last_event_end = Marker::new(0, 1, 0);
+
+    let (first, span) = pull(&mut parser, &mut last_event_end)?;
+    debug_assert!(matches!(first, Event::StreamStart));
+
+    let (second, doc_span) = pull(&mut parser, &mut last_event_end)?;
+    match second {
+        Event::StreamEnd => Ok(Value::None),
+        Event::DocumentStart(_) => {
+            last_event_end = doc_span.start;
+            let mut composer = Composer::new(text);
+            let root = composer.compose_node(&mut parser, &mut last_event_end, 1)?;
+
+            let (end, _) = pull(&mut parser, &mut last_event_end)?;
+            debug_assert!(matches!(end, Event::DocumentEnd));
+
+            let (after, after_span) = pull(&mut parser, &mut last_event_end)?;
+            match after {
+                Event::StreamEnd => {}
+                Event::DocumentStart(_) => {
+                    return Err(YamlError::MultipleDocuments {
+                        mark: after_span.start.into(),
+                    });
+                }
+                other => unreachable_event(&other),
+            }
+
+            construct_lenient(&root)
+        }
+        other => {
+            let _ = span;
+            unreachable_event(&other)
+        }
+    }
+}
+
 /// PyYAML's `Reader.check_printable` (`reader.py`): every `str` input is
 /// scanned up front for a character outside PyYAML's own allowed set --
 /// before any tokenizing, so a non-printable character anywhere in the
@@ -1371,6 +1418,66 @@ fn construct_mapping_node(pairs: &[(Rc<Node>, Rc<Node>)]) -> Result<Value, YamlE
             return Err(YamlError::UnhashableKey { mark: key.mark() });
         }
         let value = construct(value)?;
+        dict.insert(key_value, value);
+    }
+    Ok(Value::Dict(dict))
+}
+
+/// [`construct`], but for [`load_yaml_last_key_wins`]: skips the
+/// duplicate-own-key pre-check [`construct_mapping_node`] does, so a
+/// repeated mapping key silently keeps its last value (ordinary `dict`
+/// construction, not `_UniqueKeyLoader`'s) instead of erroring.
+fn construct_lenient(node: &Node) -> Result<Value, YamlError> {
+    match node {
+        Node::Scalar { text, tag, mark } => resolve_scalar_value(text, tag, *mark),
+        Node::Sequence {
+            tag, items, mark, ..
+        } => {
+            if tag != scalar::TAG_SEQ {
+                return Err(unresolvable(tag, *mark));
+            }
+            items
+                .iter()
+                .map(|item| construct_lenient(item))
+                .collect::<Result<_, _>>()
+                .map(Value::List)
+        }
+        Node::Mapping {
+            tag, pairs, mark, ..
+        } => {
+            if tag != scalar::TAG_MAP {
+                return Err(unresolvable(tag, *mark));
+            }
+            construct_mapping_node_lenient(pairs)
+        }
+    }
+}
+
+/// [`construct_key`]'s [`construct_lenient`] counterpart.
+fn construct_key_lenient(node: &Node) -> Result<Value, YamlError> {
+    if let Node::Scalar { text, tag, mark } = node {
+        if tag == scalar::TAG_VALUE {
+            return resolve_scalar_value(text, scalar::TAG_STR, *mark);
+        }
+    }
+    construct_lenient(node)
+}
+
+/// [`construct_mapping_node`], minus its own-key duplicate pre-check:
+/// the flatten-and-insert loop below already overwrites a repeated
+/// key's value with the later one by itself (plain `Dict::insert`), so
+/// skipping the pre-check is the whole difference -- last key wins,
+/// the way plain `yaml.safe_load` (no `_UniqueKeyLoader`) builds a
+/// `dict` literal with a repeated key.
+fn construct_mapping_node_lenient(pairs: &[(Rc<Node>, Rc<Node>)]) -> Result<Value, YamlError> {
+    let flattened = flatten_pairs(pairs)?;
+    let mut dict = Dict::new();
+    for &(key, value) in &flattened {
+        let key_value = construct_key_lenient(key)?;
+        if matches!(key_value, Value::List(_) | Value::Dict(_)) {
+            return Err(YamlError::UnhashableKey { mark: key.mark() });
+        }
+        let value = construct_lenient(value)?;
         dict.insert(key_value, value);
     }
     Ok(Value::Dict(dict))

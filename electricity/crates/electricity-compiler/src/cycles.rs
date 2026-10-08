@@ -20,40 +20,14 @@
 //!
 //! # Known divergences
 //!
-//! - **No duplicate-key check.** `core/cycle_check.py::load_orch` reads
-//!   a child with plain `yaml.safe_load` (last key wins silently),
-//!   unlike Circuitry's own main loader. electricity-yaml (a merged
-//!   crate, additive-only in this lane) exposes only its own
-//!   duplicate-key-rejecting [`electricity_yaml::load_yaml`]; a child
-//!   with a duplicate key is treated as unreadable (empty) here instead
-//!   of being read with the last key winning. Unreachable by an
-//!   ordinary orchestration (a hand-written document has no reason to
-//!   repeat a key), and the parent error this would otherwise mask
-//!   (`c2-duplicate-key`) is already reported earlier, against the
-//!   *entry* document, by the structural check (lane B) -- never
-//!   against a `use` child.
 //! - **Non-UTF-8 content.** Python's `path.read_text(encoding="utf-8")`
 //!   raises `UnicodeDecodeError` uncaught here (not a `yaml.YAMLError`,
 //!   so `load_orch`'s own `except (OSError, yaml.YAMLError)` doesn't
 //!   catch it) -- an existing Circuitry edge case this port does not
 //!   reproduce; a non-UTF-8 child is treated as unreadable (empty)
 //!   rather than propagating a hard error.
-//! - **No root self-identity.** Python's `detect_cycles` seeds its DFS
-//!   with the *root* document's own resolved path
-//!   (`root_path.resolve()`), so a child whose `path:`/`orchestration:`
-//!   resolves back to the entry document itself is caught as a cycle.
-//!   [`DocumentOrigin::File`] carries the document's *directory* only,
-//!   not its filename, so this port cannot recover that identity and
-//!   seeds the root under a sentinel (`"<root>"`) that no real resolved
-//!   child path can ever equal. A cycle entirely among `use` children
-//!   (`B -> C -> B`, reachable from the root but not including it) is
-//!   still detected correctly; one that loops back through the root
-//!   document itself is not. Flagged for the orchestrator -- fixing it
-//!   needs either `DocumentOrigin` or `pipeline.rs` (lane B) to carry
-//!   the entry path through to this call, neither of which this lane
-//!   owns.
 
-use crate::{CompileError, DocumentOrigin};
+use crate::CompileError;
 use electricity_value::{Dict, Value};
 use std::collections::HashMap;
 use std::fs;
@@ -193,7 +167,7 @@ fn load_child(path: &Path) -> Value {
     let Some(text) = read_text_universal_newlines(path) else {
         return empty();
     };
-    match electricity_yaml::load_yaml(&text) {
+    match electricity_yaml::load_yaml_last_key_wins(&text) {
         Ok(value @ Value::Dict(_)) => value,
         _ => empty(),
     }
@@ -257,18 +231,40 @@ fn visit(
 /// A `Cycle: a → b → a` error among *document*'s `use` effects, if any
 /// -- ported from `core/cycle_check.py::detect_cycles` (see this
 /// module's own docs for the divergences from the Python reference).
-pub(crate) fn detect_cycles(document: &Value, origin: &DocumentOrigin) -> Result<(), CompileError> {
-    let parent_dir = match origin {
-        DocumentOrigin::File { document_dir, .. } => Some(document_dir.clone()),
-        DocumentOrigin::Generated => None,
+///
+/// *entry_path* is the entry document's own path as given (Python's
+/// `root_path`, e.g. `req.orchestration_path` at
+/// `cli/runtime_shim.py:786`/`:1394`) -- `None` for a document with no
+/// path of its own (generated at run time, or with no path at all).
+/// Matching `detect_cycles(root_orch, root_path=...)` exactly: the
+/// root's own node identity is *entry_path*'s resolved (symlink-
+/// following) form, so a `use` cycle that loops back through the
+/// *entry* document itself -- not just among its children -- is
+/// caught; and a `path:`/`orchestration:` child of the root resolves
+/// against *entry_path*'s own (unresolved) parent directory, same as
+/// Python's `root_path.parent` -- not a resolved/canonicalized form,
+/// so an entry document reached through a symlink still resolves a
+/// sibling reference against the symlink's own directory, the same
+/// directory the link's target's siblings are *not* necessarily in.
+pub(crate) fn detect_cycles(
+    document: &Value,
+    entry_path: Option<&Path>,
+) -> Result<(), CompileError> {
+    let root_identity = match entry_path {
+        Some(path) => path
+            .canonicalize()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| path.to_string_lossy().into_owned()),
+        None => "<root>".to_string(),
     };
+    let root_parent_dir = entry_path.and_then(Path::parent).map(PathBuf::from);
     let mut color = HashMap::new();
     let mut parent_chain = Vec::new();
     let mut cache = HashMap::new();
     if let Some(cycle) = visit(
         document,
-        "<root>",
-        parent_dir.as_deref(),
+        &root_identity,
+        root_parent_dir.as_deref(),
         &mut color,
         &mut parent_chain,
         &mut cache,
@@ -281,7 +277,6 @@ pub(crate) fn detect_cycles(document: &Value, origin: &DocumentOrigin) -> Result
 #[cfg(test)]
 mod tests {
     use super::detect_cycles;
-    use crate::DocumentOrigin;
     use electricity_value::{Dict, Value};
     use std::fs;
     use std::path::PathBuf;
@@ -303,11 +298,13 @@ mod tests {
         Value::Dict(dict)
     }
 
-    fn origin_for(dir: &std::path::Path) -> DocumentOrigin {
-        DocumentOrigin::File {
-            document_dir: dir.to_path_buf(),
-            confinement_root: dir.to_path_buf(),
-        }
+    /// A not-necessarily-existing entry path inside *dir*: every
+    /// existing test here only needs *its* `.parent()` (always `dir`,
+    /// whether or not the file itself exists), not its resolved
+    /// identity -- that only matters for the self-cycle tests below,
+    /// which write the entry file for real.
+    fn entry_at(dir: &std::path::Path) -> PathBuf {
+        dir.join("root.yaml")
     }
 
     fn tmp_dir(tag: &str) -> PathBuf {
@@ -325,7 +322,7 @@ mod tests {
     fn no_use_effects_is_fine() {
         let document = doc_with_effects(vec![]);
         let dir = tmp_dir("none");
-        assert!(detect_cycles(&document, &origin_for(&dir)).is_ok());
+        assert!(detect_cycles(&document, Some(&entry_at(&dir))).is_ok());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -333,7 +330,7 @@ mod tests {
     fn unresolvable_reference_is_not_a_cycle() {
         let document = doc_with_effects(vec![use_effect("sub", "does-not-exist.yaml")]);
         let dir = tmp_dir("unresolvable");
-        assert!(detect_cycles(&document, &origin_for(&dir)).is_ok());
+        assert!(detect_cycles(&document, Some(&entry_at(&dir))).is_ok());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -352,7 +349,7 @@ mod tests {
         .unwrap();
 
         let document = doc_with_effects(vec![use_effect("sub", "a.yaml")]);
-        let err = detect_cycles(&document, &origin_for(&dir)).unwrap_err();
+        let err = detect_cycles(&document, Some(&entry_at(&dir))).unwrap_err();
         assert!(err.0.starts_with("Cycle: "));
         assert!(err.0.contains(" → "));
         let _ = fs::remove_dir_all(&dir);
@@ -369,7 +366,7 @@ mod tests {
         fs::write(dir.join("b.yaml"), "effects: []\n").unwrap();
 
         let document = doc_with_effects(vec![use_effect("sub", "a.yaml")]);
-        assert!(detect_cycles(&document, &origin_for(&dir)).is_ok());
+        assert!(detect_cycles(&document, Some(&entry_at(&dir))).is_ok());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -379,7 +376,7 @@ mod tests {
         fs::write(dir.join("a.yaml"), "not: [valid: yaml:\n").unwrap();
 
         let document = doc_with_effects(vec![use_effect("sub", "a.yaml")]);
-        assert!(detect_cycles(&document, &origin_for(&dir)).is_ok());
+        assert!(detect_cycles(&document, Some(&entry_at(&dir))).is_ok());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -397,7 +394,91 @@ mod tests {
         );
         let document = doc_with_effects(vec![Value::Dict(inline_effect)]);
         let dir = tmp_dir("inline");
-        assert!(detect_cycles(&document, &origin_for(&dir)).is_ok());
+        assert!(detect_cycles(&document, Some(&entry_at(&dir))).is_ok());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_document_that_uses_itself_is_a_cycle() {
+        let dir = tmp_dir("self-cycle");
+        let entry = dir.join("root.yaml");
+        fs::write(
+            &entry,
+            "effects:\n  - type: use\n    name: s\n    path: root.yaml\n",
+        )
+        .unwrap();
+
+        let document = doc_with_effects(vec![use_effect("s", "root.yaml")]);
+        let err = detect_cycles(&document, Some(&entry)).unwrap_err();
+        assert!(err.0.starts_with("Cycle: "));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cycle_through_the_entry_document_itself_is_detected() {
+        let dir = tmp_dir("entry-cycle");
+        let entry = dir.join("root.yaml");
+        fs::write(
+            &entry,
+            "effects:\n  - type: use\n    name: s\n    path: a.yaml\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("a.yaml"),
+            "effects:\n  - type: use\n    name: s\n    path: root.yaml\n",
+        )
+        .unwrap();
+
+        let document = doc_with_effects(vec![use_effect("s", "a.yaml")]);
+        let err = detect_cycles(&document, Some(&entry)).unwrap_err();
+        assert!(err.0.starts_with("Cycle: "));
+        assert!(err.0.contains(" → "));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cycle_through_the_entry_document_is_caught_from_the_other_side_too() {
+        let dir = tmp_dir("entry-cycle-other-side");
+        let entry = dir.join("a.yaml");
+        fs::write(
+            &entry,
+            "effects:\n  - type: use\n    name: s\n    path: root.yaml\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("root.yaml"),
+            "effects:\n  - type: use\n    name: s\n    path: a.yaml\n",
+        )
+        .unwrap();
+
+        let document = doc_with_effects(vec![use_effect("s", "root.yaml")]);
+        let err = detect_cycles(&document, Some(&entry)).unwrap_err();
+        assert!(err.0.starts_with("Cycle: "));
+        assert!(err.0.contains(" → "));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_duplicate_key_in_a_child_does_not_hide_a_cycle_through_it() {
+        let dir = tmp_dir("dup-key-child");
+        // `name` repeated: Circuitry's own main loader would reject this
+        // outright, but `core/cycle_check.py::load_orch` reads a `use`
+        // child with plain `yaml.safe_load` (last key wins), so the
+        // cycle through it is still real.
+        fs::write(
+            dir.join("a.yaml"),
+            "effects:\n  - type: use\n    name: s\n    name: s\n    path: b.yaml\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("b.yaml"),
+            "effects:\n  - type: use\n    name: s\n    path: a.yaml\n",
+        )
+        .unwrap();
+
+        let document = doc_with_effects(vec![use_effect("sub", "a.yaml")]);
+        let err = detect_cycles(&document, Some(&entry_at(&dir))).unwrap_err();
+        assert!(err.0.starts_with("Cycle: "));
         let _ = fs::remove_dir_all(&dir);
     }
 }
