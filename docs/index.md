@@ -35,6 +35,7 @@ Start with the [README](../README.md) for install, first run, and the mental mod
 - [`surrealdb` tool plugin](./plugins/surrealdb.md) — SurrealQL and record operations, env-only credentials, readiness and error mapping.
 - [Runtime Plugin Catalog](./runtime-plugins.md) — per-plugin schema, redaction, and connection/auth docs for the bundled persistence runtime plugins.
 - [Binary tool plugins: `binary` and `env`](./plugins/binary-tools.md) — a machine-specific executable path and environment for `imagemagick`, `ffmpeg`, and the other subprocess-wrapping tool plugins.
+- [`service` tool plugin](./plugins/service.md) — start a background process, wait until it is ready, and stop exactly what was started (ownership records, port holders, `finally:` stop).
 
 ## Project
 

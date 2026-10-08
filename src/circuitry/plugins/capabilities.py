@@ -71,6 +71,8 @@ PLUGIN_CAPABILITIES: dict[str, frozenset[str]] = {
     "diff_patch": frozenset({SHELL}),
     "pdf_render": frozenset({SHELL}),
     "ffmpeg": frozenset({SHELL}),
+    # Starts a long-running process; an http(s) readiness check reaches a URL.
+    "service": frozenset({SHELL, NETWORK}),
     # Stdlib-only filesystem writers (no subprocess).
     "fs": frozenset({FS_WRITE}),
     "tar": frozenset({FS_WRITE}),
