@@ -100,6 +100,9 @@ def syntax_templates() -> list[str]:
         "{{^section}}x{{/section}}",
         "{{! a comment }}x",
         "{{=<% %>=}}<%a%><%={{ }}=%>{{b}}",
+        "{{= =}}",  # empty set-delimiter tag -- chevron treats the rest as one literal
+        "a{{= =}}",
+        "a{{= =}}b{{x}}c",
         "{{a",  # unclosed tag
         "{{#a}}x",  # unclosed section, EOF
         "{{#a}}{{#b}}x{{/b}}",  # unclosed section, EOF (nested)
@@ -258,6 +261,14 @@ def build_render_cases() -> list[dict]:
 
     # --- custom delimiters ---
     cases.append(render_case("{{=<% %>=}}<%a%>", {"a": "custom"}))
+
+    # --- an empty set-delimiter tag: chevron's own literal-splitting
+    # raises ValueError on an empty separator, caught by treating the
+    # entire rest of the template as one literal -- no more tags parse
+    # after it ---
+    cases.append(render_case("{{= =}}", {}))
+    cases.append(render_case("a{{= =}}", {}))
+    cases.append(render_case("a{{= =}}b{{x}}c", {"x": "X"}))
 
     # --- the `.`-plus-`True` chevron bug ---
     cases.append(render_case("{{#flag}}{{.}}{{/flag}}", {"flag": True, "marker": "OUTER"}))

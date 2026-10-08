@@ -203,7 +203,19 @@ impl<'a> Tokenizer<'a> {
     /// `grab_literal`: split on the left delimiter, advancing the line
     /// counter by the literal's own newlines (mirrors chevron's
     /// `_CURRENT_LINE` bookkeeping, including its exact point in the loop).
+    ///
+    /// An empty left delimiter (reachable only via `{{= =}}`, an empty
+    /// set-delimiter tag) is its own case: Python's `str.split('', 1)`
+    /// raises `ValueError`, which chevron's `grab_literal` catches as "no
+    /// more tags in the template" -- the *entire* rest becomes one
+    /// literal, same as running off the end. `str::split_once("")` has no
+    /// such failure mode (it matches at position 0), so that case is
+    /// special-cased here rather than left to fall out of `split_once`'s
+    /// own behavior.
     fn grab_literal(&mut self) -> (String, &'a str) {
+        if self.l_del.is_empty() {
+            return (self.rest.to_string(), "");
+        }
         match self.rest.split_once(self.l_del.as_str()) {
             Some((literal, after)) => {
                 self.current_line += literal.matches('\n').count();

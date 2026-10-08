@@ -1325,6 +1325,50 @@
     {
       "ctx": {
         "t": "dict",
+        "v": []
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{= =}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "a",
+      "template": "a{{= =}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "str",
+              "v": "X"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "ab{{x}}c",
+      "template": "a{{= =}}b{{x}}c"
+    },
+    {
+      "ctx": {
+        "t": "dict",
         "v": [
           [
             {
@@ -2432,6 +2476,18 @@
     {
       "syntax_error": null,
       "template": "{{=<% %>=}}<%a%><%={{ }}=%>{{b}}"
+    },
+    {
+      "syntax_error": null,
+      "template": "{{= =}}"
+    },
+    {
+      "syntax_error": null,
+      "template": "a{{= =}}"
+    },
+    {
+      "syntax_error": null,
+      "template": "a{{= =}}b{{x}}c"
     },
     {
       "syntax_error": "unclosed tag at line 1",

@@ -16,12 +16,12 @@
 //!
 //! ## Known divergences from chevron
 //!
-//! This port matches chevron by output for every shape the production
-//! document sets and the conformance corpus exercise (`render.rs`'s module
-//! docs). The following are confirmed differences against real chevron,
-//! each judged unreachable by an ordinary orchestration template (state is
-//! always a dict; values come from YAML/JSON/tool output) and left as-is
-//! rather than fixed in this port:
+//! This port matches chevron by output for every shape the conformance
+//! corpus exercises (`render.rs`'s module docs). The following are
+//! confirmed differences against real chevron, each judged unreachable by
+//! an ordinary orchestration template (state is always a dict; values
+//! come from YAML/JSON/tool output) and left as-is rather than fixed in
+//! this port:
 //!
 //! - **Falsy root `{{.}}`.** `{{.}}` never falls through chevron's usual
 //!   falsy-to-`""` collapse (`_get_key` returns `scopes[0]` for `"."`
@@ -37,23 +37,24 @@
 //!   This port's `Value::List` is the only section-iterable type, so
 //!   `Value::Bytes` renders its section body once, with the whole byte
 //!   string as scope, like any other truthy scalar.
-//! - **The attribute-fallback mismatch (tracked upstream, not here).**
-//!   `_get_key`'s second lookup step is `getattr(scope, child)`: inside a
-//!   section whose scope is a `str` (or any Python object), a tag whose
-//!   name happens to match one of that object's attributes or methods
-//!   (`count`, `index`, `format`, a date's `.isoformat`/`.year`, ...)
-//!   resolves to Python's description of that attribute/bound method —
-//!   e.g. `{{#title}}{{title}}{{/title}}` with `title: "Intro"` renders
-//!   `<built-in method title of str object at 0x...>`, not `"Intro"` —
-//!   instead of falling through to the next scope up the way a plain
-//!   missing key would. The text contains a memory address, so it cannot
-//!   be ported byte for byte even in principle. This port has no
-//!   `getattr` step at all, so a name shadowing an attribute/method
+//! - **The attribute-fallback mismatch (tracked upstream as #389, not
+//!   here).** `_get_key`'s second lookup step is `getattr(scope, child)`:
+//!   inside a section whose scope is a `str` (or any Python object), a
+//!   tag whose name happens to match one of that object's attributes or
+//!   methods (`count`, `index`, `format`, a date's `.isoformat`/`.year`,
+//!   ...) resolves to Python's description of that attribute/bound
+//!   method — e.g. `{{#title}}{{title}}{{/title}}` with `title: "Intro"`
+//!   renders (HTML-escaped, since `{{title}}` is an escaped tag)
+//!   `&lt;built-in method title of str object at 0x...&gt;`, not
+//!   `"Intro"` — instead of falling through to the next scope up the way
+//!   a plain missing key would. The text contains a memory address, so
+//!   it cannot be ported byte for byte even in principle. This port has
+//!   no `getattr` step at all, so a name shadowing an attribute/method
 //!   simply falls through to the outer scope — the value a template
 //!   author actually meant. This is a genuine Circuitry rendering bug
 //!   (reachable by an ordinary `{{#title}}{{title}}{{/title}}`-shaped
-//!   template), tracked as a separate upstream issue rather than fixed or
-//!   reproduced in this port.
+//!   template), tracked as a separate upstream issue (#389) rather than
+//!   fixed or reproduced in this port.
 //! - **`int()` leniency.** Python's `int()` accepts leading/trailing
 //!   whitespace (`" 1"`), underscore digit grouping (`"1_0"` == 10), and
 //!   arbitrary precision. A dotted segment or set-delimiter split in this
@@ -66,14 +67,6 @@
 //!   does not. A standalone-tag line padded with only these characters is
 //!   trimmed by chevron but not by this port. Needs one of these four
 //!   control characters on a line with a tag.
-//! - **An empty set-delimiter tag.** `{{= =}}` sets both delimiters to
-//!   `""`; chevron's own literal-splitting (`template.split('', 1)`)
-//!   raises `ValueError` on an empty separator, which it catches by
-//!   treating the *entire rest of the template* as one literal — no more
-//!   tags are ever recognized after it. This port's literal-splitting
-//!   does not special-case an empty delimiter the same way, so it keeps
-//!   tokenizing tags normally afterward. Needs a template that sets an
-//!   empty delimiter and still expects tags afterward to stop parsing.
 //! - **A same-key inverted section inside a list section.** Chevron
 //!   gathers a list section's body by counting nested `('section', key)`
 //!   opens against `('end', key)` closes to find its own matching end —
