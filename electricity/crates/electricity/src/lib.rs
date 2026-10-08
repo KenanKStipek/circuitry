@@ -1,10 +1,15 @@
 //! Preview skeleton of the electricity library crate.
 //!
-//! This release ships no compiler, bytecode, VM, tool, or adapter
-//! implementation (see `../../DESIGN.md`); [`run_orchestration`] always
-//! fails with [`PreviewUnsupported`].
+//! This release ships no VM, tool, or adapter implementation (see
+//! `../../DESIGN.md`); [`run_orchestration`] always fails with
+//! [`PreviewUnsupported`]. [`dump_ir`] is the one exception
+//! (issue #408's CLI section): an unstable debugging aid that runs the
+//! compiler's `check_for_run` and prints the result, wired all the way
+//! through even though `electricity-compiler` itself is still a lane A
+//! stub -- see that crate's docs for which lane fills in each piece.
 
 use std::fmt;
+use std::path::Path;
 
 /// The crate's version, taken from the workspace's `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -32,6 +37,38 @@ impl std::error::Error for PreviewUnsupported {}
 /// Always returns `Err(PreviewUnsupported)`: this preview has no compiler or VM.
 pub fn run_orchestration() -> Result<(), PreviewUnsupported> {
     Err(PreviewUnsupported)
+}
+
+/// `{"ir_version": "unstable", "program": ...}`, 2-space indented, for
+/// `electricity --dump-ir` (issue #408's CLI section). Not a contract:
+/// nothing in this workspace reads this shape back, and it may change in
+/// any release -- see `electricity_bytecode`'s crate docs.
+///
+/// Runs `electricity_compiler::check_for_run` first; its `Err` becomes
+/// this function's `Err`, with the exact text `--dump-ir` writes to
+/// stderr on failure (the same text a plain run of the same document
+/// would report). Currently always `Err`: `check_for_run` is a lane A
+/// stub until lane B lands.
+pub fn dump_ir(orchestration_path: &Path) -> Result<String, String> {
+    let options = electricity_compiler::CheckOptions {
+        skip_preflight: true,
+        trust_document: true,
+    };
+    let program = electricity_compiler::check_for_run(orchestration_path, &options)
+        .map_err(|err| err.to_string())?;
+    // `serde_json::json!` would `.unwrap()` internally on a `Program`
+    // that fails to serialize (e.g. a non-UTF-8 `PathBuf` in
+    // `DocumentInfo`) -- reporting that as an `Err` on stderr instead
+    // of panicking matters here specifically, since a `--dump-ir`
+    // failure is this crate's one promise never to crash.
+    let program_value = serde_json::to_value(&program).map_err(|err| err.to_string())?;
+    let mut wrapper = serde_json::Map::with_capacity(2);
+    wrapper.insert(
+        "ir_version".to_string(),
+        serde_json::Value::from("unstable"),
+    );
+    wrapper.insert("program".to_string(), program_value);
+    serde_json::to_string_pretty(&serde_json::Value::Object(wrapper)).map_err(|err| err.to_string())
 }
 
 #[cfg(test)]

@@ -836,6 +836,67 @@ impl Value {
     }
 }
 
+// ---------------------------------------------------------------------
+// Serialize: a debug-only JSON shape, not a contract
+// ---------------------------------------------------------------------
+
+/// `Value`'s [`serde::Serialize`] impl is for debugging tools
+/// (electricity-compiler's `--dump-ir`, snapshot tests) only — nothing in
+/// this workspace reads this shape back, and it is not Python-faithful:
+/// JSON has no bigint, byte-string, `NaN`/`Infinity`, date, or non-string-
+/// key-map type, so every variant that doesn't fit JSON directly is
+/// tagged rather than silently coerced (an `Int::Big` or a `NaN` float
+/// serialized as a plain JSON number would either overflow a reader's
+/// `f64` or fail `serde_json`'s own NaN/Infinity rejection outright):
+///
+/// - `Bool`/`Str`/`Date`/`DateTime` -> a JSON bool/string (`py_str`'s own
+///   form for the date/time variants).
+/// - `Int::Small` and a finite `Float` -> a JSON number.
+/// - `Int::Big` and a non-finite `Float` (`NaN`/`Infinity`/`-Infinity`) ->
+///   a JSON string of the decimal digits, or of `py_repr`'s own spelling.
+/// - `Bytes` -> `{"$bytes_hex": "<lowercase hex>"}`.
+/// - `List` -> a JSON array.
+/// - `Dict` -> a JSON array of `[key, value]` pairs, never a JSON object
+///   — a `Dict`'s keys are themselves `Value` (not always a `Str`), so
+///   there is no single shape that both stays valid JSON and keeps a
+///   non-string key (`1: ...`, `true: ...`) distinguishable from its
+///   string spelling.
+impl serde::Serialize for Value {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        match self {
+            Value::None => serializer.serialize_none(),
+            Value::Bool(b) => serializer.serialize_bool(*b),
+            Value::Int(IntValue::Small(n)) => serializer.serialize_i64(*n),
+            Value::Int(big @ IntValue::Big(_)) => serializer.serialize_str(&big.to_string()),
+            Value::Float(f) if f.is_finite() => serializer.serialize_f64(*f),
+            Value::Float(f) => serializer.serialize_str(&float_repr::py_float_repr(*f)),
+            Value::Str(s) => serializer.serialize_str(s),
+            Value::Bytes(b) => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("$bytes_hex", &hex_encode(b))?;
+                map.end()
+            }
+            Value::List(items) => items.serialize(serializer),
+            Value::Dict(entries) => {
+                let pairs: Vec<(&Value, &Value)> = entries.iter().collect();
+                pairs.serialize(serializer)
+            }
+            Value::Date(d) => serializer.serialize_str(&datetime_repr::date_str(d)),
+            Value::DateTime(naive, offset) => {
+                serializer.serialize_str(&datetime_repr::datetime_str(naive, offset.as_ref()))
+            }
+        }
+    }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn py_bool_str(b: bool) -> String {
     if b { "True" } else { "False" }.to_string()
 }
