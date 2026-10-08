@@ -44,6 +44,17 @@
 //!   source's cache-root override.
 //! - `ref:` is rejected at compile time: there is no library-name/
 //!   remote-library resolution (DESIGN.md §4).
+//! - [`prompt_files`]'s confinement-root resolve: `core/prompt_files.py::
+//!   resolve_prompt_file_path` lets the confinement root's own `Path.
+//!   resolve(strict=False)` raise an *uncaught* `OSError` (only the
+//!   candidate path's own resolve is wrapped in a `PromptFileError`) --
+//!   a latent bug, reachable only by a confinement root itself behind a
+//!   broken symlink chain. This port wraps both resolves the same way,
+//!   as a [`CompileError`] rather than an uncaught panic (Rust has no
+//!   equivalent of letting an arbitrary exception type propagate out of
+//!   a `Result`-returning function); not pinned by a corpus case, since
+//!   the exact OS error text this produces is errno-message dependent
+//!   even in CPython itself.
 
 pub mod compile;
 pub mod compose;
