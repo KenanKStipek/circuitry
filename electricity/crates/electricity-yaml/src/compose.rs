@@ -256,7 +256,7 @@ enum Node {
         /// alias cloning a whole already-deep subtree into a new, only
         /// textually-shallow container) in O(1), without re-walking the
         /// cloned subtree (`crate::MAX_DEPTH`'s doc comment).
-        depth: u32,
+        depth: usize,
     },
     Mapping {
         tag: String,
@@ -264,7 +264,7 @@ enum Node {
         mark: Mark,
         /// See [`Node::Sequence`]'s `depth` -- 1 + the deepest key/value's
         /// own depth, 1 for an empty mapping.
-        depth: u32,
+        depth: usize,
     },
 }
 
@@ -281,7 +281,7 @@ impl Node {
     /// deep in the tree it sits -- see the `!matches!` exemption in
     /// [`Composer::compose_from_event`]'s depth check), or the stored
     /// `depth` for a sequence/mapping.
-    fn depth(&self) -> u32 {
+    fn depth(&self) -> usize {
         match self {
             Node::Scalar { .. } => 1,
             Node::Sequence { depth, .. } | Node::Mapping { depth, .. } => *depth,
@@ -422,7 +422,7 @@ impl<'t> Composer<'t> {
         &mut self,
         parser: &mut Parser<'input, Input<'input>>,
         last_event_end: &mut Marker,
-        depth: u32,
+        depth: usize,
     ) -> Result<Node, YamlError> {
         let before = *last_event_end;
         let (event, span) = pull(parser, last_event_end)?;
@@ -447,7 +447,7 @@ impl<'t> Composer<'t> {
         event: Event<'input>,
         span: Span,
         before: Marker,
-        depth: u32,
+        depth: usize,
         parser: &mut Parser<'input, Input<'input>>,
         last_event_end: &mut Marker,
     ) -> Result<Node, YamlError> {
@@ -526,7 +526,7 @@ impl<'t> Composer<'t> {
         tag: Option<std::borrow::Cow<'input, Tag>>,
         span: Span,
         before: Marker,
-        depth: u32,
+        depth: usize,
         parser: &mut Parser<'input, Input<'input>>,
         last_event_end: &mut Marker,
     ) -> Result<Node, YamlError> {
@@ -571,7 +571,7 @@ impl<'t> Composer<'t> {
         tag: Option<std::borrow::Cow<'input, Tag>>,
         span: Span,
         before: Marker,
-        depth: u32,
+        depth: usize,
         parser: &mut Parser<'input, Input<'input>>,
         last_event_end: &mut Marker,
     ) -> Result<Node, YamlError> {
@@ -608,12 +608,12 @@ impl<'t> Composer<'t> {
 /// 1 + the deepest item's depth (1 for an empty sequence) -- `Node`'s
 /// own `depth()` is already O(1) per child (`crate::MAX_DEPTH`'s doc
 /// comment), so this never itself recurses into a child's structure.
-fn node_depth_of(items: &[Node]) -> u32 {
+fn node_depth_of(items: &[Node]) -> usize {
     1 + items.iter().map(Node::depth).max().unwrap_or(0)
 }
 
 /// Same as [`node_depth_of`], over a mapping's key/value pairs.
-fn node_depth_of_pairs(pairs: &[(Node, Node)]) -> u32 {
+fn node_depth_of_pairs(pairs: &[(Node, Node)]) -> usize {
     1 + pairs
         .iter()
         .flat_map(|(k, v)| [k.depth(), v.depth()])

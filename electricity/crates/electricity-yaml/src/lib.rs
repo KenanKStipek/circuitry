@@ -36,7 +36,7 @@ pub use error::{Mark, YamlError};
 /// only be model-generated (a reflector/decomposition plan, or a
 /// rendered `use: inline` child) -- untrusted input that must fail with
 /// a distinct, catchable error here rather than exhausting the stack.
-pub const MAX_DEPTH: u32 = 512;
+pub const MAX_DEPTH: usize = 512;
 
 // ---------------------------------------------------------------------
 // Known divergences from Circuitry's own loader (`core/yaml_load.py`)

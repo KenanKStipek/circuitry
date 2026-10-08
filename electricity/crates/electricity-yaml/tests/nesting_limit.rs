@@ -47,7 +47,7 @@ fn nested_flow_sequence(n: usize) -> String {
 
 #[test]
 fn exactly_at_the_limit_parses_on_a_2mib_thread() {
-    let text = nested_block_mapping(usize::try_from(electricity_yaml::MAX_DEPTH).unwrap() - 1);
+    let text = nested_block_mapping(electricity_yaml::MAX_DEPTH - 1);
     let value = run_on_small_stack(text).expect("exactly MAX_DEPTH levels must still parse");
     // Innermost value is the int 1, wrapped `MAX_DEPTH - 1` times.
     assert!(value.py_repr().starts_with("{'a': {'a':"));
@@ -55,7 +55,7 @@ fn exactly_at_the_limit_parses_on_a_2mib_thread() {
 
 #[test]
 fn one_past_the_limit_is_a_distinct_nesting_error_not_a_scan_error() {
-    let text = nested_block_mapping(usize::try_from(electricity_yaml::MAX_DEPTH).unwrap());
+    let text = nested_block_mapping(electricity_yaml::MAX_DEPTH);
     let err = run_on_small_stack(text).unwrap_err();
     assert!(
         matches!(err, YamlError::NestingTooDeep { .. }),
