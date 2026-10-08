@@ -290,6 +290,8 @@ dependencies = [
  "electricity-value",
  "electricity-yaml",
  "indexmap",
+ "num-traits",
+ "regex",
  "serde",
  "serde_json",
 ]
