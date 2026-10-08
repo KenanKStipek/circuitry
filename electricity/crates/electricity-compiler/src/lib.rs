@@ -44,6 +44,22 @@
 //!   source's cache-root override.
 //! - `ref:` is rejected at compile time: there is no library-name/
 //!   remote-library resolution (DESIGN.md §4).
+//! - `use.inputs`'s compile-time template/reference checks stay as
+//!   shallow as Circuitry's own `_compile_use` (top-level values only;
+//!   a nested dict/list value is neither template-checked nor
+//!   recursed into) — deliberately narrower than the equivalent walk
+//!   for a tool's `params`, to avoid rejecting a document Circuitry's
+//!   own compiler accepts (`compile::params`'s own module docs).
+//! - `cycles::detect_cycles` has no root self-identity: a
+//!   [`DocumentOrigin::File`] carries the document's directory only,
+//!   not its filename, so a `use` cycle that loops back through the
+//!   *entry* document itself is not caught (a cycle entirely among
+//!   `use` children is unaffected) — see `cycles.rs`'s own module docs.
+//! - `compile::leaves::resolve_text_or_file` is a lane-C-local stand-in
+//!   for lane D's own `prompt_files::resolve_text_or_file`: the
+//!   plain-string case (every case this lane's corpus exercises) is
+//!   exact; a `{file: ...}` prompt source is a clearly marked gap
+//!   until lane D lands.
 
 pub mod compile;
 pub mod compose;
