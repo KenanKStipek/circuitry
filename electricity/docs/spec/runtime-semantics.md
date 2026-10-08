@@ -1727,6 +1727,7 @@ the run is fully deterministic.
 | C30 | Two `{{> name}}` tags concatenated in one tool `params` string, each naming a different `yield` effect | n/a | Both splice in, unescaped by the surrounding (escaped) tool-param context (§3.4, §3.6) |
 | C31 | `yield` template `{{input.x}}`, vs. the same value through a tool `params` string | `-e x='"<b>&'` | Prompt text (`yield.template`) renders `{{input.x}}` unescaped; the tool param still HTML-escapes it (§3.1, §3.4) |
 | C32 | Declared `prompts:` map with one entry sourced from `{file: <path>}`, spliced via `{{> name}}` into a `yield` template alongside an ordinary `{{input...}}` reference | `-e topic=circuitry` | The file's own text is read at compile time and used exactly as inline text would be (§3.6.2) |
+| C33 | Two declared prompts, each nesting a different `yield` effect's reference, used side by side (`{{> a}}-{{> b}}`) and in reverse order (`{{> y}} {{> a}}`) | n/a | Both resolve independently (`X-Y`, `Y X`) — the whole recursive expansion shares one synthetic-key counter, so two sibling references nested inside different declared prompts never mint the same key (§3.6) |
 
 ---
 

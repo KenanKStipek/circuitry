@@ -91,8 +91,33 @@ def _trust_document(path: Path, *, yes: bool, store: Path, config: Path | None) 
     # child trusted here is found by the run-time check in `core.use`, which
     # hashes the same way.
     from ..core.prompt_compose import document_content_digest
+    from .library_sources import (
+        LibraryRegistry,
+        LibrarySourceError,
+        confinement_root_for_document,
+    )
 
-    digest = document_content_digest(path, orch)
+    try:
+        library_registry = LibraryRegistry.from_runtime(cfg.runtime)
+    except LibrarySourceError:
+        library_registry = LibraryRegistry.default()
+    resolved_path = path.resolve()
+    # Same cache-path confinement rule `cli.runtime_shim.run()`/`validate()`
+    # apply (#396 second-review finding 6): `cof trust <cache path>` must
+    # hash against the fetched tree's own root, not whatever project config
+    # happens to sit above the cache directory on this machine, or it could
+    # disagree with the run-time check over what the document's own content
+    # even is.
+    digest = document_content_digest(
+        path,
+        orch,
+        confinement_root=confinement_root_for_document(
+            path,
+            resolved_path.parent,
+            library_registry=library_registry,
+            is_cache_path=library_registry.is_cache_path(path),
+        ),
+    )
     consented = consented_capabilities(digest, store_path=store)
 
     console.print(f"[bold]Orchestration:[/bold] {escape(str(path.resolve()))}")

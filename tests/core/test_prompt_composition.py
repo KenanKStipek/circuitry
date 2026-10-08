@@ -190,6 +190,22 @@ def test_two_declared_prompts_each_nesting_a_different_yield_do_not_collide() ->
     assert store.get("prime.second.value") == "Y X"
 
 
+def test_exponentially_nested_declared_prompts_fail_cleanly_not_by_exhausting_memory() -> None:
+    """`cof check`'s cycle check cannot catch this -- each level names a
+    *different* declared prompt, each including the next one twice, so
+    thirty levels alone would produce 2**30 copies of the leaf text. A size
+    cap on the expanded output turns that into a prompt-level render error
+    instead of a memory blowup."""
+    prompts = {f"p{i}": f"{{{{> p{i + 1}}}}}{{{{> p{i + 1}}}}}" for i in range(29)}
+    prompts["p29"] = "leaf"
+    orch = {
+        "prompts": prompts,
+        "effects": [{"type": "yield", "name": "y", "template": "{{> p0}}"}],
+    }
+    with pytest.raises(RuntimeError, match="likely runaway nested declared-prompt growth"):
+        _run(orch)
+
+
 # ── section scope: text splicing, not a pre-rendered value (decision C) ─────
 
 
@@ -1003,3 +1019,34 @@ def test_tool_param_still_escapes_its_own_tags() -> None:
     }
     store = _run(orch, initial_state={"input": {"x": "<b>"}})
     assert store.get("prime.t.value") == '"&lt;b&gt;"'
+
+
+# ── document_content_digest: the bytes hashed are path+length-tagged ────────
+
+
+def test_moving_bytes_between_two_prompt_files_changes_the_digest(tmp_path: Path) -> None:
+    """Concatenating each file's bytes with nothing between them would make
+    `document_content_digest` blind to moving bytes across a file boundary
+    (same total content, same file set, different split) -- the path and
+    byte length of each file are hashed ahead of its bytes precisely so
+    that cannot happen."""
+    from circuitry.core.prompt_compose import document_content_digest
+
+    orch = {
+        "prompts": {"a": {"file": "a.md"}, "b": {"file": "b.md"}},
+        "effects": [{"type": "yield", "name": "y", "template": "{{> a}}{{> b}}"}],
+    }
+    doc = tmp_path / "doc.yml"
+    doc.write_text(yaml.safe_dump(orch), encoding="utf-8")
+
+    _write(tmp_path / "a.md", "AB")
+    _write(tmp_path / "b.md", "CD")
+    digest_before = document_content_digest(doc, orch, confinement_root=tmp_path)
+
+    # Same four bytes overall ("ABCD"), same two files, moved across the
+    # boundary instead of each file's own content changing.
+    _write(tmp_path / "a.md", "A")
+    _write(tmp_path / "b.md", "BCD")
+    digest_after = document_content_digest(doc, orch, confinement_root=tmp_path)
+
+    assert digest_before != digest_after

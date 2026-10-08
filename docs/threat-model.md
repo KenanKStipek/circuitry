@@ -569,6 +569,12 @@ declared prompt's own text) is itself prompt text once rendered — it is
 never treated as something else — and a `{{> name}}` splicing it in never
 re-renders the result, so a file's own content cannot carry a template tag
 that executes again (see [Mustache Template Interpolation](./orchestration-reference.md#mustache-template-interpolation)).
+The one place resolved prompt text *does* become something else is a child
+document's own source: `{{> gen}}` inside a `use: inline` string becomes
+part of what gets parsed and compiled as that child's YAML, exactly as
+`{{{prime.gen.value}}}` already does there — not new to this feature, and
+gated the same way (`use: inline`'s own content is this document's own,
+never independently trusted).
 
 ---
 

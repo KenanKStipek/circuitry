@@ -230,6 +230,13 @@ def document_content_digest(
     like ``core.resume.document_sha256``: a document that fails to parse
     here (it will fail again, loudly, moments later) just falls back to the
     file's own bytes.
+
+    Each prompt file's own path (relative to the document's directory, so
+    the digest doesn't vary with where a checkout happens to sit on disk)
+    and byte length are hashed ahead of its bytes, not just the bytes
+    concatenated with nothing between them — otherwise moving bytes from
+    the end of one prompt file to the start of the next (same total bytes,
+    same file set, different split) would leave the digest unchanged.
     """
     from .prompt_files import default_project_root
 
@@ -246,7 +253,14 @@ def document_content_digest(
             orch, document_dir=document_dir, confinement_root=root
         )
         for prompt_file in sorted(set(paths)):
-            hasher.update(prompt_file.read_bytes())
+            data = prompt_file.read_bytes()
+            try:
+                label = str(prompt_file.relative_to(document_dir))
+            except ValueError:
+                label = str(prompt_file)
+            hasher.update(label.encode("utf-8"))
+            hasher.update(len(data).to_bytes(8, "big"))
+            hasher.update(data)
     except Exception:
         pass
     return hasher.hexdigest()
@@ -807,6 +821,16 @@ def _resolve_effect_text(
     )
 
 
+#: A cap on the total text ``{{> name}}`` expansion produces across one
+#: render — not a precise budget, just a backstop against a declared
+#: prompt that nests itself exponentially (e.g. 30 levels of
+#: ``p_n: "{{> p_n+1}}{{> p_n+1}}"``, which `cof check`'s own cycle check
+#: doesn't catch, since each level names a *different* prompt) passing
+#: `cof check` and then exhausting memory at run time (#396 second-review
+#: finding 9).
+_MAX_EXPANDED_CHARS = 8 * 1024 * 1024
+
+
 def _expand(
     template: str,
     *,
@@ -817,6 +841,7 @@ def _expand(
     seen: frozenset[str],
     counter: Iterator[int],
     extra: dict[str, str],
+    budget: list[int],
 ) -> str:
     """*template*, with every ``{{> name}}`` tag replaced, mutating *extra*
     in place with one entry per resolved effect reference.
@@ -827,8 +852,20 @@ def _expand(
     recursive ``_expand`` call, and a fresh ``counter``/``extra`` pair per
     call would let two sibling references (one inside a nested declared
     prompt, one beside it) mint the same synthetic key and collide in the
-    single ``extra`` dict the whole render ultimately shares.
+    single ``extra`` dict the whole render ultimately shares. *budget* is a
+    one-element running total (also shared, unchanged, across every
+    recursive call) of every resolved fragment's/value's own length, capped
+    at :data:`_MAX_EXPANDED_CHARS`.
     """
+
+    def _charge(size: int, *, where: str) -> None:
+        budget[0] += size
+        if budget[0] > _MAX_EXPANDED_CHARS:
+            raise TemplateError(
+                f"{where}: '{{{{> name}}}}' expansion produced over "
+                f"{_MAX_EXPANDED_CHARS} characters — likely runaway nested "
+                "declared-prompt growth."
+            )
 
     def replace(match: re.Match[str]) -> str:
         name = match.group(1).strip()
@@ -847,11 +884,15 @@ def _expand(
                 seen=seen | {name},
                 counter=counter,
                 extra=extra,
+                budget=budget,
             )
             fragment = _unescape_variable_tags(fragment, label=f"prompts.{name}")
-            return _drop_one_trailing_newline(fragment)
+            fragment = _drop_one_trailing_newline(fragment)
+            _charge(len(fragment), where=label)
+            return fragment
         text = _resolve_effect_text(name, head, ctx=ctx, known_names=known_names, label=label)
         text = _drop_one_trailing_newline(text)
+        _charge(len(text), where=label)
         key = f"__circuitry_partial_{next(counter)}__"
         extra[key] = text
         return f"{{{{{{{key}}}}}}}"
@@ -892,6 +933,7 @@ def render_with_composition(
         seen=frozenset(),
         counter=itertools.count(),
         extra=extra,
+        budget=[0],
     )
     merged_ctx = {**ctx, **extra} if extra else ctx
     return render_template(rewritten, merged_ctx, label=label, escape=escape)
