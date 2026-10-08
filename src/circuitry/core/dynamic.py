@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal, Union
 
@@ -164,6 +164,25 @@ class DynamicDefinition:
 
     # False = skip execution (whole subtree) and write a disabled node.
     enabled: bool = True
+
+    # This document's own declared `prompts:` (#396) — only ever populated
+    # on the root `DynamicDefinition` a `core.compiler.compile_orchestration`
+    # call returns; always empty on a nested `dynamic` effect (it has no
+    # declarations of its own, and inherits none — see the module's own
+    # `prompts:` docs). Threaded into `runtime_config` by the caller, not
+    # read from here at render time.
+    prompts: Mapping[str, str] = field(default_factory=dict)
+
+    # Every effect name this document's tree contains anywhere (#396) —
+    # same lifecycle as `prompts` above: only populated on the root, threaded
+    # into `runtime_config` by the caller. Lets `{{> name}}`'s runtime
+    # expansion (`core.prompt_compose._resolve_effect_text`) tell "this is a
+    # real effect that simply has not written its value yet" (an untaken
+    # `if` branch, a `flow: tree` sibling, one later in the chain — renders
+    # "", like a bare `{{{prime.x.value}}}` miss) apart from a genuinely
+    # unknown name (a backstop error, for a generated/`use: inline` document
+    # that skipped `cof check`'s own, scope-aware name validation).
+    effect_names: frozenset[str] = field(default_factory=frozenset)
 
 
 class DynamicRuntime:
@@ -737,6 +756,7 @@ class DynamicRuntime:
         from .reflector import ReflectorDefinition, ReflectorRuntime
         from .tool import ToolDefinition, ToolRuntime
         from .use import UseDefinition, UseRuntime
+        from .yield_effect import YieldDefinition, YieldRuntime
 
         indent = "  " * self.depth
         type_label = _effect_type_label(effect)
@@ -745,6 +765,7 @@ class DynamicRuntime:
         is_prompt = isinstance(effect, PromptDefinition)
         is_tool = isinstance(effect, ToolDefinition)
         is_use = isinstance(effect, UseDefinition)
+        is_yield = isinstance(effect, YieldDefinition)
 
         # If a tracker is provided, derive all callbacks from it
         _cb_running: Callable[[str, int], None] | None = None
@@ -777,7 +798,7 @@ class DynamicRuntime:
             and name != "?"
             and effect_completed_ok(store.state.get(name))
         ):
-            if self.verbose and not is_prompt and not is_tool and not is_use:
+            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
                 line = (
                     f"{indent}[ok]↻[/ok] [{color}]{icon}[/{color}]"
                     f" {name} [dim](resumed)[/dim]"
@@ -788,7 +809,7 @@ class DynamicRuntime:
                     _console.print(line)
             return "resumed"
 
-        if self.verbose and not is_prompt and not is_tool and not is_use:
+        if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
             if cb_start is not None:
                 cb_start()
             else:
@@ -917,10 +938,24 @@ class DynamicRuntime:
                     ancestors=self._child_ancestors if tracker is None else None,
                 ).execute(store=store, ctx=ctx)
 
+            elif isinstance(effect, YieldDefinition):
+                YieldRuntime(
+                    effect,
+                    runtime_config=self.runtime_config,
+                    dry_run=self.dry_run,
+                    verbose=self.verbose,
+                    depth=self.depth,
+                    cb_start=cb_start,
+                    cb_done=cb_done,
+                    cb_error=cb_error,
+                    display_name=_child_display_name(name, label_prefix=self._label_prefix),
+                    ancestors=self._child_ancestors if tracker is None else None,
+                ).execute(store=store, ctx=ctx)
+
             else:
                 raise TypeError(f"Unsupported effect type: {type(effect)}")
 
-            if self.verbose and not is_prompt and not is_tool and not is_use:
+            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
                 elapsed = time.monotonic() - t0
                 suffix = _elapsed_str(elapsed)
                 # A dynamic with on_error: skip/continue absorbs its own
@@ -958,7 +993,7 @@ class DynamicRuntime:
             return "ran"
 
         except Exception:
-            if self.verbose and not is_prompt and not is_tool and not is_use:
+            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
                 elapsed = time.monotonic() - t0
                 suffix = _elapsed_str(elapsed)
                 if isinstance(effect, DynamicDefinition):
@@ -1036,9 +1071,12 @@ def _effect_type_label(effect: Any) -> str:
     from .reflector import ReflectorDefinition
     from .tool import ToolDefinition
     from .use import UseDefinition
+    from .yield_effect import YieldDefinition
 
     if isinstance(effect, PromptDefinition):
         return "prompt"
+    if isinstance(effect, YieldDefinition):
+        return "yield"
     if isinstance(effect, DynamicDefinition):
         return f"dynamic:{effect.flow}"
     if isinstance(effect, ConditionalDefinition):
@@ -1058,6 +1096,7 @@ def _effect_type_label(effect: Any) -> str:
 # Dynamic and loop have distinct icons for chain (sequential) vs tree (parallel).
 _EFFECT_STYLE: dict[str, tuple[str, str]] = {
     "prompt": ("◆", "cyan"),
+    "yield": ("○", "magenta"),
     "dynamic:chain": ("⬡", "blue"),
     "dynamic:tree": ("⬢", "blue"),
     "loop:chain": ("↻", "yellow"),

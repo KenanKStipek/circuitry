@@ -1,0 +1,11 @@
+name: c31-prompt-text-escaping
+effects:
+  - type: yield
+    name: brief
+    template: "{{input.x}}"
+  - type: tool
+    name: escaped
+    provider: json
+    params:
+      mode: stringify
+      input: "{{input.x}}"

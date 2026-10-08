@@ -43,7 +43,26 @@ prime.kind.meta     # adapter, model, model_reason, prompt_type, prompt_sent,
 
 ## Templates and messages
 
-`template` is a [Mustache](https://mustache.github.io/) string. Anything in double braces is looked up in the shadow state: `{{input.issue}}` reads a caller-supplied value, `{{prime.kind.value}}` reads an earlier effect's output. Triple-stache `{{{…}}}` skips HTML escaping, which matters when you interpolate code or markup. [Shadow state](03-state.md) covers the full addressing rules; the short version is that every reference starts with `input.`, `prime.`, or `runtime.`. Circuitry does not support partials. A `{{> name}}` tag is an error: `cof check` reports it, and at run time the render fails without reading any file. (chevron, the renderer Circuitry uses, would otherwise read `name.mustache` from the working directory.) One that only appears at run time (a generated plan, a `use: inline` child) fails the render the same way, instead of touching the file system.
+`template` is a [Mustache](https://mustache.github.io/) string. Anything in double braces is looked up in the shadow state: `{{input.issue}}` reads a caller-supplied value, `{{prime.kind.value}}` reads an earlier effect's output. [Shadow state](03-state.md) covers the full addressing rules; the short version is that every reference starts with `input.`, `prime.`, or `runtime.`. Unlike everywhere else a template renders, `{{…}}` in a prompt's `template`/`messages` does not HTML-escape — prompts are not HTML, and escaping only corrupted the quoted text, code and JSON they commonly carry. (Triple-stache `{{{…}}}` still works the same way it always did; it's just no longer the only way to get unescaped text here.)
+
+**Composing prompts.** A top-level `prompts:` map declares named text, reused with `{{> name}}`:
+
+```yaml
+prompts:
+  voice: |
+    Plain, direct sentences. No marketing language.
+
+effects:
+  - type: prompt
+    name: draft
+    template: |
+      {{> voice}}
+      Summarize {{input.issue}} in five lines.
+```
+
+`{{> name}}` also splices in a `yield` effect's text, or another `prompt`'s (when its reply is plain text) — verbatim, never re-rendered, so a model's reply containing a literal `{{...}}` cannot inject a tag. It can appear more than once in one string, and works in a tool's `params`/`prompt` and a `use` effect's `inputs`/`inline` too, not just prompt templates. `{file: <path>}` can replace a declared prompt's text, or a `template`/`content`, loading it from a file next to the document instead. See [the orchestration reference](../orchestration-reference.md#prompt-composition) for the full rule — composition, naming conflicts, cycles, and file confinement.
+
+Everywhere else `{{> name}}` is still what it always was outside this feature: `cof check` reports an unknown one, and at run time the render fails without reading any file. (chevron, the renderer Circuitry uses, would otherwise read `name.mustache` from the working directory.) One that only appears at run time (a generated plan, a `use: inline` child) fails the render the same way, instead of touching the file system.
 
 `messages` is the role-based alternative for models that expect a conversation:
 

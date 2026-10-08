@@ -1,0 +1,19 @@
+name: c33-nested-prompt-collision
+prompts:
+  a:
+    "{{> x}}"
+  b:
+    "{{> y}}"
+effects:
+  - type: yield
+    name: x
+    template: "X"
+  - type: yield
+    name: y
+    template: "Y"
+  - type: yield
+    name: first
+    template: "{{> a}}-{{> b}}"
+  - type: yield
+    name: second
+    template: "{{> y}} {{> a}}"

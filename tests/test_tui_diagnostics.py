@@ -205,6 +205,22 @@ def test_a_clean_file_reports_nothing() -> None:
     assert report.kinds() == ()
 
 
+def test_a_file_sourced_prompt_compiles_cleanly(tmp_path: Path) -> None:
+    """A valid `template: {file: ...}` document (#396) must compile exactly
+    like `cof run` would, not fail with "this document has no file of its
+    own" for lack of document_dir/confinement_root."""
+    (tmp_path / "brief.md").write_text("Summarize {{topic}}.", encoding="utf-8")
+    orch_path = tmp_path / "filed.yml"
+    orch_path.write_text(
+        "effects:\n  - type: prompt\n    name: intro\n    template:\n      file: brief.md\n",
+        encoding="utf-8",
+    )
+
+    report = validate_report(orch_path, skip_preflight=True)
+
+    assert report.of_kind("compile") == ()
+
+
 def test_a_skipped_project_config_warning_reaches_the_report(tmp_path: Path) -> None:
     project_config = ProjectConfigStatus(tmp_path / "circuitry.config.json", "untrusted")
     config = CircuitryConfig(project_config=project_config)

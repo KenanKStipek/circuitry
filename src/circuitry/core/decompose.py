@@ -769,11 +769,28 @@ def _run_isolated(
         ),
         _lock=parent_store._lock,
     )
+    # A child document run with `use` sees only its own declared prompts
+    # (#396) — same contract here: `root.prompts`/`root.effect_names`, just
+    # compiled from THIS plan's own dict, never the parent's, so a
+    # `{{> name}}` the parent happens to declare can't leak in. The planner
+    # (`WIZARD_PRIME_V1`, embedded in both `wizard.yml` and `decompose.yml`)
+    # IS taught `prompts:`/`{{> name}}`, so a generated plan may legitimately
+    # declare and reference its own — `root.prompts` reflects whatever the
+    # plan's own document actually has, rather than a hardcoded `{}`, so one
+    # that is self-consistent (declares its own `prompts:` and only ever
+    # references them) runs the way it compiled,
+    # instead of failing at run time for a name `cof check` already accepted.
+    from .prompt_compose import EFFECT_NAMES_RUNTIME_KEY as _EFFECT_NAMES_KEY
+    from .prompt_compose import RUNTIME_CONFIG_KEY as _PROMPTS_KEY
+
+    child_runtime_config = dict(runtime_config)
+    child_runtime_config[_PROMPTS_KEY] = root.prompts
+    child_runtime_config[_EFFECT_NAMES_KEY] = root.effect_names
     DynamicRuntime(
         root,
         adapter=adapter,
         model=model,
-        runtime_config=runtime_config,
+        runtime_config=child_runtime_config,
         dry_run=False,
         timeout_seconds=timeout_seconds,
         verbose=verbose,

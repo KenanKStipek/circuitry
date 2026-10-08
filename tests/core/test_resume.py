@@ -110,6 +110,64 @@ def test_resume_skips_completed_steps_and_reruns_the_failed_one(
     assert second.state["prime"]["step4"]["value"] == "ok:four"
 
 
+def test_resume_skips_a_completed_yield_and_reruns_the_failed_step_after_it(
+    tmp_path: Path,
+) -> None:
+    """A `yield` effect (#396) completes/fails through the same
+    `meta.completed_at`/`meta.error` contract every other effect does, so
+    resume's skip/rerun logic needs no special case for it."""
+    orch = _write(
+        tmp_path,
+        "chain.yml",
+        """\
+effects:
+  - type: yield
+    name: brief
+    template: "Topic: {{input.topic}}"
+  - type: prompt
+    name: step2
+    template: "two"
+""",
+    )
+    adapter = CountingAdapter()
+    adapter.fail_prompts = {"two"}
+
+    first = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+            initial_state={"input": {"topic": "circuitry"}},
+        )
+    )
+    assert first.ok is False
+    assert first.state["prime"]["brief"]["value"] == "Topic: circuitry"
+    assert adapter.calls == ["two"]
+
+    adapter.fail_prompts = set()
+    second = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+            initial_state=first.state,
+            resume=True,
+        )
+    )
+    assert second.ok is True, second.error
+    # The yield must not have re-rendered (no way to observe that directly —
+    # the adapter call count is the proxy: only step2 reruns).
+    assert adapter.calls == ["two", "two"]
+    assert second.state["prime"]["brief"]["value"] == "Topic: circuitry"
+    assert second.state["prime"]["step2"]["value"] == "ok:two"
+
+
 def test_resume_without_the_flag_reruns_everything(tmp_path: Path) -> None:
     """Plain `--state` carryover (no `--resume`) keeps today's behavior: a
     step that already succeeded still reruns — this is the existing

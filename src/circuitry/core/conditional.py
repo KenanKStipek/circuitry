@@ -189,6 +189,7 @@ class ConditionalRuntime:
         from .reflector import ReflectorDefinition, ReflectorRuntime
         from .tool import ToolDefinition, ToolRuntime
         from .use import UseDefinition, UseRuntime
+        from .yield_effect import YieldDefinition, YieldRuntime
 
         # Keys child_store already carried before this branch runs — for a
         # transparent (unnamed) conditional that is the enclosing scope's own
@@ -396,6 +397,16 @@ class ConditionalRuntime:
                             timeout_seconds=self.timeout_seconds,
                             verbose=self.verbose,
                             progress_display=self.progress_display,
+                            depth=self.depth + 1,
+                            ancestors=self._ancestors,
+                        ).execute(store=child_store, ctx=ctx)
+
+                    elif isinstance(effect, YieldDefinition):
+                        YieldRuntime(
+                            effect,
+                            runtime_config=self.runtime_config,
+                            dry_run=self.dry_run,
+                            verbose=self.verbose,
                             depth=self.depth + 1,
                             ancestors=self._ancestors,
                         ).execute(store=child_store, ctx=ctx)

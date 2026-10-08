@@ -1,0 +1,6 @@
+{
+  "spec_case": "C33",
+  "description": "Two {{> name}} references to declared prompts, each nesting a different effect reference (#396 second-review P0): one shared synthetic-key counter across the whole recursive expansion, not one per declared prompt, or the second reference's hidden key overwrites the first's.",
+  "expect": "success",
+  "cli_args": []
+}

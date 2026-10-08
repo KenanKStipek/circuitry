@@ -31,7 +31,7 @@
       "patterns": [
         {
           "name": "keyword.control.circuitry.type",
-          "match": "(?<=\\btype:\\s)(prompt|dynamic|if|conditional|loop|reflector)\\b"
+          "match": "(?<=\\btype:\\s)(prompt|dynamic|if|conditional|loop|reflector|yield)\\b"
         }
       ]
     },
@@ -39,7 +39,7 @@
       "patterns": [
         {
           "name": "support.type.property-name.circuitry",
-          "match": "\\b(adapter|model|runtime|effects|flow|name|template|prompt_type|schema|if|then|else|each|while|body|max_effects)\\b(?=\\s*:)"
+          "match": "\\b(adapter|model|runtime|effects|flow|name|template|prompt_type|schema|if|then|else|each|while|body|max_effects|prompts)\\b(?=\\s*:)"
         }
       ]
     },

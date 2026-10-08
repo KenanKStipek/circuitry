@@ -20,6 +20,8 @@ from circuitry.cli.document_consent import (
     document_digest,
     record_consent,
 )
+from circuitry.cli.orchestration_loader import load_orchestration_file
+from circuitry.core.prompt_compose import document_content_digest
 from circuitry.core.store import Store
 from circuitry.core.use import UseDefinition, UseRuntime
 
@@ -189,3 +191,78 @@ def test_a_ref_reached_only_through_an_inline_child_runs_once_pre_consented(
     runtime.execute(store=store, ctx=store.state)
 
     assert store.state["outer"]["meta"]["error"] is None
+
+
+# ── one shared content digest across cof trust and the run-time check (#396) ─
+
+
+def test_a_ref_child_with_a_prompt_file_runs_once_trusted_by_its_shared_digest(
+    tmp_path: Path,
+) -> None:
+    """`cof trust`/the pre-run gate (`cli.document_consent`) and the run-time
+    check (`UseRuntime._check_capability_consent`) must hash a `ref:` child
+    identically — both now go through `core.prompt_compose.document_content_digest`
+    — or a child that uses a prompt file and needs a gated capability can
+    never run: whichever surface is consulted last finds nothing under its
+    own, differently-computed digest (#396's P0).
+    """
+    folder = tmp_path / "lib"
+    helper_path = _write_yaml(
+        folder / "helper.yml",
+        {
+            "prompts": {"brief": {"file": "brief.md"}},
+            "effects": [
+                {"type": "yield", "name": "y", "template": "{{> brief}}"},
+                {"type": "tool", "name": "t", "provider": "shell", "params": {"command": "echo", "args": ["hi"]}},
+            ],
+        },
+    )
+    (folder / "brief.md").write_text("Say hi.", encoding="utf-8")
+
+    helper_orch = load_orchestration_file(helper_path)
+    digest = document_content_digest(helper_path, helper_orch)
+    record_consent(digest, frozenset({"shell"}), store_path=trust_store_path())
+
+    outer = UseDefinition(name="outer", ref="helper")
+    runtime = UseRuntime(
+        outer, adapter=None, model=None, runtime_config=_folder_runtime(folder)
+    )
+    store = Store(state={})
+
+    runtime.execute(store=store, ctx=store.state)
+
+    assert store.state["outer"]["meta"]["error"] is None
+    assert store.state["outer"]["y"]["value"] == "Say hi."
+
+
+def test_editing_only_the_prompt_file_asks_for_consent_again(tmp_path: Path) -> None:
+    """Consent is per content hash (#396): a ``ref:`` child trusted before a
+    referenced prompt file changed must ask again, exactly as an edit to the
+    orchestration YAML itself already does.
+    """
+    folder = tmp_path / "lib"
+    helper_path = _write_yaml(
+        folder / "helper.yml",
+        {
+            "prompts": {"brief": {"file": "brief.md"}},
+            "effects": [{"type": "tool", "name": "t", "provider": "shell", "params": {"command": "echo", "args": ["hi"]}}],
+        },
+    )
+    brief_path = folder / "brief.md"
+    brief_path.write_text("Say hi.", encoding="utf-8")
+
+    helper_orch = load_orchestration_file(helper_path)
+    digest = document_content_digest(helper_path, helper_orch)
+    record_consent(digest, frozenset({"shell"}), store_path=trust_store_path())
+
+    # The prompt file changes; the orchestration YAML does not.
+    brief_path.write_text("Say hi, differently.", encoding="utf-8")
+
+    outer = UseDefinition(name="outer", ref="helper")
+    runtime = UseRuntime(
+        outer, adapter=None, model=None, runtime_config=_folder_runtime(folder)
+    )
+    store = Store(state={})
+
+    with pytest.raises(RuntimeError, match=r"needs capabilities.*shell"):
+        runtime.execute(store=store, ctx=store.state)

@@ -1,0 +1,6 @@
+{
+  "spec_case": "C30",
+  "description": "Two {{> name}} tags, each naming a different yield effect, concatenated in one tool params string; both splice in unescaped even though the surrounding tool-param context still HTML-escapes its own, separate {{...}} tag (electricity/docs/spec/runtime-semantics.md §3.4, §3.6).",
+  "expect": "success",
+  "cli_args": ["-e", "extra=a & b"]
+}
