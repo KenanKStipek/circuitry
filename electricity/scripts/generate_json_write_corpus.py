@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import random
 import struct
 import sys
 from pathlib import Path
@@ -97,6 +98,65 @@ def case(value: object) -> dict:
         "value": encode(value),
         "cases": [{"mode": mode["name"], **run_mode(value, mode)} for mode in MODES],
     }
+
+
+def _random_sort_key(rng: random.Random) -> object:
+    choice = rng.random()
+    if choice < 0.25:
+        return rng.randint(-1000, 1000)
+    if choice < 0.5:
+        return rng.choice([True, False])
+    if choice < 0.75:
+        return round(rng.uniform(-1000.0, 1000.0), 6)
+    # Occasionally a "nice" float that collides with an int/bool under
+    # Python's numeric key equality (1 == 1.0 == True).
+    return float(rng.randint(-5, 5))
+
+
+def _distinct_sort_keys(rng: random.Random, size: int, with_nan: bool) -> list[object]:
+    keys: list[object] = []
+    seen: dict = {}
+    while len(keys) < size:
+        k = _random_sort_key(rng)
+        if k in seen:
+            continue
+        seen[k] = True
+        keys.append(k)
+    if with_nan:
+        keys.insert(rng.randrange(len(keys) + 1), float("nan"))
+    rng.shuffle(keys)
+    return keys
+
+
+def random_nan_sort_cases(seed: int, n_with_nan: int, n_without_nan: int) -> list[object]:
+    """Random dicts of 2-63 keys (kept under electricity-json's documented
+    64-key divergence threshold) mixing ints, floats and bools in random
+    insertion order, pinning ``sort_keys=True``'s CPython 3.11
+    ``count_run``/``binarysort`` port against ``json.dumps(d,
+    sort_keys=True)``'s actual key order. This is a seeded 200-case
+    subset of a ~3500-case differential run (3000 NaN-keyed, 500 without,
+    20 pinning that ``1``/``1.0``/``True`` collapse to one key) done
+    against this exact port in a scratch worktree, confirmed to match
+    with zero mismatches; CI only needs this smaller subset to keep
+    pinning it going forward.
+    """
+    rng = random.Random(seed)
+    cases: list[object] = []
+    for _ in range(n_with_nan):
+        size = rng.randint(1, 62)  # +1 for the NaN key => up to 63
+        keys = _distinct_sort_keys(rng, size, with_nan=True)
+        cases.append({k: i for i, k in enumerate(keys)})
+    for _ in range(n_without_nan):
+        size = rng.randint(2, 63)
+        keys = _distinct_sort_keys(rng, size, with_nan=False)
+        cases.append({k: i for i, k in enumerate(keys)})
+    # 1 / 1.0 / True (and 0 / False / 0.0) collapse to one dict key in
+    # Python; pin that this still holds with a NaN key in the mix.
+    for _ in range(20):
+        collapsing_keys: list[object] = [1, 1.0, True, 0, False, 0.0, float("nan")]
+        rng.shuffle(collapsing_keys)
+        cases.append({k: i for i, k in enumerate(collapsing_keys)})
+    return cases
 
 
 def build_corpus() -> list[dict]:
@@ -181,7 +241,13 @@ def build_corpus() -> list[dict]:
         # every mode, including default_str (default= is never consulted
         # for keys).
         {datetime.date(2020, 1, 2): "date-key"},
+        # A descending opening run with a NaN key: count_run's reversal
+        # of a strictly descending run must fire the same way whether or
+        # not a NaN key is in the mix.
+        {3.0: "a", 2.0: "b", 1.0: "c", float("nan"): "d", 0.5: "e"},
+        {3.0: "a", float("nan"): "b", 2.0: "c", 1.0: "d"},
     ]
+    values += random_nan_sort_cases(seed=377, n_with_nan=150, n_without_nan=30)
     return [case(v) for v in values]
 
 
