@@ -114,7 +114,53 @@ pub(crate) fn scope_child(scope_path: &str, child_name: &str) -> String {
 }
 
 /// Ports `core/compiler.py::_compile_effects_in_scope`.
+/// How many levels deep [`compile_effects_in_scope`] recurses into
+/// itself (through `dynamic`/`if`/`loop`/a reflector's inner effects)
+/// before bailing with a distinct error instead of risking a stack
+/// overflow -- see [`Ctx`]'s own docs for how this number was chosen.
+/// Comfortably below both the ~210-level debug-build overflow point a
+/// 2 MiB stack hits in practice, and `electricity_yaml::MAX_DEPTH`
+/// (512, which already bounds how deep a *parsed* document's effect
+/// containers can possibly nest at roughly half that many levels, two
+/// YAML-structural-depth units per level).
+const MAX_COMPILE_DEPTH: usize = 128;
+
+/// Increments/decrements [`Ctx`]'s own nesting-depth counter around
+/// [`compile_effects_in_scope_inner`]'s own body -- a plain wrapper
+/// rather than an RAII guard borrowing `ctx.depth` specifically, since
+/// that borrow would outlive the inner call's own (separate) uses of
+/// `ctx` as a whole.
 pub(crate) fn compile_effects_in_scope(
+    ctx: &mut Ctx,
+    effects: &Value,
+    path: &EffectPath,
+    scope_path: &str,
+    container_path: &str,
+    loop_names: &BTreeSet<String>,
+    seen_names: &mut BTreeMap<String, String>,
+) -> Result<Vec<Op>, CompileError> {
+    ctx.depth += 1;
+    if ctx.depth > MAX_COMPILE_DEPTH {
+        ctx.depth -= 1;
+        return Err(CompileError(format!(
+            "{container_path}: effect nesting is too deep to compile \
+             (over {MAX_COMPILE_DEPTH} levels)."
+        )));
+    }
+    let result = compile_effects_in_scope_inner(
+        ctx,
+        effects,
+        path,
+        scope_path,
+        container_path,
+        loop_names,
+        seen_names,
+    );
+    ctx.depth -= 1;
+    result
+}
+
+fn compile_effects_in_scope_inner(
     ctx: &mut Ctx,
     effects: &Value,
     path: &EffectPath,
@@ -781,4 +827,64 @@ fn compile_loop(
         labels,
         enabled: true,
     })
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::MAX_COMPILE_DEPTH;
+    use crate::DocumentOrigin;
+    use crate::compile::compile_document;
+    use electricity_value::{Dict, Value};
+    use std::path::PathBuf;
+
+    fn origin() -> DocumentOrigin {
+        DocumentOrigin::File {
+            document_dir: PathBuf::from("/doc"),
+            confinement_root: PathBuf::from("/doc"),
+        }
+    }
+
+    /// `n` levels of nested, named `dynamic` effects, bottoming out in
+    /// an empty effects list -- built directly as [`Value`] (not
+    /// parsed YAML text), so this test's own stack usage stays
+    /// trivial regardless of `n`.
+    fn nested_dynamics(n: usize) -> Value {
+        let mut inner = Value::List(Vec::new());
+        for i in 0..n {
+            let mut dict = Dict::new();
+            dict.insert(
+                Value::Str("type".to_string()),
+                Value::Str("dynamic".to_string()),
+            );
+            dict.insert(Value::Str("name".to_string()), Value::Str(format!("n{i}")));
+            dict.insert(Value::Str("effects".to_string()), inner);
+            inner = Value::List(vec![Value::Dict(dict)]);
+        }
+        let mut root = Dict::new();
+        root.insert(Value::Str("effects".to_string()), inner);
+        Value::Dict(root)
+    }
+
+    #[test]
+    fn exactly_at_the_depth_limit_compiles() {
+        // `n` nested `dynamic` effects need `n + 1`
+        // `compile_effects_in_scope` calls (the root `effects:` list,
+        // plus one per dynamic's own child list, including the
+        // innermost one's empty list) -- `n = MAX_COMPILE_DEPTH - 1`
+        // is exactly at the limit.
+        let document = nested_dynamics(MAX_COMPILE_DEPTH - 1);
+        compile_document(&document, &origin())
+            .unwrap_or_else(|err| panic!("expected success at exactly the limit, got: {}", err.0));
+    }
+
+    #[test]
+    fn one_past_the_depth_limit_is_a_distinct_depth_error() {
+        let document = nested_dynamics(MAX_COMPILE_DEPTH + 1);
+        let err = compile_document(&document, &origin()).unwrap_err();
+        assert!(
+            err.0.contains("effect nesting is too deep to compile"),
+            "unexpected error: {}",
+            err.0
+        );
+    }
 }

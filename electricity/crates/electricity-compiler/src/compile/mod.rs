@@ -20,16 +20,29 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 /// Per-document compile-time state threaded through every container/
-/// leaf-compiling function: today, just the monotonic counter behind a
-/// named loop's [`LoopId`] (DESIGN.md §5.1 -- "assigned in document
-/// order by the compiler").
+/// leaf-compiling function: the monotonic counter behind a named
+/// loop's [`LoopId`] (DESIGN.md §5.1 -- "assigned in document order by
+/// the compiler"), and the current container-nesting depth
+/// ([`containers::DepthGuard`]) -- a document nested deep enough
+/// (`dynamic`/`if`/`loop`/reflector, each recursing through
+/// [`containers::compile_effects_in_scope`] once per level) can
+/// overflow even a generously sized stack long before it overflows
+/// `electricity-yaml`'s own structural depth limit (512): review
+/// finding 1 on PR #415 measured a 2 MiB-stack overflow at roughly 210
+/// levels in a debug build. `electricity_yaml::MAX_DEPTH` bounds *what
+/// parses*; this bounds *what this compiler will recurse into*, well
+/// below that, with a distinct, clean [`CompileError`] instead.
 pub(crate) struct Ctx {
     next_loop_id: u32,
+    depth: usize,
 }
 
 impl Ctx {
     fn new() -> Self {
-        Ctx { next_loop_id: 0 }
+        Ctx {
+            next_loop_id: 0,
+            depth: 0,
+        }
     }
 
     pub(crate) fn next_loop_id(&mut self) -> LoopId {
