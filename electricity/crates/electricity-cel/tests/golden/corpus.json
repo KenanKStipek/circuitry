@@ -1137,6 +1137,77 @@
     "strict": false
   },
   {
+    "expr": "!has(state.a.b) || has(state.a.b.c)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false
+  },
+  {
+    "expr": "has(state.a.b) || has(state.a.b.c)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false
+  },
+  {
+    "expr": "has(state.prime.x.value.price)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "prime"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "x"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "value"
+                      },
+                      {
+                        "t": "none"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
     "expr": "!state.prime.x.value",
     "mode": "condition",
     "outcome": {
@@ -3467,6 +3538,258 @@
     "strict": false
   },
   {
+    "expr": "state.prime.tick.value == 'open'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL expression \"state.prime.tick.value == 'open'\" reads unset state path 'state.prime.tick.value' and is marked strict."
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": true
+  },
+  {
+    "expr": "state.n == null",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "100000000000000000000"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.input.ok == true",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "100000000000000000000"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "ok"
+                },
+                {
+                  "t": "bool",
+                  "v": true
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.n < 1.5",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.n > 1.5",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "1.5 > state.n",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "1.5 < state.n",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.n < 2",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.n < 2u",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "2 < 1u",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false
+  },
+  {
+    "expr": "1u < 2",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false
+  },
+  {
     "expr": "state.a == b'abc'",
     "mode": "condition",
     "outcome": {
@@ -3757,6 +4080,78 @@
           {
             "naive": "2020-01-01T15:00:00.000000",
             "offset_seconds": 3600,
+            "t": "datetime"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.a - state.b",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "naive": "2020-01-01T10:00:00.000000",
+            "offset_seconds": 0,
+            "t": "datetime"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "naive": "2020-01-01T10:00:00.000000",
+            "offset_seconds": 0,
+            "t": "datetime"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.a - state.b",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "naive": "2020-01-01T15:00:00.000000",
+            "offset_seconds": 3600,
+            "t": "datetime"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "naive": "2020-01-01T10:00:00.000000",
+            "offset_seconds": 0,
             "t": "datetime"
           }
         ]

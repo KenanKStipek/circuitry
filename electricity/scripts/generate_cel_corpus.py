@@ -218,6 +218,19 @@ def build_corpus() -> list[dict]:
         # A doubly-missing path: `input` itself is absent, not just `n`.
         condition("!has(state.input.n) || state.input.n > 1", {}),
         condition("has(state.input.n)", {}),
+        # A patched clone of `state` to make a prior `has()` gracious would
+        # leak into this second, longer `has()` read of the same prefix
+        # (issue #379 review finding 1): cel-python's own `has()` is "the
+        # argument evaluated without error", never conjured data.
+        condition("!has(state.a.b) || has(state.a.b.c)", {}),
+        condition("has(state.a.b) || has(state.a.b.c)", {}),
+        # `has()` through a non-map value partway down the chain (a
+        # disabled node writes `{"value": None}`): cel-python's `has()`
+        # reports `False`, not an evaluation error (finding 1).
+        condition(
+            "has(state.prime.x.value.price)",
+            {"prime": {"x": {"value": None}}},
+        ),
     ]
 
     # --- Negation / ternary -------------------------------------------
@@ -316,6 +329,48 @@ def build_corpus() -> list[dict]:
             strict=True,
         ),
         condition("state.prime.tick.value.price <= 10", {}, strict=False),
+        # Circuitry's own strict message is built with Python's `repr()`
+        # (`{expr!r}`/`{unresolved!r}`), not a bare `'...'` wrap: a `'` in
+        # the expression switches to double quotes (issue #379 review
+        # finding 2).
+        condition(
+            "state.prime.tick.value == 'open'", {}, strict=True, exact_error=True
+        ),
+    ]
+
+    # --- big ints: too large for CEL's 64-bit int, the expression reads it
+    # (issue #379 review finding 3) -------------------------------------
+    # Not included here: `evaluate_cel_expect` with a big int in
+    # `value`/`meta`/`state` is a deliberate, documented deviation
+    # (electricity-cel's lib.rs docs) rather than something this
+    # differential corpus asserts sameness on — `evaluate_cel_expect`
+    # converts before its own `try`/`except`, so the matching
+    # `ValueError("overflow")` escapes *uncaught*, which `core.expect`'s
+    # caller doesn't handle either; electricity-cel raises a `CelError`
+    # there instead of reproducing that crash.
+    huge = 10**20
+    cases += [
+        condition("state.n == null", {"n": huge}),
+        # Narrowed to what the expression reads (`_project`): a big int
+        # elsewhere in `state`, unread, must not fail this condition.
+        condition("state.input.ok == true", {"n": huge, "input": {"ok": True}}),
+    ]
+
+    # --- numeric ordering: celpy's `IntType` alone decorates `<`/`<=`/
+    # `>`/`>=` with `@type_matched` (same concrete type only);
+    # `UintType`/`DoubleType` never override ordering, so crossing
+    # numeric types is fine when *they* are the left operand -- the
+    # restriction is asymmetric, unlike `==`/`!=`'s spec-mandated
+    # heterogeneous exemption (issue #379 review finding 4) --------------
+    cases += [
+        condition("state.n < 1.5", {"n": 1}),
+        condition("state.n > 1.5", {"n": 1}),
+        condition("1.5 > state.n", {"n": 1}),
+        condition("1.5 < state.n", {"n": 1}),
+        condition("state.n < 2", {"n": 1}),
+        condition("state.n < 2u", {"n": 1}),
+        condition("2 < 1u", {}),
+        condition("1u < 2", {}),
     ]
 
     # --- bytes -------------------------------------------------------------
@@ -341,6 +396,15 @@ def build_corpus() -> list[dict]:
         condition("state.a < state.b", {"a": naive_10, "b": aware_15_plus5}),
         condition("state.a < state.b", {"a": naive_10, "b": aware_15_plus1}),
         condition("state.a > state.b", {"a": naive_10, "b": aware_15_plus1}),
+    ]
+
+    # --- a Duration's truthiness is "nonzero", not always true: the top-
+    # level expression result (not a CEL `bool(...)` call, which doesn't
+    # accept a duration) is what `evaluate_cel`'s own `bool(result)` sees
+    # (issue #379 review finding 7) --------------------------------------
+    cases += [
+        condition("state.a - state.b", {"a": aware_10_utc, "b": aware_10_utc}),
+        condition("state.a - state.b", {"a": aware_15_plus1, "b": aware_10_utc}),
     ]
 
     # --- a bare date has no CEL counterpart: it is null ---------------------

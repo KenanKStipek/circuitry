@@ -21,8 +21,24 @@
 //! Both entry points enforce the 4096-character expression cap and
 //! reject an empty/whitespace-only expression, with Circuitry's own
 //! wording (word-for-word with `core/cel_eval.py`, not `cel`'s).
+//!
+//! A `Value::Int` too large for CEL's 64-bit `int`, if the expression
+//! actually reads it, is a `CelError` from both entry points
+//! (`convert::Overflow`). This is a deliberate, evidence-backed
+//! deviation for [`evaluate_expect`]: `evaluate_cel_expect` in
+//! `core/cel_eval.py` converts `value`/`meta`/`state` *before* its own
+//! `try`/`except`, so the matching `ValueError` there escapes uncaught
+//! instead of becoming a `CelEvaluationError` — `core.expect`'s caller
+//! only catches the latter, so that overload would crash the run rather
+//! than fail the expectation. Reproducing a different Rust panic for
+//! parity with an inconsistency between Circuitry's own two entry points
+//! (one wraps this error, the other doesn't) isn't worth it; raising a
+//! `CelError` the same way [`evaluate_condition`] already does is a
+//! strictly safer, still fail-loud choice for the one entry point whose
+//! Python counterpart doesn't itself fail loud here.
 
 mod convert;
+mod ordering;
 mod paths;
 
 use std::fmt;
@@ -30,6 +46,15 @@ use std::sync::{Arc, OnceLock};
 
 use cel::{Context, Env};
 use electricity_value::Value;
+
+/// Python's `repr()` of a `str`, used to match `core/cel_eval.py`'s own
+/// `{expr!r}`/`{unresolved!r}` messages word for word: a message
+/// containing a `'` (`state.x == 'open'`) gets double quotes, and
+/// backslashes/newlines are escaped, neither of which a bare `'{expr}'`
+/// does.
+fn py_repr(s: &str) -> String {
+    Value::Str(s.to_string()).py_repr()
+}
 
 /// `core/cel_eval.py`'s `_MAX_EXPR_LENGTH`.
 pub const MAX_EXPR_LENGTH: usize = 4096;
@@ -93,8 +118,22 @@ fn check_length(expr: &str) -> Result<(), CelError> {
 }
 
 fn compile(env: &Env, expr: &str) -> Result<cel::Program, CelError> {
-    env.compile(expr)
-        .map_err(|e| CelError::new(expr, format!("CEL evaluation failed for '{expr}': {e}")))
+    env.compile(expr).map_err(|e| {
+        CelError::new(
+            expr,
+            format!("CEL evaluation failed for {}: {e}", py_repr(expr)),
+        )
+    })
+}
+
+/// `core/cel_eval.py`'s `ValueError("overflow")` for a `Value::Int` too
+/// large for CEL's 64-bit `int`, wrapped the same way a genuine
+/// evaluation failure is.
+fn overflow_err(expr: &str) -> CelError {
+    CelError::new(
+        expr,
+        format!("CEL evaluation failed for {}: overflow", py_repr(expr)),
+    )
 }
 
 /// Python `bool(result)` applied to whatever a CEL expression evaluated
@@ -111,8 +150,11 @@ fn truthy(value: &cel::Value) -> bool {
         cel::Value::List(l) => !l.is_empty(),
         cel::Value::Map(m) => !m.map.is_empty(),
         cel::Value::Null => false,
+        // `celtypes.DurationType` subclasses `datetime.timedelta`, whose
+        // `__bool__` is "nonzero", not "always true" — a duration this
+        // falsy is reachable (subtracting two equal timestamps).
+        cel::Value::Duration(d) => !d.is_zero(),
         cel::Value::Timestamp(_)
-        | cel::Value::Duration(_)
         | cel::Value::Struct(_)
         | cel::Value::Opaque(_)
         | cel::Value::Function(..) => true,
@@ -146,7 +188,9 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
             return Err(CelError::new(
                 expr,
                 format!(
-                    "CEL expression '{expr}' reads unset state path '{unresolved}' and is marked strict."
+                    "CEL expression {} reads unset state path {} and is marked strict.",
+                    py_repr(expr),
+                    py_repr(unresolved)
                 ),
             ));
         }
@@ -156,18 +200,31 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
         return Ok(false);
     }
 
-    let mut patched_state = state.clone();
-    for chain in paths::guarded_chains(program.expression()) {
-        if chain[0] == "state" {
-            paths::ensure_has_target_parents(&mut patched_state, &chain);
-        }
-    }
+    // Narrowed to what the expression actually reads (`_project` in
+    // `core/cel_eval.py`): a big int elsewhere in `state`, unread, must
+    // not make the conversion below fail (finding 3), and converting is
+    // cheaper for a large `state` than a handful of paths warrant.
+    let projected_state = if collected.reads_whole_state {
+        state.clone()
+    } else {
+        paths::project(state, &collected.paths)
+    };
+
+    let mut tree = program.expression().clone();
+    paths::rewrite(&mut tree, &[("state", state)]);
 
     let mut ctx = Context::with_env(Arc::clone(&env));
-    ctx.add_variable_from_value("state", convert::to_cel(&patched_state));
-    let result = program
-        .execute(&ctx)
-        .map_err(|e| CelError::new(expr, format!("CEL evaluation failed for '{expr}': {e}")))?;
+    ordering::register(&mut ctx);
+    ctx.add_variable_from_value(
+        "state",
+        convert::to_cel(&projected_state).map_err(|_| overflow_err(expr))?,
+    );
+    let result = cel::Value::resolve(&tree, &ctx).map_err(|e| {
+        CelError::new(
+            expr,
+            format!("CEL evaluation failed for {}: {e}", py_repr(expr)),
+        )
+    })?;
     Ok(truthy(&result))
 }
 
@@ -195,25 +252,32 @@ pub fn evaluate_expect(
     let env = stdlib_env();
     let program = compile(&env, expr)?;
 
-    let mut patched_value = value.clone();
-    let mut patched_meta = meta.clone();
-    let mut patched_state = state.clone();
-    for chain in paths::guarded_chains(program.expression()) {
-        match chain[0].as_str() {
-            "value" => paths::ensure_has_target_parents(&mut patched_value, &chain),
-            "meta" => paths::ensure_has_target_parents(&mut patched_meta, &chain),
-            "state" => paths::ensure_has_target_parents(&mut patched_state, &chain),
-            _ => {}
-        }
-    }
+    let mut tree = program.expression().clone();
+    paths::rewrite(
+        &mut tree,
+        &[("value", value), ("meta", meta), ("state", state)],
+    );
 
     let mut ctx = Context::with_env(Arc::clone(&env));
-    ctx.add_variable_from_value("value", convert::to_cel(&patched_value));
-    ctx.add_variable_from_value("meta", convert::to_cel(&patched_meta));
-    ctx.add_variable_from_value("state", convert::to_cel(&patched_state));
-    let result = program
-        .execute(&ctx)
-        .map_err(|e| CelError::new(expr, format!("CEL evaluation failed for '{expr}': {e}")))?;
+    ordering::register(&mut ctx);
+    ctx.add_variable_from_value(
+        "value",
+        convert::to_cel(value).map_err(|_| overflow_err(expr))?,
+    );
+    ctx.add_variable_from_value(
+        "meta",
+        convert::to_cel(meta).map_err(|_| overflow_err(expr))?,
+    );
+    ctx.add_variable_from_value(
+        "state",
+        convert::to_cel(state).map_err(|_| overflow_err(expr))?,
+    );
+    let result = cel::Value::resolve(&tree, &ctx).map_err(|e| {
+        CelError::new(
+            expr,
+            format!("CEL evaluation failed for {}: {e}", py_repr(expr)),
+        )
+    })?;
     Ok(truthy(&result))
 }
 
@@ -296,12 +360,86 @@ mod tests {
     fn has_guard_tolerates_a_doubly_missing_path() {
         // `state` has no "input" key at all, not just a missing "n" --
         // `cel`'s own has() only guards its *last* segment, so without
-        // `paths::ensure_has_target_parents` this raises `NoSuchKey`
-        // instead of letting `has()` report `false` the way cel-python's
-        // own (whole-chain) `has()` does.
+        // rewriting `has(...)` into a literal (`paths::rewrite`) this
+        // raises `NoSuchKey` instead of letting `has()` report `false`
+        // the way cel-python's own (whole-chain) `has()` does.
         let empty = Value::Dict(Dict::new());
         let expr = "!has(state.input.n) || state.input.n > 1";
         assert_eq!(evaluate_condition(expr, &empty, false), Ok(true));
+    }
+
+    #[test]
+    fn has_does_not_leak_a_fabricated_parent_into_a_later_read() {
+        // A prior version of this fix made `has()` work by inserting
+        // empty dicts into a clone of `state` so `cel`'s own, less
+        // graceful `has()` wouldn't hit a missing key — and that
+        // fabricated `{}` leaked into every other read of the same path,
+        // including a second `has()` on a longer chain through it.
+        let empty = Value::Dict(Dict::new());
+        let expr = "!has(state.a.b) || has(state.a.b.c)";
+        assert_eq!(evaluate_condition(expr, &empty, false), Ok(true));
+    }
+
+    #[test]
+    fn has_on_a_disabled_node_is_false_not_an_error() {
+        // A disabled node writes `{"value": None}`; has() selecting a
+        // further field through that `None` is exactly the case `cel`'s
+        // own has() raises `NoSuchKey`/an overload error on instead of
+        // returning `false` the way cel-python's does.
+        let state = dict(vec![(
+            "prime",
+            dict(vec![("x", dict(vec![("value", Value::None)]))]),
+        )]);
+        assert_eq!(
+            evaluate_condition("has(state.prime.x.value.price)", &state, false),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn big_int_read_by_the_expression_raises() {
+        let huge: num_bigint::BigInt = "100000000000000000000".parse().unwrap();
+        let state = dict(vec![("n", Value::from(huge))]);
+        assert!(evaluate_condition("state.n == null", &state, false).is_err());
+    }
+
+    #[test]
+    fn big_int_not_read_by_the_expression_does_not_raise() {
+        // The conversion is narrowed to what the expression reads
+        // (`paths::project`): an unrelated big int elsewhere in `state`
+        // must not fail a condition that never looks at it.
+        let huge: num_bigint::BigInt = "100000000000000000000".parse().unwrap();
+        let state = dict(vec![
+            ("n", Value::from(huge)),
+            ("input", dict(vec![("ok", Value::Bool(true))])),
+        ]);
+        assert_eq!(
+            evaluate_condition("state.input.ok == true", &state, false),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn cross_numeric_type_ordering_raises() {
+        let state = dict(vec![("n", Value::from(1_i64))]);
+        assert!(evaluate_condition("state.n < 1.5", &state, false).is_err());
+    }
+
+    #[test]
+    fn same_numeric_type_ordering_still_works() {
+        let state = dict(vec![("n", Value::from(1_i64))]);
+        assert_eq!(evaluate_condition("state.n < 2", &state, false), Ok(true));
+    }
+
+    #[test]
+    fn strict_message_matches_python_repr_for_a_quoted_expression() {
+        let state = Value::Dict(Dict::new());
+        let err = evaluate_condition("state.prime.tick.value == 'open'", &state, true).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "CEL expression \"state.prime.tick.value == 'open'\" reads unset state path \
+             'state.prime.tick.value' and is marked strict."
+        );
     }
 
     #[test]
@@ -310,6 +448,31 @@ mod tests {
         assert_eq!(evaluate_condition("1 == true", &state, false), Ok(false));
         assert_eq!(evaluate_condition("1 == 1.0", &state, false), Ok(true));
         assert_eq!(evaluate_condition("'a' == 1", &state, false), Ok(false));
+    }
+
+    #[test]
+    fn zero_duration_is_falsy() {
+        // `celtypes.DurationType` subclasses `datetime.timedelta`, whose
+        // `__bool__` is "nonzero" — `bool(timedelta(0))` is `False`, not
+        // always `True` the way every other non-numeric CEL type is here.
+        use chrono::{NaiveDate, NaiveDateTime};
+        let t = |hour: u32| -> Value {
+            let naive: NaiveDateTime = NaiveDate::from_ymd_opt(2020, 1, 1)
+                .unwrap()
+                .and_hms_opt(hour, 0, 0)
+                .unwrap();
+            Value::DateTime(naive, None)
+        };
+        let state = dict(vec![("a", t(10)), ("b", t(10))]);
+        assert_eq!(
+            evaluate_condition("state.a - state.b", &state, false),
+            Ok(false)
+        );
+        let state = dict(vec![("a", t(11)), ("b", t(10))]);
+        assert_eq!(
+            evaluate_condition("state.a - state.b", &state, false),
+            Ok(true)
+        );
     }
 
     #[test]

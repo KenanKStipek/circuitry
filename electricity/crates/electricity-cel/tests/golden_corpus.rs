@@ -142,7 +142,18 @@ fn golden_corpus_matches_circuitrys_real_cel_evaluator() {
                 "case {i}: expected Ok({expected}) for {:?}, got Err({err})",
                 case.expr
             )),
-            (Outcome::Error { message: None }, Err(_)) => {} // any error is fine
+            (Outcome::Error { message: None }, Err(err)) => {
+                // Text from `cel`/`lark` itself only has to fail at the
+                // same place with a non-empty message, not match
+                // word-for-word (DESIGN.md §1, §12) — but it still has
+                // to have *a* message, not a silently empty one.
+                if err.to_string().is_empty() {
+                    failures.push(format!(
+                        "case {i}: error for {:?} has an empty message",
+                        case.expr
+                    ));
+                }
+            }
             (
                 Outcome::Error {
                     message: Some(expected_message),
