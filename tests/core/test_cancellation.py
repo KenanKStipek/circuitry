@@ -675,3 +675,87 @@ def test_communicate_promptly_step_timeout_while_writing_does_not_hang(
     elapsed = time.monotonic() - t0
 
     assert elapsed < 5.0, f"run_tracked took {elapsed:.1f}s -- the timeout itself hung"
+
+
+def test_communicate_promptly_repeats_the_group_kill_while_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#385 round 3: a real production race, not just a quirk of the CLI
+    signal tests' own scripts -- any `bash -c "a; b"` step can lose it,
+    since macOS's /bin/bash (3.2) forks a *child* process to run a
+    non-tail command like `b` rather than exec'ing into it. A single
+    `killpg` sent from the signal handler the instant cancellation is
+    requested can land in the narrow window between that `fork()` and
+    the new child actually joining the group, so the escaped child
+    survives it -- `_communicate_promptly` must keep repeating the same
+    `killpg` on every slice while cancellation stays set, until
+    `communicate()` finally sees EOF.
+    """
+    token = CancellationToken()
+    token.request()
+    monkeypatch.setattr(cancellation, "_token", token)
+
+    killpg_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        os, "killpg", lambda pgid, sig: killpg_calls.append((pgid, sig))
+    )
+
+    class _FakeProc:
+        pid = 4242
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.args = ["x"]
+
+        def communicate(
+            self, input: Any = None, timeout: float | None = None
+        ) -> tuple[str, str]:
+            self.calls += 1
+            if self.calls < 3:
+                raise subprocess.TimeoutExpired(self.args, timeout or 0.0)
+            return "out", "err"
+
+    proc = _FakeProc()
+    result = cancellation._communicate_promptly(
+        proc, input=None, timeout=None, pgid=777, poll_seconds=0.01  # type: ignore[arg-type]
+    )
+    assert result == ("out", "err")
+    assert proc.calls == 3
+    assert killpg_calls == [(777, signal.SIGKILL), (777, signal.SIGKILL)]
+
+
+def test_communicate_promptly_does_not_repeat_the_group_kill_when_not_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The repeat kill above is gated on cancellation actually being
+    requested -- an ordinary step timeout retry loop (no cancellation at
+    all) must never call `killpg` on its own account."""
+    token = CancellationToken()
+    monkeypatch.setattr(cancellation, "_token", token)
+
+    killpg_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        os, "killpg", lambda pgid, sig: killpg_calls.append((pgid, sig))
+    )
+
+    class _FakeProc:
+        pid = 4242
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.args = ["x"]
+
+        def communicate(
+            self, input: Any = None, timeout: float | None = None
+        ) -> tuple[str, str]:
+            self.calls += 1
+            if self.calls < 3:
+                raise subprocess.TimeoutExpired(self.args, timeout or 0.0)
+            return "out", "err"
+
+    proc = _FakeProc()
+    result = cancellation._communicate_promptly(
+        proc, input=None, timeout=None, pgid=777, poll_seconds=0.01  # type: ignore[arg-type]
+    )
+    assert result == ("out", "err")
+    assert killpg_calls == []

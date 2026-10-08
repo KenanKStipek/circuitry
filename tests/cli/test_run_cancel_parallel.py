@@ -78,19 +78,25 @@ assert _COMMUNICATE_TIMEOUT_SECONDS < _BRANCH_SLEEP_SECONDS
 def _branch_tool(name: str, *, pidfile: Path, started: Path) -> str:
     """A `tool: shell` effect: records its own pid and a 'started' marker
     before sleeping, so a test can wait for (and later assert on) exactly
-    those two things without a fixed sleep of its own."""
-    # `exec` the tail command (#385 round 3): plain `sleep N` as the last
-    # of several `;`-separated commands makes macOS's /bin/bash (3.2) fork
-    # a *child* process to run it rather than exec into it, so the pid
-    # recorded above is bash's own, not the long-lived process -- a
-    # cancellation's `killpg` on that pid's process group then races the
-    # kernel's own registration of that just-forked child into the group,
-    # which can (rarely, confirmed under load) leave it alive, still
-    # holding this step's own stdout/stderr pipes open past bash's own
-    # death and the run that is waiting for them to close. `exec` removes
-    # the extra process entirely: bash becomes `sleep`, same pid, so
-    # there is nothing left to race.
-    script = f"echo $$ > {pidfile}; touch {started}; exec sleep {_BRANCH_SLEEP_SECONDS}"
+    those two things without a fixed sleep of its own.
+
+    Deliberately NOT `exec`'d (#385 round 3): macOS's /bin/bash (3.2)
+    forks a *child* process to run a non-tail command like this `sleep`
+    rather than exec'ing into it, so the pid recorded above is bash's
+    own, not the long-lived process -- a real production race, not a
+    quirk of this script: `kill_process_group`'s own `killpg` can race
+    the kernel's own registration of that just-forked child into the
+    group. `run_tracked`/`_communicate_promptly` now repeat that same
+    `killpg` on every slice while cancellation stays set
+    (`_repeat_group_kill`), which is exactly the production fix this
+    test (the suite's main tree-flow/parallel-loop cancellation tests)
+    exists to exercise for real under this module's own bounded-load
+    comparison -- see `_signal_test_support.py`'s
+    `_process_group_and_pipe_diagnostics` for how the race was found.
+    Other scripts in this file that only need a killable branch, not to
+    exercise this specific race, use `exec` instead.
+    """
+    script = f"echo $$ > {pidfile}; touch {started}; sleep {_BRANCH_SLEEP_SECONDS}"
     return f"""
       - type: tool
         name: {name}

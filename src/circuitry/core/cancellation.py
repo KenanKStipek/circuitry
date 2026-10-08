@@ -125,6 +125,63 @@ def kill_process_group(proc: subprocess.Popen[str] | subprocess.Popen[bytes]) ->
         pass
 
 
+def _isolated_pgid(
+    proc: subprocess.Popen[str] | subprocess.Popen[bytes],
+) -> int | None:
+    """*proc*'s own process-group id, only when it is isolated in one of
+    its own -- i.e. exactly the case :func:`kill_process_group` itself
+    already treats as safe to ``killpg`` -- else ``None`` (#385 round 3).
+
+    Captured once, right after ``Popen``, by :func:`run_tracked`: a pgid
+    can never be reused while any process in it is still alive, so this
+    stays valid for repeat kills for as long as the group has a single
+    member left, including one born from a fork after the first kill
+    (see :func:`_repeat_group_kill`).
+    """
+    if os.name != "posix":
+        return None
+    pid = getattr(proc, "pid", None)
+    if pid is None:
+        return None
+    try:
+        pgid = os.getpgid(pid)
+    except ProcessLookupError:
+        return None
+    return None if pgid == os.getpgrp() else pgid
+
+
+def _repeat_group_kill(pgid: int | None) -> None:
+    """``os.killpg(pgid, SIGKILL)`` again, ignoring ``ProcessLookupError``
+    (the whole group is already gone) and ``PermissionError`` (#385
+    round 3).
+
+    A real production race, not just a quirk of this suite's own test
+    scripts: ``bash -c "a; b"`` forks a *child* process to run a non-tail
+    command like ``b`` rather than exec'ing into it (macOS's /bin/bash
+    3.2 always does this; other shells can too for a background job, a
+    subshell, a pipeline stage). If a cancellation's own
+    :func:`kill_process_group` call (a single ``killpg``) lands in the
+    narrow window between that ``fork()`` and the new child actually
+    joining its parent's process group at the kernel level, the new
+    child is not yet a member of the group the signal was multicast to
+    and survives it, invisibly: it keeps running, and because it
+    inherited the same stdout/stderr pipes, ``_communicate_promptly``
+    never sees EOF until it does. Calling this again on every slice
+    while cancellation stays set (:func:`_communicate_promptly`) closes
+    that window within one poll interval regardless of when exactly the
+    fork lost the first race -- a pgid can never be reused while any
+    member of it is still alive, so repeating the same ``killpg`` is
+    always safe, never reaches a different, unrelated process, and never
+    needs its own total time limit.
+    """
+    if pgid is None:
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
 def kill_tracked_process(proc: BaseProcess) -> None:
     """Best-effort SIGKILL of *proc*'s own pid only -- never a process group
     (#357 follow-up).
@@ -594,6 +651,7 @@ def _communicate_promptly(
     *,
     input: str | bytes | None,
     timeout: float | None,
+    pgid: int | None = None,
     poll_seconds: float = _SIGNAL_POLL_SECONDS,
 ) -> tuple[Any, Any]:
     """``proc.communicate()``, but never in one single wait as long as
@@ -638,6 +696,16 @@ def _communicate_promptly(
     call, ``None`` after) — safe there only because none of this
     catalog's own ``Popen`` test doubles actually model a retry losing
     unwritten input.
+
+    *pgid*, when given (an isolated child -- see its own helper
+    ``_isolated_pgid``), is repeat-killed (``_repeat_group_kill``) after
+    every slice in which cancellation is still set outside
+    ``CancellationToken.cleanup``: the single ``killpg`` call
+    ``kill_process_group`` already sent from the signal handler can race
+    a child the tracked process forks right at that instant (see that
+    helper's own docstring), so this keeps retrying it, at the same
+    cadence as everything else here, until ``communicate`` actually sees
+    EOF.
     """
     # getattr, not proc.stdin: a Popen-like test double that never
     # models a `stdin` attribute at all (most of this catalog's own
@@ -672,6 +740,9 @@ def _communicate_promptly(
             )
         except subprocess.TimeoutExpired:
             first = False
+            token = get_token()
+            if token.is_set() and not token.in_cleanup():
+                _repeat_group_kill(pgid)
 
 
 def run_tracked(
@@ -729,12 +800,25 @@ def run_tracked(
         start_new_session=(os.name == "posix" and (token.armed or new_session)),
         **popen_kwargs,
     )
+    # Captured once, right after Popen, not re-derived later: a pgid
+    # can never be reused while any member of it is still alive, so
+    # this stays valid through every repeat kill below, including one
+    # needed because of a process this same pgid's own leader forked
+    # after this (#385 round 3, see _repeat_group_kill's own docstring).
+    pgid = _isolated_pgid(proc)
     with proc, token.track(proc):
         try:
-            stdout, stderr = _communicate_promptly(proc, input=input, timeout=timeout)
+            stdout, stderr = _communicate_promptly(
+                proc, input=input, timeout=timeout, pgid=pgid
+            )
         except subprocess.TimeoutExpired:
             kill_process_group(proc)
             proc.wait()
+            # One more, after the process we were tracking has actually
+            # exited: a child it forked at the exact instant of the kill
+            # above must not be left running past a timed-out step
+            # either.
+            _repeat_group_kill(pgid)
             raise
         except BaseException:
             # Cancellation already killed this process's group from the
@@ -742,5 +826,6 @@ def run_tracked(
             # that unwinds through here, the same as ``run_binary``.
             kill_process_group(proc)
             proc.wait()
+            _repeat_group_kill(pgid)
             raise
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)

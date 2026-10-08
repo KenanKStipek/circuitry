@@ -1676,7 +1676,15 @@ else, but faster: a branch that hasn't started yet never starts at all (no
 node, no hooks — the same shape `stop_on_error` already gives a not-yet-
 started sibling), and a branch already running is stopped outright — its
 child process (the whole process group a tool like `shell` spawns, not
-just its own pid) is killed. This covers every `shell`/binary-wrapping
+just its own pid) is killed, and killed again on every short poll for as
+long as cancellation stays requested: a shell step whose own command
+forks a further child right as the first kill lands (a shell running
+more than one command, e.g. `cmd1; cmd2`, can do this even for a plain
+sequential pipeline) can rarely survive that single kill, since the new
+child joining its process group and the kill being delivered to it are
+racing each other at the kernel level — the repeated kill catches it
+within a fraction of a second regardless of which kill it survived.
+This covers every `shell`/binary-wrapping
 tool plugin and every HTTP call that goes through curl (every model
 adapter's own prompt, `web_search`, `weather`, ComfyUI's REST calls). A
 few steps the kill genuinely cannot reach finish on their own instead,
@@ -1687,7 +1695,17 @@ running until the server responds or its own timeout, regardless of the
 signal), the `service` tool's own `start`/`stop` calls (a service is
 meant to outlive the run, so cancelling the run must not orphan a
 half-started or half-stopped one), and any plain Python-level step that
-never polls back in. A killed
+never polls back in. Rarely, and only under very heavy CPU load on the
+machine running `cof` itself, the *next* step after one the kill cannot
+reach can still start: Ctrl-C/SIGTERM/SIGHUP is only ever actually
+handled by this process's own main thread, and only once that thread's
+Python interpreter next checks for one — under adversarial contention
+(measured at roughly 3% of runs under a synthetic load of three
+CPU-bound processes competing for the machine's own cores) that check
+can be delayed long enough for a worker thread finishing such a step to
+reach its own next step first. This is a limit of signal delivery
+itself, not of this orchestrator's own polling, which already returns to
+that check several times a second. A killed
 child is sent SIGKILL directly, not the SIGINT/SIGTERM the signal itself
 carried, so a tool with its own graceful-shutdown handling (`ffmpeg`
 finalizing a partial output) never gets the chance; running detached from
