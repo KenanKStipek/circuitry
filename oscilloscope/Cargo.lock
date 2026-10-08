@@ -405,6 +405,8 @@ dependencies = [
  "electricity-value",
  "electricity-yaml",
  "indexmap",
+ "num-traits",
+ "regex",
  "sha2",
 ]
 

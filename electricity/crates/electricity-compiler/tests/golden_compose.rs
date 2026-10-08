@@ -254,9 +254,11 @@ run_error_case!(
     "dotted_reference_to_a_missing_segment_under_a_named_if"
 );
 
-// -- cases whose document passes declared-prompts and composition, so they
-// -- reach lane C's own unconditional gap next (`compile_document`'s
-// -- "not implemented" stub) rather than Circuitry's own real outcome.
+// -- cases whose document passes declared-prompts and composition, so
+// -- compile_document reaches lane C's own effect compilation next --
+// -- these assert the same success outcome Circuitry's own
+// -- compile_orchestration reports for the same document (`run_error`
+// -- is None in the corpus), now that lane C has landed.
 
 fn assert_compile_succeeds(name: &str) {
     let case = load_case(name);
@@ -275,29 +277,21 @@ fn assert_compile_succeeds(name: &str) {
 }
 
 #[test]
-#[ignore = "passes composition and reaches lane C's own compile gap; \
-            un-ignore once lane C's compile_document lands"]
 fn prompts_file_crlf_translated_succeeds_against_circuitry() {
     assert_compile_succeeds("prompts_file_crlf_translated");
 }
 
 #[test]
-#[ignore = "passes composition and reaches lane C's own compile gap; \
-            un-ignore once lane C's compile_document lands"]
 fn dotted_reference_reaches_into_a_named_if_from_anywhere_succeeds_against_circuitry() {
     assert_compile_succeeds("dotted_reference_reaches_into_a_named_if_from_anywhere");
 }
 
 #[test]
-#[ignore = "passes composition and reaches lane C's own compile gap; \
-            un-ignore once lane C's compile_document lands"]
 fn dotted_self_reference_from_inside_the_same_named_if_succeeds_against_circuitry() {
     assert_compile_succeeds("dotted_self_reference_from_inside_the_same_named_if");
 }
 
 #[test]
-#[ignore = "passes composition and reaches lane C's own compile gap; \
-            un-ignore once lane C's compile_document lands"]
 fn dotted_self_reference_from_inside_a_named_dynamic_succeeds_against_circuitry() {
     assert_compile_succeeds("dotted_self_reference_from_inside_a_named_dynamic");
 }
@@ -308,22 +302,16 @@ fn dotted_self_reference_from_inside_a_named_dynamic_succeeds_against_circuitry(
 /// for where it *is* verified right now, independent of compile
 /// succeeding.
 #[test]
-#[ignore = "compile_document itself is lane C's gap; the digest is \
-            verified independently by every_case_digest_matches_circuitry"]
 fn digest_with_no_prompt_files_succeeds_against_circuitry() {
     assert_compile_succeeds("digest_with_no_prompt_files");
 }
 
 #[test]
-#[ignore = "compile_document itself is lane C's gap; the digest is \
-            verified independently by every_case_digest_matches_circuitry"]
 fn digest_includes_a_referenced_prompt_file_succeeds_against_circuitry() {
     assert_compile_succeeds("digest_includes_a_referenced_prompt_file");
 }
 
 #[test]
-#[ignore = "compile_document itself is lane C's gap; the digest is \
-            verified independently by every_case_digest_matches_circuitry"]
 fn digest_includes_a_parent_directory_prompt_file_succeeds_against_circuitry() {
     assert_compile_succeeds("digest_includes_a_parent_directory_prompt_file");
 }

@@ -1,0 +1,111 @@
+{
+  "adapter": null,
+  "document": null,
+  "effect_names": [
+    "handle"
+  ],
+  "interface": null,
+  "model": null,
+  "prompts": {},
+  "root": {
+    "enabled": true,
+    "kind": {
+      "Control": {
+        "Block": {
+          "ops": [
+            {
+              "enabled": true,
+              "kind": {
+                "Control": {
+                  "Loop": {
+                    "body": {
+                      "Block": {
+                        "ops": [
+                          {
+                            "enabled": true,
+                            "kind": {
+                              "Leaf": {
+                                "Prompt": {
+                                  "assets": [],
+                                  "content": {
+                                    "Template": {
+                                      "composable": true,
+                                      "escape": "None",
+                                      "source": "item {{item}}"
+                                    }
+                                  },
+                                  "description": null,
+                                  "deterministic": false,
+                                  "group": null,
+                                  "inputs": null,
+                                  "model": null,
+                                  "model_params": null,
+                                  "prompt_type": "Text",
+                                  "provider": null,
+                                  "provider_fallbacks": [],
+                                  "retries": {
+                                    "backoff_ms": 1000,
+                                    "max_attempts": 1
+                                  },
+                                  "routing_override": null,
+                                  "schema": null,
+                                  "timeout_ms": null
+                                }
+                              }
+                            },
+                            "labels": null,
+                            "name": "handle",
+                            "on_error": "Fail",
+                            "path": [
+                              {
+                                "Name": "prime"
+                              },
+                              {
+                                "Name": "handle"
+                              }
+                            ]
+                          }
+                        ],
+                        "overlay": true
+                      }
+                    },
+                    "collect": null,
+                    "flow": "Chain",
+                    "max_concurrency": null,
+                    "max_iterations": null,
+                    "min_iterations": 0,
+                    "spec": {
+                      "Each": {
+                        "as_name": "item",
+                        "in_path": "input.items",
+                        "truncate": false
+                      }
+                    }
+                  }
+                }
+              },
+              "labels": null,
+              "name": null,
+              "on_error": "Fail",
+              "path": [
+                {
+                  "Name": "prime"
+                }
+              ]
+            }
+          ],
+          "overlay": false
+        }
+      }
+    },
+    "labels": null,
+    "name": "prime",
+    "on_error": "Fail",
+    "path": [
+      {
+        "Name": "prime"
+      }
+    ]
+  },
+  "runtime_block": null
+}

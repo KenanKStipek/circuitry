@@ -94,7 +94,7 @@ pub fn check_report(path: &Path, options: &CheckOptions) -> CheckReport {
         };
     }
 
-    if let Err(err) = cycles::detect_cycles(&document, &origin) {
+    if let Err(err) = cycles::detect_cycles(&document, Some(path)) {
         return CheckReport {
             ok: false,
             errors: vec![err.0],
@@ -159,7 +159,7 @@ pub fn check_for_run(path: &Path, options: &CheckOptions) -> Result<Program, Run
         return Err(RunCheckError::Structural(group_errors));
     }
 
-    cycles::detect_cycles(&document, &origin).map_err(|err| RunCheckError::Cycle(err.0))?;
+    cycles::detect_cycles(&document, Some(path)).map_err(|err| RunCheckError::Cycle(err.0))?;
 
     if let Ok(computed_digest) = digest::document_content_digest(path, &document, &confinement_root)
     {

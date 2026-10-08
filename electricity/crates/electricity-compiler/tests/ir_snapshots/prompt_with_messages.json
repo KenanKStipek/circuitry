@@ -1,0 +1,88 @@
+{
+  "adapter": null,
+  "document": null,
+  "effect_names": [
+    "chat"
+  ],
+  "interface": null,
+  "model": null,
+  "prompts": {},
+  "root": {
+    "enabled": true,
+    "kind": {
+      "Control": {
+        "Block": {
+          "ops": [
+            {
+              "enabled": true,
+              "kind": {
+                "Leaf": {
+                  "Prompt": {
+                    "assets": [],
+                    "content": {
+                      "Messages": [
+                        {
+                          "content": {
+                            "composable": true,
+                            "escape": "None",
+                            "source": "sys"
+                          },
+                          "role": "System"
+                        },
+                        {
+                          "content": {
+                            "composable": true,
+                            "escape": "None",
+                            "source": "hi {{input.name}}"
+                          },
+                          "role": "User"
+                        }
+                      ]
+                    },
+                    "description": null,
+                    "deterministic": false,
+                    "group": null,
+                    "inputs": null,
+                    "model": null,
+                    "model_params": null,
+                    "prompt_type": "Text",
+                    "provider": null,
+                    "provider_fallbacks": [],
+                    "retries": {
+                      "backoff_ms": 1000,
+                      "max_attempts": 1
+                    },
+                    "routing_override": null,
+                    "schema": null,
+                    "timeout_ms": null
+                  }
+                }
+              },
+              "labels": null,
+              "name": "chat",
+              "on_error": "Fail",
+              "path": [
+                {
+                  "Name": "prime"
+                },
+                {
+                  "Name": "chat"
+                }
+              ]
+            }
+          ],
+          "overlay": false
+        }
+      }
+    },
+    "labels": null,
+    "name": "prime",
+    "on_error": "Fail",
+    "path": [
+      {
+        "Name": "prime"
+      }
+    ]
+  },
+  "runtime_block": null
+}
