@@ -901,7 +901,10 @@ mod depth_tests {
 
     #[test]
     fn one_past_the_depth_limit_is_a_distinct_depth_error() {
-        let document = nested_dynamics(MAX_COMPILE_DEPTH + 1);
+        // `n = MAX_COMPILE_DEPTH` needs `n + 1` calls, one past the
+        // limit -- the first depth that actually fails, not an
+        // arbitrarily-further one.
+        let document = nested_dynamics(MAX_COMPILE_DEPTH);
         let err = compile_document(&document, &origin()).unwrap_err();
         assert!(
             err.0.contains("effect nesting is too deep to compile"),
