@@ -62,17 +62,31 @@ fn help_prints_usage_and_preview_notice_and_exits_zero() {
     assert!(stdout.contains("preview"));
 }
 
+/// `electricity <config.json> <doc>` runs `check_for_run` first (issue
+/// #408's CLI section). An empty document is one of the few checks
+/// fully resolvable without lane C's own compiler, so its exact text
+/// -- not just a marker naming an unimplemented lane -- is a stable
+/// thing to assert here.
 #[test]
-fn run_request_fails_with_preview_message_and_exit_code_one() {
-    let (mut cmd, _home) = command("run");
+fn run_request_fails_with_the_checks_own_error_text_and_exit_code_one() {
+    let (mut cmd, home) = command("run");
+    let config = home.path.join("config.json");
+    let doc = home.path.join("doc.yml");
+    fs::write(&config, "{}").unwrap();
+    fs::write(&doc, "").unwrap();
     let output = cmd
-        .args(["config.json", "orchestration.yml"])
+        .args([config.to_str().unwrap(), doc.to_str().unwrap()])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("cannot run orchestrations yet"));
-    assert!(stderr.contains("cof run"));
+    // The "required property" text past the location is the Rust
+    // `jsonschema` crate's own (third-party) wording, not required to
+    // match Circuitry's Python `jsonschema` text word for word
+    // (DESIGN.md §1/§12) -- only the "Orchestration validation failed:"
+    // wrapper and the location are Circuitry's own.
+    assert!(stderr.starts_with("Orchestration validation failed:\n  - top level: "));
+    assert!(stderr.contains("required property"), "{stderr}");
 }
 
 #[test]
@@ -101,13 +115,13 @@ fn unknown_flag_is_a_usage_error_with_exit_code_two() {
     assert_eq!(output.status.code(), Some(2));
 }
 
-/// `--dump-ir` wiring (issue #408's CLI section): until lane B lands,
-/// `electricity-compiler::check_for_run` is a stub that always fails, so
-/// this is the exact text `--dump-ir` reports for any document today --
-/// not Circuitry's own error for this particular file, which lane A
-/// never reaches.
+/// `--dump-ir` wiring (issue #408's CLI section): `effects: []` has no
+/// structural, concurrency-configuration, compile, group, or cycle
+/// error, so `check_for_run` succeeds and `--dump-ir` prints the
+/// resulting `Program` as the documented `{"ir_version": "unstable",
+/// "program": ...}` wrapper.
 #[test]
-fn dump_ir_reports_the_lane_a_stub_error_and_exits_one() {
+fn dump_ir_prints_the_program_json_and_exits_zero() {
     let (mut cmd, home) = command("dump-ir");
     let doc = home.path.join("doc.yml");
     fs::write(&doc, "effects: []\n").unwrap();
@@ -115,10 +129,12 @@ fn dump_ir_reports_the_lane_a_stub_error_and_exits_one() {
         .args(["config.json", doc.to_str().unwrap(), "--dump-ir"])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not implemented in lane A"));
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON on stdout");
+    assert_eq!(value["ir_version"], "unstable");
+    assert!(value["program"].is_object());
 }
 
 #[test]
@@ -130,9 +146,8 @@ fn dump_ir_flag_before_positionals_is_also_recognized() {
         .args(["--dump-ir", "config.json", doc.to_str().unwrap()])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not implemented in lane A"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
 }
 
 #[test]

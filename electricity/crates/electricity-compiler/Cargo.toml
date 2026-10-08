@@ -19,7 +19,14 @@ electricity-template = { path = "../electricity-template" }
 electricity-cel = { path = "../electricity-cel" }
 electricity-schema = { path = "../electricity-schema" }
 electricity-bytecode = { path = "../electricity-bytecode" }
+# Only used by `schema_instance.rs` to build the `serde_json::Value`
+# `electricity-schema` validates (that crate's own public API) --
+# "arbitrary_precision" so a `Value::Int` too large for `i64` still
+# becomes a real JSON number instance via `Number`'s `FromStr`, not a
+# fallback marker (see that module's docs).
+serde_json = { version = "1", features = ["arbitrary_precision"] }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+chrono = "0.4"

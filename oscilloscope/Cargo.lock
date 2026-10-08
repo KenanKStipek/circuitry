@@ -407,6 +407,7 @@ dependencies = [
  "indexmap",
  "num-traits",
  "regex",
+ "serde_json",
  "sha2",
 ]
 

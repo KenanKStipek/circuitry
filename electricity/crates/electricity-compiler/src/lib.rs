@@ -8,14 +8,11 @@
 //! ([`compose`], [`prompt_files`], [`digest`]), and the two entry points
 //! that reproduce Circuitry's two surfaces ([`pipeline`]).
 //!
-//! # Lane A (this lane): the stable public API
+//! # Lanes (issue #408)
 //!
-//! Every function and type below exists with its final signature in
-//! this PR; every body is a stub that returns a clear "not implemented
-//! in lane A" error (never a `todo!()`/panic) until the lane named in
-//! its module's header fills it in. Lanes B, C and D fill in disjoint
-//! files — see each module's own header for which lane owns it and
-//! which Circuitry source it ports:
+//! Lanes A (this crate's stable public API), B, C and D each filled in
+//! disjoint files and have all landed — see each module's own header
+//! for which lane owns it and which Circuitry source it ports:
 //!
 //! | Module | Lane | Circuitry source |
 //! |---|---|---|
@@ -24,6 +21,7 @@
 //! | [`difflib`] | B | `difflib.get_close_matches` (Python stdlib) |
 //! | [`schema_instance`] | B | the `Value` -> schema-instance conversion |
 //! | [`pipeline`] | B | `cli/runtime_shim.py` (`validate`/`run`, and `core/concurrency.py`'s config-parsing errors) |
+//! | [`project_root`] | B | `core/prompt_files.py::default_project_root` |
 //! | [`compile`] (`containers`/`leaves`) | C | `core/compiler.py` |
 //! | [`state_ns`] | C | `core/state_ns.py` |
 //! | [`groups`] | C | `core/compiler.py`'s `unknown_concurrency_group_errors` (an effect's `group:` reference; the `max_concurrency`/`concurrency_groups` config-parsing errors are [`pipeline`]'s, lane B) |
@@ -34,6 +32,13 @@
 //!
 //! # Known divergences
 //!
+//! - [`pipeline::check_report`]'s `warnings` does not reproduce
+//!   Circuitry's own advisory lint (`core/lint.py::lint_orchestration`
+//!   -- deprecated aliases, loop-body reference footguns, `threshold:`
+//!   on a built-in `if`, `min_iterations` on an `each` loop, and more):
+//!   only `unknown_key_warnings` and the host-settings notice are
+//!   ported. Lint parity was never assigned to any of issue #408's
+//!   lanes; tracked as issue #428.
 //! - `.toon` documents are refused outright (an electricity-specific
 //!   message: convert to YAML or JSON) — Circuitry's own TOON support
 //!   has no Rust-side port.
@@ -44,6 +49,46 @@
 //!   source's cache-root override.
 //! - `ref:` is rejected at compile time: there is no library-name/
 //!   remote-library resolution (DESIGN.md §4).
+//! - [`schema_instance`]'s conversion of a `Date`/`DateTime`/`Bytes`/
+//!   `NaN`/`Infinity` value fails every `"type"` keyword exactly the way
+//!   Python's own `isinstance` verdict would (including `"object"` --
+//!   `electricity-schema`'s own overridden `"type"` keyword, not this
+//!   crate's marker representation alone -- see that module's own doc
+//!   comment), except one narrow, live case: `minimum`/`maximum` against
+//!   an `Infinity`/`-Infinity` value only vacuously pass rather than
+//!   enforcing a finite bound (e.g. `threshold: .inf` passes here, a
+//!   `maximum` error in Python) -- a deliberate, documented trade-off
+//!   against a panic risk in the `jsonschema` crate itself (same doc
+//!   comment), not an inert gap.
+//! - [`electricity_schema::json_path_from_pointer`]'s non-string-key
+//!   location: decoded back exactly for an `int`/`bool` key (`1:` ->
+//!   `[1]`, `yes:` -> `[True]`). For any other hashable non-string key
+//!   (a float, `None`, a date/datetime, bytes), Python's own `json_path`
+//!   raises `TypeError` instead, collapsing the whole structural check
+//!   into one error rather than this location's own -- not reproduced
+//!   here (`schema_instance`'s own doc comment has the full rationale);
+//!   the location instead falls back to a non-empty, best-effort quoted
+//!   rendering of the key's own `repr()` text.
+//! - [`pipeline::check_for_run`] omits two of `cli/runtime_shim.py::run`'s
+//!   own pre-structural checks, both ported nowhere in electricity today:
+//!   `resolve_complexity_settings`'s validation of a malformed
+//!   `runtime.complexity` block (`cli/complexity_config.py`, raising
+//!   `ComplexityConfigError` from inside `resolve_effective_settings`,
+//!   before the concurrency limiter this function does check), and
+//!   `build_persistence_backend`'s validation of a malformed
+//!   `runtime.persistence` block (`core/store/persistence.py`, raised
+//!   after the concurrency limiter but before `check_interface_inputs`).
+//!   A document with an otherwise-valid structure but a malformed
+//!   `runtime.complexity`/`runtime.persistence` block passes
+//!   `check_for_run` here where `cof run` would fail -- complexity
+//!   routing/decomposition and persistence backends are whole subsystems
+//!   with no IR representation in this crate at all (out of scope for
+//!   issue #408's lane B), so this is left a documented gap rather than
+//!   a partial port of either module.
+//! - [`structural::schema_errors`] sorts multiple simultaneous schema
+//!   violations by `(location, message)`, not Circuitry's own `str(err)`
+//!   order (third-party `jsonschema` text from a different
+//!   implementation) -- see that function's own doc comment.
 //! - [`compile::containers`]'s [`compile::containers::compile_effects_in_scope`]
 //!   rejects more than `MAX_COMPILE_DEPTH` (128) nested effect
 //!   containers with its own distinct error. Circuitry has no fixed
@@ -116,6 +161,7 @@ pub mod digest;
 pub mod groups;
 pub mod load;
 pub mod pipeline;
+pub mod project_root;
 pub mod prompt_files;
 pub mod reflector_prime;
 pub mod schema_instance;
@@ -128,6 +174,7 @@ pub use load::load_document;
 pub use pipeline::{check_for_run, check_report};
 pub use structural::{structural_errors, unknown_key_warnings};
 
+use electricity_value::Value;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -207,11 +254,21 @@ impl std::error::Error for RunCheckError {}
 
 /// Options shared by [`check_report`] and [`check_for_run`] — the
 /// `skip_preflight`/`trust_document` flags `cli/runtime_shim.py`'s
-/// `validate`/`run` both take.
+/// `validate`/`run` both take, plus what the pipeline needs from the
+/// *config file* itself (issue #408's lane B section): its own
+/// `runtime:` block, merged under the document's own (document wins
+/// key by key — electricity trusts every document, DESIGN.md §11).
+/// `None` — the default, and what every golden corpus case runs
+/// with, since Circuitry's own ground truth always calls
+/// `validate`/`run` with `config=None` — behaves exactly like an
+/// empty config: the merged runtime is just the document's own
+/// `runtime:` block, unchanged. Populated by the `electricity` CLI
+/// alone, from the `config.json` positional argument.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CheckOptions {
     pub skip_preflight: bool,
     pub trust_document: bool,
+    pub config_runtime: Option<Value>,
 }
 
 /// Matches `runtime_shim.validate(...)`'s return shape.
@@ -220,14 +277,4 @@ pub struct CheckReport {
     pub ok: bool,
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
-}
-
-/// `program` reused by every stub so the exact wording stays
-/// consistent, and so finding it (ripgrep this crate for the string
-/// below) always lands on the right lane/issue.
-pub(crate) fn not_implemented(function: &str, lane: &str) -> String {
-    format!(
-        "electricity-compiler: `{function}` is not implemented in lane A \
-         (see issue #408, lane {lane})"
-    )
 }

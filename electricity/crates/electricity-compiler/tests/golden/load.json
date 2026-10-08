@@ -1,0 +1,1207 @@
+[
+  {
+    "name": "unsupported_suffix_md",
+    "files": {
+      "doc.md": "effects: []\n"
+    },
+    "entry": "doc.md",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Unsupported orchestration format: .md. Supported: .json, .toon, .yaml, .yml"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Unsupported orchestration format: .md. Supported: .json, .toon, .yaml, .yml",
+    "definition": null,
+    "definition_error": "ValueError: Unsupported orchestration format: .md. Supported: .json, .toon, .yaml, .yml",
+    "digest": "97f26cb17f03004ddfa97ac5a2b5375573d78d4effdc6df37c56cf47f7bfbef8",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "toon_refused",
+    "files": {
+      "doc.toon": "effects[0]: 1\n"
+    },
+    "entry": "doc.toon",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "The 'toon-format' package is required to load .toon files. Install it with: pip install git+https://github.com/toon-format/toon-python.git"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "The 'toon-format' package is required to load .toon files. Install it with: pip install git+https://github.com/toon-format/toon-python.git",
+    "definition": null,
+    "definition_error": "ImportError: The 'toon-format' package is required to load .toon files. Install it with: pip install git+https://github.com/toon-format/toon-python.git",
+    "digest": "865f84ae38fbe34d1688af1bc40a0e4153e79aab4e9656b6ef48055395a7429c",
+    "comparison": {
+      "validate_errors": [
+        "location"
+      ],
+      "run_error": "location"
+    }
+  },
+  {
+    "name": "empty_yaml_file",
+    "files": {
+      "doc.yml": ""
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Orchestration file is empty."
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - top level: 'effects' is a required property",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "empty_json_file",
+    "files": {
+      "doc.json": ""
+    },
+    "entry": "doc.json",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Orchestration file is empty."
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Expecting value: line 1 column 1 (char 0)",
+    "definition": null,
+    "definition_error": "JSONDecodeError: Expecting value: line 1 column 1 (char 0)",
+    "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "location"
+    }
+  },
+  {
+    "name": "whitespace_only_file",
+    "files": {
+      "doc.yml": "   \t\n  \n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Orchestration file is empty."
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "while scanning for the next token\nfound character '\\t' that cannot start any token\n  in \"<unicode string>\", line 1, column 4:\n       \t\n       ^",
+    "definition": null,
+    "definition_error": "ScannerError: while scanning for the next token\nfound character '\\t' that cannot start any token\n  in \"<unicode string>\", line 1, column 4:\n       \t\n       ^",
+    "digest": "3ff42aff38059cd69ceda80b9796c874b9c58dbe88c6efeb5226614e09ea93b9",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "location"
+    }
+  },
+  {
+    "name": "non_mapping_root_yaml_truthy",
+    "files": {
+      "doc.yml": "- 1\n- 2\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Orchestration YAML must be a mapping/object at the root."
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration YAML must be a mapping/object at the root.",
+    "definition": null,
+    "definition_error": "ValueError: Orchestration YAML must be a mapping/object at the root.",
+    "digest": "bb3b465728f1bf8bf324241affecb2270b689801d5b44cc8dffe5f9def657c0b",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "non_mapping_root_yaml_falsy_becomes_empty_dict",
+    "files": {
+      "doc.yml": "false\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "top level: 'effects' is a required property"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - top level: 'effects' is a required property",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "2ed27c1421e6928dbe13dbfdb5c59e1045b30341fe7ebe05700006bc5ac572c0",
+    "comparison": {
+      "validate_errors": [
+        "location_prefix"
+      ],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "non_mapping_root_json",
+    "files": {
+      "doc.json": "[]\n"
+    },
+    "entry": "doc.json",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Orchestration JSON must be a mapping/object at the root."
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration JSON must be a mapping/object at the root.",
+    "definition": null,
+    "definition_error": "ValueError: Orchestration JSON must be a mapping/object at the root.",
+    "digest": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "duplicate_key_yaml",
+    "files": {
+      "doc.yml": "name: a\neffects: []\nname: b\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "<root>/doc.yml: duplicate key 'name' at line 3, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "<root>/doc.yml: duplicate key 'name' at line 3, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one",
+    "definition": null,
+    "definition_error": "DuplicateKeyError: <root>/doc.yml: duplicate key 'name' at line 3, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one",
+    "digest": "9e78a4fdca7aaff02cb65bcfc098246da4cdae38b1a5ec70fd5a848068d914cf",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "duplicate_key_yaml_crlf",
+    "files": {
+      "doc.yml": "name: a\r\neffects: []\r\nname: b\r\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "<root>/doc.yml: duplicate key 'name' at line 3, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "<root>/doc.yml: duplicate key 'name' at line 3, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one",
+    "definition": null,
+    "definition_error": "DuplicateKeyError: <root>/doc.yml: duplicate key 'name' at line 3, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one",
+    "digest": "bcbdfcea0748a228cc124a2c7019e4ee3594a8904b6d2a01c9de162971cc3b1a",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "duplicate_key_json",
+    "files": {
+      "doc.json": "{\"name\": \"a\", \"effects\": [], \"name\": \"b\"}"
+    },
+    "entry": "doc.json",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "<root>/doc.json: duplicate key 'name' in top level; JSON would silently keep only the last one"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "<root>/doc.json: duplicate key 'name' in top level; JSON would silently keep only the last one",
+    "definition": null,
+    "definition_error": "DuplicateKeyError: <root>/doc.json: duplicate key 'name' in top level; JSON would silently keep only the last one",
+    "digest": "78a718daee233cf9c51d8030cdc98c3f97c03fb966f5a9621b55ba6edbcecf50",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "lone_cr_near_miss_key",
+    "files": {
+      "doc.yml": "effects:\r  - type: loop\r    name: poll\r    each: {in: 'input.xs'}\r    whlie: {mode: cel, expr: 'true'}\r    body: [{type: tool, name: t, provider: json, params: {mode: stringify, input: 1}}]\r"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0]: unknown key 'whlie' on a 'loop' effect — did you mean 'while'? As written it is ignored."
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0]: unknown key 'whlie' on a 'loop' effect — did you mean 'while'? As written it is ignored.",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "poll",
+          "body": [
+            {
+              "name": "t",
+              "provider": "json",
+              "params": {
+                "mode": "stringify",
+                "input": 1
+              },
+              "params_json": null,
+              "prompt": null,
+              "model": null,
+              "timeout_ms": null,
+              "on_error": "fail",
+              "description": null,
+              "retries": null,
+              "expect": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.xs",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "poll",
+        "t"
+      ]
+    },
+    "definition_error": null,
+    "digest": "5876adf86d4478dff29eb099957bf216f7a4830e64804eb8bc1314e1be7332f0",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "near_miss_key_error_and_unrelated_key_warning",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: a\n    provider: json\n    prams: {mode: stringify, input: 1}\n  - type: tool\n    name: b\n    provider: json\n    params: {mode: stringify, input: 1}\n    owner: ops\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0]: unknown key 'prams' on a 'tool' effect — did you mean 'params'? As written it is ignored."
+      ],
+      "warnings": [
+        "effects[1]: unknown key 'owner' on a 'tool' effect is ignored. Known keys: description, expect, group, model, name, on_error, params, params_json, prompt, provider, retries, timeout_ms, type."
+      ]
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0]: unknown key 'prams' on a 'tool' effect — did you mean 'params'? As written it is ignored.",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "a",
+          "provider": "json",
+          "params": {},
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null
+        },
+        {
+          "name": "b",
+          "provider": "json",
+          "params": {
+            "mode": "stringify",
+            "input": 1
+          },
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "a",
+        "b"
+      ]
+    },
+    "definition_error": null,
+    "digest": "8dbf7ffb333984f717b327b6e5f59f14a4bd45650137e76f0823906506cee067",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "schema_violation_loop_needs_exactly_one_of_while_or_each",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: poll\n    body: [{type: tool, name: t, provider: json, params: {mode: stringify, input: 1}}]\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0]: value is not valid under any of the given schemas ('each' is a required property)"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0]: value is not valid under any of the given schemas ('each' is a required property)",
+    "definition": null,
+    "definition_error": "ValueError: Loop at 'prime.effects[0]' must set exactly one of 'while' or 'each' (found neither).",
+    "digest": "b6e22894d21a3c240bbcf6901a410d81c544c1957006479a7404de05761fa264",
+    "comparison": {
+      "validate_errors": [
+        "location_prefix"
+      ],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "group_field_on_a_container_effect",
+    "files": {
+      "doc.yml": "effects:\n  - type: dynamic\n    name: d\n    group: g\n    effects:\n      - type: tool\n        name: t\n        provider: json\n        params: {mode: stringify, input: 1}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0]: 'group' is only allowed on tool/prompt effects (it names a concurrency-group slot a leaf effect holds at dispatch) — found on a 'dynamic' effect."
+      ],
+      "warnings": [
+        "effects[0]: unknown key 'group' on a 'dynamic' effect is ignored. Known keys: description, effects, finally, flow, labels, max_concurrency, name, on_error, steps, stop_on_error, strategy, type."
+      ]
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0]: 'group' is only allowed on tool/prompt effects (it names a concurrency-group slot a leaf effect holds at dispatch) — found on a 'dynamic' effect.",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "d",
+          "effects": [
+            {
+              "name": "t",
+              "provider": "json",
+              "params": {
+                "mode": "stringify",
+                "input": 1
+              },
+              "params_json": null,
+              "prompt": null,
+              "model": null,
+              "timeout_ms": null,
+              "on_error": "fail",
+              "description": null,
+              "retries": null,
+              "expect": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "flow": "chain",
+          "finally_effects": [],
+          "max_concurrency": null,
+          "stop_on_error": false,
+          "on_error": "fail",
+          "labels": null,
+          "enabled": true,
+          "prompts": {},
+          "effect_names": []
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "d",
+        "t"
+      ]
+    },
+    "definition_error": null,
+    "digest": "5dd161e37587e4ce0b828f1594aba3b605279f41890a8783f5eb15d0c50ba39f",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_inputs_unknown_type",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: stringg}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "interface.inputs.x.type: 'stringg' is not a recognized type — expected one of string, number, integer, boolean, array, object."
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - interface.inputs.x.type: 'stringg' is not a recognized type — expected one of string, number, integer, boolean, array, object.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "6fdc6cb8c2d11023067ce4c0e28a39f065248c0c13b0938cd129f779c617beca",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_inputs_default_type_mismatch_with_unquote_hint",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: integer, default: '3'}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "interface.inputs.x.default: declared type 'integer' but '3' is str — quoting it makes it a string; remove the quotes to declare it as integer."
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - interface.inputs.x.default: declared type 'integer' but '3' is str — quoting it makes it a string; remove the quotes to declare it as integer.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "03f75b8fc8eab2ed127b623138dfce01aec4dfc650434c17c3c7c1420248f35f",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "runtime_not_an_object_is_a_run_only_error",
+    "files": {
+      "doc.yml": "runtime: 5\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration 'runtime' must be an object if provided.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "b93316e2350c393de8dcfea58b1b1140bf8617d31b9f15c1299fc798a29221ac",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "plugins_not_a_list_is_a_run_only_error",
+    "files": {
+      "doc.yml": "plugins: foo\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration 'plugins' must be a list if provided.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "9efdffc5f005946874a73897bf907596f6ba2cad19512051bfbc966c61f37825",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "plugins_entry_not_a_string_is_a_run_only_error",
+    "files": {
+      "doc.yml": "plugins: [1]\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Plugins must be strings.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "4927de63eb77969082f4feda266a361f8b13b2e4447faaa634414707d7d86bf1",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "missing_required_interface_input_is_a_run_only_error",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "missing required input 'x' declared in orchestration interface.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "missing_entry_file_with_an_unsupported_suffix",
+    "files": {},
+    "entry": "missing.txt",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "FileNotFoundError: [Errno 2] No such file or directory: '<root>/missing.txt'"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Unsupported orchestration format: .txt. Supported: .json, .toon, .yaml, .yml",
+    "definition": null,
+    "definition_error": "ValueError: Unsupported orchestration format: .txt. Supported: .json, .toon, .yaml, .yml",
+    "digest": null,
+    "comparison": {
+      "validate_errors": [
+        "location"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "non_utf8_file_with_an_unsupported_suffix",
+    "files": {
+      "doc.png": {
+        "bytes_hex": "89504e47ff"
+      }
+    },
+    "entry": "doc.png",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "UnicodeDecodeError: 'utf-8' codec can't decode byte 0x89 in position 0: invalid start byte"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Unsupported orchestration format: .png. Supported: .json, .toon, .yaml, .yml",
+    "definition": null,
+    "definition_error": "ValueError: Unsupported orchestration format: .png. Supported: .json, .toon, .yaml, .yml",
+    "digest": "88d68653bc6eba8184e26ce031ad2c828ea72973d7fd3863823a2704e6b41940",
+    "comparison": {
+      "validate_errors": [
+        "location"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "negative_max_concurrency_config_error",
+    "files": {
+      "doc.yml": "runtime: {max_concurrency: -1}\neffects:\n  - type: tool\n    name: t\n    provider: json\n    params: {mode: stringify, input: 1}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "runtime.max_concurrency must be a positive integer, got -1."
+      ],
+      "warnings": [
+        "Applied host settings from doc.yml: runtime.max_concurrency"
+      ]
+    },
+    "lint_warnings": [],
+    "run_error": "Invalid runtime concurrency configuration:\n  - runtime.max_concurrency must be a positive integer, got -1.",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "t",
+          "provider": "json",
+          "params": {
+            "mode": "stringify",
+            "input": 1
+          },
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "t"
+      ]
+    },
+    "definition_error": null,
+    "digest": "f8e8fac197d673ea8c380516409c422f9311b6f5ca7008a073ba9b6b46f55f6e",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "invalid_concurrency_groups_config_error",
+    "files": {
+      "doc.yml": "runtime: {concurrency_groups: {io: -1}}\neffects:\n  - type: tool\n    name: t\n    provider: json\n    params: {mode: stringify, input: 1}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "runtime.concurrency_groups.io must be a positive integer, got -1."
+      ],
+      "warnings": [
+        "Applied host settings from doc.yml: runtime.concurrency_groups.io"
+      ]
+    },
+    "lint_warnings": [],
+    "run_error": "Invalid runtime concurrency configuration:\n  - runtime.concurrency_groups.io must be a positive integer, got -1.",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "t",
+          "provider": "json",
+          "params": {
+            "mode": "stringify",
+            "input": 1
+          },
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "t"
+      ]
+    },
+    "definition_error": null,
+    "digest": "e8d1fad60679c296d15539bb9fa10d03fa851b501b26632e938c733ee51a2205",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "if_threshold_huge_int_is_a_maximum_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: if\n    name: c\n    if: {mode: cel, expr: 'true'}\n    then: [{type: tool, name: t, provider: json, params: {mode: stringify, input: 1}}]\n    threshold: 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].threshold: 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 is greater than the maximum of 1"
+      ],
+      "warnings": [
+        "effects[0]: 'threshold' has no effect — the built-in evaluator reads a categorical yes/no with no calibrated confidence to cut, so it is recorded on meta.threshold and never consulted. Deprecated: kept schema-valid only so existing documents that set it keep passing; new documents should not set it."
+      ]
+    },
+    "lint_warnings": [
+      "effects[0]: 'threshold' has no effect — the built-in evaluator reads a categorical yes/no with no calibrated confidence to cut, so it is recorded on meta.threshold and never consulted. Deprecated: kept schema-valid only so existing documents that set it keep passing; new documents should not set it."
+    ],
+    "run_error": "Orchestration validation failed:\n  - effects[0].threshold: 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 is greater than the maximum of 1",
+    "definition": null,
+    "definition_error": "OverflowError: int too large to convert to float",
+    "digest": "ef0c493b213b4ded6de8d88d599d12e4c9a4ff776955f3ce1e26f265892eca3d",
+    "comparison": {
+      "validate_errors": [
+        "location_prefix"
+      ],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "tree_loop_max_concurrency_huge_negative_int_is_a_minimum_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: poll\n    flow: tree\n    each: {in: 'input.xs'}\n    max_concurrency: -10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n    body: [{type: tool, name: t, provider: json, params: {mode: stringify, input: 1}}]\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].max_concurrency: -10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 is less than the minimum of 1"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].max_concurrency: -10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 is less than the minimum of 1",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "poll",
+          "body": [
+            {
+              "name": "t",
+              "provider": "json",
+              "params": {
+                "mode": "stringify",
+                "input": 1
+              },
+              "params_json": null,
+              "prompt": null,
+              "model": null,
+              "timeout_ms": null,
+              "on_error": "fail",
+              "description": null,
+              "retries": null,
+              "expect": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.xs",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "tree",
+          "max_concurrency": -10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "poll",
+        "t"
+      ]
+    },
+    "definition_error": null,
+    "digest": "87b9f26f99c933aa3458e38011f3e04ad0b5e2a3c3ad5d35866688ea60180f5b",
+    "comparison": {
+      "validate_errors": [
+        "location_prefix"
+      ],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_huge_int_is_valid",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: p\n    template: 'hi'\n    timeout_ms: 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "p",
+          "template": "hi",
+          "messages": null,
+          "prompt_type": "text",
+          "schema": null,
+          "model": null,
+          "provider": null,
+          "provider_fallbacks": null,
+          "routing_override": null,
+          "params": null,
+          "timeout_ms": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,
+          "deterministic": false,
+          "inputs": null,
+          "assets": null,
+          "retries": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "p"
+      ]
+    },
+    "definition_error": null,
+    "digest": "e2cd791f974341305a66afb93a1c165d383c4621d3af07c58468bf3e69bc0ed2",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  }
+]

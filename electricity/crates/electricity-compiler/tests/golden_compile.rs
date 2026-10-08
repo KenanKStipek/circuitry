@@ -2,10 +2,13 @@
 //! golden cases against this lane's own `compile_document` (issue
 //! #408's Test strategy section).
 //!
-//! Lane B's `load_document` hasn't landed yet, so each case's entry
-//! file is parsed directly here (`electricity-yaml`/`electricity-json`,
-//! by suffix) rather than through the pipeline's own surfaces; a
-//! `DocumentOrigin::File` is built from the canonicalized case root
+//! Each case's entry file is parsed directly here
+//! (`electricity-yaml`/`electricity-json`, by suffix) rather than
+//! through `load_document`/`check_report`/`check_for_run` (lane B) --
+//! this corpus is only about `compile_document`'s own behaviour, and
+//! every case's document is already structurally valid, so routing
+//! through the full pipeline would just re-run lane B's own checks for
+//! no benefit. A `DocumentOrigin::File` is built from the canonicalized case root
 //! (every corpus case is a single, flat project with no nested
 //! `config.json` of its own, so `document_dir` and `confinement_root`
 //! coincide). A test-only projection of the compiled [`Program`]
@@ -60,8 +63,8 @@ fn parse_document(entry: &Path) -> electricity_value::Value {
 /// `runtime:` block is the *entire* merged runtime config `cli/
 /// runtime_shim.py`'s `concurrency_limiter.group_names` would be built
 /// from -- the same value [`groups::unknown_group_errors`]'s real
-/// caller (`pipeline.rs`, lane B) would pass once it stops using an
-/// empty placeholder set of its own.
+/// caller (`pipeline.rs`, lane B) passes, computed from the merged
+/// runtime config the same way.
 fn known_groups_from_runtime(program: &electricity_bytecode::Program) -> BTreeSet<String> {
     let Some(Value::Dict(runtime)) = &program.runtime_block else {
         return BTreeSet::new();
