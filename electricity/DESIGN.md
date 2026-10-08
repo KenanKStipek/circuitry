@@ -386,7 +386,11 @@ two. Both forms always end with a trailing `\n` (matching `cli/app.py`'s `_write
    Circuitry's exact `"Orchestration validation failed:\n  - ..."` prefix:
    1. unknown-key errors (near-miss/typo detection against the actual key set for that effect
       type, including the `_MISTAKEN_FOR` hardcoded confusables like `adapter`→`provider`);
-   2. JSON-schema errors (Draft7, with the deepest `oneOf` sub-error appended);
+   2. JSON-schema errors (Draft7, with the deepest `oneOf` sub-error appended — `electricity-schema`
+      (§4 step 3, #380) cannot produce this suffix on `jsonschema` 0.26, whose
+      `OneOfNotValid`/`AnyOf` variants carry no sub-error list to pick from; the compiler lane
+      built here either re-validates the losing branches by hand or needs a `jsonschema` upgrade
+      that exposes them, whichever lands first);
    3. `group:` placement errors (leaf effects only);
    4. `interface.inputs.<k>.type` must be one of the six recognized types;
    5. `interface.inputs.<k>.default` type-mismatch (already-typed data, not CLI text).
@@ -1969,19 +1973,26 @@ not a shipped, documented, production adapter name a real document could rely on
 therefore no existing shared contract to port — electricity needs a **new**, matching test-only
 adapter on the Rust side, and Circuitry needs its own equivalent formalized as shared,
 documented infrastructure (not left as scattered test fixtures) before both engines can be
-scripted from the same case file: an `electricity-adapters` test-only adapter also registered under
-the name `scripted`, consuming the **same** fixture-config shape (a per-case ordered reply list,
-keyed by call sequence) so one case directory's fixture file configures both engines identically,
-rather than each engine inventing its own scripting format that the suite would then have to
-translate between. Tool fakes split by kind: a process-backed tool (`shell`, `ffmpeg`, `awk`,
-`imagemagick`) is faked by a recorded-stdout/exit-code wrapper script the case substitutes for the
-real binary (both engines invoke whatever `binary`/`PATH` resolves to, so pointing that resolution
-at a fixture script needs no engine-specific fake-tool code at all); an HTTP-family tool (`http`,
-`web_fetch`, `webhook`, `mcp` over HTTP) is faked by a loopback-bound mock HTTP server the suite
-starts per case, with the document's `base_url`/equivalent config pointed at it — again requiring
-no fake-mode branch inside either engine's real `http` client. This is Python-side work in the
-same repository (the `scripted` adapter and the fixture-config format do not exist as a
-documented, shared contract today) and gates M0 (§15).
+scripted from the same case file.
+
+**Resolved (#362): Circuitry's own `scripted` adapter ships as a documented, registered adapter**
+(`circuitry.adapters.scripted.ScriptedAdapter`, `runtime.adapters.scripted.replies_file`), and the
+fixture-config format is specified in `electricity/docs/spec/scripted-replies.md` so electricity's
+own test-only adapter (still to be built, on the Rust side) can read the identical file. Replies
+are **keyed by the calling effect's stable state path** (`prime.review`,
+`prime.shots.iter_2.describe`), never by call sequence — call sequence is nondeterministic for a
+`flow: tree` loop or dynamic, whose branches dispatch in whatever order their worker threads
+happen to run. Circuitry threads this path through every model-call site via a context variable
+(`core.effect_identity`), set for the duration of one call and read by the adapter, not derived
+from a global counter. Replies queued for one path are consumed in order, which is what makes a
+retry or an `expect:` re-ask against the same effect deterministic too. Tool fakes split by kind:
+a process-backed tool (`shell`, `ffmpeg`, `awk`, `imagemagick`) is faked by a recorded-stdout/
+exit-code wrapper script the case substitutes for the real binary (both engines invoke whatever
+`binary`/`PATH` resolves to, so pointing that resolution at a fixture script needs no
+engine-specific fake-tool code at all); an HTTP-family tool (`http`, `web_fetch`, `webhook`, `mcp`
+over HTTP) is faked by a loopback-bound mock HTTP server the suite starts per case, with the
+document's `base_url`/equivalent config pointed at it — again requiring no fake-mode branch
+inside either engine's real `http` client.
 
 **Normalization rules** applied before diffing, not before generating (the raw `cof` output is
 the ground truth; normalization only narrows what's compared):

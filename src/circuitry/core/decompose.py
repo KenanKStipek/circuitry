@@ -50,6 +50,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .effect_identity import nested_container
 from .store import Store
 from .use import (
     _clean_yaml_fences,
@@ -485,19 +486,20 @@ def _run_planner(
     # The planner reads its inputs where every orchestration reads caller input,
     # under ``input`` ({{{input.source_template}}}, state.input.max_chunks);
     # seeded at the root, it saw an empty prompt and its gate never passed.
-    planner_store = _run_isolated(
-        planner_orch,
-        initial_state={"input": planner_state},
-        parent_store=store,
-        node=node,
-        node_path=node_path,
-        adapter=adapter,
-        model=model,
-        runtime_config=_planner_runtime_config(runtime_config),
-        timeout_seconds=timeout_seconds,
-        verbose=verbose,
-        display_depth=display_depth,
-    )
+    with nested_container(store, defn.name):
+        planner_store = _run_isolated(
+            planner_orch,
+            initial_state={"input": planner_state},
+            parent_store=store,
+            node=node,
+            node_path=node_path,
+            adapter=adapter,
+            model=model,
+            runtime_config=_planner_runtime_config(runtime_config),
+            timeout_seconds=timeout_seconds,
+            verbose=verbose,
+            display_depth=display_depth,
+        )
 
     read = {
         name: _resolve_dot_path(planner_store.state, path)
@@ -709,19 +711,20 @@ def _execute_plan(
     if isinstance(copied_prime, dict) and len(result_parts) >= 2:
         copied_prime.pop(result_parts[1], None)
 
-    child_store = _run_isolated(
-        parsed,
-        initial_state=child_state,
-        parent_store=store,
-        node=node,
-        node_path=node_path,
-        adapter=adapter,
-        model=model,
-        runtime_config=child_runtime_config,
-        timeout_seconds=timeout_seconds,
-        verbose=verbose,
-        display_depth=display_depth,
-    )
+    with nested_container(store, defn.name):
+        child_store = _run_isolated(
+            parsed,
+            initial_state=child_state,
+            parent_store=store,
+            node=node,
+            node_path=node_path,
+            adapter=adapter,
+            model=model,
+            runtime_config=child_runtime_config,
+            timeout_seconds=timeout_seconds,
+            verbose=verbose,
+            display_depth=display_depth,
+        )
 
     value = _resolve_dot_path(child_store.state, plan.result_path)
     if value is None:
