@@ -170,6 +170,144 @@ def test_declared_prompt_trailing_newline_is_dropped_once() -> None:
     assert store.get("prime.y.value") == "Plain, direct.\nNext line"
 
 
+# ── section scope: text splicing, not a pre-rendered value (decision C) ─────
+
+
+def test_a_declared_prompt_inside_a_list_section_sees_each_items_own_scope() -> None:
+    """The fragment's own text is spliced in before chevron ever renders —
+    so a section wrapped AROUND `{{> line}}` iterates normally, rendering
+    the fragment's own tags fresh against each item, not one shared
+    top-level context."""
+    orch = {
+        "prompts": {"line": "-{{title}}"},
+        "effects": [
+            {
+                "type": "tool",
+                "name": "t",
+                "provider": "json",
+                "params": {
+                    "mode": "stringify",
+                    "input": "{{#input.items}}{{> line}}{{/input.items}}",
+                },
+            }
+        ],
+    }
+    store = _run(
+        orch, initial_state={"input": {"items": [{"title": "a"}, {"title": "b"}]}}
+    )
+    assert store.get("prime.t.value") == '"-a-b"'
+
+
+def test_a_declared_prompt_inside_nested_sections_sees_each_level() -> None:
+    orch = {
+        "prompts": {"line": "[{{name}}]"},
+        "effects": [
+            {
+                "type": "tool",
+                "name": "t",
+                "provider": "json",
+                "params": {
+                    "mode": "stringify",
+                    "input": (
+                        "{{#input.groups}}({{#items}}{{> line}}{{/items}})"
+                        "{{/input.groups}}"
+                    ),
+                },
+            }
+        ],
+    }
+    store = _run(
+        orch,
+        initial_state={
+            "input": {
+                "groups": [
+                    {"items": [{"name": "a"}, {"name": "b"}]},
+                    {"items": [{"name": "c"}]},
+                ]
+            }
+        },
+    )
+    assert store.get("prime.t.value") == '"([a][b])([c])"'
+
+
+def test_a_declared_prompt_inside_an_inverted_section() -> None:
+    orch = {
+        "prompts": {"empty_note": "NOTHING HERE"},
+        "effects": [
+            {
+                "type": "tool",
+                "name": "t",
+                "provider": "json",
+                "params": {
+                    "mode": "stringify",
+                    "input": "{{^input.items}}{{> empty_note}}{{/input.items}}",
+                },
+            }
+        ],
+    }
+    empty = _run(orch, initial_state={"input": {"items": []}})
+    nonempty = _run(orch, initial_state={"input": {"items": ["x"]}})
+    assert empty.get("prime.t.value") == '"NOTHING HERE"'
+    assert nonempty.get("prime.t.value") == '""'
+
+
+def test_a_declared_prompt_used_both_at_top_level_and_inside_a_section() -> None:
+    orch = {
+        "prompts": {"tag": "#{{input.x}}"},
+        "effects": [
+            {
+                "type": "tool",
+                "name": "t",
+                "provider": "json",
+                "params": {
+                    "mode": "stringify",
+                    "input": "{{> tag}} {{#input.items}}{{> tag}}{{/input.items}}",
+                },
+            }
+        ],
+    }
+    store = _run(orch, initial_state={"input": {"x": "root", "items": [1, 2]}})
+    assert store.get("prime.t.value") == '"#root #root#root"'
+
+
+def test_a_set_delimiter_tag_inside_a_declared_prompt_is_a_compile_error() -> None:
+    with pytest.raises(ValueError, match="set-delimiter"):
+        compile_orchestration(
+            orch={
+                "prompts": {"bad": "{{=<% %>=}}hi"},
+                "effects": [{"type": "yield", "name": "y", "template": "{{> bad}}"}],
+            }
+        )
+
+
+def test_a_set_delimiter_tag_inside_a_prompt_file_is_a_compile_error(
+    tmp_path: Path,
+) -> None:
+    _write(tmp_path / "bad.md", "{{=<% %>=}}hi")
+    with pytest.raises(ValueError, match="set-delimiter"):
+        compile_orchestration(
+            orch={
+                "prompts": {"bad": {"file": "bad.md"}},
+                "effects": [{"type": "yield", "name": "y", "template": "{{> bad}}"}],
+            },
+            document_dir=tmp_path,
+            confinement_root=tmp_path,
+        )
+
+
+def test_an_unbalanced_section_inside_a_declared_prompt_is_reported_against_it() -> None:
+    """Each declared prompt is validated on its own, so a malformed
+    fragment is reported against the prompt that owns it, not the template
+    that happens to include it first."""
+    with pytest.raises(ValueError, match=r"prompts\.bad: malformed Mustache template"):
+        compile_orchestration(
+            orch={
+                "prompts": {"bad": "{{#items}}unclosed"},
+                "effects": [{"type": "yield", "name": "y", "template": "{{> bad}}"}],
+            }
+        )
+
+
 def test_yield_text_is_spliced_into_another_effects_template() -> None:
     orch = {
         "effects": [
