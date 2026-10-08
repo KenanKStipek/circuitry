@@ -259,10 +259,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "electricity-json"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "electricity-value",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "electricity-schema"
 version = "0.1.0"
 dependencies = [
  "jsonschema",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "electricity-template"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "electricity-value",
  "serde",
  "serde_json",
 ]
