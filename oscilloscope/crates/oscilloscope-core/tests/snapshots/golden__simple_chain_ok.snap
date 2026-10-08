@@ -1,0 +1,17 @@
+---
+source: crates/oscilloscope-core/tests/golden.rs
+expression: rendered
+---
+--- observation 0 ---
+log:
+  ▶ prime.first  shell echo one
+  ✓ prime.first  0.0s  one
+  ▶ prime.second  shell echo two
+  ✓ prime.second  0.0s  two
+  ■ run ok  0.0s
+status:
+prime: Done skip=None retrying=false
+prime.first: Done skip=None retrying=false
+prime.second: Done skip=None retrying=false
+--- exit ---
+exit_code: 0

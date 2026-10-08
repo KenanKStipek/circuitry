@@ -1,0 +1,6 @@
+{
+  "ok": false,
+  "error": "Interrupted (Ctrl-C/SIGINT)",
+  "warnings": [],
+  "state_out": "<SCRUBBED>/run/state.json"
+}

@@ -1,0 +1,8 @@
+effects:
+  - name: slow
+    type: tool
+    provider: shell
+    params:
+      command: tail
+      args: ["-f", "/dev/null"]
+      allowed_commands: ["tail"]

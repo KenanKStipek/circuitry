@@ -973,6 +973,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "insta",
+ "libc",
  "oscilloscope-core",
  "serde",
  "serde_json",
@@ -987,6 +988,7 @@ dependencies = [
  "electricity-bytecode",
  "electricity-compiler",
  "electricity-value",
+ "insta",
  "libc",
  "serde",
  "serde_json",
