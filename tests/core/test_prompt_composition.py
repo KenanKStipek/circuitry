@@ -1050,3 +1050,42 @@ def test_moving_bytes_between_two_prompt_files_changes_the_digest(tmp_path: Path
     digest_after = document_content_digest(doc, orch, confinement_root=tmp_path)
 
     assert digest_before != digest_after
+
+
+def test_document_content_digest_is_independent_of_the_projects_location(
+    tmp_path: Path,
+) -> None:
+    """A prompt file outside the document's own directory (`../shared/x.md`)
+    used to get its absolute path as its digest label -- `relative_to` raises
+    on a `..` reference, and the fallback was the absolute path -- so the
+    digest depended on where the *project* happened to sit on disk, not just
+    the document's own bytes. The same project tree, materialized under two
+    different (and differently-deep) temp roots, must digest identically."""
+    from circuitry.core.prompt_compose import document_content_digest
+
+    def _materialize(root: Path) -> Path:
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "circuitry.config.json").write_text("{}", encoding="utf-8")
+        _write(root / "shared" / "x.md", "Shared prompt text.")
+        orch = {
+            "prompts": {"x": {"file": "../shared/x.md"}},
+            "effects": [{"type": "yield", "name": "y", "template": "{{> x}}"}],
+        }
+        doc = root / "docs" / "doc.yml"
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text(yaml.safe_dump(orch), encoding="utf-8")
+        return doc
+
+    root1 = tmp_path / "project1"
+    root2 = tmp_path / "a" / "much" / "deeper" / "project2"
+    doc1 = _materialize(root1)
+    doc2 = _materialize(root2)
+    orch = {
+        "prompts": {"x": {"file": "../shared/x.md"}},
+        "effects": [{"type": "yield", "name": "y", "template": "{{> x}}"}],
+    }
+
+    digest1 = document_content_digest(doc1, orch, confinement_root=root1)
+    digest2 = document_content_digest(doc2, orch, confinement_root=root2)
+
+    assert digest1 == digest2

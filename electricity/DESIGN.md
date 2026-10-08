@@ -1024,18 +1024,23 @@ these before it ever reaches the orchestration's own state:
   `on_run_failure` event for every plugin that loaded. `--out` is written with that partial
   record, the same as any other in-run failure (§6.9).
 - **`runtime.last_run`**: `{run_id, orchestration_path, document_hash, dry_run, validate_only,
-  verbose, started_at, completed_at}`. `document_hash` is `document_content_digest`: SHA-256 of
-  the orchestration file's own bytes, followed by, for each prompt file it references
-  (`{file: ...}`), that file's path relative to the document's directory, its byte length as 8
-  bytes, then its bytes — not just every file's bytes concatenated, so moving bytes across a
-  prompt-file boundary still changes the digest. `--resume` also accepts a document hash written
-  by the pre-#407 algorithm (document bytes plus every referenced prompt file's bytes, with no
-  path label or length, concatenated) against a saved state that recorded one, kept as a private,
-  temporary compatibility fallback. The digest is `null` if the document became unreadable
-  between the earlier load and this hash (not treated as fatal
-  here, since the load already succeeded once); it is what a later `--resume`'s safety check
-  compares against (§6.8). `dry_run`/`validate_only`/`verbose` are always `false` for electricity's
-  v1 CLI surface (none of the three flags exist yet — Decisions, above — so these fields are
+  verbose, started_at, completed_at}`. `document_hash` is `document_content_digest`: SHA-256
+  over the orchestration file's own bytes; then, for each prompt file it references
+  (`{file: ...}`), in ascending order of resolved absolute paths compared component by component
+  (Python's `Path` ordering) — its label (UTF-8, `/`-separated, relative to the document's
+  directory, which may start with `../`), its byte length as 8-byte BIG-ENDIAN, then its bytes.
+  The label is location-independent: it never depends on where the project sits on disk, a `../`
+  reference included. Not just every file's bytes concatenated, so moving bytes across a
+  prompt-file boundary still changes the digest. An error while resolving or reading a prompt
+  file silently stops adding files, so the digest covers only what was hashed up to that point.
+  `--resume` also accepts a document hash written by the pre-#407 algorithm (document bytes plus
+  every referenced prompt file's bytes, with no path label or length, concatenated) against a
+  saved state that recorded one, kept as a private, temporary compatibility fallback. The digest
+  is `null` if the document became unreadable between the earlier load and this hash (not
+  treated as fatal here, since the load already succeeded once); it is what a later `--resume`'s
+  safety check compares against (§6.8). `dry_run`/`validate_only`/`verbose` are always `false`
+  for electricity's v1 CLI surface (none of the three flags exist yet — Decisions, above — so
+  these fields are
   always written `false`, not omitted, to keep the state shape identical). `completed_at` starts
   `null` and is filled in on **every** exit path, success or failure alike, alongside `totals`.
 - **`runtime.last_run.totals`**: `{wall_time_s, effects_run, tokens_sent, tokens_received,
