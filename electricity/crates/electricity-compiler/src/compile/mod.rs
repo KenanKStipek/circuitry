@@ -22,8 +22,8 @@ use std::collections::BTreeSet;
 /// Per-document compile-time state threaded through every container/
 /// leaf-compiling function: the monotonic counter behind a named
 /// loop's [`LoopId`] (DESIGN.md §5.1 -- "assigned in document order by
-/// the compiler"), and the current container-nesting depth
-/// ([`containers::DepthGuard`]) -- a document nested deep enough
+/// the compiler"), and the current container-nesting depth, counted
+/// against [`containers::MAX_COMPILE_DEPTH`] -- a document nested deep enough
 /// (`dynamic`/`if`/`loop`/reflector, each recursing through
 /// [`containers::compile_effects_in_scope`] once per level) can
 /// overflow even a generously sized stack long before it overflows

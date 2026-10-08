@@ -113,7 +113,6 @@ pub(crate) fn scope_child(scope_path: &str, child_name: &str) -> String {
     }
 }
 
-/// Ports `core/compiler.py::_compile_effects_in_scope`.
 /// How many levels deep [`compile_effects_in_scope`] recurses into
 /// itself (through `dynamic`/`if`/`loop`/a reflector's inner effects)
 /// before bailing with a distinct error instead of risking a stack
@@ -123,9 +122,16 @@ pub(crate) fn scope_child(scope_path: &str, child_name: &str) -> String {
 /// (512, which already bounds how deep a *parsed* document's effect
 /// containers can possibly nest at roughly half that many levels, two
 /// YAML-structural-depth units per level).
+///
+/// Circuitry itself has no fixed limit of its own kind: its YAML
+/// loader and its schema-instance check each raise Python's own
+/// `RecursionError` first, at a caller-dependent depth -- a documented
+/// divergence (this crate's own `lib.rs`, DESIGN.md's divergence
+/// table), not a parity gap.
 const MAX_COMPILE_DEPTH: usize = 128;
 
-/// Increments/decrements [`Ctx`]'s own nesting-depth counter around
+/// Ports `core/compiler.py::_compile_effects_in_scope`. Increments/
+/// decrements [`Ctx`]'s own nesting-depth counter around
 /// [`compile_effects_in_scope_inner`]'s own body -- a plain wrapper
 /// rather than an RAII guard borrowing `ctx.depth` specifically, since
 /// that borrow would outlive the inner call's own (separate) uses of

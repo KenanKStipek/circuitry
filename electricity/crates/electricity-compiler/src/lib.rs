@@ -44,6 +44,14 @@
 //!   source's cache-root override.
 //! - `ref:` is rejected at compile time: there is no library-name/
 //!   remote-library resolution (DESIGN.md §4).
+//! - [`compile::containers`]'s [`compile::containers::compile_effects_in_scope`]
+//!   rejects more than `MAX_COMPILE_DEPTH` (128) nested effect
+//!   containers with its own distinct error. Circuitry has no fixed
+//!   limit of its own: its YAML loader and its schema-instance check
+//!   each raise Python's `RecursionError` at a caller-dependent depth,
+//!   well before `compile_orchestration`'s own stack frames would
+//!   (`compile::containers`'s own module docs have the measured
+//!   numbers).
 //! - `use.inputs`'s compile-time template/reference checks stay as
 //!   shallow as Circuitry's own `_compile_use` (top-level values only;
 //!   a nested dict/list value is neither template-checked nor
