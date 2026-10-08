@@ -119,6 +119,45 @@ def test_ref_child_requirements_walks_through_a_path_edge_to_a_nested_ref(
     assert [r.required for r in reqs] == [{"shell"}]
 
 
+def test_ref_child_requirements_digest_matches_the_run_time_checks_for_a_prompt_file(
+    tmp_path: Path,
+) -> None:
+    """The pre-run gate's own digest for a `ref:` child (#396's P0) must be
+    exactly `core.prompt_compose.document_content_digest`'s — the same
+    function `core.use.UseRuntime`'s run-time check and `cof trust` use —
+    so consent recorded against one is found by all three."""
+    from circuitry.core.prompt_compose import document_content_digest
+
+    folder = tmp_path / "lib"
+    helper_path = _write_yaml(
+        folder / "helper.yml",
+        {
+            "prompts": {"brief": {"file": "brief.md"}},
+            "effects": [
+                {"type": "yield", "name": "y", "template": "{{> brief}}"},
+                _tool("shell"),
+            ],
+        },
+    )
+    (folder / "brief.md").write_text("Say hi.", encoding="utf-8")
+    root = {"effects": [{"type": "use", "name": "u", "ref": "helper"}]}
+    runtime = _folder_runtime(folder)
+
+    reqs = ref_child_requirements(root, root_path=tmp_path / "root.yml", runtime=runtime)
+
+    assert len(reqs) == 1
+    expected_orch = yaml.safe_load(helper_path.read_text())
+    assert reqs[0].digest == document_content_digest(helper_path, expected_orch)
+
+    # Editing only the prompt file changes the digest — consent per content
+    # hash, not per orchestration-YAML hash alone.
+    (folder / "brief.md").write_text("Say hi, differently.", encoding="utf-8")
+    reqs_after_edit = ref_child_requirements(
+        root, root_path=tmp_path / "root.yml", runtime=runtime
+    )
+    assert reqs_after_edit[0].digest != reqs[0].digest
+
+
 def test_ref_child_requirements_ignores_inline_children(tmp_path: Path) -> None:
     root = {
         "effects": [
@@ -283,6 +322,42 @@ def test_enforce_consent_gates_the_whole_document_when_fetched(tmp_path: Path) -
             allow_capabilities=None,
             prompt=None,
         )
+
+
+def test_enforce_consent_gates_a_fetched_document_with_a_prompt_file_by_its_shared_digest(
+    tmp_path: Path,
+) -> None:
+    """The whole-document gate's digest (#396's P0) is
+    `core.prompt_compose.document_content_digest`, the same function `cof
+    trust`/the run-time check use — consent recorded via `record_consent`
+    against that digest is found here, even though the document references
+    a prompt file.
+    """
+    from circuitry.core.prompt_compose import document_content_digest
+
+    (tmp_path / "brief.md").write_text("Say hi.", encoding="utf-8")
+    orch = {
+        "prompts": {"brief": {"file": "brief.md"}},
+        "effects": [
+            {"type": "yield", "name": "y", "template": "{{> brief}}"},
+            _tool("shell"),
+        ],
+    }
+    orch_path = _write_yaml(tmp_path / "orch.yml", orch)
+    digest = document_content_digest(orch_path, orch)
+    record_consent(digest, frozenset({"shell"}), store_path=trust_store_path())
+
+    ceiling = enforce_consent(
+        orch=orch,
+        orchestration_path=orch_path,
+        gate_whole_document=True,
+        runtime=None,
+        store_path=trust_store_path(),
+        allow_capabilities=None,
+        prompt=None,
+    )
+
+    assert ceiling == {"shell"}
 
 
 def test_enforce_consent_refuses_a_fetched_document_whose_only_shell_use_is_in_finally(
