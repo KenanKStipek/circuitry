@@ -296,6 +296,35 @@ runtime:
     assert "step2" in second.stdout
 
 
+def test_resume_refuses_when_only_a_referenced_prompt_file_changed(tmp_path: Path) -> None:
+    """The document content hash (#396) folds in every `{file: ...}` prompt
+    source the document references, not just the orchestration YAML's own
+    bytes — editing only the prompt file must refuse resume exactly like
+    editing the YAML itself already does.
+    """
+    _write(tmp_path / "brief.md", "Say hi.")
+    orch = _write(
+        tmp_path / "chain.yml",
+        "prompts:\n  brief: {file: brief.md}\n"
+        "effects:\n  - type: yield\n    name: y\n    template: \"{{> brief}}\"\n",
+    )
+    out = tmp_path / "run.json"
+
+    first = runner.invoke(app, ["run", str(orch), "--out", str(out)])
+    assert first.exit_code == 0, first.stdout
+
+    _write(tmp_path / "brief.md", "Say hi, differently.")
+
+    blocked = runner.invoke(app, ["run", str(orch), "--state", str(out), "--resume", "x"])
+    assert blocked.exit_code == 1
+    assert "content hash differs" in blocked.stdout
+
+    forced = runner.invoke(
+        app, ["run", str(orch), "--state", str(out), "--resume", "x", "--force"]
+    )
+    assert forced.exit_code == 0, forced.stdout
+
+
 def test_resume_refuses_a_state_with_no_document_hash_unless_forced(tmp_path: Path) -> None:
     """#270 F8: a state with no `runtime.last_run.document_hash` (never
     written by `cof run`, or predating this field) must refuse the same

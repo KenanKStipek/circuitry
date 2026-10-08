@@ -55,6 +55,7 @@ def test_misspelled_while_is_an_error_naming_the_key(tmp_path: Path) -> None:
         ({"type": "prompt", "name": "p", "temlpate": "hi", "template": "hi"},
          "temlpate", "template"),
         ({**_TOOL, "Params": {}}, "Params", "params"),
+        ({"type": "yield", "name": "y", "templte": "hi"}, "templte", "template"),
     ],
 )
 def test_near_miss_keys_are_errors(effect: dict, key: str, meant: str) -> None:
@@ -138,6 +139,17 @@ def test_near_miss_key_inside_the_root_finally_is_an_error() -> None:
     assert len(errors) == 1
     assert "finally[0]" in errors[0]
     assert "did you mean 'params'?" in errors[0]
+
+
+def test_top_level_prompt_singular_is_a_near_miss_of_prompts() -> None:
+    """A stray top-level `prompt:` (#396's `prompts:` map, singular typo) is
+    an error naming the intended key, not a silently-ignored warning."""
+    errors = unknown_key_errors(
+        {"prompt": {"voice": "Plain, direct."}, "effects": [_TOOL]}
+    )
+    assert len(errors) == 1
+    assert "unknown key 'prompt'" in errors[0]
+    assert "did you mean 'prompts'?" in errors[0]
 
 
 def test_top_level_near_miss_is_an_error_and_other_keys_warn() -> None:
