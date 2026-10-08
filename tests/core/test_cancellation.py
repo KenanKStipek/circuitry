@@ -682,6 +682,86 @@ def test_run_tracked_unicode_encode_error_in_stdin_fails_the_step() -> None:
         run_tracked([sys.executable, "-c", "import sys; sys.stdin.read()"], input="\udcff")
 
 
+def test_run_tracked_writer_thread_handles_bytes_input() -> None:
+    """#385 review P2 (test tidiness): the writer thread's `text=False`
+    path -- `stdin` is already a raw byte stream with no `.buffer` to
+    unwrap, and *input* is already `bytes`, not `str` to encode."""
+    result = run_tracked(
+        [sys.executable, "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"],
+        text=False,
+        input=b"raw bytes\x00\xff",
+    )
+    assert result.stdout == b"raw bytes\x00\xff"
+
+
+def test_run_tracked_writer_thread_handles_empty_input() -> None:
+    """#385 review P2 (test tidiness): `input=\"\"` closes stdin at once,
+    the same as before the writer thread existed -- the child must see
+    immediate EOF, not hang waiting for input that will never arrive."""
+    result = run_tracked(
+        [sys.executable, "-c", "import sys; print(repr(sys.stdin.read()))"],
+        input="",
+        timeout=10.0,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "''"
+
+
+def test_run_tracked_writer_thread_child_never_reads_stdin() -> None:
+    """#385 review P2 (test tidiness): a child that exits without ever
+    reading its stdin must not hang `run_tracked` -- the writer thread's
+    own write gets `BrokenPipeError` once the child's read end closes,
+    and that is swallowed, not raised into the main thread."""
+    result = run_tracked(
+        [sys.executable, "-c", "pass"],
+        input="x" * (1024 * 1024),
+        timeout=10.0,
+    )
+    assert result.returncode == 0
+
+
+def test_communicate_promptly_does_not_repeat_the_group_kill_during_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#385 review P2 (test tidiness): cancellation can be set while a
+    `finally:` step's own subprocess call runs inside `token.cleanup()`
+    -- that must not trigger the repeat kill either, the same gate
+    `_communicate_promptly` already applies to its *first* kill via
+    `run_tracked`'s own `except BaseException` (#356), covered here
+    directly at `_communicate_promptly` instead."""
+    token = CancellationToken()
+    token.request()
+    monkeypatch.setattr(cancellation, "_token", token)
+
+    killpg_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        os, "killpg", lambda pgid, sig: killpg_calls.append((pgid, sig))
+    )
+
+    class _FakeProc:
+        pid = 4242
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.args = ["x"]
+
+        def communicate(
+            self, input: Any = None, timeout: float | None = None
+        ) -> tuple[str, str]:
+            self.calls += 1
+            if self.calls < 3:
+                raise subprocess.TimeoutExpired(self.args, timeout or 0.0)
+            return "out", "err"
+
+    proc = _FakeProc()
+    with token.cleanup():
+        result = cancellation._communicate_promptly(
+            proc, input=None, timeout=None, pgid=777, poll_seconds=0.01  # type: ignore[arg-type]
+        )
+    assert result == ("out", "err")
+    assert killpg_calls == []
+
+
 def test_communicate_promptly_cancellation_while_writing_kills_without_hanging(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

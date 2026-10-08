@@ -151,18 +151,26 @@ def _process_group_and_pipe_diagnostics(pid: int | None) -> str:
         )
     ]
     lsof_pids = sorted({*group_pids, str(os.getpid())})
-    lsof = subprocess.run(
-        ["lsof", "-p", ",".join(lsof_pids)],
-        capture_output=True,
-        text=True,
-        timeout=5.0,
-        check=False,  # a dead pid among lsof_pids is expected and not an error
-    )
+    try:
+        lsof = subprocess.run(
+            ["lsof", "-p", ",".join(lsof_pids)],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=False,  # a dead pid among lsof_pids is expected and not an error
+        )
+        lsof_output = lsof.stdout or lsof.stderr or "(no output)"
+    except FileNotFoundError:
+        # A missing `lsof` binary must not hide the `ps` report already
+        # collected above behind an unrelated FileNotFoundError (#385
+        # review P2) -- this is diagnostics for a test failure, not
+        # something the failure itself should depend on.
+        lsof_output = "(lsof not available on this machine)"
     sections.append(
         "lsof for those pids plus this test process itself (a PIPE node "
         "listed under more than one pid is still held open by whichever "
         "one isn't this test process -- that's the EOF this test is "
-        "still waiting for):\n" + (lsof.stdout or lsof.stderr or "(no output)")
+        "still waiting for):\n" + lsof_output
     )
     return "\n\n".join(sections)
 

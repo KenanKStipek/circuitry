@@ -25,7 +25,6 @@
 from __future__ import annotations
 
 import json
-import os
 import signal
 import subprocess
 import sys
@@ -33,7 +32,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from _signal_test_support import _diagnose_and_fail, _wait_for_paths
+from _signal_test_support import _diagnose_and_fail, _sandboxed_env, _wait_for_paths
 
 _FIXTURE = Path(__file__).parent / "_fixtures" / "run_with_uncancellable_step.py"
 
@@ -49,24 +48,9 @@ _BLOCK_SECONDS = 3.0
 #: genuinely never started, must not pass this test by accident).
 _PAST_END_SECONDS = 2.0
 
-_CREDENTIAL_ENV_VARS = (
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "CYBERDINER_TOKEN",
-    "CYBERDINER_EXPO_URL",
-    "GH_TOKEN",
-    "GITHUB_TOKEN",
-    "NPM_TOKEN",
-)
-
 
 def _run_fixture(orch: Path, *, state_path: Path | None = None) -> subprocess.Popen[str]:
     tmp_path = orch.parent
-    home = tmp_path / "home"
-    home.mkdir(exist_ok=True)
-    env = {k: v for k, v in os.environ.items() if k not in _CREDENTIAL_ENV_VARS}
-    env["HOME"] = str(home)
-    env["PYTHONFAULTHANDLER"] = "1"
     args = [sys.executable, str(_FIXTURE), str(orch)]
     if state_path is not None:
         args.append(str(state_path))
@@ -75,7 +59,7 @@ def _run_fixture(orch: Path, *, state_path: Path | None = None) -> subprocess.Po
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        env=env,
+        env=_sandboxed_env(tmp_path),
         cwd=tmp_path,
     )
 
