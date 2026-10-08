@@ -1347,7 +1347,17 @@ regardless of which underlying crate is used:
   — a run-time-built `value`/`meta`/`state` argument — by the shared `MAX_DEPTH` instead, rejecting
   with the same `CelError` kind rather than recursing further. `Cargo.toml`'s
   `[profile.dev.package.cel]`/`[profile.dev.package.antlr4rust]` overrides exist so a debug
-  build's much larger per-frame stack cost doesn't overflow before either check runs.
+  build's much larger per-frame stack cost doesn't overflow before either check runs. Circuitry's
+  own `core/cel_eval.py` has no equivalent pre-scan: `celpy`'s parser raises Python's own
+  `RecursionError` well before a native stack overflow, in principle a graceful, catchable failure
+  for this exact input — but `_compile`'s own `except Exception` handler that would turn it into
+  `CelValidationError` can itself re-trigger a second `RecursionError` formatting the first one's
+  message (`str(exc)`, still deep in the same exhausted recursion budget), which escapes
+  **uncaught** past every call site in `core/cel_eval.py` as a bare `RecursionError`, confirmed
+  directly (`evaluate_cel("0" + "+1" * 2000, {})` raises `RecursionError`, not
+  `CelEvaluationError`). `electricity-cel`'s pre-scan means it never reaches an equivalent native
+  stack overflow to begin with, which incidentally also means it rejects this input more cleanly
+  than Circuitry's own evaluator does today.
 
 ### 7.3 Regex engines
 
