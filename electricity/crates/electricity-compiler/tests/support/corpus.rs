@@ -64,6 +64,9 @@ pub fn materialize(tag: &str, files: &BTreeMap<String, FileContent>) -> TempCase
                     apply_mode(&dest, mode);
                 }
             }
+            FileContent::Repeat { repeat, count } => {
+                fs::write(&dest, repeat.repeat(*count)).expect("write repeated-content file");
+            }
             FileContent::Symlink { symlink } => {
                 symlinks.push((dest, symlink.clone()));
             }

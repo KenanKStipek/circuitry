@@ -89,7 +89,7 @@ CASES: list[dict] = [
         "name": "prompts_file_over_size_limit",
         "files": {
             "doc.yml": "prompts:\n  voice: {file: big.md}\n" + _YIELD,
-            "big.md": "x" * (1024 * 1024 + 1),
+            "big.md": {"repeat": "x", "count": 1024 * 1024 + 1},
         },
         "entry": "doc.yml",
     },

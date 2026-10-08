@@ -11,7 +11,12 @@ Each case is a dict:
 
     {
         "name": str,
-        "files": {relpath: text | {"symlink": target} | {"bytes_hex": hex, "mode": octal_str}},
+        "files": {
+            relpath: text
+            | {"symlink": target}
+            | {"bytes_hex": hex, "mode": octal_str}
+            | {"repeat": text, "count": int}
+        },
         "entry": relpath,          # which file is the orchestration itself
         "options": {"skip_preflight": bool, "trust_document": bool},  # optional
         "error_modes": {                                              # optional
@@ -26,6 +31,12 @@ the file is written, for a lane D case exercising an unreadable prompt
 file (`core/prompt_files.py`'s "could not be read" branch). Not
 meaningful on Windows; a case that needs it is Unix-only by nature
 (permission bits), same as a symlink-escape case already is.
+
+A `{"repeat": text, "count": int}` entry writes *text* repeated *count*
+times (`text * count`) -- a generated-content spec for a case whose
+file content is large and uniform (a lane D case one byte over the
+prompt-file size limit, say), so the golden JSON this helper writes
+records the short spec rather than the file's own megabyte of bytes.
 
 `run_case` materializes *case*'s files into a fresh temporary directory
 (that directory -- its resolved, symlink-free path, matching the Rust
@@ -102,6 +113,8 @@ def _materialize(files: dict[str, Any], root: Path) -> None:
             dest.write_bytes(bytes.fromhex(content["bytes_hex"]))
             if "mode" in content:
                 dest.chmod(int(content["mode"], 8))
+        elif isinstance(content, dict) and "repeat" in content:
+            dest.write_text(content["repeat"] * content["count"], encoding="utf-8")
         else:
             dest.write_text(content, encoding="utf-8")
     for dest, target in symlinks:
