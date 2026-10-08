@@ -44,6 +44,39 @@
 //!   source's cache-root override.
 //! - `ref:` is rejected at compile time: there is no library-name/
 //!   remote-library resolution (DESIGN.md §4).
+//! - [`compile::containers`]'s [`compile::containers::compile_effects_in_scope`]
+//!   rejects more than `MAX_COMPILE_DEPTH` (128) nested effect
+//!   containers with its own distinct error. Circuitry has no fixed
+//!   limit of its own: its YAML loader and its schema-instance check
+//!   each raise Python's `RecursionError` at a caller-dependent depth,
+//!   well before `compile_orchestration`'s own stack frames would
+//!   (`compile::containers`'s own module docs have the measured
+//!   numbers).
+//! - [`cycles`]'s own non-UTF-8-content gap: a `use` child that isn't
+//!   valid UTF-8 is treated as unreadable (an empty document, never a
+//!   cycle edge through it), where Circuitry's own `load_orch` raises
+//!   an uncaught `UnicodeDecodeError` ([`cycles`]'s own module docs).
+//! - [`compile::coerce::py_int`]/[`compile::coerce::py_float`]: a value
+//!   of the wrong Python type (one schema validation -- lane B -- would
+//!   already have rejected) coerces to `0`/`0.0` rather than raising,
+//!   so this compiler never panics on it ([`compile::coerce`]'s own
+//!   module docs).
+//! - A handful of narrower whitespace/Unicode divergences, declined as
+//!   out of scope for this lane (PR #415's review, finding 19): the
+//!   `\x1c`-`\x1f` control characters Python's `str.strip()`/`.isspace()`
+//!   treat as whitespace but Rust's `char::is_whitespace` does not
+//!   ([`compose`]'s own module docs); [`compile::names`]'s own
+//!   `iter_<n>`-reserved-pattern check is ASCII-digit-only, where
+//!   Circuitry's `re.fullmatch(r"iter_\d+", name)` matches any Unicode
+//!   decimal digit; [`state_ns`]'s own `iter_template_strings` silently
+//!   drops a non-string leaf under a checked field rather than
+//!   reporting it, matching `core/state_ns.py::_iter_template_strings`'s
+//!   own `isinstance(str)` guard exactly, but still a narrower overall
+//!   behavior than Circuitry's, since nothing later reports that leaf
+//!   either; a declared `use.inputs: {}` and an absent `inputs` compile
+//!   identically here, where Circuitry's schema instance (lane B)
+//!   distinguishes the two; and an unknown chat-message `role` value
+//!   (unreachable today -- the schema's `role` is a closed enum).
 //! - [`prompt_files`]'s confinement-root resolve: `core/prompt_files.py::
 //!   resolve_prompt_file_path` lets the confinement root's own `Path.
 //!   resolve(strict=False)` raise an *uncaught* `RuntimeError` (only the

@@ -1,0 +1,75 @@
+{
+  "adapter": null,
+  "document": null,
+  "effect_names": [
+    "greet"
+  ],
+  "interface": null,
+  "model": null,
+  "prompts": {},
+  "root": {
+    "enabled": true,
+    "kind": {
+      "Control": {
+        "Block": {
+          "ops": [
+            {
+              "enabled": true,
+              "kind": {
+                "Leaf": {
+                  "Prompt": {
+                    "assets": [],
+                    "content": {
+                      "Template": {
+                        "composable": true,
+                        "escape": "None",
+                        "source": "hi {{input.name}}"
+                      }
+                    },
+                    "description": null,
+                    "deterministic": false,
+                    "group": null,
+                    "inputs": null,
+                    "model": null,
+                    "model_params": null,
+                    "prompt_type": "Text",
+                    "provider": null,
+                    "provider_fallbacks": [],
+                    "retries": {
+                      "backoff_ms": 1000,
+                      "max_attempts": 1
+                    },
+                    "routing_override": null,
+                    "schema": null,
+                    "timeout_ms": null
+                  }
+                }
+              },
+              "labels": null,
+              "name": "greet",
+              "on_error": "Fail",
+              "path": [
+                {
+                  "Name": "prime"
+                },
+                {
+                  "Name": "greet"
+                }
+              ]
+            }
+          ],
+          "overlay": false
+        }
+      }
+    },
+    "labels": null,
+    "name": "prime",
+    "on_error": "Fail",
+    "path": [
+      {
+        "Name": "prime"
+      }
+    ]
+  },
+  "runtime_block": null
+}
