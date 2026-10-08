@@ -44,6 +44,36 @@
 //!   source's cache-root override.
 //! - `ref:` is rejected at compile time: there is no library-name/
 //!   remote-library resolution (DESIGN.md §4).
+//! - [`prompt_files`]'s confinement-root resolve: `core/prompt_files.py::
+//!   resolve_prompt_file_path` lets the confinement root's own `Path.
+//!   resolve(strict=False)` raise an *uncaught* `RuntimeError` (only the
+//!   candidate path's own resolve is wrapped in a `PromptFileError`) --
+//!   a latent bug, reachable only by a confinement root itself behind a
+//!   symlink *loop* (on CPython 3.11, `Path.resolve(strict=False)` only
+//!   raises there; a merely dangling/broken chain with no cycle resolves
+//!   fine, leaving the missing target as a literal trailing path
+//!   segment). This port wraps both resolves the same way, as a
+//!   [`CompileError`] rather than an uncaught panic (Rust has no
+//!   equivalent of letting an arbitrary exception type propagate out of
+//!   a `Result`-returning function); not pinned by a corpus case, since
+//!   the exact OS error text this produces is errno-message dependent
+//!   even in CPython itself.
+//! - [`prompt_files::resolve_non_strict`]'s own symlink-loop handling:
+//!   unlike CPython's `Path.resolve(strict=False)` (which detects a
+//!   cycle structurally and raises `RuntimeError` immediately), this
+//!   port caps any symlink chain -- looping or not -- at 40 hops and
+//!   then fails with an `other`-kind [`std::io::Error`] ("too many
+//!   levels of symbolic links"), an approximation of the OS's own
+//!   `ELOOP`, not a byte-for-byte port of CPython's own loop detection
+//!   or error text.
+//! - A prompt file that exists but cannot be read (permission denied,
+//!   say) reports the OS error text verbatim after "could not be
+//!   read: " -- `std::io::Error`'s own `Display`, which never matches
+//!   Python's `OSError.__str__` word for word (e.g. Rust's `Permission
+//!   denied (os error 13)` vs. Python's `[Errno 13] Permission denied:
+//!   '<path>'`). Only the Circuitry-owned prefix in front of it is
+//!   pinned exactly by a corpus case; the OS-specific suffix is
+//!   compared by location only (DESIGN.md §1, §12).
 
 pub mod compile;
 pub mod compose;
@@ -60,6 +90,7 @@ pub mod state_ns;
 pub mod structural;
 
 pub use compile::compile_document;
+pub use digest::document_content_digest;
 pub use load::load_document;
 pub use pipeline::{check_for_run, check_report};
 pub use structural::{structural_errors, unknown_key_warnings};
