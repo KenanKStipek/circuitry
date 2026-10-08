@@ -107,12 +107,66 @@ impl Case {
 }
 
 /// `expected` compared against `actual` per *mode*: `"exact"` is a
-/// literal match; `"location"` only checks `actual` is non-empty
-/// (third-party text, DESIGN.md §1/§12 -- never compared word for word).
+/// literal match; `"location"` only checks `actual` is non-empty text
+/// with no location structure of its own (a YAML/JSON parse error, a
+/// `.toon` refusal -- pure third-party text, DESIGN.md §1/§12, never
+/// compared word for word, not even its location); `"location_prefix"`
+/// is for Circuitry's own `"{location}: {message}"`-shaped errors (a
+/// schema violation, bare or wrapped in `"Orchestration validation
+/// failed:\n  - ..."`) -- see [`matches_location`].
 pub fn matches(mode: &str, expected: &str, actual: &str) -> bool {
     match mode {
         "location" => !actual.is_empty(),
+        "location_prefix" => matches_location(expected, actual),
         _ => expected == actual,
+    }
+}
+
+/// Compares Circuitry's own prefix of a `"{location}: {message}"`-shaped
+/// error exactly, leaving the message past the first `": "` on each
+/// line -- third-party `jsonschema` text, DESIGN.md §1/§12 --
+/// unchecked beyond being present. Handles both shapes this crate's own
+/// errors take: `check_report`'s bare `"<location>: <message>"` (one
+/// error, no wrapper) and `check_for_run`'s `"Orchestration validation
+/// failed:\n  - <location>: <message>\n  - ..."` (the wrapper, then one
+/// `"  - "`-prefixed line per error) -- the wrapper and the per-line
+/// location must all match exactly, and there must be the same number
+/// of lines, or this returns `false` outright rather than guessing
+/// which lines correspond.
+pub fn matches_location(expected: &str, actual: &str) -> bool {
+    const WRAPPER: &str = "Orchestration validation failed:\n";
+    let (expected_wrapped, expected_body) = match expected.strip_prefix(WRAPPER) {
+        Some(rest) => (true, rest),
+        None => (false, expected),
+    };
+    let (actual_wrapped, actual_body) = match actual.strip_prefix(WRAPPER) {
+        Some(rest) => (true, rest),
+        None => (false, actual),
+    };
+    if expected_wrapped != actual_wrapped {
+        return false;
+    }
+    let expected_lines: Vec<&str> = expected_body.lines().collect();
+    let actual_lines: Vec<&str> = actual_body.lines().collect();
+    if expected_lines.len() != actual_lines.len() || expected_lines.is_empty() {
+        return false;
+    }
+    expected_lines
+        .iter()
+        .zip(actual_lines.iter())
+        .all(|(expected_line, actual_line)| {
+            line_location(expected_line) == line_location(actual_line)
+        })
+}
+
+/// A `"  - <location>: <message>"` or bare `"<location>: <message>"`
+/// line's own `<location>` -- the text up to the first `": "`, or the
+/// whole (trimmed) line if it has none.
+fn line_location(line: &str) -> &str {
+    let trimmed = line.strip_prefix("  - ").unwrap_or(line);
+    match trimmed.find(": ") {
+        Some(index) => &trimmed[..index],
+        None => trimmed,
     }
 }
 

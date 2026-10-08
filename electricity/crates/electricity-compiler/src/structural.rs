@@ -54,7 +54,7 @@ const MISTAKEN_FOR: [(&str, &str); 1] = [("adapter", "provider")];
 const CHILD_KEYS: [&str; 6] = ["effects", "steps", "then", "else", "body", "finally"];
 
 /// `core/interface_inputs.py::_TYPE_NAMES`.
-const INTERFACE_TYPE_NAMES: [&str; 6] =
+pub(crate) const INTERFACE_TYPE_NAMES: [&str; 6] =
     ["string", "number", "integer", "boolean", "array", "object"];
 
 fn known_effect_keys(effect_type: &str) -> BTreeSet<String> {
@@ -93,6 +93,20 @@ fn near_miss(key: &str, known: &BTreeSet<String>) -> Option<String> {
     difflib::get_close_match(&normalized, &sorted, 0.8).map(|s| s.to_string())
 }
 
+/// `type(x).__name__` -- the *unqualified* class name Python's own
+/// `__name__` attribute gives, unlike [`Value::type_name`] (shared
+/// across crates for other purposes, e.g. a comparison-type error),
+/// which spells a date/datetime's own name as `"datetime.date"`/
+/// `"datetime.datetime"` -- the module-qualified form `__name__` never
+/// produces.
+pub(crate) fn py_class_name(value: &Value) -> &'static str {
+    match value {
+        Value::Date(_) => "date",
+        Value::DateTime(..) => "datetime",
+        other => other.type_name(),
+    }
+}
+
 /// `str(key)` as `document_check.py`'s `report()` renders it: `repr(key)`
 /// for a string key, or `f"{key!r} (YAML read the unquoted key as a
 /// {type(key).__name__})"` for anything else.
@@ -102,7 +116,7 @@ fn key_label(key: &Value) -> String {
         other => format!(
             "{} (YAML read the unquoted key as a {})",
             other.py_repr(),
-            other.type_name()
+            py_class_name(other)
         ),
     }
 }
@@ -155,6 +169,19 @@ fn effect_type_of(effect: &Value) -> String {
 
 fn is_known_effect_type(effect_type: &str) -> bool {
     EFFECT_DEFS.iter().any(|(name, _)| *name == effect_type)
+}
+
+/// `orch.get("effects")`, falling back to `orch.get("steps")` only when
+/// `effects` is *absent or `None`* (`document_check.py`'s `effects if
+/// effects is not None else orch.get("steps")`) -- an explicit
+/// `effects:` (YAML's bare key with nothing after it, or a JSON `null`)
+/// is `None`, not merely absent, and must fall back the same way;
+/// `effects: []` must not, since `[]` is not `None`.
+fn effects_or_steps(dict: &electricity_value::Dict) -> Option<&Value> {
+    match dict.get(&Value::Str("effects".to_string())) {
+        None | Some(Value::None) => dict.get(&Value::Str("steps".to_string())),
+        some => some,
+    }
 }
 
 fn walk_unknown_keys(
@@ -222,9 +249,7 @@ fn unknown_keys(document: &Value) -> (Vec<String>, Vec<String>) {
         }
     }
 
-    let effects = dict
-        .get(&Value::Str("effects".to_string()))
-        .or_else(|| dict.get(&Value::Str("steps".to_string())));
+    let effects = effects_or_steps(dict);
     walk_unknown_keys(effects, "effects", &mut errors, &mut warnings);
     walk_unknown_keys(
         dict.get(&Value::Str("finally".to_string())),
@@ -261,9 +286,7 @@ pub fn group_field_errors(document: &Value) -> Vec<String> {
     let Some(dict) = document.as_dict() else {
         return errors;
     };
-    let effects = dict
-        .get(&Value::Str("effects".to_string()))
-        .or_else(|| dict.get(&Value::Str("steps".to_string())));
+    let effects = effects_or_steps(dict);
     walk_group_fields(effects, "effects", &mut errors);
     walk_group_fields(
         dict.get(&Value::Str("finally".to_string())),
@@ -304,7 +327,7 @@ fn walk_group_fields(effects: Option<&Value>, path: &str, errors: &mut Vec<Strin
 }
 
 /// `core/interface_inputs.py::_matches_type`.
-fn matches_type(value: &Value, declared_type: &str) -> bool {
+pub(crate) fn matches_type(value: &Value, declared_type: &str) -> bool {
     match declared_type {
         "string" => matches!(value, Value::Str(_)),
         "number" => matches!(value, Value::Int(_) | Value::Float(_)),
@@ -346,7 +369,7 @@ pub fn interface_unknown_type_errors(document: &Value) -> Vec<String> {
         }
         errors.push(format!(
             "interface.inputs.{}.type: {} is not a recognized type — expected one of {allowed}.",
-            key.as_str().unwrap_or_default(),
+            key.py_str(),
             declared_type.py_repr(),
         ));
     }
@@ -391,10 +414,10 @@ pub fn interface_default_type_errors(document: &Value) -> Vec<String> {
         };
         errors.push(format!(
             "interface.inputs.{}.default: declared type '{}' but {} is {}{hint}.",
-            key.as_str().unwrap_or_default(),
+            key.py_str(),
             declared_type,
             default_value.py_repr(),
-            default_value.type_name(),
+            py_class_name(default_value),
         ));
     }
     errors
@@ -647,5 +670,109 @@ mod tests {
                     .to_string()
             ]
         );
+    }
+
+    #[test]
+    fn a_date_dict_key_reports_its_unqualified_class_name() {
+        let date = Value::Date(chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
+        let mut dict = Dict::new();
+        dict.insert(date, Value::Str("x".to_string()));
+        dict.insert(Value::Str("effects".to_string()), Value::List(vec![]));
+        let warnings = unknown_key_warnings(&Value::Dict(dict));
+        assert_eq!(warnings.len(), 1);
+        // Python's `type(key).__name__` for a `datetime.date` is `"date"`,
+        // not the module-qualified `"datetime.date"` -- F5.
+        assert!(
+            warnings[0].contains("(YAML read the unquoted key as a date)"),
+            "{warnings:?}"
+        );
+        assert!(!warnings[0].contains("datetime.date)"), "{warnings:?}");
+    }
+
+    #[test]
+    fn interface_errors_render_a_non_string_key_with_str_not_blank() {
+        let mut spec = Dict::new();
+        spec.insert(
+            Value::Str("type".to_string()),
+            Value::Str("stringg".to_string()),
+        );
+        let mut inputs = Dict::new();
+        inputs.insert(Value::from(1i64), Value::Dict(spec));
+        let mut interface = Dict::new();
+        interface.insert(Value::Str("inputs".to_string()), Value::Dict(inputs));
+        let mut dict = Dict::new();
+        dict.insert(Value::Str("interface".to_string()), Value::Dict(interface));
+        dict.insert(Value::Str("effects".to_string()), Value::List(vec![]));
+        let errors = interface_unknown_type_errors(&Value::Dict(dict));
+        assert_eq!(errors.len(), 1);
+        // `f"interface.inputs.{key}..."` renders an int key as `str(key)`
+        // ("1"), not the blank text `key.as_str().unwrap_or_default()`
+        // -- F5.
+        assert!(
+            errors[0].starts_with("interface.inputs.1.type:"),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_null_effects_key_falls_back_to_steps_like_an_absent_one() {
+        let mut dict = Dict::new();
+        dict.insert(Value::Str("effects".to_string()), Value::None);
+        dict.insert(
+            Value::Str("steps".to_string()),
+            Value::List(vec![effect(vec![
+                ("type", Value::Str("tool".to_string())),
+                ("name", Value::Str("t".to_string())),
+                ("provider", Value::Str("json".to_string())),
+                ("prams", Value::Dict(Dict::new())),
+            ])]),
+        );
+        let errors = unknown_key_errors(&Value::Dict(dict));
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("did you mean 'params'?"), "{errors:?}");
+    }
+
+    #[test]
+    fn an_empty_list_effects_key_does_not_fall_back_to_steps() {
+        let mut dict = Dict::new();
+        dict.insert(Value::Str("effects".to_string()), Value::List(vec![]));
+        dict.insert(
+            Value::Str("steps".to_string()),
+            Value::List(vec![effect(vec![
+                ("type", Value::Str("tool".to_string())),
+                ("name", Value::Str("t".to_string())),
+                ("provider", Value::Str("json".to_string())),
+                ("prams", Value::Dict(Dict::new())),
+            ])]),
+        );
+        assert_eq!(unknown_key_errors(&Value::Dict(dict)), Vec::<String>::new());
+    }
+
+    /// Replays `electricity/scripts/generate_compiler_difflib_corpus.py`'s
+    /// golden cases -- `core.document_check._near_miss` (the `_MISTAKEN_FOR`
+    /// table plus `difflib.get_close_matches`, cutoff 0.8) against
+    /// Circuitry's own real known-key sets, not a hand-typed value (F9).
+    #[derive(serde::Deserialize)]
+    struct DifflibCase {
+        word: String,
+        known_set: String,
+        expected: Option<String>,
+    }
+
+    #[test]
+    fn difflib_matches_cpython_recorded_values() {
+        let text = include_str!("../tests/golden/difflib.json");
+        let cases: Vec<DifflibCase> =
+            serde_json::from_str(text).expect("golden/difflib.json is valid JSON");
+        assert!(!cases.is_empty());
+        for case in cases {
+            let known = known_effect_keys(&case.known_set);
+            let actual = near_miss(&case.word, &known);
+            assert_eq!(
+                actual, case.expected,
+                "word {:?} against the {:?} known-key set",
+                case.word, case.known_set
+            );
+        }
     }
 }

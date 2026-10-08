@@ -71,9 +71,10 @@ CASES: list[dict[str, Any]] = [
         # `check_report`'s own "Orchestration file is empty." is
         # Circuitry's own text (exact); `check_for_run` loads an empty
         # YAML file as `{}` and then fails the schema's own "'effects'
-        # is a required property" check -- third-party `jsonschema`
-        # text (location only).
-        "error_modes": {"validate_errors": ["exact"], "run_error": "location"},
+        # is a required property" check -- a schema error, so the
+        # location ("top level") is Circuitry's own and compared
+        # exactly; the message past it is third-party `jsonschema` text.
+        "error_modes": {"validate_errors": ["exact"], "run_error": "location_prefix"},
     },
     {
         "name": "empty_json_file",
@@ -105,10 +106,12 @@ CASES: list[dict[str, Any]] = [
         # `load_yaml("false\n") or {}` -- a falsy root becomes `{}`
         # (Python truthiness, not just `is None`), so this loads fine
         # and only then fails the schema's required-property check --
-        # third-party `jsonschema` text on both surfaces here (`check_
-        # report` has no "Orchestration file is empty." short circuit
-        # to beat it to, unlike `empty_yaml_file`'s own case).
-        "error_modes": {"validate_errors": ["location"], "run_error": "location"},
+        # a schema error on both surfaces here (`check_report` has no
+        # "Orchestration file is empty." short circuit to beat it to,
+        # unlike `empty_yaml_file`'s own case): the location ("top
+        # level") is Circuitry's own and compared exactly, the message
+        # past it is third-party `jsonschema` text.
+        "error_modes": {"validate_errors": ["location_prefix"], "run_error": "location_prefix"},
     },
     {
         "name": "non_mapping_root_json",
@@ -182,7 +185,10 @@ CASES: list[dict[str, Any]] = [
             ),
         },
         "entry": "doc.yml",
-        "error_modes": {"validate_errors": ["location"], "run_error": "location"},
+        # Another schema error (`"value is not valid under any of the
+        # given schemas"`): the location ("effects[0]") is Circuitry's
+        # own and compared exactly, the message past it is third-party.
+        "error_modes": {"validate_errors": ["location_prefix"], "run_error": "location_prefix"},
     },
     {
         "name": "group_field_on_a_container_effect",
@@ -224,6 +230,73 @@ CASES: list[dict[str, Any]] = [
             ),
         },
         "entry": "doc.yml",
+    },
+    {
+        "name": "runtime_not_an_object_is_a_run_only_error",
+        # `resolve_effective_settings`'s own shape check -- the schema
+        # doesn't type `runtime`, so `validate()` (and so `check_report`)
+        # passes outright; only `run()` (`check_for_run`) reaches this,
+        # before structural checks even start (F1).
+        "files": {"doc.yml": "runtime: 5\neffects: []\n"},
+        "entry": "doc.yml",
+        # Schema-valid and structurally clean -- `check_report`'s own
+        # path only diverges from `check_for_run` once it reaches a real
+        # compile, lane C's (`compile_document` is still a stub here).
+        "check_report_needs": "C",
+    },
+    {
+        "name": "plugins_not_a_list_is_a_run_only_error",
+        "files": {"doc.yml": "plugins: foo\neffects: []\n"},
+        "entry": "doc.yml",
+        "check_report_needs": "C",
+    },
+    {
+        "name": "plugins_entry_not_a_string_is_a_run_only_error",
+        "files": {"doc.yml": "plugins: [1]\neffects: []\n"},
+        "entry": "doc.yml",
+        "check_report_needs": "C",
+    },
+    {
+        "name": "missing_required_interface_input_is_a_run_only_error",
+        # `check_interface_inputs` against the top-level `interface.
+        # inputs` -- also only reached by `run()`, after the
+        # concurrency limiter and before structural checks (F1). The
+        # schema itself never requires an input actually be supplied.
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "check_report_needs": "C",
+    },
+    {
+        "name": "missing_entry_file_with_an_unsupported_suffix",
+        # The suffix is checked before any read (F2): `check_for_run`
+        # reports the unsupported-format message without ever touching
+        # the (nonexistent) file; `validate()` reads the raw file text
+        # itself first and raises `FileNotFoundError` uncaught --
+        # recorded by `_compiler_corpus.py`'s own `except Exception`
+        # around that call, not Circuitry's usual `{ok, errors,
+        # warnings}` shape, so the `validate_errors` side is `location`
+        # (the OS's own message text, not Circuitry's).
+        "files": {},
+        "entry": "missing.txt",
+        "error_modes": {"validate_errors": ["location"], "run_error": "exact"},
+    },
+    {
+        "name": "non_utf8_file_with_an_unsupported_suffix",
+        # Same shape as the case above, through the other path `load_
+        # document`'s suffix-first check guards against: a `.png`
+        # (unsupported either way) that also isn't valid UTF-8 --
+        # `check_for_run` never reads it at all, where the pre-fix code
+        # reported a UTF-8 decode error instead of the suffix one.
+        "files": {"doc.png": {"bytes_hex": "89504e47ff"}},
+        "entry": "doc.png",
+        "error_modes": {"validate_errors": ["location"], "run_error": "exact"},
     },
     {
         "name": "negative_max_concurrency_config_error",

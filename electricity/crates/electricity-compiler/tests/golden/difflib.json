@@ -1,0 +1,52 @@
+[
+  {
+    "word": "Max-Iterations",
+    "known_set": "loop",
+    "expected": "max_iterations"
+  },
+  {
+    "word": " whlie ",
+    "known_set": "loop",
+    "expected": "while"
+  },
+  {
+    "word": "max_iteration",
+    "known_set": "loop",
+    "expected": "max_iterations"
+  },
+  {
+    "word": "min_iteraton",
+    "known_set": "loop",
+    "expected": "min_iterations"
+  },
+  {
+    "word": "adapter",
+    "known_set": "tool",
+    "expected": "provider"
+  },
+  {
+    "word": "adapter",
+    "known_set": "prompt",
+    "expected": "provider"
+  },
+  {
+    "word": "whilé",
+    "known_set": "loop",
+    "expected": "while"
+  },
+  {
+    "word": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "known_set": "loop",
+    "expected": null
+  },
+  {
+    "word": "iterationsiterations",
+    "known_set": "loop",
+    "expected": null
+  },
+  {
+    "word": "whle_",
+    "known_set": "loop",
+    "expected": "while"
+  }
+]

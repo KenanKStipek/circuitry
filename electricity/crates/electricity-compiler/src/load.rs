@@ -28,14 +28,14 @@ const SUPPORTED_SUFFIXES: [&str; 4] = [".json", ".toon", ".yaml", ".yml"];
 /// differently from a compile failure).
 pub fn load_document(path: &Path) -> Result<Value, CompileError> {
     let suffix = suffix_lowercase(path);
-    let text = read_universal_newlines(path)?;
 
     match suffix.as_str() {
         ".yml" | ".yaml" => {
+            let text = read_universal_newlines(path)?;
             let value = electricity_yaml::load_yaml(&text).map_err(|err| {
                 CompileError(match err {
                     electricity_yaml::YamlError::DuplicateKey { message } => {
-                        format!("{}: {message}", path.display())
+                        format!("{}: {message}", pathlib_str(path))
                     }
                     other => other.to_string(),
                 })
@@ -48,25 +48,69 @@ pub fn load_document(path: &Path) -> Result<Value, CompileError> {
             require_mapping_root(value, "YAML")
         }
         ".json" => {
+            let text = read_universal_newlines(path)?;
             let value = electricity_json::load_json(&text).map_err(|err| {
                 CompileError(match err {
                     electricity_json::ReadError::DuplicateKey { message } => {
-                        format!("{}: {message}", path.display())
+                        format!("{}: {message}", pathlib_str(path))
                     }
                     other => other.to_string(),
                 })
             })?;
             require_mapping_root(value, "JSON")
         }
+        // `.toon` is refused outright (a documented divergence, issue
+        // #408's Scope section) without reading the file at all --
+        // unlike Python's own `load_orchestration_file`, which reads it
+        // unconditionally before even checking `toon_format` is
+        // installed. Not read here either way, since the fallback
+        // message never depends on the file's contents.
         ".toon" => Err(CompileError(
             "TOON documents are not supported; convert to YAML or JSON".to_string(),
         )),
+        // The suffix is checked *before* any read, matching
+        // `orchestration_loader.py::load_orchestration_file`'s own
+        // order -- an unsupported suffix never reaches an OS error (a
+        // missing file) or a UTF-8 decode error (non-text bytes) first.
         _ => {
             let supported = SUPPORTED_SUFFIXES.join(", ");
             Err(CompileError(format!(
                 "Unsupported orchestration format: {suffix}. Supported: {supported}"
             )))
         }
+    }
+}
+
+/// `str(Path(given))`: drops a `.` component, collapses repeated `/`,
+/// and strips a trailing `/` -- pathlib's own normalization, which
+/// Rust's `Path::components()` mostly already applies (a trailing `/`
+/// and repeated `//` never produce separate components), except a
+/// leading/mid-path `.` component, which `components()` keeps and this
+/// strips to match (`./doc.yml` -> `doc.yml`, `a/./b.yml` -> `a/b.yml`).
+/// Unlike pathlib, never resolves `..` -- pathlib doesn't either.
+fn pathlib_str(path: &Path) -> String {
+    use std::path::Component;
+    let mut is_absolute = false;
+    let mut parts: Vec<String> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::RootDir => is_absolute = true,
+            Component::CurDir => {}
+            Component::ParentDir => parts.push("..".to_string()),
+            Component::Normal(s) => parts.push(s.to_string_lossy().into_owned()),
+            Component::Prefix(prefix) => {
+                parts.push(prefix.as_os_str().to_string_lossy().into_owned())
+            }
+        }
+    }
+    if parts.is_empty() {
+        return ".".to_string();
+    }
+    let joined = parts.join("/");
+    if is_absolute {
+        format!("/{joined}")
+    } else {
+        joined
     }
 }
 
@@ -135,7 +179,8 @@ fn translate_universal_newlines(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::translate_universal_newlines;
+    use super::{pathlib_str, translate_universal_newlines};
+    use std::path::Path;
 
     #[test]
     fn crlf_becomes_lf() {
@@ -160,5 +205,40 @@ mod tests {
     #[test]
     fn no_newlines_is_unchanged() {
         assert_eq!(translate_universal_newlines("abc"), "abc");
+    }
+
+    #[test]
+    fn pathlib_str_drops_a_leading_dot_component() {
+        assert_eq!(pathlib_str(Path::new("./doc.yml")), "doc.yml");
+    }
+
+    #[test]
+    fn pathlib_str_collapses_repeated_slashes() {
+        assert_eq!(pathlib_str(Path::new("a//b.yml")), "a/b.yml");
+    }
+
+    #[test]
+    fn pathlib_str_drops_a_mid_path_dot_component() {
+        assert_eq!(pathlib_str(Path::new("./a/./b.yml")), "a/b.yml");
+    }
+
+    #[test]
+    fn pathlib_str_strips_a_trailing_slash() {
+        assert_eq!(pathlib_str(Path::new("a/b/")), "a/b");
+    }
+
+    #[test]
+    fn pathlib_str_does_not_resolve_parent_components() {
+        assert_eq!(pathlib_str(Path::new("a/../b.yml")), "a/../b.yml");
+    }
+
+    #[test]
+    fn pathlib_str_keeps_a_leading_slash_absolute() {
+        assert_eq!(pathlib_str(Path::new("/a//b.yml")), "/a/b.yml");
+    }
+
+    #[test]
+    fn pathlib_str_plain_relative_path_is_unchanged() {
+        assert_eq!(pathlib_str(Path::new("doc.yml")), "doc.yml");
     }
 }

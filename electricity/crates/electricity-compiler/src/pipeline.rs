@@ -96,7 +96,7 @@ fn parse_concurrency_groups(value: Option<&Value>) -> (BTreeSet<String>, Vec<Str
             errors.push(format!(
                 "runtime.concurrency_groups must be a mapping of group name to a positive \
                  integer limit, got {}.",
-                other.type_name()
+                crate::structural::py_class_name(other)
             ));
             return (names, errors);
         }
@@ -272,6 +272,215 @@ fn is_python_strip_whitespace(ch: char) -> bool {
     matches!(ch, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c')
 }
 
+/// Python truthiness, for `orch.get("plugins") or []`/`orch.get(
+/// "runtime") or {}` below -- a missing key (`None` here), `None`,
+/// `False`, a numeric zero, and any empty `str`/`bytes`/`list`/`dict`
+/// are falsy; everything else is truthy.
+fn is_truthy(value: Option<&Value>) -> bool {
+    match value {
+        None => false,
+        Some(Value::None) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Int(i)) => !i.is_zero(),
+        Some(Value::Float(f)) => *f != 0.0,
+        Some(Value::Str(s)) => !s.is_empty(),
+        Some(Value::Bytes(b)) => !b.is_empty(),
+        Some(Value::List(items)) => !items.is_empty(),
+        Some(Value::Dict(d)) => !d.is_empty(),
+        Some(Value::Date(_)) | Some(Value::DateTime(..)) => true,
+    }
+}
+
+/// `cli/effective_settings.py::resolve_effective_settings`'s own shape
+/// checks on the document's raw `plugins:`/`runtime:` blocks -- only
+/// [`check_for_run`] reaches these (`validate()`/[`check_report`] never
+/// calls `resolve_effective_settings` at all): `orch.get("plugins") or
+/// []` must be a list if truthy; `orch.get("runtime") or {}` must be an
+/// object if truthy; then, since a bare path/library run never carries
+/// a CLI `--plugins` override of its own (`cli_plugins` is always
+/// `None` for every surface this crate exposes) and the host config is
+/// always `CircuitryConfig()`'s own empty default list (`config=None`
+/// in every golden case's own ground truth), every document `plugins:`
+/// entry (already passed through unchanged by `_split_orchestration_
+/// plugins`'s trusted branch -- `trust_document` is always `true` here)
+/// must be a string.
+fn effective_settings_shape_error(document: &Value) -> Option<String> {
+    let dict = document.as_dict();
+    let plugins_raw = dict.and_then(|d| d.get(&Value::Str("plugins".to_string())));
+    let orch_plugins = is_truthy(plugins_raw).then(|| plugins_raw.unwrap());
+    if let Some(value) = orch_plugins {
+        if !matches!(value, Value::List(_)) {
+            return Some("Orchestration 'plugins' must be a list if provided.".to_string());
+        }
+    }
+    let runtime_raw = dict.and_then(|d| d.get(&Value::Str("runtime".to_string())));
+    let orch_runtime = is_truthy(runtime_raw).then(|| runtime_raw.unwrap());
+    if let Some(value) = orch_runtime {
+        if !matches!(value, Value::Dict(_)) {
+            return Some("Orchestration 'runtime' must be an object if provided.".to_string());
+        }
+    }
+    if let Some(Value::List(items)) = orch_plugins {
+        if items.iter().any(|item| !matches!(item, Value::Str(_))) {
+            return Some("Plugins must be strings.".to_string());
+        }
+    }
+    None
+}
+
+/// Python `repr(s)` of a plain Rust `&str` -- shared by
+/// [`check_interface_inputs_error`]'s own coercion-failure messages,
+/// which quote a raw CLI-shaped string value the same way Python's
+/// `{value!r}`/`{raw!r}` f-string interpolation does.
+fn python_repr_str(s: &str) -> String {
+    Value::Str(s.to_string()).py_repr()
+}
+
+/// `core/interface_inputs.py::_TRUE_WORDS`/`_FALSE_WORDS`.
+const TRUE_WORDS: [&str; 6] = ["true", "t", "yes", "y", "on", "1"];
+const FALSE_WORDS: [&str; 6] = ["false", "f", "no", "n", "off", "0"];
+
+/// `core/interface_inputs.py::_coerce`: converts a CLI-`-e`/Mustache-
+/// rendered-shaped string to *declared_type*, Python's own exact
+/// `int()`/`float()`/custom-boolean error text on failure (its own
+/// `json.loads` text for `array`/`object` is third-party, not matched
+/// word for word). Never reaches the `array`/`object`/plain-`string`
+/// arms from [`check_interface_inputs_error`] today (no probe needs
+/// them), but implemented for every `_TYPE_NAMES` entry `_coerce`
+/// itself handles, not just the ones exercised so far.
+fn coerce_interface_value(raw: &str, declared_type: &str) -> Result<Value, String> {
+    match declared_type {
+        "number" => parse_python_int(raw)
+            .map(Value::Int)
+            .or_else(|| raw.trim().parse::<f64>().ok().map(Value::Float))
+            .ok_or_else(|| {
+                format!(
+                    "could not convert string to float: {}",
+                    python_repr_str(raw)
+                )
+            }),
+        "integer" => parse_python_int(raw).map(Value::Int).ok_or_else(|| {
+            format!(
+                "invalid literal for int() with base 10: {}",
+                python_repr_str(raw)
+            )
+        }),
+        "boolean" => {
+            let lowered = raw.trim().to_lowercase();
+            if TRUE_WORDS.contains(&lowered.as_str()) {
+                Ok(Value::Bool(true))
+            } else if FALSE_WORDS.contains(&lowered.as_str()) {
+                Ok(Value::Bool(false))
+            } else {
+                Err(format!("{} is not a boolean", python_repr_str(raw)))
+            }
+        }
+        "array" | "object" => electricity_json::load_json(raw).map_err(|e| e.to_string()),
+        _ => Ok(Value::Str(raw.to_string())),
+    }
+}
+
+/// Python `int(s)`: optional surrounding whitespace, an optional
+/// leading `+`/`-`, then one or more ASCII digits -- arbitrary
+/// precision, via [`electricity_value::IntValue::parse_decimal`].
+/// Unlike CPython, does not accept an underscore digit separator
+/// (`"1_000"`); no probe needs it, and `interface.inputs` defaults are
+/// ordinary YAML/JSON scalars, not Python source text.
+fn parse_python_int(raw: &str) -> Option<electricity_value::IntValue> {
+    let trimmed = raw.trim();
+    let (negative, digits) = match trimmed.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let signed = if negative {
+        format!("-{digits}")
+    } else {
+        digits.to_string()
+    };
+    electricity_value::IntValue::parse_decimal(&signed)
+}
+
+/// `core/interface_inputs.py::check_interface_inputs`, specialized to
+/// `inputs = {}` always (every call from [`check_for_run`] runs with no
+/// input namespace of its own -- neither this crate's [`CheckOptions`]
+/// nor the golden corpus's own ground truth (`validate`/`run` called
+/// with no CLI `-e`/`--state` override) ever carries one): every key
+/// starts absent, so the function reduces to, per declared input in
+/// document order, a `default:` (type-checked the same way, and
+/// returned as this input's value) or a `required: true` (an error
+/// naming it) -- any other key (no default, not required) is simply
+/// skipped, exactly as an absent, optional, undefaulted input already
+/// is. Stops and returns the first violation, matching Python's own
+/// eager `raise`.
+fn check_interface_inputs_error(document: &Value) -> Option<String> {
+    let interface = document
+        .as_dict()?
+        .get(&Value::Str("interface".to_string()))?
+        .as_dict()?;
+    let iface_inputs = interface
+        .get(&Value::Str("inputs".to_string()))?
+        .as_dict()?;
+    for (key, spec) in iface_inputs {
+        let Some(spec_dict) = spec.as_dict() else {
+            continue;
+        };
+        let key_str = key.py_str();
+        let value = if let Some(default) = spec_dict.get(&Value::Str("default".to_string())) {
+            default.clone()
+        } else if is_truthy(spec_dict.get(&Value::Str("required".to_string()))) {
+            return Some(format!(
+                "missing required input '{key_str}' declared in orchestration interface."
+            ));
+        } else {
+            continue;
+        };
+        let declared_type = match spec_dict.get(&Value::Str("type".to_string())) {
+            Some(Value::Str(s))
+                if crate::structural::INTERFACE_TYPE_NAMES.contains(&s.as_str()) =>
+            {
+                s.as_str()
+            }
+            _ => continue,
+        };
+        if crate::structural::matches_type(&value, declared_type) {
+            continue;
+        }
+        if declared_type == "string"
+            && matches!(value, Value::Int(_) | Value::Float(_) | Value::Bool(_))
+        {
+            continue;
+        }
+        if let Value::Str(raw) = &value {
+            match coerce_interface_value(raw, declared_type) {
+                Ok(coerced) => {
+                    if crate::structural::matches_type(&coerced, declared_type) {
+                        continue;
+                    }
+                    return Some(format!(
+                        "input '{key_str}' declared type '{declared_type}' but got {}.",
+                        crate::structural::py_class_name(&coerced)
+                    ));
+                }
+                Err(message) => {
+                    return Some(format!(
+                        "input '{key_str}' declared type '{declared_type}' but {} could not be \
+                         converted: {message}",
+                        python_repr_str(raw)
+                    ));
+                }
+            }
+        }
+        return Some(format!(
+            "input '{key_str}' declared type '{declared_type}' but got {}.",
+            crate::structural::py_class_name(&value)
+        ));
+    }
+    None
+}
+
 /// Matches `runtime_shim.validate(path, config=None, skip_preflight=...,
 /// trust_document=...)`.
 ///
@@ -415,6 +624,16 @@ pub fn check_report(path: &Path, options: &CheckOptions) -> CheckReport {
 pub fn check_for_run(path: &Path, options: &CheckOptions) -> Result<Program, RunCheckError> {
     let document = load_document(path).map_err(|err| RunCheckError::Compile(err.0))?;
 
+    // `resolve_effective_settings`'s own shape checks on the document's
+    // raw `plugins:`/`runtime:` blocks -- `run()`'s own order, and
+    // before even the concurrency-limiter construction below (`cli/
+    // effective_settings.py`, confirmed directly: these run as part of
+    // building `effective`, which `RunConcurrencyLimiter.from_runtime_
+    // config` is built from immediately after).
+    if let Some(message) = effective_settings_shape_error(&document) {
+        return Err(RunCheckError::Compile(message));
+    }
+
     let merged_runtime = merged_runtime_block(options, &document);
     let config_errors = concurrency_config_errors(merged_runtime.as_ref());
     if !config_errors.is_empty() {
@@ -423,6 +642,19 @@ pub fn check_for_run(path: &Path, options: &CheckOptions) -> Result<Program, Run
             "Invalid runtime concurrency configuration:\n{}",
             lines.join("\n")
         )));
+    }
+
+    // `check_interface_inputs` against the top-level `interface.inputs`
+    // -- `run()`'s own position, after the concurrency limiter and
+    // before structural checks (`cli/runtime_shim.py::run`, confirmed
+    // directly). Always run with an empty input namespace: neither
+    // surface this crate exposes (`check_report`/`check_for_run`) takes
+    // a CLI `-e`/`--state` value of its own, matching every golden
+    // case's own ground truth (`validate`/`run` always called with no
+    // such override) -- see [`check_interface_inputs_error`]'s own doc
+    // comment.
+    if let Some(message) = check_interface_inputs_error(&document) {
+        return Err(RunCheckError::Compile(message));
     }
 
     let structural = structural_errors(&document);
@@ -530,5 +762,122 @@ mod tests {
     fn complexity_and_state_runtime_keys_are_author_level_and_silent() {
         let doc = runtime_doc(vec![("complexity", Value::from("low"))]);
         assert_eq!(host_setting_warnings(&doc, "doc.yml"), Vec::<String>::new());
+    }
+
+    fn doc_with_top_level(pairs: Vec<(&str, Value)>) -> Value {
+        let mut dict = Dict::new();
+        for (k, v) in pairs {
+            dict.insert(Value::Str(k.to_string()), v);
+        }
+        Value::Dict(dict)
+    }
+
+    #[test]
+    fn non_list_plugins_is_a_shape_error() {
+        let doc = doc_with_top_level(vec![("plugins", Value::Str("foo".to_string()))]);
+        assert_eq!(
+            effective_settings_shape_error(&doc),
+            Some("Orchestration 'plugins' must be a list if provided.".to_string())
+        );
+    }
+
+    #[test]
+    fn non_object_runtime_is_a_shape_error() {
+        let doc = doc_with_top_level(vec![("runtime", Value::from(5i64))]);
+        assert_eq!(
+            effective_settings_shape_error(&doc),
+            Some("Orchestration 'runtime' must be an object if provided.".to_string())
+        );
+    }
+
+    #[test]
+    fn non_string_plugin_entry_is_a_shape_error() {
+        let doc = doc_with_top_level(vec![("plugins", Value::List(vec![Value::from(1i64)]))]);
+        assert_eq!(
+            effective_settings_shape_error(&doc),
+            Some("Plugins must be strings.".to_string())
+        );
+    }
+
+    #[test]
+    fn empty_or_absent_plugins_and_runtime_have_no_shape_error() {
+        assert_eq!(
+            effective_settings_shape_error(&doc_with_top_level(vec![])),
+            None
+        );
+        let doc = doc_with_top_level(vec![
+            ("plugins", Value::List(vec![])),
+            ("runtime", Value::Dict(Dict::new())),
+        ]);
+        assert_eq!(effective_settings_shape_error(&doc), None);
+    }
+
+    fn interface_doc(spec_pairs: Vec<(&str, Value)>) -> Value {
+        let mut spec = Dict::new();
+        for (k, v) in spec_pairs {
+            spec.insert(Value::Str(k.to_string()), v);
+        }
+        let mut inputs = Dict::new();
+        inputs.insert(Value::Str("x".to_string()), Value::Dict(spec));
+        let mut interface = Dict::new();
+        interface.insert(Value::Str("inputs".to_string()), Value::Dict(inputs));
+        let mut dict = Dict::new();
+        dict.insert(Value::Str("interface".to_string()), Value::Dict(interface));
+        Value::Dict(dict)
+    }
+
+    #[test]
+    fn missing_required_input_with_no_default_is_an_error() {
+        let doc = interface_doc(vec![
+            ("type", Value::Str("string".to_string())),
+            ("required", Value::Bool(true)),
+        ]);
+        assert_eq!(
+            check_interface_inputs_error(&doc),
+            Some("missing required input 'x' declared in orchestration interface.".to_string())
+        );
+    }
+
+    #[test]
+    fn unconvertible_default_reports_pythons_own_int_error_text() {
+        let doc = interface_doc(vec![
+            ("type", Value::Str("integer".to_string())),
+            ("default", Value::Str("abc".to_string())),
+        ]);
+        assert_eq!(
+            check_interface_inputs_error(&doc),
+            Some(
+                "input 'x' declared type 'integer' but 'abc' could not be converted: invalid \
+                 literal for int() with base 10: 'abc'"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn non_coercible_default_type_reports_got_the_actual_type() {
+        let doc = interface_doc(vec![
+            ("type", Value::Str("integer".to_string())),
+            ("default", Value::List(vec![Value::from(1i64)])),
+        ]);
+        assert_eq!(
+            check_interface_inputs_error(&doc),
+            Some("input 'x' declared type 'integer' but got list.".to_string())
+        );
+    }
+
+    #[test]
+    fn optional_undefaulted_input_is_not_an_error() {
+        let doc = interface_doc(vec![("type", Value::Str("string".to_string()))]);
+        assert_eq!(check_interface_inputs_error(&doc), None);
+    }
+
+    #[test]
+    fn matching_default_is_not_an_error() {
+        let doc = interface_doc(vec![
+            ("type", Value::Str("integer".to_string())),
+            ("default", Value::from(3i64)),
+        ]);
+        assert_eq!(check_interface_inputs_error(&doc), None);
     }
 }

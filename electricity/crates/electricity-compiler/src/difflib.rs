@@ -17,11 +17,24 @@
 //!
 //! `SequenceMatcher(None, ...)` -- the one constructor
 //! `get_close_matches` ever builds -- has no junk function, and
-//! `autojunk`'s popular-element culling only triggers for a sequence of
-//! 200 or more elements (`SequenceMatcher.__chain_b`): every "word" this
-//! crate ever matches is a document key name, always far shorter, so
-//! `bjunk` is always empty and every `isbjunk` check in the reference
-//! algorithm is always `False` -- omitted below accordingly.
+//! `autojunk`'s popular-element culling (`SequenceMatcher.__chain_b`)
+//! only triggers once the sequence it's built *from* -- `word`, which
+//! `get_close_matches` always binds to `seq2`/`b`, not a possibility --
+//! reaches 200 elements. A document's own unknown-key text is author-
+//! written, not bounded the way a known-key name is, so `word` reaching
+//! that length is a real case, not a hypothetical one (see
+//! `generate_compiler_difflib_corpus.py`'s own 250-character probe) --
+//! omitting `bjunk` is still exact, but because `ratio()`'s own `2.0 *
+//! M / T` is bounded above by `2 * len(a) / (len(a) + len(b))`, and
+//! every known-key set this crate's own caller matches against is far
+//! shorter than 200: at `len(b) >= 200` against a `len(a)` in the
+//! dozens, that bound already sits well under the `0.8` cutoff
+//! `structural.rs` always calls with, so no possibility can pass
+//! regardless of which elements of `b` autojunk would have culled.
+//! `cutoff` itself is a parameter here (not hardcoded to `0.8`) for
+//! exactly the boundary probe that bound doesn't cover -- a `word`
+//! short enough, and a `cutoff` low enough, that `bjunk` could in
+//! principle change the verdict; no caller in this codebase passes one.
 
 use std::collections::HashMap;
 
@@ -175,7 +188,8 @@ mod tests {
     /// Recorded from CPython directly:
     /// `difflib.get_close_matches("whlie", ["while", "yield", "loop"], n=1, cutoff=0.8)`
     /// -> `['while']` (also checked end to end against the real corpus
-    /// in `golden_load.rs`'s `difflib_matches_cpython_recorded_values`).
+    /// in `structural.rs`'s own `difflib_matches_cpython_recorded_values`,
+    /// which replays `generate_compiler_difflib_corpus.py`'s golden cases).
     #[test]
     fn near_miss_within_cutoff_matches_cpython() {
         let known = vec!["while".to_string(), "yield".to_string(), "loop".to_string()];

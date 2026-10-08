@@ -92,7 +92,7 @@
       "validate_errors": [
         "exact"
       ],
-      "run_error": "location"
+      "run_error": "location_prefix"
     }
   },
   {
@@ -214,9 +214,9 @@
     "digest": "2ed27c1421e6928dbe13dbfdb5c59e1045b30341fe7ebe05700006bc5ac572c0",
     "comparison": {
       "validate_errors": [
-        "location"
+        "location_prefix"
       ],
-      "run_error": "location"
+      "run_error": "location_prefix"
     }
   },
   {
@@ -514,9 +514,9 @@
     "digest": "b6e22894d21a3c240bbcf6901a410d81c544c1957006479a7404de05761fa264",
     "comparison": {
       "validate_errors": [
-        "location"
+        "location_prefix"
       ],
-      "run_error": "location"
+      "run_error": "location_prefix"
     }
   },
   {
@@ -673,6 +673,210 @@
     "comparison": {
       "validate_errors": [
         "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "runtime_not_an_object_is_a_run_only_error",
+    "files": {
+      "doc.yml": "runtime: 5\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": "Orchestration 'runtime' must be an object if provided.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "b93316e2350c393de8dcfea58b1b1140bf8617d31b9f15c1299fc798a29221ac",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    },
+    "check_report_needs": "C"
+  },
+  {
+    "name": "plugins_not_a_list_is_a_run_only_error",
+    "files": {
+      "doc.yml": "plugins: foo\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": "Orchestration 'plugins' must be a list if provided.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "9efdffc5f005946874a73897bf907596f6ba2cad19512051bfbc966c61f37825",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    },
+    "check_report_needs": "C"
+  },
+  {
+    "name": "plugins_entry_not_a_string_is_a_run_only_error",
+    "files": {
+      "doc.yml": "plugins: [1]\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": "Plugins must be strings.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "4927de63eb77969082f4feda266a361f8b13b2e4447faaa634414707d7d86bf1",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    },
+    "check_report_needs": "C"
+  },
+  {
+    "name": "missing_required_interface_input_is_a_run_only_error",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": "missing required input 'x' declared in orchestration interface.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    },
+    "check_report_needs": "C"
+  },
+  {
+    "name": "missing_entry_file_with_an_unsupported_suffix",
+    "files": {},
+    "entry": "missing.txt",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "FileNotFoundError: [Errno 2] No such file or directory: '<root>/missing.txt'"
+      ],
+      "warnings": []
+    },
+    "run_error": "Unsupported orchestration format: .txt. Supported: .json, .toon, .yaml, .yml",
+    "definition": null,
+    "definition_error": "ValueError: Unsupported orchestration format: .txt. Supported: .json, .toon, .yaml, .yml",
+    "digest": null,
+    "comparison": {
+      "validate_errors": [
+        "location"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "non_utf8_file_with_an_unsupported_suffix",
+    "files": {
+      "doc.png": {
+        "bytes_hex": "89504e47ff"
+      }
+    },
+    "entry": "doc.png",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "UnicodeDecodeError: 'utf-8' codec can't decode byte 0x89 in position 0: invalid start byte"
+      ],
+      "warnings": []
+    },
+    "run_error": "Unsupported orchestration format: .png. Supported: .json, .toon, .yaml, .yml",
+    "definition": null,
+    "definition_error": "ValueError: Unsupported orchestration format: .png. Supported: .json, .toon, .yaml, .yml",
+    "digest": "88d68653bc6eba8184e26ce031ad2c828ea72973d7fd3863823a2704e6b41940",
+    "comparison": {
+      "validate_errors": [
+        "location"
       ],
       "run_error": "exact"
     }

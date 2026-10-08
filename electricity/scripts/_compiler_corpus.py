@@ -179,12 +179,27 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
         entry_path = root / case["entry"]
 
         with _IsolatedRun(root):
-            validate_result = validate(
-                entry_path,
-                config=None,
-                skip_preflight=skip_preflight,
-                trust_document=trust_document,
-            )
+            try:
+                validate_result = validate(
+                    entry_path,
+                    config=None,
+                    skip_preflight=skip_preflight,
+                    trust_document=trust_document,
+                )
+            except Exception as exc:
+                # `validate()` reads the orchestration file's raw text
+                # itself, outside the broad `except Exception` the rest
+                # of the function is wrapped in (`cli/runtime_shim.py`'s
+                # own `text = orchestration_path.read_text(...)`), so a
+                # missing file or undecodable bytes raise straight out
+                # of this call instead of returning the usual `{ok,
+                # errors, warnings}` shape -- recorded the same way a
+                # `definition_error` below is, not swallowed.
+                validate_result = {
+                    "ok": False,
+                    "errors": [f"{type(exc).__name__}: {exc}"],
+                    "warnings": [],
+                }
             run_result = run(
                 RunRequest(
                     orchestration_path=entry_path,
@@ -223,9 +238,20 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
                 except Exception as exc:  # recorded, not swallowed
                     definition_error = f"{type(exc).__name__}: {exc}"
 
-            digest = document_content_digest(
-                entry_path, orch, confinement_root=confinement_root
-            )
+            try:
+                digest = document_content_digest(
+                    entry_path, orch, confinement_root=confinement_root
+                )
+            except OSError:
+                # `document_content_digest` reads *entry_path*'s own raw
+                # bytes itself, unconditionally and outside any of its
+                # own `try`/`except` -- a case whose entry is missing
+                # (or otherwise unreadable) never reaches it in
+                # ordinary use (`validate`/`run` would have failed on
+                # the same read already), but this helper calls it
+                # regardless of whether `orch` loaded, so it must
+                # tolerate the same failure here.
+                digest = None
 
         error_modes = case.get("error_modes") or {}
         validate_errors = validate_result.get("errors", [])

@@ -89,7 +89,182 @@
 
 use std::sync::OnceLock;
 
-use serde_json::Value;
+use jsonschema::paths::{LazyLocation, Location};
+use jsonschema::primitive_type::PrimitiveType;
+use jsonschema::{Keyword, ValidationError};
+use serde_json::{Map, Number, Value};
+
+/// The marker key `electricity-compiler`'s `schema_instance.rs` wraps a
+/// `Date`/`DateTime`/`Bytes`/`NaN`/`Infinity` value's text under,
+/// standing in for a Python value with no `serde_json::Value` shape of
+/// its own -- defined here, not there, because [`type_keyword_factory`]
+/// (this crate's own override of the `"type"` keyword, registered on
+/// [`orchestration_validator`]) needs to recognize it at validation time,
+/// and [`json_path_from_pointer`] needs to decode [`NON_STRING_KEY_PREFIX`]
+/// back into Python's own `json_path` rendering for a non-string `Dict`
+/// key. See `electricity-compiler`'s own module docs for why a dedicated
+/// marker is needed at all.
+pub const NON_JSON_SCALAR_MARKER: &str = "$circuitry_non_json_scalar";
+
+/// Set (to `true`) on a [`non_json_scalar`] marker that stands in for a
+/// Python value `jsonschema`'s own `"number"` type keyword would still
+/// accept (`NaN`/`Infinity` before an arbitrary-precision float literal
+/// can represent it, i.e. `NaN` only -- see `schema_instance.rs`'s own
+/// `float_to_json_number`) -- never set for a `Date`/`DateTime`/`Bytes`
+/// marker, which no JSON Schema `"type"` should ever accept.
+pub const NON_JSON_SCALAR_NUMBER_LIKE: &str = "$circuitry_non_json_scalar_number_like";
+
+/// Prefixes a non-string `Dict` key's stand-in string (a NUL byte, which
+/// cannot appear in a YAML/JSON *text* key any real document writes,
+/// followed by the key's own `repr()`-style text) so a `"properties"`/
+/// `"required"` check against a real (string) property name behaves
+/// exactly as Python's own `dict.get`/`in` would against a key that
+/// compares unequal to every string.
+pub const NON_STRING_KEY_PREFIX: &str = "\u{0}non_string_key:";
+
+/// Builds the marker [`NON_JSON_SCALAR_MARKER`] stands for -- see its own
+/// doc comment and [`NON_JSON_SCALAR_NUMBER_LIKE`]'s.
+pub fn non_json_scalar(label: &str, number_like: bool) -> Value {
+    let mut map = Map::with_capacity(2);
+    map.insert(
+        NON_JSON_SCALAR_MARKER.to_string(),
+        Value::String(label.to_string()),
+    );
+    if number_like {
+        map.insert(NON_JSON_SCALAR_NUMBER_LIKE.to_string(), Value::Bool(true));
+    }
+    Value::Object(map)
+}
+
+/// `Some(number_like)` iff *instance* is a [`non_json_scalar`] marker;
+/// `None` for an ordinary value (including a real object that merely
+/// happens to have other keys too -- a marker object only ever carries
+/// [`NON_JSON_SCALAR_MARKER`], optionally [`NON_JSON_SCALAR_NUMBER_LIKE`],
+/// and nothing else, so `len() <= 2` guards against a legitimate document
+/// object that coincidentally used the same property name).
+fn scalar_marker_number_like(instance: &Value) -> Option<bool> {
+    let map = instance.as_object()?;
+    if !map.contains_key(NON_JSON_SCALAR_MARKER) || map.len() > 2 {
+        return None;
+    }
+    Some(
+        map.get(NON_JSON_SCALAR_NUMBER_LIKE)
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    )
+}
+
+/// Builds [`NON_STRING_KEY_PREFIX`]'s marker for a `Dict` key whose own
+/// `repr()`-style text is *repr_text*.
+pub fn non_string_key_marker(repr_text: &str) -> String {
+    format!("{NON_STRING_KEY_PREFIX}{repr_text}")
+}
+
+/// `true` iff *key* is [`non_string_key_marker`]'s stand-in for a `Dict`
+/// key that wasn't a string.
+pub fn is_non_string_key_marker(key: &str) -> bool {
+    key.starts_with(NON_STRING_KEY_PREFIX)
+}
+
+/// Overrides the built-in `"type"` keyword (registered by name --
+/// `compiler.rs`'s own keyword dispatch checks a caller-registered
+/// factory before the standard definitions, so this *replaces* rather
+/// than supplements it) so a [`non_json_scalar`] marker is checked
+/// against Python's own `isinstance` verdict instead of whichever
+/// `serde_json::Value` variant the marker happens to use: it fails
+/// every declared type except -- for a number-like marker (`NaN`/
+/// `Infinity`/`-Infinity`) -- `"number"` itself (which the marker's own
+/// JSON-object shape would otherwise always fail, same as it would
+/// otherwise always *pass* `"object"` -- Python's `isinstance(value,
+/// dict)` is `False` for every one of these values either way).
+/// Reimplements ordinary `"type"` semantics for every non-marker value
+/// instead of delegating to it, since the override replaces the
+/// built-in keyword wholesale rather than running alongside it -- both
+/// `jsonschema`'s own `type_.rs` validators that back it are
+/// `pub(crate)`, not reachable from here.
+struct TypeValidator {
+    types: Vec<PrimitiveType>,
+    location: Location,
+}
+
+impl Keyword for TypeValidator {
+    fn validate<'i>(
+        &self,
+        instance: &'i Value,
+        location: &LazyLocation,
+    ) -> Result<(), ValidationError<'i>> {
+        if self.is_valid(instance) {
+            Ok(())
+        } else {
+            let wanted = self
+                .types
+                .iter()
+                .map(PrimitiveType::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(ValidationError::custom(
+                self.location.clone(),
+                location.into(),
+                instance,
+                format!("{instance} is not of type {wanted}"),
+            ))
+        }
+    }
+
+    fn is_valid(&self, instance: &Value) -> bool {
+        match scalar_marker_number_like(instance) {
+            Some(number_like) => number_like && self.types.contains(&PrimitiveType::Number),
+            None => self
+                .types
+                .iter()
+                .any(|t| primitive_type_matches(*t, instance)),
+        }
+    }
+}
+
+/// `jsonschema::keywords::type_::is_integer`, reimplemented here since
+/// that one is `pub(crate)` in the `jsonschema` crate: a `Number` with
+/// no fractional part, `u64`/`i64`-representable or not.
+fn is_integer_number(n: &Number) -> bool {
+    n.is_u64() || n.is_i64() || n.as_f64().is_some_and(|f| f.fract() == 0.0)
+}
+
+fn primitive_type_matches(declared: PrimitiveType, instance: &Value) -> bool {
+    match declared {
+        PrimitiveType::Null => instance.is_null(),
+        PrimitiveType::Boolean => instance.is_boolean(),
+        PrimitiveType::Object => instance.is_object(),
+        PrimitiveType::Array => instance.is_array(),
+        PrimitiveType::String => instance.is_string(),
+        PrimitiveType::Number => instance.is_number(),
+        PrimitiveType::Integer => matches!(instance, Value::Number(n) if is_integer_number(n)),
+    }
+}
+
+// `ValidationOptions::with_keyword`'s own factory signature (jsonschema
+// 0.26), not ours to shrink -- `Err` is only ever reached if a future
+// draft starts rejecting "type"'s own value shape, which the bundled
+// schema never does.
+#[allow(clippy::result_large_err)]
+fn type_keyword_factory<'a>(
+    _parent: &'a Map<String, Value>,
+    value: &'a Value,
+    path: Location,
+) -> Result<Box<dyn Keyword>, ValidationError<'a>> {
+    let types: Vec<PrimitiveType> = match value {
+        Value::String(s) => PrimitiveType::try_from(s.as_str()).into_iter().collect(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|v| v.as_str())
+            .filter_map(|s| PrimitiveType::try_from(s).ok())
+            .collect(),
+        _ => Vec::new(),
+    };
+    Ok(Box::new(TypeValidator {
+        types,
+        location: path,
+    }))
+}
 
 /// One schema violation: Circuitry's own location format (exact), plus the
 /// underlying `jsonschema` crate's own message (not required to match
@@ -322,6 +497,7 @@ fn orchestration_validator() -> &'static jsonschema::Validator {
     VALIDATOR.get_or_init(|| {
         jsonschema::draft7::options()
             .should_validate_formats(false)
+            .with_keyword("type", type_keyword_factory)
             .build(orchestration_schema())
             .expect("bundled orchestration.schema.json compiles as Draft 7")
     })
@@ -455,12 +631,31 @@ fn json_path_from_pointer(document: &Value, pointer: &str) -> String {
             path.push('[');
             path.push_str(&segment);
             path.push(']');
+        } else if let Some(repr_text) = non_string_key_repr(&segment) {
+            // Python's `json_path` checks `isinstance(elem, int)` before
+            // the string-pattern branch -- true for `bool` too, a
+            // subclass of `int` -- so a non-string `Dict` key that was an
+            // `int`/`bool` renders the same bracket-without-quotes way an
+            // array index does (`1:` -> `[1]`, `yes:` -> `[True]`), not
+            // the quoted-string form below.
+            path.push('[');
+            path.push_str(&repr_text);
+            path.push(']');
         } else if is_json_path_compatible_property(&segment) {
             path.push('.');
             path.push_str(&segment);
         } else {
+            // Strips the marker prefix first, if any, so the fallback
+            // for a non-int/bool non-string key (float, `None`, a
+            // date/datetime, bytes -- where Python itself raises
+            // `TypeError`, see `non_string_key_repr`'s own doc comment)
+            // still quotes the key's own `repr()` text rather than the
+            // marker's internal NUL-prefixed form.
+            let display = segment
+                .strip_prefix(NON_STRING_KEY_PREFIX)
+                .unwrap_or(&segment);
             path.push_str("['");
-            path.push_str(&segment.replace('\\', "\\\\").replace('\'', "\\'"));
+            path.push_str(&display.replace('\\', "\\\\").replace('\'', "\\'"));
             path.push_str("']");
         }
     }
@@ -472,6 +667,32 @@ fn json_path_from_pointer(document: &Value, pointer: &str) -> String {
 /// followed a real `~` into a spurious `/`).
 fn unescape_json_pointer_segment(segment: &str) -> String {
     segment.replace("~1", "/").replace("~0", "~")
+}
+
+/// `Some(repr_text)` iff *segment* is [`non_string_key_marker`]'s stand-in
+/// for a `Dict` key that was an `int` or `bool` (Python's own `json_path`
+/// checks `isinstance(elem, int)`, true for `bool` too, before its
+/// string-pattern branch) -- `None` for a string key, or for one of the
+/// other hashable-but-non-string/int/bool key types YAML can still
+/// produce (a float, `None`, a date/datetime, bytes): Python's own
+/// `json_path` raises `TypeError` for those (`elem.replace` on a
+/// non-`str`), collapsing the whole structural check into one error
+/// rather than this location's own -- a narrow, documented divergence
+/// (`electricity-compiler`'s own module docs) this crate doesn't
+/// reproduce; the caller instead gets this location's own best-effort
+/// quoted-bracket rendering of the key's `repr()` text, non-empty and at
+/// the right node, just not Python's own crash-shaped result.
+fn non_string_key_repr(segment: &str) -> Option<String> {
+    let repr_text = segment.strip_prefix(NON_STRING_KEY_PREFIX)?;
+    let is_int_repr = {
+        let digits = repr_text.strip_prefix('-').unwrap_or(repr_text);
+        !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+    };
+    if repr_text == "True" || repr_text == "False" || is_int_repr {
+        Some(repr_text.to_string())
+    } else {
+        None
+    }
 }
 
 /// `jsonschema.exceptions._JSON_PATH_COMPATIBLE_PROPERTY_PATTERN`:

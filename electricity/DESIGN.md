@@ -422,13 +422,17 @@ two. Both forms always end with a trailing `\n` (matching `cli/app.py`'s `_write
       that exposes them, whichever lands first). The document is first converted into the JSON-
       Schema instance shape (`electricity-compiler`'s `schema_instance` module): a non-string
       `Dict` key (YAML's bare `yes:`/`1:`) is rendered so it can never collide with a real schema
-      property name, and a `datetime.date`/`datetime.datetime`/`bytes` value (an unquoted YAML
-      timestamp, an explicit `!!binary`) is rendered so it fails every `"type"` keyword a bare
-      scalar can reach in Circuitry's bundled schemas (`"string"`/`"number"`/`"integer"`/
-      `"boolean"`/`"array"`/`"null"`) the same way Python's own `isinstance` check does — **known
-      divergence**: that representation does not also fail `"type": "object"`, but no field in
-      `schema/orchestration.schema.json` ever applies that keyword at a position a bare scalar
-      could reach, so the gap is inert in practice;
+      property name (and `electricity-schema`'s own `json_path_from_pointer` decodes it back
+      into Python's own `json_path` rendering for an `int`/`bool` key — `1:` → `[1]`, `yes:` →
+      `[True]`), and a `datetime.date`/`datetime.datetime`/`bytes`/`NaN`/`Infinity` value (an
+      unquoted YAML timestamp, an explicit `!!binary`, a non-finite float literal) is rendered so
+      it fails every `"type"` keyword — including `"object"` — the same way Python's own
+      `isinstance` check does, via a sibling custom keyword `electricity-schema` adds next to
+      every `"type"` keyword in the compiled schema (not the marker representation alone, which a
+      bare `"type": "object"` position would otherwise pass) — **known divergence**: `minimum`/
+      `maximum` against an `Infinity`/`-Infinity` value still only vacuously pass rather than
+      enforcing a finite bound, a deliberate trade-off against a panic risk in the `jsonschema`
+      crate's own arbitrary-precision number handling, not an oversight;
    3. `group:` placement errors (leaf effects only);
    4. `interface.inputs.<k>.type` must be one of the six recognized types;
    5. `interface.inputs.<k>.default` type-mismatch (already-typed data, not CLI text).

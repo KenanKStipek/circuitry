@@ -45,10 +45,16 @@
 //!   source's cache-root override.
 //! - `ref:` is rejected at compile time: there is no library-name/
 //!   remote-library resolution (DESIGN.md §4).
-//! - [`schema_instance`]'s conversion of a `Date`/`DateTime`/`Bytes`
-//!   value fails every `"type"` keyword a bare scalar can reach in
-//!   Circuitry's bundled schemas except `"object"`, which no such
-//!   position ever uses -- see that module's own doc comment.
+//! - [`schema_instance`]'s conversion of a `Date`/`DateTime`/`Bytes`/
+//!   `NaN`/`Infinity` value fails every `"type"` keyword exactly the way
+//!   Python's own `isinstance` verdict would (including `"object"` --
+//!   `electricity-schema`'s own sibling-keyword mechanism, not this
+//!   crate's marker representation alone -- see that module's own doc
+//!   comment), except one narrow case: `minimum`/`maximum` against an
+//!   `Infinity`/`-Infinity` value only vacuously pass rather than
+//!   enforcing a finite bound, a deliberate, documented trade-off
+//!   against a panic risk in the `jsonschema` crate itself (same doc
+//!   comment).
 //! - [`structural::schema_errors`] sorts multiple simultaneous schema
 //!   violations by `(location, message)`, not Circuitry's own `str(err)`
 //!   order (third-party `jsonschema` text from a different

@@ -230,6 +230,36 @@ fn invalid_concurrency_groups_config_error() {
 }
 
 #[test]
+fn runtime_not_an_object_is_a_run_only_error() {
+    run_case("runtime_not_an_object_is_a_run_only_error");
+}
+
+#[test]
+fn plugins_not_a_list_is_a_run_only_error() {
+    run_case("plugins_not_a_list_is_a_run_only_error");
+}
+
+#[test]
+fn plugins_entry_not_a_string_is_a_run_only_error() {
+    run_case("plugins_entry_not_a_string_is_a_run_only_error");
+}
+
+#[test]
+fn missing_required_interface_input_is_a_run_only_error() {
+    run_case("missing_required_interface_input_is_a_run_only_error");
+}
+
+#[test]
+fn missing_entry_file_with_an_unsupported_suffix() {
+    run_case("missing_entry_file_with_an_unsupported_suffix");
+}
+
+#[test]
+fn non_utf8_file_with_an_unsupported_suffix() {
+    run_case("non_utf8_file_with_an_unsupported_suffix");
+}
+
+#[test]
 fn every_case_in_the_corpus_has_a_test() {
     let text = include_str!("golden/load.json");
     let cases: Vec<Case> = serde_json::from_str(text).expect("golden/load.json is valid JSON");
@@ -253,6 +283,12 @@ fn every_case_in_the_corpus_has_a_test() {
         "interface_inputs_default_type_mismatch_with_unquote_hint",
         "negative_max_concurrency_config_error",
         "invalid_concurrency_groups_config_error",
+        "runtime_not_an_object_is_a_run_only_error",
+        "plugins_not_a_list_is_a_run_only_error",
+        "plugins_entry_not_a_string_is_a_run_only_error",
+        "missing_required_interface_input_is_a_run_only_error",
+        "missing_entry_file_with_an_unsupported_suffix",
+        "non_utf8_file_with_an_unsupported_suffix",
     ];
     for case in &cases {
         assert!(
