@@ -3574,6 +3574,209 @@
     }
   },
   {
+    "name": "prompt_template_from_file",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: greet\n    template: {file: template.txt}\n",
+      "template.txt": "Hello, {{input.name}}!"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "greet",
+          "template": "Hello, {{input.name}}!",
+          "messages": null,
+          "prompt_type": "text",
+          "schema": null,
+          "model": null,
+          "provider": null,
+          "provider_fallbacks": null,
+          "routing_override": null,
+          "params": null,
+          "timeout_ms": null,
+          "deterministic": false,
+          "inputs": null,
+          "assets": null,
+          "retries": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "greet"
+      ]
+    },
+    "definition_error": null,
+    "digest": "5c508904ce8864d448f1259480bb2105a1ebbb70aed2b1d7fb6684fcd1fca0dc",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "prompt_message_content_from_file",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: chat\n    messages:\n      - role: user\n        content: {file: msg.txt}\n",
+      "msg.txt": "Hi {{input.name}}"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "chat",
+          "template": null,
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hi {{input.name}}"
+            }
+          ],
+          "prompt_type": "text",
+          "schema": null,
+          "model": null,
+          "provider": null,
+          "provider_fallbacks": null,
+          "routing_override": null,
+          "params": null,
+          "timeout_ms": null,
+          "deterministic": false,
+          "inputs": null,
+          "assets": null,
+          "retries": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "chat"
+      ]
+    },
+    "definition_error": null,
+    "digest": "cddcfafd7833daa1a19a114a7e70f46031bea0ee29ded0d4d28a815f6a3bc7a1",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "yield_template_from_file",
+    "files": {
+      "doc.yml": "effects:\n  - type: yield\n    name: out\n    template: {file: yield.txt}\n",
+      "yield.txt": "Value is {{input.n}}"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "out",
+          "template": "Value is {{input.n}}",
+          "inputs": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "out"
+      ]
+    },
+    "definition_error": null,
+    "digest": "0bac6b0dda3dbab3c348367bf5353324fb7df44f95669a86d21929ab1c26b817",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "prompt_template_file_missing",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: greet\n    template: {file: does-not-exist.txt}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].template: 'file' 'does-not-exist.txt' does not exist."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].template: 'file' 'does-not-exist.txt' does not exist.",
+    "definition": null,
+    "definition_error": "PromptFileError: prime.effects[0].template: 'file' 'does-not-exist.txt' does not exist.",
+    "digest": "f6eea04921634a3c32a5c4634803ab4ea56a0b9da94c44083373aafbc7ba4633",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
     "name": "tool_param_leaves_checked_before_security_sensitive_reference",
     "files": {
       "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    params:\n      allowed_commands: {from: 'bogus'}\n"

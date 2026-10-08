@@ -275,29 +275,21 @@ fn assert_compile_succeeds(name: &str) {
 }
 
 #[test]
-#[ignore = "passes composition and reaches lane C's own compile gap; \
-            un-ignore once lane C's compile_document lands"]
 fn prompts_file_crlf_translated_succeeds_against_circuitry() {
     assert_compile_succeeds("prompts_file_crlf_translated");
 }
 
 #[test]
-#[ignore = "passes composition and reaches lane C's own compile gap; \
-            un-ignore once lane C's compile_document lands"]
 fn dotted_reference_reaches_into_a_named_if_from_anywhere_succeeds_against_circuitry() {
     assert_compile_succeeds("dotted_reference_reaches_into_a_named_if_from_anywhere");
 }
 
 #[test]
-#[ignore = "passes composition and reaches lane C's own compile gap; \
-            un-ignore once lane C's compile_document lands"]
 fn dotted_self_reference_from_inside_the_same_named_if_succeeds_against_circuitry() {
     assert_compile_succeeds("dotted_self_reference_from_inside_the_same_named_if");
 }
 
 #[test]
-#[ignore = "passes composition and reaches lane C's own compile gap; \
-            un-ignore once lane C's compile_document lands"]
 fn dotted_self_reference_from_inside_a_named_dynamic_succeeds_against_circuitry() {
     assert_compile_succeeds("dotted_self_reference_from_inside_a_named_dynamic");
 }
@@ -308,22 +300,16 @@ fn dotted_self_reference_from_inside_a_named_dynamic_succeeds_against_circuitry(
 /// for where it *is* verified right now, independent of compile
 /// succeeding.
 #[test]
-#[ignore = "compile_document itself is lane C's gap; the digest is \
-            verified independently by every_case_digest_matches_circuitry"]
 fn digest_with_no_prompt_files_succeeds_against_circuitry() {
     assert_compile_succeeds("digest_with_no_prompt_files");
 }
 
 #[test]
-#[ignore = "compile_document itself is lane C's gap; the digest is \
-            verified independently by every_case_digest_matches_circuitry"]
 fn digest_includes_a_referenced_prompt_file_succeeds_against_circuitry() {
     assert_compile_succeeds("digest_includes_a_referenced_prompt_file");
 }
 
 #[test]
-#[ignore = "compile_document itself is lane C's gap; the digest is \
-            verified independently by every_case_digest_matches_circuitry"]
 fn digest_includes_a_parent_directory_prompt_file_succeeds_against_circuitry() {
     assert_compile_succeeds("digest_includes_a_parent_directory_prompt_file");
 }

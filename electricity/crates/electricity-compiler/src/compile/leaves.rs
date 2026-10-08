@@ -4,13 +4,13 @@
 //! and `outputs`, and Python's coercions (`int(...)`, `float(...)`,
 //! truthiness, an invalid `on_error` becoming `"fail"`).
 
-use crate::CompileError;
 use crate::compile::Ctx;
 use crate::compile::coerce::{get_bool_default, get_truthy, py_int};
 use crate::compile::containers::{compile_effects_in_scope, normalize_flow};
 use crate::compile::expect::{compile_expect, compile_retries};
 use crate::compile::params::{build_tool_params, build_use_inputs};
 use crate::compile::templates::{check_templates, template_text};
+use crate::{CompileError, DocumentOrigin, prompt_files};
 use electricity_bytecode::effects::{
     AssetRef, Message, PromptContent, PromptOp, PromptType, ReflectorOp, Role, ToolOp, UseOp,
     UseSource, YieldOp,
@@ -56,35 +56,12 @@ fn optional_str(dict: &Dict, key: &str) -> Option<String> {
     }
 }
 
-/// A template/content field's text: *value* itself, or a `{file: ...}`'s
-/// -- a minimal, lane-C-local stand-in for `core/prompt_files.py::
-/// resolve_text_or_file` (lane D's own file): the plain-string case
-/// (every corpus case this lane owns) is ported exactly; a `{file:
-/// ...}` source -- lane D's own prompt-file reading/confinement -- is
-/// left as a clearly-marked gap rather than silently mishandled, the
-/// same way lane A's own seam stubs mark an unimplemented lane.
-fn resolve_text_or_file(value: &Value, field: &str) -> Result<String, CompileError> {
-    match value {
-        Value::Str(s) => Ok(s.clone()),
-        Value::Dict(dict)
-            if dict.len() == 1 && dict.contains_key(&Value::Str("file".to_string())) =>
-        {
-            Err(CompileError(crate::not_implemented(
-                &format!("leaves::resolve_text_or_file({field}: {{file: ...}})"),
-                "D",
-            )))
-        }
-        _ => Err(CompileError(format!(
-            "{field} must be a string or {{file: <path>}}."
-        ))),
-    }
-}
-
 pub(crate) fn compile_prompt(
     effect: &Dict,
     path: &EffectPath,
     name: &str,
     effect_path: &str,
+    origin: &DocumentOrigin,
 ) -> Result<Op, CompileError> {
     let prompt_type_raw = get_truthy(effect, "prompt_type")
         .map(Value::py_str)
@@ -102,9 +79,10 @@ pub(crate) fn compile_prompt(
 
     let template_raw = effect.get(&Value::Str("template".to_string()));
     let template = match template_raw {
-        Some(value) if !value.is_none() => Some(resolve_text_or_file(
+        Some(value) if !value.is_none() => Some(prompt_files::resolve_text_or_file(
             value,
             &format!("{effect_path}.template"),
+            origin,
         )?),
         _ => None,
     };
@@ -130,9 +108,10 @@ pub(crate) fn compile_prompt(
                     .get(&Value::Str("content".to_string()))
                     .cloned()
                     .unwrap_or_else(|| Value::Str(String::new()));
-                let content = resolve_text_or_file(
+                let content = prompt_files::resolve_text_or_file(
                     &content_raw,
                     &format!("{effect_path}.messages[{index}].content"),
+                    origin,
                 )?;
                 messages.push(Message {
                     role,
@@ -561,6 +540,7 @@ pub(crate) fn compile_yield(
     path: &EffectPath,
     name: &str,
     effect_path: &str,
+    origin: &DocumentOrigin,
 ) -> Result<Op, CompileError> {
     const FORBIDDEN_KEYS: [&str; 11] = [
         "prompt_type",
@@ -600,7 +580,11 @@ pub(crate) fn compile_yield(
             "Yield effect '{name}' must have 'template'."
         )));
     };
-    let template = resolve_text_or_file(template_raw, &format!("{effect_path}.template"))?;
+    let template = prompt_files::resolve_text_or_file(
+        template_raw,
+        &format!("{effect_path}.template"),
+        origin,
+    )?;
     if template.trim().is_empty() {
         return Err(CompileError(format!(
             "Yield effect '{name}': 'template' must not be empty."

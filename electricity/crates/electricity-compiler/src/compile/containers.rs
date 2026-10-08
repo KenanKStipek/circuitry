@@ -257,6 +257,7 @@ fn compile_effect(
                 &path.push_name(&valid_name),
                 &valid_name,
                 effect_path,
+                &ctx.origin,
             )
         }
         "dynamic" => {
@@ -322,6 +323,7 @@ fn compile_effect(
                 &path.push_name(&valid_name),
                 &valid_name,
                 effect_path,
+                &ctx.origin,
             )
         }
         "reflector" => {

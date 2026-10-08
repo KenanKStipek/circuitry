@@ -1014,6 +1014,62 @@ add(doc(text="effects: []\nflow: bogus\n"))
 CASES[-1]["name"] = "unknown_flow_value"
 
 
+# --- Decision 2: {file:} prompt/yield sources, now that lane D's own ---
+# --- prompt_files::resolve_text_or_file is wired in ---------------------
+
+add({
+    "name": "prompt_template_from_file",
+    "files": {
+        "doc.yml": (
+            "effects:\n"
+            "  - type: prompt\n"
+            "    name: greet\n"
+            "    template: {file: template.txt}\n"
+        ),
+        "template.txt": "Hello, {{input.name}}!",
+    },
+    "entry": "doc.yml",
+})
+
+add({
+    "name": "prompt_message_content_from_file",
+    "files": {
+        "doc.yml": (
+            "effects:\n"
+            "  - type: prompt\n"
+            "    name: chat\n"
+            "    messages:\n"
+            "      - role: user\n"
+            "        content: {file: msg.txt}\n"
+        ),
+        "msg.txt": "Hi {{input.name}}",
+    },
+    "entry": "doc.yml",
+})
+
+add({
+    "name": "yield_template_from_file",
+    "files": {
+        "doc.yml": (
+            "effects:\n"
+            "  - type: yield\n"
+            "    name: out\n"
+            "    template: {file: yield.txt}\n"
+        ),
+        "yield.txt": "Value is {{input.n}}",
+    },
+    "entry": "doc.yml",
+})
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: prompt\n"
+    "    name: greet\n"
+    "    template: {file: does-not-exist.txt}\n"
+)))
+CASES[-1]["name"] = "prompt_template_file_missing"
+
+
 # --- Findings 5/6: check order within a single effect -----------------------
 
 add(doc(text=(

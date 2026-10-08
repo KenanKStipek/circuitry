@@ -50,11 +50,6 @@
 //!   recursed into) — deliberately narrower than the equivalent walk
 //!   for a tool's `params`, to avoid rejecting a document Circuitry's
 //!   own compiler accepts (`compile::params`'s own module docs).
-//! - `compile::leaves::resolve_text_or_file` is a lane-C-local stand-in
-//!   for lane D's own `prompt_files::resolve_text_or_file`: the
-//!   plain-string case (every case this lane's corpus exercises) is
-//!   exact; a `{file: ...}` prompt source is a clearly marked gap
-//!   until lane D lands.
 //! - [`prompt_files`]'s confinement-root resolve: `core/prompt_files.py::
 //!   resolve_prompt_file_path` lets the confinement root's own `Path.
 //!   resolve(strict=False)` raise an *uncaught* `RuntimeError` (only the

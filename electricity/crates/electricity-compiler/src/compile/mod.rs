@@ -35,13 +35,23 @@ use std::collections::BTreeSet;
 pub(crate) struct Ctx {
     next_loop_id: u32,
     depth: usize,
+    /// The document's own origin (`core/prompt_files.py`'s
+    /// `document_dir`/`confinement_root` pair) -- stored here, rather
+    /// than threaded as a separate parameter through every
+    /// container-compiling function, so only the two leaf functions
+    /// that actually resolve a `{file: ...}` source
+    /// ([`leaves::compile_prompt`]/[`leaves::compile_yield`]) need an
+    /// extra parameter at all; every function already threading `ctx`
+    /// through reaches it for free.
+    pub(crate) origin: DocumentOrigin,
 }
 
 impl Ctx {
-    fn new() -> Self {
+    fn new(origin: DocumentOrigin) -> Self {
         Ctx {
             next_loop_id: 0,
             depth: 0,
+            origin,
         }
     }
 
@@ -82,7 +92,7 @@ pub fn compile_document(
     compose::check_prompt_composition(document, &declared_prompts, origin)?;
 
     let root_path = EffectPath::root();
-    let mut ctx = Ctx::new();
+    let mut ctx = Ctx::new(origin.clone());
 
     let top_effects = dict_get(document, "effects");
     let effects = if top_effects.is_some_and(crate::state_ns::is_truthy) {
