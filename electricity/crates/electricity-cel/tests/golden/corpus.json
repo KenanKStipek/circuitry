@@ -5189,5 +5189,464 @@
       "v": []
     },
     "strict": true
+  },
+  {
+    "expr": "'b' in state.tags",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "tags"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "str",
+                "v": "a"
+              },
+              {
+                "t": "none"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.input.answer in ['yes', 'no']",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "answer"
+                },
+                {
+                  "t": "bool",
+                  "v": true
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "!(value.status in ['failed'])",
+    "meta": {
+      "t": "dict",
+      "v": []
+    },
+    "mode": "expect",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "value": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "status"
+          },
+          {
+            "t": "none"
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "expr": "state.h[-1].s == 'done'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "h"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "dict",
+                "v": [
+                  [
+                    {
+                      "t": "str",
+                      "v": "s"
+                    },
+                    {
+                      "t": "str",
+                      "v": "x"
+                    }
+                  ]
+                ]
+              },
+              {
+                "t": "dict",
+                "v": [
+                  [
+                    {
+                      "t": "str",
+                      "v": "s"
+                    },
+                    {
+                      "t": "str",
+                      "v": "done"
+                    }
+                  ]
+                ]
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "has(state.l[-1].x)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "dict",
+                "v": [
+                  [
+                    {
+                      "t": "str",
+                      "v": "x"
+                    },
+                    {
+                      "t": "int",
+                      "v": "1"
+                    }
+                  ]
+                ]
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "has(state.l[0.0].x)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "dict",
+                "v": [
+                  [
+                    {
+                      "t": "str",
+                      "v": "x"
+                    },
+                    {
+                      "t": "int",
+                      "v": "1"
+                    }
+                  ]
+                ]
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.l[true] == 2",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              },
+              {
+                "t": "int",
+                "v": "2"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "has(state.results.filter(r, r.ok)[0].id)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "results"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "dict",
+                "v": [
+                  [
+                    {
+                      "t": "str",
+                      "v": "ok"
+                    },
+                    {
+                      "t": "bool",
+                      "v": false
+                    }
+                  ]
+                ]
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "has(state.m[has(state.sub.deep) ? 'a' : 'b'].x)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "b"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "x"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "has(state.a.n.x) || state.a.n > 0.0",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "n"
+                },
+                {
+                  "bits": "7ff8000000000000",
+                  "t": "float"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "true == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false
+  },
+  {
+    "expr": "1 in [true]",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false
+  },
+  {
+    "expr": "true in [1]",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.f < state.n",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "f"
+          },
+          {
+            "bits": "4340000000000000",
+            "t": "float"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "9007199254740993"
+          }
+        ]
+      ]
+    },
+    "strict": false
   }
 ]

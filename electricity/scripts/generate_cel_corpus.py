@@ -352,9 +352,11 @@ def build_corpus() -> list[dict]:
     # (electricity-cel's lib.rs docs) rather than something this
     # differential corpus asserts sameness on — `evaluate_cel_expect`
     # converts before its own `try`/`except`, so the matching
-    # `ValueError("overflow")` escapes *uncaught*, which `core.expect`'s
-    # caller doesn't handle either; electricity-cel raises a `CelError`
-    # there instead of reproducing that crash.
+    # `ValueError("overflow")` escapes Python *uncaught* there (neither a
+    # `CelEvaluationError` nor a failed expectation), and `core.tool`'s
+    # and `core.use`'s callers handle that raw `ValueError` differently
+    # from each other (`lib.rs`'s crate docs trace both); electricity-cel
+    # raises a `CelError` for this case instead of reproducing either.
     huge = 10**20
     cases += [
         condition("state.n == null", {"n": huge}),
@@ -578,6 +580,90 @@ def build_corpus() -> list[dict]:
     # into one. Deliberately NOT a corpus case: pinning it here would
     # assert parity on a documented, permanent divergence rather than a
     # bug this crate can fix.
+
+    # --- third review of #379, finding 1: `in` must decide `false` on a
+    # type mismatch that doesn't actually raise in celpy (a plain Python
+    # `==` resolving through the two-sided `NotImplemented` fallback),
+    # not raise on every mismatch -- a regression the second fix pass
+    # introduced trying to fix finding 5 below.
+    cases += [
+        condition("'b' in state.tags", {"tags": ["a", None]}),
+        # YAML 1.1 reads a bare `yes`/`no` as a `bool`.
+        condition("state.input.answer in ['yes', 'no']", {"input": {"answer": True}}),
+        expect("!(value.status in ['failed'])", value={"status": None}),
+    ]
+
+    # --- third review of #379, finding 3: list indexing is celpy's own
+    # `list.__getitem__` (Python's), not `cel`'s native one -- negative
+    # wraps from the end, `bool` is `0`/`1`, a `double` always raises,
+    # both inside `has()` and out.
+    cases += [
+        condition(
+            "state.h[-1].s == 'done'",
+            {"h": [{"s": "x"}, {"s": "done"}]},
+        ),
+        condition("has(state.l[-1].x)", {"l": [{"x": 1}]}),
+        condition("has(state.l[0.0].x)", {"l": [{"x": 1}]}),
+        condition("state.l[true] == 2", {"l": [1, 2]}),
+    ]
+
+    # --- third review of #379, finding 2: `has()`'s own safe-navigation
+    # rewrite previously only accepted an identifier or a literal as the
+    # root of the chain it rewrites, leaving anything else (a macro or
+    # function-call result) to `cel`'s own, non-graceful `has()`.
+    cases += [
+        condition(
+            "has(state.results.filter(r, r.ok)[0].id)",
+            {"results": [{"ok": False}]},
+        ),
+    ]
+
+    # --- third review of #379, finding 6: `has()`'s own index *key*
+    # expression needs the same strict-operator/nested-`has()` rewriting
+    # as everything else, not `cel`'s native evaluation of it -- a nested
+    # `has()` over a two-level-missing chain inside the key is exactly
+    # the kind of thing `cel`'s own, native `has()` raises on.
+    cases += [
+        condition(
+            "has(state.m[has(state.sub.deep) ? 'a' : 'b'].x)",
+            {"m": {"b": {"x": 1}}},
+        ),
+    ]
+
+    # --- third review of #379, finding 7: `paths::project` must not
+    # corrupt a `NaN` leaf a longer, `has()`-guarded path extends past it
+    # -- comparing the freshly read and already-placed values for
+    # equality to decide whether to keep descending is itself `false` for
+    # `NaN` (`NaN != NaN`), which silently re-broke the P0 the second fix
+    # pass had already fixed for every other value.
+    cases += [
+        condition(
+            "has(state.a.n.x) || state.a.n > 0.0",
+            {"a": {"n": float("nan")}},
+        ),
+    ]
+
+    # --- third review of #379, finding 5: celpy's `BoolType` has no
+    # `__eq__` override, so a `bool` on the *left* of an `int`/`uint`
+    # resolves through the plain `int` it subclasses instead of raising
+    # -- an asymmetry the reverse order, and `double` either way, don't
+    # share.
+    cases += [
+        condition("true == 1", {}),
+        condition("1 in [true]", {}),
+        condition("true in [1]", {}),
+    ]
+
+    # --- third review of #379, finding 8: comparing a `double` against
+    # an `int`/`uint` must not round the integer operand to the nearest
+    # representable `double` first -- Python's own `float`/`int`
+    # comparison is exact.
+    cases += [
+        condition(
+            "state.f < state.n",
+            {"f": 9007199254740992.0, "n": 9007199254740993},
+        ),
+    ]
 
     return cases
 

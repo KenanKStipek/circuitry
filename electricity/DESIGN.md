@@ -1240,12 +1240,27 @@ regardless of which underlying crate is used:
   directly, `dict`→`MapType`, `list/tuple/set`→`ListType`, `datetime`→`TimestampType`,
   `timedelta`→`DurationType`; anything with no CEL counterpart maps to `null` — never the raw
   value, which is the sandbox boundary (no expression can reach an attribute/method/class
-  through state).
+  through state). Two values this doesn't hold for, both documented (not just in the PR) as known
+  divergences in `electricity-cel`'s own crate docs: an `int` too large for CEL's 64-bit `int`
+  raises (`ValueError("overflow")` in cel-python, `convert::Overflow` here) rather than becoming
+  `null`, read directly or as a dict key; and a dict key with no CEL key counterpart (a `float`,
+  `None`, a bare `date` — reachable from an ordinary YAML input file, not just data buried in
+  `value`/`meta`) is **dropped** here, where cel-python converts it to `None` and so collapses
+  several such keys into one.
 - **Heterogeneous equality** (runtime-semantics §4.3): cross-type `==` between non-numeric types
   is `False`, never an error; `int`/`uint`/`double` are one numeric family and compare across
-  subtype (`1.0 == 1` → `True`). This is the opposite of Rust's/Python's native `==` and must be
-  implemented as custom `_==_`/`_!=_` overrides regardless of what the underlying crate's
-  default equality does.
+  subtype at the top level (`1.0 == 1` → `True`). This is the opposite of Rust's/Python's native
+  `==` and must be implemented as custom `_==_`/`_!=_` overrides regardless of what the
+  underlying crate's default equality does. The numeric family does **not** cross subtype a
+  second time, inside a `list`/`map` or `in`'s own scan (`[1, 2] == [1.0, 2.0]` is `False`,
+  matching cel-python's own, stricter, exact-type-inside-a-container `ListType`/`MapType.__eq__`
+  rather than `cel`'s more permissive native one) — the two levels disagree in cel-python itself,
+  and both must be reproduced, not just the outer one.
+- **List indexing** is cel-python's own `list.__getitem__`, not `cel`'s native one: a negative
+  index wraps from the end, a `bool` index is `0`/`1`, and a `double` index (even a whole-number
+  one) is rejected — `cel`'s own native indexing instead rejects negative and accepts a
+  whole-number `double`. Map indexing needs no such override; `cel`'s own already matches
+  cel-python's `MapType.__getitem__` (`int`/`uint`/`bool`/`string` keys only).
 - **The absent-path convention** (runtime-semantics §4.4): reading an unset `state.` path is
   **not** an evaluation error inside `if`/`while` CEL — it is decided *structurally*, by walking
   the parse tree for every dotted `state.` read before evaluating, and makes the whole expression

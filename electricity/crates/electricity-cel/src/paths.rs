@@ -13,7 +13,7 @@ use cel::common::ast::{CallExpr, EntryExpr, Expr, IdedExpr, LiteralValue};
 use cel::common::types::CelString;
 use electricity_value::{Dict, Value};
 
-use crate::{equality, ordering};
+use crate::{equality, indexing, ordering};
 
 /// A `state.`-rooted dotted read the parse tree contains, and whether it
 /// is guarded by `has(...)`.
@@ -125,54 +125,52 @@ fn walk(expr: &Expr, out: &mut Collected, guarded: bool) {
 /// (DESIGN.md §7.2):
 ///
 /// - Every `has(...)` call becomes `<safe-navigation chain>.hasValue()`
-///   when its argument is a chain of plain field selections and `[...]`
-///   indices (see [`to_optional`]): `has(a.b[c].d)` becomes
-///   `(a.?b[?c].?d).hasValue()`, built from `cel`'s own optional-value
-///   primitives (`_?._`/`_[?_]`, on by default — `Env::with_optional_support`),
-///   not a custom function. `cel`'s `_?._`/`_[?_]` already turn *any*
-///   evaluation failure along the chain — a missing key, an out-of-range
-///   index, a selection through the wrong type — into `optional.none()`
-///   rather than raising (`objects.rs`'s `unwrap_optional`/`index_into`),
-///   which is exactly cel-python's own rule for `has()`: "the argument
-///   evaluated without error" (`evaluation.py`'s `ident_arg` `has`), not
-///   "the last segment alone resolves gracefully" the way `cel`'s own,
-///   native `has()` treats it. Because every step becomes ordinary
-///   evaluation under `?.`/`[?]` — not a Rust-side walk against a
-///   snapshot of `state`/`value`/`meta` taken before evaluation — this
-///   handles a chain rooted at *any* identifier, including a
+///   (see [`to_optional`]): `has(a.b[c].d)` becomes `(a.?b[?c].?d).hasValue()`,
+///   built from `cel`'s own optional-select (`_?._`) for a field and this
+///   crate's own, Python-semantics optional index ([`indexing::opt_index`])
+///   for `[...]`, rather than `cel`'s own, native `has()`. A missing key,
+///   an out-of-range or wrongly-typed list index, or a selection through
+///   the wrong type all become `optional.none()` along the way
+///   (`objects.rs`'s `unwrap_optional`, [`indexing`]'s own
+///   `python_index`), matching cel-python's own rule for `has()`: "the
+///   argument evaluated without error" (`evaluation.py`'s `ident_arg`
+///   `has`), not "the last segment alone resolves gracefully" the way
+///   `cel`'s own, native `has()` treats it. Because every step becomes
+///   ordinary evaluation under `?.`/`[?]` — not a Rust-side walk against
+///   a snapshot of `state`/`value`/`meta` taken before evaluation — this
+///   handles a chain rooted at *any* expression, including a
 ///   comprehension's own loop variable (`value.items.all(value, has(value.x))`
 ///   correctly tests the inner, loop-bound `value`, not the outer root a
-///   prior, name-matching version of this rewrite confused it for), and
-///   an index whose key is itself an arbitrary sub-expression
-///   (`has(state.m[state.k].x)`), with no data to patch and nothing for
-///   a patch to leak into.
-/// - Every `_<_`/`_<=_`/`_>_`/`_>=_`/`_==_`/`_!=_`/`@in` call becomes a
-///   call to [`ordering`]'s or [`equality`]'s own functions, which
-///   reproduce celpy's exact rules (comment on each module) rather than
-///   `cel`'s own, more permissive ones.
-///
-/// A `has(...)` argument [`to_optional`] can't rewrite (anything other
-/// than a chain of field selections and indices — a macro, a plain
-/// function call) is left for `cel` to evaluate as-is, matching this
-/// function's own restriction before the rewrite existed.
+///   prior, name-matching version of this rewrite confused it for) and a
+///   macro or function-call result (`has(state.xs.filter(x, x.ok)[0].id)`).
+///   Two things [`to_optional`] still leaves to `cel`'s/celpy's own,
+///   non-graceful evaluation, undocumented anywhere else: an *index
+///   expression* that itself fails to evaluate (`has(state.m[state.k].x)`
+///   with `k` unset raises, rather than reporting `false` the way a
+///   missing `m` or a missing key under it does), and a root identifier
+///   that isn't bound at all (`has(meta.x)` in condition mode, where only
+///   `state` is ever bound, raises the same way).
+/// - Every `_<_`/`_<=_`/`_>_`/`_>=_`/`_==_`/`_!=_`/`@in`/`_[_]` call
+///   becomes a call to [`ordering`]'s, [`equality`]'s or [`indexing`]'s
+///   own functions, which reproduce celpy's exact rules (comment on each
+///   module) rather than `cel`'s own, more permissive ones.
 pub fn rewrite(node: &mut IdedExpr) {
     if let Expr::Select(select) = &node.expr {
         if select.test {
-            if let Some(operand) = to_optional(&select.operand.expr) {
-                let chain = opt_select(operand, &select.field);
-                node.expr = Expr::Call(CallExpr {
-                    func_name: "hasValue".to_string(),
-                    target: Some(Box::new(IdedExpr { id: 0, expr: chain })),
-                    args: Vec::new(),
-                });
-                return;
-            }
+            let chain = opt_select(to_optional(&select.operand.expr), &select.field);
+            node.expr = Expr::Call(CallExpr {
+                func_name: "hasValue".to_string(),
+                target: Some(Box::new(IdedExpr { id: 0, expr: chain })),
+                args: Vec::new(),
+            });
+            return;
         }
     }
     if let Expr::Call(call) = &mut node.expr {
         if call.target.is_none() && call.args.len() == 2 {
             if let Some(name) = ordering::strict_function_name(&call.func_name)
                 .or_else(|| equality::strict_function_name(&call.func_name))
+                .or_else(|| indexing::strict_function_name(&call.func_name))
             {
                 call.func_name = name.to_string();
             }
@@ -219,42 +217,46 @@ pub fn rewrite(node: &mut IdedExpr) {
     }
 }
 
-/// *expr* rewritten into CEL's safe-navigation form (`_?._` for a field
-/// selection, `_[?_]` for an index), or `None` if *expr* isn't a chain of
-/// those over a leaf (an identifier or a literal) — a macro, a plain
-/// function call, anything [`rewrite`]'s own restriction already left
-/// alone before `has()` could rewrite at all. Every step this *can*
-/// convert never raises: a missing key, a missing index or a selection
-/// through the wrong type all become `optional.none()`
-/// (`objects.rs`'s `unwrap_optional`/`index_into`, `Err(_) =>
-/// CelOptional::none()`), and a later step chains off a `None` by simply
-/// propagating it, never re-evaluating.
-fn to_optional(expr: &Expr) -> Option<Expr> {
+/// *expr* rewritten into CEL's safe-navigation form: `_?._` for a field
+/// selection, this crate's own, Python-semantics [`indexing::opt_index`]
+/// for `[...]`, and *expr* itself — run back through [`rewrite`] first,
+/// so a nested strict operator or `has()` inside it still gets handled —
+/// for anything else (an identifier, a literal, or a macro/function-call
+/// result `has()`'s argument wasn't previously allowed to chain off of,
+/// issue #379 review finding 2). Every `.?`/`[?]` step this builds never
+/// raises on its own account: a missing key, an out-of-range or wrongly-
+/// typed list index, or a selection through the wrong type all become
+/// `optional.none()`, and a later step chains off that by simply
+/// propagating it, never re-evaluating. What this does *not* make safe:
+/// the expression at the chain's root still has to evaluate without
+/// raising on its own (an undeclared identifier, a macro that itself
+/// fails), and an index *expression* (as opposed to the lookup it
+/// performs) still evaluates outside any `?` — both are real, documented
+/// divergences from cel-python's own, unconditionally-swallow-everything
+/// `has()` (`lib.rs`'s crate docs), not something this chain papers over.
+fn to_optional(expr: &Expr) -> Expr {
     match expr {
-        Expr::Ident(_) | Expr::Literal(_) => Some(expr.clone()),
         Expr::Select(select) if !select.test => {
-            let operand = to_optional(&select.operand.expr)?;
-            Some(opt_select(operand, &select.field))
+            opt_select(to_optional(&select.operand.expr), &select.field)
         }
         Expr::Call(call)
             if call.target.is_none()
                 && call.args.len() == 2
                 && call.func_name == cel::common::ast::operators::INDEX =>
         {
-            let operand = to_optional(&call.args[0].expr)?;
-            Some(Expr::Call(CallExpr {
-                func_name: cel::common::ast::operators::OPT_INDEX.to_string(),
-                target: None,
-                args: vec![
-                    IdedExpr {
-                        id: 0,
-                        expr: operand,
-                    },
-                    call.args[1].clone(),
-                ],
-            }))
+            let operand = to_optional(&call.args[0].expr);
+            let mut key = call.args[1].clone();
+            rewrite(&mut key);
+            indexing::opt_index(operand, key.expr)
         }
-        _ => None,
+        _ => {
+            let mut cloned = IdedExpr {
+                id: 0,
+                expr: expr.clone(),
+            };
+            rewrite(&mut cloned);
+            cloned.expr
+        }
     }
 }
 
@@ -287,14 +289,25 @@ fn opt_select(operand: Expr, field: &str) -> Expr {
 /// Python only ever sees the projected subset too.
 ///
 /// *paths* sorted shortest-first, so a whole subtree a shorter path
-/// already placed is reused, not re-entered — mirroring Python's own
-/// `if placed is value: break` by comparing *values*, not identities
-/// (`Value` has no cheap notion of the latter): when the two are equal,
-/// nothing a longer path could add is missing, and — the bug a previous
-/// version of this had (issue #379 review finding 1) — overwriting
-/// `target[part]` with a placeholder `{}` just because *value* itself
-/// isn't a dict would otherwise corrupt what the shorter path already
-/// placed there.
+/// already placed is reused, not re-entered. At an intermediate segment,
+/// whatever is already placed under *part* decides what to do — keep
+/// descending into it if it's a `Dict` (a shorter path already started
+/// this same subtree), or stop if it's anything else (a shorter,
+/// unguarded path already placed a *leaf* there, matching Python's own
+/// `if placed is value: break`, which this reaches the same outcome as
+/// without needing identity comparison — `Value` has none cheap). The
+/// terminal segment always just (re-)inserts the freshly read *value*,
+/// unconditionally: it's read straight from *state* every time, so it's
+/// always the correct thing to place, whether or not something was there
+/// before. Comparing the placed and freshly read *values* for equality
+/// instead — a previous version of this did, to decide both of the above
+/// in one check — was itself the P0 this ported from Python to fix
+/// (overwriting a placed non-dict leaf with `{}` the moment a longer,
+/// `has()`-guarded path tried to extend past it, issue #379 review
+/// finding 1) and *re-broke* the same way for a `NaN` leaf (review
+/// finding 7, `has(state.a.n.x) || state.a.n > 0.0`): `NaN != NaN`, so
+/// the equality check wrongly decided a *different* value was now being
+/// placed and overwrote the leaf with `{}` to keep descending.
 pub fn project(state: &Value, paths: &[StatePath]) -> Value {
     let mut unique: Vec<&str> = paths.iter().map(|p| p.path.as_str()).collect();
     unique.sort_by_key(|p| (p.matches('.').count(), *p));
@@ -313,18 +326,19 @@ pub fn project(state: &Value, paths: &[StatePath]) -> Value {
                 break;
             };
             let key = Value::Str(part.to_string());
-            if target.get(&key) == Some(value) {
-                break;
-            }
             if index == segments.len() - 1 {
                 target.insert(key, value.clone());
                 break;
             }
-            if !matches!(target.get(&key), Some(Value::Dict(_))) {
-                target.insert(key.clone(), Value::Dict(Dict::new()));
+            match target.get(&key) {
+                Some(Value::Dict(_)) => {}
+                Some(_) => break,
+                None => {
+                    target.insert(key.clone(), Value::Dict(Dict::new()));
+                }
             }
             let Some(Value::Dict(next_target)) = target.get_mut(&key) else {
-                unreachable!("just inserted or already a dict")
+                unreachable!("just inserted or confirmed to be a dict")
             };
             target = next_target;
             source = value;
@@ -472,6 +486,7 @@ mod tests {
         let mut ctx = Context::with_env(Arc::clone(&env));
         ordering::register(&mut ctx);
         equality::register(&mut ctx);
+        indexing::register(&mut ctx);
         ctx.add_variable_from_value("state", crate::convert::to_cel(state).unwrap());
         cel::Value::resolve(&tree, &ctx).unwrap()
     }
@@ -529,6 +544,61 @@ mod tests {
         assert_eq!(
             eval("has(state.m[state.k].x)", &state),
             cel::Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn has_over_a_filter_result_is_false_not_an_error() {
+        // re-review finding 2: `has()`'s argument contains a macro call
+        // (`filter`), not just a dotted/indexed chain over an identifier
+        // — a previous version of `to_optional` left this to `cel`'s own,
+        // native `has()`, which raises indexing into the empty result.
+        let state = dict_value(vec![(
+            "results",
+            Value::List(vec![dict_value(vec![("ok", Value::Bool(false))])]),
+        )]);
+        assert_eq!(
+            eval("has(state.results.filter(r, r.ok)[0].id)", &state),
+            cel::Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn has_over_a_negative_list_index_matches_plain_indexing() {
+        // re-review finding 3: `has()`'s own safe-navigation chain needs
+        // the same Python list-indexing semantics as a plain `[...]`.
+        let state = dict_value(vec![(
+            "l",
+            Value::List(vec![dict_value(vec![("x", Value::from(1_i64))])]),
+        )]);
+        assert_eq!(eval("has(state.l[-1].x)", &state), cel::Value::Bool(true));
+    }
+
+    #[test]
+    fn has_over_a_double_list_index_is_false_not_an_error() {
+        let state = dict_value(vec![(
+            "l",
+            Value::List(vec![dict_value(vec![("x", Value::from(1_i64))])]),
+        )]);
+        assert_eq!(eval("has(state.l[0.0].x)", &state), cel::Value::Bool(false));
+    }
+
+    #[test]
+    fn has_in_an_index_key_gets_its_own_safe_navigation_too() {
+        // re-review finding 6: a prior version left `has()`'s own index
+        // *key* expression to `cel`'s native evaluation, unrewritten --
+        // `has(state.sub.deep)` inside the key is a two-level-missing
+        // chain that `cel`'s own, native `has()` raises on (it's only
+        // graceful for the last segment); without rewriting the key too,
+        // that raise would propagate out of the whole expression instead
+        // of resolving to the `'b'` branch the way cel-python does.
+        let state = dict_value(vec![(
+            "m",
+            dict_value(vec![("b", dict_value(vec![("x", Value::from(42_i64))]))]),
+        )]);
+        assert_eq!(
+            eval("has(state.m[has(state.sub.deep) ? 'a' : 'b'].x)", &state),
+            cel::Value::Bool(true)
         );
     }
 
@@ -616,6 +686,38 @@ mod tests {
             ],
         );
         assert_eq!(projected, state);
+    }
+
+    #[test]
+    fn project_does_not_corrupt_a_nan_leaf_a_longer_path_extends() {
+        // finding 7: `has(state.a.n.x) || state.a.n > 0.0` on
+        // `{a: {n: NaN}}`. `state.a.n` (unguarded) and `state.a.n.x`
+        // (has()-guarded) are both collected; a value-equality check
+        // between the freshly read `NaN` and the already-placed `NaN`
+        // is itself `false` (`NaN != NaN`), so a version of `project`
+        // relying on that equality to decide "nothing more to do" wrongly
+        // kept descending and overwrote the leaf with `{}`.
+        let state = dict_value(vec![("a", dict_value(vec![("n", Value::from(f64::NAN))]))]);
+        let projected = project(
+            &state,
+            &[
+                StatePath {
+                    path: "state.a.n".to_string(),
+                    guarded: false,
+                },
+                StatePath {
+                    path: "state.a.n.x".to_string(),
+                    guarded: true,
+                },
+            ],
+        );
+        let Value::Dict(root) = &projected else {
+            panic!("expected a dict")
+        };
+        let Some(Value::Dict(a)) = root.get(&Value::Str("a".to_string())) else {
+            panic!("expected state.a to stay a dict")
+        };
+        assert!(matches!(a.get(&Value::Str("n".to_string())), Some(Value::Float(f)) if f.is_nan()));
     }
 
     #[test]

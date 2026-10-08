@@ -93,6 +93,57 @@ fn float_cmp(f: f64, other: f64) -> Option<Ordering> {
     f.partial_cmp(&other)
 }
 
+/// `f` against *i*, exactly — unlike [`float_cmp`], which casts *i* to
+/// `f64` first and so loses precision once `i` needs more than 53 bits
+/// (`9007199254740993`, one above `2^53`, rounds to the same `f64` as
+/// `9007199254740992.0`). Python's `float.__lt__`/`int.__lt__` compare
+/// the two exactly, never rounding the `int` operand first (finding 8).
+/// `None` for a `NaN` *f*, same as [`float_cmp`].
+fn float_cmp_i64(f: f64, i: i64) -> Option<Ordering> {
+    if f.is_nan() {
+        return None;
+    }
+    if f < i64::MIN as f64 {
+        return Some(Ordering::Less);
+    }
+    if f >= 9_223_372_036_854_775_808.0 {
+        // `i64::MAX as f64` itself rounds *up* to `2^63`; this is the
+        // correct exclusive upper bound for "definitely greater".
+        return Some(Ordering::Greater);
+    }
+    // `f` is within `i64`'s range, so truncating it towards negative
+    // infinity and converting *that* integral value to `i64` is exact.
+    let floor = f.floor();
+    let truncated = floor as i64;
+    match truncated.cmp(&i) {
+        Ordering::Equal if floor == f => Some(Ordering::Equal),
+        Ordering::Equal => Some(Ordering::Greater),
+        other => Some(other),
+    }
+}
+
+/// [`float_cmp_i64`]'s counterpart for an unsigned *u*.
+fn float_cmp_u64(f: f64, u: u64) -> Option<Ordering> {
+    if f.is_nan() {
+        return None;
+    }
+    if f < 0.0 {
+        return Some(Ordering::Less);
+    }
+    if f >= 18_446_744_073_709_551_616.0 {
+        // `u64::MAX as f64` rounds up to `2^64`; same reasoning as
+        // `float_cmp_i64`'s upper bound.
+        return Some(Ordering::Greater);
+    }
+    let floor = f.floor();
+    let truncated = floor as u64;
+    match truncated.cmp(&u) {
+        Ordering::Equal if floor == f => Some(Ordering::Equal),
+        Ordering::Equal => Some(Ordering::Greater),
+        other => Some(other),
+    }
+}
+
 /// *a op b*'s ordering, or `None` if a `NaN` double participated (no
 /// ordering holds, but unlike an incomparable pair this isn't an error —
 /// every comparison operator simply answers `false`, matching celpy's
@@ -119,12 +170,12 @@ fn strict_cmp(a: &Value, b: &Value) -> Result<Option<Ordering>, ExecutionError> 
 
         (UInt(x), UInt(y)) => Ok(Some(x.cmp(y))),
         (UInt(x), Int(y)) => Ok(Some(uint_cmp_int(*x, *y))),
-        (UInt(x), Float(y)) => Ok(float_cmp(*x as f64, *y)),
+        (UInt(x), Float(y)) => Ok(float_cmp_u64(*y, *x).map(Ordering::reverse)),
         (UInt(x), Bool(y)) => Ok(Some(uint_cmp_int(*x, *y as i64))),
 
         (Float(x), Float(y)) => Ok(float_cmp(*x, *y)),
-        (Float(x), Int(y)) => Ok(float_cmp(*x, *y as f64)),
-        (Float(x), UInt(y)) => Ok(float_cmp(*x, *y as f64)),
+        (Float(x), Int(y)) => Ok(float_cmp_i64(*x, *y)),
+        (Float(x), UInt(y)) => Ok(float_cmp_u64(*x, *y)),
         (Float(x), Bool(y)) => Ok(float_cmp(*x, *y as i64 as f64)),
 
         (Bool(x), Bool(y)) => Ok(Some(x.cmp(y))),
@@ -243,6 +294,25 @@ mod tests {
         assert_eq!(eval("true < 1.5"), Ok(Value::Bool(true)));
         assert_eq!(eval("1u > true"), Ok(Value::Bool(false)));
         assert_eq!(eval("true < 1u"), Ok(Value::Bool(false)));
+    }
+
+    #[test]
+    fn float_against_a_big_int_compares_exactly() {
+        // finding 8: `9007199254740993` (one above `2^53`) rounds to the
+        // same `f64` as `9007199254740992.0` under a naive cast, making
+        // `<` wrongly `false` instead of `true`.
+        assert_eq!(
+            eval("9007199254740992.0 < 9007199254740993"),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
+            eval("9007199254740992.0 < 9007199254740992"),
+            Ok(Value::Bool(false))
+        );
+        assert_eq!(
+            eval("18446744073709551615u > 18446744073709550000.0"),
+            Ok(Value::Bool(true))
+        );
     }
 
     #[test]

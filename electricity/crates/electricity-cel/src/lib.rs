@@ -78,9 +78,38 @@
 //! actually available. A `Value::Int` too large for `i64` as a dict key
 //! raises `convert::Overflow` instead of being dropped, matching every
 //! other big-int read.
+//!
+//! `has(...)` is rewritten into `cel`'s own safe-navigation primitives
+//! plus this crate's own, Python-semantics list index (`paths::rewrite`,
+//! `indexing`), matching cel-python's own rule — "the argument evaluated
+//! without error" — for a missing key, an out-of-range or wrongly-typed
+//! list index, a selection through the wrong type, a chain rooted at any
+//! identifier (including a comprehension's own loop variable), and a
+//! chain rooted at a macro or function-call result. Two narrower cases
+//! are a known, undocumented-elsewhere divergence instead of being made
+//! safe: an *index expression* that itself fails to evaluate
+//! (`has(state.m[state.k].x)` with `k` unset raises, rather than
+//! reporting `false` the way a missing `m` does), and a chain rooted at
+//! an identifier that isn't bound in the current mode at all
+//! (`has(meta.x)` in `evaluate_condition`, which only ever binds
+//! `state`, raises the same way). Both are narrow: the former only
+//! matters for an index key that is itself unreliable (most are
+//! literals or another `state.`-rooted read, already covered), the
+//! latter only for a typo'd or wrong-mode root name.
+//!
+//! List indexing (`state.l[i]`, inside `has()` or not) is celpy's own
+//! `list.__getitem__`: a negative *i* wraps from the end, a `bool` is
+//! `0`/`1`, and a `double` is rejected outright, even a whole-number one
+//! — all different from `cel`'s own, native list indexing, which rejects
+//! negative and accepts a whole-number `double` (`indexing` module
+//! docs). Map indexing keeps `cel`'s own behavior unchanged — it already
+//! matches cel-python's `MapType.__getitem__`/`valid_key_type` (`int`/
+//! `uint`/`bool`/`string` keys only, with the same implicit int/uint
+//! cross-conversion).
 
 mod convert;
 mod equality;
+mod indexing;
 mod ordering;
 mod paths;
 
@@ -276,6 +305,7 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
     let mut ctx = Context::with_env(Arc::clone(&env));
     ordering::register(&mut ctx);
     equality::register(&mut ctx);
+    indexing::register(&mut ctx);
     ctx.add_variable_from_value(
         "state",
         convert::to_cel(&projected_state).map_err(|_| overflow_err(expr))?,
@@ -319,6 +349,7 @@ pub fn evaluate_expect(
     let mut ctx = Context::with_env(Arc::clone(&env));
     ordering::register(&mut ctx);
     equality::register(&mut ctx);
+    indexing::register(&mut ctx);
     ctx.add_variable_from_value(
         "value",
         convert::to_cel(value).map_err(|_| overflow_err(expr))?,
@@ -556,6 +587,30 @@ mod tests {
     fn unknown_function_raises() {
         let state = dict(vec![("a", Value::from(1_i64))]);
         assert!(evaluate_condition("nope(state.a)", &state, false).is_err());
+    }
+
+    #[test]
+    fn negative_list_index_wraps_from_the_end() {
+        let state = dict(vec![(
+            "h",
+            Value::List(vec![
+                dict(vec![("s", Value::Str("x".into()))]),
+                dict(vec![("s", Value::Str("done".into()))]),
+            ]),
+        )]);
+        assert_eq!(
+            evaluate_condition("state.h[-1].s == 'done'", &state, false),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn double_list_index_raises() {
+        let state = dict(vec![(
+            "l",
+            Value::List(vec![Value::from(1_i64), Value::from(2_i64)]),
+        )]);
+        assert!(evaluate_condition("state.l[0.0] == 1", &state, false).is_err());
     }
 
     #[test]

@@ -27,18 +27,34 @@
 //! `in` has no such fallback (`evaluation.py`'s `operator_in`): a type
 //! mismatch it can't look past raises outright rather than deciding
 //! `false` (`1 in [1.0]`, `state.x in ['a', 'b']` with `x` an int).
-//! [`strict_in_fn`] reproduces that directly.
+//! [`strict_in_fn`] reproduces that directly — but only for a mismatch
+//! that actually raises in celpy. `operator_in`'s own `c == item` is a
+//! plain Python `==`, which already resolves the two-sided `NotImplemented`
+//! fallback *before* `operator_in` ever sees a `TypeError`: a `string`,
+//! `bool`, `null`, `bytes`, `timestamp` or `duration` compared with a
+//! value of a different, equally undecorated type returns `false` with
+//! no exception (`'b' in ['a', None]` is `false`, not an error) — only a
+//! mismatch touching `int`/`uint`/`double` (`@type_matched`) or a
+//! `list`/`map` against something other than `null` or its own kind
+//! actually raises. [`raises_on_mismatch`] decides which of the two
+//! [`strict_eq`]'s own catch-all falls into; the first review's P1 fix
+//! (`strict_in_fn` erroring on *every* type mismatch) overcorrected,
+//! regressing this specific case.
 //!
 //! [`paths::rewrite`](crate::paths::rewrite) substitutes this module's
 //! functions for `cel`'s own `_==_`/`_!=_`/`@in`, the same way it does
 //! for [`crate::ordering`]'s.
 //!
-//! Not reproduced: celpy's own asymmetry for `bool` (`BoolType` is a
-//! plain `int` subclass with no equality override, so which side's
-//! dunder Python's dispatch tries first can change the outcome — `1 in
-//! [true]` is `true`, `true in [1]` raises). This module treats `bool`
-//! like every other exact-type-only value instead, a documented,
-//! narrower divergence (`lib.rs`).
+//! celpy's own asymmetry for `bool` on the *left* of `int`/`uint` *is*
+//! reproduced: `BoolType` has no `__eq__` override, so Python's dispatch
+//! tries it first and resolves via the plain `int` it subclasses —
+//! `true == 1`/`true == 1u` is `true`, never raising, while `1 == true`/
+//! `1u == true` (`int`'s own `@type_matched` tried first) raises, caught
+//! by [`spec_eq`]'s fallback into `false`. `bool` against `double` raises
+//! either way (`int.__eq__` returns `NotImplemented` for a `float`
+//! comparand rather than resolving it, so Python falls through to
+//! `double`'s own `@type_matched`, which raises for `bool` same as any
+//! other non-`double`).
 
 use cel::common::ast::operators;
 use cel::extractors::Arguments;
@@ -101,6 +117,15 @@ fn strict_eq(a: &Value, b: &Value) -> Result<bool, ()> {
         (Value::Null, Value::Null) => Ok(true),
         (Value::Timestamp(x), Value::Timestamp(y)) => Ok(x == y),
         (Value::Duration(x), Value::Duration(y)) => Ok(x == y),
+        // `BoolType` has no `__eq__` override in celpy, so a `bool` on
+        // the *left* of an `int`/`uint` resolves through the plain `int`
+        // it subclasses rather than reaching the other side's
+        // `@type_matched` — `true == 1`/`true == 1u` is `true`, not a
+        // raise (finding 5). The reverse order (`int`/`uint` first) has
+        // no arm here on purpose: it falls to the catch-all below and
+        // raises, matching celpy exactly.
+        (Value::Bool(x), Value::Int(y)) => Ok(i64::from(*x) == *y),
+        (Value::Bool(x), Value::UInt(y)) => Ok(u64::from(*x) == *y),
         (Value::List(x), Value::List(y)) => {
             if x.len() != y.len() {
                 return Ok(false);
@@ -124,8 +149,31 @@ fn strict_eq(a: &Value, b: &Value) -> Result<bool, ()> {
             }
             Ok(true)
         }
-        _ => Err(()),
+        _ if raises_on_mismatch(a, b) => Err(()),
+        _ => Ok(false),
     }
+}
+
+/// Whether celpy actually raises comparing *a* and *b* once no exact-type
+/// (or `bool`-vs-`int`/`uint`) arm above matched — the distinction
+/// [`strict_eq`]'s catch-all needs and its own flat `Err` used to erase
+/// (finding 1): a plain Python `==` between two celpy values of
+/// unrelated, *both* non-numeric, non-container types resolves through
+/// the two-sided `NotImplemented` fallback to `false` with no exception
+/// (a `string`/`bytes`/`timestamp`/`duration`/`bool`/`null` against a
+/// different one of those). Only `int`/`uint`/`double` (`@type_matched`)
+/// on either side, or a `list`/`map` against anything but `null` or its
+/// own kind, actually raises.
+fn raises_on_mismatch(a: &Value, b: &Value) -> bool {
+    let numeric = |v: &Value| matches!(v, Value::Int(_) | Value::UInt(_) | Value::Float(_));
+    if numeric(a) || numeric(b) {
+        return true;
+    }
+    let container = |v: &Value| matches!(v, Value::List(_) | Value::Map(_));
+    if container(a) || container(b) {
+        return !matches!(a, Value::Null) && !matches!(b, Value::Null);
+    }
+    false
 }
 
 /// `==` the way celpy's own top-level override falls back once
@@ -242,5 +290,34 @@ mod tests {
         assert_eq!(eval("1 in [1, 2, 3]"), Ok(Value::Bool(true)));
         assert_eq!(eval("'a' in ['a', 'b']"), Ok(Value::Bool(true)));
         assert_eq!(eval("1 in [2, 3]"), Ok(Value::Bool(false)));
+    }
+
+    #[test]
+    fn in_decides_false_on_a_benign_mismatch_instead_of_raising() {
+        // finding 1: `'b' in ['a', None]` is `false` in celpy (a `string`
+        // against `null` resolves via the two-sided `NotImplemented`
+        // fallback, no exception) — a prior fix made `strict_in_fn` raise
+        // on *every* type mismatch, regressing this.
+        assert_eq!(eval("'b' in ['a', null]"), Ok(Value::Bool(false)));
+        assert_eq!(eval("true in ['a', 'b']"), Ok(Value::Bool(false)));
+        assert_eq!(eval("null in ['a', 'b']"), Ok(Value::Bool(false)));
+        // `null` against `int`/`uint`/`double` raises either way — `int`'s
+        // own `@type_matched` has no exemption for `None`.
+        assert!(eval("null in [1, 2]").is_err());
+    }
+
+    #[test]
+    fn bool_on_the_left_of_int_or_uint_compares_by_value() {
+        // finding 5: celpy's `BoolType` has no `__eq__` override, so
+        // `true == 1`/`true == 1u` resolve through the plain `int` it
+        // subclasses rather than raising — unlike the reverse order.
+        assert_eq!(eval("true == 1"), Ok(Value::Bool(true)));
+        assert_eq!(eval("true == 1u"), Ok(Value::Bool(true)));
+        assert_eq!(eval("false == 0"), Ok(Value::Bool(true)));
+        assert_eq!(eval("1 == true"), Ok(Value::Bool(false)));
+        assert_eq!(eval("1u == true"), Ok(Value::Bool(false)));
+        assert_eq!(eval("true == 1.0"), Ok(Value::Bool(false)));
+        assert_eq!(eval("1 in [true]"), Ok(Value::Bool(true)));
+        assert!(eval("true in [1]").is_err());
     }
 }
