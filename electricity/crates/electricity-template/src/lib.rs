@@ -1,0 +1,366 @@
+//! A chevron port: Circuitry's Mustache templates (`core/templates.py`,
+//! wrapping the third-party `chevron` library), over
+//! [`electricity_value::Value`], line-for-line rather than a generic
+//! Mustache engine (DESIGN.md §3.3, runtime-semantics §3).
+//!
+//! ```
+//! use electricity_template::{render_template, PlainCtx, Value};
+//!
+//! let mut ctx = Value::Dict(Default::default());
+//! ctx.as_dict_mut()
+//!     .unwrap()
+//!     .insert(Value::Str("name".into()), Value::Str("world".into()));
+//! let out = render_template("hello {{name}}", &ctx, &PlainCtx, "template").unwrap();
+//! assert_eq!(out, "hello world");
+//! ```
+
+mod render;
+mod tokenizer;
+
+pub use electricity_value::Value;
+pub use render::{JsonAwareCtx, PlainCtx, SpliceCtx};
+
+use tokenizer::{Tag, TokenizeFailure};
+
+/// Why a template could not be rendered. Mirrors `core/templates.py`'s
+/// `TemplateError`, keeping its two-tier message exactly: a malformed
+/// template (an unclosed tag, a mismatched section close, an unsupported
+/// partial) says `"malformed Mustache template"`; a render-time failure
+/// against the data it was handed says `"could not render"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateError {
+    label: String,
+    kind: TemplateErrorKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TemplateErrorKind {
+    Syntax(String),
+    Render(String),
+}
+
+impl std::fmt::Display for TemplateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.kind {
+            TemplateErrorKind::Syntax(msg) => {
+                write!(f, "{}: malformed Mustache template: {msg}", self.label)
+            }
+            TemplateErrorKind::Render(msg) => {
+                write!(f, "{}: could not render: {msg}", self.label)
+            }
+        }
+    }
+}
+
+impl std::error::Error for TemplateError {}
+
+enum ValidateFailure {
+    Syntax(String),
+    Other(String),
+}
+
+/// Tokenize *template* and reject it if it contains a Mustache partial
+/// tag (`{{> name}}`) — partials are not supported (DESIGN.md §1,
+/// runtime-semantics §3.1): chevron's own partial loading reads an
+/// arbitrary file from the process's working directory by name, which
+/// this port never does. Draining the tokenizer fully (rather than
+/// stopping at the first partial token) is what makes this double as a
+/// general syntax check: any other tokenize failure (an unclosed tag, a
+/// mismatched section close) surfaces here too, exactly like
+/// `core/templates.py`'s `_reject_partials`, which `template_syntax_error`
+/// and `render_template` both call for this reason.
+fn validate_and_reject_partials(template: &str) -> Result<Vec<Tag>, ValidateFailure> {
+    let tokens = match tokenizer::tokenize(template) {
+        Ok(tokens) => tokens,
+        Err(failure @ TokenizeFailure::Syntax(_)) => {
+            return Err(ValidateFailure::Syntax(failure.describe()));
+        }
+        Err(failure @ TokenizeFailure::Index(_)) => {
+            return Err(ValidateFailure::Other(failure.describe()));
+        }
+    };
+    for tag in &tokens {
+        if let Tag::Partial(name) = tag {
+            return Err(ValidateFailure::Syntax(format!(
+                "partials are not supported: {{{{> {name}}}}}"
+            )));
+        }
+    }
+    Ok(tokens)
+}
+
+/// Why *template* is not valid Mustache (with partials rejected), or
+/// `None` when it parses. Mirrors `core/templates.py::template_syntax_error`
+/// exactly, including that it returns the same joined description
+/// whether the failure is chevron's own `ChevronError` or, in the one
+/// case chevron itself doesn't raise that type for (an empty tag,
+/// `{{}}`), a plain index-out-of-range message.
+pub fn template_syntax_error(template: &str) -> Option<String> {
+    match validate_and_reject_partials(template) {
+        Ok(_) => None,
+        Err(ValidateFailure::Syntax(msg)) => Some(msg),
+        Err(ValidateFailure::Other(msg)) => Some(msg),
+    }
+}
+
+/// Render *template* against *root* through *ctx* ([`PlainCtx`] for every
+/// ordinary template site, [`JsonAwareCtx`] only for a tool's
+/// `params_json`, DESIGN.md §3.3). Mirrors
+/// `core/templates.py::render_template` exactly, including which
+/// failures are "malformed" vs. "could not render" (see
+/// [`TemplateError`]) and *label*'s place in the message
+/// (`"{label}: ..."`, the field name the caller is rendering — e.g.
+/// `"template"`, `"params_json"`, `"messages[0].content"`).
+pub fn render_template(
+    template: &str,
+    root: &Value,
+    ctx: &dyn SpliceCtx,
+    label: &str,
+) -> Result<String, TemplateError> {
+    let tokens = match validate_and_reject_partials(template) {
+        Ok(tokens) => tokens,
+        Err(ValidateFailure::Syntax(msg)) => {
+            return Err(TemplateError {
+                label: label.to_string(),
+                kind: TemplateErrorKind::Syntax(msg),
+            });
+        }
+        Err(ValidateFailure::Other(msg)) => {
+            return Err(TemplateError {
+                label: label.to_string(),
+                kind: TemplateErrorKind::Render(msg),
+            });
+        }
+    };
+    let tree = render::build_tree(&tokens);
+    let scopes = [root.clone()];
+    render::render_nodes(&tree, &scopes, ctx).map_err(|msg| TemplateError {
+        label: label.to_string(),
+        kind: TemplateErrorKind::Render(msg),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use electricity_value::Dict;
+
+    fn dict(pairs: Vec<(&str, Value)>) -> Value {
+        let mut d = Dict::new();
+        for (k, v) in pairs {
+            d.insert(Value::Str(k.to_string()), v);
+        }
+        Value::Dict(d)
+    }
+
+    #[test]
+    fn plain_variable_and_escaping() {
+        let ctx = dict(vec![("s", Value::Str("<b>&'\"".to_string()))]);
+        let out = render_template("{{s}}", &ctx, &PlainCtx, "template").unwrap();
+        assert_eq!(out, "&lt;b&gt;&amp;'&quot;");
+    }
+
+    #[test]
+    fn no_escape_variants() {
+        let ctx = dict(vec![("s", Value::Str("<b>".to_string()))]);
+        assert_eq!(
+            render_template("{{{s}}}", &ctx, &PlainCtx, "t").unwrap(),
+            "<b>"
+        );
+        assert_eq!(
+            render_template("{{&s}}", &ctx, &PlainCtx, "t").unwrap(),
+            "<b>"
+        );
+    }
+
+    #[test]
+    fn missing_key_renders_empty() {
+        let ctx = dict(vec![]);
+        assert_eq!(
+            render_template("[{{missing}}]", &ctx, &PlainCtx, "t").unwrap(),
+            "[]"
+        );
+    }
+
+    #[test]
+    fn dotted_missing_segment_renders_empty() {
+        let ctx = dict(vec![("a", dict(vec![("b", dict(vec![]))]))]);
+        assert_eq!(
+            render_template("[{{a.b.c}}]", &ctx, &PlainCtx, "t").unwrap(),
+            "[]"
+        );
+    }
+
+    #[test]
+    fn list_index() {
+        let ctx = dict(vec![(
+            "items",
+            Value::List(vec![Value::Str("a".into()), Value::Str("b".into())]),
+        )]);
+        assert_eq!(
+            render_template("{{items.1}}", &ctx, &PlainCtx, "t").unwrap(),
+            "b"
+        );
+    }
+
+    #[test]
+    fn section_over_list() {
+        let ctx = dict(vec![(
+            "items",
+            Value::List(vec![Value::Int(1.into()), Value::Int(2.into())]),
+        )]);
+        assert_eq!(
+            render_template("{{#items}}[{{.}}]{{/items}}", &ctx, &PlainCtx, "t").unwrap(),
+            "[1][2]"
+        );
+    }
+
+    #[test]
+    fn section_skips_falsy_elements_entirely() {
+        // `False`/`0` elements must produce no output at all for their
+        // iteration (not even the surrounding literal `<`/`>`) —
+        // confirmed against real chevron. `True` is deliberately excluded
+        // here since it also triggers the unrelated `.`-plus-`True` bug
+        // covered by `dot_true_bug_swaps_to_outer_scope`.
+        let ctx = dict(vec![(
+            "items",
+            Value::List(vec![
+                Value::Int(1.into()),
+                Value::Bool(false),
+                Value::Int(0.into()),
+                Value::Str("x".to_string()),
+            ]),
+        )]);
+        assert_eq!(
+            render_template("{{#items}}<{{.}}>{{/items}}", &ctx, &PlainCtx, "t").unwrap(),
+            "<1><x>"
+        );
+    }
+
+    #[test]
+    fn inverted_section() {
+        let ctx = dict(vec![("x", Value::Bool(false))]);
+        assert_eq!(
+            render_template("{{^x}}empty{{/x}}", &ctx, &PlainCtx, "t").unwrap(),
+            "empty"
+        );
+        let ctx2 = dict(vec![("x", Value::Bool(true))]);
+        assert_eq!(
+            render_template("{{^x}}empty{{/x}}", &ctx2, &PlainCtx, "t").unwrap(),
+            ""
+        );
+    }
+
+    #[test]
+    fn zero_and_false_render_literally() {
+        let ctx = dict(vec![("z", Value::Int(0.into())), ("f", Value::Bool(false))]);
+        assert_eq!(render_template("{{z}}", &ctx, &PlainCtx, "t").unwrap(), "0");
+        assert_eq!(
+            render_template("{{f}}", &ctx, &PlainCtx, "t").unwrap(),
+            "False"
+        );
+    }
+
+    #[test]
+    fn dot_true_bug_swaps_to_outer_scope() {
+        let ctx = dict(vec![("outer", Value::Str("x".into()))]);
+        let out = render_template(
+            "{{#flag}}{{.}}{{/flag}}",
+            &{
+                let mut d = Dict::new();
+                d.insert(Value::Str("flag".into()), Value::Bool(true));
+                d.insert(Value::Str("marker".into()), Value::Str("OUTER".into()));
+                Value::Dict(d)
+            },
+            &PlainCtx,
+            "t",
+        )
+        .unwrap();
+        assert!(out.contains("OUTER"));
+        let _ = ctx;
+    }
+
+    #[test]
+    fn dot_true_bug_raises_without_outer_scope() {
+        let err = render_template("{{.}}", &Value::Bool(true), &PlainCtx, "template").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "template: could not render: list index out of range"
+        );
+    }
+
+    #[test]
+    fn dot_true_bug_does_not_affect_no_escape() {
+        let out = render_template("{{{.}}}", &Value::Bool(true), &PlainCtx, "t").unwrap();
+        assert_eq!(out, "True");
+    }
+
+    #[test]
+    fn partial_is_rejected() {
+        let err = render_template("{{> name}}", &dict(vec![]), &PlainCtx, "template").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "template: malformed Mustache template: partials are not supported: {{> name}}"
+        );
+        assert_eq!(
+            template_syntax_error("{{> name}}"),
+            Some("partials are not supported: {{> name}}".to_string())
+        );
+    }
+
+    #[test]
+    fn unclosed_tag_is_syntax_error() {
+        assert_eq!(
+            template_syntax_error("{{a"),
+            Some("unclosed tag at line 1".to_string())
+        );
+        let err = render_template("{{a", &dict(vec![]), &PlainCtx, "template").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "template: malformed Mustache template: unclosed tag at line 1"
+        );
+    }
+
+    #[test]
+    fn empty_tag_is_could_not_render_not_malformed() {
+        assert_eq!(
+            template_syntax_error("{{}}"),
+            Some("string index out of range".to_string())
+        );
+        let err = render_template("{{}}", &dict(vec![]), &PlainCtx, "template").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "template: could not render: string index out of range"
+        );
+    }
+
+    #[test]
+    fn json_aware_ctx_keeps_falsy_containers() {
+        let serializer = |v: &Value| -> Result<String, String> {
+            match v {
+                Value::List(items) if items.is_empty() => Ok("[]".to_string()),
+                Value::Dict(d) if d.is_empty() => Ok("{}".to_string()),
+                _ => Ok(v.py_repr()),
+            }
+        };
+        let json_ctx = JsonAwareCtx::new(&serializer);
+        let ctx = dict(vec![("items", Value::List(vec![]))]);
+        assert_eq!(
+            render_template("[{{items}}]", &ctx, &json_ctx, "params_json").unwrap(),
+            "[[]]"
+        );
+        assert_eq!(
+            render_template("[{{items}}]", &ctx, &PlainCtx, "t").unwrap(),
+            "[]"
+        );
+    }
+
+    #[test]
+    fn json_aware_ctx_serializer_error_is_could_not_render() {
+        let failing = |_: &Value| -> Result<String, String> { Err("boom".to_string()) };
+        let json_ctx = JsonAwareCtx::new(&failing);
+        let ctx = dict(vec![("items", Value::List(vec![Value::Int(1.into())]))]);
+        let err = render_template("{{items}}", &ctx, &json_ctx, "params_json").unwrap_err();
+        assert_eq!(err.to_string(), "params_json: could not render: boom");
+    }
+}

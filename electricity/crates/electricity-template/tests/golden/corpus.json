@@ -1,0 +1,1974 @@
+{
+  "render_cases": [
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "s"
+            },
+            {
+              "t": "str",
+              "v": "<b>&'\""
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "&lt;b&gt;&amp;'&quot;",
+      "template": "{{s}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "s"
+            },
+            {
+              "t": "str",
+              "v": "<b>&'\""
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "<b>&'\"",
+      "template": "{{{s}}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "s"
+            },
+            {
+              "t": "str",
+              "v": "<b>&'\""
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "<b>&'\"",
+      "template": "{{&s}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "t"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "True",
+      "template": "{{t}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "t"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "False",
+      "template": "{{t}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "n"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{n}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "i"
+            },
+            {
+              "t": "int",
+              "v": "42"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "42",
+      "template": "{{i}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "z"
+            },
+            {
+              "t": "int",
+              "v": "0"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "0",
+      "template": "{{z}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "f"
+            },
+            {
+              "bits": "3ff0000000000000",
+              "t": "float"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "1.0",
+      "template": "{{f}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "f"
+            },
+            {
+              "bits": "0000000000000000",
+              "t": "float"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "0.0",
+      "template": "{{f}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "f"
+            },
+            {
+              "bits": "8000000000000000",
+              "t": "float"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "-0.0",
+      "template": "{{f}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "f"
+            },
+            {
+              "bits": "3ee4f8b588e368f1",
+              "t": "float"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "1e-05",
+      "template": "{{f}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "l"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "int",
+                  "v": "2"
+                },
+                {
+                  "t": "int",
+                  "v": "3"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "[1, 2, 3]",
+      "template": "{{l}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "l"
+            },
+            {
+              "t": "list",
+              "v": []
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{l}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "d"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "a"
+                  },
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "{'a': 1}",
+      "template": "{{d}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "d"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{d}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "l"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "none"
+                },
+                {
+                  "t": "bool",
+                  "v": true
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "[1, 'a', None, True]",
+      "template": "{{l}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "[]",
+      "template": "[{{missing}}]"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "b"
+                  },
+                  {
+                    "t": "dict",
+                    "v": []
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{a.b.c}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "b"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "c"
+                        },
+                        {
+                          "t": "str",
+                          "v": "deep"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "deep",
+      "template": "{{a.b.c}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "items"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "first"
+                },
+                {
+                  "t": "str",
+                  "v": "second"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "first",
+      "template": "{{items.0}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "items"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "first"
+                },
+                {
+                  "t": "str",
+                  "v": "second"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "second",
+      "template": "{{items.-1}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "items"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "first"
+                },
+                {
+                  "t": "str",
+                  "v": "second"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{items.5}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "d"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "int",
+                    "v": "1"
+                  },
+                  {
+                    "t": "str",
+                    "v": "int-key"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{d.1}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "items"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "int",
+                  "v": "2"
+                },
+                {
+                  "t": "int",
+                  "v": "3"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "[1][2][3]",
+      "template": "{{#items}}[{{.}}]{{/items}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "items"
+            },
+            {
+              "t": "list",
+              "v": []
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{#items}}[{{.}}]{{/items}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "items"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "bool",
+                  "v": false
+                },
+                {
+                  "t": "int",
+                  "v": "0"
+                },
+                {
+                  "t": "str",
+                  "v": "x"
+                },
+                {
+                  "t": "none"
+                },
+                {
+                  "t": "str",
+                  "v": ""
+                },
+                {
+                  "t": "list",
+                  "v": []
+                },
+                {
+                  "t": "dict",
+                  "v": []
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "<1><x>",
+      "template": "{{#items}}<{{.}}>{{/items}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "items"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "name"
+                      },
+                      {
+                        "t": "str",
+                        "v": "a"
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "name"
+                      },
+                      {
+                        "t": "str",
+                        "v": "b"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "a-b-",
+      "template": "{{#items}}{{name}}-{{/items}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "items"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "name"
+                      },
+                      {
+                        "t": "str",
+                        "v": "a"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "outer"
+            },
+            {
+              "t": "str",
+              "v": "OUT"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "OUT",
+      "template": "{{#items}}{{outer}}{{/items}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "yes",
+      "template": "{{#x}}yes{{/x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{#x}}yes{{/x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "int",
+              "v": "0"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{#x}}yes{{/x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "field"
+                  },
+                  {
+                    "t": "str",
+                    "v": "v"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "v",
+      "template": "{{#x}}{{field}}{{/x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{#x}}{{field}}{{/x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "empty",
+      "template": "{{^x}}empty{{/x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{^x}}empty{{/x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "int",
+              "v": "0"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "empty",
+      "template": "{{^x}}empty{{/x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "list",
+              "v": []
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "empty",
+      "template": "{{^x}}empty{{/x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "empty",
+      "template": "{{^x}}empty{{/x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "outer"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "inner"
+                      },
+                      {
+                        "t": "list",
+                        "v": [
+                          {
+                            "t": "int",
+                            "v": "1"
+                          },
+                          {
+                            "t": "int",
+                            "v": "2"
+                          }
+                        ]
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "inner"
+                      },
+                      {
+                        "t": "list",
+                        "v": []
+                      }
+                    ]
+                  ]
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "12",
+      "template": "{{#outer}}{{#inner}}{{.}}{{/inner}}{{/outer}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "b"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "A-not-B",
+      "template": "{{#a}}{{^b}}A-not-B{{/b}}{{/a}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "text\nbody\ntail",
+      "template": "text\n{{#a}}\nbody\n{{/a}}\ntail"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "text\ntail",
+      "template": "text\n{{#a}}\nbody\n{{/a}}\ntail"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "after",
+      "template": "  {{! comment }}\nafter"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "str",
+              "v": "custom"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "custom",
+      "template": "{{=<% %>=}}<%a%>"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "flag"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "marker"
+            },
+            {
+              "t": "str",
+              "v": "OUTER"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "{'flag': True, 'marker': 'OUTER'}",
+      "template": "{{#flag}}{{.}}{{/flag}}"
+    },
+    {
+      "ctx": {
+        "t": "bool",
+        "v": true
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "True",
+      "template": "{{{.}}}"
+    },
+    {
+      "ctx": {
+        "t": "bool",
+        "v": true
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": "template: could not render: list index out of range",
+      "render_ok": null,
+      "template": "{{.}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "items"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "bool",
+                  "v": true
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "[{'items': [True]}]",
+      "template": "{{#items}}[{{.}}]{{/items}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "str",
+              "v": "ok"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "messages[0].content",
+      "render_err": null,
+      "render_ok": "ok",
+      "template": "{{x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "json_aware": false,
+      "label": "messages[0].content",
+      "render_err": "messages[0].content: malformed Mustache template: unclosed tag at line 1",
+      "render_ok": null,
+      "template": "{{a"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "int",
+                  "v": "2"
+                },
+                {
+                  "t": "int",
+                  "v": "3"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": true,
+      "label": "params_json",
+      "render_err": null,
+      "render_ok": "[1, 2, 3]",
+      "template": "{{x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "list",
+              "v": []
+            }
+          ]
+        ]
+      },
+      "json_aware": true,
+      "label": "params_json",
+      "render_err": null,
+      "render_ok": "[]",
+      "template": "{{x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ]
+        ]
+      },
+      "json_aware": true,
+      "label": "params_json",
+      "render_err": null,
+      "render_ok": "{}",
+      "template": "{{x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "a"
+                  },
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": true,
+      "label": "params_json",
+      "render_err": null,
+      "render_ok": "{&quot;a&quot;: 1}",
+      "template": "{{x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "none"
+                },
+                {
+                  "t": "bool",
+                  "v": true
+                },
+                {
+                  "t": "bool",
+                  "v": false
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": true,
+      "label": "params_json",
+      "render_err": null,
+      "render_ok": "[1, &quot;a&quot;, null, true, false]",
+      "template": "{{x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "list",
+              "v": []
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "[]",
+      "template": "[{{x}}]"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "b"
+            },
+            {
+              "t": "bytes",
+              "v": "00ff616263"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "b'\\x00\\xffabc'",
+      "template": "{{b}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "b"
+            },
+            {
+              "t": "bytes",
+              "v": ""
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{b}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "d"
+            },
+            {
+              "t": "date",
+              "v": "2020-01-02"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "2020-01-02",
+      "template": "{{d}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "dt"
+            },
+            {
+              "naive": "2020-01-02T03:04:05.000000",
+              "offset_seconds": 0,
+              "t": "datetime"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "2020-01-02 03:04:05+00:00",
+      "template": "{{dt}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "b"
+                      },
+                      {
+                        "t": "bool",
+                        "v": true
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "b"
+                      },
+                      {
+                        "t": "bool",
+                        "v": false
+                      }
+                    ]
+                  ]
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "inoutout",
+      "template": "{{#a}}{{#b}}in{{/b}}out{{/a}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "items"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "int",
+                  "v": "2"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "no-1no-2",
+      "template": "{{#items}}{{^flag}}no-{{/flag}}{{.}}{{/items}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "body",
+      "template": "{{#a}}{{! nested comment }}body{{/a}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "str",
+              "v": "A"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "b"
+            },
+            {
+              "t": "str",
+              "v": "B"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "c"
+            },
+            {
+              "t": "str",
+              "v": "C"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "ABC",
+      "template": "{{=<< >>=}}<<a>><<=[[ ]]=>>[[b]][[={{ }}=]]{{c}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "items"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "str",
+                  "v": "b"
+                },
+                {
+                  "t": "str",
+                  "v": "c"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "b",
+      "template": "{{items.-2}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "items"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "str",
+                  "v": "b"
+                },
+                {
+                  "t": "str",
+                  "v": "c"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{items.-99}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "s"
+            },
+            {
+              "t": "str",
+              "v": "café 中文 🎉 <ok>"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "café 中文 🎉 &lt;ok&gt;",
+      "template": "{{s}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "items"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "str",
+                  "v": "b"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "- a\n- b\ndone",
+      "template": "{{#items}}\n- {{.}}\n{{/items}}\ndone"
+    }
+  ],
+  "syntax_cases": [
+    {
+      "syntax_error": null,
+      "template": "no tags here"
+    },
+    {
+      "syntax_error": null,
+      "template": "{{name}}"
+    },
+    {
+      "syntax_error": null,
+      "template": "{{{name}}}"
+    },
+    {
+      "syntax_error": null,
+      "template": "{{&name}}"
+    },
+    {
+      "syntax_error": null,
+      "template": "{{#section}}x{{/section}}"
+    },
+    {
+      "syntax_error": null,
+      "template": "{{^section}}x{{/section}}"
+    },
+    {
+      "syntax_error": null,
+      "template": "{{! a comment }}x"
+    },
+    {
+      "syntax_error": null,
+      "template": "{{=<% %>=}}<%a%><%={{ }}=%>{{b}}"
+    },
+    {
+      "syntax_error": "unclosed tag at line 1",
+      "template": "{{a"
+    },
+    {
+      "syntax_error": "Unexpected EOF the tag \"a\" was never closed was opened at line 1",
+      "template": "{{#a}}x"
+    },
+    {
+      "syntax_error": "Unexpected EOF the tag \"a\" was never closed was opened at line 1",
+      "template": "{{#a}}{{#b}}x{{/b}}"
+    },
+    {
+      "syntax_error": "Trying to close tag \"a\" Looks like it was not opened. line 2",
+      "template": "{{/a}}"
+    },
+    {
+      "syntax_error": "Trying to close tag \"b\" last open tag is \"a\" line 2",
+      "template": "{{#a}}{{/b}}"
+    },
+    {
+      "syntax_error": "Trying to close tag \"a\" last open tag is \"b\" line 2",
+      "template": "{{#a}}{{#b}}{{/a}}{{/b}}"
+    },
+    {
+      "syntax_error": "unclosed set delimiter tag at line 1",
+      "template": "{{=a}}"
+    },
+    {
+      "syntax_error": "string index out of range",
+      "template": "{{}}"
+    },
+    {
+      "syntax_error": "partials are not supported: {{> partial}}",
+      "template": "{{> partial}}"
+    },
+    {
+      "syntax_error": "partials are not supported: {{> p}}",
+      "template": "{{#a}}{{> p}}{{/a}}"
+    },
+    {
+      "syntax_error": null,
+      "template": "text\n{{#a}}\nbody\n{{/a}}\ntail"
+    },
+    {
+      "syntax_error": null,
+      "template": "{{a.b.c}}"
+    },
+    {
+      "syntax_error": null,
+      "template": "{{items.0}}"
+    },
+    {
+      "syntax_error": null,
+      "template": "a{{! standalone? }}\nb"
+    }
+  ]
+}
