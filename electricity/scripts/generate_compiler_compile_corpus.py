@@ -1014,6 +1014,60 @@ add(doc(text="effects: []\nflow: bogus\n"))
 CASES[-1]["name"] = "unknown_flow_value"
 
 
+# --- Finding 18: an explicit `null` name/template is "absent", not --
+# --- "the wrong type" ---------------------------------------------
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: null\n"
+    "    provider: shell\n"
+)))
+CASES[-1]["name"] = "explicit_null_name_on_a_required_name_type"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: if\n"
+    "    name: null\n"
+    "    if: {mode: cel, expr: 'true'}\n"
+    "    then: []\n"
+)))
+CASES[-1]["name"] = "explicit_null_name_on_a_conditional_is_unnamed"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: loop\n"
+    "    name: null\n"
+    "    each: {in: input.items}\n"
+    "    body:\n"
+    "      - type: prompt\n"
+    "        name: handle\n"
+    "        template: x\n"
+)))
+CASES[-1]["name"] = "explicit_null_name_on_a_loop_is_unnamed"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: yield\n"
+    "    name: x\n"
+    "    template: null\n"
+)))
+CASES[-1]["name"] = "explicit_null_yield_template_must_have_template"
+
+
+# --- Finding 20: `inline`'s syntax check runs against the raw, --------
+# --- untrimmed text, so a leading blank line doesn't shift the --------
+# --- "at line N" a malformed-template message carries -----------------
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: use\n"
+    "    name: x\n"
+    "    inline: \"\\n\\n{{#a}}\"\n"
+)))
+CASES[-1]["name"] = "inline_checked_against_the_untrimmed_text"
+
+
 # --- Findings 15/16: is-not-None coercions and integer saturation ----
 
 add(doc(text=(

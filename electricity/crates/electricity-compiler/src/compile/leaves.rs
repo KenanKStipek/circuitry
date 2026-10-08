@@ -494,8 +494,16 @@ pub(crate) fn compile_use(
         _ => None,
     };
 
-    if let Some(inline) = &inline_field {
-        check_templates(&Value::Str(inline.clone()), effect_path, "inline", true)?;
+    if inline_field.is_some() {
+        // Python's own syntax check (`_check_templates`) runs against
+        // the *raw*, untrimmed `inline` value -- only `inline_field`
+        // (trimmed, for the IR) is stripped; a leading blank line
+        // would otherwise shift a "malformed ... at line N" message's
+        // own line number (finding 20).
+        let raw_inline = effect.get(&Value::Str("inline".to_string())).cloned();
+        if let Some(raw_inline) = raw_inline {
+            check_templates(&raw_inline, effect_path, "inline", true)?;
+        }
     }
 
     let inputs = match &inputs_dict {
@@ -574,7 +582,13 @@ pub(crate) fn compile_yield(
         )));
     }
 
-    let template_raw = effect.get(&Value::Str("template".to_string()));
+    // `effect.get("template")` is `None` for both an absent key and an
+    // explicit `template: null` -- either way Python's own
+    // `template_raw is None` check raises the same "must have
+    // 'template'" message, not `resolve_text_or_file`'s shape error.
+    let template_raw = effect
+        .get(&Value::Str("template".to_string()))
+        .filter(|v| !v.is_none());
     let Some(template_raw) = template_raw else {
         return Err(CompileError(format!(
             "Yield effect '{name}' must have 'template'."

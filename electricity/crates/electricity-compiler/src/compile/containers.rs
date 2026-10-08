@@ -197,7 +197,10 @@ fn compile_effects_in_scope_inner(
             )));
         }
 
-        if let Some(raw_name) = dict.get(&Value::Str("name".to_string())) {
+        if let Some(raw_name) = dict
+            .get(&Value::Str("name".to_string()))
+            .filter(|v| !v.is_none())
+        {
             let valid_name = validate_name(raw_name, &effect_type, scope_path, &effect_path)?;
             if let Some(first_seen) = seen_names.get(&valid_name) {
                 return Err(CompileError(format!(
@@ -230,7 +233,12 @@ fn compile_effect(
     effect_path: &str,
     loop_names: &BTreeSet<String>,
 ) -> Result<Op, CompileError> {
-    let name = effect.get(&Value::Str("name".to_string()));
+    // Python's `effect.get("name")` is `None` for both an absent key
+    // and an explicit `name: null` -- either way, "no name was given",
+    // not "a non-string name was given" (`validate_name`'s own error).
+    let name = effect
+        .get(&Value::Str("name".to_string()))
+        .filter(|v| !v.is_none());
 
     if effect_type != "dynamic" && effect.contains_key(&Value::Str("finally".to_string())) {
         let label = if effect_type.is_empty() {
@@ -446,7 +454,10 @@ fn compile_conditional(
     effect_path: &str,
     loop_names: &BTreeSet<String>,
 ) -> Result<Op, CompileError> {
-    let validated_name = match effect.get(&Value::Str("name".to_string())) {
+    let validated_name = match effect
+        .get(&Value::Str("name".to_string()))
+        .filter(|v| !v.is_none())
+    {
         Some(name) => Some(validate_name(name, "conditional", scope_path, effect_path)?),
         None => None,
     };
@@ -652,7 +663,10 @@ fn compile_loop(
     effect_path: &str,
     loop_names: &BTreeSet<String>,
 ) -> Result<Op, CompileError> {
-    let validated_name = match effect.get(&Value::Str("name".to_string())) {
+    let validated_name = match effect
+        .get(&Value::Str("name".to_string()))
+        .filter(|v| !v.is_none())
+    {
         Some(name) => Some(validate_name(name, "loop", scope_path, effect_path)?),
         None => None,
     };

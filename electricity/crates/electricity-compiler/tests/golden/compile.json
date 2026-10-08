@@ -3574,6 +3574,241 @@
     }
   },
   {
+    "name": "explicit_null_name_on_a_required_name_type",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: null\n    provider: shell\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].name: None is not of type 'string'",
+        "effects[0].name: None should not be valid under {'pattern': '^(value|meta|input|prime|runtime)$'}",
+        "effects[0].name: None should not be valid under {'pattern': '^iter_\\\\d+$'}"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].name: None is not of type 'string'\n  - effects[0].name: None should not be valid under {'pattern': '^(value|meta|input|prime|runtime)$'}\n  - effects[0].name: None should not be valid under {'pattern': '^iter_\\\\d+$'}",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect at 'prime.effects[0]' is missing required field 'name'.",
+    "digest": "34b6f9296fd11bf90c4aab83af4acc27c74c76a697082284412404043d753610",
+    "comparison": {
+      "validate_errors": [
+        "exact",
+        "exact",
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "explicit_null_name_on_a_conditional_is_unnamed",
+    "files": {
+      "doc.yml": "effects:\n  - type: if\n    name: null\n    if: {mode: cel, expr: 'true'}\n    then: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].name: None is not of type 'string'",
+        "effects[0].name: None should not be valid under {'pattern': '^(value|meta|input|prime|runtime)$'}",
+        "effects[0].name: None should not be valid under {'pattern': '^iter_\\\\d+$'}"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].name: None is not of type 'string'\n  - effects[0].name: None should not be valid under {'pattern': '^(value|meta|input|prime|runtime)$'}\n  - effects[0].name: None should not be valid under {'pattern': '^iter_\\\\d+$'}",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": null,
+          "condition": {
+            "mode": "cel",
+            "template": null,
+            "expr": "true",
+            "strict": false
+          },
+          "then_effects": [],
+          "else_effects": [],
+          "threshold": 0.5,
+          "on_error": "fail",
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "717b8689fc3b20dac3e0e72739d7f81a5d0b002f0948eaef6bb8445033ae0e0e",
+    "comparison": {
+      "validate_errors": [
+        "exact",
+        "exact",
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "explicit_null_name_on_a_loop_is_unnamed",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: null\n    each: {in: input.items}\n    body:\n      - type: prompt\n        name: handle\n        template: x\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].name: None is not of type 'string'",
+        "effects[0].name: None should not be valid under {'pattern': '^(value|meta|input|prime|runtime)$'}",
+        "effects[0].name: None should not be valid under {'pattern': '^iter_\\\\d+$'}"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].name: None is not of type 'string'\n  - effects[0].name: None should not be valid under {'pattern': '^(value|meta|input|prime|runtime)$'}\n  - effects[0].name: None should not be valid under {'pattern': '^iter_\\\\d+$'}",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": null,
+          "body": [
+            {
+              "name": "handle",
+              "template": "x",
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.items",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "handle"
+      ]
+    },
+    "definition_error": null,
+    "digest": "fe0edc1376d94253668177c2bb2086b7006348af6ae55290dcd68c2fd1c2cfca",
+    "comparison": {
+      "validate_errors": [
+        "exact",
+        "exact",
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "explicit_null_yield_template_must_have_template",
+    "files": {
+      "doc.yml": "effects:\n  - type: yield\n    name: x\n    template: null\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].template: None is not valid under any of the given schemas (None is not of type 'string')"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].template: None is not valid under any of the given schemas (None is not of type 'string')",
+    "definition": null,
+    "definition_error": "ValueError: Yield effect 'x' must have 'template'.",
+    "digest": "48453c517d25bfe62766792a0a769fc9ae9987174dd4f21aff12bd59ed75fec5",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "inline_checked_against_the_untrimmed_text",
+    "files": {
+      "doc.yml": "effects:\n  - type: use\n    name: x\n    inline: \"\\n\\n{{#a}}\"\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].inline: malformed Mustache template: Unexpected EOF the tag \"a\" was never closed was opened at line 3"
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].inline: malformed Mustache template: Unexpected EOF the tag \"a\" was never closed was opened at line 3",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].inline: malformed Mustache template: Unexpected EOF the tag \"a\" was never closed was opened at line 3",
+    "digest": "429c88e1687304e88685dfb8c7f97a0d9a6336aff135397abd8132b61ea3d41d",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
     "name": "tool_timeout_ms_zero_is_kept_not_absent",
     "files": {
       "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    timeout_ms: 0\n"
