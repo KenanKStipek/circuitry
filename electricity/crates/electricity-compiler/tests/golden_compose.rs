@@ -254,9 +254,11 @@ run_error_case!(
     "dotted_reference_to_a_missing_segment_under_a_named_if"
 );
 
-// -- cases whose document passes declared-prompts and composition, so they
-// -- reach lane C's own unconditional gap next (`compile_document`'s
-// -- "not implemented" stub) rather than Circuitry's own real outcome.
+// -- cases whose document passes declared-prompts and composition, so
+// -- compile_document reaches lane C's own effect compilation next --
+// -- these assert the same success outcome Circuitry's own
+// -- compile_orchestration reports for the same document (`run_error`
+// -- is None in the corpus), now that lane C has landed.
 
 fn assert_compile_succeeds(name: &str) {
     let case = load_case(name);

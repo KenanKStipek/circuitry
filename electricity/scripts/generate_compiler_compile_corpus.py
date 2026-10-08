@@ -1397,22 +1397,27 @@ add({
 
 add({
     # Decision 1: a `use` cycle that loops back through the *entry*
-    # document itself, entered from the a.yml side.
+    # document itself, entered from the a.yml side -- a three-hop
+    # cycle, deliberately a different shape from `use_cycle_two_hop`'s
+    # own two-hop one (second review of #415, finding 6: this case
+    # used to be byte-for-byte identical to that one).
     "name": "use_cycle_through_entry_document_entered_from_a",
     "files": {
         "a.yml": "effects:\n  - type: use\n    name: s\n    path: b.yml\n",
-        "b.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n",
+        "b.yml": "effects:\n  - type: use\n    name: s\n    path: c.yml\n",
+        "c.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n",
     },
     "entry": "a.yml",
 })
 
 add({
-    # Same two files, entered from the other side -- the cycle's own
-    # chain (and its rotation) differs by entry point.
+    # Same three-hop cycle, entered from a different node -- the
+    # cycle's own chain (and its rotation) differs by entry point.
     "name": "use_cycle_through_entry_document_entered_from_b",
     "files": {
         "a.yml": "effects:\n  - type: use\n    name: s\n    path: b.yml\n",
-        "b.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n",
+        "b.yml": "effects:\n  - type: use\n    name: s\n    path: c.yml\n",
+        "c.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n",
     },
     "entry": "b.yml",
 })

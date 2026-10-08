@@ -293,8 +293,9 @@ fn loop_while_cel_parse_error_uses_its_own_label() {
 /// `use` cycle detection (`cycles::detect_cycles`) is not part of
 /// `compile_document`/`compile_orchestration` at all -- both compile
 /// successfully, cycle or not; `use_cycle_two_hop`'s own cycle is
-/// pinned instead by `cycles.rs`'s own unit tests, which call
-/// `detect_cycles` directly.
+/// pinned against Circuitry's own recorded `run_error` by
+/// `compile_corpus_matches_circuitry` (which calls `detect_cycles`
+/// directly, decision 1) and by `cycles.rs`'s own unit tests.
 #[test]
 fn use_path_children_compile_successfully_cycle_or_not() {
     for name in ["use_cycle_two_hop", "use_acyclic_chain"] {
