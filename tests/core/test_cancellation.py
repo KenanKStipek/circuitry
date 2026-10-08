@@ -644,6 +644,20 @@ def test_communicate_promptly_delivers_all_stdin_across_slices(
     )
 
 
+def test_run_tracked_unicode_encode_error_in_stdin_fails_the_step() -> None:
+    """#385 review P2: the stdin writer thread must encode in the
+    *calling* thread, not its own -- a lone surrogate (or any character
+    the stdin encoding can't represent) used to raise `UnicodeEncodeError`
+    inside `communicate()` itself and fail the step; writing straight to
+    the `TextIOWrapper` from the writer thread instead let that exception
+    escape only into the thread's own excepthook, so the step saw nothing
+    but EOF on the child's stdin. Encoding before the thread starts means
+    this still raises synchronously out of `run_tracked`.
+    """
+    with pytest.raises(UnicodeEncodeError):
+        run_tracked([sys.executable, "-c", "import sys; sys.stdin.read()"], input="\udcff")
+
+
 def test_communicate_promptly_cancellation_while_writing_kills_without_hanging(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -637,9 +637,18 @@ def poll_promptly(
             return True
 
 
-def _feed_stdin(stdin: Any, data: str | bytes) -> None:
-    """Write the whole of *data* to *stdin* and close it, from a thread
-    of its own (#385 follow-up, see ``_communicate_promptly``).
+def _feed_stdin(stdin: Any, data: bytes) -> None:
+    """Write the whole of *data* (already encoded to bytes by the caller)
+    to *stdin* and close it, from a thread of its own (#385 follow-up,
+    see ``_communicate_promptly``).
+
+    Always bytes, never ``str``: encoding happens in the calling thread,
+    before this thread starts, specifically so a ``UnicodeEncodeError``
+    (a lone surrogate, or a character the locale's own encoding can't
+    represent) raises synchronously there and fails the step the same
+    way it always has, rather than surfacing only as a traceback from
+    this thread's own excepthook while the child just sees EOF (#385
+    review P2).
 
     ``BrokenPipeError`` means the reader (the child, or whatever still
     held its read end) is gone — nothing left to write to, so this just
@@ -726,8 +735,29 @@ def _communicate_promptly(
     stdin = getattr(proc, "stdin", None)
     threaded_stdin = input is not None and stdin is not None
     if threaded_stdin:
+        # Encoded here, on the calling thread -- not inside `_feed_stdin`'s
+        # own thread -- so a `UnicodeEncodeError` surfaces synchronously
+        # and fails this step the same way it always has, instead of
+        # only ever printing from the writer thread's own excepthook
+        # while the child just sees EOF (#385 review P2). `text=True`
+        # gives a `TextIOWrapper` with its own `.buffer`, the raw byte
+        # stream `communicate()` itself writes/reads through -- the same
+        # invariant `subprocess.Popen.communicate` itself enforces (text
+        # mode takes `str` input, binary mode takes `bytes`) means *input*
+        # matches whichever of these two branches applies.
+        assert stdin is not None
+        raw_stdin = getattr(stdin, "buffer", None)
+        if raw_stdin is not None:
+            assert isinstance(input, str)
+            data: bytes = input.encode(stdin.encoding, stdin.errors)
+        else:
+            raw_stdin = stdin
+            assert isinstance(input, bytes)
+            data = input
         proc.stdin = None
-        threading.Thread(target=_feed_stdin, args=(stdin, input), daemon=True).start()
+        threading.Thread(
+            target=_feed_stdin, args=(raw_stdin, data), daemon=True
+        ).start()
     if timeout is None:
         deadline = None
     else:
