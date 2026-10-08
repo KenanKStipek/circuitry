@@ -1191,6 +1191,45 @@ CASES[-1]["files"]["child.yml"] = "effects: []\n"
 CASES[-1]["name"] = "use_inputs_templates_checked_before_references"
 
 
+# --- Second review of #415, finding 2: validate_bare_input_refs runs --
+# --- before declared prompts/composition -- matching -----------------
+# --- compile_orchestration's own order (mod.rs) -- not just before a --
+# --- single effect's own checks (above). `prompts:`/`{{> name}}` -----
+# --- appear here only to give the *later* check something that would --
+# --- otherwise fail first; testing composition itself is lane D's own --
+# --- corpus (generate_compiler_compose_corpus.py). ---------------------
+
+add({
+    "name": "bare_input_ref_checked_before_declared_prompts",
+    "files": {"doc.yml": (
+        "interface:\n"
+        "  inputs:\n"
+        "    topic: {type: string}\n"
+        "prompts:\n"
+        "  p: '{{#bad'\n"
+        "effects:\n"
+        "  - type: prompt\n"
+        "    name: x\n"
+        "    template: 'about {{topic}}'\n"
+    )},
+    "entry": "doc.yml",
+})
+
+add({
+    "name": "bare_input_ref_checked_before_composition",
+    "files": {"doc.yml": (
+        "interface:\n"
+        "  inputs:\n"
+        "    topic: {type: string}\n"
+        "effects:\n"
+        "  - type: prompt\n"
+        "    name: x\n"
+        "    template: 'about {{topic}} {{> nope}}'\n"
+    )},
+    "entry": "doc.yml",
+})
+
+
 # --- Finding 7: collect '' on an unnamed loop is not rejected ---------------
 
 add(doc(text=(

@@ -4269,6 +4269,62 @@
     }
   },
   {
+    "name": "bare_input_ref_checked_before_declared_prompts",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    topic: {type: string}\nprompts:\n  p: '{{#bad'\neffects:\n  - type: prompt\n    name: x\n    template: 'about {{topic}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Template at 'effects[0].template': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'."
+      ],
+      "warnings": []
+    },
+    "run_error": "Template at 'effects[0].template': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
+    "definition": null,
+    "definition_error": "ValueError: Template at 'effects[0].template': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
+    "digest": "5808f00ebeec02b587dc43c74f857debec6363d65a14bae5b1a5db6e69fb4182",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "bare_input_ref_checked_before_composition",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    topic: {type: string}\neffects:\n  - type: prompt\n    name: x\n    template: 'about {{topic}} {{> nope}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Template at 'effects[0].template': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'."
+      ],
+      "warnings": []
+    },
+    "run_error": "Template at 'effects[0].template': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
+    "definition": null,
+    "definition_error": "ValueError: Template at 'effects[0].template': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
+    "digest": "2409d426d3b6a1c6205a4a29e1c1bf38f45bb33b98cb055d811bbe5050bf5388",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
     "name": "collect_empty_string_on_unnamed_loop_is_fine",
     "files": {
       "doc.yml": "effects:\n  - type: loop\n    each: {in: input.items}\n    collect: ''\n    body:\n      - type: prompt\n        name: handle\n        template: x\n"
