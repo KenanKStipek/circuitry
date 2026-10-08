@@ -245,14 +245,16 @@ applies PyYAML's own regex table to every plain scalar (runtime-semantics §1.1)
   `==`/`!=` between a naive and an aware datetime are well-defined and simply **return**
   `False`/`True` (Python's own "never equal across awareness" rule — this never raises), while an
   *ordering* comparison (`<`, `<=`, `>`, `>=`) between the two **raises** `TypeError`. `str()`
-  never raises either way, since it only ever looks at one value. electricity's CEL layer (§7.2)
-  must reproduce this split exactly — `_==_`/`_!=_` return `False`/`True`, the ordering operators
-  raise — while `py_str` simply formats whichever value it's given and never needs to raise for
-  this reason at all. **Settled 2026-10-06**: whether `cel`'s own ordering operators already
-  raise on a naive/aware mismatch the way cel-python's do is decided empirically, by the
-  differential corpus against cel-python (§12) — not a judgment call made in advance of running
-  it. If the corpus finds a gap, electricity's CEL layer wraps the ordering operators so they
-  raise on exactly the same inputs cel-python does;
+  never raises either way, since it only ever looks at one value. This split is `Value`'s own,
+  used outside CEL — **settled empirically, by the differential corpus against cel-python (§12),
+  per issue #379**: it does not carry over into CEL at all. Circuitry's own `_to_cel`
+  (`core/cel_eval.py`) wraps every `datetime.datetime` as cel-python's `celtypes.TimestampType`,
+  whose constructor defaults a naive datetime to UTC (`tzinfo=source.tzinfo or
+  datetime.timezone.utc`) the moment it is converted — so a naive and an aware datetime compare
+  as the same kind of CEL value, as instants: `<`/`<=`/`>`/`>=` and `==`/`!=` all work, none of
+  them raise, confirmed directly against `evaluate_cel`/`evaluate_cel_expect`, strict or not.
+  electricity's CEL layer (§7.2) must convert the same way (naive = UTC) and must **not** wrap
+  `cel`'s own ordering operators to raise for this reason;
 - `<<` merge keys, including a list of maps to merge, with later/explicit keys winning
   (runtime-semantics §1.1's confirmed `{x:1,y:2}` + `{<<: *base, y: 3}` → `{x:1, y:3}`);
 - `=` (the `tag:yaml.org,2002:value` tag) is a load error, matching PyYAML's SafeLoader having
@@ -1238,12 +1240,53 @@ regardless of which underlying crate is used:
   directly, `dict`→`MapType`, `list/tuple/set`→`ListType`, `datetime`→`TimestampType`,
   `timedelta`→`DurationType`; anything with no CEL counterpart maps to `null` — never the raw
   value, which is the sandbox boundary (no expression can reach an attribute/method/class
-  through state).
+  through state). Two values this doesn't hold for, both documented (not just in the PR) as known
+  divergences in `electricity-cel`'s own crate docs: an `int` too large for CEL's 64-bit `int`
+  raises (`ValueError("overflow")` in cel-python, `convert::Overflow` here) rather than becoming
+  `null`, read directly or as a dict key; and a dict key with no CEL key counterpart (a `float`,
+  `None`, a bare `date` — reachable from an ordinary YAML input file, not just data buried in
+  `value`/`meta`) is **dropped** here, where cel-python converts it to `None` and so collapses
+  several such keys into one.
 - **Heterogeneous equality** (runtime-semantics §4.3): cross-type `==` between non-numeric types
   is `False`, never an error; `int`/`uint`/`double` are one numeric family and compare across
-  subtype (`1.0 == 1` → `True`). This is the opposite of Rust's/Python's native `==` and must be
-  implemented as custom `_==_`/`_!=_` overrides regardless of what the underlying crate's
-  default equality does.
+  subtype at the top level (`1.0 == 1` → `True`). This is the opposite of Rust's/Python's native
+  `==` and must be implemented as custom `_==_`/`_!=_` overrides regardless of what the
+  underlying crate's default equality does. The numeric family does **not** cross subtype a
+  second time, inside a `list`/`map` or `in`'s own scan (`[1, 2] == [1.0, 2.0]` is `False`,
+  matching cel-python's own, stricter, exact-type-inside-a-container `ListType`/`MapType.__eq__`
+  rather than `cel`'s more permissive native one) — the two levels disagree in cel-python itself,
+  and both must be reproduced, not just the outer one.
+- **Indexing** is cel-python's own `__getitem__`, not `cel`'s native one: on a `list`, a
+  negative index wraps from the end, a `bool` index is `0`/`1`, and a `double` index (even a
+  whole-number one) is rejected — `cel`'s own native indexing instead rejects negative and
+  accepts a whole-number `double`. A bare `string`/`bytes` operand indexes by Unicode character
+  or by byte the same way, something `cel`'s own `_[_]` has no indexer for at all. Map indexing
+  needs its own strict (non-cross-converting) key match: cel-python's own `IntType`/
+  `UintType.__eq__` raises on the *other* integer type as a key rather than finding the entry
+  the way `cel`'s own, cross-converting map indexing does; a `bool` key against an `int`/`uint`
+  lookup (or the reverse) is a narrower, known divergence this does not reproduce either way
+  (electricity-cel's own crate docs; pinned by a Rust unit test, since the differential corpus
+  can't express an intentional non-match).
+- **`has(X)`** is rewritten, at parse time, into `!@not_strictly_false(__electricity_false(X))`:
+  `@not_strictly_false` is one of `cel`'s own built-in operators, never raising itself, true
+  unless its argument evaluates (without error) to the literal `false`; a *registered* function's
+  arguments are evaluated eagerly, before its body ever runs, so a registered function that
+  always returns `false` is only ever reached once `X` itself has evaluated without raising. This
+  reproduces cel-python's own rule for `has()` — "the argument evaluated without error" — for
+  *any* expression `X`, including one that was never a field selection to begin with
+  (`has(state.items[0])`, which `cel`'s own `has()` macro fails to even parse): replacing `cel`'s
+  own `has` macro this way means not using `Env::stdlib()` at all, since it bundles `has`
+  together with the five other standard macros as one shared, immutable set that rejects a second
+  macro for the same call shape — the other five are added back unchanged (electricity-cel's own
+  `macros` module docs).
+- **`in` over a `string`/`bytes` operand** iterates its characters or bytes, matching cel-python's
+  own `for c in container`; `cel`'s own `@in` has no indexer for either. A nested `list`/`map`
+  comparison (reachable only through `in`, since a top-level `==` already falls back to the
+  heterogeneous rule above) compares every element before deciding, rather than stopping at the
+  first one that raises — cel-python's own container equality folds its elements with CEL's
+  error-absorbing `&&`, where a `false` element anywhere wins over a raising one anywhere else,
+  and a `map` comparison checks both sides hold the same key set before comparing any value, so
+  neither result can depend on a `HashMap`'s own unspecified iteration order.
 - **The absent-path convention** (runtime-semantics §4.4): reading an unset `state.` path is
   **not** an evaluation error inside `if`/`while` CEL — it is decided *structurally*, by walking
   the parse tree for every dotted `state.` read before evaluating, and makes the whole expression
