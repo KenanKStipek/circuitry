@@ -1,0 +1,1298 @@
+[
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "null"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "null"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "null"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "null"
+      }
+    ],
+    "value": {
+      "t": "none"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "true"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "true"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "true"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "true"
+      }
+    ],
+    "value": {
+      "t": "bool",
+      "v": true
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "false"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "false"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "false"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "false"
+      }
+    ],
+    "value": {
+      "t": "bool",
+      "v": false
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "0"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "0"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "0"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "0"
+      }
+    ],
+    "value": {
+      "t": "int",
+      "v": "0"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "-1"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "-1"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "-1"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "-1"
+      }
+    ],
+    "value": {
+      "t": "int",
+      "v": "-1"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "9223372036854775808"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "9223372036854775808"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "9223372036854775808"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "9223372036854775808"
+      }
+    ],
+    "value": {
+      "t": "int",
+      "v": "9223372036854775808"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "-1000000000000000000000000000000"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "-1000000000000000000000000000000"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "-1000000000000000000000000000000"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "-1000000000000000000000000000000"
+      }
+    ],
+    "value": {
+      "t": "int",
+      "v": "-1000000000000000000000000000000"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "0.0"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "0.0"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "0.0"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "0.0"
+      }
+    ],
+    "value": {
+      "bits": "0000000000000000",
+      "t": "float"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "-0.0"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "-0.0"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "-0.0"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "-0.0"
+      }
+    ],
+    "value": {
+      "bits": "8000000000000000",
+      "t": "float"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "1.5"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "1.5"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "1.5"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "1.5"
+      }
+    ],
+    "value": {
+      "bits": "3ff8000000000000",
+      "t": "float"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "1e+16"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "1e+16"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "1e+16"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "1e+16"
+      }
+    ],
+    "value": {
+      "bits": "4341c37937e08000",
+      "t": "float"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "1e-05"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "1e-05"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "1e-05"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "1e-05"
+      }
+    ],
+    "value": {
+      "bits": "3ee4f8b588e368f1",
+      "t": "float"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "NaN"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "NaN"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "NaN"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "NaN"
+      }
+    ],
+    "value": {
+      "bits": "7ff8000000000000",
+      "t": "float"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "Infinity"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "Infinity"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "Infinity"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "Infinity"
+      }
+    ],
+    "value": {
+      "bits": "7ff0000000000000",
+      "t": "float"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "-Infinity"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "-Infinity"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "-Infinity"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "-Infinity"
+      }
+    ],
+    "value": {
+      "bits": "fff0000000000000",
+      "t": "float"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "\"\""
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "\"\""
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "\"\""
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "\"\""
+      }
+    ],
+    "value": {
+      "t": "str",
+      "v": ""
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "\"hello\""
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "\"hello\""
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "\"hello\""
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "\"hello\""
+      }
+    ],
+    "value": {
+      "t": "str",
+      "v": "hello"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "\"both\\\" and '\""
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "\"both\\\" and '\""
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "\"both\\\" and '\""
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "\"both\\\" and '\""
+      }
+    ],
+    "value": {
+      "t": "str",
+      "v": "both\" and '"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "\"tab\\tnewline\\nreturn\\r\\u0000\\u001f\""
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "\"tab\\tnewline\\nreturn\\r\\u0000\\u001f\""
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "\"tab\\tnewline\\nreturn\\r\\u0000\\u001f\""
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "\"tab\\tnewline\\nreturn\\r\\u0000\\u001f\""
+      }
+    ],
+    "value": {
+      "t": "str",
+      "v": "tab\tnewline\nreturn\r\u0000\u001f"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "\"caf\\u00e9\""
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "\"caf\\u00e9\""
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "\"café\""
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "\"café\""
+      }
+    ],
+    "value": {
+      "t": "str",
+      "v": "café"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "\"\\ud83d\\ude00\""
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "\"\\ud83d\\ude00\""
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "\"😀\""
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "\"😀\""
+      }
+    ],
+    "value": {
+      "t": "str",
+      "v": "😀"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "[]"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "[]"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "[]"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "[]"
+      }
+    ],
+    "value": {
+      "t": "list",
+      "v": []
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "[1, 2, 3]"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "[\n  1,\n  2,\n  3\n]"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "[1, 2, 3]"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "[1, 2, 3]"
+      }
+    ],
+    "value": {
+      "t": "list",
+      "v": [
+        {
+          "t": "int",
+          "v": "1"
+        },
+        {
+          "t": "int",
+          "v": "2"
+        },
+        {
+          "t": "int",
+          "v": "3"
+        }
+      ]
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "[1, \"a\", null, true, 1.5, [2, 3]]"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "[\n  1,\n  \"a\",\n  null,\n  true,\n  1.5,\n  [\n    2,\n    3\n  ]\n]"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "[1, \"a\", null, true, 1.5, [2, 3]]"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "[1, \"a\", null, true, 1.5, [2, 3]]"
+      }
+    ],
+    "value": {
+      "t": "list",
+      "v": [
+        {
+          "t": "int",
+          "v": "1"
+        },
+        {
+          "t": "str",
+          "v": "a"
+        },
+        {
+          "t": "none"
+        },
+        {
+          "t": "bool",
+          "v": true
+        },
+        {
+          "bits": "3ff8000000000000",
+          "t": "float"
+        },
+        {
+          "t": "list",
+          "v": [
+            {
+              "t": "int",
+              "v": "2"
+            },
+            {
+              "t": "int",
+              "v": "3"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "{}"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "{}"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "{}"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "{}"
+      }
+    ],
+    "value": {
+      "t": "dict",
+      "v": []
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "{\"b\": 2, \"a\": 1, \"c\": 3}"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "{\n  \"a\": 1,\n  \"b\": 2,\n  \"c\": 3\n}"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "{\"b\": 2, \"a\": 1, \"c\": 3}"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "{\"b\": 2, \"a\": 1, \"c\": 3}"
+      }
+    ],
+    "value": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "c"
+          },
+          {
+            "t": "int",
+            "v": "3"
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "{\"10\": \"ten\", \"1\": \"one\", \"2\": \"two\"}"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "{\n  \"1\": \"one\",\n  \"2\": \"two\",\n  \"10\": \"ten\"\n}"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "{\"10\": \"ten\", \"1\": \"one\", \"2\": \"two\"}"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "{\"10\": \"ten\", \"1\": \"one\", \"2\": \"two\"}"
+      }
+    ],
+    "value": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "int",
+            "v": "10"
+          },
+          {
+            "t": "str",
+            "v": "ten"
+          }
+        ],
+        [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "str",
+            "v": "one"
+          }
+        ],
+        [
+          {
+            "t": "int",
+            "v": "2"
+          },
+          {
+            "t": "str",
+            "v": "two"
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "{\"true\": \"bool-key\"}"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "{\n  \"true\": \"bool-key\"\n}"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "{\"true\": \"bool-key\"}"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "{\"true\": \"bool-key\"}"
+      }
+    ],
+    "value": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "bool",
+            "v": true
+          },
+          {
+            "t": "str",
+            "v": "bool-key"
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "{\"null\": \"none-key\"}"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "{\n  \"null\": \"none-key\"\n}"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "{\"null\": \"none-key\"}"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "{\"null\": \"none-key\"}"
+      }
+    ],
+    "value": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "none"
+          },
+          {
+            "t": "str",
+            "v": "none-key"
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "{\"2.5\": \"float-key\"}"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "{\n  \"2.5\": \"float-key\"\n}"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "{\"2.5\": \"float-key\"}"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "{\"2.5\": \"float-key\"}"
+      }
+    ],
+    "value": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "bits": "4004000000000000",
+            "t": "float"
+          },
+          {
+            "t": "str",
+            "v": "float-key"
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "{\"NaN\": \"nan-key\"}"
+      },
+      {
+        "error": false,
+        "mode": "pretty",
+        "text": "{\n  \"NaN\": \"nan-key\"\n}"
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "{\"NaN\": \"nan-key\"}"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "{\"NaN\": \"nan-key\"}"
+      }
+    ],
+    "value": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "bits": "7ff8000000000000",
+            "t": "float"
+          },
+          {
+            "t": "str",
+            "v": "nan-key"
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": false,
+        "mode": "compact",
+        "text": "{\"0\": \"int-key\", \"s\": \"str-key\"}"
+      },
+      {
+        "error": true,
+        "mode": "pretty",
+        "text": null
+      },
+      {
+        "error": false,
+        "mode": "ascii_false",
+        "text": "{\"0\": \"int-key\", \"s\": \"str-key\"}"
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "{\"0\": \"int-key\", \"s\": \"str-key\"}"
+      }
+    ],
+    "value": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "int",
+            "v": "0"
+          },
+          {
+            "t": "str",
+            "v": "int-key"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "s"
+          },
+          {
+            "t": "str",
+            "v": "str-key"
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": true,
+        "mode": "compact",
+        "text": null
+      },
+      {
+        "error": true,
+        "mode": "pretty",
+        "text": null
+      },
+      {
+        "error": true,
+        "mode": "ascii_false",
+        "text": null
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "\"b'raw bytes \\\\x00\\\\xff'\""
+      }
+    ],
+    "value": {
+      "t": "bytes",
+      "v": "7261772062797465732000ff"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": true,
+        "mode": "compact",
+        "text": null
+      },
+      {
+        "error": true,
+        "mode": "pretty",
+        "text": null
+      },
+      {
+        "error": true,
+        "mode": "ascii_false",
+        "text": null
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "\"2020-01-02\""
+      }
+    ],
+    "value": {
+      "t": "date",
+      "v": "2020-01-02"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": true,
+        "mode": "compact",
+        "text": null
+      },
+      {
+        "error": true,
+        "mode": "pretty",
+        "text": null
+      },
+      {
+        "error": true,
+        "mode": "ascii_false",
+        "text": null
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "\"2020-01-02 03:04:05.123456\""
+      }
+    ],
+    "value": {
+      "naive": "2020-01-02T03:04:05.123456",
+      "offset_seconds": null,
+      "t": "datetime"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": true,
+        "mode": "compact",
+        "text": null
+      },
+      {
+        "error": true,
+        "mode": "pretty",
+        "text": null
+      },
+      {
+        "error": true,
+        "mode": "ascii_false",
+        "text": null
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "\"2020-01-02 03:04:05+05:30\""
+      }
+    ],
+    "value": {
+      "naive": "2020-01-02T03:04:05.000000",
+      "offset_seconds": 19800,
+      "t": "datetime"
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": true,
+        "mode": "compact",
+        "text": null
+      },
+      {
+        "error": true,
+        "mode": "pretty",
+        "text": null
+      },
+      {
+        "error": true,
+        "mode": "ascii_false",
+        "text": null
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "{\"ts\": \"2020-01-02\"}"
+      }
+    ],
+    "value": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "ts"
+          },
+          {
+            "t": "date",
+            "v": "2020-01-02"
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": true,
+        "mode": "compact",
+        "text": null
+      },
+      {
+        "error": true,
+        "mode": "pretty",
+        "text": null
+      },
+      {
+        "error": true,
+        "mode": "ascii_false",
+        "text": null
+      },
+      {
+        "error": false,
+        "mode": "default_str",
+        "text": "[\"b'x'\", 1]"
+      }
+    ],
+    "value": {
+      "t": "list",
+      "v": [
+        {
+          "t": "bytes",
+          "v": "78"
+        },
+        {
+          "t": "int",
+          "v": "1"
+        }
+      ]
+    }
+  },
+  {
+    "cases": [
+      {
+        "error": true,
+        "mode": "compact",
+        "text": null
+      },
+      {
+        "error": true,
+        "mode": "pretty",
+        "text": null
+      },
+      {
+        "error": true,
+        "mode": "ascii_false",
+        "text": null
+      },
+      {
+        "error": true,
+        "mode": "default_str",
+        "text": null
+      }
+    ],
+    "value": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "date",
+            "v": "2020-01-02"
+          },
+          {
+            "t": "str",
+            "v": "date-key"
+          }
+        ]
+      ]
+    }
+  }
+]

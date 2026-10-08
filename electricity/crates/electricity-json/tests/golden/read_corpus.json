@@ -1,0 +1,582 @@
+[
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "none"
+      }
+    },
+    "text": "null"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "bool",
+        "v": true
+      }
+    },
+    "text": "true"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "bool",
+        "v": false
+      }
+    },
+    "text": "false"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "int",
+        "v": "0"
+      }
+    },
+    "text": "0"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "int",
+        "v": "-1"
+      }
+    },
+    "text": "-1"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "int",
+        "v": "123456789012345678901234567890"
+      }
+    },
+    "text": "123456789012345678901234567890"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "int",
+        "v": "-123456789012345678901234567890"
+      }
+    },
+    "text": "-123456789012345678901234567890"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "bits": "3ff8000000000000",
+        "t": "float"
+      }
+    },
+    "text": "1.5"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "bits": "4341c37937e08000",
+        "t": "float"
+      }
+    },
+    "text": "1e16"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "bits": "4341c37937e08000",
+        "t": "float"
+      }
+    },
+    "text": "1E16"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "bits": "bde49da7e361ce4c",
+        "t": "float"
+      }
+    },
+    "text": "-1.5e-10"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "bits": "7ff8000000000000",
+        "t": "float"
+      }
+    },
+    "text": "NaN"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "bits": "7ff0000000000000",
+        "t": "float"
+      }
+    },
+    "text": "Infinity"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "bits": "fff0000000000000",
+        "t": "float"
+      }
+    },
+    "text": "-Infinity"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "str",
+        "v": "hello"
+      }
+    },
+    "text": "\"hello\""
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "str",
+        "v": ""
+      }
+    },
+    "text": "\"\""
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "str",
+        "v": "with \"quote\" and \\backslash"
+      }
+    },
+    "text": "\"with \\\"quote\\\" and \\\\backslash\""
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "str",
+        "v": "tab\tnewline\nreturn\r"
+      }
+    },
+    "text": "\"tab\\tnewline\\nreturn\\r\""
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "str",
+        "v": "é中😀"
+      }
+    },
+    "text": "\"\\u00e9\\u4e2d\\ud83d\\ude00\""
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "str",
+        "v": "A"
+      }
+    },
+    "text": "\"\\u0041\""
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "list",
+        "v": []
+      }
+    },
+    "text": "[]"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          },
+          {
+            "t": "int",
+            "v": "3"
+          }
+        ]
+      }
+    },
+    "text": "[1, 2, 3]"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "none"
+          },
+          {
+            "t": "bool",
+            "v": true
+          },
+          {
+            "bits": "3ff8000000000000",
+            "t": "float"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "2"
+              },
+              {
+                "t": "int",
+                "v": "3"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "text": "[1, \"a\", null, true, 1.5, [2, 3]]"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "dict",
+        "v": []
+      }
+    },
+    "text": "{}"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "b"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "int",
+                  "v": "2"
+                }
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "c"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "d"
+                  },
+                  {
+                    "t": "int",
+                    "v": "3"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    "text": "{\"a\": 1, \"b\": [1, 2], \"c\": {\"d\": 3}}"
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "b"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ]
+        ]
+      }
+    },
+    "text": "  { \"a\" : 1 , \"b\" : 2 }  "
+  },
+  {
+    "expect": {
+      "kind": "ok",
+      "value": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ]
+        ]
+      }
+    },
+    "text": "{\"a\": 1}\n"
+  },
+  {
+    "expect": {
+      "kind": "duplicate_key",
+      "message": "duplicate key 'a' in top level; JSON would silently keep only the last one"
+    },
+    "text": "{\"a\": 1, \"a\": 2}"
+  },
+  {
+    "expect": {
+      "kind": "duplicate_key",
+      "message": "duplicate key 'x' in nested; JSON would silently keep only the last one"
+    },
+    "text": "{\"a\": 1, \"nested\": {\"x\": 1, \"x\": 2}}"
+  },
+  {
+    "expect": {
+      "kind": "duplicate_key",
+      "message": "duplicate key 'a' in items[1]; JSON would silently keep only the last one"
+    },
+    "text": "{\"items\": [{\"a\": 1}, {\"a\": 1, \"a\": 2}]}"
+  },
+  {
+    "expect": {
+      "kind": "duplicate_key",
+      "message": "duplicate key 'b' in a.b; JSON would silently keep only the last one"
+    },
+    "text": "{\"a\": {\"b\": {\"b\": 1, \"b\": 2}}}"
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 0
+    },
+    "text": ""
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 3
+    },
+    "text": "   "
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 1
+    },
+    "text": "{"
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 1
+    },
+    "text": "["
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 1
+    },
+    "text": "{,}"
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 5
+    },
+    "text": "[1, 2"
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 6
+    },
+    "text": "[1, 2,]"
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 8
+    },
+    "text": "{\"a\": 1,}"
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 5
+    },
+    "text": "{\"a\" 1}"
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 6
+    },
+    "text": "{\"a\": }"
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 8
+    },
+    "text": "{\"a\": 1 \"b\": 2}"
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 3
+    },
+    "text": "[1 2]"
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 0
+    },
+    "text": "\"unterminated"
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 5
+    },
+    "text": "\"bad \\x escape\""
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 6
+    },
+    "text": "\"bad \\u12 escape\""
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 0
+    },
+    "text": "nul"
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 0
+    },
+    "text": "tru"
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 1
+    },
+    "text": "01"
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 0
+    },
+    "text": "--1"
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 2
+    },
+    "text": "1 2"
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 2
+    },
+    "text": "{}}"
+  },
+  {
+    "expect": {
+      "kind": "syntax",
+      "pos": 9
+    },
+    "text": "{\"a\": 1} extra"
+  }
+]
