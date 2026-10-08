@@ -77,7 +77,7 @@ def _synthetic_input_namespace(declared: dict[str, Any]) -> dict[str, Any]:
             namespace[name] = [marker]
         elif input_type == "object":
             namespace[name] = {"_marker": marker}
-        elif input_type == "number":
+        elif input_type in ("number", "integer"):
             namespace[name] = 123456
         elif input_type == "boolean":
             namespace[name] = True

@@ -1,0 +1,103 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CurationManifest",
+  "description": "Schema for src/circuitry/curation/manifest.json — the consolidated registry + documentation index for the curation library.",
+  "type": "object",
+  "required": ["schema_version", "entries"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Manifest format version (semver-ish)."
+    },
+    "curation_version": {
+      "type": "string",
+      "description": "Version stamp for the curation library as a whole."
+    },
+    "runtime_compatibility": {
+      "type": "object",
+      "properties": {
+        "min_version": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    },
+    "entries": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Entry" },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "Entry": {
+      "type": "object",
+      "required": ["name", "file", "category", "intent"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z]+/[a-z][a-z0-9_]*$",
+          "description": "Slash-delimited canonical name. Format: '<category>/<slug>'. Slug must not contain slashes (only one path component after the category)."
+        },
+        "file": {
+          "type": "string",
+          "pattern": "^[a-z]+/[a-z0-9_]+\\.ya?ml$",
+          "description": "Path of the YAML file relative to curation/, e.g. 'utilities/critique.yml'."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["learn", "utilities", "patterns", "recipes", "agents"]
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One-line description of what this orchestration does."
+        },
+        "description": { "type": "string" },
+        "when_to_use": { "type": "string" },
+        "primitives": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "difficulty": {
+          "type": "string",
+          "enum": ["beginner", "intermediate", "advanced"]
+        },
+        "backends": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "inputs": {
+          "type": "object",
+          "description": "Input declarations keyed by name. Each value is a {type, required, description} object.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string" },
+              "required": { "type": "boolean" },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string" },
+              "path": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "state_paths": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "example": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,598 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CircuitryOrchestration",
+  "description": "JSON Schema for Circuitry orchestration YAML files (DOL — Domain Object Language).",
+  "type": "object",
+  "required": ["effects"],
+  "properties": {
+    "adapter": {
+      "type": "string",
+      "description": "Adapter to use for model invocations, e.g. ollama, openai, anthropic, litellm, cyberdiner (job queue), host_claude (MCP-only). Full compiled-in list: cof list --extensions. Optional — can be set in config.json."
+    },
+    "model": {
+      "type": "string",
+      "description": "Model identifier. Optional — can be set in config.json."
+    },
+    "flow": {
+      "$ref": "#/$defs/FlowModel",
+      "description": "Top-level flow for the implicit root dynamic. Defaults to chain."
+    },
+    "version": {
+      "type": ["string", "number"],
+      "description": "Optional free-form version string for THIS orchestration document (e.g. '1.2.0'), for the author's own tracking. It is not a schema version and not a runtime feature gate — the runtime reads it and ignores it. Numbers are accepted for back-compat; a string is canonical."
+    },
+    "effects": {
+      "type": "array",
+      "description": "Ordered list of top-level effects to execute.",
+      "items": { "$ref": "#/$defs/EffectDef" }
+    },
+    "finally": {
+      "type": "array",
+      "description": "Cleanup effects run after 'effects' completes, whether it succeeded or failed, and best-effort on a Ctrl-C/cancellation. Always sequential. The original failure (if any) still propagates after 'finally' runs; a 'finally' failure on a successful run fails it too, unless that finally effect has its own on_error: continue/skip.",
+      "items": { "$ref": "#/$defs/EffectDef" }
+    },
+    "interface": {
+      "type": "object",
+      "description": "Declares typed inputs and outputs for this orchestration. Enforced (required/type/default) at every run entry — cof run, the SDK, REST, MCP, the scheduler — and again by a 'use' effect calling this document as a child, for auto-wiring its outputs.",
+      "properties": {
+        "inputs": {
+          "type": "object",
+          "description": "Input declarations. Keys are state variable names.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string", "description": "Expected type: string, number, integer, boolean, array, object." },
+              "required": { "type": "boolean", "description": "Whether this input is required. Default false." },
+              "default": { "description": "Value used when the caller omits this input (top-level run or use: child). Any JSON type; should match 'type' when both are given." },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "outputs": {
+          "type": "object",
+          "description": "Output declarations. Keys are output names exposed to the parent. Canonical value form is an object with a 'path' — the same shape 'use.outputs' takes. A bare state-path string is accepted as shorthand.",
+          "additionalProperties": { "$ref": "#/$defs/OutputDecl" }
+        }
+      }
+    }
+  },
+  "additionalProperties": true,
+
+  "$defs": {
+    "NamePattern": {
+      "type": "string",
+      "allOf": [
+        {
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Names must start with a letter or underscore, followed by letters, digits, or underscores. No spaces or dots."
+        },
+        {
+          "not": { "pattern": "^iter_\\d+$" },
+          "description": "Names matching iter_<N> are reserved for loop iteration segments."
+        },
+        {
+          "not": { "pattern": "^(value|meta|input|prime|runtime)$" },
+          "description": "Names 'value', 'meta', 'input', 'prime', and 'runtime' are reserved structural slot names."
+        }
+      ]
+    },
+
+    "OutputDecl": {
+      "description": "One declared output. Canonical form is an object carrying a 'path' (plus optional 'type' and 'description'). The bare string form is accepted shorthand for {path: <string>} and means exactly the same thing. Both forms work in 'use.outputs' and 'interface.outputs' alike.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["path"],
+          "properties": {
+            "type": { "type": "string", "description": "Output type: string, number, boolean, array, object. Optional." },
+            "path": { "type": "string", "description": "Dot-delimited state path to extract (e.g. 'prime.summarize.value')." },
+            "description": { "type": "string" }
+          }
+        },
+        {
+          "type": "string",
+          "description": "Shorthand for {path: <this string>}."
+        }
+      ]
+    },
+
+    "FlowModel": {
+      "type": "string",
+      "enum": ["chain", "chain_of_thought", "cot", "tree", "tree_of_thought", "tot"],
+      "description": "Execution topology. Canonical values are 'chain' (sequential — each effect sees prior outputs) and 'tree' (parallel — all effects see the same input snapshot). Also accepted, deprecated, and not documented elsewhere: chain_of_thought and cot for chain; tree_of_thought and tot for tree. `cof validate` warns on them."
+    },
+
+    "OnErrorDefault": {
+      "type": "string",
+      "enum": ["fail", "skip", "continue"],
+      "description": "Error handling policy. fail = abort; skip = omit this effect and continue; continue = record error and continue."
+    },
+
+    "OnErrorLoop": {
+      "type": "string",
+      "enum": ["fail", "break", "continue"],
+      "description": "Loop-specific error policy. fail = abort; break = exit loop; continue = skip iteration and continue."
+    },
+
+    "ConditionDef": {
+      "type": "object",
+      "description": "Condition definition for an if effect and for a loop's while.",
+      "required": ["mode"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["model", "cel"],
+          "description": "model = LLM evaluates template and returns boolean. cel = CEL expression evaluated against state."
+        },
+        "template": {
+          "type": "string",
+          "description": "Prompt template for model-based evaluation. Enforced as required when mode is model."
+        },
+        "expr": {
+          "type": "string",
+          "description": "CEL expression (evaluated by cel-python) for deterministic evaluation. State binds to 'state', so paths read state.input.<name>, state.prime.<name>.value or state.runtime.<name>. Inside a loop's own body, its each.as name and iter.index are also legal state.<key> roots. Full CEL is available: macros (all/exists/exists_one/map/filter), has(), '!', the '?:' ternary and the standard functions (size/int/string/matches/...). Enforced as required when mode is cel."
+        },
+        "strict": {
+          "type": "boolean",
+          "default": false,
+          "description": "mode: cel only. By default an unset 'state.' path makes the whole expression false and logs a WARNING. With strict: true an unresolved path raises instead, so a missing field cannot silently pick a branch."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "model" } }, "required": ["mode"] },
+          "then": { "required": ["template"] }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "cel" } }, "required": ["mode"] },
+          "then": { "required": ["expr"] }
+        }
+      ]
+    },
+
+    "MessageDef": {
+      "type": "object",
+      "required": ["role", "content"],
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": ["system", "user", "assistant", "tool"]
+        },
+        "content": { "type": "string" }
+      }
+    },
+
+    "AssetRefDef": {
+      "type": "object",
+      "required": ["kind", "ref"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "description": "Asset type, e.g. image, file, audio." },
+        "ref": { "type": "string", "description": "Mustache template rendering to a local path or an http(s) URL. Use {{{...}}}: {{...}} HTML-escapes the value." }
+      }
+    },
+
+    "RetryPolicyDef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_attempts": { "type": "integer", "minimum": 1 },
+        "backoff_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "ExpectDef": {
+      "description": "Output check for a tool/use effect, run after a successful attempt. A bare string is shorthand for {mode: cel, expr: <string>}.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "CEL expression shorthand for {mode: cel, expr: <this string>}."
+        },
+        {
+          "type": "object",
+          "required": ["mode"],
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "type": "string", "enum": ["cel", "model"] },
+            "expr": {
+              "type": "string",
+              "description": "CEL expression over this effect's own 'value' and 'meta' (not state.value/state.meta — these two bind directly, unlike every other CEL site), plus 'state' bound the usual way (state.prime.<name>.value, ...). E.g. has(value.prompt_id). Required when mode is cel."
+            },
+            "template": {
+              "type": "string",
+              "description": "Prompt template asked yes/no like a model-mode if's template, on the run's own adapter/model. Required when mode is model."
+            }
+          },
+          "allOf": [
+            { "if": { "properties": { "mode": { "const": "cel" } }, "required": ["mode"] }, "then": { "required": ["expr"] } },
+            { "if": { "properties": { "mode": { "const": "model" } }, "required": ["mode"] }, "then": { "required": ["template"] } }
+          ]
+        }
+      ]
+    },
+
+    "EffectDef": {
+      "type": "object",
+      "required": ["type"],
+      "description": "A single executable effect. Discriminated by the 'type' field.",
+      "if": { "properties": { "type": { "const": "prompt" } } },
+      "then": { "$ref": "#/$defs/PromptEffect" },
+      "else": {
+        "if": { "properties": { "type": { "const": "dynamic" } } },
+        "then": { "$ref": "#/$defs/DynamicEffect" },
+        "else": {
+          "if": { "properties": { "type": { "enum": ["if", "conditional"] } } },
+          "then": { "$ref": "#/$defs/ConditionalEffect" },
+          "else": {
+            "if": { "properties": { "type": { "const": "loop" } } },
+            "then": { "$ref": "#/$defs/LoopEffect" },
+            "else": {
+              "if": { "properties": { "type": { "const": "reflector" } } },
+              "then": { "$ref": "#/$defs/ReflectorEffect" },
+              "else": {
+                "if": { "properties": { "type": { "const": "tool" } } },
+                "then": { "$ref": "#/$defs/ToolEffect" },
+                "else": {
+                  "if": { "properties": { "type": { "const": "use" } } },
+                  "then": { "$ref": "#/$defs/UseEffect" },
+                  "else": {
+                    "properties": {
+                      "type": {
+                        "enum": ["prompt", "dynamic", "if", "conditional", "loop", "reflector", "tool", "use"],
+                        "description": "Unknown effect type. Must be one of: prompt, dynamic, if, loop, reflector, tool, use. ('conditional' is also accepted as a deprecated alias of 'if'.)"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "PromptEffect": {
+      "type": "object",
+      "required": ["type", "name"],
+      "description": "Atomic model invocation. Produces a typed value at prime.<name>.value.",
+      "if": {
+        "properties": {
+          "prompt_type": { "enum": ["json", "object", "array"] }
+        },
+        "required": ["prompt_type"]
+      },
+      "then": {
+        "required": ["schema"]
+      },
+      "properties": {
+        "type": { "const": "prompt" },
+        "name": { "$ref": "#/$defs/NamePattern" },
+        "description": { "type": "string" },
+        "prompt_type": {
+          "type": "string",
+          "enum": ["text", "json", "boolean", "tool", "number", "array", "object"],
+          "description": "Output type. Defaults to text. Use json when output needs to be an array or object used by downstream effects."
+        },
+        "schema": {
+          "type": "object",
+          "description": "JSON Schema for validating structured output. Enforced as required when prompt_type is json, object, or array."
+        },
+        "template": {
+          "type": "string",
+          "description": "Mustache template string. Use {{key}} for initial state, {{prime.name.value}} for effect outputs."
+        },
+        "messages": {
+          "type": "array",
+          "description": "Role-based message array. Mutually exclusive with template.",
+          "items": { "$ref": "#/$defs/MessageDef" }
+        },
+        "model": { "type": "string", "description": "Per-effect model override." },
+        "provider": { "type": "string", "description": "Per-effect provider override." },
+        "provider_fallbacks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Ordered list of fallback providers."
+        },
+        "params": { "type": "object", "description": "Generation parameters. temperature, max_tokens and stop are mapped to each provider's names; other keys go to the provider unchanged." },
+        "timeout_ms": { "type": "integer", "minimum": 0 },
+        "deterministic": { "type": "boolean", "description": "If true, temperature 0 (unless params sets one) and a fixed seed where the provider takes one." },
+        "inputs": { "type": "object", "description": "Prompt-local key/value pairs available in template rendering." },
+        "assets": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/AssetRefDef" }
+        },
+        "retries": { "$ref": "#/$defs/RetryPolicyDef" },
+        "on_error": { "$ref": "#/$defs/OnErrorDefault" },
+        "group": {
+          "type": "string",
+          "description": "Named concurrency-group slot (runtime.concurrency_groups.<name>) this effect waits for a free slot in before dispatching, in addition to runtime.max_concurrency's run-wide cap. Leaf effects only — cof check rejects it elsewhere. The group must be defined in runtime.concurrency_groups or cof check rejects the reference."
+        }
+      },
+      "oneOf": [
+        { "required": ["template"] },
+        { "required": ["messages"] }
+      ]
+    },
+
+    "DynamicEffect": {
+      "type": "object",
+      "required": ["type", "name", "effects"],
+      "description": "Named container that executes child effects as a chain or tree. Outputs at prime.<name>.<child_name>.value.",
+      "properties": {
+        "type": { "const": "dynamic" },
+        "name": { "$ref": "#/$defs/NamePattern" },
+        "description": { "type": "string" },
+        "flow": { "$ref": "#/$defs/FlowModel" },
+        "effects": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EffectDef" },
+          "minItems": 1,
+          "description": "Child effects to execute. Must be non-empty."
+        },
+        "finally": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EffectDef" },
+          "description": "Cleanup effects run after 'effects' completes, whether it succeeded or failed, and best-effort on a Ctrl-C/cancellation. Always sequential, regardless of this dynamic's own flow. Only legal here and at the document root."
+        },
+        "max_concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum parallel executions for tree flow."
+        },
+        "stop_on_error": { "type": "boolean" },
+        "on_error": { "$ref": "#/$defs/OnErrorDefault" },
+        "labels": { "type": "object" }
+      }
+    },
+
+    "ConditionalEffect": {
+      "type": "object",
+      "required": ["type", "if", "then"],
+      "description": "Evaluates a condition and executes exactly one branch. Canonical type is 'if'. Name is optional — named conditionals record decision metadata.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["if", "conditional"],
+          "description": "Canonical value is 'if'. 'conditional' is also accepted as a deprecated alias; `cof validate` warns on it."
+        },
+        "name": { "$ref": "#/$defs/NamePattern" },
+        "description": { "type": "string" },
+        "if": { "$ref": "#/$defs/ConditionDef" },
+        "then": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EffectDef" },
+          "description": "Effects to execute when condition is true."
+        },
+        "else": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EffectDef" },
+          "description": "Effects to execute when condition is false. Use the same inner effect names as then for deterministic state paths."
+        },
+        "threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Deprecated, no effect: the built-in evaluator is a categorical yes/no with no calibrated confidence to cut. Still recorded on meta.threshold; cof check warns when set. Default 0.5."
+        },
+        "on_error": {
+          "type": "string",
+          "enum": ["fail", "continue", "skip"]
+        },
+        "labels": { "type": "object" }
+      }
+    },
+
+    "LoopEffect": {
+      "type": "object",
+      "required": ["type", "body"],
+      "description": "Iterates over a collection (each) or repeats while a condition holds (while) — exactly one of the two. Name is optional.",
+      "oneOf": [
+        { "required": ["each"] },
+        { "required": ["while"] }
+      ],
+      "properties": {
+        "type": { "const": "loop" },
+        "name": { "$ref": "#/$defs/NamePattern" },
+        "description": { "type": "string" },
+        "collect": {
+          "type": "string",
+          "description": "Name of a body effect whose .value is aggregated across all iterations into an array. Written to prime.<loop_name>.collected.value after the loop completes. Requires a named loop."
+        },
+        "flow": {
+          "$ref": "#/$defs/FlowModel",
+          "description": "Execution topology for each-loops. chain (default) = sequential. tree = all iterations run in parallel via ThreadPoolExecutor. while-loops always run sequentially."
+        },
+        "max_concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum parallel workers when flow is tree. Default: ThreadPoolExecutor's own min(32, cpu_count + 4) — each.in has no default bound on collection size, so an unset value is capped rather than spawning one thread per item."
+        },
+        "body": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EffectDef" },
+          "minItems": 1,
+          "description": "Effects to execute each iteration."
+        },
+        "each": {
+          "type": "object",
+          "required": ["in"],
+          "additionalProperties": false,
+          "description": "Collection iteration config. each.in must point to a prompt_type: json effect whose output is an array.",
+          "properties": {
+            "in": {
+              "type": "string",
+              "description": "Dot-delimited state path resolving to a JSON array, e.g. prime.my_prompt.value, or an enclosing loop's each.as binding, e.g. s.crops inside a loop whose each.as is s."
+            },
+            "as": {
+              "type": "string",
+              "description": "Variable name for the current element. Defaults to 'item'. Accessible in body templates as {{as_name}} and, inside this loop's own body, in mode: cel expressions as state.<as_name>."
+            },
+            "truncate": {
+              "type": "boolean",
+              "default": false,
+              "description": "Default false: a collection longer than max_iterations fails the loop at start (the length is known up front, so hitting the cap is never a runaway). Set true to process only the first max_iterations elements and record termination: max_iterations_reached plus the unvisited count instead."
+            }
+          }
+        },
+        "while": {
+          "$ref": "#/$defs/ConditionDef",
+          "description": "Continuation condition. Loop repeats while condition is true."
+        },
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum iteration cap. No default — unset means the loop runs until its collection or condition ends it. For each-loops, when set, the collection must not be longer than it unless each.truncate: true is set."
+        },
+        "min_iterations": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Minimum iterations before condition is checked. While loops only; on an each loop it has no effect and cof check warns."
+        },
+        "on_error": { "$ref": "#/$defs/OnErrorLoop" },
+        "labels": { "type": "object" }
+      }
+    },
+
+    "ReflectorEffect": {
+      "type": "object",
+      "required": ["type", "name", "effects"],
+      "description": "Planning-time effect. Reads state, generates a Dynamic plan, executes it. Repeats for max_iterations cycles.",
+      "properties": {
+        "type": { "const": "reflector" },
+        "name": { "$ref": "#/$defs/NamePattern" },
+        "description": { "type": "string" },
+        "flow": { "$ref": "#/$defs/FlowModel" },
+        "effects": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EffectDef" },
+          "minItems": 1,
+          "description": "Inner effects template used as the base dynamic per planning cycle."
+        },
+        "plan_from_step": {
+          "type": "string",
+          "description": "Name of the inner effect whose output drives the reflector plan. Default: propose_steps."
+        },
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum planning cycles. Default 1."
+        },
+        "generated_key": {
+          "type": "string",
+          "description": "State key under which generated effects are recorded. Default: generated."
+        },
+        "stop_on_done": {
+          "type": "boolean",
+          "description": "Stop when the plan signals completion. Default true."
+        },
+        "max_effects": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum effects the reflector can generate per cycle. Default 8. Alias: max_steps."
+        },
+        "max_steps": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Alias for max_effects."
+        },
+        "prime_template": {
+          "type": "string",
+          "description": "Custom prime template for reflector planning. Overrides the built-in REFLECTOR_PRIME_V1."
+        }
+      }
+    },
+
+    "ToolEffect": {
+      "type": "object",
+      "required": ["type", "name", "provider"],
+      "description": "Executes a non-LLM side-effect via a named plugin. Writes result at prime.<name>.value.",
+      "properties": {
+        "type": { "const": "tool" },
+        "name": { "$ref": "#/$defs/NamePattern" },
+        "description": { "type": "string" },
+        "provider": {
+          "type": "string",
+          "description": "Plugin name. Supported: ffmpeg, comfyui."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Primary prompt/input text for the plugin. Supports Mustache rendering. For comfyui: the image generation prompt."
+        },
+        "model": {
+          "type": "string",
+          "description": "Model or checkpoint name for the plugin. For comfyui: checkpoint filename (e.g. flux1-schnell-fp8.safetensors)."
+        },
+        "params": {
+          "type": "object",
+          "description": "Plugin-specific parameters. All string values support Mustache rendering against current state. A leaf anywhere in params (any depth, in objects and lists), {from: <path>}, passes the value at that path unchanged (array, object, number or boolean) instead of rendering it, the same contract as a use effect's inputs; a path that doesn't resolve -- including one that resolves to null -- is an error naming the param's own path, unless the leaf also carries default: <value>. A mapping with any other key is passed through literally -- use params_json to pass a literal one-key {from: ...} object. Takes precedence over top-level prompt/model."
+        },
+        "params_json": {
+          "type": "string",
+          "description": "A Mustache template rendered to text and then parsed as JSON, producing a real object/array (not just strings). The parsed object is deep-merged over 'params' (params_json wins on overlapping keys). Use this to pass a runtime-built array or nested object to a tool whose schema requires one, e.g. '{\"arguments\": {\"symbols\": {{{prime.symbol_list.value}}} }}'."
+        },
+        "timeout_ms": { "type": "integer", "minimum": 0 },
+        "retries": { "$ref": "#/$defs/RetryPolicyDef" },
+        "expect": { "$ref": "#/$defs/ExpectDef" },
+        "on_error": { "$ref": "#/$defs/OnErrorDefault" },
+        "group": {
+          "type": "string",
+          "description": "Named concurrency-group slot (runtime.concurrency_groups.<name>) this effect waits for a free slot in before dispatching, in addition to runtime.max_concurrency's run-wide cap. Leaf effects only — cof check rejects it elsewhere. The group must be defined in runtime.concurrency_groups or cof check rejects the reference."
+        }
+      }
+    },
+
+    "UseEffect": {
+      "type": "object",
+      "required": ["type", "name"],
+      "description": "Runs another orchestration as an isolated sub-step. Provide exactly one of 'ref' (library lookup across configured sources), 'path' (filesystem), or 'inline' (Mustache template yielding YAML). The 'orchestration' field is deprecated — use 'ref' or 'path' instead.",
+      "properties": {
+        "type": { "const": "use" },
+        "name": { "$ref": "#/$defs/NamePattern" },
+        "description": { "type": "string" },
+        "ref": {
+          "type": "string",
+          "description": "Library lookup across every source configured in runtime.library.sources. A bare, slash-delimited name like 'utilities/critique' searches sources in precedence order (curation-only by default, resolving to 'curation/utilities/critique.yml'). A source-qualified name — '<source>:<name>', e.g. 'hub:utilities/critique' — resolves in exactly that source and never falls through. Remote (github) sources are served from a SHA-pinned cache and record the commit into runtime.library_refs; refresh them with `cof library refresh <source>`. Mutually exclusive with 'path', 'orchestration', and 'inline'."
+        },
+        "path": {
+          "type": "string",
+          "description": "Filesystem path (absolute, cwd-relative, or parent-orchestration-relative). Mutually exclusive with 'ref', 'orchestration', and 'inline'."
+        },
+        "orchestration": {
+          "type": "string",
+          "description": "DEPRECATED — use 'ref' for library lookup or 'path' for filesystem references. Still accepted for back-compat; emits a DeprecationWarning at compile time.",
+          "deprecated": true
+        },
+        "inline": {
+          "type": "string",
+          "description": "Mustache template that renders to orchestration YAML at runtime. Typically references a prior prompt output (e.g. '{{prime.plan.value}}'). Mutually exclusive with 'ref', 'path', and 'orchestration'."
+        },
+        "validate": {
+          "type": "boolean",
+          "description": "Check the child (inline, path or ref) the way cof check checks a file (schema, near-miss keys) before it runs. Default true. Set false to skip that, e.g. for LLM-generated YAML that may use loose formatting; a repeated key is still an error.",
+          "default": true
+        },
+        "inputs": {
+          "type": "object",
+          "description": "Input mapping. Keys become the child's input.<key>. String values are Mustache-rendered against parent state and arrive as text; a reference, {from: <path>}, passes the value at that path unchanged (array, object, number, boolean or null). The path is rooted at input./prime./runtime. or at an enclosing loop binding.",
+          "additionalProperties": true
+        },
+        "outputs": {
+          "type": "object",
+          "description": "Output mapping. Keys become fields in this effect's .value. Canonical value form is an object with a 'path' into the child's final state — {path: 'prime.summarize.value'} — the same shape 'interface.outputs' takes; a bare path string is accepted shorthand. When omitted, the entire child state is exposed at prime.<use_name>.<child_effect>.value (full-namespace mode).",
+          "additionalProperties": { "$ref": "#/$defs/OutputDecl" }
+        },
+        "retries": { "$ref": "#/$defs/RetryPolicyDef" },
+        "expect": { "$ref": "#/$defs/ExpectDef" },
+        "on_error": { "$ref": "#/$defs/OnErrorDefault" }
+      },
+      "oneOf": [
+        { "required": ["ref"] },
+        { "required": ["path"] },
+        { "required": ["orchestration"] },
+        { "required": ["inline"] }
+      ]
+    }
+  }
+}

@@ -143,7 +143,7 @@ circuitry/
 └── pyproject.toml · requirements-dev.txt
 ```
 
-The library under `src/circuitry/curation/` is what `cof list` shows: **`learn/`** is single-primitive demonstrations, one concept per file; **`utilities/`** are composable single-output orchestrations with typed interfaces, called via `use:`; **`patterns/`** are multi-primitive templates (critique → refine, parallel → judge, classify → route); **`recipes/`** are full workflows; **`agents/`** are orchestrations that build or improve orchestrations — the wizard, the meta-orchestrator, the decomposition planner. `cof eject <name>` copies any of them into your project.
+The library under `src/circuitry/curation/` is what `cof list` shows: **`learn/`** is single-primitive demonstrations, one concept per file; **`utilities/`** are composable single-output orchestrations with typed interfaces, called via `use:`; **`patterns/`** are multi-primitive templates (critique → refine, parallel → judge, classify → route); **`recipes/`** are full workflows; **`agents/`** are orchestrations that build or improve orchestrations — the wizard, the meta-orchestrator, the decomposition planner — plus `agent_loop`, a tool-using agent made of a loop, a prompt and tool effects. `cof eject <name>` copies any of them into your project.
 
 ## API Reference
 

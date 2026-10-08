@@ -137,6 +137,34 @@ Before `finally` existed, the only way to guarantee a cleanup step always ran wa
 
 A failure inside `finally` never hides the original error. If the main `effects` failed, that failure is still what's reported — a `finally` failure on top of it is recorded as a second note (`meta.finally_error`), never a replacement. If the main `effects` succeeded, a `finally` failure fails the run too, unless that particular `finally` effect has its own `on_error: continue`/`skip` — the same per-effect opt-out as anywhere else. A `use` child's own root `finally:` runs the same way, when the child orchestration finishes — the parent sees only the child's own `meta.error`/`meta.finally_error` folded into whatever the `use` effect reports, same as any other child failure.
 
+The server above is started and stopped through an external service manager. When the run should start a server itself, the `service` tool does both halves and keeps them honest: `action: start` runs the command in its own process group, waits until it answers, and records that it owns that group; `action: stop` stops only a group whose record still proves it is the one it started — SIGTERM, a grace period, then SIGKILL for whatever is left — and waits until its ports are free. A service outlives the run on purpose, so the stop belongs in `finally:`:
+
+```yaml
+- type: dynamic
+  name: with_web
+  effects:
+    - type: tool
+      name: start_web
+      provider: service
+      params:
+        action: start
+        name: web
+        command: [python3, -m, http.server, "8000", --bind, 127.0.0.1]
+        ports: [8000]
+        ready: "http://127.0.0.1:8000/"
+    - type: tool
+      name: page
+      provider: http
+      params: {url: "http://127.0.0.1:8000/"}
+  finally:
+    - type: tool
+      name: stop_web
+      provider: service
+      params: {action: stop, name: web}
+```
+
+If port 8000 is already held by something the plugin did not start, `start_web` fails with that process's pid, command and working directory, and leaves it running. If the server exits before it is ready, `start_web` fails with the tail of its log. Either way — and on Ctrl-C — `stop_web` still runs, and stopping a service that is not running is not an error. See the [`service` tool plugin](../plugins/service.md).
+
 ## Where failure lands
 
 ```

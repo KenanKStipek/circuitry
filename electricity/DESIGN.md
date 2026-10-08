@@ -386,7 +386,11 @@ two. Both forms always end with a trailing `\n` (matching `cli/app.py`'s `_write
    Circuitry's exact `"Orchestration validation failed:\n  - ..."` prefix:
    1. unknown-key errors (near-miss/typo detection against the actual key set for that effect
       type, including the `_MISTAKEN_FOR` hardcoded confusables like `adapter`→`provider`);
-   2. JSON-schema errors (Draft7, with the deepest `oneOf` sub-error appended);
+   2. JSON-schema errors (Draft7, with the deepest `oneOf` sub-error appended — `electricity-schema`
+      (§4 step 3, #380) cannot produce this suffix on `jsonschema` 0.26, whose
+      `OneOfNotValid`/`AnyOf` variants carry no sub-error list to pick from; the compiler lane
+      built here either re-validates the losing branches by hand or needs a `jsonschema` upgrade
+      that exposes them, whichever lands first);
    3. `group:` placement errors (leaf effects only);
    4. `interface.inputs.<k>.type` must be one of the six recognized types;
    5. `interface.inputs.<k>.default` type-mismatch (already-typed data, not CLI text).
@@ -2069,6 +2073,7 @@ divergence.
 | — | **Credentials in config.json**: the reference reads the `cyberdiner` adapter's token (§9.4) from config only (no env-var form exists for it at all), the `surrealdb` runtime plugin's token/user/password (§10.2) from config as a fallback after the matching env var, and an `mcp` server's `headers`/`env` (§8.1) from config by design. | **Settled 2026-10-06**: follow the reference exactly for all three — config credentials are redacted in state and config.json is already operator-chosen/trusted, so the real rule is "provider API keys from env only; every other service credential from wherever `cof` reads it; no credential on argv or in state" (§1, §14). | No — settled; listed here as the record of the decision. |
 | — | **`--resume <run-id>` input re-pass rule**: every key the loaded state's `input` namespace has must be re-supplied via `-e`, not just one. | **Copy** — implemented in §6.8's resume-safety checks. | No. |
 | — | **CLI usage-error exit code `2`**: not one of the four codes in an earlier draft's CLI-surface assumption. | **Settled 2026-10-06** (`0`/`1`/`130`/`143` plus `2` for usage errors, as `cof`/click; `129` for SIGHUP since Circuitry #357) — §6.9 now also maps which specific pre-run failures get `1` versus `2`, matching the reference's own case-by-case `BadParameter` handling rather than grouping every usage error under one code. | No — settled; listed here as the record of the decision. |
+| — | **`electricity-template`'s confirmed chevron divergences** (§3.3): a falsy root `{{.}}`, bytes iterated in a section, the `getattr`-attribute-fallback mismatch (tracked upstream as #389), `int()` leniency, `\x1c`-`\x1f` counted as whitespace, and a same-key inverted section inside a list section — full description of each in the crate's own module docs (`electricity-template/src/lib.rs`), not duplicated here. | **Copy by output everywhere reachable; leave these as-is** — none is reachable by an ordinary orchestration template (state is always a dict; values come from YAML/JSON/tool output). The `getattr` one is a genuine Circuitry rendering bug, tracked as a separate upstream issue (#389) rather than fixed in electricity. | No — each judged unreachable in production documents; re-scan if a future document shape needs one. |
 
 ---
 
