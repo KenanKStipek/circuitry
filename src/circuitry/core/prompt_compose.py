@@ -222,14 +222,18 @@ def document_content_digest(
     """SHA-256 of *resolved_path*'s bytes, plus every prompt file it
     references (#396) — shared by every surface that treats a document's
     bytes as its identity: capability consent (``cof trust``,
-    ``cli.document_consent``) and ``core.use``'s own content digest
-    (``UseRuntime._content_digest``). *confinement_root* is the project a
-    ``{file: ...}`` reference inside *orch* must stay inside — the caller's
-    own confinement rule (a library source's cached tree, say); the nearest
-    ``circuitry.config.json``/``config.json`` when omitted. Best-effort,
-    like ``core.resume.document_sha256``: a document that fails to parse
-    here (it will fail again, loudly, moments later) just falls back to the
-    file's own bytes.
+    ``cli.document_consent``), ``core.use``'s own content digest
+    (``UseRuntime._content_digest``), and the `document_hash` a run stamps
+    at `runtime.last_run` (`cli.runtime_shim.run`, #407) for ``cof run
+    --resume``'s own change check — one algorithm everywhere, rather than
+    `core.resume` walking prompt-file references on its own.
+    *confinement_root* is the project a ``{file: ...}`` reference inside
+    *orch* must stay inside — the caller's own confinement rule (a library
+    source's cached tree, say); the nearest
+    ``circuitry.config.json``/``config.json`` when omitted. Best-effort: a
+    document whose prompt-file references fail to resolve here (it will
+    fail again, loudly, moments later) just falls back to the file's own
+    bytes.
 
     Each prompt file's own path (relative to the document's directory, so
     the digest doesn't vary with where a checkout happens to sit on disk)

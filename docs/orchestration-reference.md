@@ -1816,12 +1816,19 @@ progress back to `run.json`, rather than risking losing it all again on a
 second interruption.
 
 **Safety.** `--resume` refuses to continue against a document that changed
-since the saved run — it compares content hashes — unless you pass
-`--force`; a saved state with no recorded hash at all refuses the same way,
-since there is then no way to tell whether the document changed. It also
-refuses to resume with *silently inherited* inputs: `--state <file>` names
-its own inputs explicitly and `--resume last` loads a state that already
-carries its own resolved `input.*`, but `--resume <run-id>` has no such
+since the saved run — it compares content hashes, the same digest
+`document_content_digest` computes for capability consent (`cof trust`),
+so it also catches a referenced prompt file (`{file: ...}`) changing, not
+just the orchestration YAML's own bytes — unless you pass `--force`; a
+saved state with no recorded hash at all refuses the same way, since there
+is then no way to tell whether the document changed. A state saved by a
+release before this digest became the one every surface uses still
+resumes without `--force` too: the hash its own, now-retired algorithm
+wrote is accepted as well, as long as the document genuinely hasn't
+changed. It also refuses to resume with *silently inherited* inputs:
+`--state <file>` names its own inputs explicitly and `--resume last` loads
+a state that already carries its own resolved `input.*`, but `--resume
+<run-id>` has no such
 stash, so every one of the original run's `input.*` keys must be named
 again with `-e` (changed or not) — otherwise it refuses, naming which
 inputs are missing. The persistence lookup for `--resume <run-id>` is also

@@ -15,7 +15,8 @@ from rich.panel import Panel
 from rich.table import Table
 from typer.core import TyperGroup
 
-from ..core.resume import document_sha256
+from ..core.prompt_compose import document_content_digest
+from ..core.resume import _legacy_document_sha256
 from ..core.saved_state import dumps_saved_state
 from ..core.store import build_persistence_backend
 from ..output import ResilientConsole
@@ -501,6 +502,8 @@ def _resolve_resume_state(
     env_vars: list[str] | None,
     cfg: CircuitryConfig,
     trust_document: bool,
+    library_registry: LibraryRegistry,
+    remote_library_source: bool,
 ) -> tuple[dict[str, Any], list[str], Path | None]:
     """The saved state ``--resume`` continues from, the args to replay
     alongside it, and the file it came from (``None`` for a run-id, which
@@ -623,11 +626,38 @@ def _resolve_resume_state(
                 "whether this document changed since it ran. Pass --force "
                 "to resume anyway."
             )
+        current_hash: str | None
         try:
-            current_hash = document_sha256(orch_path)
-        except OSError:
+            from .library_sources import confinement_root_for_document
+
+            current_orch = load_orchestration_file(orch_path)
+            document_dir = orch_path.resolve().parent
+            current_hash = document_content_digest(
+                orch_path,
+                current_orch,
+                confinement_root=confinement_root_for_document(
+                    orch_path,
+                    document_dir,
+                    library_registry=library_registry,
+                    is_cache_path=library_registry.is_cache_path(orch_path),
+                    remote_library_source=remote_library_source,
+                ),
+            )
+        except Exception:
+            # Unreadable (vanished since the check above) or unparseable —
+            # either way the run itself fails moments later with a sharper
+            # error; a hash that only guards a *future* --resume shouldn't
+            # block this one.
             current_hash = None
-        if current_hash is not None and current_hash != recorded_hash:
+        if (
+            current_hash is not None
+            and current_hash != recorded_hash
+            # A state saved before #407 recorded the old algorithm's hash
+            # (document bytes + each referenced prompt file's bytes, sorted,
+            # no label/length) — accept that too, so it still resumes
+            # without --force.
+            and _legacy_document_sha256(orch_path) != recorded_hash
+        ):
             raise typer.BadParameter(
                 f"{orch_path} changed since the run being resumed (content "
                 "hash differs) — rerun from scratch, or pass --force to "
@@ -1166,6 +1196,8 @@ def run_cmd(
                 env_vars=env_vars,
                 cfg=cfg,
                 trust_document=trust_document,
+                library_registry=run_registry,
+                remote_library_source=remote_library_source,
             )
         except typer.BadParameter as exc:
             console.print(f"[red]Error:[/red] {exc}")

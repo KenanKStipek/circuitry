@@ -325,6 +325,169 @@ def test_resume_refuses_when_only_a_referenced_prompt_file_changed(tmp_path: Pat
     assert forced.exit_code == 0, forced.stdout
 
 
+def test_document_hash_changes_when_bytes_move_between_prompt_files(tmp_path: Path) -> None:
+    """`runtime.last_run.document_hash` is `document_content_digest` (#407):
+    moving bytes across a prompt-file boundary (same total content, same
+    file set, different split) must still change it — concatenating each
+    file's bytes with nothing between them (the pre-#407 algorithm) could
+    not tell that apart."""
+    _write(tmp_path / "a.md", "AB")
+    _write(tmp_path / "b.md", "CD")
+    orch = _write(
+        tmp_path / "chain.yml",
+        "prompts:\n  a: {file: a.md}\n  b: {file: b.md}\n"
+        "effects:\n  - type: yield\n    name: y\n    template: \"{{> a}}{{> b}}\"\n",
+    )
+
+    out1 = tmp_path / "run1.json"
+    first = runner.invoke(app, ["run", str(orch), "--out", str(out1)])
+    assert first.exit_code == 0, first.stdout
+    hash_before = json.loads(out1.read_text(encoding="utf-8"))["runtime"]["last_run"][
+        "document_hash"
+    ]
+
+    # Same four bytes overall ("ABCD"), same two files, moved across the
+    # boundary instead of either file's own content changing.
+    _write(tmp_path / "a.md", "A")
+    _write(tmp_path / "b.md", "BCD")
+
+    out2 = tmp_path / "run2.json"
+    second = runner.invoke(app, ["run", str(orch), "--out", str(out2)])
+    assert second.exit_code == 0, second.stdout
+    hash_after = json.loads(out2.read_text(encoding="utf-8"))["runtime"]["last_run"][
+        "document_hash"
+    ]
+
+    assert hash_before != hash_after
+
+
+def test_document_hash_equals_document_content_digest_for_the_same_document(
+    tmp_path: Path,
+) -> None:
+    """`document_hash` and the consent digest (`cof trust`, the pre-run
+    gate, `use`) must be the exact same value for the same document (#407)
+    — one algorithm, not two that happen to agree on bytes alone."""
+    from circuitry.core.prompt_compose import document_content_digest
+    from circuitry.core.yaml_load import load_yaml
+
+    _write(tmp_path / "brief.md", "Say hi.")
+    orch_path = _write(
+        tmp_path / "chain.yml",
+        "prompts:\n  brief: {file: brief.md}\n"
+        "effects:\n  - type: yield\n    name: y\n    template: \"{{> brief}}\"\n",
+    )
+    out = tmp_path / "run.json"
+
+    result = runner.invoke(app, ["run", str(orch_path), "--out", str(out)])
+    assert result.exit_code == 0, result.stdout
+    document_hash = json.loads(out.read_text(encoding="utf-8"))["runtime"]["last_run"][
+        "document_hash"
+    ]
+
+    orch = load_yaml(orch_path.read_text(encoding="utf-8"))
+    expected = document_content_digest(orch_path, orch, confinement_root=tmp_path)
+    assert document_hash == expected
+
+
+def test_resume_accepts_a_pre_407_document_hash(tmp_path: Path) -> None:
+    """A state saved by a release before #407 recorded `document_hash` with
+    the old algorithm (document bytes, then each referenced prompt file's
+    bytes, sorted, with no path label or length) — `--resume` must still
+    accept that without `--force` when the document hasn't actually
+    changed."""
+    from circuitry.core.resume import _legacy_document_sha256
+
+    _write(tmp_path / "brief.md", "Say hi.")
+    orch = _write(
+        tmp_path / "chain.yml",
+        "prompts:\n  brief: {file: brief.md}\n"
+        "effects:\n  - type: yield\n    name: y\n    template: \"{{> brief}}\"\n",
+    )
+    out = tmp_path / "run.json"
+
+    first = runner.invoke(app, ["run", str(orch), "--out", str(out)])
+    assert first.exit_code == 0, first.stdout
+
+    state = json.loads(out.read_text(encoding="utf-8"))
+    legacy_hash = _legacy_document_sha256(orch)
+    # A document with a referenced prompt file is exactly where the two
+    # algorithms diverge (the new one tags each file with its path and
+    # byte length) — otherwise this fixture would not exercise the
+    # fallback at all.
+    assert legacy_hash != state["runtime"]["last_run"]["document_hash"]
+    state["runtime"]["last_run"]["document_hash"] = legacy_hash
+    out.write_text(json.dumps(state), encoding="utf-8")
+
+    resumed = runner.invoke(app, ["run", str(orch), "--state", str(out), "--resume", "x"])
+    assert resumed.exit_code == 0, resumed.stdout
+
+
+def test_resume_refuses_a_changed_document_under_the_legacy_hash_too(tmp_path: Path) -> None:
+    """A saved state carrying a pre-#407 hash is accepted when the document
+    is unchanged (see above) — but a document that genuinely changed since
+    is still refused, exactly like a state carrying the current hash."""
+    from circuitry.core.resume import _legacy_document_sha256
+
+    orch = _write(
+        tmp_path / "chain.yml", "effects:\n  - type: tool\n    name: s\n    provider: uuid\n"
+    )
+    out = tmp_path / "run.json"
+
+    first = runner.invoke(app, ["run", str(orch), "--out", str(out)])
+    assert first.exit_code == 0, first.stdout
+
+    state = json.loads(out.read_text(encoding="utf-8"))
+    state["runtime"]["last_run"]["document_hash"] = _legacy_document_sha256(orch)
+    out.write_text(json.dumps(state), encoding="utf-8")
+
+    _write(
+        orch,
+        "effects:\n  - type: tool\n    name: s\n    provider: uuid\n"
+        "  - type: tool\n    name: s2\n    provider: uuid\n",
+    )
+
+    blocked = runner.invoke(app, ["run", str(orch), "--state", str(out), "--resume", "x"])
+    assert blocked.exit_code == 1
+    assert "content hash differs" in blocked.stdout
+
+    forced = runner.invoke(
+        app, ["run", str(orch), "--state", str(out), "--resume", "x", "--force"]
+    )
+    assert forced.exit_code == 0, forced.stdout
+
+
+def test_resume_refuses_a_changed_prompt_file_under_the_legacy_hash_too(tmp_path: Path) -> None:
+    """Same as above, but the thing that changed is a referenced prompt
+    file rather than the orchestration YAML itself."""
+    from circuitry.core.resume import _legacy_document_sha256
+
+    _write(tmp_path / "brief.md", "Say hi.")
+    orch = _write(
+        tmp_path / "chain.yml",
+        "prompts:\n  brief: {file: brief.md}\n"
+        "effects:\n  - type: yield\n    name: y\n    template: \"{{> brief}}\"\n",
+    )
+    out = tmp_path / "run.json"
+
+    first = runner.invoke(app, ["run", str(orch), "--out", str(out)])
+    assert first.exit_code == 0, first.stdout
+
+    state = json.loads(out.read_text(encoding="utf-8"))
+    state["runtime"]["last_run"]["document_hash"] = _legacy_document_sha256(orch)
+    out.write_text(json.dumps(state), encoding="utf-8")
+
+    _write(tmp_path / "brief.md", "Say hi, differently.")
+
+    blocked = runner.invoke(app, ["run", str(orch), "--state", str(out), "--resume", "x"])
+    assert blocked.exit_code == 1
+    assert "content hash differs" in blocked.stdout
+
+    forced = runner.invoke(
+        app, ["run", str(orch), "--state", str(out), "--resume", "x", "--force"]
+    )
+    assert forced.exit_code == 0, forced.stdout
+
+
 def test_resume_refuses_a_state_with_no_document_hash_unless_forced(tmp_path: Path) -> None:
     """#270 F8: a state with no `runtime.last_run.document_hash` (never
     written by `cof run`, or predating this field) must refuse the same
