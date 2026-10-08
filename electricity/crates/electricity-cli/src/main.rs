@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "\
 Usage: electricity <config.json> <orchestration.yml> [-e key=value]... [--out state.json] [--profile <path>]
-       electricity <config.json> <orchestration.yml> --dump-ir
+       electricity <config.json> <orchestration.yml> --dump-ir [-e key=value]...
 
 electricity is a preview: this release cannot run orchestrations yet. Use
 `cof run` instead. --version, --help and --dump-ir are the only supported
@@ -19,14 +19,17 @@ commands.
 Options:
   -V, --version   Print the version and exit
   -h, --help      Print this message and exit
+  -e key=value    Pass an orchestration input, checked against its
+                  declared interface.inputs the same way `cof run -e`
+                  does. Repeatable; a later -e for the same key wins.
   --dump-ir       Print the compiled IR as JSON and exit. Unstable: this
                   format is a debugging aid and can change in any release.";
 
 enum Action {
     Version,
     Help,
-    Run(String, String),
-    DumpIr(String, String),
+    Run(String, String, Vec<String>),
+    DumpIr(String, String, Vec<String>),
     UsageError(String),
 }
 
@@ -51,6 +54,36 @@ fn positionals(args: &[String]) -> Vec<&str> {
     result
 }
 
+/// Every `-e` value in *args*, in order, duplicates included --
+/// `electricity::parse_inputs`'s own input, built the same way
+/// [`positionals`] walks the same argument list. `Err` is a trailing
+/// `-e` with no value (this preview's own usage error; cof's own
+/// Click-layer "Option '-e' requires an argument." is third-party CLI
+/// framework text, not Circuitry's own, so not matched word for word).
+fn e_entries(args: &[String]) -> Result<Vec<String>, String> {
+    let mut result = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        if arg == "-e" {
+            match args.get(i + 1) {
+                Some(value) => {
+                    result.push(value.clone());
+                    i += 2;
+                }
+                None => return Err("-e requires an argument".to_string()),
+            }
+        } else if arg == "--dump-ir" {
+            i += 1;
+        } else if KNOWN_RUN_FLAGS.contains(&arg) {
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    Ok(result)
+}
+
 /// Run flags the usage text advertises (`-e key=value`, `--out`, `--profile`):
 /// recognized in any position, each followed by its own value.
 const KNOWN_RUN_FLAGS: &[&str] = &["-e", "--out", "--profile"];
@@ -62,6 +95,17 @@ fn classify(args: &[String]) -> Action {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         return Action::Help;
     }
+
+    // A trailing `-e` with no value is this preview's own
+    // structural-parsing error (cof's own Click layer reports it before
+    // any positional validation too, confirmed directly: `cof run -e`
+    // alone reports the missing `-e` value, not "Missing orchestration")
+    // -- checked before the positional/unrecognized-option classification
+    // below, same priority.
+    let inputs = match e_entries(args) {
+        Ok(inputs) => inputs,
+        Err(message) => return Action::UsageError(message),
+    };
 
     // Preserves the pre-#408 classification exactly ("Additive only"):
     // only the first argument decides Run vs. a usage error, so a
@@ -86,7 +130,7 @@ fn classify(args: &[String]) -> Action {
         let found = positionals(args);
         return match (found.first(), found.get(1)) {
             (Some(config), Some(orchestration)) => {
-                Action::Run(config.to_string(), orchestration.to_string())
+                Action::Run(config.to_string(), orchestration.to_string(), inputs)
             }
             _ => Action::UsageError("no config file or orchestration given".to_string()),
         };
@@ -100,7 +144,7 @@ fn classify(args: &[String]) -> Action {
 
     match (found.first(), found.get(1)) {
         (Some(config), Some(orchestration)) => {
-            Action::DumpIr(config.to_string(), orchestration.to_string())
+            Action::DumpIr(config.to_string(), orchestration.to_string(), inputs)
         }
         _ => Action::UsageError("--dump-ir requires <config.json> <orchestration.yml>".to_string()),
     }
@@ -122,7 +166,21 @@ fn main() -> ExitCode {
             println!("{USAGE}");
             ExitCode::SUCCESS
         }
-        Action::Run(config_path, orchestration_path) => {
+        Action::Run(config_path, orchestration_path, raw_inputs) => {
+            // `electricity::parse_inputs`'s own malformed-`-e` text,
+            // Circuitry's own `BadParameter` message word for word
+            // (issue #429) -- not reached today, since `e_entries`
+            // (every entry already has a value) says nothing about
+            // whether that value itself contains `=`; this is the
+            // `cli/app.py::_parse_env_vars` check proper.
+            let inputs = match electricity::parse_inputs(&raw_inputs) {
+                Ok(inputs) => inputs,
+                Err(message) => {
+                    eprintln!("electricity: {message}");
+                    eprintln!("{USAGE}");
+                    return ExitCode::from(2);
+                }
+            };
             // On failure: exactly the error text on stderr, exit 1
             // (issue #408's CLI section). On success: still exit 1
             // with the preview refusal -- there is no VM yet.
@@ -130,13 +188,26 @@ fn main() -> ExitCode {
                 "{}",
                 electricity::run_orchestration(
                     Path::new(&config_path),
-                    Path::new(&orchestration_path)
+                    Path::new(&orchestration_path),
+                    &inputs,
                 )
             );
             ExitCode::from(1)
         }
-        Action::DumpIr(config_path, orchestration_path) => {
-            match electricity::dump_ir(Path::new(&config_path), Path::new(&orchestration_path)) {
+        Action::DumpIr(config_path, orchestration_path, raw_inputs) => {
+            let inputs = match electricity::parse_inputs(&raw_inputs) {
+                Ok(inputs) => inputs,
+                Err(message) => {
+                    eprintln!("electricity: {message}");
+                    eprintln!("{USAGE}");
+                    return ExitCode::from(2);
+                }
+            };
+            match electricity::dump_ir(
+                Path::new(&config_path),
+                Path::new(&orchestration_path),
+                &inputs,
+            ) {
                 Ok(json) => {
                     println!("{json}");
                     ExitCode::SUCCESS
@@ -190,7 +261,7 @@ mod unit_tests {
     fn positional_args_are_a_run_request() {
         assert!(matches!(
             classify(&["config.json".to_string(), "orchestration.yml".to_string()]),
-            Action::Run(_, _)
+            Action::Run(_, _, _)
         ));
     }
 
@@ -203,7 +274,7 @@ mod unit_tests {
                 "config.json".to_string(),
                 "orchestration.yml".to_string()
             ]),
-            Action::Run(_, _)
+            Action::Run(_, _, _)
         ));
         assert!(matches!(
             classify(&[
@@ -212,7 +283,7 @@ mod unit_tests {
                 "config.json".to_string(),
                 "orchestration.yml".to_string()
             ]),
-            Action::Run(_, _)
+            Action::Run(_, _, _)
         ));
     }
 
@@ -223,7 +294,7 @@ mod unit_tests {
             "orchestration.yml".to_string(),
             "--dump-ir".to_string(),
         ]) {
-            Action::DumpIr(config, orchestration) => {
+            Action::DumpIr(config, orchestration, _) => {
                 assert_eq!(config, "config.json");
                 assert_eq!(orchestration, "orchestration.yml");
             }
@@ -239,7 +310,7 @@ mod unit_tests {
                 "config.json".to_string(),
                 "orchestration.yml".to_string(),
             ]),
-            Action::DumpIr(_, _)
+            Action::DumpIr(_, _, _)
         ));
     }
 
@@ -259,7 +330,7 @@ mod unit_tests {
             "extra.yml".to_string(),
             "--dump-ir".to_string(),
         ]) {
-            Action::DumpIr(config, orchestration) => {
+            Action::DumpIr(config, orchestration, _) => {
                 assert_eq!(config, "config.json");
                 assert_eq!(orchestration, "orchestration.yml");
             }
@@ -278,7 +349,7 @@ mod unit_tests {
                 "orchestration.yml".to_string(),
                 "--pretty".to_string(),
             ]),
-            Action::Run(_, _)
+            Action::Run(_, _, _)
         ));
     }
 
@@ -290,7 +361,46 @@ mod unit_tests {
                 "orchestration.yml".to_string(),
                 "-".to_string(),
             ]),
-            Action::Run(_, _)
+            Action::Run(_, _, _)
+        ));
+    }
+
+    #[test]
+    fn e_values_are_collected_in_order_for_a_run_request() {
+        match classify(&[
+            "config.json".to_string(),
+            "orchestration.yml".to_string(),
+            "-e".to_string(),
+            "name=World".to_string(),
+        ]) {
+            Action::Run(_, _, inputs) => assert_eq!(inputs, vec!["name=World".to_string()]),
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn e_values_are_collected_for_a_dump_ir_request_too() {
+        match classify(&[
+            "config.json".to_string(),
+            "orchestration.yml".to_string(),
+            "--dump-ir".to_string(),
+            "-e".to_string(),
+            "name=World".to_string(),
+        ]) {
+            Action::DumpIr(_, _, inputs) => assert_eq!(inputs, vec!["name=World".to_string()]),
+            _ => panic!("expected DumpIr"),
+        }
+    }
+
+    #[test]
+    fn trailing_e_with_no_value_is_a_usage_error() {
+        assert!(matches!(
+            classify(&[
+                "config.json".to_string(),
+                "orchestration.yml".to_string(),
+                "-e".to_string(),
+            ]),
+            Action::UsageError(_)
         ));
     }
 }

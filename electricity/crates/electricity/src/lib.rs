@@ -36,23 +36,65 @@ impl fmt::Display for PreviewUnsupported {
 
 impl std::error::Error for PreviewUnsupported {}
 
+/// Parses the CLI's `-e key=value` entries, in order, into
+/// [`electricity_compiler::CheckOptions`]'s own `inputs` shape --
+/// `cli/app.py::_parse_env_vars`'s own `"=" not in entry` check and its
+/// exact `BadParameter` text (issue #429: Circuitry's own message, not
+/// third-party, so matched word for word), and its own `result[key] =
+/// ...` dict-assignment semantics for a repeated key: an `IndexMap`'s
+/// `insert` keeps a repeated key at its *first* occurrence's position
+/// while taking the *new* value, exactly like a Python `dict`'s own
+/// `__setitem__` does -- so `-e name=A -e name=B` behaves like cof's
+/// own `-e name=A -e name=B` (`B` wins, in `name`'s original position).
+pub fn parse_inputs(entries: &[String]) -> Result<indexmap::IndexMap<String, String>, String> {
+    let mut result = indexmap::IndexMap::new();
+    for entry in entries {
+        match entry.split_once('=') {
+            Some((key, value)) => {
+                result.insert(key.to_string(), value.to_string());
+            }
+            None => {
+                return Err(format!(
+                    "Invalid -e format: {} (expected KEY=VALUE)",
+                    python_repr_str(entry)
+                ));
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// Python `repr(s)` of a plain Rust `&str` -- [`parse_inputs`]'s own
+/// malformed-entry message quotes the offending text the same way
+/// Python's `{entry!r}` f-string interpolation does.
+fn python_repr_str(s: &str) -> String {
+    electricity_value::Value::Str(s.to_string()).py_repr()
+}
+
 /// Runs *orchestration_path* the way `electricity <config.json> <doc> ...`
 /// does (issue #408's CLI section): [`electricity_compiler::check_for_run`]
 /// first, trusting the document and skipping preflight, with
 /// *config_path*'s own `runtime:` block (if the file exists and parses)
-/// merged under the document's own, key by key -- then, on success,
-/// still this preview's one refusal, since there is no VM yet.
+/// merged under the document's own, key by key, and *inputs* (the CLI's
+/// own `-e key=value` pairs, [`parse_inputs`]'s own output -- issue
+/// #429) passed straight through as `CheckOptions.inputs` -- then, on
+/// success, still this preview's one refusal, since there is no VM yet.
 ///
 /// A [`RunOutcome::CheckFailed`] carries [`electricity_compiler::check_for_run`]'s
 /// own error text verbatim -- the exact text the CLI writes to stderr on a
 /// check failure (issue #408's CLI section: "On failure: exactly the error
 /// text on stderr, exit 1"). [`RunOutcome::PreviewRefusal`] is the
 /// unconditional "On success: keep the current preview refusal" branch.
-pub fn run_orchestration(config_path: &Path, orchestration_path: &Path) -> RunOutcome {
+pub fn run_orchestration(
+    config_path: &Path,
+    orchestration_path: &Path,
+    inputs: &indexmap::IndexMap<String, String>,
+) -> RunOutcome {
     let options = electricity_compiler::CheckOptions {
         skip_preflight: true,
         trust_document: true,
         config_runtime: config_runtime_block(config_path),
+        inputs: inputs.clone(),
     };
     match electricity_compiler::check_for_run(orchestration_path, &options) {
         Ok(_) => RunOutcome::PreviewRefusal(PreviewUnsupported),
@@ -109,11 +151,21 @@ fn config_runtime_block(config_path: &Path) -> Option<electricity_value::Value> 
 /// Its `Err` becomes this function's `Err`, with the exact text
 /// `--dump-ir` writes to stderr on failure (the same text a plain run of
 /// the same document would report).
-pub fn dump_ir(config_path: &Path, orchestration_path: &Path) -> Result<String, String> {
+///
+/// *inputs* ([`parse_inputs`]'s own output, issue #429) is passed
+/// through as `CheckOptions.inputs`, same as [`run_orchestration`] --
+/// so a document with a required input needs `-e` on `--dump-ir` too,
+/// exactly as it does on a plain run.
+pub fn dump_ir(
+    config_path: &Path,
+    orchestration_path: &Path,
+    inputs: &indexmap::IndexMap<String, String>,
+) -> Result<String, String> {
     let options = electricity_compiler::CheckOptions {
         skip_preflight: true,
         trust_document: true,
         config_runtime: config_runtime_block(config_path),
+        inputs: inputs.clone(),
     };
     let program = electricity_compiler::check_for_run(orchestration_path, &options)
         .map_err(|err| err.to_string())?;
@@ -156,7 +208,7 @@ mod tests {
         std::fs::write(&config, "{}").unwrap();
         std::fs::write(&doc, "effects: []\n").unwrap();
 
-        let outcome = run_orchestration(&config, &doc);
+        let outcome = run_orchestration(&config, &doc, &indexmap::IndexMap::new());
         let message = outcome.to_string();
         // `effects: []` is structurally valid, has no `runtime:`
         // configuration error, and compiles cleanly, so this preview's
@@ -184,7 +236,7 @@ mod tests {
         let doc = dir.join("doc.yml");
         std::fs::write(&doc, "").unwrap();
 
-        let outcome = run_orchestration(&config, &doc);
+        let outcome = run_orchestration(&config, &doc, &indexmap::IndexMap::new());
         let message = outcome.to_string();
         // The "required property" text past the location is the Rust
         // `jsonschema` crate's own (third-party) wording, not required
@@ -195,5 +247,60 @@ mod tests {
         assert!(message.contains("required property"), "{message}");
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn run_orchestration_passes_e_inputs_to_check_for_run() {
+        let dir = std::env::temp_dir().join(format!(
+            "electricity-run-orchestration-test-inputs-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("config.json");
+        let doc = dir.join("doc.yml");
+        std::fs::write(
+            &doc,
+            "interface:\n  inputs:\n    name:\n      type: string\n      required: true\neffects: []\n",
+        )
+        .unwrap();
+
+        let outcome = run_orchestration(&config, &doc, &indexmap::IndexMap::new());
+        assert!(matches!(outcome, RunOutcome::CheckFailed(_)), "{outcome:?}");
+        assert!(
+            outcome
+                .to_string()
+                .contains("missing required input 'name'"),
+            "{outcome}"
+        );
+
+        let mut inputs = indexmap::IndexMap::new();
+        inputs.insert("name".to_string(), "World".to_string());
+        let outcome = run_orchestration(&config, &doc, &inputs);
+        assert!(
+            matches!(outcome, RunOutcome::PreviewRefusal(_)),
+            "{outcome:?}"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn parse_inputs_rejects_an_entry_with_no_equals_sign() {
+        assert_eq!(
+            parse_inputs(&["badtext".to_string()]),
+            Err("Invalid -e format: 'badtext' (expected KEY=VALUE)".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_inputs_keeps_a_repeated_key_at_its_first_position_with_the_last_value() {
+        let inputs = parse_inputs(&[
+            "name=Alice".to_string(),
+            "age=30".to_string(),
+            "name=Bob".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(inputs.keys().collect::<Vec<_>>(), vec!["name", "age"]);
+        assert_eq!(inputs["name"], "Bob");
     }
 }

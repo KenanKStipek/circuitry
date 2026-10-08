@@ -475,7 +475,11 @@ fn parse_python_float(raw: &str) -> Option<f64> {
 /// key and a present `-e x=null` are deliberately indistinguishable one
 /// step up, in [`check_interface_inputs_error`]'s own `absent` check,
 /// exactly as Python's `key not in inputs or inputs[key] is None` is).
-fn cli_input_value(options: &CheckOptions, key: &str, declared_type_is_string: bool) -> Option<Value> {
+fn cli_input_value(
+    options: &CheckOptions,
+    key: &str,
+    declared_type_is_string: bool,
+) -> Option<Value> {
     let raw = options.inputs.get(key)?;
     if declared_type_is_string {
         return Some(Value::Str(raw.clone()));
@@ -518,8 +522,7 @@ fn check_interface_inputs_error(document: &Value, options: &CheckOptions) -> Opt
             spec_dict.get(&Value::Str("type".to_string())),
             Some(Value::Str(s)) if s == "string"
         );
-        let current =
-            key_as_str.and_then(|k| cli_input_value(options, k, declared_type_is_string));
+        let current = key_as_str.and_then(|k| cli_input_value(options, k, declared_type_is_string));
         let absent = matches!(current, None | Some(Value::None));
         let value = if absent {
             if let Some(default) = spec_dict.get(&Value::Str("default".to_string())) {
