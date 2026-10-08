@@ -5,6 +5,9 @@ on:
     paths:
       - "oscilloscope/**"
       - "electricity/crates/**"
+      - "electricity/Cargo.toml"
+      - "src/circuitry/**"
+      - "pyproject.toml"
       - ".github/workflows/oscilloscope.yml"
       - ".github/workflows/rust-release-build.yml"
   push:
@@ -14,6 +17,9 @@ on:
     paths:
       - "oscilloscope/**"
       - "electricity/crates/**"
+      - "electricity/Cargo.toml"
+      - "src/circuitry/**"
+      - "pyproject.toml"
       - ".github/workflows/oscilloscope.yml"
       - ".github/workflows/rust-release-build.yml"
 
@@ -70,6 +76,32 @@ jobs:
       - name: cargo check --workspace (MSRV)
         working-directory: oscilloscope
         run: cargo check --workspace
+
+  e2e-cof:
+    name: end-to-end with cof
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: oscilloscope
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: install Circuitry (cof) from this checkout
+        run: python3 -m pip install -e .
+
+      - name: cargo test (OSP_E2E_COF=1)
+        working-directory: oscilloscope
+        env:
+          OSP_E2E_COF: "1"
+          CARGO_BUILD_JOBS: "4"
+        run: cargo test --workspace
 
   build:
     name: release build (no publish)

@@ -8,3 +8,16 @@ edition = "2024"
 rust-version = "1.86"
 license = "MIT"
 publish = false
+
+# Copied from ../electricity/Cargo.toml (#422 review): osp compiles
+# documents through electricity-compiler in debug builds too, so the
+# same unoptimized-debug-build stack overflow electricity's own
+# `tests/nesting_limit.rs` measured applies here as well.
+[profile.dev.package.electricity-yaml]
+opt-level = 2
+[profile.dev.package.electricity-cel]
+opt-level = 2
+[profile.dev.package.cel]
+opt-level = 2
+[profile.dev.package.antlr4rust]
+opt-level = 2

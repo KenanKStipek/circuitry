@@ -14,3 +14,10 @@ description = "osp (oscilloscope) core library: plan, observe, model, diff, engi
 # bytecode IR also breaks osp, in the same pass.
 electricity-compiler = { path = "../../../electricity/crates/electricity-compiler" }
 electricity-bytecode = { path = "../../../electricity/crates/electricity-bytecode" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+signal-hook = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
