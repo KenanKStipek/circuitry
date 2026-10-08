@@ -351,15 +351,17 @@ const FALSE_WORDS: [&str; 6] = ["false", "f", "no", "n", "off", "0"];
 /// rendered-shaped string to *declared_type*, Python's own exact
 /// `int()`/`float()`/custom-boolean error text on failure (its own
 /// `json.loads` text for `array`/`object` is third-party, not matched
-/// word for word). Never reaches the `array`/`object`/plain-`string`
-/// arms from [`check_interface_inputs_error`] today (no probe needs
-/// them), but implemented for every `_TYPE_NAMES` entry `_coerce`
-/// itself handles, not just the ones exercised so far.
+/// word for word). `array`/`object` use plain `json.loads` -- a
+/// duplicate object key silently keeps the last value, not
+/// `core/json_load.py`'s stricter path-naming `DuplicateKeyError`
+/// orchestration documents themselves get (`_coerce` imports the stdlib
+/// `json` module directly, same as [`electricity_json::loads`]'s own
+/// doc comment lists `cli/app.py`'s `-e` values among its callers).
 fn coerce_interface_value(raw: &str, declared_type: &str) -> Result<Value, String> {
     match declared_type {
         "number" => parse_python_int(raw)
             .map(Value::Int)
-            .or_else(|| raw.trim().parse::<f64>().ok().map(Value::Float))
+            .or_else(|| parse_python_float(raw).map(Value::Float))
             .ok_or_else(|| {
                 format!(
                     "could not convert string to float: {}",
@@ -382,22 +384,51 @@ fn coerce_interface_value(raw: &str, declared_type: &str) -> Result<Value, Strin
                 Err(format!("{} is not a boolean", python_repr_str(raw)))
             }
         }
-        "array" | "object" => electricity_json::load_json(raw).map_err(|e| e.to_string()),
+        "array" | "object" => electricity_json::loads(raw).map_err(|e| e.to_string()),
         _ => Ok(Value::Str(raw.to_string())),
     }
 }
 
+/// Python's own underscore-digit-separator rule (PEP 515), applied to
+/// any numeric-literal text before [`parse_python_int`]/
+/// [`parse_python_float`] see it: an `_` is valid only directly between
+/// two ASCII digits -- never leading, trailing, doubled, or next to a
+/// sign/`.`/`e`/`E`. Returns `None` (an invalid literal, same as
+/// CPython's `int()`/`float()` would raise on it) on any other
+/// placement; otherwise every `_` is stripped and the remaining text
+/// returned. A CLI `-e` value with no `_` at all (the overwhelming
+/// majority) is returned unchanged.
+fn strip_python_underscores(s: &str) -> Option<String> {
+    if !s.contains('_') {
+        return Some(s.to_string());
+    }
+    let chars: Vec<char> = s.chars().collect();
+    for (i, c) in chars.iter().enumerate() {
+        if *c != '_' {
+            continue;
+        }
+        let prev_digit = i > 0 && chars[i - 1].is_ascii_digit();
+        let next_digit = i + 1 < chars.len() && chars[i + 1].is_ascii_digit();
+        if !prev_digit || !next_digit {
+            return None;
+        }
+    }
+    Some(chars.into_iter().filter(|c| *c != '_').collect())
+}
+
 /// Python `int(s)`: optional surrounding whitespace, an optional
-/// leading `+`/`-`, then one or more ASCII digits -- arbitrary
-/// precision, via [`electricity_value::IntValue::parse_decimal`].
-/// Unlike CPython, does not accept an underscore digit separator
-/// (`"1_000"`); no probe needs it, and `interface.inputs` defaults are
-/// ordinary YAML/JSON scalars, not Python source text.
+/// leading `+`/`-`, then one or more ASCII digits (PEP 515 underscores
+/// allowed between digits, via [`strip_python_underscores`]) --
+/// arbitrary precision, via [`electricity_value::IntValue::parse_decimal`].
 fn parse_python_int(raw: &str) -> Option<electricity_value::IntValue> {
     let trimmed = raw.trim();
-    let (negative, digits) = match trimmed.strip_prefix('-') {
+    let destressed = strip_python_underscores(trimmed)?;
+    let (negative, digits) = match destressed.strip_prefix('-') {
         Some(rest) => (true, rest),
-        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+        None => (
+            false,
+            destressed.strip_prefix('+').unwrap_or(destressed.as_str()),
+        ),
     };
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
@@ -410,19 +441,63 @@ fn parse_python_int(raw: &str) -> Option<electricity_value::IntValue> {
     electricity_value::IntValue::parse_decimal(&signed)
 }
 
-/// `core/interface_inputs.py::check_interface_inputs`, specialized to
-/// `inputs = {}` always (every call from [`check_for_run`] runs with no
-/// input namespace of its own -- neither this crate's [`CheckOptions`]
-/// nor the golden corpus's own ground truth (`validate`/`run` called
-/// with no CLI `-e`/`--state` override) ever carries one): every key
-/// starts absent, so the function reduces to, per declared input in
-/// document order, a `default:` (type-checked the same way, and
-/// returned as this input's value) or a `required: true` (an error
-/// naming it) -- any other key (no default, not required) is simply
-/// skipped, exactly as an absent, optional, undefaulted input already
-/// is. Stops and returns the first violation, matching Python's own
-/// eager `raise`.
-fn check_interface_inputs_error(document: &Value) -> Option<String> {
+/// Python `float(s)`: PEP 515 underscores (via
+/// [`strip_python_underscores`]), then Rust's own `f64::from_str` --
+/// which already accepts the same decimal/exponent grammar plus
+/// `inf`/`infinity`/`nan` case-insensitively with an optional sign, so
+/// nothing further is needed. Only reached from [`coerce_interface_value`]'s
+/// `"number"` arm, where any successfully parsed `f64` already satisfies
+/// `matches_type(_, "number")` regardless of its actual value -- so unlike
+/// [`parse_python_int`], precision edge cases here can never change
+/// [`check_interface_inputs_error`]'s verdict, only whether parsing
+/// succeeds at all.
+fn parse_python_float(raw: &str) -> Option<f64> {
+    let trimmed = raw.trim();
+    let destressed = strip_python_underscores(trimmed)?;
+    destressed.parse::<f64>().ok()
+}
+
+/// A declared input's resolved *current* value, from *options*' `-e`
+/// text, matching what Circuitry's own `state["input"]` namespace holds
+/// by the time `check_interface_inputs` runs for a CLI-driven run:
+/// `cli/app.py::_parse_env_vars` JSON-sniffs every `-e` value first
+/// (`-e start=5` becomes the int `5`, `-e x=1.50` becomes the float
+/// `1.5`, a value that isn't valid JSON -- `-e name=World`, `-e
+/// n=1_000` -- stays the literal text), and
+/// `_restore_raw_text_for_string_inputs` then substitutes the original
+/// `-e` text back in, unconditionally, for any key `interface.inputs`
+/// declares `type: string` (so a declared-string input never loses
+/// text to JSON's own numeric/boolean coercion, *and* a JSON null given
+/// to a string input stays the literal text `"null"` rather than
+/// becoming absent). `None` means the key wasn't given at all -- not
+/// the same as a present JSON `null`, which this returns as
+/// `Some(Value::None)` for every other declared type (an absent CLI
+/// key and a present `-e x=null` are deliberately indistinguishable one
+/// step up, in [`check_interface_inputs_error`]'s own `absent` check,
+/// exactly as Python's `key not in inputs or inputs[key] is None` is).
+fn cli_input_value(options: &CheckOptions, key: &str, declared_type_is_string: bool) -> Option<Value> {
+    let raw = options.inputs.get(key)?;
+    if declared_type_is_string {
+        return Some(Value::Str(raw.clone()));
+    }
+    Some(electricity_json::loads(raw).unwrap_or_else(|_| Value::Str(raw.clone())))
+}
+
+/// `core/interface_inputs.py::check_interface_inputs`, against *options*'
+/// own `-e` input namespace (empty by default, so every golden corpus
+/// case and every pre-#429 caller sees the exact same always-absent
+/// behavior this function used to be hard-coded to): per declared input
+/// in document order, [`cli_input_value`] decides whether the key is
+/// present; an absent key gets its `default:` (type-checked the same
+/// way as any other value, falling through rather than `continue`-ing
+/// past the check below) or, with no default, an error if `required:
+/// true`, or is simply skipped (an absent, optional, undefaulted input)
+/// -- a present value is coerced to its declared `type` with
+/// [`coerce_interface_value`] (`core/interface_inputs.py::_coerce`) when
+/// it doesn't already match. Undeclared keys in *options.inputs* are
+/// never looked at: extra `-e` input stays allowed. Stops and returns
+/// the first violation, matching Python's own eager `raise`.
+fn check_interface_inputs_error(document: &Value, options: &CheckOptions) -> Option<String> {
     let interface = document
         .as_dict()?
         .get(&Value::Str("interface".to_string()))?
@@ -435,14 +510,29 @@ fn check_interface_inputs_error(document: &Value) -> Option<String> {
             continue;
         };
         let key_str = key.py_str();
-        let value = if let Some(default) = spec_dict.get(&Value::Str("default".to_string())) {
-            default.clone()
-        } else if is_truthy(spec_dict.get(&Value::Str("required".to_string()))) {
-            return Some(format!(
-                "missing required input '{key_str}' declared in orchestration interface."
-            ));
+        let key_as_str = match key {
+            Value::Str(s) => Some(s.as_str()),
+            _ => None,
+        };
+        let declared_type_is_string = matches!(
+            spec_dict.get(&Value::Str("type".to_string())),
+            Some(Value::Str(s)) if s == "string"
+        );
+        let current =
+            key_as_str.and_then(|k| cli_input_value(options, k, declared_type_is_string));
+        let absent = matches!(current, None | Some(Value::None));
+        let value = if absent {
+            if let Some(default) = spec_dict.get(&Value::Str("default".to_string())) {
+                default.clone()
+            } else if is_truthy(spec_dict.get(&Value::Str("required".to_string()))) {
+                return Some(format!(
+                    "missing required input '{key_str}' declared in orchestration interface."
+                ));
+            } else {
+                continue;
+            }
         } else {
-            continue;
+            current.expect("not absent")
         };
         let declared_type = match spec_dict.get(&Value::Str("type".to_string())) {
             Some(Value::Str(s))
@@ -666,13 +756,11 @@ pub fn check_for_run(path: &Path, options: &CheckOptions) -> Result<Program, Run
     // `check_interface_inputs` against the top-level `interface.inputs`
     // -- `run()`'s own position, after the concurrency limiter and
     // before structural checks (`cli/runtime_shim.py::run`, confirmed
-    // directly). Always run with an empty input namespace: neither
-    // surface this crate exposes (`check_report`/`check_for_run`) takes
-    // a CLI `-e`/`--state` value of its own, matching every golden
-    // case's own ground truth (`validate`/`run` always called with no
-    // such override) -- see [`check_interface_inputs_error`]'s own doc
-    // comment.
-    if let Some(message) = check_interface_inputs_error(&document) {
+    // directly), against *options.inputs* -- the CLI's own `-e`
+    // key=value pairs (issue #429) -- see [`check_interface_inputs_error`]'s
+    // own doc comment for how a CLI-shaped input namespace is built from
+    // them.
+    if let Some(message) = check_interface_inputs_error(&document, options) {
         return Err(RunCheckError::Compile(message));
     }
 
@@ -845,6 +933,18 @@ mod tests {
         Value::Dict(dict)
     }
 
+    fn no_inputs() -> CheckOptions {
+        CheckOptions::default()
+    }
+
+    fn with_inputs(pairs: Vec<(&str, &str)>) -> CheckOptions {
+        let mut options = CheckOptions::default();
+        for (k, v) in pairs {
+            options.inputs.insert(k.to_string(), v.to_string());
+        }
+        options
+    }
+
     #[test]
     fn missing_required_input_with_no_default_is_an_error() {
         let doc = interface_doc(vec![
@@ -852,7 +952,7 @@ mod tests {
             ("required", Value::Bool(true)),
         ]);
         assert_eq!(
-            check_interface_inputs_error(&doc),
+            check_interface_inputs_error(&doc, &no_inputs()),
             Some("missing required input 'x' declared in orchestration interface.".to_string())
         );
     }
@@ -864,7 +964,7 @@ mod tests {
             ("default", Value::Str("abc".to_string())),
         ]);
         assert_eq!(
-            check_interface_inputs_error(&doc),
+            check_interface_inputs_error(&doc, &no_inputs()),
             Some(
                 "input 'x' declared type 'integer' but 'abc' could not be converted: invalid \
                  literal for int() with base 10: 'abc'"
@@ -880,7 +980,7 @@ mod tests {
             ("default", Value::List(vec![Value::from(1i64)])),
         ]);
         assert_eq!(
-            check_interface_inputs_error(&doc),
+            check_interface_inputs_error(&doc, &no_inputs()),
             Some("input 'x' declared type 'integer' but got list.".to_string())
         );
     }
@@ -888,7 +988,7 @@ mod tests {
     #[test]
     fn optional_undefaulted_input_is_not_an_error() {
         let doc = interface_doc(vec![("type", Value::Str("string".to_string()))]);
-        assert_eq!(check_interface_inputs_error(&doc), None);
+        assert_eq!(check_interface_inputs_error(&doc, &no_inputs()), None);
     }
 
     #[test]
@@ -897,6 +997,104 @@ mod tests {
             ("type", Value::Str("integer".to_string())),
             ("default", Value::from(3i64)),
         ]);
-        assert_eq!(check_interface_inputs_error(&doc), None);
+        assert_eq!(check_interface_inputs_error(&doc, &no_inputs()), None);
+    }
+
+    #[test]
+    fn required_input_supplied_via_e_satisfies_it() {
+        let doc = interface_doc(vec![
+            ("type", Value::Str("string".to_string())),
+            ("required", Value::Bool(true)),
+        ]);
+        assert_eq!(
+            check_interface_inputs_error(&doc, &with_inputs(vec![("x", "hello")])),
+            None
+        );
+    }
+
+    #[test]
+    fn provided_e_value_overrides_the_default() {
+        let doc = interface_doc(vec![
+            ("type", Value::Str("integer".to_string())),
+            ("default", Value::from(3i64)),
+        ]);
+        // An invalid override proves the default was actually replaced,
+        // not merely satisfied alongside it.
+        assert_eq!(
+            check_interface_inputs_error(&doc, &with_inputs(vec![("x", "abc")])),
+            Some(
+                "input 'x' declared type 'integer' but 'abc' could not be converted: invalid \
+                 literal for int() with base 10: 'abc'"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn integer_e_value_with_underscores_coerces_like_pythons_int() {
+        let doc = interface_doc(vec![
+            ("type", Value::Str("integer".to_string())),
+            ("required", Value::Bool(true)),
+        ]);
+        assert_eq!(
+            check_interface_inputs_error(&doc, &with_inputs(vec![("x", "1_000")])),
+            None
+        );
+    }
+
+    #[test]
+    fn e_value_that_json_sniffs_to_the_wrong_type_reports_the_sniffed_type() {
+        // `-e x=5.0` JSON-sniffs to a float before `check_interface_inputs`
+        // ever sees it (`cli/app.py::_parse_env_vars`), so a declared
+        // `integer` input rejects it as a float, not as unparsable text.
+        let doc = interface_doc(vec![
+            ("type", Value::Str("integer".to_string())),
+            ("required", Value::Bool(true)),
+        ]);
+        assert_eq!(
+            check_interface_inputs_error(&doc, &with_inputs(vec![("x", "5.0")])),
+            Some("input 'x' declared type 'integer' but got float.".to_string())
+        );
+    }
+
+    #[test]
+    fn boolean_word_e_value_coerces() {
+        let doc = interface_doc(vec![
+            ("type", Value::Str("boolean".to_string())),
+            ("required", Value::Bool(true)),
+        ]);
+        assert_eq!(
+            check_interface_inputs_error(&doc, &with_inputs(vec![("x", "yes")])),
+            None
+        );
+        assert_eq!(
+            check_interface_inputs_error(&doc, &with_inputs(vec![("x", "nope")])),
+            Some(
+                "input 'x' declared type 'boolean' but 'nope' could not be converted: 'nope' is \
+                 not a boolean"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn string_typed_e_value_keeps_its_exact_text_even_when_it_looks_like_json() {
+        let doc = interface_doc(vec![("type", Value::Str("string".to_string()))]);
+        // `06`/`true` would JSON-sniff away their original shape if this
+        // input weren't declared `type: string` -- the CLI restores the
+        // raw text for exactly that case.
+        assert_eq!(
+            check_interface_inputs_error(&doc, &with_inputs(vec![("x", "06")])),
+            None
+        );
+    }
+
+    #[test]
+    fn undeclared_extra_e_input_is_allowed() {
+        let doc = interface_doc(vec![("type", Value::Str("string".to_string()))]);
+        assert_eq!(
+            check_interface_inputs_error(&doc, &with_inputs(vec![("unrelated", "1")])),
+            None
+        );
     }
 }

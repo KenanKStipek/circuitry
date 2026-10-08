@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 use electricity_compiler::CheckOptions;
+use indexmap::IndexMap;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -67,6 +68,11 @@ pub struct Comparison {
 pub struct CaseOptions {
     pub skip_preflight: bool,
     pub trust_document: bool,
+    /// The CLI's `-e key=value` text pairs, in document/JSON-object
+    /// order -- `_compiler_corpus.py`'s own optional `"inputs"` key
+    /// (issue #429), absent for every case that doesn't pass any.
+    #[serde(default)]
+    pub inputs: IndexMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -136,11 +142,13 @@ impl Case {
                 skip_preflight: options.skip_preflight,
                 trust_document: options.trust_document,
                 config_runtime: None,
+                inputs: options.inputs.clone(),
             },
             None => CheckOptions {
                 skip_preflight: true,
                 trust_document: true,
                 config_runtime: None,
+                inputs: IndexMap::new(),
             },
         }
     }
