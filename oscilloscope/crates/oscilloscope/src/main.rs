@@ -364,25 +364,30 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     }
 }
 
+/// Prints a clap parse error to the right stream and returns its exit
+/// code: `--help`/`--version` (exit 0) print to stdout, same as any
+/// other successful output; an actual usage error (exit 2) prints to
+/// stderr, same as every other error `osp` reports (#422 review note).
+fn report_clap_error(err: clap::Error) -> ExitCode {
+    if err.exit_code() == 0 {
+        print!("{err}");
+    } else {
+        eprint!("{err}");
+    }
+    ExitCode::from(err.exit_code() as u8)
+}
+
 fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
-        Err(err) => {
-            // clap's own exit codes: 0 for --help/--version, 2 for a
-            // usage error (`clap::error::ErrorKind` maps to `Error::exit_code()`).
-            print!("{err}");
-            return ExitCode::from(err.exit_code() as u8);
-        }
+        Err(err) => return report_clap_error(err),
     };
     match cli.command {
         Commands::Watch(args) => do_watch(args),
         Commands::Run(raw) => {
             match RunArgs::try_parse_from(std::iter::once("osp".to_string()).chain(raw)) {
                 Ok(args) => do_run(args),
-                Err(err) => {
-                    print!("{err}");
-                    ExitCode::from(err.exit_code() as u8)
-                }
+                Err(err) => report_clap_error(err),
             }
         }
     }
