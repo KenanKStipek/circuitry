@@ -187,6 +187,7 @@ def ref_child_requirements(
             # inside, exactly the rule `core.use.UseRuntime._confinement_root_for`
             # gives it at run time (#396); the digest the two must agree on
             # depends on it.
+            resolved: Path
             if kind == "ref":
                 try:
                     resolved_ref = resolve_ref(value, registry=registry)
@@ -201,11 +202,12 @@ def ref_child_requirements(
                     else default_project_root(resolved.parent)
                 )
             else:
-                resolved = resolve_reference(
+                maybe_resolved = resolve_reference(
                     kind, value, parent_dir=parent_dir, registry=registry
                 )
-                if resolved is None:
+                if maybe_resolved is None:
                     continue
+                resolved = maybe_resolved
                 confinement_root = default_project_root(resolved.resolve().parent)
             key = str(resolved)
             if key in seen:

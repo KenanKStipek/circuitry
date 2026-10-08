@@ -570,10 +570,9 @@ def check_prompt_composition(
             # checks continue from — those are walked with THAT dict as
             # `out`, so nested names land there (dotted-reachable from
             # anywhere), never merged back up into the enclosing scope.
-            introduces_scope = (
-                isinstance(name, str) and bool(name) and etype in _SCOPE_INTRODUCING_TYPES
-            )
-            next_out = out[name]["children"] if introduces_scope else out
+            next_out = out
+            if isinstance(name, str) and name and etype in _SCOPE_INTRODUCING_TYPES:
+                next_out = out[name]["children"]
             for field in _CHILD_LISTS:
                 walk(effect.get(field), f"{effect_path}.{field}", next_out)
 

@@ -17,7 +17,11 @@ from typing import Any
 
 from ..cli.redaction import redact
 from ..output import console as _console
-from .prompt_compose import declared_prompts, known_effect_names, render_with_composition
+from .prompt_compose import (
+    declared_prompts,
+    known_effect_names,
+    render_with_composition,
+)
 from .store import Store
 
 

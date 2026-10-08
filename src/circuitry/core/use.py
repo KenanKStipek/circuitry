@@ -22,7 +22,11 @@ from .expect import ExpectDef, evaluate_expect, expect_failure_summary
 from .interface_inputs import check_interface_inputs
 from .outputs import normalize_outputs
 from .prompt import RetryPolicyDef
-from .prompt_compose import declared_prompts, known_effect_names, render_with_composition
+from .prompt_compose import (
+    declared_prompts,
+    known_effect_names,
+    render_with_composition,
+)
 from .store import Store
 from .store.store import replace_node
 from .yaml_load import load_yaml
@@ -891,7 +895,9 @@ class UseRuntime:
                     # declared prompts" (#396) — set fresh here rather than
                     # inherited, since `child_runtime_config` started as a
                     # shallow copy of the parent's.
-                    from .prompt_compose import EFFECT_NAMES_RUNTIME_KEY as _EFFECT_NAMES_KEY
+                    from .prompt_compose import (
+                        EFFECT_NAMES_RUNTIME_KEY as _EFFECT_NAMES_KEY,
+                    )
                     from .prompt_compose import RUNTIME_CONFIG_KEY as _PROMPTS_KEY
 
                     child_runtime_config[_PROMPTS_KEY] = child_root.prompts
