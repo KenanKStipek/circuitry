@@ -1202,7 +1202,7 @@ Everywhere else a template renders — an `if`/`while` model template, `expect.t
 
 - `<path>` is a literal relative path (no `{{ }}`), resolved against the directory of the document that names it.
 - After symlinks are resolved, it must stay inside the document's project: the directory of the nearest `circuitry.config.json`/`config.json` at or above the document, or the document's own directory when there is none. `../prompts/x.md` is fine as long as it stays inside. Absolute paths and paths that leave the project are errors.
-- A library document (`use: ref:`, `cof run-library`) resolves against its own file in the library source and must stay inside that source's tree instead — for a `github` source, the cached tree at the pinned commit.
+- A library document (`use: ref:`, `cof run-library`) resolves against its own file in the library source, against the same project rule above applied to the child's own location — except a `github` source, which has no project config of its own to discover: it is confined to the cached tree at the pinned commit instead, never anywhere else on disk.
 - Files are read when the document is loaded and compiled, never mid-run. `cof check` reports, naming the field, a file that is missing, unreadable, not UTF-8, or larger than 1 MiB.
 - A document generated at run time (a reflector/decompose plan, a `use: inline` child) cannot use `file:` — that is a compile error. Neither can a document with no file of its own (stdin, an SDK string).
 

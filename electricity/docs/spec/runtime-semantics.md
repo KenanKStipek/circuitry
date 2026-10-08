@@ -1708,7 +1708,8 @@ the run is fully deterministic.
 | C28 | `type: yield` with a plain template, no `model`/`adapter` configured at all | n/a | `prime.<name>.value` is the rendered text; no adapter call is attempted (§3.6, §5.9) |
 | C29 | Declared `prompts:` map, `{{> name}}` splicing a declared prompt into another declared prompt and into a `yield` template, with the declared prompt's text ending in `\n` | n/a | Nested declared-prompt expansion; the one-trailing-newline-drop rule (§3.6) |
 | C30 | Two `{{> name}}` tags concatenated in one tool `params` string, each naming a different `yield` effect | n/a | Both splice in, unescaped by the surrounding (escaped) tool-param context (§3.4, §3.6) |
-| C31 | `yield` template `{{x}}` with `inputs: {x: '"<b>&'}`, vs. the same value through a tool `params` string | n/a | Prompt text (`yield.template`) renders `{{x}}` unescaped; the tool param still HTML-escapes it (§3.1, §3.4) |
+| C31 | `yield` template `{{input.x}}`, vs. the same value through a tool `params` string | `-e x='"<b>&'` | Prompt text (`yield.template`) renders `{{input.x}}` unescaped; the tool param still HTML-escapes it (§3.1, §3.4) |
+| C32 | Declared `prompts:` map with one entry sourced from `{file: <path>}`, spliced via `{{> name}}` into a `yield` template alongside an ordinary `{{input...}}` reference | `-e topic=circuitry` | The file's own text is read at compile time and used exactly as inline text would be (§3.6.2) |
 
 ---
 

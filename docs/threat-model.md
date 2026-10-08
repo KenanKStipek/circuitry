@@ -539,9 +539,16 @@ project pointing outside it is still caught — checked against *that
 document's project*: the directory of the nearest
 `circuitry.config.json`/`config.json` at or above it, or its own directory
 when there is none. A library document (`use: ref:`, `cof run-library`)
-resolves the same way but is confined to its source's own tree instead — for
-a `github` source, the cached tree at the pinned commit, never anywhere else
-on disk. An absolute path, or one that resolves outside the confinement
+resolves the same way, against *its own* location rather than the parent
+document's — with one exception: a `github` source is confined to the
+cached tree at the pinned commit instead, never anywhere else on disk,
+since that cache has no project config of its own to discover. A
+folder/curation source already on disk (or a plain `path:`/`orchestration:`
+field) gets the ordinary rule above, applied to the child's own directory —
+not necessarily the whole source's tree: a source with no
+`circuitry.config.json`/`config.json` anywhere above the specific document
+confines to that document's own directory, the same as any other file
+without one. An absolute path, or one that resolves outside the confinement
 root, is a `cof check`/compile error naming the field, same as a missing,
 unreadable, non-UTF-8, or over-1-MiB file. A document generated at run time
 (a reflector/decompose plan, a `use: inline` child) cannot use `file:` at
@@ -551,8 +558,9 @@ is a compile error there too, not a narrower check. Implementation:
 
 **Residual risk.** Confinement is to a *project*, not to the one file a
 `use: ref:`/`path:` child itself is — a prompt file anywhere else under the
-same project (or the same library source's tree) is reachable, by design
-(so `../shared/voice.md` works across sibling documents). A host that
+same project (or, for a `github` source, the same cached commit) is
+reachable, by design (so `../shared/voice.md` works across sibling
+documents). A host that
 trusts a document at all is already trusting everything under its project
 by this same reasoning §1 and §6 already apply to `use: inline`/`path:`
 children and project config discovery. Content a prompt file carries (and a

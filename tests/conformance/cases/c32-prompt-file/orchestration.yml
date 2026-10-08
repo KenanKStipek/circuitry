@@ -1,0 +1,8 @@
+name: c32-prompt-file
+prompts:
+  voice:
+    file: voice.md
+effects:
+  - type: yield
+    name: brief
+    template: "{{> voice}} Topic: {{input.topic}}"
