@@ -1,0 +1,649 @@
+[
+  {
+    "document": {
+      "effects": []
+    },
+    "locations": [],
+    "name": "minimal",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "fetch",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "tool_effect",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "ask",
+          "template": "Ask a question",
+          "type": "prompt"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "prompt_text_effect",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "ask",
+          "prompt_type": "json",
+          "schema": {
+            "type": "object"
+          },
+          "template": "Ask a question",
+          "type": "prompt"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "prompt_json_effect_with_schema",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "effects": [
+            {
+              "name": "t",
+              "provider": "ffmpeg",
+              "type": "tool"
+            }
+          ],
+          "flow": "tree",
+          "name": "d",
+          "type": "dynamic"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "dynamic_tree_with_child",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "else": [],
+          "if": {
+            "expr": "true",
+            "mode": "cel"
+          },
+          "then": [
+            {
+              "name": "t",
+              "provider": "ffmpeg",
+              "type": "tool"
+            }
+          ],
+          "type": "if"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "conditional_if_then_else",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "body": [
+            {
+              "name": "t",
+              "provider": "ffmpeg",
+              "type": "tool"
+            }
+          ],
+          "each": {
+            "in": "prime.x.value"
+          },
+          "name": "l",
+          "type": "loop"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "loop_each",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "body": [
+            {
+              "name": "t",
+              "provider": "ffmpeg",
+              "type": "tool"
+            }
+          ],
+          "type": "loop",
+          "while": {
+            "expr": "true",
+            "mode": "cel"
+          }
+        }
+      ]
+    },
+    "locations": [],
+    "name": "loop_while",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "effects": [
+            {
+              "name": "t",
+              "provider": "ffmpeg",
+              "type": "tool"
+            }
+          ],
+          "name": "r",
+          "type": "reflector"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "reflector_effect",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "u",
+          "path": "./child.yml",
+          "type": "use"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "use_with_path",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "u",
+          "ref": "lib/thing",
+          "type": "use"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "use_with_ref",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "inline": "effects: []",
+          "name": "u",
+          "type": "use"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "use_with_inline",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "expect": "value != null",
+          "name": "t",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "tool_expect_bare_string",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "expect": {
+            "mode": "model",
+            "template": "Did it work?"
+          },
+          "name": "t",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "tool_expect_model_object",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "t",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ],
+      "interface": {
+        "inputs": {
+          "topic": {
+            "required": true,
+            "type": "string"
+          }
+        },
+        "outputs": {
+          "summary": "prime.summarize.value"
+        }
+      }
+    },
+    "locations": [],
+    "name": "interface_inputs_and_outputs",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {
+      "adapter": "ollama",
+      "effects": [
+        {
+          "name": "t",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ],
+      "finally": [
+        {
+          "name": "cleanup",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ],
+      "flow": "chain",
+      "model": "llama3",
+      "version": "1.0.0"
+    },
+    "locations": [],
+    "name": "full_document_with_finally",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {},
+    "locations": [
+      "top level"
+    ],
+    "name": "missing_effects",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": "nope"
+    },
+    "locations": [
+      "effects"
+    ],
+    "name": "effects_wrong_type",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [
+        {}
+      ]
+    },
+    "locations": [
+      "effects[0]",
+      "effects[0]",
+      "effects[0]",
+      "effects[0]"
+    ],
+    "name": "effect_missing_type",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "t",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0]"
+    ],
+    "name": "tool_missing_provider",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "p",
+          "prompt_type": "json",
+          "template": "Ask a question",
+          "type": "prompt"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0]"
+    ],
+    "name": "prompt_json_missing_schema",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "u",
+          "type": "use"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0]"
+    ],
+    "name": "use_missing_ref_path_inline",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "u",
+          "path": "b",
+          "ref": "a",
+          "type": "use"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0]"
+    ],
+    "name": "use_both_ref_and_path",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "body": [
+            {
+              "name": "t",
+              "provider": "ffmpeg",
+              "type": "tool"
+            }
+          ],
+          "type": "loop"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0]"
+    ],
+    "name": "loop_missing_each_or_while",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "t",
+          "type": "tool"
+        }
+      ],
+      "version": true
+    },
+    "locations": [
+      "effects[0]",
+      "version"
+    ],
+    "name": "two_errors_different_locations",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [],
+      "interface": {
+        "inputs": {
+          "weird key": {
+            "type": 123
+          }
+        }
+      }
+    },
+    "locations": [
+      "interface.inputs['weird key'].type"
+    ],
+    "name": "interface_inputs_weird_key_wrong_type",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [],
+      "interface": {
+        "inputs": {
+          "it's": {
+            "type": 123
+          }
+        }
+      }
+    },
+    "locations": [
+      "interface.inputs['it\\'s'].type"
+    ],
+    "name": "interface_inputs_key_needing_escape",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {},
+    "locations": [],
+    "name": "empty",
+    "schema": "profile",
+    "valid": true
+  },
+  {
+    "document": {
+      "adapter": "ollama",
+      "inputs": {
+        "a": 1
+      },
+      "model": "llama3",
+      "out": "out.json"
+    },
+    "locations": [],
+    "name": "adapter_model_out_inputs",
+    "schema": "profile",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": {
+        "summarize": {
+          "enabled": true,
+          "model": "m",
+          "provider": "p"
+        }
+      }
+    },
+    "locations": [],
+    "name": "per_effect_overrides",
+    "schema": "profile",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": {
+        "a.b": {
+          "routing": false
+        }
+      }
+    },
+    "locations": [],
+    "name": "routing_false",
+    "schema": "profile",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": {
+        "a.b": {
+          "routing": "heavy"
+        }
+      }
+    },
+    "locations": [],
+    "name": "routing_named_band",
+    "schema": "profile",
+    "valid": true
+  },
+  {
+    "document": {
+      "persistence": {
+        "backend": "sqlite"
+      }
+    },
+    "locations": [],
+    "name": "persistence_sqlite",
+    "schema": "profile",
+    "valid": true
+  },
+  {
+    "document": {
+      "bogus": 1
+    },
+    "locations": [
+      "<root>"
+    ],
+    "name": "unknown_top_level_key",
+    "schema": "profile",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": {
+        "summarize": {}
+      }
+    },
+    "locations": [
+      "effects/summarize"
+    ],
+    "name": "effect_override_empty",
+    "schema": "profile",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": {
+        "summarize": {
+          "bogus": 1,
+          "model": "m"
+        }
+      }
+    },
+    "locations": [
+      "effects/summarize"
+    ],
+    "name": "effect_override_unknown_key",
+    "schema": "profile",
+    "valid": false
+  },
+  {
+    "document": {
+      "persistence": {
+        "enabled": true
+      }
+    },
+    "locations": [
+      "persistence"
+    ],
+    "name": "persistence_missing_backend",
+    "schema": "profile",
+    "valid": false
+  },
+  {
+    "document": {
+      "inputs": "nope"
+    },
+    "locations": [
+      "inputs"
+    ],
+    "name": "inputs_wrong_type",
+    "schema": "profile",
+    "valid": false
+  },
+  {
+    "document": [],
+    "locations": [
+      "<root>"
+    ],
+    "name": "root_wrong_type",
+    "schema": "profile",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": {
+        "a.b": {
+          "routing": 5
+        }
+      }
+    },
+    "locations": [
+      "effects/a.b/routing"
+    ],
+    "name": "routing_wrong_oneof",
+    "schema": "profile",
+    "valid": false
+  }
+]
