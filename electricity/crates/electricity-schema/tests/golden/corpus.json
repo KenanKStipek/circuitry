@@ -1,0 +1,986 @@
+[
+  {
+    "document": {
+      "effects": []
+    },
+    "locations": [],
+    "name": "minimal",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "fetch",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "tool_effect",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "ask",
+          "template": "Ask a question",
+          "type": "prompt"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "prompt_text_effect",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "ask",
+          "prompt_type": "json",
+          "schema": {
+            "type": "object"
+          },
+          "template": "Ask a question",
+          "type": "prompt"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "prompt_json_effect_with_schema",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "effects": [
+            {
+              "name": "t",
+              "provider": "ffmpeg",
+              "type": "tool"
+            }
+          ],
+          "flow": "tree",
+          "name": "d",
+          "type": "dynamic"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "dynamic_tree_with_child",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "else": [],
+          "if": {
+            "expr": "true",
+            "mode": "cel"
+          },
+          "then": [
+            {
+              "name": "t",
+              "provider": "ffmpeg",
+              "type": "tool"
+            }
+          ],
+          "type": "if"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "conditional_if_then_else",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "body": [
+            {
+              "name": "t",
+              "provider": "ffmpeg",
+              "type": "tool"
+            }
+          ],
+          "each": {
+            "in": "prime.x.value"
+          },
+          "name": "l",
+          "type": "loop"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "loop_each",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "body": [
+            {
+              "name": "t",
+              "provider": "ffmpeg",
+              "type": "tool"
+            }
+          ],
+          "type": "loop",
+          "while": {
+            "expr": "true",
+            "mode": "cel"
+          }
+        }
+      ]
+    },
+    "locations": [],
+    "name": "loop_while",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "effects": [
+            {
+              "name": "t",
+              "provider": "ffmpeg",
+              "type": "tool"
+            }
+          ],
+          "name": "r",
+          "type": "reflector"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "reflector_effect",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "u",
+          "path": "./child.yml",
+          "type": "use"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "use_with_path",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "u",
+          "ref": "lib/thing",
+          "type": "use"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "use_with_ref",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "inline": "effects: []",
+          "name": "u",
+          "type": "use"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "use_with_inline",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "expect": "value != null",
+          "name": "t",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "tool_expect_bare_string",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "expect": {
+            "mode": "model",
+            "template": "Did it work?"
+          },
+          "name": "t",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "tool_expect_model_object",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "t",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ],
+      "interface": {
+        "inputs": {
+          "topic": {
+            "required": true,
+            "type": "string"
+          }
+        },
+        "outputs": {
+          "summary": "prime.summarize.value"
+        }
+      }
+    },
+    "locations": [],
+    "name": "interface_inputs_and_outputs",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "adapter": "ollama",
+      "effects": [
+        {
+          "name": "t",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ],
+      "finally": [
+        {
+          "name": "cleanup",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ],
+      "flow": "chain",
+      "model": "llama3",
+      "version": "1.0.0"
+    },
+    "locations": [],
+    "name": "full_document_with_finally",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "fetch\n",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "name_with_trailing_newline_still_matches_pattern",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [],
+      "flow": "tree_of_thought"
+    },
+    "locations": [],
+    "name": "flow_enum_valid",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "t",
+          "provider": "ffmpeg",
+          "retries": {
+            "backoff_ms": 100,
+            "max_attempts": 3
+          },
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "retries_valid",
+    "schema": "orchestration",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {},
+    "locations": [
+      "top level"
+    ],
+    "name": "missing_effects",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": "nope"
+    },
+    "locations": [
+      "effects"
+    ],
+    "name": "effects_wrong_type",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {}
+      ]
+    },
+    "locations": [
+      "effects[0]",
+      "effects[0]",
+      "effects[0]",
+      "effects[0]"
+    ],
+    "name": "effect_missing_type",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {
+      "effects[0]": "value is not valid under any of the given schemas ('template' is a required property)"
+    }
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "t",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0]"
+    ],
+    "name": "tool_missing_provider",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "p",
+          "prompt_type": "json",
+          "template": "Ask a question",
+          "type": "prompt"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0]"
+    ],
+    "name": "prompt_json_missing_schema",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "u",
+          "type": "use"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0]"
+    ],
+    "name": "use_missing_ref_path_inline",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {
+      "effects[0]": "value is not valid under any of the given schemas ('ref' is a required property)"
+    }
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "u",
+          "path": "b",
+          "ref": "a",
+          "type": "use"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0]"
+    ],
+    "name": "use_both_ref_and_path",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {
+      "effects[0]": "value is valid under each of {'required': ['path']}, {'required': ['ref']}"
+    }
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "body": [
+            {
+              "name": "t",
+              "provider": "ffmpeg",
+              "type": "tool"
+            }
+          ],
+          "type": "loop"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0]"
+    ],
+    "name": "loop_missing_each_or_while",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {
+      "effects[0]": "value is not valid under any of the given schemas ('each' is a required property)"
+    }
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "t",
+          "type": "tool"
+        }
+      ],
+      "version": true
+    },
+    "locations": [
+      "effects[0]",
+      "version"
+    ],
+    "name": "two_errors_different_locations",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [],
+      "interface": {
+        "inputs": {
+          "weird key": {
+            "type": 123
+          }
+        }
+      }
+    },
+    "locations": [
+      "interface.inputs['weird key'].type"
+    ],
+    "name": "interface_inputs_weird_key_wrong_type",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [],
+      "interface": {
+        "inputs": {
+          "it's": {
+            "type": 123
+          }
+        }
+      }
+    },
+    "locations": [
+      "interface.inputs['it\\'s'].type"
+    ],
+    "name": "interface_inputs_key_needing_escape",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [],
+      "interface": {
+        "inputs": {
+          "1": {
+            "type": 5
+          }
+        }
+      }
+    },
+    "locations": [
+      "interface.inputs['1'].type"
+    ],
+    "name": "interface_inputs_digit_string_key",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [],
+      "interface": {
+        "inputs": {
+          "abc\n": {
+            "type": 5
+          }
+        }
+      }
+    },
+    "locations": [
+      "interface.inputs.abc\n.type"
+    ],
+    "name": "interface_inputs_key_trailing_newline",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "bad name",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0].name"
+    ],
+    "name": "name_bad_character",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "1abc",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0].name"
+    ],
+    "name": "name_leading_digit",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "value",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0].name"
+    ],
+    "name": "name_reserved_word",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "iter_3",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0].name"
+    ],
+    "name": "name_iter_reserved",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "iter_٣",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0].name",
+      "effects[0].name"
+    ],
+    "name": "name_iter_reserved_unicode_digit",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "value\n",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0].name"
+    ],
+    "name": "name_reserved_word_with_trailing_newline",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "iter_3\n",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0].name"
+    ],
+    "name": "name_iter_reserved_with_trailing_newline",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "fetch\n\n",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0].name"
+    ],
+    "name": "name_two_trailing_newlines_still_invalid",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [],
+      "flow": "bogus"
+    },
+    "locations": [
+      "flow"
+    ],
+    "name": "flow_enum_invalid",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "t",
+          "provider": "ffmpeg",
+          "retries": {
+            "max_attempts": 0
+          },
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0].retries.max_attempts"
+    ],
+    "name": "retries_max_attempts_below_minimum",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "body": [
+            {
+              "name": "t",
+              "type": "tool"
+            }
+          ],
+          "each": {
+            "in": "prime.x.value"
+          },
+          "type": "loop"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0].body[0]"
+    ],
+    "name": "loop_body_nested_missing_provider",
+    "schema": "orchestration",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {},
+    "locations": [],
+    "name": "empty",
+    "schema": "profile",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "adapter": "ollama",
+      "inputs": {
+        "a": 1
+      },
+      "model": "llama3",
+      "out": "out.json"
+    },
+    "locations": [],
+    "name": "adapter_model_out_inputs",
+    "schema": "profile",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": {
+        "summarize": {
+          "enabled": true,
+          "model": "m",
+          "provider": "p"
+        }
+      }
+    },
+    "locations": [],
+    "name": "per_effect_overrides",
+    "schema": "profile",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": {
+        "a.b": {
+          "routing": false
+        }
+      }
+    },
+    "locations": [],
+    "name": "routing_false",
+    "schema": "profile",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": {
+        "a.b": {
+          "routing": "heavy"
+        }
+      }
+    },
+    "locations": [],
+    "name": "routing_named_band",
+    "schema": "profile",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "persistence": {
+        "backend": "sqlite"
+      }
+    },
+    "locations": [],
+    "name": "persistence_sqlite",
+    "schema": "profile",
+    "valid": true,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "bogus": 1
+    },
+    "locations": [
+      "<root>"
+    ],
+    "name": "unknown_top_level_key",
+    "schema": "profile",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": {
+        "summarize": {}
+      }
+    },
+    "locations": [
+      "effects/summarize"
+    ],
+    "name": "effect_override_empty",
+    "schema": "profile",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": {
+        "summarize": {
+          "bogus": 1,
+          "model": "m"
+        }
+      }
+    },
+    "locations": [
+      "effects/summarize"
+    ],
+    "name": "effect_override_unknown_key",
+    "schema": "profile",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "persistence": {
+        "enabled": true
+      }
+    },
+    "locations": [
+      "persistence"
+    ],
+    "name": "persistence_missing_backend",
+    "schema": "profile",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "inputs": "nope"
+    },
+    "locations": [
+      "inputs"
+    ],
+    "name": "inputs_wrong_type",
+    "schema": "profile",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": [],
+    "locations": [
+      "<root>"
+    ],
+    "name": "root_wrong_type",
+    "schema": "profile",
+    "valid": false,
+    "value_substituted_messages": {}
+  },
+  {
+    "document": {
+      "effects": {
+        "a.b": {
+          "routing": 5
+        }
+      }
+    },
+    "locations": [
+      "effects/a.b/routing"
+    ],
+    "name": "routing_wrong_oneof",
+    "schema": "profile",
+    "valid": false,
+    "value_substituted_messages": {}
+  }
+]
