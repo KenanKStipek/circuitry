@@ -108,10 +108,11 @@ pub const NON_JSON_SCALAR_MARKER: &str = "$circuitry_non_json_scalar";
 
 /// Set (to `true`) on a [`non_json_scalar`] marker that stands in for a
 /// Python value `jsonschema`'s own `"number"` type keyword would still
-/// accept (`NaN`/`Infinity` before an arbitrary-precision float literal
-/// can represent it, i.e. `NaN` only -- see `schema_instance.rs`'s own
-/// `float_to_json_number`) -- never set for a `Date`/`DateTime`/`Bytes`
-/// marker, which no JSON Schema `"type"` should ever accept.
+/// accept -- `NaN`, `Infinity` and `-Infinity` all three (Python's own
+/// `isinstance(x, float)` is `True` for every one of them; see
+/// `schema_instance.rs`'s own `float_to_json_number`) -- never set for a
+/// `Date`/`DateTime`/`Bytes` marker, which no JSON Schema `"type"` should
+/// ever accept.
 pub const NON_JSON_SCALAR_NUMBER_LIKE: &str = "$circuitry_non_json_scalar_number_like";
 
 /// Prefixes a non-string `Dict` key's stand-in string (a NUL byte, which
@@ -137,21 +138,26 @@ pub fn non_json_scalar(label: &str, number_like: bool) -> Value {
 }
 
 /// `Some(number_like)` iff *instance* is a [`non_json_scalar`] marker;
-/// `None` for an ordinary value (including a real object that merely
-/// happens to have other keys too -- a marker object only ever carries
-/// [`NON_JSON_SCALAR_MARKER`], optionally [`NON_JSON_SCALAR_NUMBER_LIKE`],
-/// and nothing else, so `len() <= 2` guards against a legitimate document
-/// object that coincidentally used the same property name).
+/// `None` for an ordinary value, including a real document object that
+/// merely happens to carry [`NON_JSON_SCALAR_MARKER`] as one property
+/// name among others of its own -- a marker object only ever carries
+/// exactly that key alone, or that key plus exactly
+/// [`NON_JSON_SCALAR_NUMBER_LIKE`] and nothing else, so both the size
+/// and the second key's own name (not just its count) are checked.
 fn scalar_marker_number_like(instance: &Value) -> Option<bool> {
     let map = instance.as_object()?;
-    if !map.contains_key(NON_JSON_SCALAR_MARKER) || map.len() > 2 {
+    if !map.contains_key(NON_JSON_SCALAR_MARKER) {
         return None;
     }
-    Some(
-        map.get(NON_JSON_SCALAR_NUMBER_LIKE)
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-    )
+    match map.len() {
+        1 => Some(false),
+        2 if map.contains_key(NON_JSON_SCALAR_NUMBER_LIKE) => Some(
+            map.get(NON_JSON_SCALAR_NUMBER_LIKE)
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        ),
+        _ => None,
+    }
 }
 
 /// Builds [`NON_STRING_KEY_PREFIX`]'s marker for a `Dict` key whose own
@@ -520,11 +526,45 @@ fn profile_validator() -> &'static jsonschema::Validator {
 pub fn orchestration_errors(document: &Value) -> Vec<SchemaError> {
     orchestration_validator()
         .iter_errors(document)
+        .filter(|err| !is_spurious_marker_error(err))
         .map(|err| SchemaError {
             location: orchestration_location(document, err.instance_path.as_str()),
             message: substitute_value_prefix(&err.instance, err.to_string()),
         })
         .collect()
+}
+
+/// `true` iff *err* is one of the object-shape keywords (`required`,
+/// `additionalProperties`, `maxProperties`, `minProperties`,
+/// `propertyNames`, `unevaluatedProperties`) firing against a
+/// [`non_json_scalar`] marker standing in for a `Date`/`DateTime`/`Bytes`/
+/// `NaN`/`Infinity` value -- a marker is a real `serde_json::Value::Object`
+/// (so these validators, which the `jsonschema` crate runs unconditionally
+/// against any JSON object instance, see it as one), but Python's own
+/// `jsonschema` validators for every one of these keywords return
+/// immediately for a non-`dict` instance (`validator.is_type(instance,
+/// "object")` is `False` for a `date`/`bytes`/`float`), so Python never
+/// raises any of them for a value these keywords were never meant to see.
+/// The overridden `"type"` keyword ([`type_keyword_factory`]) already
+/// reports the one error a marker *should* produce at this position (or
+/// none, at a position a number-like marker's `"number"` type legitimately
+/// reaches); every other keyword's own verdict (`enum`, `const`, `oneOf`,
+/// `anyOf`, ...) still runs unfiltered, since none of those are gated on
+/// the instance being an object the way these are.
+fn is_spurious_marker_error(err: &ValidationError<'_>) -> bool {
+    use jsonschema::error::ValidationErrorKind;
+    if scalar_marker_number_like(&err.instance).is_none() {
+        return false;
+    }
+    matches!(
+        err.kind,
+        ValidationErrorKind::AdditionalProperties { .. }
+            | ValidationErrorKind::Required { .. }
+            | ValidationErrorKind::MaxProperties { .. }
+            | ValidationErrorKind::MinProperties { .. }
+            | ValidationErrorKind::PropertyNames { .. }
+            | ValidationErrorKind::UnevaluatedProperties { .. }
+    )
 }
 
 /// Every schema violation in `document` against Circuitry's
@@ -723,6 +763,26 @@ mod tests {
     fn valid_minimal_orchestration_has_no_errors() {
         let doc = json!({"effects": []});
         assert_eq!(orchestration_errors(&doc), vec![]);
+    }
+
+    #[test]
+    fn a_real_object_carrying_the_marker_key_and_an_unrelated_second_key_is_not_a_marker() {
+        // F7 (second-round review): the marker key alone, or paired with
+        // exactly `NON_JSON_SCALAR_NUMBER_LIKE`, is a marker -- any other
+        // second key means it's a real document object that happens to
+        // reuse the marker's own property name, not a stand-in.
+        let real_object = json!({
+            NON_JSON_SCALAR_MARKER: "x",
+            "some_other_key": true,
+        });
+        assert_eq!(scalar_marker_number_like(&real_object), None);
+
+        let marker_alone = json!({NON_JSON_SCALAR_MARKER: "x"});
+        assert_eq!(scalar_marker_number_like(&marker_alone), Some(false));
+
+        let number_like_marker =
+            json!({NON_JSON_SCALAR_MARKER: "x", NON_JSON_SCALAR_NUMBER_LIKE: true});
+        assert_eq!(scalar_marker_number_like(&number_like_marker), Some(true));
     }
 
     #[test]

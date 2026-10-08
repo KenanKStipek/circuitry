@@ -584,6 +584,111 @@ mod tests {
     }
 
     #[test]
+    fn a_date_at_an_object_typed_position_is_exactly_one_error() {
+        // F2 (second-round review): `retries` is `{"type": "object",
+        // "additionalProperties": false}` -- a marker object there used to
+        // also trip "additionalProperties" (leaking the internal marker
+        // key name) on top of the "type" error. Python's own `jsonschema`
+        // never runs an object-shape keyword against a non-dict instance,
+        // so there is exactly one error here.
+        let date = Value::Date(chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
+        let doc = doc_with_effects(vec![effect(vec![
+            ("type", Value::Str("prompt".to_string())),
+            ("name", Value::Str("x".to_string())),
+            ("template", Value::Str("hi".to_string())),
+            ("retries", date),
+        ])]);
+        let errors = schema_errors(&doc);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].starts_with("effects[0].retries: "), "{errors:?}");
+        assert!(
+            !errors[0].contains("circuitry_non_json_scalar"),
+            "leaked the internal marker key name: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn an_integer_beyond_f64_range_is_a_maximum_error_not_a_panic() {
+        // F1/F4 (second-round review): `threshold` is `number`, `minimum:
+        // 0`, `maximum: 1` -- a bare YAML integer this large used to panic
+        // inside the `jsonschema` crate (`arbitrary_precision`'s `as_f64`
+        // returns `None` for a value that overflows to infinity, and
+        // `maximum`'s own validator calls `.expect("Always valid")` on
+        // it). Python: a `maximum` error at `effects[0].threshold`.
+        let huge =
+            electricity_value::IntValue::parse_decimal(&format!("1{}", "0".repeat(400))).unwrap();
+        let doc = doc_with_effects(vec![effect(vec![
+            ("type", Value::Str("if".to_string())),
+            ("if", {
+                let mut cond = Dict::new();
+                cond.insert(
+                    Value::Str("mode".to_string()),
+                    Value::Str("cel".to_string()),
+                );
+                cond.insert(
+                    Value::Str("expr".to_string()),
+                    Value::Str("true".to_string()),
+                );
+                Value::Dict(cond)
+            }),
+            ("then", Value::List(vec![])),
+            ("threshold", Value::Int(huge)),
+        ])]);
+        let errors = schema_errors(&doc);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].starts_with("effects[0].threshold: "),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_negative_integer_beyond_f64_range_is_a_minimum_error_not_a_panic() {
+        // Same guard, the negative/`minimum` side: a loop's `max_concurrency`
+        // is `integer`, `minimum: 1`. Python: a `minimum` error at
+        // `effects[0].max_concurrency`.
+        let huge_negative =
+            electricity_value::IntValue::parse_decimal(&format!("-1{}", "0".repeat(400))).unwrap();
+        let mut each = Dict::new();
+        each.insert(Value::Str("in".to_string()), Value::Str("x".to_string()));
+        let doc = doc_with_effects(vec![effect(vec![
+            ("type", Value::Str("loop".to_string())),
+            ("each", Value::Dict(each)),
+            (
+                "body",
+                Value::List(vec![effect(vec![
+                    ("type", Value::Str("tool".to_string())),
+                    ("name", Value::Str("t".to_string())),
+                    ("provider", Value::Str("json".to_string())),
+                ])]),
+            ),
+            ("max_concurrency", Value::Int(huge_negative)),
+        ])]);
+        let errors = schema_errors(&doc);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].starts_with("effects[0].max_concurrency: "),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn an_integer_beyond_f64_range_within_an_unbounded_above_minimum_is_valid() {
+        // `timeout_ms` is `integer`, `minimum: 0`, no `maximum` -- Python:
+        // valid regardless of magnitude (`isinstance(x, int)` has no size
+        // limit).
+        let huge =
+            electricity_value::IntValue::parse_decimal(&format!("1{}", "0".repeat(400))).unwrap();
+        let doc = doc_with_effects(vec![effect(vec![
+            ("type", Value::Str("tool".to_string())),
+            ("name", Value::Str("t".to_string())),
+            ("provider", Value::Str("json".to_string())),
+            ("timeout_ms", Value::Int(huge)),
+        ])]);
+        assert_eq!(schema_errors(&doc), Vec::<String>::new());
+    }
+
+    #[test]
     fn group_on_a_container_effect_is_an_error() {
         let dynamic = effect(vec![
             ("type", Value::Str("dynamic".to_string())),

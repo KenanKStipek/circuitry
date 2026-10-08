@@ -100,16 +100,20 @@ fn config_runtime_block(config_path: &Path) -> Option<electricity_value::Value> 
 /// nothing in this workspace reads this shape back, and it may change in
 /// any release -- see `electricity_bytecode`'s crate docs.
 ///
-/// Runs `electricity_compiler::check_for_run` first; its `Err` becomes
-/// this function's `Err`, with the exact text `--dump-ir` writes to
-/// stderr on failure (the same text a plain run of the same document
-/// would report). Currently always `Err`: `check_for_run` is a lane A
-/// stub until lane B lands.
-pub fn dump_ir(orchestration_path: &Path) -> Result<String, String> {
+/// Runs `electricity_compiler::check_for_run` first, with *config_path*'s
+/// own `runtime:` block merged under the document's own the same way
+/// [`run_orchestration`] does -- so a `--dump-ir` of a document that
+/// relies on a config-defined `runtime.concurrency_groups`/
+/// `max_concurrency` checks out the same way a `cof run`/plain run of it
+/// would, rather than failing without the config file's own settings.
+/// Its `Err` becomes this function's `Err`, with the exact text
+/// `--dump-ir` writes to stderr on failure (the same text a plain run of
+/// the same document would report).
+pub fn dump_ir(config_path: &Path, orchestration_path: &Path) -> Result<String, String> {
     let options = electricity_compiler::CheckOptions {
         skip_preflight: true,
         trust_document: true,
-        config_runtime: None,
+        config_runtime: config_runtime_block(config_path),
     };
     let program = electricity_compiler::check_for_run(orchestration_path, &options)
         .map_err(|err| err.to_string())?;

@@ -26,14 +26,14 @@ enum Action {
     Version,
     Help,
     Run(String, String),
-    DumpIr(String),
+    DumpIr(String, String),
     UsageError(String),
 }
 
 /// Every positional argument in *args*, skipping `--dump-ir` and each
-/// known run flag's own value -- the one list both `Action::Run` (its
-/// first two: `<config.json> <orchestration.yml>`) and `Action::DumpIr`
-/// (its second) are built from.
+/// known run flag's own value -- the one list both `Action::Run` and
+/// `Action::DumpIr` (each its own first two: `<config.json>
+/// <orchestration.yml>`) are built from.
 fn positionals(args: &[String]) -> Vec<&str> {
     let mut result = Vec::new();
     let mut i = 0;
@@ -92,17 +92,17 @@ fn classify(args: &[String]) -> Action {
         };
     }
 
-    // The second positional, never the *last* -- `electricity
+    // The first two positionals, never a trailing one -- `electricity
     // <config.json> <orchestration.yml> --dump-ir` takes exactly two,
     // so a third stray positional must not silently become the
     // orchestration path.
     let found = positionals(args);
 
-    match found.get(1) {
-        Some(orchestration) => Action::DumpIr(orchestration.to_string()),
-        None => {
-            Action::UsageError("--dump-ir requires <config.json> <orchestration.yml>".to_string())
+    match (found.first(), found.get(1)) {
+        (Some(config), Some(orchestration)) => {
+            Action::DumpIr(config.to_string(), orchestration.to_string())
         }
+        _ => Action::UsageError("--dump-ir requires <config.json> <orchestration.yml>".to_string()),
     }
 }
 
@@ -135,8 +135,8 @@ fn main() -> ExitCode {
             );
             ExitCode::from(1)
         }
-        Action::DumpIr(orchestration_path) => {
-            match electricity::dump_ir(Path::new(&orchestration_path)) {
+        Action::DumpIr(config_path, orchestration_path) => {
+            match electricity::dump_ir(Path::new(&config_path), Path::new(&orchestration_path)) {
                 Ok(json) => {
                     println!("{json}");
                     ExitCode::SUCCESS
@@ -217,13 +217,16 @@ mod unit_tests {
     }
 
     #[test]
-    fn dump_ir_flag_selects_the_last_positional_as_the_orchestration() {
+    fn dump_ir_flag_selects_the_first_two_positionals_as_config_and_orchestration() {
         match classify(&[
             "config.json".to_string(),
             "orchestration.yml".to_string(),
             "--dump-ir".to_string(),
         ]) {
-            Action::DumpIr(path) => assert_eq!(path, "orchestration.yml"),
+            Action::DumpIr(config, orchestration) => {
+                assert_eq!(config, "config.json");
+                assert_eq!(orchestration, "orchestration.yml");
+            }
             _ => panic!("expected DumpIr"),
         }
     }
@@ -236,7 +239,7 @@ mod unit_tests {
                 "config.json".to_string(),
                 "orchestration.yml".to_string(),
             ]),
-            Action::DumpIr(_)
+            Action::DumpIr(_, _)
         ));
     }
 
@@ -249,14 +252,17 @@ mod unit_tests {
     }
 
     #[test]
-    fn dump_ir_picks_the_second_positional_not_the_last() {
+    fn dump_ir_picks_the_first_two_positionals_not_the_last() {
         match classify(&[
             "config.json".to_string(),
             "orchestration.yml".to_string(),
             "extra.yml".to_string(),
             "--dump-ir".to_string(),
         ]) {
-            Action::DumpIr(path) => assert_eq!(path, "orchestration.yml"),
+            Action::DumpIr(config, orchestration) => {
+                assert_eq!(config, "config.json");
+                assert_eq!(orchestration, "orchestration.yml");
+            }
             _ => panic!("expected DumpIr"),
         }
     }

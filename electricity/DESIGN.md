@@ -424,15 +424,25 @@ two. Both forms always end with a trailing `\n` (matching `cli/app.py`'s `_write
       `Dict` key (YAML's bare `yes:`/`1:`) is rendered so it can never collide with a real schema
       property name (and `electricity-schema`'s own `json_path_from_pointer` decodes it back
       into Python's own `json_path` rendering for an `int`/`bool` key — `1:` → `[1]`, `yes:` →
-      `[True]`), and a `datetime.date`/`datetime.datetime`/`bytes`/`NaN`/`Infinity` value (an
+      `[True]`). **Known divergence**: for any other hashable non-string key (a float, `None`, a
+      date/datetime, bytes), Python's own `json_path` raises `TypeError` instead, collapsing the
+      whole structural check into one error rather than this location's own; not reproduced here
+      (`electricity-compiler`'s own `schema_instance` module doc has the full rationale) — the
+      location instead falls back to a non-empty, best-effort quoted rendering of the key's own
+      `repr()` text. A `datetime.date`/`datetime.datetime`/`bytes`/`NaN`/`Infinity` value (an
       unquoted YAML timestamp, an explicit `!!binary`, a non-finite float literal) is rendered so
       it fails every `"type"` keyword — including `"object"` — the same way Python's own
-      `isinstance` check does, via a sibling custom keyword `electricity-schema` adds next to
-      every `"type"` keyword in the compiled schema (not the marker representation alone, which a
-      bare `"type": "object"` position would otherwise pass) — **known divergence**: `minimum`/
+      `isinstance` check does, via an override of the `"type"` keyword itself
+      (`electricity-schema`'s own `type_keyword_factory`, replacing rather than supplementing the
+      built-in validator) — not the marker representation alone, which a bare `"type": "object"`
+      position would otherwise pass. The same crate also drops any `"required"`/
+      `"additionalProperties"`/other object-shape keyword error such a marker's own JSON-object
+      encoding would otherwise spuriously trigger, matching Python, which never runs those
+      validators against a non-`dict` instance in the first place. **Known divergence**: `minimum`/
       `maximum` against an `Infinity`/`-Infinity` value still only vacuously pass rather than
-      enforcing a finite bound, a deliberate trade-off against a panic risk in the `jsonschema`
-      crate's own arbitrary-precision number handling, not an oversight;
+      enforcing a finite bound (e.g. `threshold: .inf` passes where Python raises `maximum`), a
+      live, deliberate trade-off against a panic risk in the `jsonschema` crate's own
+      arbitrary-precision number handling, not an oversight;
    3. `group:` placement errors (leaf effects only);
    4. `interface.inputs.<k>.type` must be one of the six recognized types;
    5. `interface.inputs.<k>.default` type-mismatch (already-typed data, not CLI text).

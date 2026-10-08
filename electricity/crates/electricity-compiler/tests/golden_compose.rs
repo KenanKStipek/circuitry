@@ -2,19 +2,21 @@
 //! golden cases: every message in `core/prompt_files.py` and in
 //! `core/prompt_compose.py`'s compile-time composition checks.
 //!
-//! `check_for_run` always fails at `load_document` (lane B's own stub)
-//! before reaching any of this lane's own code, so every case here
-//! calls this crate's public [`compile_document`] directly instead --
-//! parsing the entry file with `electricity-yaml` (a lane A/merged-crate
-//! dependency, unaffected by lane B's stub) the same way `load_document`
-//! eventually will, and building a [`DocumentOrigin::File`] from the
-//! entry's own parent directory (every *now-testable* case's project
+//! `load_document` (lane B) is implemented, but `compile_document` still
+//! has lane C's own unfilled gap: every composable document reaches it
+//! and fails there, past this lane's own composition checks, so
+//! `check_for_run` itself isn't yet usable for a composition-success
+//! case. Every case here instead calls this crate's public
+//! [`compile_document`] directly -- parsing the entry file with
+//! `electricity-yaml` (a lane A/merged-crate dependency) the same way
+//! `load_document` does, and building a [`DocumentOrigin::File`] from
+//! the entry's own parent directory (every *now-testable* case's project
 //! root -- none of them sit under a nested `circuitry.config.json`/
 //! `config.json`). [`compile_document`]'s error carries the exact same
-//! text `RunCheckError::Compile` would wrap verbatim once lane B lands,
-//! since lane D's own `prompt_files::compile_declared_prompts`/
-//! `compose::check_prompt_composition` run first inside it, before lane
-//! C's own effect-by-effect compile step.
+//! text `RunCheckError::Compile` wraps verbatim, since lane D's own
+//! `prompt_files::compile_declared_prompts`/`compose::
+//! check_prompt_composition` run first inside it, before lane C's own
+//! effect-by-effect compile step.
 //!
 //! A case whose document fails at the declared-prompts or composition
 //! step is fully testable now. A case whose composition *succeeds*

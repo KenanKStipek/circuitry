@@ -48,13 +48,39 @@
 //! - [`schema_instance`]'s conversion of a `Date`/`DateTime`/`Bytes`/
 //!   `NaN`/`Infinity` value fails every `"type"` keyword exactly the way
 //!   Python's own `isinstance` verdict would (including `"object"` --
-//!   `electricity-schema`'s own sibling-keyword mechanism, not this
+//!   `electricity-schema`'s own overridden `"type"` keyword, not this
 //!   crate's marker representation alone -- see that module's own doc
-//!   comment), except one narrow case: `minimum`/`maximum` against an
-//!   `Infinity`/`-Infinity` value only vacuously pass rather than
-//!   enforcing a finite bound, a deliberate, documented trade-off
+//!   comment), except one narrow, live case: `minimum`/`maximum` against
+//!   an `Infinity`/`-Infinity` value only vacuously pass rather than
+//!   enforcing a finite bound (e.g. `threshold: .inf` passes here, a
+//!   `maximum` error in Python) -- a deliberate, documented trade-off
 //!   against a panic risk in the `jsonschema` crate itself (same doc
-//!   comment).
+//!   comment), not an inert gap.
+//! - [`electricity_schema::json_path_from_pointer`]'s non-string-key
+//!   location: decoded back exactly for an `int`/`bool` key (`1:` ->
+//!   `[1]`, `yes:` -> `[True]`). For any other hashable non-string key
+//!   (a float, `None`, a date/datetime, bytes), Python's own `json_path`
+//!   raises `TypeError` instead, collapsing the whole structural check
+//!   into one error rather than this location's own -- not reproduced
+//!   here (`schema_instance`'s own doc comment has the full rationale);
+//!   the location instead falls back to a non-empty, best-effort quoted
+//!   rendering of the key's own `repr()` text.
+//! - [`pipeline::check_for_run`] omits two of `cli/runtime_shim.py::run`'s
+//!   own pre-structural checks, both ported nowhere in electricity today:
+//!   `resolve_complexity_settings`'s validation of a malformed
+//!   `runtime.complexity` block (`cli/complexity_config.py`, raising
+//!   `ComplexityConfigError` from inside `resolve_effective_settings`,
+//!   before the concurrency limiter this function does check), and
+//!   `build_persistence_backend`'s validation of a malformed
+//!   `runtime.persistence` block (`core/store/persistence.py`, raised
+//!   after the concurrency limiter but before `check_interface_inputs`).
+//!   A document with an otherwise-valid structure but a malformed
+//!   `runtime.complexity`/`runtime.persistence` block passes
+//!   `check_for_run` here where `cof run` would fail -- complexity
+//!   routing/decomposition and persistence backends are whole subsystems
+//!   with no IR representation in this crate at all (out of scope for
+//!   issue #408's lane B), so this is left a documented gap rather than
+//!   a partial port of either module.
 //! - [`structural::schema_errors`] sorts multiple simultaneous schema
 //!   violations by `(location, message)`, not Circuitry's own `str(err)`
 //!   order (third-party `jsonschema` text from a different

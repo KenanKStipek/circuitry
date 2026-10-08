@@ -25,33 +25,41 @@
 //! `interface`, `interface.inputs.<k>` all use it, and a bare YAML
 //! scalar *can* reach every one of them) the same way Python's own
 //! `isinstance(value, dict)` does *not*. `electricity-schema` fixes
-//! this at validation time, not here: every `"type"` keyword in the
-//! compiled schema gets a sibling custom keyword
-//! (`SCALAR_MARKER_REJECT_KEYWORD`, that crate's own module) that fails
-//! a marker against every declared type except — for a number-like
-//! marker (`NaN`/`Infinity`/`-Infinity`, all three: Python's own
-//! `isinstance(x, float)` is `True` for every one of them) —
-//! `"number"` itself.
+//! this at validation time, not here: it overrides the `"type"`
+//! keyword itself (`electricity-schema`'s own `type_keyword_factory`)
+//! so it fails a marker against every declared type except — for a
+//! number-like marker (`NaN`/`Infinity`/`-Infinity`, all three:
+//! Python's own `isinstance(x, float)` is `True` for every one of
+//! them) — `"number"` itself. The same crate also drops any
+//! `"required"`/`"additionalProperties"`/other object-shape keyword
+//! error a marker's own JSON-object encoding would otherwise spuriously
+//! trigger (`orchestration_errors`'s own marker filter), matching
+//! Python's `jsonschema`, which never runs those validators against a
+//! non-`dict` instance in the first place.
 //!
 //! **Known divergence:** `minimum`/`maximum` against an `Infinity`/
 //! `-Infinity` value still only vacuously pass (the marker isn't a
 //! `serde_json::Number` at all, and `minimum`/`maximum` are no-ops on a
 //! non-numeric instance per the JSON Schema spec), where Python's own
-//! `float('inf')` comparisons would actually enforce a finite bound.
-//! Representing `Infinity` as a real, arbitrary-precision JSON number
-//! (`1e400`, which Rust's own `f64` parser overflows back to `inf`) was
-//! tried and reverted: the `jsonschema` crate's own `minimum`/`maximum`/
-//! `type: integer` keywords call `Number::as_f64().expect("Always
-//! valid")` on exactly this shape, and `serde_json`'s `arbitrary_
-//! precision` feature makes `as_f64()` return `None` -- not the
-//! overflowed `inf` -- for a number whose parsed value isn't finite, so
-//! that representation panics inside the third-party crate the moment
-//! such a document reaches `minimum`/`maximum`/`type: integer`, rather
-//! than producing a wrong-but-safe verdict. No field in Circuitry's
-//! bundled schemas pairs a numeric `minimum`/`maximum` with a position a
-//! bare `Infinity` literal can reach today, so this is inert in
-//! practice, not a live gap -- but it is a real, documented one, not an
-//! oversight.
+//! `float('inf')` comparisons would actually enforce a finite bound --
+//! e.g. `threshold: .inf` (`minimum: 0`, `maximum: 1`, a bare `number`
+//! position a YAML `Infinity` literal reaches directly) is a `maximum`
+//! error in Python and passes here. This is a live, reachable gap, not
+//! an inert one: representing `Infinity` as a real, arbitrary-precision
+//! JSON number (`1e400`, which Rust's own `f64` parser overflows back
+//! to `inf`) was tried and reverted, because the `jsonschema` crate's
+//! own `minimum`/`maximum`/`type: integer` keywords call
+//! `Number::as_f64().expect("Always valid")` on exactly this shape, and
+//! `serde_json`'s `arbitrary_precision` feature makes `as_f64()` return
+//! `None` -- not the overflowed `inf` -- for a number whose parsed
+//! value isn't finite, so that representation panics inside the
+//! third-party crate the moment such a document reaches
+//! `minimum`/`maximum`/`type: integer` (the same panic
+//! [`int_to_json_number`] now guards against for an out-of-range
+//! integer literal), rather than producing a wrong-but-safe verdict.
+//! Closing this gap for `Infinity` the same way would need
+//! `minimum`/`maximum` overridden alongside `"type"`; left as a
+//! documented divergence rather than done here.
 //!
 //! ## Non-string `Dict` keys
 //!
@@ -114,10 +122,33 @@ fn int_to_json_number(i: &electricity_value::IntValue) -> serde_json::Value {
     use electricity_value::IntValue;
     match i {
         IntValue::Small(n) => serde_json::Value::Number(Number::from(*n)),
-        IntValue::Big(big) => match parse_arbitrary_precision_number(&big.to_string()) {
-            Some(number) => serde_json::Value::Number(number),
-            None => non_json_scalar(&big.to_string(), false),
-        },
+        IntValue::Big(big) => {
+            let digits = big.to_string();
+            match parse_arbitrary_precision_number(&digits) {
+                // `serde_json`'s own `arbitrary_precision` `as_f64` (see
+                // this module's docs) returns `None` for a parsed value
+                // whose magnitude overflows `f64` to infinity -- and the
+                // `jsonschema` crate's `minimum`/`maximum`/`type: integer`
+                // keywords then call `.expect("Always valid")` on exactly
+                // that `None` and panic. A number this large can't reach
+                // `electricity-schema` any other way, so clamp instead of
+                // handing it a shape that crate cannot represent: every
+                // numeric bound Circuitry's bundled schema pairs with an
+                // integer field is `0` or `1`, so a positive magnitude this
+                // large is always past every such bound at `u64::MAX`, and a
+                // negative one past every such bound at `i64::MIN` -- the
+                // same side of the bound the real value is on, and still a
+                // real JSON number (so `type: integer` still accepts it, as
+                // Python's own `isinstance(x, int)` does regardless of
+                // magnitude).
+                Some(number) if number.as_f64().is_some() => serde_json::Value::Number(number),
+                _ => serde_json::Value::Number(if digits.starts_with('-') {
+                    Number::from(i64::MIN)
+                } else {
+                    Number::from(u64::MAX)
+                }),
+            }
+        }
     }
 }
 

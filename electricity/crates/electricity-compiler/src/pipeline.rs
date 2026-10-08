@@ -263,11 +263,18 @@ fn document_origin(path: &Path) -> (DocumentOrigin, PathBuf, PathBuf) {
     )
 }
 
-/// Python's `str.strip()` character set: space, tab, newline, carriage
-/// return, vertical tab, form feed -- used only for
-/// [`check_report`]'s own "Orchestration file is empty." check
-/// (`cli/runtime_shim.py::validate`'s `text.strip()`), which runs on
-/// the raw file text before any format-specific parsing.
+/// The 6 ASCII characters Python's `str.strip()` treats as whitespace
+/// with no argument -- used only for [`check_report`]'s own
+/// "Orchestration file is empty." check (`cli/runtime_shim.py::
+/// validate`'s `text.strip()`), which runs on the raw file text before
+/// any format-specific parsing. **Known divergence, not a full port**:
+/// Python's `str.strip()` actually strips every Unicode codepoint
+/// `str.isspace()` considers whitespace (Unicode category `Zs`/`Zl`/`Zp`
+/// plus the bidirectional `WS`/`B`/`S` properties -- a strictly larger,
+/// and not identical, set than Rust's own `char::is_whitespace()`), so a
+/// document whose raw text is non-ASCII whitespace only reports non-empty
+/// here where Python would report "Orchestration file is empty." -- an
+/// edge case this function approximates with just the ASCII subset.
 fn is_python_strip_whitespace(ch: char) -> bool {
     matches!(ch, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c')
 }
@@ -598,6 +605,18 @@ pub fn check_report(path: &Path, options: &CheckOptions) -> CheckReport {
 /// The exact error text a `cof run` of *path* reports, matching
 /// `runtime_shim.run(RunRequest(..., validate_only=True,
 /// skip_preflight=..., trust_document=...))`.
+///
+/// **Known divergence** (crate docs' own "Known divergences" list has the
+/// full rationale): `run()` also raises, before any of the checks below,
+/// from `resolve_complexity_settings`'s validation of a malformed
+/// `runtime.complexity` block (inside `resolve_effective_settings`, before
+/// the concurrency limiter) and, between the concurrency limiter and
+/// `check_interface_inputs`, from `build_persistence_backend`'s validation
+/// of a malformed `runtime.persistence` block. Neither is ported here --
+/// complexity routing/decomposition and persistence backends have no IR
+/// representation in this crate at all -- so a document whose only fault
+/// is one of those two blocks passes this function where `cof run` would
+/// fail.
 ///
 /// Order: [`load_document`]; [`concurrency_config_errors`] against the
 /// merged runtime config -- confirmed directly against
