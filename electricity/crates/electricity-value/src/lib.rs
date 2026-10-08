@@ -51,8 +51,10 @@ pub use int_value::IntValue;
 ///
 /// A `Value` built by reading JSON or YAML through this workspace can
 /// never exceed this depth (both readers enforce it while reading, not
-/// after). One built at run time instead — a CEL evaluation result, a
-/// future state merge or loop that wraps a value — is not automatically
+/// after). One built at run time instead — a future state merge, or a
+/// loop that wraps a value (nothing in this workspace yet converts a
+/// `cel::Value` back into this `Value`, so a CEL evaluation result
+/// specifically is not one of today's examples) — is not automatically
 /// bounded by this constant; [`Value::depth`] lets a caller that builds
 /// such a value check it before relying on [`Value::py_str`],
 /// [`Value::py_repr`], equality, hashing or [`Value::py_partial_cmp`],
@@ -322,6 +324,24 @@ impl Value {
     /// operation that does recurse ([`Value::py_str`], [`Value::py_repr`],
     /// equality, hashing, [`Value::py_partial_cmp`]) would be unsafe to
     /// run on it.
+    ///
+    /// Counts nesting *to the deepest value*, not every container: an
+    /// empty `List`/`Dict` has no child to push a deeper `depth` for, so
+    /// it contributes the same `depth` as its own parent would see from
+    /// any other child, not one more the way `electricity-json`'s own
+    /// reader/writer count *every* `[`/`{` — 513 nested *empty* lists
+    /// (`depth() == 512`, since the innermost, empty one contributes
+    /// nothing beyond what its parent already counted) therefore passes
+    /// a `<= MAX_DEPTH` check despite being one bracket deeper than
+    /// `electricity-json` would accept.
+    /// Immaterial in practice (JSON/YAML can never produce a `Value` this
+    /// function needs to check in the first place — both readers enforce
+    /// `MAX_DEPTH` themselves while reading, long before a reader could
+    /// hand back a `Value` for this to measure; see this constant's own
+    /// docs) and off by at most one regardless of how deep the value
+    /// actually is, against a limit (512) already far under where the
+    /// recursive operations this guards (`py_str`/`py_repr`/equality/
+    /// hashing/`py_partial_cmp`) would actually become unsafe.
     pub fn depth(&self) -> usize {
         let mut max_depth = 0usize;
         let mut stack: Vec<(&Value, usize)> = vec![(self, 0)];
@@ -353,8 +373,8 @@ impl Value {
 /// drops each child in place, which for a `List`/`Dict` means calling
 /// `Value`'s own `Drop` again on every element -- one stack frame per
 /// nesting level. [`MAX_DEPTH`] bounds a `Value` built by reading JSON or
-/// YAML, but not one built at run time (a CEL evaluation result, a future
-/// state merge or loop that wraps a value), and a worker thread's 2 MiB
+/// YAML, but not one built at run time (a future state merge or a loop
+/// that wraps a value), and a worker thread's 2 MiB
 /// stack is not generous: overflowing it in `Drop` aborts the whole
 /// process (Rust cannot unwind out of a `Drop` panic the normal way,
 /// and a stack overflow isn't a catchable panic to begin with), unlike

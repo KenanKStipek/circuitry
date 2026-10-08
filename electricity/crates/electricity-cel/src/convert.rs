@@ -40,8 +40,10 @@ pub enum ConvertError {
     Overflow,
     /// *value* nested deeper than [`electricity_value::MAX_DEPTH`] —
     /// never produced by this workspace's own JSON/YAML readers, but
-    /// reachable from a run-time-built `Value` (a CEL evaluation result,
-    /// a future state merge or loop that wraps a value).
+    /// reachable from a run-time-built `Value` (a future state merge or
+    /// a loop that wraps a value — not a CEL evaluation result: neither
+    /// [`crate::evaluate_condition`] nor [`crate::evaluate_expect`]
+    /// produces a `Value` at all, only a `bool`).
     Depth,
 }
 
@@ -78,7 +80,11 @@ pub fn to_cel(value: &Value) -> Result<cel::Value, ConvertError> {
 /// `List`/`Dict` child -- not [`Value::depth`] computed once up front,
 /// so a value deep enough to matter is rejected as soon as the walk
 /// reaches that depth rather than after a full, separate traversal just
-/// to measure it.
+/// to measure it. Shares [`Value::depth`]'s own off-by-one against
+/// `electricity-json`'s reader/writer for an empty innermost container
+/// (that function's own docs): an empty `List`/`Dict` never recurses
+/// here either, so the deepest *checked* level is one less than
+/// `electricity-json` would count for the same shape.
 fn to_cel_at_depth(value: &Value, depth: usize) -> Result<cel::Value, ConvertError> {
     if depth > electricity_value::MAX_DEPTH {
         return Err(ConvertError::Depth);

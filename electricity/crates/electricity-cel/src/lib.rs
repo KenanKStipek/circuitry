@@ -24,7 +24,7 @@
 //!
 //! A `Value::Int` too large for CEL's 64-bit `int`, if the expression
 //! actually reads it, is a `CelError` from both entry points
-//! (`convert::Overflow`, [`CelError::is_overflow`]). For
+//! (`convert::ConvertError::Overflow`, [`CelError::is_overflow`]). For
 //! [`evaluate_condition`] this matches Python exactly: `_project`
 //! narrows what `_to_cel` ever sees to what the expression reads, so an
 //! unread big int elsewhere in `state` never raises, and one the
@@ -76,7 +76,7 @@
 //! reproducing Python's collapse-to-one-null-key behavior isn't an
 //! option here; dropping the entry is the least-wrong of the choices
 //! actually available. A `Value::Int` too large for `i64` as a dict key
-//! raises `convert::Overflow` instead of being dropped, matching every
+//! raises `convert::ConvertError::Overflow` instead of being dropped, matching every
 //! other big-int read.
 //!
 //! `has(X)` is rewritten, at parse time, into

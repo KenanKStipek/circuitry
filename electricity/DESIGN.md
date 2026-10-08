@@ -230,8 +230,9 @@ expression *syntax* nesting is a distinct, much smaller limit of its own, `MAX_N
 for reasons specific to that crate's parser (§7.2); `electricity-template`'s own section-nesting
 limit, `MAX_SECTION_DEPTH`, is smaller still, for reasons specific to its renderer (§3.3). A
 `Value` read through this workspace's own JSON/YAML loaders can never exceed `MAX_DEPTH`, but one
-built at run time (a CEL evaluation result, a future state merge or loop that wraps a value) is
-not automatically bounded by it — `Value::depth()` lets a caller check before relying on
+built at run time (a future state merge or a loop that wraps a value — nothing in this workspace
+yet converts a `cel::Value` back into this crate's `Value`, so a CEL evaluation result specifically
+is not one of today's examples) is not automatically bounded by it — `Value::depth()` lets a caller check before relying on
 `py_str`/`py_repr`/equality/hashing/`py_partial_cmp`, every one of which recurses over nested
 values and assumes the invariant rather than enforcing it. `Drop` is the one exception: it is
 iterative regardless of depth, because a `Value` deeper than expected, dropped on a worker
