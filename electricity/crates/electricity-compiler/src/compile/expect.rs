@@ -18,11 +18,11 @@ pub(crate) fn compile_retries(effect: &Dict) -> Option<RetryPolicy> {
     let max_attempts = get_truthy(retries_raw, "max_attempts")
         .map(py_int)
         .unwrap_or(1)
-        .max(0) as u32;
+        .clamp(0, i64::from(u32::MAX)) as u32;
     let backoff_ms = get_truthy(retries_raw, "backoff_ms")
         .map(py_int)
         .unwrap_or(1000)
-        .max(0) as u32;
+        .clamp(0, i64::from(u32::MAX)) as u32;
     Some(RetryPolicy {
         max_attempts,
         backoff_ms,
@@ -151,6 +151,21 @@ mod tests {
             Some(RetryPolicy {
                 max_attempts: 3,
                 backoff_ms: 500
+            })
+        );
+    }
+
+    /// Finding 16: `backoff_ms: 5000000000` (over `u32::MAX`) saturates
+    /// rather than wrapping.
+    #[test]
+    fn retries_backoff_ms_beyond_u32_saturates_instead_of_wrapping() {
+        let retries = dict(vec![("backoff_ms", Value::Int(5_000_000_000i64.into()))]);
+        let effect = dict(vec![("retries", Value::Dict(retries))]);
+        assert_eq!(
+            compile_retries(&effect),
+            Some(RetryPolicy {
+                max_attempts: 1,
+                backoff_ms: u32::MAX,
             })
         );
     }

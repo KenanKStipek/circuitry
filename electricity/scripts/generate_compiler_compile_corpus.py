@@ -1014,6 +1014,37 @@ add(doc(text="effects: []\nflow: bogus\n"))
 CASES[-1]["name"] = "unknown_flow_value"
 
 
+# --- Findings 15/16: is-not-None coercions and integer saturation ----
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: x\n"
+    "    provider: shell\n"
+    "    timeout_ms: 0\n"
+)))
+CASES[-1]["name"] = "tool_timeout_ms_zero_is_kept_not_absent"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: prompt\n"
+    "    name: x\n"
+    "    template: hi\n"
+    "    timeout_ms: 0\n"
+)))
+CASES[-1]["name"] = "prompt_timeout_ms_zero_is_kept_not_absent"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: dynamic\n"
+    "    name: g\n"
+    "    flow: tree\n"
+    "    max_concurrency: 0\n"
+    "    effects: []\n"
+)))
+CASES[-1]["name"] = "dynamic_max_concurrency_zero_is_kept_not_absent"
+
+
 # --- Decision 2: {file:} prompt/yield sources, now that lane D's own ---
 # --- prompt_files::resolve_text_or_file is wired in ---------------------
 

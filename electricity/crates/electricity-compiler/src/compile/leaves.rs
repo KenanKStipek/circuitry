@@ -218,7 +218,7 @@ pub(crate) fn compile_prompt(
         _ => None,
     };
 
-    let timeout_ms = get_truthy(effect, "timeout_ms")
+    let timeout_ms = crate::compile::coerce::get_present(effect, "timeout_ms")
         .map(py_int)
         .map(|n| n.max(0) as u64);
     let deterministic = get_bool_default(effect, "deterministic", false);
@@ -333,7 +333,7 @@ pub(crate) fn compile_tool(
     };
 
     let model = optional_str(effect, "model");
-    let timeout_ms = get_truthy(effect, "timeout_ms")
+    let timeout_ms = crate::compile::coerce::get_present(effect, "timeout_ms")
         .map(py_int)
         .map(|n| n.max(0) as u64);
     let on_error = normalize_on_error_default(effect);
@@ -667,7 +667,7 @@ pub(crate) fn compile_reflector(
     let max_iterations = get_truthy(effect, "max_iterations")
         .map(py_int)
         .unwrap_or(electricity_bytecode::defaults::REFLECTOR_MAX_ITERATIONS as i64)
-        .max(0) as u32;
+        .clamp(0, i64::from(u32::MAX)) as u32;
     let generated_key = get_truthy(effect, "generated_key")
         .map(Value::py_str)
         .unwrap_or_else(|| electricity_bytecode::defaults::GENERATED_KEY.to_string());
@@ -693,7 +693,7 @@ pub(crate) fn compile_reflector(
     ])
     .map(py_int)
     .unwrap_or(electricity_bytecode::defaults::MAX_EFFECTS as i64)
-    .max(0) as u32;
+    .clamp(0, i64::from(u32::MAX)) as u32;
 
     let op = ReflectorOp {
         inner: Box::new(inner_region),

@@ -398,9 +398,9 @@ fn compile_dynamic(
         Vec::new()
     };
 
-    let max_concurrency = get_truthy(effect, "max_concurrency")
+    let max_concurrency = crate::compile::coerce::get_present(effect, "max_concurrency")
         .map(py_int)
-        .map(|n| n.max(0) as u32);
+        .map(|n| n.clamp(0, i64::from(u32::MAX)) as u32);
     let stop_on_error = get_bool_default(effect, "stop_on_error", false);
     let on_error = normalize_on_error_dyn(effect);
     let labels = labels_of(effect);
@@ -761,13 +761,13 @@ fn compile_loop(
         .or(each_def)
         .expect("exactly one mode checked above");
 
-    let max_iterations = get_truthy(effect, "max_iterations")
+    let max_iterations = crate::compile::coerce::get_present(effect, "max_iterations")
         .map(py_int)
-        .map(|n| n.max(0) as u32);
+        .map(|n| n.clamp(0, i64::from(u32::MAX)) as u32);
     let min_iterations = get_truthy(effect, "min_iterations")
         .map(py_int)
         .unwrap_or(0)
-        .max(0) as u32;
+        .clamp(0, i64::from(u32::MAX)) as u32;
     let on_error = normalize_on_error_loop(effect);
 
     let collect_raw = effect.get(&Value::Str("collect".to_string()));
@@ -803,9 +803,9 @@ fn compile_loop(
         }
     }
 
-    let max_concurrency = get_truthy(effect, "max_concurrency")
+    let max_concurrency = crate::compile::coerce::get_present(effect, "max_concurrency")
         .map(py_int)
-        .map(|n| n.max(0) as u32);
+        .map(|n| n.clamp(0, i64::from(u32::MAX)) as u32);
     let labels = labels_of(effect);
 
     let region = Region::Loop {
@@ -888,5 +888,103 @@ mod depth_tests {
             "unexpected error: {}",
             err.0
         );
+    }
+}
+
+#[cfg(test)]
+mod coercion_tests {
+    use crate::DocumentOrigin;
+    use crate::compile::compile_document;
+    use electricity_bytecode::{NodeKind, Region};
+    use electricity_value::{Dict, Value};
+    use std::path::PathBuf;
+
+    fn origin() -> DocumentOrigin {
+        DocumentOrigin::File {
+            document_dir: PathBuf::from("/doc"),
+            confinement_root: PathBuf::from("/doc"),
+        }
+    }
+
+    /// Finding 15: `max_concurrency: 0` is `is not None` in Python, not
+    /// `or`-chained -- `0` is a real, meaningful setting (zero workers
+    /// allowed under `flow: tree`), kept as `Some(0)` rather than
+    /// collapsing to `None` the way a truthiness filter would.
+    #[test]
+    fn dynamic_max_concurrency_zero_is_kept_not_treated_as_absent() {
+        let mut dynamic = Dict::new();
+        dynamic.insert(
+            Value::Str("type".to_string()),
+            Value::Str("dynamic".to_string()),
+        );
+        dynamic.insert(Value::Str("name".to_string()), Value::Str("g".to_string()));
+        dynamic.insert(
+            Value::Str("flow".to_string()),
+            Value::Str("tree".to_string()),
+        );
+        dynamic.insert(
+            Value::Str("max_concurrency".to_string()),
+            Value::Int(0.into()),
+        );
+        dynamic.insert(Value::Str("effects".to_string()), Value::List(Vec::new()));
+
+        let mut root = Dict::new();
+        root.insert(
+            Value::Str("effects".to_string()),
+            Value::List(vec![Value::Dict(dynamic)]),
+        );
+        let document = Value::Dict(root);
+
+        let program = compile_document(&document, &origin()).unwrap();
+        let NodeKind::Control(Region::Block { ops, .. }) = &program.root.kind else {
+            panic!("expected a block")
+        };
+        let NodeKind::Control(Region::Parallel {
+            max_concurrency, ..
+        }) = &ops[0].kind
+        else {
+            panic!("expected a parallel region")
+        };
+        assert_eq!(*max_concurrency, Some(0));
+    }
+
+    /// Finding 16: a `max_iterations` beyond `u32::MAX` saturates
+    /// rather than wrapping (`4294967297` -- `2^32 + 1` -- must not
+    /// become `1`).
+    #[test]
+    fn loop_max_iterations_beyond_u32_saturates_instead_of_wrapping() {
+        let mut each = Dict::new();
+        each.insert(
+            Value::Str("in".to_string()),
+            Value::Str("input.items".to_string()),
+        );
+        let mut loop_effect = Dict::new();
+        loop_effect.insert(
+            Value::Str("type".to_string()),
+            Value::Str("loop".to_string()),
+        );
+        loop_effect.insert(Value::Str("name".to_string()), Value::Str("it".to_string()));
+        loop_effect.insert(Value::Str("each".to_string()), Value::Dict(each));
+        loop_effect.insert(Value::Str("body".to_string()), Value::List(Vec::new()));
+        loop_effect.insert(
+            Value::Str("max_iterations".to_string()),
+            Value::Int(4_294_967_297i64.into()),
+        );
+
+        let mut root = Dict::new();
+        root.insert(
+            Value::Str("effects".to_string()),
+            Value::List(vec![Value::Dict(loop_effect)]),
+        );
+        let document = Value::Dict(root);
+
+        let program = compile_document(&document, &origin()).unwrap();
+        let NodeKind::Control(Region::Block { ops, .. }) = &program.root.kind else {
+            panic!("expected a block")
+        };
+        let NodeKind::Control(Region::Loop { max_iterations, .. }) = &ops[0].kind else {
+            panic!("expected a loop region")
+        };
+        assert_eq!(*max_iterations, Some(u32::MAX));
     }
 }

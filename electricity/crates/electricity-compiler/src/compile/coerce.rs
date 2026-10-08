@@ -23,6 +23,20 @@ pub(crate) fn first_truthy<'a>(candidates: &[Option<&'a Value>]) -> Option<&'a V
     candidates.iter().flatten().find(|v| is_truthy(v)).copied()
 }
 
+/// *dict*'s raw value at *key* if present and not `None` --
+/// `effect.get(key) is not None`, never filtered by truthiness the
+/// way [`get_truthy`] is. Ports the handful of fields `core/
+/// compiler.py` checks with `is not None` rather than its usual
+/// `or`-chained-default idiom: `0`/`0.0`/an empty value is a real,
+/// meaningful setting for these, not "absent" (`timeout_ms: 0`, a
+/// loop's `max_iterations: 0`, `max_concurrency: 0`).
+pub(crate) fn get_present<'a>(dict: &'a Dict, key: &str) -> Option<&'a Value> {
+    match dict.get(&Value::Str(key.to_string())) {
+        Some(Value::None) | None => None,
+        Some(value) => Some(value),
+    }
+}
+
 /// Python's `bool(effect.get(key, default))` truthiness, for a flag
 /// whose Python default is itself a literal `True`/`False`
 /// (`effect.get("stop_on_error", False)`, `effect.get("validate",

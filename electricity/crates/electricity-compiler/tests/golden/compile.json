@@ -3574,6 +3574,178 @@
     }
   },
   {
+    "name": "tool_timeout_ms_zero_is_kept_not_absent",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    timeout_ms: 0\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "x",
+          "provider": "shell",
+          "params": {},
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": 0,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "x"
+      ]
+    },
+    "definition_error": null,
+    "digest": "5256c01edc9f37cbd268870259b195817b7507a319a409aefe4e0c8535276b50",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_zero_is_kept_not_absent",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    timeout_ms: 0\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "x",
+          "template": "hi",
+          "messages": null,
+          "prompt_type": "text",
+          "schema": null,
+          "model": null,
+          "provider": null,
+          "provider_fallbacks": null,
+          "routing_override": null,
+          "params": null,
+          "timeout_ms": 0,
+          "deterministic": false,
+          "inputs": null,
+          "assets": null,
+          "retries": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "x"
+      ]
+    },
+    "definition_error": null,
+    "digest": "67d76ade5d01dffb9631421008d41e4608187b4b3dc26a8bcf231e38af91aeb4",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "dynamic_max_concurrency_zero_is_kept_not_absent",
+    "files": {
+      "doc.yml": "effects:\n  - type: dynamic\n    name: g\n    flow: tree\n    max_concurrency: 0\n    effects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].max_concurrency: 0 is less than the minimum of 1",
+        "effects[0].effects: value should be non-empty"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].max_concurrency: 0 is less than the minimum of 1\n  - effects[0].effects: value should be non-empty",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "g",
+          "effects": [],
+          "flow": "tree",
+          "finally_effects": [],
+          "max_concurrency": 0,
+          "stop_on_error": false,
+          "on_error": "fail",
+          "labels": null,
+          "enabled": true,
+          "prompts": {},
+          "effect_names": []
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "g"
+      ]
+    },
+    "definition_error": null,
+    "digest": "bdfd95a95eb2872e4ffed1d1862ca02b96c771b46d2a683d56d0343ccb354b2c",
+    "comparison": {
+      "validate_errors": [
+        "exact",
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
     "name": "prompt_template_from_file",
     "files": {
       "doc.yml": "effects:\n  - type: prompt\n    name: greet\n    template: {file: template.txt}\n",
