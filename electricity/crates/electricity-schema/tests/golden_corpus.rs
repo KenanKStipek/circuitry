@@ -18,8 +18,8 @@
 //!
 //! The corpus is checked in (`tests/golden/corpus.json`); CI separately
 //! regenerates it (via Circuitry's own validation) and fails the build if
-//! it differs (`.github/workflows/electricity.yml`'s `generated-files`
-//! job), so this test only needs to trust the committed file.
+//! it differs (`.github/workflows/electricity-generated.yml`), so this
+//! test only needs to trust the committed file.
 
 use electricity_schema::{orchestration_errors, profile_errors};
 use serde::Deserialize;
