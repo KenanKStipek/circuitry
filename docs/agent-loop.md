@@ -82,7 +82,7 @@ The transcript is plain markdown:
 # Agent transcript
 
 Task: Why does parse_duration fail?
-Workdir: /home/me/project
+Workdir: ~/project
 
 ## Step 0
 thought: Find where parse_duration is defined.

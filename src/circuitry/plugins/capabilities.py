@@ -48,6 +48,9 @@ PLUGIN_CAPABILITIES: dict[str, frozenset[str]] = {
     # The dedicated shell-execution and Python-evaluation plugins.
     "shell": frozenset({SHELL}),
     "python_eval": frozenset({PYTHON_EVAL}),
+    # A delegated coding-agent session: runs the CLI and whatever the agent
+    # decides to run, edits files, and calls its model over the network.
+    "agent": frozenset({SHELL, FS_WRITE, NETWORK}),
     # Subprocess wrappers: a binary on PATH, run with effect-supplied args.
     "docker": frozenset({SHELL, NETWORK}),
     "kubectl": frozenset({SHELL, NETWORK}),
