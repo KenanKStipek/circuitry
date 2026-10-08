@@ -278,27 +278,6 @@ model:     OPTIONAL. Omit — it comes from the user's config.json.
    max_iterations, generated_key, stop_on_done, max_effects, prime_template.
    Use it only when the steps genuinely cannot be known up front.
 
-8) yield — renders a template and stores the text. No model call.
-   Required: type, name, template. Optional: inputs, description, on_error.
-   Use it to build a value from a plain template, not from a model — compose
-   it with other effects' text (see COMPOSING PROMPTS below), not to ask for
-   anything.
-     - type: yield
-       name: brief
-       template: "Topic: {{input.topic}}"
-
-=== COMPOSING PROMPTS ===
-A top-level `prompts:` map declares named text, as a string or `{file: <path>}`.
-`{{> name}}` splices in a declared prompt, or the text of a `yield`/text
-`prompt` effect, anywhere a template renders — never HTML-escaped, even
-inside a tool param. It can appear more than once in one string.
-  prompts:
-    voice: "Plain, direct sentences."
-  effects:
-    - type: prompt
-      name: draft
-      template: "{{> voice}}\nSummarize {{input.topic}}."
-
 === STATE PATHS ===
 State has exactly three root namespaces: input (caller-supplied), prime
 (effect outputs), runtime (framework metadata). Every path is root-relative —

@@ -6,44 +6,62 @@ which keeps rejecting an unexpanded partial tag exactly as it does today
 (chevron's own partial support is never used; see ``core.templates``'
 module docstring). *name* is either:
 
-* **A declared prompt** (``prompts:`` at the document root). Its own text is
-  a template, expanded and rendered — recursively, so a declared prompt may
-  include another — against the same context as the surrounding template,
-  always unescaped (its tags "never escape, wherever it is included", #397),
-  then spliced in.
+* **A declared prompt** (``prompts:`` at the document root). Its own TEXT —
+  not a rendered value — is spliced in, after its own ``{{> other}}`` tags
+  are recursively expanded the same way (cycle-checked) and its own escaped
+  variable tags (``{{x}}``) are rewritten to explicit no-escape tags
+  (``{{&x}}``, #397), directly into the including template's source, before
+  that whole string ever reaches chevron. Chevron then renders the spliced
+  text's own tags against whatever scope they land in — a Mustache section
+  the ``{{> name}}`` tag sat inside included — exactly like any other text
+  that was always there; a fragment reused inside a loop-body section (one
+  line per item) sees each item, not one shared top-level context. (The
+  alternative — splicing a pre-rendered VALUE, bound to an opaque context
+  key — was tried and rejected: it cannot see enclosing section scope at
+  all, since it is rendered once, in isolation, before the surrounding
+  template's sections ever run.)
 * **An effect** — a ``yield``, or a ``prompt`` whose reply is text. Spliced
   in exactly what ``{{{prime.<name>.value}}}`` would insert at that point: a
   dotted name reaches into a nested/composed effect's own state the same way
   a bare template reference already does, and a missing/skipped/absorbed-
-  failure value renders as ``""``.
+  failure value renders as ``""``. Unlike a declared prompt, this IS a
+  resolved value, bound to a synthetic context key and spliced in with a
+  triple-brace tag, never re-rendered — a model reply containing literal
+  ``{{...}}`` is inserted verbatim, the same guarantee an ordinary
+  ``{{{x}}}`` already gives today.
 
-Either way, the resolved text is substituted as an opaque value bound to a
-synthetic context key and spliced in with a triple-brace tag — never by
-pasting the resolved text into the template's own source and re-tokenizing
-it — so a model reply (or a declared prompt's own text) containing literal
-``{{...}}`` is inserted verbatim and never parsed as more Mustache, the same
-guarantee an ordinary ``{{{x}}}`` already gives today. One trailing line
-break (``\\n``/``\\r\\n``) is dropped from the resolved text before it is
-spliced in, so ``{{> voice}}`` alone on its own line does not add a blank
-one; nothing else about surrounding whitespace changes (no Mustache
-standalone-partial re-indentation — see issue #396).
+One trailing line break (``\\n``/``\\r\\n``) is dropped from a declared
+prompt's own text and from a resolved effect value before either is spliced
+in, so ``{{> voice}}`` alone on its own line does not add a blank one;
+nothing else about surrounding whitespace changes (no Mustache
+standalone-partial re-indentation — see issue #396). A declared prompt may
+not use a set-delimiter tag (``{{=...=}}``): it would change the delimiters
+of whatever template it lands in, which is never checked at that template's
+own compile time.
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from .templates import TemplateError, render_template
+import chevron.tokenizer  # type: ignore[import-untyped]
+
+from .templates import TemplateError, render_template, template_syntax_error
 
 __all__ = [
+    "EFFECT_NAMES_RUNTIME_KEY",
     "RUNTIME_CONFIG_KEY",
     "PromptCompositionError",
+    "all_effect_names",
     "check_prompt_composition",
     "compile_declared_prompts",
     "declared_prompts",
+    "document_content_digest",
+    "known_effect_names",
     "referenced_prompt_file_paths",
     "render_with_composition",
 ]
@@ -56,6 +74,11 @@ __all__ = [
 #: special-casing at the ``use`` boundary itself.
 RUNTIME_CONFIG_KEY = "_prompts"
 
+#: The ``runtime_config`` key a document's own compiled effect-name set
+#: rides under (see :data:`circuitry.core.dynamic.DynamicDefinition.effect_names`
+#: and :func:`known_effect_names`) — same lifecycle as ``RUNTIME_CONFIG_KEY``.
+EFFECT_NAMES_RUNTIME_KEY = "_prompt_effect_names"
+
 
 def declared_prompts(runtime_config: Mapping[str, Any] | None) -> dict[str, str]:
     """The current document's declared prompts, from *runtime_config*."""
@@ -63,6 +86,24 @@ def declared_prompts(runtime_config: Mapping[str, Any] | None) -> dict[str, str]
         return {}
     value = runtime_config.get(RUNTIME_CONFIG_KEY)
     return value if isinstance(value, dict) else {}
+
+
+def known_effect_names(runtime_config: Mapping[str, Any] | None) -> frozenset[str]:
+    """Every effect name the current document's tree contains anywhere.
+
+    Lets the runtime side of ``{{> name}}`` (:func:`_resolve_effect_text`)
+    tell a real effect that simply has not written its value yet — an
+    untaken ``if`` branch, a ``flow: tree`` sibling, one later in the chain
+    — apart from a genuinely unknown name.
+    """
+    if not runtime_config:
+        return frozenset()
+    value = runtime_config.get(EFFECT_NAMES_RUNTIME_KEY)
+    if isinstance(value, frozenset):
+        return value
+    if isinstance(value, (set, list, tuple)):
+        return frozenset(value)
+    return frozenset()
 
 
 class PromptCompositionError(ValueError):
@@ -85,6 +126,18 @@ _PARTIAL_TAG = re.compile(r"(?<!\{)\{\{>([^}]*)\}\}")
 #: text (``prompt_type`` unset or ``"text"``, and ``template``/``messages``
 #: rather than something that decodes to JSON/boolean/number/array/object).
 _TEXT_PRODUCING_TYPES = frozenset({"yield", "prompt"})
+
+#: Effect types whose named children nest under the container's own name in
+#: real state (``prime.<name>.<child>.value``) — and so, for ``{{> name}}``
+#: name resolution, introduce a new scope a dotted name must cross into
+#: explicitly. A named ``loop`` is deliberately excluded: inside its body,
+#: ``prime.<step>.value`` already means "this pass's own sibling", the same
+#: "short sibling path" precedence a named ``dynamic`` gives its own
+#: children from the inside (``core.dynamic``/``core.loop`` — see
+#: ``core.primes``' "WITHIN A LOOP BODY"). ``use`` is excluded too: its
+#: children are a wholly separate document, compiled on its own; nothing in
+#: *this* document's effect tree corresponds to its internal effect names.
+_SCOPE_INTRODUCING_TYPES = frozenset({"if", "dynamic"})
 
 
 def compile_declared_prompts(
@@ -122,6 +175,76 @@ def compile_declared_prompts(
             confinement_root=confinement_root,
         )
     return declared
+
+
+#: Container fields whose values are lists of child effect dicts, walked
+#: when collecting every effect name/type in the document (not into a
+#: ``use`` effect's own child document — that compiles separately).
+_CHILD_LISTS = ("effects", "steps", "body", "then", "else", "finally")
+
+
+def all_effect_names(orch: Mapping[str, Any]) -> frozenset[str]:
+    """Every effect name anywhere in *orch*, flattened regardless of nesting.
+
+    Used for the declared-prompt/effect-name collision check (ambiguous
+    everywhere a name could be bare-referenced) and for the runtime
+    "known but not written yet" set (:func:`known_effect_names`) — both
+    deliberately permissive, unlike :func:`check_prompt_composition`'s own
+    scope-aware name resolution.
+    """
+    names: set[str] = set()
+
+    def walk(effects: Any) -> None:
+        if not isinstance(effects, list):
+            return
+        for effect in effects:
+            if not isinstance(effect, dict):
+                continue
+            name = effect.get("name")
+            if isinstance(name, str) and name:
+                names.add(name)
+            for field in _CHILD_LISTS:
+                walk(effect.get(field))
+
+    walk(orch.get("effects") or orch.get("steps") or [])
+    walk(orch.get("finally"))
+    return frozenset(names)
+
+
+def document_content_digest(
+    resolved_path: Path, orch: Mapping[str, Any], *, confinement_root: Path | None = None
+) -> str:
+    """SHA-256 of *resolved_path*'s bytes, plus every prompt file it
+    references (#396) — shared by every surface that treats a document's
+    bytes as its identity: capability consent (``cof trust``,
+    ``cli.document_consent``) and ``core.use``'s own content digest
+    (``UseRuntime._content_digest``). *confinement_root* is the project a
+    ``{file: ...}`` reference inside *orch* must stay inside — the caller's
+    own confinement rule (a library source's cached tree, say); the nearest
+    ``circuitry.config.json``/``config.json`` when omitted. Best-effort,
+    like ``core.resume.document_sha256``: a document that fails to parse
+    here (it will fail again, loudly, moments later) just falls back to the
+    file's own bytes.
+    """
+    from .prompt_files import default_project_root
+
+    hasher = hashlib.sha256()
+    hasher.update(resolved_path.read_bytes())
+    try:
+        document_dir = resolved_path.resolve().parent
+        root = (
+            confinement_root
+            if confinement_root is not None
+            else default_project_root(document_dir)
+        )
+        paths = referenced_prompt_file_paths(
+            orch, document_dir=document_dir, confinement_root=root
+        )
+        for prompt_file in sorted(set(paths)):
+            hasher.update(prompt_file.read_bytes())
+    except Exception:
+        pass
+    return hasher.hexdigest()
 
 
 def referenced_prompt_file_paths(
@@ -188,39 +311,54 @@ def referenced_prompt_file_paths(
 # ── static (cof check) validation ───────────────────────────────────────────
 
 
-#: Container fields whose values are lists of child effect dicts, walked
-#: when collecting every effect name/type in the document (not into a
-#: ``use`` effect's own child document — that compiles separately).
-_CHILD_LISTS = ("effects", "steps", "body", "then", "else", "finally")
-
-
-def _collect_effect_records(
-    effects: Any, out: dict[str, str]
-) -> None:
-    if not isinstance(effects, list):
-        return
-    for effect in effects:
-        if not isinstance(effect, dict):
-            continue
-        name = effect.get("name")
-        etype = str(effect.get("type") or "").strip().lower()
-        if isinstance(name, str) and name:
-            out[name] = etype
-        for field in _CHILD_LISTS:
-            _collect_effect_records(effect.get(field), out)
-
-
 #: The exact fields ``{{> name}}`` is composed in — "prompt templates and
 #: messages, yield templates, declared prompts, tool params and prompt, use
 #: inputs and inline" (#396). Everything else a template renders
 #: (``if``/``while`` model templates, ``expect.template``, an asset's
 #: ``ref``, ``retries``, ...) is deliberately excluded here: it keeps going
 #: through the unconditional partial rejection ``core.templates`` already
-#: gave every template, unaffected by this module.
+#: gave every template, unaffected by this module. Only ``template`` and a
+#: message's ``content`` may be ``{file: ...}``-shaped (#396 §3); the rest
+#: are always plain strings.
 _COMPOSABLE_SCALAR_FIELDS = ("template", "prompt", "inline", "params_json")
 
 
-def _iter_composable_strings(effect: Mapping[str, Any]) -> list[str]:
+def _resolve_file_field_text(
+    value: Any, *, document_dir: Path | None, confinement_root: Path | None
+) -> str | None:
+    """*value*'s text, if it is a ``{file: ...}`` this document can read —
+    best-effort, same swallow-and-skip precedent as
+    :func:`referenced_prompt_file_paths`: a genuine ``file:`` violation is
+    ``compile_declared_prompts``/the effect's own compile step's to raise,
+    with the field name this best-effort scan has lost.
+    """
+    if document_dir is None or confinement_root is None:
+        return None
+    if not (
+        isinstance(value, Mapping)
+        and set(value) == {"file"}
+        and isinstance(value.get("file"), str)
+    ):
+        return None
+    from .prompt_files import PromptFileError, resolve_prompt_file
+
+    try:
+        return resolve_prompt_file(
+            value["file"],
+            document_dir=document_dir,
+            confinement_root=confinement_root,
+            field="file",
+        )
+    except PromptFileError:
+        return None
+
+
+def _iter_composable_strings(
+    effect: Mapping[str, Any],
+    *,
+    document_dir: Path | None = None,
+    confinement_root: Path | None = None,
+) -> list[str]:
     """Every string in *effect* that ``{{> name}}`` composition actually sees.
 
     ``inputs`` is only ever rendered — and so only ever scanned here — on a
@@ -236,13 +374,26 @@ def _iter_composable_strings(effect: Mapping[str, Any]) -> list[str]:
         value = effect.get(field)
         if isinstance(value, str):
             found.append(value)
+        elif field == "template":
+            file_text = _resolve_file_field_text(
+                value, document_dir=document_dir, confinement_root=confinement_root
+            )
+            if file_text is not None:
+                found.append(file_text)
     messages = effect.get("messages")
     if isinstance(messages, list):
-        found.extend(
-            message["content"]
-            for message in messages
-            if isinstance(message, Mapping) and isinstance(message.get("content"), str)
-        )
+        for message in messages:
+            if not isinstance(message, Mapping):
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                found.append(content)
+            else:
+                file_text = _resolve_file_field_text(
+                    content, document_dir=document_dir, confinement_root=confinement_root
+                )
+                if file_text is not None:
+                    found.append(file_text)
     params = effect.get("params")
     if params is not None:
         found.extend(_walk_strings(params))
@@ -278,112 +429,158 @@ def _effect_is_text_producing(effect_type: str, effect: Mapping[str, Any]) -> bo
 
 def partial_references(text: str) -> set[str]:
     """Every name a ``{{> name}}`` tag in *text* names, for reference analysis
-    (tree-flow sibling warnings, ``cof check``, ``--resume``) alongside the
-    existing ``prime.<name>`` scan those already do."""
+    (``cof check``, ``--resume``) alongside the existing ``prime.<name>``
+    scan those already do."""
     return {m.group(1).strip() for m in _PARTIAL_TAG.finditer(text)}
 
 
+def _declared_prompt_syntax_errors(declared: Mapping[str, str]) -> list[str]:
+    """Each declared prompt validated on its own, before it is ever spliced
+    anywhere (#396): a malformed fragment (an unbalanced section, say) is
+    reported against the prompt that owns it, not whatever template
+    happens to include it first. Also forbids a set-delimiter tag
+    (``{{=...=}}``) inside a declared prompt — it would silently change the
+    delimiters of the template it lands in, which is never checked at that
+    template's own compile time.
+    """
+    errors: list[str] = []
+    for name, text in declared.items():
+        reason = template_syntax_error(text, allow_partials=True)
+        if reason is not None:
+            errors.append(f"prompts.{name}: malformed Mustache template: {reason}")
+            continue
+        for token_type, _value in chevron.tokenizer.tokenize(text):
+            if token_type == "set delimiter":
+                errors.append(
+                    f"prompts.{name}: '{{{{=...=}}}}' (set-delimiter) is not "
+                    "allowed inside a declared prompt — it would change the "
+                    "delimiters of the template that includes it."
+                )
+                break
+    return errors
+
+
 def check_prompt_composition(
-    orch: Mapping[str, Any], *, declared: Mapping[str, str]
+    orch: Mapping[str, Any],
+    *,
+    declared: Mapping[str, str],
+    document_dir: Path | None = None,
+    confinement_root: Path | None = None,
 ) -> list[str]:
     """``cof check`` errors for ``prompts:``/``{{> name}}`` in *orch*.
 
     Checks, across every template-bearing string in the document (effects
-    and declared prompts alike): an unknown name, a name that is both
-    declared and an effect, a named effect that is neither a ``yield`` nor a
-    text ``prompt``, and a cycle among declared prompts. A dotted name
-    (``pipeline.outline``) is only checked by its first segment — the named
-    top-level effect — the same shallow-path trust ``{{prime.x.y}}`` already
-    gets elsewhere in this codebase; what a composed/nested effect exposes
-    under that segment is a run-time concern, same as any other dotted
-    state reference.
+    and declared prompts alike, including ``{file: ...}``-sourced effect
+    templates/message content): a malformed declared prompt, an unknown
+    name, a name that is both declared and an effect, a named effect that is
+    neither a ``yield`` nor a text ``prompt``, and a cycle among declared
+    prompts.
+
+    Name resolution is scope-aware: a named ``if``/``dynamic`` nests its own
+    children under its name (``prime.<name>.<child>``, reachable from
+    outside only via the dotted form, ``{{> name.child}}``); anything else
+    (an unnamed container, or a named ``loop``/``use``/``reflector``) keeps
+    its children bare-visible in the enclosing scope, the same "short
+    sibling path" precedence their own runtime containers already give them
+    (``core.dynamic``/``core.loop``). A dotted name that resolves past a
+    container this module does not model that way (a loop's own iteration
+    wrapping, say) is trusted rather than rejected — the same shallow-path
+    trust ``{{prime.x.y}}`` already gets elsewhere in this codebase; what it
+    exposes at run time is that effect's own concern.
     """
-    errors: list[str] = []
+    errors = _declared_prompt_syntax_errors(declared)
 
-    effect_records: dict[str, str] = {}
-    _collect_effect_records(orch.get("effects") or orch.get("steps") or [], effect_records)
-    _collect_effect_records(orch.get("finally"), effect_records)
-
-    overlap = sorted(set(declared) & set(effect_records))
+    overlap = sorted(set(declared) & all_effect_names(orch))
     errors.extend(
         f"'{name}' is both a declared prompt and an effect name — "
         "'{{> " + name + "}}' would be ambiguous."
         for name in overlap
     )
 
-    def check_name(name: str, *, where: str) -> None:
+    root: dict[str, dict[str, Any]] = {}
+
+    def check_name(name: str, *, where: str, scope_chain: list[dict[str, dict[str, Any]]]) -> None:
         head = name.split(".", 1)[0]
         if head in declared:
-            if head in overlap:
-                return  # already reported once, above
+            return  # declared always wins; collision already reported once, above
+        visible: dict[str, dict[str, Any]] = {}
+        for scope in scope_chain:
+            visible.update(scope)
+        if head not in visible:
+            errors.append(f"{where}: '{{{{> {name}}}}}' does not name a declared prompt or effect.")
             return
-        if head in effect_records:
-            if head in overlap:
-                return
-            etype = effect_records[head]
-            if etype not in _TEXT_PRODUCING_TYPES or (
-                etype == "prompt"
-                and not _effect_is_text_producing(etype, _find_effect(orch, head))
-            ):
-                errors.append(
-                    f"{where}: '{{{{> {name}}}}}' names effect '{head}' "
-                    f"(type '{etype}'), which is neither a 'yield' nor a "
-                    "text 'prompt'."
-                )
-            return
-        errors.append(f"{where}: '{{{{> {name}}}}}' does not name a declared prompt or effect.")
+        node = visible[head]
+        segments = name.split(".")
+        for seg in segments[1:]:
+            children = node.get("children") or {}
+            if seg not in children:
+                return  # shallow-path trust: a container this model doesn't follow
+            node = children[seg]
+        if not node["text_producing"]:
+            errors.append(
+                f"{where}: '{{{{> {name}}}}}' names effect '{segments[-1]}' "
+                f"(type '{node['type']}'), which is neither a 'yield' nor a "
+                "text 'prompt'."
+            )
 
-    def walk(effects: Any, container_path: str) -> None:
+    def walk(
+        effects: Any,
+        container_path: str,
+        scope_chain: list[dict[str, dict[str, Any]]],
+        out: dict[str, dict[str, Any]],
+    ) -> None:
         if not isinstance(effects, list):
             return
+        for effect in effects:
+            if not isinstance(effect, dict):
+                continue
+            name = effect.get("name")
+            etype = str(effect.get("type") or "").strip().lower()
+            if isinstance(name, str) and name:
+                out[name] = {
+                    "type": etype,
+                    "children": {},
+                    "text_producing": _effect_is_text_producing(etype, effect),
+                }
         for idx, effect in enumerate(effects):
             if not isinstance(effect, dict):
                 continue
             effect_path = f"{container_path}[{idx}]"
-            for text in _iter_composable_strings(effect):
+            for text in _iter_composable_strings(
+                effect, document_dir=document_dir, confinement_root=confinement_root
+            ):
                 for name in sorted(partial_references(text)):
                     if not _NAME_SHAPE.match(name):
                         errors.append(
                             f"{effect_path}: '{{{{> {name}}}}}' is not a valid name."
                         )
                         continue
-                    check_name(name, where=effect_path)
+                    check_name(name, where=effect_path, scope_chain=scope_chain)
+            name = effect.get("name")
+            etype = str(effect.get("type") or "").strip().lower()
+            introduces_scope = (
+                isinstance(name, str) and bool(name) and etype in _SCOPE_INTRODUCING_TYPES
+            )
+            next_scope_chain, next_out = scope_chain, out
+            if introduces_scope:
+                child_children = out[name]["children"]
+                next_scope_chain = [*scope_chain, child_children]
+                next_out = child_children
             for field in _CHILD_LISTS:
-                walk(effect.get(field), f"{effect_path}.{field}")
+                walk(effect.get(field), f"{effect_path}.{field}", next_scope_chain, next_out)
 
-    walk(orch.get("effects") or orch.get("steps") or [], "effects")
-    walk(orch.get("finally"), "finally")
+    walk(orch.get("effects") or orch.get("steps") or [], "effects", [root], root)
+    walk(orch.get("finally") or [], "finally", [root], root)
 
     for prompt_name, text in declared.items():
         for name in sorted(partial_references(text)):
             if not _NAME_SHAPE.match(name):
                 errors.append(f"prompts.{prompt_name}: '{{{{> {name}}}}}' is not a valid name.")
                 continue
-            check_name(name, where=f"prompts.{prompt_name}")
+            check_name(name, where=f"prompts.{prompt_name}", scope_chain=[root])
 
     errors.extend(_declared_prompt_cycles(declared))
     return errors
-
-
-def _find_effect(orch: Mapping[str, Any], name: str) -> dict[str, Any]:
-    found: dict[str, Any] = {}
-
-    def walk(effects: Any) -> None:
-        if not isinstance(effects, list) or found:
-            return
-        for effect in effects:
-            if not isinstance(effect, dict) or found:
-                continue
-            if effect.get("name") == name:
-                found.update(effect)
-                return
-            for field in _CHILD_LISTS:
-                walk(effect.get(field))
-
-    walk(orch.get("effects") or orch.get("steps") or [])
-    if not found:
-        walk(orch.get("finally"))
-    return found
 
 
 def _dfs_find_cycle(
@@ -469,48 +666,84 @@ def _dotted_get(root: Any, path: list[str]) -> Any:
     return current
 
 
-def _resolve_partial_text(
+def _unescape_variable_tags(text: str, *, label: str) -> str:
+    """Rebuild *text* — a declared prompt's own resolved text, recursively
+    including any fragment it itself spliced in — with every escaped
+    variable tag (``{{x}}``) rewritten to an explicit no-escape tag
+    (``{{&x}}``), so the fragment's own tags never escape wherever they
+    land once spliced into an including template (#397), even one that
+    keeps escaping everything else (a tool param, say).
+
+    Rebuilds from chevron's own tokenizer rather than a regex, so section/
+    comment/no-escape tags are reproduced correctly regardless of nesting.
+    chevron.tokenizer classifies 'variable' and 'no escape' tags identically
+    for its standalone-whitespace trimming (neither ever qualifies), so
+    converting one into the other here never disturbs surrounding
+    whitespace. A set-delimiter tag is rejected rather than honoured — a
+    declared prompt may not carry one (``cof check`` already rejects it for
+    a checked document; this is the backstop for a generated/``use: inline``
+    one, #396 §2's "fails the same way, under on_error").
+    """
+    parts: list[str] = []
+    try:
+        tokens = list(chevron.tokenizer.tokenize(text))
+    except Exception as exc:
+        raise TemplateError(f"{label}: malformed Mustache template: {exc}") from exc
+    for token_type, value in tokens:
+        if token_type == "literal":
+            parts.append(value)
+        elif token_type in ("variable", "no escape"):
+            parts.append(f"{{{{&{value}}}}}")
+        elif token_type == "section":
+            parts.append(f"{{{{#{value}}}}}")
+        elif token_type == "inverted section":
+            parts.append(f"{{{{^{value}}}}}")
+        elif token_type == "end":
+            parts.append(f"{{{{/{value}}}}}")
+        elif token_type == "partial":
+            # Should never occur: every `{{> name}}` is fully expanded,
+            # recursively, before this runs. Reproduced as-is so
+            # `render_template`'s own unconditional rejection catches it
+            # with its usual message, rather than silently mangling it.
+            parts.append(f"{{{{>{value}}}}}")
+        elif token_type == "set delimiter":
+            raise TemplateError(
+                f"{label}: a declared prompt may not use '{{{{=...=}}}}' "
+                "(set-delimiter) — it would change the delimiters of the "
+                "template that includes it."
+            )
+        # comments are dropped — they render as nothing anyway.
+    return "".join(parts)
+
+
+def _resolve_effect_text(
     name: str,
+    head: str,
     *,
     ctx: Mapping[str, Any],
-    declared: Mapping[str, str],
+    known_names: frozenset[str],
     label: str,
-    seen: frozenset[str],
 ) -> str:
-    if not _NAME_SHAPE.match(name):
-        raise TemplateError(f"{label}: '{{{{> {name}}}}}' is not a valid name.")
+    """The resolved text ``{{> name}}`` splices for an effect reference —
+    exactly what ``{{{prime.<name>.value}}}`` would insert.
 
-    head = name.split(".", 1)[0]
-    if "." not in name and head in declared:
-        if name in seen:
-            raise TemplateError(
-                f"{label}: cycle among declared prompts at '{name}'."
-            )
-        resolved, extra = _expand(
-            declared[name], ctx=ctx, declared=declared, label=f"prompts.{name}", seen=seen | {name}
-        )
-        merged_ctx = {**ctx, **extra} if extra else ctx
-        text = render_template(resolved, merged_ctx, label=f"prompts.{name}", escape=False)
-    else:
-        # Not a declared prompt: must be an effect reference. ``head`` has
-        # to at least exist as a node in ``ctx['prime']`` — written the
-        # moment an effect starts (``Store.fire_effect_start``), including a
-        # disabled/skipped one or one absorbed by its own ``on_error`` — for
-        # the rest of the path to legitimately resolve to "" (a skipped
-        # effect, one absorbed by ``on_error: continue``, per #396). A name
-        # that was never anything is a run-time "unknown name" failure
-        # (``cof check`` catches it first for anything static; this is the
-        # backstop for a generated plan or a ``use: inline`` child's own
-        # dynamically built text, which can carry a name that is nobody's
-        # effect at all).
-        prime_ns = ctx.get("prime") if isinstance(ctx, Mapping) else None
-        if not (isinstance(prime_ns, Mapping) and head in prime_ns):
-            raise TemplateError(
-                f"{label}: '{{{{> {name}}}}}' does not name a declared prompt or effect."
-            )
+    *head* already exists in ``ctx['prime']`` (it ran, even if skipped or
+    absorbed by its own ``on_error``) — dotted-get it, "" for ``None``. Not
+    there yet, but a real effect in the document (*known_names*, #396) — an
+    untaken ``if`` branch, a ``flow: tree`` sibling, one later in the chain
+    — also "", the same as a bare miss. Genuinely unknown — not even a name
+    in the document — is the run-time backstop error for a generated
+    document that skipped ``cof check``'s own, scope-aware validation.
+    """
+    prime_ns = ctx.get("prime") if isinstance(ctx, Mapping) else None
+    if isinstance(prime_ns, Mapping) and head in prime_ns:
         value = _dotted_get(ctx, ["prime", *name.split("."), "value"])
-        text = "" if value is None else str(value)
-    return _drop_one_trailing_newline(text)
+        return "" if value is None else str(value)
+    if head in known_names:
+        return ""
+    raise TemplateError(
+        f"{label}: '{{{{> {name}}}}}' does not name a declared prompt or effect."
+    )
 
 
 def _expand(
@@ -518,6 +751,7 @@ def _expand(
     *,
     ctx: Mapping[str, Any],
     declared: Mapping[str, str],
+    known_names: frozenset[str],
     label: str,
     seen: frozenset[str],
 ) -> tuple[str, dict[str, str]]:
@@ -527,9 +761,25 @@ def _expand(
     def replace(match: re.Match[str]) -> str:
         nonlocal counter
         name = match.group(1).strip()
-        text = _resolve_partial_text(
-            name, ctx=ctx, declared=declared, label=label, seen=seen
-        )
+        if not _NAME_SHAPE.match(name):
+            raise TemplateError(f"{label}: '{{{{> {name}}}}}' is not a valid name.")
+        head = name.split(".", 1)[0]
+        if "." not in name and head in declared:
+            if name in seen:
+                raise TemplateError(f"{label}: cycle among declared prompts at '{name}'.")
+            fragment, nested_extra = _expand(
+                declared[name],
+                ctx=ctx,
+                declared=declared,
+                known_names=known_names,
+                label=f"prompts.{name}",
+                seen=seen | {name},
+            )
+            extra.update(nested_extra)
+            fragment = _unescape_variable_tags(fragment, label=f"prompts.{name}")
+            return _drop_one_trailing_newline(fragment)
+        text = _resolve_effect_text(name, head, ctx=ctx, known_names=known_names, label=label)
+        text = _drop_one_trailing_newline(text)
         key = f"__circuitry_partial_{counter}__"
         counter += 1
         extra[key] = text
@@ -544,6 +794,7 @@ def render_with_composition(
     ctx: Mapping[str, Any],
     *,
     declared: Mapping[str, str] | None = None,
+    known_effect_names: frozenset[str] = frozenset(),
     label: str = "template",
     escape: bool = True,
 ) -> str:
@@ -551,12 +802,23 @@ def render_with_composition(
 
     *declared* is the document's own ``prompts:`` registry (empty/``None``
     outside a document that declares any, or for a child ``use`` document
-    with none of its own — see the ``_prompts`` runtime-config key). Every
-    other tag in *template* keeps rendering exactly as :func:`render_template`
-    already does, including *escape*.
+    with none of its own — see the ``_prompts`` runtime-config key).
+    *known_effect_names* is the document's own effect-name set (see
+    :func:`known_effect_names`), used only to tell a real effect that has
+    not written its value yet apart from a genuinely unknown name. Every
+    other tag in *template* — including one a declared prompt's own text
+    textually spliced in here — keeps rendering exactly as
+    :func:`render_template` already does, including *escape*; a spliced
+    declared-prompt fragment's own tags are pre-rewritten to never escape
+    regardless (#397).
     """
     rewritten, extra = _expand(
-        template, ctx=ctx, declared=declared or {}, label=label, seen=frozenset()
+        template,
+        ctx=ctx,
+        declared=declared or {},
+        known_names=known_effect_names,
+        label=label,
+        seen=frozenset(),
     )
     merged_ctx = {**ctx, **extra} if extra else ctx
     return render_template(rewritten, merged_ctx, label=label, escape=escape)

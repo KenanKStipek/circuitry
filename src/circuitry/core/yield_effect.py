@@ -17,7 +17,7 @@ from typing import Any
 
 from ..cli.redaction import redact
 from ..output import console as _console
-from .prompt_compose import declared_prompts, render_with_composition
+from .prompt_compose import declared_prompts, known_effect_names, render_with_composition
 from .store import Store
 
 
@@ -129,6 +129,7 @@ class YieldRuntime:
                 self.defn.template,
                 effective_ctx,
                 declared=declared_prompts(self.runtime_config),
+                known_effect_names=known_effect_names(self.runtime_config),
                 label=f"yield '{self.defn.name}' template",
                 escape=False,
             )

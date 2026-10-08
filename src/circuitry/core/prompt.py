@@ -34,7 +34,7 @@ from .answers import AnswerParseError, parse_boolean_answer, parse_number_answer
 from .cancellation import get_token
 from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .effect_identity import model_call
-from .prompt_compose import declared_prompts, render_with_composition
+from .prompt_compose import declared_prompts, known_effect_names, render_with_composition
 from .store import Store
 from .templates import render_template
 
@@ -1396,6 +1396,7 @@ class PromptRuntime:
         if self.defn.template or not self.defn.messages:
             return ()
         declared = declared_prompts(self.runtime_config)
+        known_names = known_effect_names(self.runtime_config)
         return tuple(
             ChatMessage(
                 role=msg.role,
@@ -1403,6 +1404,7 @@ class PromptRuntime:
                     msg.content,
                     ctx,
                     declared=declared,
+                    known_effect_names=known_names,
                     label=f"messages[{index}].content",
                     escape=False,
                 ),
@@ -1425,6 +1427,7 @@ class PromptRuntime:
                 self.defn.template,
                 ctx,
                 declared=declared_prompts(self.runtime_config),
+                known_effect_names=known_effect_names(self.runtime_config),
                 label="template",
                 escape=False,
             )

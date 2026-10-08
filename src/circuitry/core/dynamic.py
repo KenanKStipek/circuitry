@@ -173,6 +173,17 @@ class DynamicDefinition:
     # read from here at render time.
     prompts: Mapping[str, str] = field(default_factory=dict)
 
+    # Every effect name this document's tree contains anywhere (#396) —
+    # same lifecycle as `prompts` above: only populated on the root, threaded
+    # into `runtime_config` by the caller. Lets `{{> name}}`'s runtime
+    # expansion (`core.prompt_compose._resolve_effect_text`) tell "this is a
+    # real effect that simply has not written its value yet" (an untaken
+    # `if` branch, a `flow: tree` sibling, one later in the chain — renders
+    # "", like a bare `{{{prime.x.value}}}` miss) apart from a genuinely
+    # unknown name (a backstop error, for a generated/`use: inline` document
+    # that skipped `cof check`'s own, scope-aware name validation).
+    effect_names: frozenset[str] = field(default_factory=frozenset)
+
 
 class DynamicRuntime:
     def __init__(

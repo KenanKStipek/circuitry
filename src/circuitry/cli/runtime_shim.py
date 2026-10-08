@@ -733,6 +733,7 @@ def run(req: RunRequest) -> RunResult:
                 "Orchestration validation failed:\n"
                 + "\n".join(f"  - {error}" for error in document_errors)
             )
+        from ..core.prompt_compose import EFFECT_NAMES_RUNTIME_KEY as _EFFECT_NAMES_KEY
         from ..core.prompt_compose import RUNTIME_CONFIG_KEY as _PROMPTS_KEY
         from ..core.prompt_files import default_project_root
 
@@ -744,6 +745,7 @@ def run(req: RunRequest) -> RunResult:
             confinement_root=default_project_root(_document_dir),
         )
         runtime_config[_PROMPTS_KEY] = root_def.prompts
+        runtime_config[_EFFECT_NAMES_KEY] = root_def.effect_names
 
         group_errors = unknown_concurrency_group_errors(
             root_def, concurrency_limiter.group_names

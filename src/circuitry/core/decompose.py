@@ -773,10 +773,12 @@ def _run_isolated(
     # rather than inherited, so it can't accidentally resolve a `{{> name}}`
     # the parent document happens to declare; decompose/reflector plans
     # aren't taught the composition syntax at all.
+    from .prompt_compose import EFFECT_NAMES_RUNTIME_KEY as _EFFECT_NAMES_KEY
     from .prompt_compose import RUNTIME_CONFIG_KEY as _PROMPTS_KEY
 
     child_runtime_config = dict(runtime_config)
     child_runtime_config[_PROMPTS_KEY] = {}
+    child_runtime_config[_EFFECT_NAMES_KEY] = frozenset()
     DynamicRuntime(
         root,
         adapter=adapter,

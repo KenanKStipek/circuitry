@@ -27,7 +27,7 @@ from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .effect_identity import model_call
 from .expect import ExpectDef, evaluate_expect, expect_failure_summary
 from .prompt import RetryPolicyDef
-from .prompt_compose import declared_prompts, render_with_composition
+from .prompt_compose import declared_prompts, known_effect_names, render_with_composition
 from .store import Store
 from .use import _resolve_reference
 
@@ -168,6 +168,7 @@ def _render_params(
     *,
     name: str,
     declared: dict[str, str] | None = None,
+    known_names: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Resolve by-reference leaves, then Mustache-render every remaining string in params.
 
@@ -194,7 +195,9 @@ def _render_params(
                 )
             return copy.deepcopy(resolved)
         if isinstance(v, str):
-            return render_with_composition(v, ctx, declared=declared, label=path)
+            return render_with_composition(
+                v, ctx, declared=declared, known_effect_names=known_names, label=path
+            )
         if isinstance(v, dict):
             return {k: _render_value(vv, f"{path}.{k}") for k, vv in v.items()}
         if isinstance(v, list):
@@ -240,7 +243,11 @@ def _json_aware_ctx(value: Any) -> Any:
 
 
 def _render_params_json(
-    template: str, ctx: dict[str, Any], *, declared: dict[str, str] | None = None
+    template: str,
+    ctx: dict[str, Any],
+    *,
+    declared: dict[str, str] | None = None,
+    known_names: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Mustache-render params_json, then parse the result as a JSON object.
 
@@ -250,7 +257,11 @@ def _render_params_json(
     the author wrote, which is worse than surfacing the error.
     """
     rendered_text = render_with_composition(
-        template, _json_aware_ctx(ctx), declared=declared, label="params_json"
+        template,
+        _json_aware_ctx(ctx),
+        declared=declared,
+        known_effect_names=known_names,
+        label="params_json",
     )
     try:
         parsed = json.loads(rendered_text)
@@ -650,18 +661,29 @@ class ToolRuntime:
                 # Render top-level prompt/model, then merge with params (params take precedence)
                 top_level: dict[str, Any] = {}
                 declared = declared_prompts(self.runtime_config)
+                known_names = known_effect_names(self.runtime_config)
                 if self.defn.prompt is not None:
                     top_level["prompt"] = render_with_composition(
-                        self.defn.prompt, ctx, declared=declared, label="prompt"
+                        self.defn.prompt,
+                        ctx,
+                        declared=declared,
+                        known_effect_names=known_names,
+                        label="prompt",
                     )
                 if self.defn.model is not None:
                     top_level["model"] = self.defn.model
 
                 _reject_templated_security_params(self.defn.params)
-                params = _render_params(self.defn.params, ctx, name=self.defn.name, declared=declared)
+                params = _render_params(
+                    self.defn.params,
+                    ctx,
+                    name=self.defn.name,
+                    declared=declared,
+                    known_names=known_names,
+                )
                 if self.defn.params_json is not None:
                     params_json_overlay = _render_params_json(
-                        self.defn.params_json, ctx, declared=declared
+                        self.defn.params_json, ctx, declared=declared, known_names=known_names
                     )
                     _reject_params_json_security_overrides(params_json_overlay)
                     params = _deep_merge_params(params, params_json_overlay)

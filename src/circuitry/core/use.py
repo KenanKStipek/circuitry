@@ -22,7 +22,7 @@ from .expect import ExpectDef, evaluate_expect, expect_failure_summary
 from .interface_inputs import check_interface_inputs
 from .outputs import normalize_outputs
 from .prompt import RetryPolicyDef
-from .prompt_compose import declared_prompts, render_with_composition
+from .prompt_compose import declared_prompts, known_effect_names, render_with_composition
 from .store import Store
 from .store.store import replace_node
 from .yaml_load import load_yaml
@@ -188,6 +188,7 @@ def _render_inputs(
     ctx: dict[str, Any],
     *,
     declared: dict[str, str] | None = None,
+    known_names: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Render input values for a child run.
 
@@ -204,7 +205,7 @@ def _render_inputs(
             rendered[key] = copy.deepcopy(_resolve_reference(ctx, path))
         elif isinstance(value, str):
             rendered[key] = render_with_composition(
-                value, ctx, declared=declared, label=f"inputs.{key}"
+                value, ctx, declared=declared, known_effect_names=known_names, label=f"inputs.{key}"
             )
         else:
             rendered[key] = value
@@ -560,6 +561,7 @@ class UseRuntime:
                 self.defn.inline,
                 ctx,
                 declared=declared_prompts(self.runtime_config),
+                known_effect_names=known_effect_names(self.runtime_config),
                 label="inline",
             )
             cleaned = _clean_yaml_fences(raw_yaml)
@@ -896,9 +898,11 @@ class UseRuntime:
                     # declared prompts" (#396) — set fresh here rather than
                     # inherited, since `child_runtime_config` started as a
                     # shallow copy of the parent's.
+                    from .prompt_compose import EFFECT_NAMES_RUNTIME_KEY as _EFFECT_NAMES_KEY
                     from .prompt_compose import RUNTIME_CONFIG_KEY as _PROMPTS_KEY
 
                     child_runtime_config[_PROMPTS_KEY] = child_root.prompts
+                    child_runtime_config[_EFFECT_NAMES_KEY] = child_root.effect_names
 
                     # The run-wide limiter (if any) is ambient — a `use` child
                     # never declares its own `runtime.concurrency_groups` (see
@@ -932,6 +936,7 @@ class UseRuntime:
                             self.defn.inputs,
                             ctx,
                             declared=declared_prompts(self.runtime_config),
+                            known_names=known_effect_names(self.runtime_config),
                         )
                         unresolved = _unresolved_references(self.defn.inputs, child_inputs)
                     # Check interface first — it fills in declared `default:`s and

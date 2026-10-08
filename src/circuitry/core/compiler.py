@@ -24,6 +24,7 @@ from .prompt import (
 )
 from .prompt_compose import (
     PromptCompositionError,
+    all_effect_names,
     check_prompt_composition,
     compile_declared_prompts,
 )
@@ -400,7 +401,12 @@ def compile_orchestration(
             )
         except PromptCompositionError as exc:
             raise ValueError(str(exc)) from exc
-        composition_errors = check_prompt_composition(orch, declared=declared_prompts)
+        composition_errors = check_prompt_composition(
+            orch,
+            declared=declared_prompts,
+            document_dir=document_dir,
+            confinement_root=confinement_root,
+        )
         if composition_errors:
             raise ValueError(
                 "Prompt composition errors:\n"
@@ -438,6 +444,7 @@ def compile_orchestration(
             flow=flow,
             finally_effects=tuple(compiled_finally),
             prompts=declared_prompts,
+            effect_names=all_effect_names(orch),
         )
 
 
