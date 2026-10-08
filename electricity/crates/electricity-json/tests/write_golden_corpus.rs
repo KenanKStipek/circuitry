@@ -4,8 +4,8 @@
 //!
 //! The corpus is checked in (`tests/golden/write_corpus.json`); CI
 //! separately regenerates it with Python 3.11 and fails the build if it
-//! differs (`.github/workflows/electricity.yml`), so this test only needs
-//! to trust the committed file.
+//! differs (`.github/workflows/electricity-generated.yml`), so this test
+//! only needs to trust the committed file.
 
 use chrono::{FixedOffset, NaiveDate, NaiveDateTime};
 use electricity_json::{WriteMode, dumps, dumps_default_str};

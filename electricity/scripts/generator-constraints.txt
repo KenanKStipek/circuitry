@@ -1,0 +1,12 @@
+# Versions of the libraries whose behaviour the generated files capture.
+# electricity/scripts/generate_*.py take their expected outputs from
+# Circuitry's own code and, through it, from these libraries, so an
+# unpinned upgrade could change a committed file with no change in this
+# repository. CI installs Circuitry with these as constraints
+# (`pip install -e . -c electricity/scripts/generator-constraints.txt`).
+# To upgrade one: change it here, rerun every generator without --check,
+# commit the regenerated files, and let electricity's Rust tests replay them.
+cel-python==0.5.0
+chevron==0.14.0
+jsonschema==4.26.0
+PyYAML==6.0.3
