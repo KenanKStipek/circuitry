@@ -206,28 +206,52 @@ def test_kill_process_group_kills_the_whole_group_when_isolated(
     assert proc.killed is False
 
 
-def test_kill_process_group_ignores_a_pgid_reused_by_a_process_we_dont_own(
+def test_kill_process_group_ignores_permissionerror_from_killpg(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#385 round 3: a pgid is only reused once every process that held it
-    has actually been reaped -- but that can happen between one caller's
-    kill reaping the last of them and a later, slower caller (a repeat
-    kill from `_repeat_group_kill`, or simply this function called again)
-    finding that exact number already reassigned to an unrelated process
-    it does not own. `os.killpg` then raises `PermissionError`, which
-    must be swallowed the same way an already-gone group's
+    """#385 round 3, cause corrected by the #385 review: a repeated
+    `killpg` at the same pgid can raise `PermissionError` once the
+    group's last live member is a zombie nothing has reaped yet (macOS;
+    see `test_killpg_sigkill_raises_permissionerror_on_an_unreaped_zombie_pgid`
+    for the real OS-level confirmation) -- not, as an earlier revision of
+    this docstring guessed, pgid reuse by some unrelated process (same-
+    user reuse would make `killpg` *succeed*, not raise `EPERM`). Either
+    way, this must be swallowed the same way an already-gone group's
     `ProcessLookupError` already is -- this is a best-effort kill, never
     a crash."""
     proc = _FakeTrackedProc()
     monkeypatch.setattr(os, "getpgid", lambda pid: 999)
     monkeypatch.setattr(os, "getpgrp", lambda: 777)
 
-    def _reused_pgid_killpg(pgid: int, sig: int) -> None:
-        raise PermissionError("not our process")
+    def _permissionerror_killpg(pgid: int, sig: int) -> None:
+        raise PermissionError("not permitted")
 
-    monkeypatch.setattr(os, "killpg", _reused_pgid_killpg)
+    monkeypatch.setattr(os, "killpg", _permissionerror_killpg)
 
     kill_process_group(proc)  # type: ignore[arg-type] -- must not raise
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS-specific killpg/zombie quirk")
+def test_killpg_sigkill_raises_permissionerror_on_an_unreaped_zombie_pgid() -> None:
+    """#385 review P2: confirms, against the real OS rather than a mock,
+    what actually raises the `PermissionError` `kill_process_group`/
+    `_repeat_group_kill` swallow -- not pgid reuse by an unrelated
+    process (same-user reuse would make `killpg` succeed), but macOS
+    itself: a second `killpg(pgid, SIGKILL)` at a pgid whose one member
+    the first `SIGKILL` already killed, before anything `wait()`s on it,
+    reliably raises `PermissionError`, not `ProcessLookupError`, even
+    though the pgid number hasn't gone anywhere and still belongs to
+    this same process's own child.
+    """
+    proc = subprocess.Popen(["sleep", "2"], start_new_session=True)
+    pgid = proc.pid
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+        time.sleep(0.05)  # now a zombie -- nothing has called wait() yet
+        with pytest.raises(PermissionError):
+            os.killpg(pgid, signal.SIGKILL)
+    finally:
+        proc.wait()
 
 
 def test_track_kills_a_process_added_after_cancellation_was_already_requested(

@@ -102,14 +102,20 @@ def kill_process_group(proc: subprocess.Popen[str] | subprocess.Popen[bytes]) ->
     handler. Guard against that case and kill just the child instead.
 
     ``PermissionError`` is ignored the same as ``ProcessLookupError``
-    (#385 round 3): a pgid is only ever reused once every process that
-    held it has actually been reaped, but once *this* call's own kill
-    (or a repeat of it — see :func:`_repeat_group_kill`) has reaped the
-    last one, a slow caller hitting this function again can still find
-    that exact number reassigned to an unrelated process it does not
-    own, under enough general process churn on the machine (seen once
-    under this suite's own bounded synthetic load, not reproduced
-    since) — best-effort, same as the rest of this function.
+    (#385 round 3, cause confirmed by the #385 review's own probe): once
+    this call's own ``killpg`` has killed the group's last live member,
+    that member is a zombie until something actually ``wait()``s on it
+    (:func:`_communicate_promptly`/``run_tracked``'s own cleanup, which
+    can run later than this) — on macOS, a further ``killpg`` at that
+    pgid before the reap raises ``EPERM``, not ``ESRCH``, even sending
+    the exact same signal to the exact same, still-correctly-owned pgid
+    (confirmed directly: ``killpg(pgid, SIGKILL)`` a second time on a
+    pgid whose one member a first ``SIGKILL`` already killed but nothing
+    has reaped yet reliably raises ``PermissionError``, every time, on
+    this platform). Not pgid reuse by some unrelated process: a reused
+    pgid would belong to this same user on an ordinary dev machine, and
+    ``killpg`` to a group you own does not raise ``EPERM`` — best-effort,
+    same as the rest of this function.
     """
     if proc.poll() is not None:
         return
@@ -162,8 +168,10 @@ def _isolated_pgid(
 
 def _repeat_group_kill(pgid: int | None) -> None:
     """``os.killpg(pgid, SIGKILL)`` again, ignoring ``ProcessLookupError``
-    (the whole group is already gone) and ``PermissionError`` (#385
-    round 3).
+    (the whole group is already gone) and ``PermissionError`` (the
+    group's last live member is now a zombie nothing has reaped yet --
+    see :func:`kill_process_group`'s own docstring for why that, not
+    pgid reuse, is what actually raises it here) (#385 round 3).
 
     A real production race, not just a quirk of this suite's own test
     scripts: ``bash -c "a; b"`` forks a *child* process to run a non-tail
