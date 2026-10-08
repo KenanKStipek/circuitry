@@ -16,6 +16,7 @@ from ..output import console as _console
 from ..output import live_region as _live_region
 from .cancellation import get_token, submit_with_context
 from .disabled import is_enabled, write_disabled_node
+from .effect_identity import nested_container
 from .prompt import PromptDefinition, PromptRuntime
 from .resume import effect_completed_ok
 from .store import Store
@@ -419,18 +420,28 @@ class DynamicRuntime:
 
                 with live_ctx:
                     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                        futures: dict = {
-                            submit_with_context(
-                                executor,
-                                self._execute_branch,
-                                effect,
-                                store=isolated_stores[idx],
-                                ctx=tree_ctx,
-                                stop_event=stop_event,
-                                tracker=tree_tracker,
-                            ): idx
-                            for idx, effect in enumerate(self.defn.effects)
-                        }
+                        # Each branch's own ``isolated_stores[idx]`` resets
+                        # its path prefix (Store.parallel_branches), so a
+                        # model call inside it would otherwise lose this
+                        # dynamic's own absolute path — pushed here, before
+                        # ``submit_with_context`` copies the submitting
+                        # thread's contextvars into the worker (#362).
+                        # ``child_store`` directly, not ``self.defn.name`` on
+                        # the outer ``store`` — see loop.py's own tree-flow
+                        # dispatch for why (#370 review F2).
+                        with nested_container(child_store, None):
+                            futures: dict = {
+                                submit_with_context(
+                                    executor,
+                                    self._execute_branch,
+                                    effect,
+                                    store=isolated_stores[idx],
+                                    ctx=tree_ctx,
+                                    stop_event=stop_event,
+                                    tracker=tree_tracker,
+                                ): idx
+                                for idx, effect in enumerate(self.defn.effects)
+                            }
                         try:
                             self._await_tree_branches(
                                 futures, tree_errors=tree_errors, store=store

@@ -26,6 +26,7 @@ from .openrouter import OpenRouterAdapter
 from .perplexity import PerplexityAdapter
 from .qwen_dashscope import QwenDashScopeAdapter
 from .replicate import ReplicateAdapter
+from .scripted import ScriptedAdapter
 from .tgi import TgiAdapter
 from .together import TogetherAdapter
 from .vllm import VllmAdapter
@@ -62,6 +63,7 @@ __all__ = [
     "QwenDashScopeAdapter",
     "ReplicateAdapter",
     "RunCancelled",
+    "ScriptedAdapter",
     "TgiAdapter",
     "TogetherAdapter",
     "VllmAdapter",

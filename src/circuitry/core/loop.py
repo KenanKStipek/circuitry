@@ -16,6 +16,7 @@ from ..output import live_region as _live_region
 from .answers import parse_boolean_answer
 from .cancellation import get_token, submit_with_context
 from .disabled import is_disabled_node, is_enabled
+from .effect_identity import model_call, nested_container
 from .scope import local_writes as _local_writes_state
 from .scope import scope_ctx as _scope_ctx
 from .store import Store
@@ -578,20 +579,32 @@ class LoopRuntime:
                         with ThreadPoolExecutor(
                             max_workers=self.defn.max_concurrency
                         ) as executor:
-                            future_to_idx = {
-                                submit_with_context(
-                                    executor,
-                                    self._execute_body,
-                                    store=isolated_stores[idx],
-                                    ctx=iter_ctx,
-                                    iteration=idx,
-                                    baseline=baseline,
-                                    parallel=True,
-                                    tracker=tree_tracker,
-                                    iter_label=f"[{idx}]",
-                                ): idx
-                                for idx, iter_ctx in iter_ctxs
-                            }
+                            # Each branch's own ``isolated_stores[idx]`` resets
+                            # its path prefix (Store.parallel_branches), so a
+                            # model call inside it would otherwise lose this
+                            # loop's own absolute path — pushed here, before
+                            # ``submit_with_context`` copies the submitting
+                            # thread's contextvars into the worker (#362).
+                            # ``child_store``, not ``self.defn.name`` on the
+                            # outer ``store``: an unnamed loop's ``child_store``
+                            # *is* ``store`` (see above), so this also covers
+                            # the transparent case without formatting a
+                            # ``None`` name into the path (#370 review F2).
+                            with nested_container(child_store, None):
+                                future_to_idx = {
+                                    submit_with_context(
+                                        executor,
+                                        self._execute_body,
+                                        store=isolated_stores[idx],
+                                        ctx=iter_ctx,
+                                        iteration=idx,
+                                        baseline=baseline,
+                                        parallel=True,
+                                        tracker=tree_tracker,
+                                        iter_label=f"[{idx}]",
+                                    ): idx
+                                    for idx, iter_ctx in iter_ctxs
+                                }
                             try:
                                 _tree_done = 0
                                 for future in as_completed(future_to_idx):
@@ -868,7 +881,8 @@ class LoopRuntime:
                             }
                             try:
                                 should_continue = self._evaluate_condition(
-                                    ctx=_scope_ctx(cond_ctx, last_writes)
+                                    store=child_store,
+                                    ctx=_scope_ctx(cond_ctx, last_writes),
                                 )
                                 if meta and self.defn.while_def.mode == "model":
                                     meta["answer"] = self._model_answer
@@ -1166,16 +1180,16 @@ class LoopRuntime:
         logger.warning("Loop collection %s; running zero iterations", error)
         return [], error
 
-    def _evaluate_condition(self, *, ctx: dict[str, Any]) -> bool:
+    def _evaluate_condition(self, *, store: Store, ctx: dict[str, Any]) -> bool:
         """Evaluate the while condition and return a boolean result."""
         if not self.defn.while_def:
             return False
 
         if self.defn.while_def.mode == "cel":
             return self._evaluate_cel(ctx=ctx)
-        return self._evaluate_model(ctx=ctx)
+        return self._evaluate_model(store=store, ctx=ctx)
 
-    def _evaluate_model(self, *, ctx: dict[str, Any]) -> bool:
+    def _evaluate_model(self, *, store: Store, ctx: dict[str, Any]) -> bool:
         """Cybernetic evaluation: invoke model with rendered template."""
         self._model_answer = None
         self._model_tokens_sent = None
@@ -1196,11 +1210,19 @@ class LoopRuntime:
 
 Should the loop continue? Answer (yes/no):"""
 
-        res = self.adapter.generate(
-            model=self.model,
-            prompt=prompt,
-            timeout_seconds=self.timeout_seconds,
-        )
+        # The decision itself is this loop's own identity, not a separately
+        # named sub-effect — *store* is already ``child_store``, whose own
+        # path already includes this loop's name when it has one
+        # (``Store.child``), so ``model_call`` is passed ``None`` rather than
+        # ``self.defn.name`` again, which would double it (``prime.lp.lp``)
+        # (#370 review F1). Each re-check re-asks at the same path, consumed
+        # in order like any other retry/re-ask.
+        with model_call(store, None):
+            res = self.adapter.generate(
+                model=self.model,
+                prompt=prompt,
+                timeout_seconds=self.timeout_seconds,
+            )
         self._model_answer = res.text
         self._model_tokens_sent = res.tokens_sent
         self._model_tokens_received = res.tokens_received

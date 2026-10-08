@@ -28,6 +28,7 @@ from .openrouter import OpenRouterAdapter
 from .perplexity import PerplexityAdapter
 from .qwen_dashscope import QwenDashScopeAdapter
 from .replicate import ReplicateAdapter
+from .scripted import ScriptedAdapter
 from .tgi import TgiAdapter
 from .together import TogetherAdapter
 from .vllm import VllmAdapter
@@ -313,6 +314,12 @@ def _build_watsonx(cfg: dict[str, Any]) -> Adapter:
     )
 
 
+def _build_scripted(cfg: dict[str, Any]) -> Adapter:
+    return ScriptedAdapter(
+        replies_file=cfg.get("replies_file") or "scripted-replies.yaml"
+    )
+
+
 def _build_host_claude(cfg: dict[str, Any]) -> Adapter:
     raise RuntimeError(
         "host_claude cannot be built from config; it requires a "
@@ -355,6 +362,7 @@ ADAPTER_REGISTRY: dict[str, AdapterBuilder] = {
     "azure-openai": _build_azure_openai,
     "replicate": _build_replicate,
     "watsonx": _build_watsonx,
+    "scripted": _build_scripted,
 }
 
 

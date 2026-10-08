@@ -99,6 +99,18 @@ class Store:
         return self.state if self._root_state is None else self._root_state
 
     @property
+    def own_path(self) -> str:
+        """This store's own absolute dotted path prefix (``""`` at a run root).
+
+        What ``effect_path`` composes a name onto — exposed directly for a
+        caller that needs *this* store's own identity rather than a named
+        child's, such as a transparent (unnamed) conditional/loop's model
+        call (``core.effect_identity``), which is the container itself, not
+        a further-named effect under it.
+        """
+        return self._path_prefix
+
+    @property
     def true_root_state(self) -> dict[str, Any]:
         """The whole-run state dict, even inside an isolated parallel/tree branch.
 

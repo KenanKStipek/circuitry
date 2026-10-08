@@ -17,6 +17,7 @@ from ..adapters._retry import RetryInfo, next_backoff_delay_ms
 from ..output import console as _console
 from .cancellation import get_token
 from .document_check import structural_errors
+from .effect_identity import model_call, nested_container
 from .expect import ExpectDef, evaluate_expect, expect_failure_summary
 from .interface_inputs import check_interface_inputs
 from .outputs import normalize_outputs
@@ -888,20 +889,21 @@ class UseRuntime:
                     child_label_prefix = (
                         self.display_name if self.display_name != self.defn.name else None
                     )
-                    DynamicRuntime(
-                        child_root,
-                        adapter=self.adapter,
-                        model=self.model,
-                        model_locked=self.model_locked,
-                        runtime_config=child_runtime_config,
-                        dry_run=self.dry_run,
-                        timeout_seconds=self.timeout_seconds,
-                        verbose=self.verbose,
-                        progress_display=self.progress_display,
-                        depth=self.depth + 1,
-                        ancestors=self._ancestors,
-                        label_prefix=child_label_prefix,
-                    ).execute(store=child_store)
+                    with nested_container(store, self.defn.name):
+                        DynamicRuntime(
+                            child_root,
+                            adapter=self.adapter,
+                            model=self.model,
+                            model_locked=self.model_locked,
+                            runtime_config=child_runtime_config,
+                            dry_run=self.dry_run,
+                            timeout_seconds=self.timeout_seconds,
+                            verbose=self.verbose,
+                            progress_display=self.progress_display,
+                            depth=self.depth + 1,
+                            ancestors=self._ancestors,
+                            label_prefix=child_label_prefix,
+                        ).execute(store=child_store)
 
                     # Surface errors an on_error: skip/continue swallowed inside the
                     # child — without this, a composed failure is indistinguishable
@@ -942,16 +944,17 @@ class UseRuntime:
                     # A false or unreadable expectation fails this attempt —
                     # retries/on_error apply exactly like any other failure.
                     if self.defn.expect is not None:
-                        outcome = evaluate_expect(
-                            self.defn.expect,
-                            value=node["value"],
-                            meta=meta,
-                            ctx=ctx,
-                            adapter=self.adapter,
-                            model=self.model,
-                            timeout_seconds=self.timeout_seconds,
-                            effect_label=f"use '{self.defn.name}'",
-                        )
+                        with model_call(store, self.defn.name):
+                            outcome = evaluate_expect(
+                                self.defn.expect,
+                                value=node["value"],
+                                meta=meta,
+                                ctx=ctx,
+                                adapter=self.adapter,
+                                model=self.model,
+                                timeout_seconds=self.timeout_seconds,
+                                effect_label=f"use '{self.defn.name}'",
+                            )
                         meta["expect"] = outcome.meta
                         if not outcome.passed:
                             raise RuntimeError(
