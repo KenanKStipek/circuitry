@@ -1,0 +1,174 @@
+"""Runs the `electricity` binary (built from `electricity/` with cargo when
+available) on each conformance case applicable to it and compares the same
+way the Python runner does (electricity/DESIGN.md §12). Skipped per case
+with a clear reason while electricity's preview build cannot run
+orchestration documents yet (today it exits 1 on any run request,
+`electricity/crates/electricity-cli/src/main.rs`) — once it can, these
+stop auto-skipping and start actually diffing state.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from . import harness
+from .normalize import (
+    assert_errors_equal,
+    assert_out_serialization,
+    assert_states_equal,
+    normalize,
+)
+
+CASE_DIRS = harness.list_case_dirs()
+ELECTRICITY_DIR = Path(__file__).resolve().parents[2] / "electricity"
+PREVIEW_MESSAGE_MARKER = "is a preview and cannot run orchestrations yet"
+
+#: electricity's CLI has no notion yet of "no config file" the way `cof
+#: run` does (an explicit --config, CIRCUITRY_CONFIG, a discovered
+#: project/global file, or none of those — built-in defaults): its
+#: positional config argument is required. A case that doesn't set
+#: `case.json`'s `"config"` gets this fixture (`{}`) instead — the same
+#: "nothing set" starting point `cof run` reaches when sandboxed HOME finds
+#: no project or global config — as a documented stand-in until electricity
+#: has its own config-discovery tiers to mirror. No case needs anything
+#: more today (none is model- or adapter-config-dependent yet); a case that
+#: does should set `"config"` explicitly for both engines instead of
+#: relying on this default.
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "default_config.json"
+
+
+def _case_ids() -> list[str]:
+    return [d.name for d in CASE_DIRS]
+
+
+@pytest.fixture(scope="session")
+def electricity_binary() -> Path | None:
+    """Build the `electricity` binary once per test session. Returns
+    `None` (every case skips) when `cargo` isn't on `PATH` — the ordinary
+    pytest gate (`quality.yml`) also builds this crate (GitHub's
+    `ubuntu-latest` ships `cargo`); this only degrades, rather than
+    failing, on a contributor machine that genuinely has none."""
+    if shutil.which("cargo") is None:
+        return None
+    proc = subprocess.run(
+        ["cargo", "build", "-p", "electricity-cli", "--bin", "electricity"],
+        cwd=ELECTRICITY_DIR,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
+    )
+    if proc.returncode != 0:
+        pytest.fail(f"cargo build -p electricity-cli failed:\n{proc.stdout}\n{proc.stderr}")
+    binary = ELECTRICITY_DIR / "target" / "debug" / "electricity"
+    assert binary.exists(), f"cargo build succeeded but {binary} is missing"
+    return binary
+
+
+def _run_electricity(
+    binary: Path,
+    case_dir: Path,
+    metadata: dict,
+    *,
+    out_path: Path,
+    home_dir: Path,
+) -> harness.CaseResult:
+    """Invoke `electricity` the same way `harness.run_case` invokes `cof
+    run`, so the two engines are given the same inputs: cwd set to the case
+    directory, the orchestration path passed exactly as `case.json` names
+    it (relative, not pre-resolved to absolute — otherwise a Circuitry-own
+    byte-for-byte message like `"orchestration.yml: duplicate key ..."`
+    could never match), and `harness._sandboxed_env` for the environment
+    (the case's own `fakes/` first on `PATH`, no credential or
+    `CIRCUITRY_*` variables)."""
+    config_path = (
+        case_dir / metadata["config"] if metadata.get("config") else DEFAULT_CONFIG_PATH
+    )
+    cmd = [
+        str(binary),
+        str(config_path),
+        metadata["orchestration"],
+        "--out",
+        str(out_path),
+    ]
+    cmd += [str(arg) for arg in metadata.get("cli_args", [])]
+    proc = subprocess.run(
+        cmd,
+        cwd=case_dir,
+        env=harness._sandboxed_env(case_dir, home_dir),
+        capture_output=True,
+        text=True,
+        timeout=metadata.get("timeout_seconds", harness.DEFAULT_TIMEOUT_SECONDS),
+        check=False,
+    )
+    return harness.CaseResult(proc.returncode, proc.stdout, proc.stderr, out_path)
+
+
+@pytest.mark.parametrize("case_dir", CASE_DIRS, ids=_case_ids())
+def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -> None:
+    metadata = harness.load_case(case_dir)
+    if "electricity" not in metadata["engines"]:
+        pytest.skip(f"{case_dir.name}: does not apply to the electricity engine")
+    if electricity_binary is None:
+        pytest.skip("cargo not available; electricity binary cannot be built")
+
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    out_path = tmp_path / "out.json"
+    result = _run_electricity(
+        electricity_binary, case_dir, metadata, out_path=out_path, home_dir=home_dir
+    )
+
+    if result.returncode == 1 and PREVIEW_MESSAGE_MARKER in (result.stdout + result.stderr):
+        pytest.skip(
+            "electricity's preview build cannot run orchestration documents yet "
+            "(exits 1 on any run request) — electricity/crates/electricity-cli"
+        )
+
+    if metadata["expect"] == "success":
+        assert result.returncode == 0, (
+            f"expected success, got exit {result.returncode}\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        actual_text = out_path.read_text(encoding="utf-8")
+        assert_out_serialization(actual_text, pretty=False)
+        actual_state = json.loads(actual_text)
+        expected_state = json.loads((case_dir / "expected.json").read_text(encoding="utf-8"))
+        assert_states_equal(normalize(actual_state), normalize(expected_state))
+        # The plain/--pretty pair (C23) is not run here: electricity's CLI
+        # has no `--pretty` flag yet (`electricity/crates/electricity-cli`'s
+        # usage text), so `also_pretty` cases are a documented
+        # `known_divergence` for this engine until it does.
+        return
+
+    if metadata["expect"] == "failure":
+        assert result.returncode != 0, (
+            f"expected a load/check failure, but exited 0\nstdout: {result.stdout}"
+        )
+        # electricity reports an error on stderr as plain text (`eprintln!`
+        # in `electricity-cli/src/main.rs`), unlike `cof run`'s
+        # `{"ok": false, "error": ...}` JSON on stdout — there's no shared
+        # `parse_cli_error` to reuse here. electricity's own error-reporting
+        # contract is still open (this branch is unreachable in practice
+        # today: the preview-message skip above always fires first), so
+        # this is a best-effort guess that may need to change once
+        # electricity settles on one.
+        actual_error = result.stderr.strip()
+        expected_error = json.loads((case_dir / "expected.json").read_text(encoding="utf-8"))[
+            "error"
+        ]
+        error_compare = metadata.get("error_compare", "exact")
+        assert_errors_equal(
+            actual_error,
+            expected_error,
+            byte_for_byte=error_compare == "exact",
+            location_pattern=metadata.get("location_pattern"),
+        )
+        return
+
+    raise AssertionError(f"{case_dir.name}: unknown case.json 'expect': {metadata['expect']!r}")

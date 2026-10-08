@@ -1,0 +1,3 @@
+{
+  "error": "Orchestration validation failed:\n  - effects[0].name: 'value' should not be valid under {'pattern': '^(value|meta|input|prime|runtime)$'}"
+}

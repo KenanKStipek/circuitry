@@ -1,0 +1,18 @@
+name: c6-strict-absent
+effects:
+  - type: if
+    name: gate
+    if:
+      mode: cel
+      expr: "has(state.input.x) && state.input.x > 1"
+      strict: true
+    then:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}

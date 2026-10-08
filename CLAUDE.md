@@ -14,6 +14,7 @@ ruff check .
 mypy src
 bash scripts/smoke-curation.sh
 python scripts/sync-bundled-docs.py --check
+python scripts/generate-conformance-cases.py --check
 ```
 CI is `.github/workflows/quality.yml` (pytest matrix 3.10–3.13, ruff, mypy,
 smoke). A PR is shippable when every check is green.
