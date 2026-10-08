@@ -154,6 +154,20 @@ authenticating proxy, say) and so can itself carry `user:pass@` — unlike
 the other curl-based adapters/plugins above, these three calls don't route
 that case off argv.
 
+**Coding-agent CLI adapters (`pi`, `claude_code`) pass no credential at
+all.** They run the configured CLI binary, which authenticates with its
+own login. The prompt goes on stdin (`claude_code`) or in a file inside a
+fresh temporary directory, private to the user and removed after the call
+(`pi`) — never on argv. The child's environment drops `ANTHROPIC_API_KEY`
+and `ANTHROPIC_AUTH_TOKEN` by default (`unset_env`), so a key exported for
+another adapter is not handed to the CLI. `claude_code` passes
+`--strict-mcp-config`, because `--tools ""` turns off only Claude Code's
+built-in tools: without it, MCP servers from the user's Claude Code config
+or a project `.mcp.json` would start and their tools would be offered to
+the model. Which binary runs is
+`runtime.adapters.<name>.binary`, a host setting a limited document cannot
+set (see [What a document can set](guidebook/04-configuration.md#what-a-document-can-set)).
+
 **Mitigation — error masking.** Every curl failure raises through
 [`circuitry/curl_support.py`](../src/circuitry/curl_support.py)'s
 `curl_failure_message()`, which never echoes the curl command line — the

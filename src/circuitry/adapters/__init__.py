@@ -2,6 +2,7 @@ from .ai21 import AI21Adapter
 from .anthropic import AnthropicAdapter
 from .azure_openai import AzureOpenAIAdapter
 from .base import Adapter, GenerateResult
+from .claude_code import ClaudeCodeAdapter
 from .cloudflare_workers_ai import CloudflareWorkersAIAdapter
 from .cohere import CohereAdapter
 from .conformance import validate_generate_result
@@ -24,6 +25,7 @@ from .ollama import OllamaAdapter
 from .openai import OpenAIAdapter
 from .openrouter import OpenRouterAdapter
 from .perplexity import PerplexityAdapter
+from .pi import PiAdapter
 from .qwen_dashscope import QwenDashScopeAdapter
 from .replicate import ReplicateAdapter
 from .scripted import ScriptedAdapter
@@ -38,6 +40,7 @@ __all__ = [
     "Adapter",
     "AnthropicAdapter",
     "AzureOpenAIAdapter",
+    "ClaudeCodeAdapter",
     "CloudflareWorkersAIAdapter",
     "CohereAdapter",
     "CyberdinerAdapter",
@@ -60,6 +63,7 @@ __all__ = [
     "OpenAIAdapter",
     "OpenRouterAdapter",
     "PerplexityAdapter",
+    "PiAdapter",
     "QwenDashScopeAdapter",
     "ReplicateAdapter",
     "RunCancelled",

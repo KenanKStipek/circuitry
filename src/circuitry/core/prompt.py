@@ -339,10 +339,11 @@ class PromptRuntime:
                   prompt_type, prompt_sent, tokens_sent, tokens_received,
                   tokens_sent_total, tokens_received_total, error, dry_run,
                   fallback_attempts, fallback_recovered, retries_used?,
-                  complexity?, assets?, finish_reason?, warnings?}
+                  complexity?, assets?, finish_reason?, warnings?, cost_usd?}
 
     ``assets`` (one ``{kind, ref, size?, sha256?, media_type?}`` per image
     sent — never the bytes), ``finish_reason`` (when the provider reports
+    one), ``cost_usd`` (the winning attempt's cost, when its adapter reports
     one) and ``warnings`` (a reply cut off at the length limit, options an
     adapter ignored, an asset kind no adapter sends) appear only when they
     have something to say.
@@ -530,7 +531,7 @@ class PromptRuntime:
         meta.pop("answer", None)
         # Written only when they have content, so clear what an earlier
         # iteration of an unnamed loop (same store) left behind.
-        for key in ("finish_reason", "warnings", "assets"):
+        for key in ("finish_reason", "warnings", "assets", "cost_usd"):
             meta.pop(key, None)
         meta["waiting_for"] = None
 
@@ -739,6 +740,9 @@ class PromptRuntime:
                     node["value"] = decoded_value
                     meta["tokens_sent"] = res.tokens_sent
                     meta["tokens_received"] = res.tokens_received
+                    cost_usd = getattr(res, "cost_usd", None)
+                    if cost_usd is not None:
+                        meta["cost_usd"] = cost_usd
                     meta["fallback_attempts"] = attempts_meta
                     meta["fallback_recovered"] = len(attempts_meta) > 1
                     meta["completed_at"] = _now_iso()
@@ -1170,6 +1174,11 @@ class PromptRuntime:
         if asset_meta:
             meta["assets"] = asset_meta
 
+        json_schema = (
+            self.defn.schema
+            if self.defn.schema and self.defn.prompt_type in ("json", "object", "array")
+            else None
+        )
         return GenerateOptions(
             temperature=float(temperature) if temperature is not None else None,
             max_tokens=max_tokens,
@@ -1178,6 +1187,7 @@ class PromptRuntime:
             deterministic=self.defn.deterministic,
             messages=messages,
             images=tuple(images),
+            json_schema=json_schema,
         )
 
     def _record_reply(
