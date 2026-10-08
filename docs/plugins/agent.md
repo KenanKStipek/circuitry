@@ -33,10 +33,20 @@ the list to be the whole boundary:
   tool, and Claude Code may approve calls the list does not name.
   `exclude_tools` (`--disallowedTools`) is a hard deny in every permission
   mode.
+- **Tool names:** Claude Code's built-in names are its own and case-sensitive
+  (`Read`, `Write`, `Bash`, ...); pi's are lowercase (`read`, `write`, ...). A
+  pi list given to `engine: claude_code` leaves no built-in tool, so under the
+  `dontAsk` default every call is denied. A `tools` list with only `mcp__`
+  entries leaves no built-in tool either.
+
+`extra_args` come after the plugin's own flags, so a flag there can override
+`--tools`, `--permission-mode` or `--setting-sources`: treat `extra_args` as
+part of what narrows (or widens) the agent.
 
 A Claude Code session with `tools` set can use only what is listed, so the
-agent needs a tool that can write `result_file` (`Write`, `Edit` or `Bash`),
-or it cannot write the result file.
+agent needs a tool that can write `result_file`: `Write`, or an unrestricted
+`Bash`. The file is deleted before the session starts, so `Edit` cannot create
+it, and a `Bash(...)` specifier for another command cannot write it.
 
 Point `cwd` at the directory the work belongs in, and give an agent only
 the tools its task needs:
@@ -72,15 +82,21 @@ Code `agent` effect is isolated from the repository:
 - **MCP servers:** none start. The session gets `--strict-mcp-config` with
   no `--mcp-config`; to give it a server, pass one explicitly:
   `extra_args: ["--mcp-config", "<file>"]`.
-- **`CLAUDE.md`:** the repository root's `CLAUDE.md` is appended to the first
-  prompt, under a heading that says Claude Code did not load it, because
-  `--setting-sources user` also stops Claude Code from reading it. The repair
-  turn does not repeat it. The root is the first directory, walking up from
-  `cwd`, that holds a `.git` entry (a directory, or a file in a git worktree);
-  with none, it is `cwd`. Only that one file is read: not `CLAUDE.md` in a
-  subdirectory, not `CLAUDE.local.md`, not `.claude/CLAUDE.md`, and not files
-  it imports with `@`. A `CLAUDE.md` that is a link to a file outside the
-  repository is not read, and an empty one is skipped. `meta.raw.project_instructions`
+- **`CLAUDE.md`:** the root's `CLAUDE.md` is appended to the first prompt of
+  each effect, including an effect that resumes an earlier session with
+  `session` (the repair turn does not repeat it), under a heading that says
+  Claude Code did not load it, because `--setting-sources user` also stops
+  Claude Code from reading it. The root is the nearest directory, walking up
+  from `cwd`, that holds a `.git` entry (a directory, or a file in a git
+  worktree); with none, it is `cwd`. So outside any repository, a `CLAUDE.md`
+  in `cwd` is appended. If a home directory is itself a git repository, its
+  `CLAUDE.md` is the root file for every session under it that has no closer
+  `.git`. Only that one file is read: not `CLAUDE.md` in a subdirectory, not
+  `CLAUDE.local.md`, not `.claude/CLAUDE.md`, and not files it imports with
+  `@`. A `CLAUDE.md` that is a link to a file outside the root is not read.
+  A directory of that name, a dangling link, an unreadable file, and an empty
+  or whitespace-only one add nothing, and the session still runs. Bytes that
+  are not UTF-8 are read with replacement characters. `meta.raw.project_instructions`
   records the path that was appended.
 
 To let Claude Code load the repository's settings the normal way, set
@@ -95,9 +111,9 @@ command run, and its MCP servers start, without asking, and Claude Code reads
 `trust_project_settings` applies to `claude_code` only; with `engine: pi` it
 is an error.
 
-pi is isolated differently: `pi` always runs with `--no-approve`, so
-project-local pi files (its project settings directory, extensions and prompts) are ignored.
-pi still reads the repository's `AGENTS.md` itself, as it does in any session.
+pi is isolated differently: `--no-approve` makes pi ignore project-local files
+for the run (its project settings directory, extensions and prompts). pi still
+reads the repository's `AGENTS.md` itself, as it does in any session.
 
 ## Params
 
@@ -109,11 +125,11 @@ pi still reads the repository's `AGENTS.md` itself, as it does in any session.
 | `model` | string | the CLI's default | pi: `provider/id`; Claude Code: a model name or alias. |
 | `thinking` | string | pi's default | pi only: `off`, `minimal`, `low`, `medium`, `high`, ... |
 | `permission_mode` | string | `dontAsk` when `tools` is set; otherwise Claude Code's own default (`auto`) | Claude Code only: `--permission-mode` (`acceptEdits`, `plan`, ...). An explicit value replaces `dontAsk`. |
-| `trust_project_settings` | bool | `false` | Claude Code only. `false` isolates the repository's settings and appends its root `CLAUDE.md`; `true` lets Claude Code load them, MCP servers included, without asking. See [Repository settings](#repository-settings). |
-| `tools` | list of strings | the engine's default; must not be empty | pi: `--tools` (comma-joined), the only tools the session has. Claude Code: `--tools` with the built-in names in the list, and `--allowedTools` with every entry; `mcp__` entries are not built-in tools. |
+| `trust_project_settings` | bool | `false` | Claude Code only. `false` isolates the repository's settings and appends its root `CLAUDE.md`; `true` lets Claude Code load them, MCP servers included, without asking. Also accepts the strings `"true"` and `"false"`, since a template yields strings. See [Repository settings](#repository-settings). |
+| `tools` | list of strings | the engine's default; must not be empty | pi: `--tools` (comma-joined), the only tools the session has. Claude Code: `--tools` with the built-in names in the list, and `--allowedTools` with every entry; `mcp__` entries are not built-in tools, and a list of only those leaves none. Claude Code's built-in names are case-sensitive (`Read`, not `read`). |
 | `exclude_tools` | list of strings | none | pi: `--exclude-tools`; Claude Code: `--disallowedTools`, a hard deny in every permission mode. |
 | `session` | string | a new session | Resume this session id (pi `--session`, Claude Code `--resume`). |
-| `extra_args` | list of strings | none | More CLI flags, passed as they are. |
+| `extra_args` | list of strings | none | More CLI flags, passed as they are, after the plugin's own flags, so they can override them. |
 | `env` | mapping | none | Variables added to the session's environment. |
 | `unset_env` | list of strings | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` | Variables removed from it; replaces the default list. |
 | `result_file` | string | none | A JSON file the agent must write, relative to `cwd` (an absolute path, or one with `..`, may point anywhere). |
@@ -170,7 +186,8 @@ resume it.
 `tools` gives the session reading, searching, editing and writing. `Bash` is
 limited to `pytest` commands. Because `permission_mode` is left out, the
 session runs under `dontAsk`: any other call is denied, since nobody is there
-to approve it. `Write` or `Edit` is what lets it write the result file.
+to approve it. `Write` is what lets it write the result file (`Edit` cannot create it: the
+file is deleted before the session starts).
 `exclude_tools` keeps `WebFetch` and `WebSearch` out even if they are later
 added to `tools`.
 

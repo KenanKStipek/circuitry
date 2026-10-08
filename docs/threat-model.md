@@ -119,7 +119,9 @@ tool lists — pi's `--tools`/`--exclude-tools`; for Claude Code, `--tools`
 `--permission-mode dontAsk` by default, where a specifier such as
 `Bash(pytest:*)` limits its tool only in that mode, and `--disallowedTools`,
 a hard deny in every mode — and, unlike `shell`'s allowlist, those params
-may be templated or come from `params_json`. A Claude Code session also
+may be templated or come from `params_json`. `extra_args` come after these
+flags, so one of them (`--tools`, `--permission-mode`, `--setting-sources`) can
+override them and widen the session. A Claude Code session also
 ignores its repository's own settings (hooks, the API key helper, project MCP
 servers) unless `trust_project_settings` is set, and gets the repository
 root's `CLAUDE.md` appended to its prompt; without `tools`, Claude Code's own
