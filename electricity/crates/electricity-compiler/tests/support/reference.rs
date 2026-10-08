@@ -84,6 +84,16 @@ pub struct Case {
     #[serde(default)]
     pub digest: Option<String>,
     pub comparison: Comparison,
+    /// `core.lint.lint_orchestration(orch)`'s own output alone, not the
+    /// rest of `validate()`'s combined `warnings` list -- `check_report`
+    /// does not reproduce these advisories at all (issue #428, lint
+    /// parity, not assigned to any #408 lane). A case whose document
+    /// trips a lint rule carries it here, not in `validate.warnings`;
+    /// callers subtract this list before comparing (see
+    /// [`Case::non_lint_warnings`]). Empty for every case whose document
+    /// never loaded far enough for `validate()` to compute it either.
+    #[serde(default)]
+    pub lint_warnings: Vec<String>,
 }
 
 impl Case {
@@ -93,6 +103,29 @@ impl Case {
     /// its own, matching `run_case`'s `options.get(..., True)`. Using
     /// `CheckOptions::default()` instead (`false`/`false`) would run
     /// every golden case against the wrong settings.
+    /// `self.validate.warnings`, with every warning `lint_warnings`
+    /// also names removed (first match only, so a warning that happens
+    /// to repeat isn't over-subtracted) -- what `check_report`'s own
+    /// `warnings` is expected to equal, now that it does not reproduce
+    /// Circuitry's lint advisories (issue #428).
+    pub fn non_lint_warnings(&self) -> Vec<String> {
+        let mut remaining = self.lint_warnings.clone();
+        self.validate
+            .warnings
+            .iter()
+            .filter(
+                |warning| match remaining.iter().position(|w| w == *warning) {
+                    Some(index) => {
+                        remaining.remove(index);
+                        false
+                    }
+                    None => true,
+                },
+            )
+            .cloned()
+            .collect()
+    }
+
     pub fn check_options(&self) -> CheckOptions {
         // `config_runtime` is always `None`: every golden case is
         // recorded by `_compiler_corpus.py::run_case` calling

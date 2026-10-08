@@ -32,6 +32,13 @@
 //!
 //! # Known divergences
 //!
+//! - [`pipeline::check_report`]'s `warnings` does not reproduce
+//!   Circuitry's own advisory lint (`core/lint.py::lint_orchestration`
+//!   -- deprecated aliases, loop-body reference footguns, `threshold:`
+//!   on a built-in `if`, `min_iterations` on an `each` loop, and more):
+//!   only `unknown_key_warnings` and the host-settings notice are
+//!   ported. Lint parity was never assigned to any of issue #408's
+//!   lanes; tracked as issue #428.
 //! - `.toon` documents are refused outright (an electricity-specific
 //!   message: convert to YAML or JSON) — Circuitry's own TOON support
 //!   has no Rust-side port.

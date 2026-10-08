@@ -315,6 +315,61 @@ CASES: list[dict[str, Any]] = [
         },
         "entry": "doc.yml",
     },
+    {
+        # PR #417's second review: a schema `maximum`/`minimum` check
+        # against an arbitrary-precision integer, well past `i64`/`u64`
+        # range (the `jsonschema` crate panic this lane's F3 fix
+        # clamps against) -- a 401-digit positive integer violates
+        # `if.threshold`'s own `maximum: 1`.
+        "name": "if_threshold_huge_int_is_a_maximum_error",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: if\n"
+                "    name: c\n"
+                "    if: {mode: cel, expr: 'true'}\n"
+                f"    then: [{_TOOL_FLOW}]\n"
+                f"    threshold: {'1' + '0' * 400}\n"
+            ),
+        },
+        "entry": "doc.yml",
+        "error_modes": {"validate_errors": ["location_prefix"], "run_error": "location_prefix"},
+    },
+    {
+        # Same arbitrary-precision boundary, the `minimum` side: a
+        # 401-digit negative integer violates a tree loop's own
+        # `max_concurrency`'s `minimum: 1`.
+        "name": "tree_loop_max_concurrency_huge_negative_int_is_a_minimum_error",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: loop\n"
+                "    name: poll\n"
+                "    flow: tree\n"
+                "    each: {in: 'input.xs'}\n"
+                f"    max_concurrency: -{'1' + '0' * 400}\n"
+                f"    body: [{_TOOL_FLOW}]\n"
+            ),
+        },
+        "entry": "doc.yml",
+        "error_modes": {"validate_errors": ["location_prefix"], "run_error": "location_prefix"},
+    },
+    {
+        # Same boundary on the valid side: a 401-digit positive integer
+        # satisfies `prompt.timeout_ms`'s own `minimum: 0` (no `maximum`
+        # of its own), so the document is valid end to end.
+        "name": "prompt_timeout_ms_huge_int_is_valid",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: prompt\n"
+                "    name: p\n"
+                "    template: 'hi'\n"
+                f"    timeout_ms: {'1' + '0' * 400}\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
 ]
 
 

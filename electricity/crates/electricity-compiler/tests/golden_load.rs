@@ -24,8 +24,12 @@ fn assert_check_report(case: &Case, root: &std::path::Path, entry: &std::path::P
     let options = case.check_options();
     let report = check_report(entry, &options);
 
+    // `case.validate.warnings` minus `case.lint_warnings`: `check_report`
+    // does not reproduce Circuitry's lint advisories (issue #428), only
+    // `unknown_key_warnings` and the host-settings notice.
     assert_eq!(
-        report.warnings, case.validate.warnings,
+        report.warnings,
+        case.non_lint_warnings(),
         "case {:?}: check_report warnings",
         case.name
     );
@@ -205,6 +209,21 @@ fn invalid_concurrency_groups_config_error() {
 }
 
 #[test]
+fn if_threshold_huge_int_is_a_maximum_error() {
+    run_case("if_threshold_huge_int_is_a_maximum_error");
+}
+
+#[test]
+fn tree_loop_max_concurrency_huge_negative_int_is_a_minimum_error() {
+    run_case("tree_loop_max_concurrency_huge_negative_int_is_a_minimum_error");
+}
+
+#[test]
+fn prompt_timeout_ms_huge_int_is_valid() {
+    run_case("prompt_timeout_ms_huge_int_is_valid");
+}
+
+#[test]
 fn runtime_not_an_object_is_a_run_only_error() {
     run_case("runtime_not_an_object_is_a_run_only_error");
 }
@@ -258,6 +277,9 @@ fn every_case_in_the_corpus_has_a_test() {
         "interface_inputs_default_type_mismatch_with_unquote_hint",
         "negative_max_concurrency_config_error",
         "invalid_concurrency_groups_config_error",
+        "if_threshold_huge_int_is_a_maximum_error",
+        "tree_loop_max_concurrency_huge_negative_int_is_a_minimum_error",
+        "prompt_timeout_ms_huge_int_is_valid",
         "runtime_not_an_object_is_a_run_only_error",
         "plugins_not_a_list_is_a_run_only_error",
         "plugins_entry_not_a_string_is_a_run_only_error",

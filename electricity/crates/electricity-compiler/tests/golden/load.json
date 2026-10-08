@@ -16,6 +16,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Unsupported orchestration format: .md. Supported: .json, .toon, .yaml, .yml",
     "definition": null,
     "definition_error": "ValueError: Unsupported orchestration format: .md. Supported: .json, .toon, .yaml, .yml",
@@ -44,6 +45,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "The 'toon-format' package is required to load .toon files. Install it with: pip install git+https://github.com/toon-format/toon-python.git",
     "definition": null,
     "definition_error": "ImportError: The 'toon-format' package is required to load .toon files. Install it with: pip install git+https://github.com/toon-format/toon-python.git",
@@ -72,6 +74,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - top level: 'effects' is a required property",
     "definition": {
       "name": "prime",
@@ -112,6 +115,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Expecting value: line 1 column 1 (char 0)",
     "definition": null,
     "definition_error": "JSONDecodeError: Expecting value: line 1 column 1 (char 0)",
@@ -140,6 +144,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "while scanning for the next token\nfound character '\\t' that cannot start any token\n  in \"<unicode string>\", line 1, column 4:\n       \t\n       ^",
     "definition": null,
     "definition_error": "ScannerError: while scanning for the next token\nfound character '\\t' that cannot start any token\n  in \"<unicode string>\", line 1, column 4:\n       \t\n       ^",
@@ -168,6 +173,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration YAML must be a mapping/object at the root.",
     "definition": null,
     "definition_error": "ValueError: Orchestration YAML must be a mapping/object at the root.",
@@ -196,6 +202,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - top level: 'effects' is a required property",
     "definition": {
       "name": "prime",
@@ -236,6 +243,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration JSON must be a mapping/object at the root.",
     "definition": null,
     "definition_error": "ValueError: Orchestration JSON must be a mapping/object at the root.",
@@ -264,6 +272,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "<root>/doc.yml: duplicate key 'name' at line 3, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one",
     "definition": null,
     "definition_error": "DuplicateKeyError: <root>/doc.yml: duplicate key 'name' at line 3, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one",
@@ -292,6 +301,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "<root>/doc.yml: duplicate key 'name' at line 3, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one",
     "definition": null,
     "definition_error": "DuplicateKeyError: <root>/doc.yml: duplicate key 'name' at line 3, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one",
@@ -320,6 +330,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "<root>/doc.json: duplicate key 'name' in top level; JSON would silently keep only the last one",
     "definition": null,
     "definition_error": "DuplicateKeyError: <root>/doc.json: duplicate key 'name' in top level; JSON would silently keep only the last one",
@@ -348,6 +359,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: unknown key 'whlie' on a 'loop' effect — did you mean 'while'? As written it is ignored.",
     "definition": {
       "name": "prime",
@@ -431,6 +443,7 @@
         "effects[1]: unknown key 'owner' on a 'tool' effect is ignored. Known keys: description, expect, group, model, name, on_error, params, params_json, prompt, provider, retries, timeout_ms, type."
       ]
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: unknown key 'prams' on a 'tool' effect — did you mean 'params'? As written it is ignored.",
     "definition": {
       "name": "prime",
@@ -508,6 +521,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: value is not valid under any of the given schemas ('each' is a required property)",
     "definition": null,
     "definition_error": "ValueError: Loop at 'prime.effects[0]' must set exactly one of 'while' or 'each' (found neither).",
@@ -538,6 +552,7 @@
         "effects[0]: unknown key 'group' on a 'dynamic' effect is ignored. Known keys: description, effects, finally, flow, labels, max_concurrency, name, on_error, steps, stop_on_error, strategy, type."
       ]
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: 'group' is only allowed on tool/prompt effects (it names a concurrency-group slot a leaf effect holds at dispatch) — found on a 'dynamic' effect.",
     "definition": {
       "name": "prime",
@@ -614,6 +629,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - interface.inputs.x.type: 'stringg' is not a recognized type — expected one of string, number, integer, boolean, array, object.",
     "definition": {
       "name": "prime",
@@ -654,6 +670,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - interface.inputs.x.default: declared type 'integer' but '3' is str — quoting it makes it a string; remove the quotes to declare it as integer.",
     "definition": {
       "name": "prime",
@@ -692,6 +709,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration 'runtime' must be an object if provided.",
     "definition": {
       "name": "prime",
@@ -728,6 +746,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration 'plugins' must be a list if provided.",
     "definition": {
       "name": "prime",
@@ -764,6 +783,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Plugins must be strings.",
     "definition": {
       "name": "prime",
@@ -800,6 +820,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "missing required input 'x' declared in orchestration interface.",
     "definition": {
       "name": "prime",
@@ -836,6 +857,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Unsupported orchestration format: .txt. Supported: .json, .toon, .yaml, .yml",
     "definition": null,
     "definition_error": "ValueError: Unsupported orchestration format: .txt. Supported: .json, .toon, .yaml, .yml",
@@ -866,6 +888,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Unsupported orchestration format: .png. Supported: .json, .toon, .yaml, .yml",
     "definition": null,
     "definition_error": "ValueError: Unsupported orchestration format: .png. Supported: .json, .toon, .yaml, .yml",
@@ -896,6 +919,7 @@
         "Applied host settings from doc.yml: runtime.max_concurrency"
       ]
     },
+    "lint_warnings": [],
     "run_error": "Invalid runtime concurrency configuration:\n  - runtime.max_concurrency must be a positive integer, got -1.",
     "definition": {
       "name": "prime",
@@ -959,6 +983,7 @@
         "Applied host settings from doc.yml: runtime.concurrency_groups.io"
       ]
     },
+    "lint_warnings": [],
     "run_error": "Invalid runtime concurrency configuration:\n  - runtime.concurrency_groups.io must be a positive integer, got -1.",
     "definition": {
       "name": "prime",
@@ -1001,6 +1026,182 @@
         "exact"
       ],
       "run_error": "exact"
+    }
+  },
+  {
+    "name": "if_threshold_huge_int_is_a_maximum_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: if\n    name: c\n    if: {mode: cel, expr: 'true'}\n    then: [{type: tool, name: t, provider: json, params: {mode: stringify, input: 1}}]\n    threshold: 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].threshold: 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 is greater than the maximum of 1"
+      ],
+      "warnings": [
+        "effects[0]: 'threshold' has no effect — the built-in evaluator reads a categorical yes/no with no calibrated confidence to cut, so it is recorded on meta.threshold and never consulted. Deprecated: kept schema-valid only so existing documents that set it keep passing; new documents should not set it."
+      ]
+    },
+    "lint_warnings": [
+      "effects[0]: 'threshold' has no effect — the built-in evaluator reads a categorical yes/no with no calibrated confidence to cut, so it is recorded on meta.threshold and never consulted. Deprecated: kept schema-valid only so existing documents that set it keep passing; new documents should not set it."
+    ],
+    "run_error": "Orchestration validation failed:\n  - effects[0].threshold: 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 is greater than the maximum of 1",
+    "definition": null,
+    "definition_error": "OverflowError: int too large to convert to float",
+    "digest": "ef0c493b213b4ded6de8d88d599d12e4c9a4ff776955f3ce1e26f265892eca3d",
+    "comparison": {
+      "validate_errors": [
+        "location_prefix"
+      ],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "tree_loop_max_concurrency_huge_negative_int_is_a_minimum_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: poll\n    flow: tree\n    each: {in: 'input.xs'}\n    max_concurrency: -10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n    body: [{type: tool, name: t, provider: json, params: {mode: stringify, input: 1}}]\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].max_concurrency: -10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 is less than the minimum of 1"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].max_concurrency: -10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 is less than the minimum of 1",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "poll",
+          "body": [
+            {
+              "name": "t",
+              "provider": "json",
+              "params": {
+                "mode": "stringify",
+                "input": 1
+              },
+              "params_json": null,
+              "prompt": null,
+              "model": null,
+              "timeout_ms": null,
+              "on_error": "fail",
+              "description": null,
+              "retries": null,
+              "expect": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.xs",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "tree",
+          "max_concurrency": -10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "poll",
+        "t"
+      ]
+    },
+    "definition_error": null,
+    "digest": "87b9f26f99c933aa3458e38011f3e04ad0b5e2a3c3ad5d35866688ea60180f5b",
+    "comparison": {
+      "validate_errors": [
+        "location_prefix"
+      ],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_huge_int_is_valid",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: p\n    template: 'hi'\n    timeout_ms: 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "p",
+          "template": "hi",
+          "messages": null,
+          "prompt_type": "text",
+          "schema": null,
+          "model": null,
+          "provider": null,
+          "provider_fallbacks": null,
+          "routing_override": null,
+          "params": null,
+          "timeout_ms": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,
+          "deterministic": false,
+          "inputs": null,
+          "assets": null,
+          "retries": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "p"
+      ]
+    },
+    "definition_error": null,
+    "digest": "e2cd791f974341305a66afb93a1c165d383c4621d3af07c58468bf3e69bc0ed2",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
     }
   }
 ]

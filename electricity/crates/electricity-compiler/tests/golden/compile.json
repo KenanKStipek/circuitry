@@ -14,6 +14,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -74,6 +75,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -143,6 +145,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -205,6 +208,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -271,6 +275,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -331,6 +336,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -389,6 +395,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -443,6 +450,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -490,6 +498,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -575,6 +584,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -695,6 +705,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -797,6 +808,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].if: 'mode' is a required property",
     "definition": {
       "name": "prime",
@@ -875,6 +887,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -955,6 +968,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1036,6 +1050,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1116,6 +1131,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1195,6 +1211,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1259,6 +1276,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].name: 123 is not of type 'string'\n  - effects[0].name: 123 should not be valid under {'pattern': '^(value|meta|input|prime|runtime)$'}\n  - effects[0].name: 123 should not be valid under {'pattern': '^iter_\\\\d+$'}",
     "definition": null,
     "definition_error": "ValueError: tool effect at 'prime.effects[0]' must define a string 'name'.",
@@ -1289,6 +1307,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].name: '  ' does not match '^[A-Za-z_][A-Za-z0-9_]*$'",
     "definition": null,
     "definition_error": "ValueError: tool effect at 'prime.effects[0]' has an empty/whitespace-only name.",
@@ -1317,6 +1336,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].name: ' fetch' does not match '^[A-Za-z_][A-Za-z0-9_]*$'",
     "definition": null,
     "definition_error": "ValueError: Invalid name ' fetch' for tool at 'prime.effects[0]': leading/trailing whitespace is not allowed.",
@@ -1345,6 +1365,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].name: 'a.b' does not match '^[A-Za-z_][A-Za-z0-9_]*$'",
     "definition": null,
     "definition_error": "ValueError: Invalid name 'a.b' for tool at 'prime.effects[0]': '.' is not allowed in names.",
@@ -1373,6 +1394,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].name: 'a b' does not match '^[A-Za-z_][A-Za-z0-9_]*$'",
     "definition": null,
     "definition_error": "ValueError: Invalid name 'a b' for tool at 'prime.effects[0]': whitespace is not allowed in names.",
@@ -1401,6 +1423,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].name: 'iter_3' should not be valid under {'pattern': '^iter_\\\\d+$'}",
     "definition": null,
     "definition_error": "ValueError: Invalid name 'iter_3' for tool at 'prime.effects[0]': reserved loop iteration segment pattern 'iter_<n>' is not allowed.",
@@ -1429,6 +1452,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].name: 'value' should not be valid under {'pattern': '^(value|meta|input|prime|runtime)$'}",
     "definition": null,
     "definition_error": "ValueError: Invalid name 'value' for tool at 'prime.effects[0]': 'value' is reserved — it collides with a structural slot the runtime itself writes ('value', 'meta', 'input', 'prime', 'runtime'). Choose a different name.",
@@ -1457,6 +1481,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].name: '1abc' does not match '^[A-Za-z_][A-Za-z0-9_]*$'",
     "definition": null,
     "definition_error": "ValueError: Invalid name '1abc' for tool at 'prime.effects[0]': expected pattern [A-Za-z_][A-Za-z0-9_]*.",
@@ -1485,6 +1510,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Duplicate effect name 'dup' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
     "definition": null,
     "definition_error": "ValueError: Duplicate effect name 'dup' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
@@ -1515,6 +1541,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: 'type' is a required property\n  - effects[0]: 'type' is a required property\n  - effects[0]: value is not valid under any of the given schemas ('template' is a required property)",
     "definition": null,
     "definition_error": "ValueError: Effect at 'prime.effects[0]' is missing required field 'type'.",
@@ -1545,6 +1572,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].type: 'bogus' is not one of ['prompt', 'dynamic', 'if', 'conditional', 'loop', 'reflector', 'tool', 'use', 'yield']",
     "definition": null,
     "definition_error": "ValueError: Unsupported effect type at 'prime.effects[0]': 'bogus'",
@@ -1573,6 +1601,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: 'name' is a required property",
     "definition": null,
     "definition_error": "ValueError: Tool effect at 'prime.effects[0]' is missing required field 'name'.",
@@ -1602,6 +1631,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: 'name' is a required property\n  - effects[0].effects: value should be non-empty",
     "definition": null,
     "definition_error": "ValueError: Dynamic effect at 'prime.effects[0]' is missing required field 'name'.",
@@ -1631,6 +1661,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: 'name' is a required property",
     "definition": null,
     "definition_error": "ValueError: Use effect at 'prime.effects[0]' is missing required field 'name'.",
@@ -1659,6 +1690,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: 'name' is a required property",
     "definition": null,
     "definition_error": "ValueError: Yield effect at 'prime.effects[0]' is missing required field 'name'.",
@@ -1688,6 +1720,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: 'name' is a required property\n  - effects[0].effects: value should be non-empty",
     "definition": null,
     "definition_error": "ValueError: Reflector effect at 'prime.effects[0]' is missing required field 'name'.",
@@ -1719,6 +1752,7 @@
         "effects[0]: unknown key 'finally' on a 'tool' effect is ignored. Known keys: description, expect, group, model, name, on_error, params, params_json, prompt, provider, retries, timeout_ms, type."
       ]
     },
+    "lint_warnings": [],
     "run_error": "tool effect at 'prime.effects[0]': 'finally' is only allowed on a 'dynamic' effect or the document root.",
     "definition": null,
     "definition_error": "ValueError: tool effect at 'prime.effects[0]': 'finally' is only allowed on a 'dynamic' effect or the document root.",
@@ -1747,6 +1781,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: 'if' is a required property",
     "definition": null,
     "definition_error": "ValueError: Conditional at 'prime.effects[0]' must have an 'if' field with condition definition.",
@@ -1775,6 +1810,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].if: 'expr' is a required property",
     "definition": null,
     "definition_error": "ValueError: Conditional at 'prime.effects[0]': mode 'cel' requires an 'expr' field.",
@@ -1803,6 +1839,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].if: 'template' is a required property",
     "definition": null,
     "definition_error": "ValueError: Conditional at 'prime.effects[0]': mode 'model' requires a 'template' field.",
@@ -1832,6 +1869,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].body: value should be non-empty\n  - effects[0]: value is valid under each of {'required': ['while']}, {'required': ['each']}",
     "definition": null,
     "definition_error": "ValueError: Loop at 'prime.effects[0]' must set exactly one of 'while' or 'each' (found both).",
@@ -1862,6 +1900,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].body: value should be non-empty\n  - effects[0]: value is not valid under any of the given schemas ('each' is a required property)",
     "definition": null,
     "definition_error": "ValueError: Loop at 'prime.effects[0]' must set exactly one of 'while' or 'each' (found neither).",
@@ -1891,6 +1930,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Loop at 'prime.effects[0]' sets 'collect: handle' but has no 'name': collected values are written under the loop's own node, which an unnamed loop has none of. Give the loop a 'name' to fix this.",
     "definition": null,
     "definition_error": "ValueError: Loop at 'prime.effects[0]' sets 'collect: handle' but has no 'name': collected values are written under the loop's own node, which an unnamed loop has none of. Give the loop a 'name' to fix this.",
@@ -1919,6 +1959,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Loop 'shots' at 'prime.effects[0]': 'prime.shots.prev' is not defined in flow: tree — tree passes run in parallel, so there is no previous pass to read. Use flow: chain (the default) if the body needs the previous pass, or remove the reference.",
     "definition": null,
     "definition_error": "ValueError: Loop 'shots' at 'prime.effects[0]': 'prime.shots.prev' is not defined in flow: tree — tree passes run in parallel, so there is no previous pass to read. Use flow: chain (the default) if the body needs the previous pass, or remove the reference.",
@@ -1947,6 +1988,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: 'provider' is a required property",
     "definition": null,
     "definition_error": "ValueError: Tool effect 'x' at 'prime.effects[0]' is missing required field 'provider'.",
@@ -1975,6 +2017,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].params_json: value is not of type 'string'",
     "definition": null,
     "definition_error": "ValueError: Tool effect 'x' at 'prime.effects[0]' has invalid 'params_json': expected a string (a Mustache template that renders to JSON).",
@@ -2003,6 +2046,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Tool effect 'x' param 'params.allowed_commands': a by-reference '{from: ...}' value is not honoured for this security-sensitive setting; it must be a literal list of strings.",
     "definition": null,
     "definition_error": "ValueError: Tool effect 'x' param 'params.allowed_commands': a by-reference '{from: ...}' value is not honoured for this security-sensitive setting; it must be a literal list of strings.",
@@ -2031,6 +2075,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: value is not valid under any of the given schemas ('ref' is a required property)",
     "definition": null,
     "definition_error": "ValueError: Use effect 'x' at 'prime.effects[0]' requires exactly one of 'ref' (curation library lookup), 'path' (filesystem), 'orchestration' (deprecated), or 'inline' (Mustache template yielding YAML).",
@@ -2059,6 +2104,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: value is valid under each of {'required': ['inline']}, {'required': ['path']}",
     "definition": null,
     "definition_error": "ValueError: Use effect 'x' at 'prime.effects[0]' has multiple reference fields set (path, inline). Specify exactly one of ref/path/orchestration/inline.",
@@ -2085,6 +2131,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -2143,6 +2190,7 @@
         "effects[0]: unknown key 'schema' on a 'yield' effect is ignored. Known keys: description, inputs, name, on_error, template, type."
       ]
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: Additional properties are not allowed ('schema' was unexpected)",
     "definition": null,
     "definition_error": "ValueError: Yield effect 'x' does not accept 'schema' — a yield effect never calls a model.",
@@ -2171,6 +2219,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: 'template' is a required property",
     "definition": null,
     "definition_error": "ValueError: Yield effect 'x' must have 'template'.",
@@ -2199,6 +2248,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].prompt_type: 'image' is not one of ['text', 'json', 'boolean', 'tool', 'number', 'array', 'object']",
     "definition": null,
     "definition_error": "ValueError: Prompt 'x': prompt_type 'image' is no longer supported. Use a tool effect with provider: comfyui instead. See the orchestration reference for migration instructions.",
@@ -2227,6 +2277,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: 'schema' is a required property",
     "definition": null,
     "definition_error": "ValueError: Prompt 'x': prompt_type 'json' requires a 'schema' field.",
@@ -2255,6 +2306,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: value is not valid under any of the given schemas ('template' is a required property)",
     "definition": null,
     "definition_error": "ValueError: Prompt 'x' must have 'template' or 'messages'.",
@@ -2283,6 +2335,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "prime.effects[0].template: malformed Mustache template: Unexpected EOF the tag \"unclosed\" was never closed was opened at line 1",
     "definition": null,
     "definition_error": "ValueError: prime.effects[0].template: malformed Mustache template: Unexpected EOF the tag \"unclosed\" was never closed was opened at line 1",
@@ -2311,6 +2364,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "CEL expression at 'prime.effects[0]': 'state.bogus' does not name a state namespace ('state' binds to the state root). Write 'state.input.bogus' for caller-supplied values or 'state.prime.bogus' for effect outputs.",
     "definition": null,
     "definition_error": "ValueError: CEL expression at 'prime.effects[0]': 'state.bogus' does not name a state namespace ('state' binds to the state root). Write 'state.input.bogus' for caller-supplied values or 'state.prime.bogus' for effect outputs.",
@@ -2339,6 +2393,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "CEL expression at 'prime.effects[0]': expression does not parse (state.a ==\n        ^). Expression: 'state.a =='",
     "definition": null,
     "definition_error": "CelValidationError: CEL expression at 'prime.effects[0]': expression does not parse (state.a ==\n        ^). Expression: 'state.a =='",
@@ -2367,6 +2422,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].body: value should be non-empty",
     "definition": null,
     "definition_error": "ValueError: Loop each.in at 'prime.effects[0]': bare key 'bogus' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bogus' for caller-supplied values or 'prime.bogus' for effect outputs.",
@@ -2395,6 +2451,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Tool effect 'x' param 'params.n' at 'prime.effects[0]': 'bogus' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bogus' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
     "definition": null,
     "definition_error": "ValueError: Tool effect 'x' param 'params.n' at 'prime.effects[0]': 'bogus' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bogus' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
@@ -2423,6 +2480,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Template at 'effects[0].template': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
     "definition": null,
     "definition_error": "ValueError: Template at 'effects[0].template': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
@@ -2451,6 +2509,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Tool effect 'x' param 'params.n' at 'prime.effects[0]': 'state.topic' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.state.topic' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
     "definition": null,
     "definition_error": "ValueError: Tool effect 'x' param 'params.n' at 'prime.effects[0]': 'state.topic' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.state.topic' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
@@ -2479,6 +2538,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Tool effect 'x' param 'params.n' at 'prime.effects[0]': '{from: ...}' needs a non-empty path.",
     "definition": null,
     "definition_error": "ValueError: Tool effect 'x' param 'params.n' at 'prime.effects[0]': '{from: ...}' needs a non-empty path.",
@@ -2508,6 +2568,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Use effect 'sub' input 'n' at 'prime.effects[0]': 'bogus' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bogus' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
     "definition": null,
     "definition_error": "ValueError: Use effect 'sub' input 'n' at 'prime.effects[0]': 'bogus' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bogus' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
@@ -2536,6 +2597,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Loop each.in at 'prime.effects[0]': 'state.' is a CEL-only binding; outside CEL, paths are root-relative. Write 'input.items' instead of 'state.input.items'.",
     "definition": null,
     "definition_error": "ValueError: Loop each.in at 'prime.effects[0]': 'state.' is a CEL-only binding; outside CEL, paths are root-relative. Write 'input.items' instead of 'state.input.items'.",
@@ -2564,6 +2626,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Loop each.in at 'prime.effects[0]' must be a dot path rooted at 'input.', 'prime.', or 'runtime.' (e.g. 'input.items'), or an enclosing loop binding (loop bindings in scope: none here).",
     "definition": null,
     "definition_error": "ValueError: Loop each.in at 'prime.effects[0]' must be a dot path rooted at 'input.', 'prime.', or 'runtime.' (e.g. 'input.items'), or an enclosing loop binding (loop bindings in scope: none here).",
@@ -2592,6 +2655,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "CEL expression at 'prime.effects[0].body[0]': 'state.bogus' does not name a state namespace ('state' binds to the state root). Write 'state.input.bogus' for caller-supplied values or 'state.prime.bogus' for effect outputs. Names bound by an enclosing loop here: item, iter.",
     "definition": null,
     "definition_error": "ValueError: CEL expression at 'prime.effects[0].body[0]': 'state.bogus' does not name a state namespace ('state' binds to the state root). Write 'state.input.bogus' for caller-supplied values or 'state.prime.bogus' for effect outputs. Names bound by an enclosing loop here: item, iter.",
@@ -2620,6 +2684,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "CEL expression at 'prime.effects[0]': expression is empty.",
     "definition": null,
     "definition_error": "CelValidationError: CEL expression at 'prime.effects[0]': expression is empty.",
@@ -2648,6 +2713,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "CEL expression at 'prime.effects[0]': expression is too long (5000 chars, max 4096).",
     "definition": null,
     "definition_error": "CelValidationError: CEL expression at 'prime.effects[0]': expression is too long (5000 chars, max 4096).",
@@ -2676,6 +2742,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects: 'not-a-list' is not of type 'array'",
     "definition": null,
     "definition_error": "ValueError: prime.effects must be a list of effects.",
@@ -2706,6 +2773,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: value is not of type 'object'\n  - effects[0]: value is not of type 'object'\n  - effects[0]: value is valid under each of {'required': ['messages']}, {'required': ['template']}",
     "definition": null,
     "definition_error": "ValueError: Effect at 'prime.effects[0]' must be an object/mapping, got list.",
@@ -2737,6 +2805,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].each: 'not-a-mapping' is not of type 'object'\n  - effects[0].body: value should be non-empty",
     "definition": null,
     "definition_error": "ValueError: Loop at 'prime.effects[0]': 'each' must be a mapping.",
@@ -2767,6 +2836,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].while: 'template' is a required property\n  - effects[0].body: value should be non-empty",
     "definition": null,
     "definition_error": "ValueError: Loop while at 'prime.effects[0]': mode 'model' requires a 'template' field.",
@@ -2797,6 +2867,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].while: 'expr' is a required property\n  - effects[0].body: value should be non-empty",
     "definition": null,
     "definition_error": "ValueError: Loop while at 'prime.effects[0]': mode 'cel' requires an 'expr' field.",
@@ -2826,6 +2897,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].body: value should be non-empty",
     "definition": null,
     "definition_error": "CelValidationError: Loop while CEL expression at 'prime.effects[0]' (effect 'poll'): expression is empty.",
@@ -2854,6 +2926,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].body: value should be non-empty",
     "definition": null,
     "definition_error": "CelValidationError: Loop while CEL expression at 'prime.effects[0]' (effect 'poll'): expression does not parse (state.a ==\n        ^). Expression: 'state.a =='",
@@ -2882,6 +2955,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "tool effect at 'prime.effects[0]': 'expect' must not be an empty string.",
     "definition": null,
     "definition_error": "ValueError: tool effect at 'prime.effects[0]': 'expect' must not be an empty string.",
@@ -2910,6 +2984,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].expect: value is not valid under any of the given schemas ({'mode': 'cel'} is not of type 'string')",
     "definition": null,
     "definition_error": "ValueError: tool effect at 'prime.effects[0]': expect mode 'cel' requires a non-empty 'expr' field.",
@@ -2938,6 +3013,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].expect: value is not valid under any of the given schemas ({'mode': 'model'} is not of type 'string')",
     "definition": null,
     "definition_error": "ValueError: tool effect at 'prime.effects[0]': expect mode 'model' requires a non-empty 'template' field.",
@@ -2966,6 +3042,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].expect: 1 is not valid under any of the given schemas (1 is not of type 'string')",
     "definition": null,
     "definition_error": "ValueError: tool effect at 'prime.effects[0]': 'expect' must be a CEL string or a mapping with 'mode'.",
@@ -2992,6 +3069,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -3052,6 +3130,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: 'name' is a required property",
     "definition": null,
     "definition_error": "ValueError: Prompt effect at 'prime.effects[0]' is missing required field 'name'.",
@@ -3080,6 +3159,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].template: 123 is not valid under any of the given schemas (123 is not of type 'string')",
     "definition": null,
     "definition_error": "PromptFileError: prime.effects[0].template must be a string or {file: <path>}.",
@@ -3108,6 +3188,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Yield effect 'x': 'template' must not be empty.",
     "definition": null,
     "definition_error": "ValueError: Yield effect 'x': 'template' must not be empty.",
@@ -3136,6 +3217,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "prime.effects[0].params_json: malformed Mustache template: unclosed tag at line 1",
     "definition": null,
     "definition_error": "ValueError: prime.effects[0].params_json: malformed Mustache template: unclosed tag at line 1",
@@ -3164,6 +3246,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "prime.effects[0].prompt: malformed Mustache template: unclosed tag at line 1",
     "definition": null,
     "definition_error": "ValueError: prime.effects[0].prompt: malformed Mustache template: unclosed tag at line 1",
@@ -3192,6 +3275,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "prime.effects[0].inline: malformed Mustache template: unclosed tag at line 1",
     "definition": null,
     "definition_error": "ValueError: prime.effects[0].inline: malformed Mustache template: unclosed tag at line 1",
@@ -3220,6 +3304,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "prime.effects[0].messages[0].content: malformed Mustache template: unclosed tag at line 1",
     "definition": null,
     "definition_error": "ValueError: prime.effects[0].messages[0].content: malformed Mustache template: unclosed tag at line 1",
@@ -3248,6 +3333,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "prime.effects[0].assets[0].ref: malformed Mustache template: unclosed tag at line 1",
     "definition": null,
     "definition_error": "ValueError: prime.effects[0].assets[0].ref: malformed Mustache template: unclosed tag at line 1",
@@ -3276,6 +3362,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].if: 'mode' is a required property",
     "definition": null,
     "definition_error": "ValueError: prime.effects[0].if.template: malformed Mustache template: unclosed tag at line 1",
@@ -3305,6 +3392,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].while: 'mode' is a required property\n  - effects[0].body: value should be non-empty",
     "definition": null,
     "definition_error": "ValueError: prime.effects[0].while.template: malformed Mustache template: unclosed tag at line 1",
@@ -3334,6 +3422,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "prime.effects[0].expect.template: malformed Mustache template: unclosed tag at line 1",
     "definition": null,
     "definition_error": "ValueError: prime.effects[0].expect.template: malformed Mustache template: unclosed tag at line 1",
@@ -3363,6 +3452,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].outputs: 'not-a-mapping' is not of type 'object'",
     "definition": null,
     "definition_error": "ValueError: Use effect 'sub': outputs must be a mapping of name -> {path: <state path>}, not str.",
@@ -3392,6 +3482,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Use effect 'sub': output 'result' is an empty string. Give it a state path — result: {path: prime.<effect>.value}.",
     "definition": null,
     "definition_error": "ValueError: Use effect 'sub': output 'result' is an empty string. Give it a state path — result: {path: prime.<effect>.value}.",
@@ -3421,6 +3512,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].outputs.result: value is not valid under any of the given schemas ({} is not of type 'string')",
     "definition": null,
     "definition_error": "ValueError: Use effect 'sub': output 'result' has no 'path'. Canonical form is result: {path: prime.<effect>.value} (the bare string result: prime.<effect>.value is also accepted).",
@@ -3450,6 +3542,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].outputs.result: 5 is not valid under any of the given schemas (5 is not of type 'object')",
     "definition": null,
     "definition_error": "ValueError: Use effect 'sub': output 'result' must be an object with a 'path' key (canonical) or a bare state-path string (shorthand); got int.",
@@ -3478,6 +3571,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Duplicate effect name 'dup' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.finally[0]'.",
     "definition": null,
     "definition_error": "ValueError: Duplicate effect name 'dup' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.finally[0]'.",
@@ -3506,6 +3600,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Template at 'finally[0].template': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
     "definition": null,
     "definition_error": "ValueError: Template at 'finally[0].template': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
@@ -3534,6 +3629,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Template at 'effects[0].params.nested.deep': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
     "definition": null,
     "definition_error": "ValueError: Template at 'effects[0].params.nested.deep': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
@@ -3562,6 +3658,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - flow: 'bogus' is not one of ['chain', 'chain_of_thought', 'cot', 'tree', 'tree_of_thought', 'tot']",
     "definition": null,
     "definition_error": "ValueError: Unknown flow value 'bogus'. Valid values are: chain, chain_of_thought, cot, tot, tree, tree_of_thought.",
@@ -3592,6 +3689,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].name: None is not of type 'string'\n  - effects[0].name: None should not be valid under {'pattern': '^(value|meta|input|prime|runtime)$'}\n  - effects[0].name: None should not be valid under {'pattern': '^iter_\\\\d+$'}",
     "definition": null,
     "definition_error": "ValueError: Tool effect at 'prime.effects[0]' is missing required field 'name'.",
@@ -3624,6 +3722,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].name: None is not of type 'string'\n  - effects[0].name: None should not be valid under {'pattern': '^(value|meta|input|prime|runtime)$'}\n  - effects[0].name: None should not be valid under {'pattern': '^iter_\\\\d+$'}",
     "definition": {
       "name": "prime",
@@ -3684,6 +3783,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].name: None is not of type 'string'\n  - effects[0].name: None should not be valid under {'pattern': '^(value|meta|input|prime|runtime)$'}\n  - effects[0].name: None should not be valid under {'pattern': '^iter_\\\\d+$'}",
     "definition": {
       "name": "prime",
@@ -3769,6 +3869,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].template: None is not valid under any of the given schemas (None is not of type 'string')",
     "definition": null,
     "definition_error": "ValueError: Yield effect 'x' must have 'template'.",
@@ -3797,6 +3898,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "prime.effects[0].inline: malformed Mustache template: Unexpected EOF the tag \"a\" was never closed was opened at line 3",
     "definition": null,
     "definition_error": "ValueError: prime.effects[0].inline: malformed Mustache template: Unexpected EOF the tag \"a\" was never closed was opened at line 3",
@@ -3823,6 +3925,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -3877,6 +3980,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -3940,6 +4044,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].max_concurrency: 0 is less than the minimum of 1\n  - effects[0].effects: value should be non-empty",
     "definition": {
       "name": "prime",
@@ -3996,6 +4101,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -4057,6 +4163,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -4123,6 +4230,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -4172,6 +4280,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "prime.effects[0].template: 'file' 'does-not-exist.txt' does not exist.",
     "definition": null,
     "definition_error": "PromptFileError: prime.effects[0].template: 'file' 'does-not-exist.txt' does not exist.",
@@ -4200,6 +4309,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Tool effect 'x' param 'params.allowed_commands' at 'prime.effects[0]': 'bogus' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bogus' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
     "definition": null,
     "definition_error": "ValueError: Tool effect 'x' param 'params.allowed_commands' at 'prime.effects[0]': 'bogus' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bogus' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
@@ -4228,6 +4338,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "prime.effects[0].params.a: malformed Mustache template: unclosed tag at line 1",
     "definition": null,
     "definition_error": "ValueError: prime.effects[0].params.a: malformed Mustache template: unclosed tag at line 1",
@@ -4257,6 +4368,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "prime.effects[0].inputs.b: malformed Mustache template: unclosed tag at line 1",
     "definition": null,
     "definition_error": "ValueError: prime.effects[0].inputs.b: malformed Mustache template: unclosed tag at line 1",
@@ -4285,6 +4397,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Template at 'effects[0].template': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
     "definition": null,
     "definition_error": "ValueError: Template at 'effects[0].template': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
@@ -4313,6 +4426,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Template at 'effects[0].template': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
     "definition": null,
     "definition_error": "ValueError: Template at 'effects[0].template': bare '{{topic}}' refers to declared interface input 'topic'. Caller inputs live under the 'input' namespace; write '{{input.topic}}'.",
@@ -4339,6 +4453,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -4418,6 +4533,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -4497,6 +4613,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -4566,6 +4683,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -4618,6 +4736,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -4702,6 +4821,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -4789,6 +4909,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Duplicate effect name 'a' in scope 'prime.think'. Seen at 'prime.effects[0].effects[0]' and 'prime.effects[0].effects[1]'.",
     "definition": null,
     "definition_error": "ValueError: Duplicate effect name 'a' in scope 'prime.think'. Seen at 'prime.effects[0].effects[0]' and 'prime.effects[0].effects[1]'.",
@@ -4820,6 +4941,7 @@
         "Applied host settings from doc.yml: runtime.concurrency_groups.io"
       ]
     },
+    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - group \"it's\" is not defined in runtime.concurrency_groups — known groups: io.\n  - group 'llm' is not defined in runtime.concurrency_groups — known groups: io.",
     "definition": {
       "name": "prime",
@@ -5030,6 +5152,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Cycle: <root>/a.yml → <root>/b.yml → <root>/a.yml",
     "definition": {
       "name": "prime",
@@ -5087,6 +5210,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -5145,6 +5269,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Cycle: <root>/a.yml → <root>/b.yml → <root>/c.yml → <root>/a.yml",
     "definition": {
       "name": "prime",
@@ -5205,6 +5330,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Cycle: <root>/b.yml → <root>/c.yml → <root>/a.yml → <root>/b.yml",
     "definition": {
       "name": "prime",
@@ -5263,6 +5389,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Cycle: <root>/a.yml → <root>/a.yml",
     "definition": {
       "name": "prime",
@@ -5322,6 +5449,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Cycle: <root>/entry.yml → <root>/a.yml → <root>/entry.yml",
     "definition": {
       "name": "prime",
@@ -5379,6 +5507,7 @@
       "errors": [],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -5437,6 +5566,7 @@
       ],
       "warnings": []
     },
+    "lint_warnings": [],
     "run_error": "Cycle: <root>/a.yml → <root>/b.yml → <root>/a.yml",
     "definition": {
       "name": "prime",
