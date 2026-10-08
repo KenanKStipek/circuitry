@@ -75,7 +75,11 @@ fn int_re() -> &'static regex::Regex {
 
 fn null_re() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"^(?:~|null|Null|NULL|)$").unwrap())
+    // See `float_re`'s comment on the trailing `\n?`: needed for a bare
+    // `!` forcing a literal/folded block scalar (always `\n`-terminated)
+    // through implicit resolution, e.g. `! |\n  ~\n` (confirmed: `None`
+    // under Circuitry's real loader, not the string `"~\n"`).
+    RE.get_or_init(|| regex::Regex::new(r"^(?:~|null|Null|NULL|)\n?$").unwrap())
 }
 
 /// The *implicit* timestamp pattern -- distinct from, and stricter than,
@@ -89,12 +93,16 @@ fn null_re() -> &'static regex::Regex {
 fn implicit_timestamp_re() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
     RE.get_or_init(|| {
+        // See `float_re`'s comment on the trailing `\n?` (same bare-`!`
+        // block-scalar reasoning, confirmed for a date: `! |\n
+        // 2024-01-01\n` is `datetime.date(2024, 1, 1)` under Circuitry's
+        // real loader, not the string `"2024-01-01\n"`).
         regex::Regex::new(
             r"(?x)^(?:[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]
                     |[0-9][0-9][0-9][0-9]-[0-9][0-9]?-[0-9][0-9]?
                      (?:[Tt]|[\x20\t]+)[0-9][0-9]?
                      :[0-9][0-9]:[0-9][0-9](?:\.[0-9]*)?
-                     (?:[\x20\t]*(?:Z|[-+][0-9][0-9]?(?::[0-9][0-9])?))?)$",
+                     (?:[\x20\t]*(?:Z|[-+][0-9][0-9]?(?::[0-9][0-9])?))?)\n?$",
         )
         .unwrap()
     })
@@ -103,6 +111,10 @@ fn implicit_timestamp_re() -> &'static regex::Regex {
 fn timestamp_re() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
     RE.get_or_init(|| {
+        // See `float_re`'s comment on the trailing `\n?` (same bare-`!`
+        // block-scalar reasoning as `implicit_timestamp_re` above -- this
+        // is the separate regex `construct_timestamp` itself matches
+        // against, so it needs the same tolerance).
         regex::Regex::new(
             r"(?x)^(?P<year>[0-9][0-9][0-9][0-9])
                 -(?P<month>[0-9][0-9]?)
@@ -113,7 +125,7 @@ fn timestamp_re() -> &'static regex::Regex {
                 :(?P<second>[0-9][0-9])
                 (?:\.(?P<fraction>[0-9]*))?
                 (?:[\x20\t]*(?P<tz>Z|(?P<tz_sign>[-+])(?P<tz_hour>[0-9][0-9]?)
-                (?::(?P<tz_minute>[0-9][0-9]))?))?)?$",
+                (?::(?P<tz_minute>[0-9][0-9]))?))?)?\n?$",
         )
         .unwrap()
     })
@@ -162,27 +174,35 @@ pub fn construct_bool(text: &str) -> Option<bool> {
 /// alone, `0b`/`0x`, a legacy `0`-leading octal, `H:MM:SS` sexagesimal,
 /// or plain decimal. Arbitrary-precision throughout (Python ints are
 /// unbounded).
+///
+/// Deliberately *not* trimmed up front, unlike an earlier version of
+/// this function: PyYAML's own `construct_yaml_int` never calls `.strip()`
+/// either -- only Python's `int(s, base)`, at the one spot each branch
+/// below finally calls it, tolerates surrounding whitespace on its own.
+/// Trimming before the sign/prefix checks instead of at that point changes
+/// which branch a value with leading whitespace takes: PyYAML's sign
+/// check runs on the *raw* first character, so `"- 42"` strips a sign
+/// and falls through every prefix check (none match `" 42"`) to the
+/// final decimal branch, whose `int(" 42")` call is what actually
+/// tolerates the inner space -- while `" 0x1A"` (whitespace *before* the
+/// sign/prefix) never matches the `0x` branch at all (`" 0x1A"` doesn't
+/// start with `"0x"`) and falls all the way to `int(" 0x1A")`, which
+/// raises, not to a hex parse.
 pub fn construct_int(text: &str) -> Option<IntValue> {
-    // Python's `int()` strips surrounding whitespace itself (needed for
-    // both an explicit `!!int " 42 "` and a bare-`!`-forced block scalar,
-    // whose text always carries a trailing `\n`).
-    let stripped = text.trim().replace('_', "");
-    let (negative, rest) = split_sign(&stripped)?;
+    let value = text.replace('_', "");
+    let (negative, rest) = split_sign(&value)?;
     let magnitude = if rest == "0" {
         BigInt::from(0)
     } else if let Some(digits) = rest.strip_prefix("0b") {
-        non_empty(digits)?;
-        BigInt::from_str_radix(digits, 2).ok()?
+        parse_radix(digits, 2)?
     } else if let Some(digits) = rest.strip_prefix("0x") {
-        non_empty(digits)?;
-        BigInt::from_str_radix(digits, 16).ok()?
+        parse_radix(digits, 16)?
     } else if rest.starts_with('0') {
-        BigInt::from_str_radix(rest, 8).ok()?
+        parse_radix(rest, 8)?
     } else if rest.contains(':') {
         sexagesimal_bigint(rest)?
     } else {
-        non_empty(rest)?;
-        BigInt::from_str_radix(rest, 10).ok()?
+        parse_radix(rest, 10)?
     };
     Some(IntValue::from_bigint(if negative {
         -magnitude
@@ -191,14 +211,28 @@ pub fn construct_int(text: &str) -> Option<IntValue> {
     }))
 }
 
+/// `s`, trimmed and parsed as `radix` -- the one point at which this
+/// crate's `construct_int` tolerates surrounding whitespace, mirroring
+/// Python's `int(s, radix)` doing the same at the one point *it*'s
+/// called (`construct_int`'s own doc comment).
+fn parse_radix(s: &str, radix: u32) -> Option<BigInt> {
+    let trimmed = s.trim();
+    non_empty(trimmed)?;
+    BigInt::from_str_radix(trimmed, radix).ok()
+}
+
 /// `SafeConstructor.construct_yaml_float`: strips underscores and
 /// lowercases, then a sign, then `.inf`/`.nan`, `H:MM:SS[.ff]`
-/// sexagesimal, or a plain `f64` parse.
+/// sexagesimal, or a plain `f64` parse -- not trimmed up front, for the
+/// same reason as [`construct_int`] (its doc comment): `" .inf"` never
+/// matches the exact `".inf"` check and falls through to a plain `f64`
+/// parse of `" .inf"` (trimmed to `".inf"`, which -- unlike Python's
+/// `float()` -- Rust's own `f64` parser rejects outright, matching
+/// PyYAML's `float(".inf")` likewise raising: neither accepts the
+/// leading-dot spelling outside this function's own explicit check).
 pub fn construct_float(text: &str) -> Option<f64> {
-    // See `construct_int`'s comment: Python's `float()` strips
-    // surrounding whitespace the same way.
-    let stripped = text.trim().replace('_', "").to_lowercase();
-    let (negative, rest) = split_sign(&stripped)?;
+    let value = text.replace('_', "").to_lowercase();
+    let (negative, rest) = split_sign(&value)?;
     let sign = if negative { -1.0 } else { 1.0 };
     if rest == ".inf" {
         return Some(sign * f64::INFINITY);
@@ -219,14 +253,16 @@ pub fn construct_float(text: &str) -> Option<f64> {
         let mut value = 0.0_f64;
         let mut base = 1.0_f64;
         for part in rest.rsplit(':') {
+            let part = part.trim();
             non_empty(part)?;
             value += part.parse::<f64>().ok()? * base;
             base *= 60.0;
         }
         return Some(sign * value);
     }
-    non_empty(rest)?;
-    rest.parse::<f64>().ok().map(|v| sign * v)
+    let trimmed = rest.trim();
+    non_empty(trimmed)?;
+    trimmed.parse::<f64>().ok().map(|v| sign * v)
 }
 
 /// `SafeConstructor.construct_yaml_timestamp`: a date, or a naive/offset
@@ -312,6 +348,7 @@ fn non_empty(s: &str) -> Option<()> {
 fn sexagesimal_bigint(rest: &str) -> Option<BigInt> {
     let mut total = BigInt::from(0);
     for part in rest.split(':') {
+        let part = part.trim();
         non_empty(part)?;
         let digit = BigInt::from_str_radix(part, 10).ok()?;
         total = total * 60 + digit;

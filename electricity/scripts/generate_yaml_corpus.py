@@ -34,6 +34,8 @@ import json
 import sys
 from pathlib import Path
 
+import yaml  # type: ignore[import-untyped]
+
 from circuitry.core.yaml_load import DuplicateKeyError, load_yaml
 
 OUTPUT = (
@@ -121,6 +123,12 @@ def int_cases() -> list[dict]:
         "a: 123456789012345678901234567890\n",  # bigger than i64
         "a: 0xFFFFFFFFFFFFFFFFFF\n",  # bigger than i64, hex
         "a: 1e3\n",  # no literal dot, no sexagesimal/hex/octal form: stays string
+        # PyYAML's `construct_yaml_int` never calls `.strip()`: it checks
+        # the sign on the *raw* first character, then prefix detection on
+        # the (sign-stripped, otherwise untrimmed) rest -- only the final
+        # `int(value, base)` call tolerates surrounding whitespace.
+        'a: !!int "- 42"\n',  # sign then an inner space: the final int() call strips it
+        'a: !!int " 0x1A"\n',  # leading space blocks the "0x" prefix check: error
     ]
     return [case(y) for y in yaml_texts]
 
@@ -145,6 +153,11 @@ def float_cases() -> list[dict]:
         # `base *= 60`) -- round-half-to-even then lands one ulp below
         # what summing the parts left-to-right would give
         "a: 1:30:00.06\n",
+        # See `int_cases`'s comment on PyYAML never trimming up front:
+        # leading whitespace blocks the exact `.inf` check, and falls
+        # through to a plain `float(" .inf")`, which (unlike a bare
+        # `"inf"`) CPython's own `float()` rejects too.
+        'a: !!float " .inf"\n',
     ]
     return [case(y) for y in yaml_texts]
 
@@ -214,6 +227,14 @@ def explicit_tag_cases() -> list[dict]:
         "a: ! [1, 2]\n",  # ... and on a sequence/mapping, same as no tag at all
         "a: ! {x: 1}\n",
         "a: !custom foo\n",  # unknown tag: known-divergence error
+        "!custom foo\n",  # ... and at the document root, where it's also the root tag
+        # A bare `!` forcing *implicit* resolution on a literal block
+        # scalar (always `\n`-terminated): `null`'s and the implicit
+        # timestamp pattern's own regexes need the same trailing `\n?`
+        # float_re/int_re already have.
+        "a: ! |\n  ~\n",
+        "a: ! |\n  2024-01-01\n",
+        "a: ! |\n  .inf\n",  # bool/null/timestamp all miss; float still does too: error
     ]
     return [case(y) for y in yaml_texts]
 
@@ -250,6 +271,33 @@ def _stable_repr(value: object) -> str:
     if isinstance(value, list):
         return "[" + ", ".join(_stable_repr(v) for v in value) + "]"
     return repr(value)
+
+
+def _divergence_from_error(
+    yaml_text: str,
+    *,
+    rust_error_contains: str | None = None,
+    rust_error_tag: str | None = None,
+) -> dict:
+    """A `known_divergence` case whose `python_repr` documents whatever
+    Circuitry's *real* `load_yaml` actually does -- a value, or (unlike
+    `known_divergence_cases`'s own inline loop below, which only ever
+    expects success) an error -- so a divergence that both sides fail on,
+    just differently, can still be pinned without the Rust side matching
+    Circuitry's own exact message or position (`golden_corpus.rs`'s
+    `KnownDivergence` arm only ever compares `rust_error_tag`/
+    `rust_error_contains` against Rust's *own* error, never Circuitry's).
+    """
+    try:
+        python_repr = _stable_repr(load_yaml(yaml_text))
+    except Exception as exc:
+        python_repr = f"<{type(exc).__name__}: {exc}>"
+    entry: dict = {"yaml": yaml_text, "kind": "known_divergence", "python_repr": python_repr}
+    if rust_error_tag is not None:
+        entry["rust_error_tag"] = rust_error_tag
+    if rust_error_contains is not None:
+        entry["rust_error_contains"] = rust_error_contains
+    return entry
 
 
 def known_divergence_cases() -> list[dict]:
@@ -295,7 +343,111 @@ def known_divergence_cases() -> list[dict]:
                 "rust_error_contains": rust_error_contains,
             }
         )
+    cases.extend(_extra_known_divergence_cases())
     return cases
+
+
+def _extra_known_divergence_cases() -> list[dict]:
+    return [
+        # An anchor name outside `[0-9A-Za-z_-]` (e.g. `&x.y`): PyYAML's
+        # scanner restricts anchor names to that set (`scanner.py:917-924`)
+        # and *fails*; saphyr-parser 0.1.0's is more permissive and loads
+        # it -- the opposite direction from every other case here (Rust
+        # succeeds where Circuitry fails), which this corpus's
+        # `known_divergence` kind has no way to express (it only checks
+        # that Rust's side *also* fails, in some documented way); recorded
+        # in `lib.rs`'s "Known divergences" section instead, not pinned
+        # here.
+        # PyYAML's `construct_yaml_float` returns a *fresh* NaN object for
+        # an explicit `!!float nan` (no leading dot) -- unlike `.nan`,
+        # which returns the one shared `nan_value` singleton -- so two of
+        # them do *not* collide in CPython's dict despite both being NaN.
+        # This crate's `Value` has no such identity to track (every NaN
+        # float is just `f64::NAN`), so its duplicate-key check treats
+        # every NaN key as the same key regardless of spelling, reporting
+        # a duplicate here where Circuitry's loader keeps both.
+        _divergence_from_error(
+            "!!float nan: 1\n!!float nan: 2\n", rust_error_contains="duplicate key"
+        ),
+        # saphyr-parser 0.1.0's scanner starts a literal/folded block
+        # scalar's span at its first *content* line, not at the `|`/`>`
+        # indicator itself; PyYAML's own mark is the indicator's
+        # position. Both sides raise `DuplicateKeyError` for this
+        # document (two mapping keys that are both the block-scalar text
+        # `"k\n"`), but at different lines, so this is checked loosely
+        # (message contains "duplicate key") rather than word for word.
+        _divergence_from_error(
+            "? |\n  k\n: 1\n? |\n  k\n: 2\n", rust_error_contains="duplicate key"
+        ),
+        # PyYAML's `!!seq`/`!!map` constructors are generators, so a node
+        # with the wrong structural kind only fails one *construction
+        # round* later, after every *key* in the same mapping (including,
+        # here, an unhashable one) has already been checked -- this
+        # crate's composer instead rejects a mismatched container tag
+        # immediately, during composition, before any sibling key is even
+        # looked at. Reproducing PyYAML's exact laziness would mean
+        # dispatching every constructor purely by *tag* and deferring
+        # seq/map bodies a round, independently of a node's own
+        # structural shape -- a materially larger redesign than this P2
+        # finding's fix budget, so it's recorded as a divergence instead.
+        _divergence_from_error("a: !!seq x\n[b]: 1\n", rust_error_tag="tag:yaml.org,2002:seq"),
+        _divergence_from_error(
+            "!!seq x: 1\na: 1\na: 2\n", rust_error_tag="tag:yaml.org,2002:seq"
+        ),
+        # A self-referential alias is refused during *composition* (this
+        # crate's `Node` tree has no way to represent a cycle), which
+        # pre-empts a shallower sibling's duplicate-key error that PyYAML
+        # -- which registers an anchor before composing its own children,
+        # so never even attempts to resolve the cycle eagerly -- reports
+        # instead. Deferring self-reference detection the way
+        # `!!seq`/`!!map`'s laziness above would need is the same kind of
+        # redesign, declined for the same reason.
+        _divergence_from_error(
+            "a: 1\na: 2\nb: &b [*b]\n",
+            rust_error_contains="self-referential anchor is not supported",
+        ),
+    ]
+
+
+def merge_source_mutation_divergence_cases() -> list[dict]:
+    """circuitry#390: Circuitry's own `_UniqueKeyLoader.construct_mapping`
+    mutates a `MappingNode`'s `.value` list in its duplicate-key
+    pre-pass, but `SafeConstructor.flatten_mapping` *also* mutates that
+    same list in place when expanding a `<<:` merge key -- so a merge
+    source shared by two mappings (one merged into another that's itself
+    merged into a third) can already have been expanded once by the time
+    the pre-pass walks the second mapping's keys, raising a
+    `DuplicateKeyError` that plain `yaml.safe_load` does not raise on the
+    same document. This is a bug in Circuitry's own loader, not in the
+    YAML it's loading -- electricity-yaml must not reproduce it, so this
+    one case's expected value deliberately comes from `yaml.safe_load`,
+    not from `load_yaml` (every other case in this file's ground truth).
+    """
+    yaml_text = (
+        "base: &base\n"
+        "  retries: 1\n"
+        "  timeout: 5\n"
+        "templates:\n"
+        "  defaults: &defaults\n"
+        "    <<: *base\n"
+        "    retries: 2\n"
+        "effect:\n"
+        "  <<: *defaults\n"
+    )
+    return [
+        {
+            "yaml": yaml_text,
+            "kind": "value",
+            "repr": repr(yaml.safe_load(yaml_text)),
+            "note": (
+                "circuitry#390: Circuitry's own load_yaml raises a false "
+                "DuplicateKeyError on this document; electricity-yaml "
+                "matches yaml.safe_load instead -- a deliberate, "
+                "documented divergence from Circuitry's own loader, not "
+                "from this crate's ground truth in general."
+            ),
+        }
+    ]
 
 
 # ---------------------------------------------------------------------
@@ -309,6 +461,13 @@ def value_and_merge_tag_errors() -> list[dict]:
         "a: <<\n",  # implicit resolution to the merge tag outside a key: no constructor
         "a: !!value foo\n",
         "a: !!merge foo\n",
+        # A bare `=` used directly as a mapping's *own* key (not reached
+        # through a merge): `_UniqueKeyLoader.construct_mapping`'s own
+        # duplicate-key pre-pass constructs every one of a mapping's own
+        # keys *before* `super().construct_mapping()` -- and the
+        # `flatten_mapping` call inside it, which is what retags a `=`
+        # key to `str` -- ever runs, so this still has no constructor.
+        "{=: 5}\n",
     ]
     return [case(y) for y in yaml_texts]
 
@@ -337,6 +496,29 @@ def anchor_cases() -> list[dict]:
 
 
 # ---------------------------------------------------------------------
+# Anchor-duplicate ordering and position: checked, and recorded, before
+# a node's own children are composed, matching PyYAML's `compose_node`
+# (`composer.py:72-77, :108, :126) -- not after, the way comparing a
+# shallower anchor only once its own node is fully built would.
+# ---------------------------------------------------------------------
+
+
+def anchor_order_cases() -> list[dict]:
+    yaml_texts = [
+        # the outer sequence's own `&x` is the *first* occurrence
+        # (declared before its items are even composed), so the nested
+        # `&x` on `1` is correctly the duplicate, not the reverse
+        "a: &x\n  - &x 1\n",
+        "a: &x\n  b: &x 1\n  c: [\n",  # same, but the parser error after it never gets a chance
+        # a root-level anchor/tag: an implicit document start's own span
+        # is the first content token's, so the composer must not advance
+        # past it before scanning for a leading `&`/`!`
+        "&m\na: &m 1\n",
+    ]
+    return [case(y) for y in yaml_texts]
+
+
+# ---------------------------------------------------------------------
 # `<<:` merge keys
 # ---------------------------------------------------------------------
 
@@ -353,6 +535,12 @@ def merge_cases() -> list[dict]:
         "a: &a\n  x: 1\nb:\n  <<: {p: 9}\n",  # inline mapping merge source, no alias
         "a:\n  <<: [1, 2]\n",  # error: list items aren't mappings
         "a:\n  <<: 5\n",  # error: merge value is neither mapping nor sequence
+        # `flatten_mapping` retags a `=` key to `str` wherever it's found
+        # while flattening -- including inside a merge *source*, which
+        # (unlike this mapping's own direct keys, `value_and_merge_tag_errors`'
+        # `{=: 5}` case) never goes through the outer pre-pass that would
+        # otherwise fail on it first.
+        "<<: {=: 1}\n",
     ]
     return [case(y) for y in yaml_texts]
 
@@ -387,6 +575,16 @@ def duplicate_key_cases() -> list[dict]:
         # would otherwise fail first in a naive depth-first walk
         "a: !!int x\na: 1\n",
         "? [1, 2]\n: v\na: 1\na: 2\n",
+        # the single-document check runs once the *whole* tree is
+        # composed, before anything in it (including this duplicate) is
+        # ever constructed -- so a second document after it is the error
+        # that's reported, not the duplicate `a` (first review)
+        "a: 1\na: 2\n---\nb: 1\n",
+        # a *parser* error (an unclosed flow sequence for `c`) after an
+        # already-composed duplicate key never gets a chance to surface:
+        # the whole document must compose cleanly before any mapping's
+        # own duplicate-key check ever runs (first review)
+        "a:\n  b: 1\n  b: 2\nc: [\n",
     ]
     return [case(y) for y in yaml_texts]
 
@@ -413,6 +611,39 @@ def structural_cases() -> list[dict]:
     return [case(y) for y in yaml_texts]
 
 
+# ---------------------------------------------------------------------
+# Non-ASCII text: `node_prefix`'s gap-scanning converts a `saphyr_parser
+# ::Marker`'s position into a byte offset via its line and column
+# (never its `index()`, which counts *characters*, not bytes, despite
+# its own doc comment) -- every case below exercises that conversion
+# somewhere a multi-byte character could misalign it: a scalar value, a
+# key, a comment, and right next to an anchor, each checked either for
+# the exact value or (for the error cases) the exact position.
+# ---------------------------------------------------------------------
+
+
+def non_ascii_cases() -> list[dict]:
+    yaml_texts = [
+        "a: \u00e9\nb: 1\n",  # a two-byte character (\u00e9, 'é') in a value
+        "\u00e9: 1\n",  # ... and in a key
+        "a: \u2014 em dash\n",  # a three-byte character (an em dash)
+        "a: \U0001f642\n",  # a four-byte character (an emoji, outside the BMP)
+        "a: \u4e2d\u6587\n",  # a CJK scalar value
+        "# caf\u00e9 \u2014 \U0001f642\na: 1\n",  # non-ASCII in a comment ahead of real content
+        "a: &x \u00e9\nb: *x\n",  # non-ASCII right after an anchor
+        "a: &x 1\nb: *x  # caf\u00e9 \U0001f642\n",  # ... and in a trailing comment near an alias
+    ]
+    cases = [case(y) for y in yaml_texts]
+    # Error cases: the non-ASCII text sits *before* the error site, so a
+    # misaligned byte offset would either panic outright or report the
+    # wrong line/column for the duplicate-key/duplicate-anchor error
+    # that follows it.
+    cases.append(case("# caf\u00e9\n!!str a: 1\n!!str a: 2\n"))
+    cases.append(case("\u00e9: 1\n\u00e9: 2\n"))
+    cases.append(case("a: \u00e9\nb: &x 1\nc: &x 2\n"))
+    return cases
+
+
 def build_corpus() -> list[dict]:
     return (
         table_cases()
@@ -423,11 +654,14 @@ def build_corpus() -> list[dict]:
         + timestamp_cases()
         + explicit_tag_cases()
         + known_divergence_cases()
+        + merge_source_mutation_divergence_cases()
         + value_and_merge_tag_errors()
         + anchor_cases()
+        + anchor_order_cases()
         + merge_cases()
         + duplicate_key_cases()
         + structural_cases()
+        + non_ascii_cases()
     )
 
 

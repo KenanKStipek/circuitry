@@ -56,6 +56,10 @@ pub enum YamlError {
     UnhashableKey { mark: Mark },
     /// `<<:`'s value is not a mapping, nor a sequence of mappings.
     InvalidMerge { mark: Mark },
+    /// The document's containers nest deeper than `crate::MAX_DEPTH` --
+    /// its own, distinct error (never a scanner/parser/composer one,
+    /// and never a stack overflow): see `MAX_DEPTH`'s doc comment.
+    NestingTooDeep { mark: Mark },
 }
 
 impl YamlError {
@@ -69,7 +73,8 @@ impl YamlError {
             | YamlError::UnresolvableTag { mark, .. }
             | YamlError::InvalidScalar { mark, .. }
             | YamlError::UnhashableKey { mark }
-            | YamlError::InvalidMerge { mark } => Some(*mark),
+            | YamlError::InvalidMerge { mark }
+            | YamlError::NestingTooDeep { mark } => Some(*mark),
             YamlError::DuplicateKey { .. } => None,
         }
     }
@@ -117,6 +122,13 @@ impl fmt::Display for YamlError {
             YamlError::InvalidMerge { mark } => write!(
                 f,
                 "expected a mapping or list of mappings for merging at line {}, column {}",
+                mark.line + 1,
+                mark.column + 1
+            ),
+            YamlError::NestingTooDeep { mark } => write!(
+                f,
+                "document nesting exceeds the maximum depth ({}) at line {}, column {}",
+                crate::MAX_DEPTH,
                 mark.line + 1,
                 mark.column + 1
             ),
