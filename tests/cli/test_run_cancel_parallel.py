@@ -37,10 +37,27 @@ requires_bash = pytest.mark.skipif(
 #: the branch happened to complete on its own first.
 _BRANCH_SLEEP_SECONDS = 60
 
-#: How long a cancelled run may take to actually exit. Loose on purpose
-#: (#356 says "loosely bound... under 10s" for CI machines under load) —
-#: what matters is "nowhere near _BRANCH_SLEEP_SECONDS", not a tight bound.
-_STOP_BOUND_SECONDS = 10.0
+#: How long a cancelled run may take to actually exit. Loose on purpose —
+#: what matters is "nowhere near _BRANCH_SLEEP_SECONDS" (half of it, at
+#: most), not a tight bound. #356's original 10s turned out not to be
+#: loose enough (#385): under heavy machine load (several full test runs
+#: in parallel, or `pytest -n` with many workers) the main thread can sit
+#: starved of CPU for well over 10s before it gets to run the signal
+#: handler that kills the tracked child, which a py-spy/`sample` dump of
+#: the stuck child confirmed is ordinary scheduling starvation (a stdlib
+#: `subprocess.communicate` `select.poll()` and a lock wait), not a stuck
+#: signal/cleanup path.
+_STOP_BOUND_SECONDS = 30.0
+
+#: How long `communicate()`/`wait()` are given to actually observe the
+#: child exit before a timeout here is treated as a real failure — wider
+#: than `_STOP_BOUND_SECONDS` itself (#385), but still well under
+#: `_BRANCH_SLEEP_SECONDS` so a run that was never actually cancelled
+#: (the real bug this would catch) still fails here rather than quietly
+#: passing once the branch finishes on its own; `elapsed <
+#: _STOP_BOUND_SECONDS` below is what actually proves promptness once the
+#: child does exit.
+_COMMUNICATE_TIMEOUT_SECONDS = _STOP_BOUND_SECONDS + 20.0
 
 #: Credential env vars that must never reach a spawned `cof run` here — this
 #: suite never configures an adapter, so none of them are needed, and their
@@ -161,7 +178,7 @@ effects:
     return orch, state_path, pidfiles, started
 
 
-def _wait_for_paths(paths: list[Path], *, timeout: float = 15.0) -> None:
+def _wait_for_paths(paths: list[Path], *, timeout: float = 30.0) -> None:
     """Poll until every path in *paths* exists — no fixed sleep (#356's own
     test plan): a branch's marker lands the instant it actually starts, and
     nothing else tells us that reliably under load."""
@@ -222,7 +239,7 @@ def test_cancel_tree_dynamic_stops_promptly(
     t0 = time.monotonic()
     proc.send_signal(sig)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         proc.kill()
         raise
@@ -290,7 +307,7 @@ def test_cancel_parallel_loop_stops_promptly(
     t0 = time.monotonic()
     proc.send_signal(sig)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         proc.kill()
         raise
@@ -365,7 +382,7 @@ effects:
     t0 = time.monotonic()
     proc.send_signal(signal.SIGINT)
     try:
-        _wait_for_paths([cleanup_started], timeout=10.0)
+        _wait_for_paths([cleanup_started])
     except TimeoutError:
         proc.kill()
         proc.communicate(timeout=15)
@@ -374,7 +391,7 @@ effects:
     # in progress" window the second signal must cut through at once.
     proc.send_signal(signal.SIGINT)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         proc.kill()
         raise
@@ -447,7 +464,7 @@ effects:
     t0 = time.monotonic()
     proc.send_signal(signal.SIGINT)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         proc.kill()
         raise
@@ -517,7 +534,7 @@ effects:
     t0 = time.monotonic()
     proc.send_signal(signal.SIGINT)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         proc.kill()
         raise
@@ -599,7 +616,7 @@ def test_resume_after_cancel_reruns_an_interrupted_dynamics_children(
 
     proc.send_signal(signal.SIGINT)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         proc.kill()
         raise

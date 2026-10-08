@@ -38,8 +38,27 @@ requires_sighup = pytest.mark.skipif(
 _BRANCH_SLEEP_SECONDS = 60
 
 #: How long a cancelled run may take to actually exit — loose on purpose,
-#: what matters is "nowhere near _BRANCH_SLEEP_SECONDS".
-_STOP_BOUND_SECONDS = 10.0
+#: what matters is "nowhere near _BRANCH_SLEEP_SECONDS" (half of it, at
+#: most), not a few seconds of wall time (#385): under heavy machine load
+#: (several full test runs in parallel, or `pytest -n` with many workers),
+#: the main thread may sit starved of CPU for well over 10s before it
+#: ever gets to run the signal handler that kills the tracked child —
+#: observed in CI itself once, and reproduced locally well over half the
+#: time under enough concurrent load, with the stuck child's own stack (a
+#: stdlib `subprocess.communicate` `select.poll()` and a lock wait,
+#: nothing resembling a real deadlock) confirming scheduling starvation
+#: rather than a stuck signal/cleanup path.
+_STOP_BOUND_SECONDS = 30.0
+
+#: How long `communicate()`/`wait()` are given to actually observe the
+#: child exit before a timeout here is treated as a real failure — wider
+#: than `_STOP_BOUND_SECONDS` itself (#385), but still well under
+#: `_BRANCH_SLEEP_SECONDS` so a run that was never actually cancelled
+#: (the real bug this would catch) still fails here rather than quietly
+#: passing once the branch finishes on its own; `elapsed <
+#: _STOP_BOUND_SECONDS` below is what actually proves promptness once the
+#: child does exit.
+_COMMUNICATE_TIMEOUT_SECONDS = _STOP_BOUND_SECONDS + 20.0
 
 _CREDENTIAL_ENV_VARS = (
     "OPENAI_API_KEY",
@@ -65,7 +84,7 @@ def _sandboxed_env(tmp_path: Path) -> dict[str, str]:
     return env
 
 
-def _wait_for_paths(paths: list[Path], *, timeout: float = 15.0) -> None:
+def _wait_for_paths(paths: list[Path], *, timeout: float = 30.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if all(p.exists() for p in paths):
@@ -194,7 +213,7 @@ def test_sighup_mid_run_kills_branch_runs_finally_and_is_resumable(
     t0 = time.monotonic()
     proc.send_signal(signal.SIGHUP)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         proc.kill()
         raise
@@ -257,7 +276,7 @@ def test_double_sighup_back_to_back_does_not_abort_cleanup(tmp_path: Path) -> No
     proc.send_signal(signal.SIGHUP)
     proc.send_signal(signal.SIGHUP)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         proc.kill()
         raise
@@ -341,7 +360,7 @@ effects:
     t0 = time.monotonic()
     proc.send_signal(signal.SIGHUP)
     try:
-        _wait_for_paths([cleanup_started], timeout=10.0)
+        _wait_for_paths([cleanup_started])
     except TimeoutError:
         proc.kill()
         proc.communicate(timeout=15)
@@ -350,7 +369,7 @@ effects:
     # in progress" window the second signal must cut through at once.
     proc.send_signal(sig)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         proc.kill()
         raise
@@ -398,7 +417,7 @@ def test_sighup_with_closed_stdout_stderr_still_cleans_up(tmp_path: Path) -> Non
     t0 = time.monotonic()
     proc.send_signal(signal.SIGHUP)
     try:
-        returncode = proc.wait(timeout=_STOP_BOUND_SECONDS + 5)
+        returncode = proc.wait(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         proc.kill()
         raise
