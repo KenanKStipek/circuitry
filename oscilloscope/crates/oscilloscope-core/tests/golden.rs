@@ -77,7 +77,18 @@ fn replay(name: &str) -> String {
     let mut model = RunModel::new();
     let mut out = String::new();
 
-    let interrupted_exit = matches!(fixture.exit_code, 129 | 130 | 143);
+    // `ProcessState::Exited { interrupted }`'s own contract
+    // (model.rs): `interrupted` comes from `prime.meta.error` starting
+    // with "Interrupted", never from the exit code alone, so an
+    // abort with no final `prime.meta.error` at all (the second-SIGINT
+    // case, no `prime` node ever reaching a terminal write) renders as
+    // Aborted rather than Cancelled (F12).
+    let interrupted_exit = fixture
+        .snapshots
+        .last()
+        .and_then(|s| s.pointer("/prime/meta/error"))
+        .and_then(Value::as_str)
+        .is_some_and(|e| e.starts_with("Interrupted"));
     let last_index = fixture.snapshots.len().saturating_sub(1);
 
     for (i, state) in fixture.snapshots.iter().enumerate() {
@@ -119,20 +130,31 @@ macro_rules! golden_test {
 
 golden_test!(simple_chain_ok, "simple_chain_ok");
 golden_test!(on_error_continue, "on_error_continue");
+golden_test!(on_error_skip, "on_error_skip");
 golden_test!(sigint_once, "sigint_once");
 golden_test!(sigint_twice, "sigint_twice");
 golden_test!(sigterm, "sigterm");
+golden_test!(aborted_second_sigint, "aborted_second_sigint");
+golden_test!(named_if_taken, "named_if_taken");
+golden_test!(each_chain_loop, "each_chain_loop");
+golden_test!(each_tree_loop_concurrency, "each_tree_loop_concurrency");
+golden_test!(prompt_chain, "prompt_chain");
+golden_test!(prompt_tree_loop_concurrency, "prompt_tree_loop_concurrency");
+golden_test!(prompt_failing, "prompt_failing");
 
 /// Committed fixtures must never carry a local machine's own path (the
 /// lane contract's standing rule for generated/recorded files): this
 /// runs on every `cargo test`, not just when fixtures are re-recorded.
 #[test]
 fn fixtures_have_no_leaked_local_paths() {
+    // No trailing slash on `/private`/`/var/folders`: K2's own bug left
+    // exactly `/private<SCRUBBED>` behind, which a `/private/`-shaped
+    // needle (requiring a second slash) never matched.
     let needles = [
         "/Users/",
         "/home/",
-        "/var/folders/",
-        "/private/",
+        "/var/folders",
+        "/private",
         "/tmp/",
         ".pi/",
     ];

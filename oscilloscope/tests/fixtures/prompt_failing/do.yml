@@ -1,0 +1,4 @@
+effects:
+  - name: ask
+    type: prompt
+    template: "Ask something risky."

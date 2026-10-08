@@ -1,0 +1,25 @@
+---
+source: crates/oscilloscope-core/tests/golden.rs
+expression: rendered
+---
+--- observation 0 ---
+log:
+status:
+--- observation 1 ---
+log:
+  ▶ prime.each_chain.iter_0.nap  shell echo a
+  ✓ prime.each_chain.iter_0.nap  0.0s  a
+  ▶ prime.each_chain.iter_1.nap  shell echo b
+  ✓ prime.each_chain.iter_1.nap  0.0s  b
+  ▶ prime.each_chain.iter_2.nap  shell echo c
+  ✓ prime.each_chain.iter_2.nap  0.0s  c
+  ⟳ prime.each_chain pass 3/3  ETA 0.0s
+  ■ run ok  0.0s
+status:
+prime: Done skip=None retrying=false
+prime.each_chain: Done skip=None retrying=false
+prime.each_chain.iter_0.nap: Done skip=None retrying=false
+prime.each_chain.iter_1.nap: Done skip=None retrying=false
+prime.each_chain.iter_2.nap: Done skip=None retrying=false
+--- exit ---
+exit_code: 0

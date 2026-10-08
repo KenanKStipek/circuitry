@@ -118,7 +118,12 @@ impl EventsTailer {
         if file.read_to_string(&mut buf).is_err() {
             return Vec::new();
         }
-        self.offset = meta.len();
+        // Not `meta.len()`: `read_to_string` reads to whatever EOF is
+        // *now*, which can be past the length `meta` reported if the
+        // file grew between the two calls. Advancing by the metadata's
+        // (possibly stale) length instead left the next poll re-reading
+        // -- and re-emitting -- the overlap (F7).
+        self.offset += buf.len() as u64;
 
         self.partial.push_str(&buf);
         let mut lines = Vec::new();
@@ -150,6 +155,12 @@ pub enum Event {
     RunStart {
         ts: String,
         run_id: String,
+        /// The engine's own pid (DESIGN.md §3's format table): lets
+        /// `osp watch` tell a genuine abort (the process died with no
+        /// `run_end`) from a run that is simply still going, when it
+        /// has no child handle of its own to `wait` on (#424 review
+        /// F4).
+        pid: Option<i32>,
     },
     /// Sent once by a tree loop or tree dynamic before its branches
     /// start. `branches` is the true total (an `each` loop's item
@@ -196,6 +207,7 @@ pub fn parse_event(value: &Value) -> Option<Event> {
         "run_start" => Some(Event::RunStart {
             ts,
             run_id: value.get("run_id")?.as_str()?.to_string(),
+            pid: value.get("pid").and_then(Value::as_i64).map(|p| p as i32),
         }),
         "dispatch" => Some(Event::Dispatch {
             ts,
@@ -249,6 +261,57 @@ pub fn duration_seconds(start: &str, end: &str) -> Option<f64> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn tailer_does_not_duplicate_lines_when_the_file_grows_concurrently() {
+        // F7: `poll` used to advance its offset by `meta.len()` (the
+        // size read *before* `read_to_string`), not by how much it
+        // actually read. If the file grew between those two calls,
+        // `read_to_string` picks up the newer bytes too (it reads to
+        // whatever EOF is current), but the next poll started from the
+        // stale, smaller offset and re-read -- and re-emitted -- the
+        // overlap. A writer thread racing real polls on a real file is
+        // the only way to exercise that actual gap.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        std::fs::File::create(&path).unwrap();
+
+        let total_lines = 400;
+        let writer_path = path.clone();
+        let writer = std::thread::spawn(move || {
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&writer_path)
+                .unwrap();
+            for i in 0..total_lines {
+                writeln!(file, "{{\"ev\":\"x\",\"n\":{i}}}").unwrap();
+                file.flush().unwrap();
+            }
+        });
+
+        let mut tailer = EventsTailer::new(&path);
+        let mut seen = Vec::new();
+        loop {
+            seen.extend(tailer.poll());
+            if seen.len() >= total_lines && writer.is_finished() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_micros(50));
+        }
+        writer.join().unwrap();
+        // Drain anything written after the loop's own last check.
+        seen.extend(tailer.poll());
+
+        let ns: Vec<i64> = seen
+            .iter()
+            .map(|v| v.get("n").and_then(Value::as_i64).unwrap())
+            .collect();
+        let mut sorted = ns.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(ns.len(), total_lines, "no event should be lost");
+        assert_eq!(sorted.len(), total_lines, "no event should be duplicated");
+    }
 
     #[test]
     fn poller_returns_none_until_the_file_changes() {

@@ -1,0 +1,5 @@
+prime.ask:
+  - error:
+      kind: server_error
+      status: 500
+      message: "scripted failure"

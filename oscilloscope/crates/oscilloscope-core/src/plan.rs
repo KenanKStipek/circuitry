@@ -96,6 +96,11 @@ pub struct PlanTree {
     root: TrieNode,
     has_plan: bool,
     all_paths: Vec<String>,
+    /// Every op's display path to the earlier siblings in the same
+    /// `Region::Block` call (declaration order) — DESIGN.md §2.1 rule
+    /// 1's "every earlier plan sibling is complete", which needs each
+    /// chain op's own direct siblings, not its whole subtree.
+    earlier_siblings: HashMap<String, Vec<String>>,
 }
 
 impl PlanTree {
@@ -104,6 +109,7 @@ impl PlanTree {
             root: TrieNode::default(),
             has_plan: false,
             all_paths: Vec::new(),
+            earlier_siblings: HashMap::new(),
         }
     }
 
@@ -120,7 +126,35 @@ impl PlanTree {
         &self.all_paths
     }
 
+    /// `path`'s earlier siblings in declaration order within its own
+    /// enclosing chain (`Region::Block`) — empty for a path that isn't
+    /// a direct child of one (the document root's own entry, a tree
+    /// branch, or anything with no plan at all).
+    pub fn earlier_siblings(&self, path: &str) -> &[String] {
+        self.earlier_siblings
+            .get(path)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
     pub fn from_program(program: &Program) -> Self {
+        Self::from_program_with_loader(program, &compile)
+    }
+
+    /// `from_program`, with the `use: path:` child-document loader
+    /// swapped out — lets a test exercise the grafting walk itself
+    /// (DESIGN.md §5) against a hand-built child `Program`, independent
+    /// of whatever `electricity-compiler` can or can't compile yet
+    /// (F8: today's lane-B/C stubs make the real `compile` fail on
+    /// every document, so a test that could only reach grafting
+    /// through it would never run at all). The loader still only ever
+    /// gets called for a real, canonicalizable file on disk —
+    /// `try_graft_use`'s existing missing-file/cycle checks run first,
+    /// unchanged.
+    fn from_program_with_loader(
+        program: &Program,
+        loader: &dyn Fn(&Path) -> Result<Program, RunCheckError>,
+    ) -> Self {
         let mut trie = TrieNode::default();
         let mut all_paths = Vec::new();
         let base_dir = program
@@ -133,16 +167,20 @@ impl PlanTree {
                 cycle_guard.push(canon);
             }
         }
+        let mut earlier_siblings = HashMap::new();
         let mut ctx = WalkCtx {
             base_dir: base_dir.as_deref(),
             cycle_guard: &mut cycle_guard,
             all_paths: &mut all_paths,
+            earlier_siblings: &mut earlier_siblings,
+            loader,
         };
         walk_op(&program.root, None, None, &mut trie, &mut ctx);
         PlanTree {
             root: trie,
             has_plan: true,
             all_paths,
+            earlier_siblings,
         }
     }
 
@@ -185,6 +223,8 @@ struct WalkCtx<'a> {
     base_dir: Option<&'a Path>,
     cycle_guard: &'a mut Vec<PathBuf>,
     all_paths: &'a mut Vec<String>,
+    earlier_siblings: &'a mut HashMap<String, Vec<String>>,
+    loader: &'a dyn Fn(&Path) -> Result<Program, RunCheckError>,
 }
 
 fn display_path(path: &EffectPath) -> String {
@@ -313,7 +353,19 @@ fn walk_region(
 ) {
     match region {
         Region::Block { ops, .. } => {
+            // Each op's earlier siblings, in declaration order
+            // (DESIGN.md §2.1 rule 1) — recorded before recursing into
+            // `op` itself, so a sibling can share a display path with
+            // one of its *own* descendants (e.g. a nested chain
+            // reusing a name) without that descendant polluting this
+            // list.
+            let mut earlier: Vec<String> = Vec::new();
             for op in ops {
+                let display = display_path(&effective_path(&op.path, graft));
+                ctx.earlier_siblings
+                    .entry(display.clone())
+                    .or_insert_with(|| earlier.clone());
+                earlier.push(display);
                 walk_op(op, graft, Some(Flow::Chain), trie, ctx);
             }
         }
@@ -353,7 +405,7 @@ fn try_graft_use(child_rel: &str, use_path: &EffectPath, trie: &mut TrieNode, ct
     if ctx.cycle_guard.contains(&canon) {
         return;
     }
-    let Ok(child_program) = compile(&child_file) else {
+    let Ok(child_program) = (ctx.loader)(&child_file) else {
         return;
     };
 
@@ -367,6 +419,8 @@ fn try_graft_use(child_rel: &str, use_path: &EffectPath, trie: &mut TrieNode, ct
             base_dir: child_base_dir.as_deref(),
             cycle_guard: ctx.cycle_guard,
             all_paths: ctx.all_paths,
+            earlier_siblings: ctx.earlier_siblings,
+            loader: ctx.loader,
         };
         if let NodeKind::Control(region) = &child_program.root.kind {
             walk_region(region, Some(use_path), trie, &mut child_ctx);
@@ -561,5 +615,296 @@ mod tests {
     fn compile_a_missing_file_is_an_error() {
         let err = compile(Path::new("/nonexistent-osp-path/does-not-exist.yml"));
         assert!(err.is_err());
+    }
+
+    fn document_info(dir: &Path) -> electricity_bytecode::DocumentInfo {
+        electricity_bytecode::DocumentInfo {
+            path_as_given: dir.join("main.yml").to_string_lossy().into_owned(),
+            resolved_directory: dir.to_path_buf(),
+            confinement_root: dir.to_path_buf(),
+            digest: String::new(),
+        }
+    }
+
+    #[test]
+    fn grafts_a_use_child_under_its_own_path_stripping_the_childs_prime() {
+        // F8: `try_graft_use` needs a real, canonicalizable file (its
+        // own missing-file/cycle checks run before the loader is ever
+        // called), but not a *compilable* one — the loader is injected
+        // so this exercises osp's own grafting walk, independent of
+        // `electricity-compiler`'s lane-B/C stubs, which fail on every
+        // real document today.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.yml"), "effects: []\n").unwrap();
+        std::fs::write(dir.path().join("child.yml"), "effects: []\n").unwrap();
+
+        let root_path = EffectPath::root();
+        let use_path = root_path.clone().push_name("first");
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![Op {
+                    path: use_path,
+                    name: Some("first".to_string()),
+                    kind: NodeKind::Leaf(Box::new(LeafKind::Use(electricity_bytecode::UseOp {
+                        source: UseSource::Path("child.yml".to_string()),
+                        inputs: None,
+                        outputs: None,
+                        validate: true,
+                        retries: Default::default(),
+                        expect: None,
+                        description: None,
+                    }))),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                }],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: Some(document_info(dir.path())),
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+
+        // The child's own hand-built IR: a "prime" root (stripped, per
+        // DESIGN.md §5) with one tool child, `c_nap`.
+        let child_root_path = EffectPath::root();
+        let child_tool_path = child_root_path.clone().push_name("c_nap");
+        let child_program = Program {
+            root: Op {
+                path: child_root_path,
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops: vec![tool_op(child_tool_path, "c_nap")],
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            },
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: Some(document_info(dir.path())),
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let loader = move |_: &Path| Ok(child_program.clone());
+
+        let plan = PlanTree::from_program_with_loader(&program, &loader);
+        let m = plan
+            .match_path("prime.first.c_nap")
+            .expect("the use child's own root should be stripped, grafting c_nap directly under prime.first");
+        assert_eq!(m.entries[0].name.as_deref(), Some("c_nap"));
+        assert!(plan.match_path("prime.first.prime.c_nap").is_none());
+    }
+
+    #[test]
+    fn an_unnamed_if_writes_no_node_of_its_own_but_its_branch_matches() {
+        let root_path = EffectPath::root();
+        // An unnamed if/loop contributes no path segment at all
+        // (`path.rs`: "transparent, writing into the enclosing
+        // scope") — its own `path` is exactly its parent's.
+        let if_path = root_path.clone();
+        let branch_child = if_path.clone().push_name("flat_branch");
+        let root = Op {
+            path: root_path.clone(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![Op {
+                    path: if_path,
+                    name: None,
+                    kind: NodeKind::Control(Region::If {
+                        cond: electricity_bytecode::Condition::Cel {
+                            expr: "true".to_string(),
+                            strict: false,
+                        },
+                        then_: Box::new(Region::Block {
+                            ops: vec![tool_op(branch_child, "flat_branch")],
+                            overlay: true,
+                        }),
+                        else_: None,
+                        threshold: 0.5,
+                    }),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                }],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = PlanTree::from_program(&program);
+        let m = plan
+            .match_path("prime.flat_branch")
+            .expect("an unnamed if's branch writes into the parent, DESIGN.md §1.3");
+        assert!(matches!(m.entries[0].kind, PlanEntryKind::Leaf));
+    }
+
+    #[test]
+    fn an_unnamed_loops_body_matches_the_parents_own_path() {
+        let root_path = EffectPath::root();
+        let loop_path = root_path.clone();
+        let body_path = loop_path.clone().push_name("u_nap");
+        let root = Op {
+            path: root_path.clone(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![Op {
+                    path: loop_path,
+                    name: None,
+                    kind: NodeKind::Control(Region::Loop {
+                        spec: LoopSpec::Each {
+                            in_path: "prime.items".to_string(),
+                            as_name: "item".to_string(),
+                            truncate: false,
+                        },
+                        body: Box::new(Region::Block {
+                            ops: vec![tool_op(body_path, "u_nap")],
+                            overlay: true,
+                        }),
+                        flow: electricity_bytecode::LoopFlow::Chain,
+                        max_concurrency: None,
+                        max_iterations: None,
+                        min_iterations: 0,
+                        collect: None,
+                    }),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                }],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = PlanTree::from_program(&program);
+        let m = plan
+            .match_path("prime.u_nap")
+            .expect("an unnamed loop writes no pass index at all, DESIGN.md §1.3");
+        assert_eq!(m.entries[0].name.as_deref(), Some("u_nap"));
+    }
+
+    #[test]
+    fn a_finally_block_shares_its_containers_own_flow() {
+        let root_path = EffectPath::root();
+        let cleanup_path = root_path.clone().push_name("cleanup");
+        let body_path = root_path.clone().push_name("body_step");
+        let root = Op {
+            path: root_path.clone(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::TryFinally {
+                body: Box::new(Region::Block {
+                    ops: vec![tool_op(body_path, "body_step")],
+                    overlay: false,
+                }),
+                finally: Box::new(Region::Block {
+                    ops: vec![tool_op(cleanup_path, "cleanup")],
+                    overlay: false,
+                }),
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = PlanTree::from_program(&program);
+        let body = plan.match_path("prime.body_step").expect("body matches");
+        let cleanup = plan
+            .match_path("prime.cleanup")
+            .expect("finally matches, as a sibling under the same container");
+        assert_eq!(body.entries[0].parent_flow, Some(Flow::Chain));
+        assert_eq!(
+            cleanup.entries[0].parent_flow,
+            Some(Flow::Chain),
+            "finally shares its container's own chain scope"
+        );
+    }
+
+    #[test]
+    fn a_tree_dynamics_branches_have_tree_parent_flow() {
+        let root_path = EffectPath::root();
+        let fan_path = root_path.clone().push_name("fan");
+        let branch_a = fan_path.clone().push_name("a");
+        let branch_b = fan_path.clone().push_name("b");
+        let root = Op {
+            path: root_path.clone(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![Op {
+                    path: fan_path,
+                    name: Some("fan".to_string()),
+                    kind: NodeKind::Control(Region::Parallel {
+                        branches: vec![tool_op(branch_a, "a"), tool_op(branch_b, "b")],
+                        max_concurrency: None,
+                        stop_on_error: false,
+                    }),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                }],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = PlanTree::from_program(&program);
+        let a = plan.match_path("prime.fan.a").expect("branch a matches");
+        assert_eq!(a.entries[0].parent_flow, Some(Flow::Tree));
     }
 }

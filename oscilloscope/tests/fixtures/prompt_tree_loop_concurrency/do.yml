@@ -1,0 +1,15 @@
+interface:
+  inputs:
+    topics: {type: array, default: ["cats", "dogs", "birds"]}
+effects:
+  - type: loop
+    name: drafts
+    flow: tree
+    max_concurrency: 2
+    each:
+      in: input.topics
+      as: topic
+    body:
+      - name: draft
+        type: prompt
+        template: "Write one sentence about {{topic}}."

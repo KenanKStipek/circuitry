@@ -16,6 +16,7 @@
 //! before ever reaching `RunArgs` — this dispatch avoids that entirely.
 
 use std::io::{IsTerminal, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -130,6 +131,29 @@ fn unique_run_dir() -> PathBuf {
     std::env::temp_dir().join(format!("osp-{}-{nanos}", std::process::id()))
 }
 
+/// Creates the run directory private (`0700`): it can hold `state.live
+/// .json`/`state.json`, which carry prompt and tool output (F2).
+///
+/// The default directory's name is a predictable `osp-<pid>-<nanos>`
+/// under a shared `/tmp`, so it is created non-recursively and must
+/// not already exist — a pre-existing entry there (a collision, or
+/// something planted ahead of time) is refused rather than reused.
+/// `--out-dir` may be a path the caller wants created in full
+/// (missing parents and all) and may legitimately already exist from
+/// an earlier run (F3 clears its stale observation files, not the
+/// directory itself), so it uses `create_dir_all`'s own semantics
+/// instead, then fixes the leaf directory's own mode regardless of
+/// whether this call just created it or found it already there.
+fn create_run_dir(path: &Path, is_default: bool) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    if is_default {
+        std::fs::DirBuilder::new().mode(0o700).create(path)
+    } else {
+        std::fs::create_dir_all(path)?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+    }
+}
+
 fn build_engine(choice: EngineChoice) -> Box<dyn Engine + Send + Sync> {
     match choice {
         EngineChoice::Cof => Box::new(CofEngine::detect("cof")),
@@ -138,6 +162,18 @@ fn build_engine(choice: EngineChoice) -> Box<dyn Engine + Send + Sync> {
 }
 
 fn do_run(args: RunArgs) -> ExitCode {
+    // Registered before *anything* else in this function, not just
+    // before spawning the engine (F13): `build_engine`'s own `cof run
+    // --help` detection, and compiling the plan, both run a blocking
+    // subprocess/compile step before the engine is ever spawned, and
+    // each can legitimately take longer than a human's first Ctrl-C
+    // takes to arrive (a cold Python interpreter start under load is
+    // not rare on a shared, busy machine). A signal landing in either
+    // window, with no handler installed yet, used to hit the OS
+    // default disposition and kill osp outright — with the engine
+    // either not yet started, or started and now unsupervised.
+    let mut signals = SignalWatcher::new().ok();
+
     let orchestration = PathBuf::from(&args.orchestration);
     let config = args.config.as_ref().map(PathBuf::from);
 
@@ -153,8 +189,9 @@ fn do_run(args: RunArgs) -> ExitCode {
         }
     }
 
+    let is_default_dir = args.out_dir.is_none();
     let run_dir = args.out_dir.clone().unwrap_or_else(unique_run_dir);
-    if let Err(err) = std::fs::create_dir_all(&run_dir) {
+    if let Err(err) = create_run_dir(&run_dir, is_default_dir) {
         eprintln!(
             "osp: couldn't create run directory {}: {err}",
             run_dir.display()
@@ -168,6 +205,19 @@ fn do_run(args: RunArgs) -> ExitCode {
         sets: args.set.clone(),
         run_dir: run_dir.clone(),
     };
+
+    // A reused `--out-dir` can hold `state.live.json`/`state.json`/
+    // `events.jsonl` from an earlier run: left alone, the first poll
+    // right after spawn would read *that* run's old final state —
+    // printing its whole log (including its own `■ run` line) before
+    // this run has written anything, and suppressing this run's own
+    // summary line since the differ would already think it had seen
+    // one (F3). osp made this directory (or it's the default, always
+    // fresh), so clearing stale observation files here can't lose
+    // anything the caller put there on purpose.
+    for stale in [spec.live_state_path(), spec.out_path(), spec.events_path()] {
+        let _ = std::fs::remove_file(&stale);
+    }
 
     let engine = build_engine(args.engine);
     if engine.name() == "cof" && !engine.caps().events {
@@ -216,21 +266,8 @@ fn do_run(args: RunArgs) -> ExitCode {
     // from `differ` alone.
     let mut model = RunModel::new();
 
-    let mut signals = SignalWatcher::new().ok();
     let mut signal_count: u32 = 0;
     let mut kill_deadline: Option<Instant> = None;
-
-    let drain = |out: &mut std::io::StdoutLock<'_>,
-                 clock: &mut Clock,
-                 live_poller: &mut LiveStatePoller,
-                 differ: &mut Differ,
-                 plan: &PlanTree| {
-        if let Some(state) = live_poller.poll() {
-            for line in differ.diff(&state, plan) {
-                print_line(out, clock, line.ts.as_deref(), &line.text);
-            }
-        }
-    };
 
     let exit_status = loop {
         if let Some(watcher) = signals.as_mut() {
@@ -260,12 +297,15 @@ fn do_run(args: RunArgs) -> ExitCode {
         for line in stderr_rx.try_iter() {
             print_line(&mut out, &mut clock, None, &format!("engine: {line}"));
         }
-        drain(&mut out, &mut clock, &mut live_poller, &mut differ, &plan);
-        for raw_event in events_tailer.poll() {
-            if let Some(event) = parse_event(&raw_event) {
-                model.observe_event(&event);
-            }
-        }
+        drain_observations(
+            &mut out,
+            &mut clock,
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
 
         if let Ok(Some(status)) = child.try_wait() {
             break status;
@@ -273,19 +313,123 @@ fn do_run(args: RunArgs) -> ExitCode {
         std::thread::sleep(POLL_INTERVAL);
     };
 
+    // Join the tee threads before draining anything further (F6): the
+    // engine already exited (`try_wait` above returned `Some`), so this
+    // reaps a already-reaped child again -- safe, and how `Drop`'s own
+    // kill-then-wait does it too -- but it also blocks until every
+    // stdout/stderr byte buffered in the pipe has actually been read
+    // and queued, which plain `try_iter()` right after `try_wait()`
+    // does not: a line the tee thread hadn't gotten to yet was silently
+    // dropped, and `stdout.txt`/`stderr.txt` could be cut off
+    // mid-write.
+    let exit_status = child.wait().unwrap_or(exit_status);
+
     // Drain what's left after the engine exited: its last stderr lines,
     // and the final live-state write (DESIGN.md §1.1: `run_end`, when
     // present, lands after it).
     for line in stderr_rx.try_iter() {
         print_line(&mut out, &mut clock, None, &format!("engine: {line}"));
     }
-    drain(&mut out, &mut clock, &mut live_poller, &mut differ, &plan);
+    drain_observations(
+        &mut out,
+        &mut clock,
+        &mut live_poller,
+        &mut events_tailer,
+        &mut differ,
+        &mut model,
+        &plan,
+    );
+
+    // F5: `diff`'s own `■ run ...` line only ever comes from a `prime`
+    // snapshot that reached `runtime.last_run.completed_at`. Two cases
+    // never produce one: the engine failed before writing any state at
+    // all (a validation error, printed as `{"ok":false,"error":...}`
+    // JSON on stdout, DESIGN.md §4.1), or the run was genuinely aborted
+    // (a second signal, SIGKILL, a crash) with no final write. Try the
+    // authoritative `--out` file once more first -- the live-state
+    // poller's own last `drain` above can miss the very last write if
+    // it lands between two polls -- before falling back to either.
+    if !differ.run_line_emitted() {
+        if let Ok(bytes) = std::fs::read(spec.out_path()) {
+            if let Ok(state) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                for line in differ.diff(&state, &plan) {
+                    print_line(&mut out, &mut clock, line.ts.as_deref(), &line.text);
+                }
+            }
+        }
+    }
+    if !differ.run_line_emitted() {
+        let text = match read_stdout_json_error(&spec.stdout_path()) {
+            Some(err) => format!("■ run failed: {err}"),
+            None => "■ run aborted (no final state)".to_string(),
+        };
+        print_line(&mut out, &mut clock, None, &text);
+    }
+    let _ = writeln!(out, "exit {}", exit_code(exit_status));
 
     if args.out_dir.is_none() {
         let _ = writeln!(out, "run directory: {}", run_dir.display());
     }
 
     ExitCode::from(exit_code(exit_status) as u8)
+}
+
+/// `cof`'s own pre-execution failure shape (DESIGN.md §4.1): with no
+/// orchestration ever started, it prints exactly `{"ok":false,
+/// "error":"..."}` to stdout and nothing reaches `--live-state`/`--out`
+/// at all. Scans line by line rather than parsing the whole file as
+/// one JSON value: `--quiet` is the only flag osp passes, but a build
+/// with some other banner on stdout should still have this line found.
+fn read_stdout_json_error(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    for line in text.lines().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if value.get("ok").and_then(serde_json::Value::as_bool) == Some(false) {
+            if let Some(error) = value.get("error").and_then(serde_json::Value::as_str) {
+                return Some(error.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// One observation tick's lines, from whichever of state and events
+/// had something new, merged and sorted by their own timestamps before
+/// anything is printed (DESIGN.md §2: never by which source noticed
+/// first) — shared between `do_run` and `do_watch`. Returns the
+/// freshly polled live-state snapshot, if there was one, so a caller
+/// that needs to check `run_ended` doesn't have to poll a second time.
+fn drain_observations(
+    out: &mut std::io::StdoutLock<'_>,
+    clock: &mut Clock,
+    live_poller: &mut LiveStatePoller,
+    events_tailer: &mut EventsTailer,
+    differ: &mut Differ,
+    model: &mut RunModel,
+    plan: &PlanTree,
+) -> Option<serde_json::Value> {
+    let mut lines = Vec::new();
+    let state = live_poller.poll();
+    if let Some(state) = &state {
+        lines.extend(differ.diff(state, plan));
+    }
+    for raw_event in events_tailer.poll() {
+        if let Some(event) = parse_event(&raw_event) {
+            model.observe_event(&event);
+            lines.extend(differ.diff_event(&event, plan));
+        }
+    }
+    oscilloscope_core::diff::sort_log_lines(&mut lines);
+    for line in lines {
+        print_line(out, clock, line.ts.as_deref(), &line.text);
+    }
+    state
 }
 
 fn do_watch(args: WatchArgs) -> ExitCode {
@@ -323,32 +467,81 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     let mut model = RunModel::new();
     let mut signals = SignalWatcher::new().ok();
 
-    let final_state = loop {
+    // F4: `osp watch` owns no `Child` for a run it didn't start, so it
+    // cannot simply wait on it — and the one state-only stop condition
+    // this loop used to have, a completed live-state write, never
+    // happens for a run that aborts (a second signal, SIGKILL, a
+    // crash: DESIGN.md §1.1's "no final write and no --out"), which
+    // made watch loop forever. It now also stops on an events `run_end`
+    // (DESIGN.md §3: the final live-state write is already on disk by
+    // then) and, failing both, once the engine's own pid — from a
+    // `run_start` event, when the stream has one — is confirmed dead.
+    let mut last_state: Option<serde_json::Value> = None;
+    loop {
         if let Some(watcher) = signals.as_mut() {
             if !watcher.pending().is_empty() {
                 return ExitCode::from(130);
             }
         }
-        if let Some(state) = live_poller.poll() {
-            for line in differ.diff(&state, &plan) {
-                print_line(&mut out, &mut clock, line.ts.as_deref(), &line.text);
-            }
-            if oscilloscope_core::model::run_ended(&state) {
-                break state;
-            }
+        if let Some(state) = drain_observations(
+            &mut out,
+            &mut clock,
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        ) {
+            last_state = Some(state);
         }
-        for raw_event in events_tailer.poll() {
-            if let Some(event) = parse_event(&raw_event) {
-                model.observe_event(&event);
+        if last_state
+            .as_ref()
+            .is_some_and(oscilloscope_core::model::run_ended)
+        {
+            break;
+        }
+        if model.run_ended_by_events() {
+            // DESIGN.md §3's own ordering guarantee: the final
+            // live-state write already landed before `run_end` did, so
+            // one more poll picks it up for the exit-code check below
+            // even if this tick's `drain_observations` read the events
+            // file first.
+            if let Some(state) = drain_observations(
+                &mut out,
+                &mut clock,
+                &mut live_poller,
+                &mut events_tailer,
+                &mut differ,
+                &mut model,
+                &plan,
+            ) {
+                last_state = Some(state);
+            }
+            break;
+        }
+        if let Some(pid) = model.run_start_pid() {
+            if !oscilloscope_core::supervise::process_alive(pid) {
+                break;
             }
         }
         std::thread::sleep(POLL_INTERVAL);
-    };
+    }
 
-    if oscilloscope_core::model::run_ok(&final_state) {
-        ExitCode::from(0)
-    } else {
-        ExitCode::from(1)
+    match last_state {
+        Some(state) if oscilloscope_core::model::run_ended(&state) => {
+            if oscilloscope_core::model::run_ok(&state) {
+                ExitCode::from(0)
+            } else {
+                ExitCode::from(1)
+            }
+        }
+        _ if model.run_end_ok() == Some(true) => ExitCode::from(0),
+        _ => {
+            // Stopped on a dead pid (or a `run_end` whose promised final
+            // write never actually showed up), with nothing that counts
+            // as a clean completion: an abort (F4).
+            ExitCode::from(1)
+        }
     }
 }
 
@@ -419,16 +612,18 @@ mod tests {
     #[test]
     fn recognized_flags_work_before_the_orchestration_positional() {
         // DESIGN.md §4.1/issue #424's own synopsis: "Flags may also
-        // appear before the positionals." `do-thing.yml` here doesn't
-        // exist, so this still exits non-zero (a couldn't-launch-cof or
-        // compile-failure path) — the point is that `-e`/`--engine`
-        // *parse* before the positional rather than erroring as unknown.
-        let code = run(args(&["-e", "k=v", "--log", "do-thing.yml"]));
-        assert_ne!(
-            code,
-            ExitCode::from(2),
-            "flags before the positional should parse"
-        );
+        // appear before the positionals." Asserted at the `clap` parse
+        // alone (`RunArgs::try_parse_from`, never `run`/`do_run`): F11 —
+        // `do_run` reaches `CofEngine::detect("cof")`, which runs the
+        // real `cof run --help` under this process's own real `HOME`
+        // and credentials whenever `cof` is on `PATH`, in *every*
+        // `cargo test` run, not just the gated end-to-end suite — and
+        // then leaves an `osp-*` temp directory behind.
+        let parsed = RunArgs::try_parse_from(args(&["-e", "k=v", "--log", "do-thing.yml"]));
+        let parsed = parsed.expect("flags before the positional should parse");
+        assert_eq!(parsed.orchestration, "do-thing.yml");
+        assert_eq!(parsed.set, vec!["k=v".to_string()]);
+        assert!(parsed.log);
     }
 
     #[test]
@@ -466,6 +661,49 @@ mod tests {
     }
 
     #[test]
+    fn watch_stops_on_a_dead_run_start_pid_instead_of_hanging_forever() {
+        // F4: an aborted run (a second signal, SIGKILL, a crash) never
+        // writes a final snapshot, so `run_ended(state)` alone never
+        // becomes true. `osp watch` must still notice, from the
+        // engine's own pid (announced by a `run_start` event) going
+        // away, rather than looping forever.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("state.live.json"),
+            r#"{"runtime":{"last_run":{"completed_at":null}},"prime":{"value":null,"meta":{"completed_at":null}}}"#,
+        )
+        .unwrap();
+        let mut dead = std::process::Command::new("true").spawn().unwrap();
+        let dead_pid = dead.id();
+        dead.wait().unwrap();
+        std::fs::write(
+            dir.path().join("events.jsonl"),
+            format!(
+                "{{\"v\":1,\"seq\":0,\"ts\":\"t\",\"ev\":\"run_start\",\"run_id\":\"r\",\"pid\":{dead_pid}}}\n"
+            ),
+        )
+        .unwrap();
+
+        let target = dir.path().to_path_buf();
+        let handle = std::thread::spawn(move || {
+            run(std::iter::once("osp".to_string())
+                .chain(["watch".to_string(), target.to_str().unwrap().to_string()]))
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if handle.is_finished() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "osp watch hung instead of noticing the dead pid"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(handle.join().unwrap(), ExitCode::from(1));
+    }
+
+    #[test]
     fn clock_formats_elapsed_as_mm_ss_tenths() {
         assert_eq!(Clock::format(0.0), "00:00.0");
         assert_eq!(Clock::format(2.94), "00:02.9");
@@ -483,5 +721,87 @@ mod tests {
     #[test]
     fn effective_log_mode_is_true_when_explicitly_requested() {
         assert!(effective_log_mode(true));
+    }
+
+    #[test]
+    fn create_run_dir_is_always_private() {
+        // F2: a run directory can hold state with prompt and tool
+        // output, so it must never be left group/world-readable.
+        let parent = tempfile::tempdir().unwrap();
+
+        let default_dir = parent.path().join("default");
+        create_run_dir(&default_dir, true).unwrap();
+        let mode = std::fs::metadata(&default_dir)
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+
+        let out_dir = parent.path().join("nested").join("out");
+        create_run_dir(&out_dir, false).unwrap();
+        let mode = std::fs::metadata(&out_dir).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+
+    #[test]
+    fn create_run_dir_refuses_a_default_path_that_already_exists() {
+        // The default directory's name (`osp-<pid>-<nanos>`) is
+        // predictable; refusing an existing entry there rather than
+        // reusing it is cheap insurance against a planted/colliding
+        // directory.
+        let parent = tempfile::tempdir().unwrap();
+        let path = parent.path().join("taken");
+        std::fs::create_dir(&path).unwrap();
+        assert!(create_run_dir(&path, true).is_err());
+    }
+
+    #[test]
+    fn create_run_dir_accepts_an_existing_out_dir_and_still_locks_it_down() {
+        let parent = tempfile::tempdir().unwrap();
+        let path = parent.path().join("reused");
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new()
+                .mode(0o755)
+                .create(&path)
+                .unwrap();
+        }
+        create_run_dir(&path, false).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+
+    #[test]
+    fn a_reused_out_dir_does_not_replay_the_previous_runs_final_state() {
+        // F3: the previous run's `state.live.json`/`state.json`/
+        // `events.jsonl` must be gone before the engine is spawned into
+        // a reused `--out-dir`, or the first poll reads the *old* run's
+        // final snapshot and prints its whole log (including its own
+        // `■ run` line) before this run has written anything of its
+        // own.
+        let dir = tempfile::tempdir().unwrap();
+        let run_dir = dir.path().join("run");
+        create_run_dir(&run_dir, false).unwrap();
+        let spec = oscilloscope_core::engine::RunSpec {
+            orchestration: PathBuf::from("do.yml"),
+            config: None,
+            sets: vec![],
+            run_dir: run_dir.clone(),
+        };
+        std::fs::write(
+            spec.live_state_path(),
+            r#"{"runtime":{"last_run":{"completed_at":"t"}},"prime":{"value":true,"meta":{"error":null}}}"#,
+        )
+        .unwrap();
+        std::fs::write(spec.out_path(), "{}").unwrap();
+        std::fs::write(spec.events_path(), "").unwrap();
+
+        for stale in [spec.live_state_path(), spec.out_path(), spec.events_path()] {
+            let _ = std::fs::remove_file(&stale);
+        }
+
+        assert!(!spec.live_state_path().exists());
+        assert!(!spec.out_path().exists());
+        assert!(!spec.events_path().exists());
     }
 }

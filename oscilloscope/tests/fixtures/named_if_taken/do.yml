@@ -1,0 +1,20 @@
+effects:
+  - name: gate
+    type: if
+    if:
+      mode: cel
+      expr: "true"
+    then:
+      - name: chosen
+        type: tool
+        provider: shell
+        params:
+          command: echo
+          args: ["then-branch"]
+    else:
+      - name: chosen
+        type: tool
+        provider: shell
+        params:
+          command: echo
+          args: ["else-branch"]

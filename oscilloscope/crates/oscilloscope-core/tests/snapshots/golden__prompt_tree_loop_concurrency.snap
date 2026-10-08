@@ -1,0 +1,25 @@
+---
+source: crates/oscilloscope-core/tests/golden.rs
+expression: rendered
+---
+--- observation 0 ---
+log:
+status:
+--- observation 1 ---
+log:
+  ▶ prime.drafts.iter_0.draft  prompt scripted/scripted-model "Write one sentence about cats."
+  ✓ prime.drafts.iter_0.draft  0.0s  ↑6 ↓4
+  ▶ prime.drafts.iter_1.draft  prompt scripted/scripted-model "Write one sentence about dogs."
+  ✓ prime.drafts.iter_1.draft  0.0s  ↑6 ↓4
+  ▶ prime.drafts.iter_2.draft  prompt scripted/scripted-model "Write one sentence about birds."
+  ✓ prime.drafts.iter_2.draft  0.0s  ↑6 ↓4
+  ⟳ prime.drafts pass 3/3  ETA 0.0s
+  ■ run ok  0.0s
+status:
+prime: Done skip=None retrying=false
+prime.drafts: Done skip=None retrying=false
+prime.drafts.iter_0.draft: Done skip=None retrying=false
+prime.drafts.iter_1.draft: Done skip=None retrying=false
+prime.drafts.iter_2.draft: Done skip=None retrying=false
+--- exit ---
+exit_code: 0

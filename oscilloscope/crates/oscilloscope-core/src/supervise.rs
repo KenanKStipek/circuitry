@@ -176,6 +176,23 @@ pub fn exit_code(status: ExitStatus) -> i32 {
     1
 }
 
+/// Whether a process with this pid still exists, probed the
+/// conventional way (`kill(pid, 0)`, which sends no signal and only
+/// checks for `ESRCH`). Used by `osp watch` (F4), which has no `Child`
+/// handle of its own for a run it didn't start — the engine's pid, when
+/// an events stream names one (`run_start`, DESIGN.md §3), is the only
+/// way it can tell a genuine abort (no `run_end`, dead process) from a
+/// run simply still going.
+pub fn process_alive(pid: i32) -> bool {
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    // Anything other than "no such process" (most commonly `EPERM`, a
+    // pid that exists but is owned by someone else) still means it's
+    // alive — only `ESRCH` is a confirmed death.
+    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
 /// Polls pending signals without blocking — used in osp's own 100ms
 /// tick (DESIGN.md §6.1) alongside the live-state/events poll, so one
 /// loop drives everything.
@@ -201,6 +218,16 @@ impl SignalWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_alive_is_true_for_this_process_and_false_once_a_child_is_reaped() {
+        assert!(process_alive(std::process::id() as i32));
+
+        let mut child = Command::new("true").spawn().unwrap();
+        let pid = child.id() as i32;
+        child.wait().unwrap();
+        assert!(!process_alive(pid));
+    }
 
     #[test]
     fn exit_code_passes_through_a_normal_exit() {

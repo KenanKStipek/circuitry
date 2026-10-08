@@ -42,7 +42,9 @@ osp watch ./run
   a cancelling notice; a second forwards it again; still running 10s later,
   `osp` sends `SIGKILL`. `SIGTERM`/`SIGHUP` are forwarded the same way. `osp`
   always exits with the engine's own exit code, and never leaves it running
-  after `osp` itself exits — including on a panic.
+  after `osp` itself exits cleanly — including on a panic. The one exception
+  is `osp` itself being `SIGKILL`ed: nothing can run its own cleanup code
+  after that, so the engine (in its own process group) keeps running.
 
 `oscilloscope/` is its own Cargo workspace, versioned in lockstep with the
 rest of this repository (`pyproject.toml`, `electricity/Cargo.toml`). It
