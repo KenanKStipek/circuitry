@@ -100,8 +100,16 @@ pub(crate) fn compile_declared_prompts(
 /// `{{> name}}` *reference*, but `compile_declared_prompts` additionally
 /// rejects any `.` in a *key*, so the two conditions together reduce to
 /// this plain, dot-free shape.
+///
+/// A single trailing `\n` is accepted on the key itself (not `\r\n`,
+/// not two or more) -- Python's own `$` (without `re.MULTILINE`)
+/// matches at the end of the string *or* immediately before one
+/// trailing newline there, so `_NAME_SHAPE.match("greeting\n")` still
+/// succeeds. A key with an embedded `\n` anywhere else still fails,
+/// since the character class after it excludes `\n` either way.
 fn is_declared_prompt_name_shape(name: &str) -> bool {
-    let mut chars = name.chars();
+    let candidate = name.strip_suffix('\n').unwrap_or(name);
+    let mut chars = candidate.chars();
     match chars.next() {
         Some(c) if c == '_' || c.is_ascii_alphabetic() => {}
         _ => return false,
@@ -546,6 +554,28 @@ mod tests {
         assert_eq!(
             err.0,
             "'prompts' key 'a.b' must be a valid name ([A-Za-z_][A-Za-z0-9_]*, no '.')."
+        );
+    }
+
+    #[test]
+    fn a_single_trailing_newline_in_a_prompt_key_is_accepted() {
+        // Python's own `$` (no `re.MULTILINE`) matches just before one
+        // trailing newline too, so `_NAME_SHAPE.match("greeting\n")`
+        // still succeeds -- this port must accept the same key.
+        let document = prompts_document(vec![("greeting\n", Value::Str("hi".to_string()))]);
+        let dir = temp_dir("trailing-newline-key");
+        let result = compile_declared_prompts(&document, &origin_at(&dir)).unwrap();
+        assert_eq!(result.get("greeting\n").unwrap(), "hi");
+    }
+
+    #[test]
+    fn two_trailing_newlines_in_a_prompt_key_are_rejected() {
+        let document = prompts_document(vec![("greeting\n\n", Value::Str("hi".to_string()))]);
+        let dir = temp_dir("double-trailing-newline-key");
+        let err = compile_declared_prompts(&document, &origin_at(&dir)).unwrap_err();
+        assert_eq!(
+            err.0,
+            "'prompts' key 'greeting\\n\\n' must be a valid name ([A-Za-z_][A-Za-z0-9_]*, no '.')."
         );
     }
 

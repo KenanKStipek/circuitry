@@ -10,6 +10,17 @@
 //! [`crate::prompt_files::compile_declared_prompts`], matching
 //! `core/compiler.py::compile_orchestration`'s order: the composition
 //! checks run before any effect compiles.
+//!
+//! # Known divergence
+//!
+//! Every `.trim()` this module calls where `core/prompt_compose.py`
+//! calls `.strip()` (a `{{> name}}` tag's own captured name, an
+//! effect's `type`) shares `electricity-template`'s own documented
+//! `\x1c`-`\x1f` divergence (see that crate's module docs): Python's
+//! `str.strip()` treats the C0 control characters `\x1c`-`\x1f` (FS/GS/
+//! RS/US) as whitespace; Rust's `char::is_whitespace` does not. Needs
+//! one of these four control characters padding a tag name or a
+//! `type:` value.
 
 use crate::prompt_files::resolve_text_or_file;
 use crate::{CompileError, DocumentOrigin};
@@ -53,11 +64,28 @@ fn partial_references(text: &str) -> BTreeSet<String> {
             continue;
         }
         let after = start + 3;
-        match text[after..].find("}}") {
-            Some(end_offset) => {
-                let name = text[after..after + end_offset].trim().to_string();
-                names.insert(name);
-                i = after + end_offset + 2;
+        // The regex's capture group is `[^}]*` -- it can only extend up
+        // to (never past) the first literal `}` in the remainder, so
+        // the tag closes only if THAT `}` is immediately followed by a
+        // second one. A lone `}` (not doubled) makes the whole `{{>`
+        // attempt not match at all, the same way the regex itself
+        // fails to match there and backtracking can never place the
+        // closing `}}` any earlier (every character the group could
+        // still give up is itself non-`}`): `{{>a}b}}` is plain text,
+        // not a malformed partial, exactly like Python's own `_PARTIAL_
+        // TAG.finditer` sees it -- unlike a naive `find("}}")`, which
+        // would wrongly treat the LAST `}}` in the remainder as the
+        // close and extract `"a}b"`.
+        match text[after..].find('}') {
+            Some(brace_offset) => {
+                let brace_idx = after + brace_offset;
+                if bytes.get(brace_idx + 1) == Some(&b'}') {
+                    let name = text[after..brace_idx].trim().to_string();
+                    names.insert(name);
+                    i = brace_idx + 2;
+                } else {
+                    i = start + 3;
+                }
             }
             None => break,
         }
@@ -102,11 +130,20 @@ pub(crate) fn dict_get<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     value.as_dict()?.get(&Value::Str(key.to_string()))
 }
 
+/// `str(effect.get("type") or "").strip().lower()` -- a falsy `type`
+/// (missing, `None`, `False`, a numeric zero, or any empty `str`/
+/// `bytes`/`list`/`dict`) becomes `""` before `str()` is ever applied,
+/// so only a *truthy non-string* value (`5`, say) is stringified at
+/// all -- Python's own `str(5)` gives `"5"`, never this port's earlier
+/// blanket `""` for any non-`Str` value.
 fn effect_type_of(effect: &Value) -> String {
-    match dict_get(effect, "type") {
-        Some(Value::Str(s)) => s.trim().to_lowercase(),
-        _ => String::new(),
-    }
+    let value = dict_get(effect, "type");
+    let raw = if is_truthy(value) {
+        value.map(Value::py_str).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    raw.trim().to_lowercase()
 }
 
 fn effect_name_of(effect: &Value) -> Option<&str> {
@@ -1274,6 +1311,41 @@ mod tests {
             err.0,
             "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not \
              name a declared prompt or effect."
+        );
+    }
+
+    #[test]
+    fn a_lone_unmatched_brace_inside_a_partial_tag_is_plain_text_not_an_error() {
+        // `_PARTIAL_TAG`'s own `[^}]*` capture group can only extend up
+        // to the first literal `}`, so `{{>a}b}}` never closes as a
+        // partial at all (the single `}` after `a` isn't doubled) --
+        // Python's regex simply doesn't match here, so `cof check`
+        // passes this template untouched. A naive `find("}}")` would
+        // instead treat the trailing `}}` as the close and extract the
+        // invalid name `"a}b"`.
+        let doc = document(vec![template_effect("a", "yield", "{{>a}b}}")]);
+        assert_eq!(
+            check_prompt_composition(&doc, &IndexMap::new(), &origin()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_truthy_non_string_effect_type_is_stringified_in_the_error_message() {
+        // `str(effect.get("type") or "").strip().lower()`: a truthy
+        // non-string `type` (an int, say) is still stringified by
+        // Python's own `str()`, not collapsed to `""` the way a falsy
+        // one (`0`, `None`, missing) is.
+        let mut t1 = effect("t1", "placeholder", vec![]);
+        t1.as_dict_mut()
+            .unwrap()
+            .insert(Value::Str("type".to_string()), Value::Int(5.into()));
+        let doc = document(vec![t1, template_effect("body", "yield", "{{> t1}}")]);
+        let err = check_prompt_composition(&doc, &IndexMap::new(), &origin()).unwrap_err();
+        assert_eq!(
+            err.0,
+            "Prompt composition errors:\n  - effects[1]: '{{> t1}}' names effect \
+             't1' (type '5'), which is neither a 'yield' nor a text 'prompt'."
         );
     }
 }
