@@ -114,6 +114,12 @@ def syntax_templates() -> list[str]:
         "{{a.b.c}}",
         "{{items.0}}",
         "a{{! standalone? }}\nb",
+        "{{#items}}{{.}}{{/items}}\nnext",  # standalone flag not carried to the next tag
+        "{{a}}{{! c }}\nb",
+        "{{a}} {{#b}}x{{/b}}\nc",
+        "x\n{{! c }}  ",  # standalone tag at EOF keeps its trailing whitespace
+        "{{> p}}{{/x}}",  # a partial wins over a later unopened close
+        "{{> p}}{{}}",  # a partial wins over a later empty-tag index error
     ]
 
 
@@ -237,6 +243,15 @@ def build_render_cases() -> list[dict]:
     cases.append(render_case("text\n{{#a}}\nbody\n{{/a}}\ntail", {"a": True}))
     cases.append(render_case("text\n{{#a}}\nbody\n{{/a}}\ntail", {"a": False}))
     cases.append(render_case("  {{! comment }}\nafter", {}))
+    # A tag that opens its own line isn't itself standalone, so a close
+    # tag right after it on the same line doesn't inherit standalone
+    # status either, and the line's newline survives.
+    cases.append(render_case("{{#items}}{{.}}{{/items}}\nnext", {"items": [1]}))
+    cases.append(render_case("{{a}}{{! c }}\nb", {"a": "A"}))
+    cases.append(render_case("{{a}} {{#b}}x{{/b}}\nc", {"a": "A", "b": True}))
+    # A standalone tag at EOF keeps whatever trailing text follows it,
+    # rather than dropping it as if a newline had been found.
+    cases.append(render_case("x\n{{! c }}  ", {}))
 
     # --- custom delimiters ---
     cases.append(render_case("{{=<% %>=}}<%a%>", {"a": "custom"}))
@@ -250,6 +265,10 @@ def build_render_cases() -> list[dict]:
     # --- labels (prefix in the wrapped error / unused on success) ---
     cases.append(render_case("{{x}}", {"x": "ok"}, label="messages[0].content"))
     cases.append(render_case("{{a", {}, label="messages[0].content"))
+
+    # --- a partial wins over a later tokenize failure (lazy generator) ---
+    cases.append(render_case("{{> p}}{{/x}}", {}))
+    cases.append(render_case("{{> p}}{{}}", {}))
 
     # --- JsonAwareCtx: the params_json splice serializer ---
     cases.append(render_case("{{x}}", {"x": [1, 2, 3]}, label="params_json", json_aware=True))
@@ -269,6 +288,18 @@ def build_render_cases() -> list[dict]:
     cases.append(render_case("{{d}}", {"d": datetime.date(2020, 1, 2)}))
     utc_dt = datetime.datetime(2020, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)
     cases.append(render_case("{{dt}}", {"dt": utc_dt}))
+
+    # --- a numeric dotted segment against a string, bytes, or scalar ---
+    cases.append(render_case("{{s.0}}", {"s": "abc"}))
+    cases.append(render_case("{{s.-1}}", {"s": "abc"}))
+    cases.append(render_case("{{s.9}}", {"s": "abc"}))
+    cases.append(render_case("{{b.0}}", {"b": b"abc"}))
+    cases.append(render_case("{{b.9}}", {"b": b"abc"}))
+    cases.append(render_case("{{x.0}}", {"x": None}))
+    cases.append(render_case("{{x.0}}", {"x": True}))
+    cases.append(render_case("{{x.0}}", {"x": 1}))
+    cases.append(render_case("{{x.0}}", {"x": 1.5}))
+    cases.append(render_case("{{x.0}}", {"x": datetime.date(2020, 1, 2)}))
 
     # --- more section/inverted nesting and nested falsy-list suppression ---
     cases.append(

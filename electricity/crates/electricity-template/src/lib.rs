@@ -20,7 +20,7 @@ mod tokenizer;
 pub use electricity_value::Value;
 pub use render::{JsonAwareCtx, PlainCtx, SpliceCtx};
 
-use tokenizer::{Tag, TokenizeFailure};
+use tokenizer::{Tag, TokenizeError, TokenizeFailure};
 
 /// Why a template could not be rendered. Mirrors `core/templates.py`'s
 /// `TemplateError`, keeping its two-tier message exactly: a malformed
@@ -59,34 +59,55 @@ enum ValidateFailure {
     Other(String),
 }
 
+/// The first partial tag's name among *tokens*, in order, if any.
+fn first_partial(tokens: &[Tag]) -> Option<&str> {
+    tokens.iter().find_map(|tag| match tag {
+        Tag::Partial(name) => Some(name.as_str()),
+        _ => None,
+    })
+}
+
 /// Tokenize *template* and reject it if it contains a Mustache partial
 /// tag (`{{> name}}`) — partials are not supported (DESIGN.md §1,
 /// runtime-semantics §3.1): chevron's own partial loading reads an
 /// arbitrary file from the process's working directory by name, which
-/// this port never does. Draining the tokenizer fully (rather than
-/// stopping at the first partial token) is what makes this double as a
-/// general syntax check: any other tokenize failure (an unclosed tag, a
-/// mismatched section close) surfaces here too, exactly like
-/// `core/templates.py`'s `_reject_partials`, which `template_syntax_error`
-/// and `render_template` both call for this reason.
+/// this port never does.
+///
+/// Chevron's own tokenizer is a *generator*; `core/templates.py`'s
+/// `_reject_partials` consumes it one token at a time and raises on the
+/// first `"partial"` token, before the generator is ever resumed to
+/// produce whatever token comes after it. So a partial tag wins over any
+/// later tokenize failure (an unclosed tag, a mismatched section close) —
+/// `{{> p}}{{/x}}` reports the partial, not the unopened `{{/x}}`. This
+/// port tokenizes eagerly (see `tokenizer.rs`'s module docs), so it
+/// replays that ordering by checking the tokens produced *before* a
+/// failure (if any) for a partial first, and only falling back to the
+/// failure itself when none is found.
 fn validate_and_reject_partials(template: &str) -> Result<Vec<Tag>, ValidateFailure> {
-    let tokens = match tokenizer::tokenize(template) {
-        Ok(tokens) => tokens,
-        Err(failure @ TokenizeFailure::Syntax(_)) => {
-            return Err(ValidateFailure::Syntax(failure.describe()));
+    match tokenizer::tokenize(template) {
+        Ok(tokens) => {
+            if let Some(name) = first_partial(&tokens) {
+                return Err(ValidateFailure::Syntax(format!(
+                    "partials are not supported: {{{{> {name}}}}}"
+                )));
+            }
+            Ok(tokens)
         }
-        Err(failure @ TokenizeFailure::Index(_)) => {
-            return Err(ValidateFailure::Other(failure.describe()));
-        }
-    };
-    for tag in &tokens {
-        if let Tag::Partial(name) = tag {
-            return Err(ValidateFailure::Syntax(format!(
-                "partials are not supported: {{{{> {name}}}}}"
-            )));
+        Err(TokenizeError {
+            failure,
+            tokens_before_failure,
+        }) => {
+            if let Some(name) = first_partial(&tokens_before_failure) {
+                return Err(ValidateFailure::Syntax(format!(
+                    "partials are not supported: {{{{> {name}}}}}"
+                )));
+            }
+            match failure {
+                TokenizeFailure::Syntax(_) => Err(ValidateFailure::Syntax(failure.describe())),
+                TokenizeFailure::Index(_) => Err(ValidateFailure::Other(failure.describe())),
+            }
         }
     }
-    Ok(tokens)
 }
 
 /// Why *template* is not valid Mustache (with partials rejected), or
@@ -263,21 +284,12 @@ mod tests {
 
     #[test]
     fn dot_true_bug_swaps_to_outer_scope() {
-        let ctx = dict(vec![("outer", Value::Str("x".into()))]);
-        let out = render_template(
-            "{{#flag}}{{.}}{{/flag}}",
-            &{
-                let mut d = Dict::new();
-                d.insert(Value::Str("flag".into()), Value::Bool(true));
-                d.insert(Value::Str("marker".into()), Value::Str("OUTER".into()));
-                Value::Dict(d)
-            },
-            &PlainCtx,
-            "t",
-        )
-        .unwrap();
-        assert!(out.contains("OUTER"));
-        let _ = ctx;
+        let ctx = dict(vec![
+            ("flag", Value::Bool(true)),
+            ("marker", Value::Str("OUTER".into())),
+        ]);
+        let out = render_template("{{#flag}}{{.}}{{/flag}}", &ctx, &PlainCtx, "t").unwrap();
+        assert_eq!(out, "{'flag': True, 'marker': 'OUTER'}");
     }
 
     #[test]
@@ -305,6 +317,35 @@ mod tests {
         assert_eq!(
             template_syntax_error("{{> name}}"),
             Some("partials are not supported: {{> name}}".to_string())
+        );
+    }
+
+    #[test]
+    fn partial_wins_over_a_later_unopened_close() {
+        // A partial tag encountered first wins over a syntax error that
+        // would only surface later in the template -- chevron's own
+        // `_reject_partials` consumes its tokenizer lazily and raises on
+        // the first partial token before ever resuming the generator to
+        // reach the mismatched `{{/x}}`.
+        assert_eq!(
+            template_syntax_error("{{> p}}{{/x}}"),
+            Some("partials are not supported: {{> p}}".to_string())
+        );
+    }
+
+    #[test]
+    fn partial_wins_over_a_later_empty_tag() {
+        // Same ordering, but the later failure is the "could not
+        // render"-tier `{{}}` index error -- the partial still wins and
+        // reports as "malformed", not "could not render".
+        assert_eq!(
+            template_syntax_error("{{> p}}{{}}"),
+            Some("partials are not supported: {{> p}}".to_string())
+        );
+        let err = render_template("{{> p}}{{}}", &dict(vec![]), &PlainCtx, "template").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "template: malformed Mustache template: partials are not supported: {{> p}}"
         );
     }
 

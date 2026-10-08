@@ -169,53 +169,98 @@ fn is_zero_or_false(value: &Value) -> bool {
 /// chevron's own fallback, so this function never needs a separate
 /// not-found signal: every call site already treats `""` as "missing or
 /// falsy", which is exactly what chevron's `_get_key` itself returns.
-pub(crate) fn get_key(key: &str, scopes: &[Value]) -> Value {
+pub(crate) fn get_key(key: &str, scopes: &[Value]) -> Result<Value, String> {
     if key == "." {
-        return scopes
+        return Ok(scopes
             .first()
             .cloned()
-            .unwrap_or_else(|| Value::Str(String::new()));
+            .unwrap_or_else(|| Value::Str(String::new())));
     }
     for scope in scopes {
-        if let Some(found) = walk_dotted(scope, key) {
-            return found;
+        if let Some(found) = walk_dotted(scope, key)? {
+            return Ok(found);
         }
     }
-    Value::Str(String::new())
+    Ok(Value::Str(String::new()))
 }
 
-fn walk_dotted(scope: &Value, key: &str) -> Option<Value> {
+fn walk_dotted(scope: &Value, key: &str) -> Result<Option<Value>, String> {
     let mut current = scope.clone();
     for part in key.split('.') {
-        current = step(&current, part)?;
+        match step(&current, part)? {
+            Some(next) => current = next,
+            None => return Ok(None),
+        }
     }
-    Some(current)
+    Ok(Some(current))
 }
 
-/// One dotted-path segment: a dict key by name, or a list index (parsed
-/// as an int, Python's negative-index wraparound included). A dict
-/// lookup that misses by string key never falls back to an int key
-/// (confirmed against real chevron: `scope[child]` on a dict raises
+/// Python's `s[-n:]`-style negative-index wraparound, shared by every
+/// sequence step below: `n` wraps once against `len`, and anything still
+/// out of range is "not found" (an `IndexError` chevron's own `_get_key`
+/// catches at the scope-loop level), not a hard failure.
+fn wrapped_index(len: usize, n: i64) -> Option<usize> {
+    let len = len as i64;
+    let idx = if n < 0 { n + len } else { n };
+    (idx >= 0 && idx < len).then_some(idx as usize)
+}
+
+/// One dotted-path segment: a dict key by name, a list/str/bytes index
+/// (parsed as an int, Python's negative-index wraparound included), or
+/// (on any other scalar) a render failure.
+///
+/// A dict lookup that misses by string key never falls back to an int
+/// key (confirmed against real chevron: `scope[child]` on a dict raises
 /// `KeyError`, which `_get_key`'s *inner* `except (TypeError,
 /// AttributeError)` doesn't catch, so the int-index fallback chevron does
 /// reach for a list -- `TypeError` on `list[child]` -- is never reached
 /// for a dict at all; `{{d.1}}` against `{"d": {1: "x"}}` renders empty,
 /// not `"x"`, even though `electricity-value`'s `Dict` can hold an int
 /// key).
-fn step(current: &Value, part: &str) -> Option<Value> {
+///
+/// `_get_key`'s int-index fallback (`scope[int(child)]`) is the *last* of
+/// three attempts (`scope[child]`, then `getattr(scope, child)`, then
+/// this) and, uniquely among the three, isn't wrapped in its own
+/// `try`/`except` -- so on a scalar (`None`/`bool`/`int`/`float`/a date),
+/// once `int(child)` itself parses, `scope[int(child)]` raises a bare
+/// `TypeError` ("'NoneType' object is not subscriptable", etc.) that
+/// escapes `_get_key` entirely rather than being treated as "not found,
+/// try the next scope". A `part` that *doesn't* parse as an int never
+/// reaches that subscript at all (`int(child)` itself raises `ValueError`,
+/// which the outer per-scope `try` does catch), so it's just "not found"
+/// here too, same as a dict/list miss.
+fn step(current: &Value, part: &str) -> Result<Option<Value>, String> {
     match current {
-        Value::Dict(d) => d.get(&Value::Str(part.to_string())).cloned(),
+        Value::Dict(d) => Ok(d.get(&Value::Str(part.to_string())).cloned()),
         Value::List(items) => {
-            let n: i64 = part.parse().ok()?;
-            let len = items.len() as i64;
-            let idx = if n < 0 { n + len } else { n };
-            if idx < 0 || idx >= len {
-                None
+            let Ok(n) = part.parse::<i64>() else {
+                return Ok(None);
+            };
+            Ok(wrapped_index(items.len(), n).map(|idx| items[idx].clone()))
+        }
+        Value::Str(s) => {
+            let Ok(n) = part.parse::<i64>() else {
+                return Ok(None);
+            };
+            let chars: Vec<char> = s.chars().collect();
+            Ok(wrapped_index(chars.len(), n).map(|idx| Value::Str(chars[idx].to_string())))
+        }
+        Value::Bytes(b) => {
+            let Ok(n) = part.parse::<i64>() else {
+                return Ok(None);
+            };
+            Ok(wrapped_index(b.len(), n).map(|idx| Value::Int((b[idx] as i64).into())))
+        }
+        _ => {
+            if part.parse::<i64>().is_ok() {
+                Err(format!(
+                    "'{}' object is not subscriptable",
+                    current.type_name()
+                ))
             } else {
-                Some(items[idx as usize].clone())
+                Ok(None)
             }
         }
-        _ => None,
     }
 }
 
@@ -272,7 +317,7 @@ fn render_variable_escaped(
     scopes: &[Value],
     ctx: &dyn SpliceCtx,
 ) -> Result<String, String> {
-    let mut value = get_key(key, scopes);
+    let mut value = get_key(key, scopes)?;
     if key == "." && matches!(value, Value::Bool(true)) {
         value = scopes
             .get(1)
@@ -287,7 +332,7 @@ fn render_variable_escaped(
 /// case for `{{{.}}}`/`{{&.}}` resolving to `True` (see
 /// [`render_variable_escaped`]).
 fn render_variable_raw(key: &str, scopes: &[Value], ctx: &dyn SpliceCtx) -> Result<String, String> {
-    let value = get_key(key, scopes);
+    let value = get_key(key, scopes)?;
     stringify_for_variable(&value, ctx)
 }
 
@@ -314,7 +359,7 @@ pub(crate) fn render_nodes(
             Node::Variable(key) => out.push_str(&render_variable_escaped(key, scopes, ctx)?),
             Node::NoEscape(key) => out.push_str(&render_variable_raw(key, scopes, ctx)?),
             Node::Section(key, body) => {
-                let value = get_key(key, scopes);
+                let value = get_key(key, scopes)?;
                 if let Value::List(items) = value {
                     for element in items {
                         if truthy(&element) {
@@ -326,7 +371,7 @@ pub(crate) fn render_nodes(
                 }
             }
             Node::Inverted(key, body) => {
-                let value = get_key(key, scopes);
+                let value = get_key(key, scopes)?;
                 if !truthy(&value) {
                     out.push_str(&render_with_pushed_scope(
                         body,

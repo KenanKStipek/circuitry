@@ -41,6 +41,20 @@ pub(crate) enum TokenizeFailure {
     Index(String),
 }
 
+/// A tokenize failure, plus every token already pushed before it
+/// happened. Chevron's own tokenizer is a *generator*: `_reject_partials`
+/// (`lib.rs`) consumes it one token at a time and raises on the first
+/// `"partial"` token it sees, before the generator is ever asked to
+/// produce another one -- so a partial earlier in the template wins over
+/// a syntax error that would only surface later. Carrying the prefix lets
+/// `lib.rs` replay that same ordering against this (eagerly-collecting)
+/// port without restructuring it into a real generator.
+#[derive(Debug)]
+pub(crate) struct TokenizeError {
+    pub(crate) failure: TokenizeFailure,
+    pub(crate) tokens_before_failure: Vec<Tag>,
+}
+
 impl TokenizeFailure {
     /// The joined, single-line description every consumer actually prints
     /// (`core/templates.py`'s `_describe`: chevron's own messages span
@@ -71,7 +85,7 @@ struct Tokenizer<'a> {
 /// whitespace trimming, and section/end-tag balance checking. Does not
 /// reject partials -- that's Circuitry's own policy, layered on top (see
 /// the module docs).
-pub(crate) fn tokenize(template: &str) -> Result<Vec<Tag>, TokenizeFailure> {
+pub(crate) fn tokenize(template: &str) -> Result<Vec<Tag>, TokenizeError> {
     let mut t = Tokenizer {
         rest: template,
         l_del: "{{".to_string(),
@@ -82,8 +96,13 @@ pub(crate) fn tokenize(template: &str) -> Result<Vec<Tag>, TokenizeFailure> {
         is_standalone: true,
         tokens: Vec::new(),
     };
-    t.run()?;
-    Ok(t.tokens)
+    match t.run() {
+        Ok(()) => Ok(t.tokens),
+        Err(failure) => Err(TokenizeError {
+            failure,
+            tokens_before_failure: t.tokens,
+        }),
+    }
 }
 
 impl<'a> Tokenizer<'a> {
@@ -130,14 +149,16 @@ impl<'a> Tokenizer<'a> {
                 _ => {}
             }
 
-            let is_standalone = self.r_sa_check(&tag_type);
+            self.is_standalone = self.r_sa_check(&tag_type);
 
             let mut literal = literal;
-            if is_standalone {
+            if self.is_standalone {
                 // Remove the stuff before the newline, on the right.
+                // Chevron: `template.split('\n', 1)[-1]` -- when there is
+                // no newline left, that's the *whole* remainder, not ''.
                 self.rest = match self.rest.split_once('\n') {
                     Some((_, after)) => after,
-                    None => "",
+                    None => self.rest,
                 };
                 if tag_type != "partial" {
                     literal = literal.trim_end_matches(' ').to_string();
@@ -298,14 +319,14 @@ mod tests {
     #[test]
     fn unclosed_tag() {
         let err = tokenize("{{a").unwrap_err();
-        assert_eq!(err.describe(), "unclosed tag at line 1");
+        assert_eq!(err.failure.describe(), "unclosed tag at line 1");
     }
 
     #[test]
     fn mismatched_close() {
         let err = tokenize("{{#a}}{{/b}}").unwrap_err();
         assert_eq!(
-            err.describe(),
+            err.failure.describe(),
             "Trying to close tag \"b\" last open tag is \"a\" line 2"
         );
     }
@@ -314,7 +335,7 @@ mod tests {
     fn unopened_close() {
         let err = tokenize("{{/a}}").unwrap_err();
         assert_eq!(
-            err.describe(),
+            err.failure.describe(),
             "Trying to close tag \"a\" Looks like it was not opened. line 2"
         );
     }
@@ -323,7 +344,7 @@ mod tests {
     fn unclosed_section() {
         let err = tokenize("{{#a}}x").unwrap_err();
         assert_eq!(
-            err.describe(),
+            err.failure.describe(),
             "Unexpected EOF the tag \"a\" was never closed was opened at line 1"
         );
     }
@@ -331,8 +352,40 @@ mod tests {
     #[test]
     fn empty_tag_is_index_error() {
         let err = tokenize("{{}}").unwrap_err();
-        assert!(matches!(err, TokenizeFailure::Index(_)));
-        assert_eq!(err.describe(), "string index out of range");
+        assert!(matches!(err.failure, TokenizeFailure::Index(_)));
+        assert_eq!(err.failure.describe(), "string index out of range");
+    }
+
+    #[test]
+    fn standalone_flag_carries_to_next_tag() {
+        // Regression for the standalone flag not being written back to
+        // `self.is_standalone`: `{{#items}}` is not itself standalone (it
+        // doesn't start its own line), so `{{/items}}` right after it is
+        // not standalone either, and the trailing newline survives.
+        let tokens = tokenize("{{#items}}{{.}}{{/items}}\nnext").unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Tag::Section("items".to_string()),
+                Tag::Variable(".".to_string()),
+                Tag::End("items".to_string()),
+                Tag::Literal("\nnext".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn standalone_comment_at_eof_keeps_trailing_whitespace() {
+        // Regression: a standalone tag with no newline after it keeps
+        // whatever trailing text follows instead of dropping it.
+        let tokens = tokenize("x\n{{! c }}  ").unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Tag::Literal("x\n".to_string()),
+                Tag::Literal("  ".to_string())
+            ]
+        );
     }
 
     #[test]

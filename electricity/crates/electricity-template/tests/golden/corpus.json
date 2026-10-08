@@ -1215,6 +1215,98 @@
           [
             {
               "t": "str",
+              "v": "items"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "int",
+                  "v": "1"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "1\nnext",
+      "template": "{{#items}}{{.}}{{/items}}\nnext"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "str",
+              "v": "A"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "A\nb",
+      "template": "{{a}}{{! c }}\nb"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "str",
+              "v": "A"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "b"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "A x\nc",
+      "template": "{{a}} {{#b}}x{{/b}}\nc"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "x\n  ",
+      "template": "x\n{{! c }}  "
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
               "v": "a"
             },
             {
@@ -1343,6 +1435,28 @@
       "render_err": "messages[0].content: malformed Mustache template: unclosed tag at line 1",
       "render_ok": null,
       "template": "{{a"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": "template: malformed Mustache template: partials are not supported: {{> p}}",
+      "render_ok": null,
+      "template": "{{> p}}{{/x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": "template: malformed Mustache template: partials are not supported: {{> p}}",
+      "render_ok": null,
+      "template": "{{> p}}{{}}"
     },
     {
       "ctx": {
@@ -1608,6 +1722,225 @@
       "render_err": null,
       "render_ok": "2020-01-02 03:04:05+00:00",
       "template": "{{dt}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "s"
+            },
+            {
+              "t": "str",
+              "v": "abc"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "a",
+      "template": "{{s.0}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "s"
+            },
+            {
+              "t": "str",
+              "v": "abc"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "c",
+      "template": "{{s.-1}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "s"
+            },
+            {
+              "t": "str",
+              "v": "abc"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{s.9}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "b"
+            },
+            {
+              "t": "bytes",
+              "v": "616263"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "97",
+      "template": "{{b.0}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "b"
+            },
+            {
+              "t": "bytes",
+              "v": "616263"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{b.9}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": "template: could not render: 'NoneType' object is not subscriptable",
+      "render_ok": null,
+      "template": "{{x.0}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": "template: could not render: 'bool' object is not subscriptable",
+      "render_ok": null,
+      "template": "{{x.0}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": "template: could not render: 'int' object is not subscriptable",
+      "render_ok": null,
+      "template": "{{x.0}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "bits": "3ff8000000000000",
+              "t": "float"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": "template: could not render: 'float' object is not subscriptable",
+      "render_ok": null,
+      "template": "{{x.0}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "date",
+              "v": "2020-01-02"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": "template: could not render: 'datetime.date' object is not subscriptable",
+      "render_ok": null,
+      "template": "{{x.0}}"
     },
     {
       "ctx": {
@@ -1969,6 +2302,30 @@
     {
       "syntax_error": null,
       "template": "a{{! standalone? }}\nb"
+    },
+    {
+      "syntax_error": null,
+      "template": "{{#items}}{{.}}{{/items}}\nnext"
+    },
+    {
+      "syntax_error": null,
+      "template": "{{a}}{{! c }}\nb"
+    },
+    {
+      "syntax_error": null,
+      "template": "{{a}} {{#b}}x{{/b}}\nc"
+    },
+    {
+      "syntax_error": null,
+      "template": "x\n{{! c }}  "
+    },
+    {
+      "syntax_error": "partials are not supported: {{> p}}",
+      "template": "{{> p}}{{/x}}"
+    },
+    {
+      "syntax_error": "partials are not supported: {{> p}}",
+      "template": "{{> p}}{{}}"
     }
   ]
 }
