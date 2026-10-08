@@ -112,17 +112,25 @@ fn is_container(meta: &Value) -> bool {
 /// Whether `path` is a container, for an `--events` line that has no
 /// `meta` of its own to check (DESIGN.md §1.4: `start`/`end` fire for
 /// the root, every *named* container, and every leaf alike — an
-/// unnamed `if`/loop is the only thing that never gets one). The plan
-/// answers this directly when there is one; with no plan at all, the
-/// latest state `diff` has already seen for the path is the only
-/// other source (same check `diff`'s own container suppression uses) —
-/// which answers correctly for everything except a container's own
-/// very first `start`, before any state write has landed for it yet
-/// (measured true for the document root specifically: DESIGN.md §1.1's
-/// first write is `0.4–0.9s` after launch, well after the root's own
-/// `start`). A no-plan run missing exactly that one line for the root
-/// is a narrower gap than printing it wrongly as a leaf every time.
+/// unnamed `if`/loop is the only thing that never gets one). The
+/// document root is always one (checked first, needing neither a plan
+/// nor any state at all); the plan answers for everything else when
+/// there is one; with no plan, the latest state `diff` has already
+/// seen for the path is the only other source (same check `diff`'s
+/// own container suppression uses) — missing only a *named* non-root
+/// container's own very first `start`, before any state write has
+/// landed for it yet, with neither a plan nor the root's own blanket
+/// rule to fall back on.
 fn is_container_path(path: &str, plan: &PlanTree, last: &BTreeMap<String, NodeMeta>) -> bool {
+    // The document root is always a container (DESIGN.md §1.3: "root:
+    // prime, a node with its own meta"; §6.2's own example has no
+    // line for it) — the one case this can say for certain with
+    // neither a plan nor any state observed yet, closing the gap the
+    // fallback below otherwise has for a root `start` arriving before
+    // its first state write (DESIGN.md §1.1: 0.4–0.9s after launch).
+    if path == "prime" {
+        return true;
+    }
     if let Some(m) = plan.match_path(path) {
         if let Some(entry) = m.entries.first() {
             return !matches!(

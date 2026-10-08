@@ -4,9 +4,6 @@ expression: rendered
 ---
 --- observation 0 ---
 log:
-status:
---- observation 1 ---
-log:
   ▶ prime.drafts.iter_0.draft  prompt scripted/scripted-model "Write one sentence about cats."
   ✓ prime.drafts.iter_0.draft  0.0s  ↑6 ↓4
   ▶ prime.drafts.iter_1.draft  prompt scripted/scripted-model "Write one sentence about dogs."

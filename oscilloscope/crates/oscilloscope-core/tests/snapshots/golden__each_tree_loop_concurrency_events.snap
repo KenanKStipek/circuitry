@@ -1,0 +1,24 @@
+---
+source: crates/oscilloscope-core/tests/golden.rs
+expression: rendered
+---
+log:
+  ▶ prime.each_tree  effect
+  ▶ prime.each_tree.iter_0.nap  effect
+  ▶ prime.each_tree.iter_1.nap  effect
+  ✓ prime.each_tree.iter_1.nap  0.0s  ok
+  ▶ prime.each_tree.iter_2.nap  effect
+  ✓ prime.each_tree.iter_0.nap  0.0s  ok
+  ▶ prime.each_tree.iter_3.nap  effect
+  ✓ prime.each_tree.iter_3.nap  0.0s  ok
+  ✓ prime.each_tree.iter_2.nap  0.0s  ok
+  ✓ prime.each_tree  0.0s  ok
+status:
+prime: Done skip=None retrying=false
+prime.each_tree: Done skip=None retrying=false
+prime.each_tree.iter_0.nap: Done skip=None retrying=false
+prime.each_tree.iter_1.nap: Done skip=None retrying=false
+prime.each_tree.iter_2.nap: Done skip=None retrying=false
+prime.each_tree.iter_3.nap: Done skip=None retrying=false
+--- exit ---
+exit_code: 0

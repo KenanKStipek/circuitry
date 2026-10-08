@@ -4,9 +4,6 @@ expression: rendered
 ---
 --- observation 0 ---
 log:
-status:
---- observation 1 ---
-log:
   ▶ prime.each_chain.iter_0.nap  shell echo a
   ✓ prime.each_chain.iter_0.nap  0.0s  a
   ▶ prime.each_chain.iter_1.nap  shell echo b

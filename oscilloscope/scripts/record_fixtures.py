@@ -368,6 +368,7 @@ def record_one(case: Case, cof_bin: str) -> None:
 
         live_state = run_dir / "state.live.json"
         out_state = run_dir / "state.json"
+        events_path = run_dir / "events.jsonl"
 
         env = dict(os.environ)
         for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CYBERDINER_TOKEN", "CYBERDINER_EXPO_URL"):
@@ -385,6 +386,8 @@ def record_one(case: Case, cof_bin: str) -> None:
             str(live_state),
             "--out",
             str(out_state),
+            "--events",
+            str(events_path),
         ]
 
         proc = subprocess.Popen(
@@ -475,7 +478,11 @@ def record_one(case: Case, cof_bin: str) -> None:
                     "adapter was never selected (K1)"
                 )
 
-        write_fixture(case, doc_path, config_path, work, scratch_path, home, snapshots, stdout, stderr, exit_code)
+        events_text = events_path.read_text(encoding="utf-8") if events_path.exists() else ""
+
+        write_fixture(
+            case, doc_path, config_path, work, scratch_path, home, snapshots, stdout, stderr, exit_code, events_text
+        )
 
 
 def scrub(text: str, *scrub_paths: Path) -> str:
@@ -514,6 +521,7 @@ def write_fixture(
     stdout: bytes,
     stderr: bytes,
     exit_code: int,
+    events_text: str = "",
 ) -> None:
     out_dir = FIXTURES_DIR / case.name
     if out_dir.exists():
@@ -531,6 +539,9 @@ def write_fixture(
     snapshots_text = "\n".join(json.dumps(s, sort_keys=True) for s in snapshots) + ("\n" if snapshots else "")
     snapshots_text = scrub(snapshots_text, work, scratch_path, home)
     (out_dir / "snapshots.jsonl").write_text(snapshots_text, encoding="utf-8")
+
+    if events_text:
+        (out_dir / "events.jsonl").write_text(scrub(events_text, work, scratch_path, home), encoding="utf-8")
 
     stdout_text = scrub(stdout.decode("utf-8", errors="replace"), work, scratch_path, home)
     stderr_text = scrub(stderr.decode("utf-8", errors="replace"), work, scratch_path, home)

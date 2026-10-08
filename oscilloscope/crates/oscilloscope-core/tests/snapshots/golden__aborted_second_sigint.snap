@@ -8,7 +8,7 @@ status:
 --- observation 1 ---
 log:
   ▶ prime.slow  shell tail -f /dev/null
-  ▶ prime.cleanup  shell sleep 5
+  ▶ prime.cleanup  effect
 status:
 prime: Aborted skip=None retrying=false
 prime.cleanup: Aborted skip=None retrying=false

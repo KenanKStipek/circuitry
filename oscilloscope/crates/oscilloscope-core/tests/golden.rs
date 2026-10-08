@@ -4,21 +4,24 @@
 //! observation, and the `--log` line stream, against a committed
 //! snapshot (`insta`).
 //!
-//! Every fixture here was recorded with no `--events` (`cof run --help`
-//! on the recording machine had none, DESIGN.md §3/issue #419 not yet
-//! merged), so these exercise the state-only inference rules
-//! (DESIGN.md §2.1's "From state alone") with the no-plan fallback
-//! (`PlanTree::empty()`) — the path that has to work today while the
-//! compiler lanes are still stubs. An events-plus-state fixture lands
-//! once `cof run --events` is available to `oscilloscope/scripts/
-//! record_fixtures.py`.
+//! Every fixture's own status-table replay (`replay`, below) uses the
+//! no-plan fallback (`PlanTree::empty()`) and only `snapshots.jsonl` —
+//! the path that has to work with the compiler lanes still stubbed,
+//! and the one every fixture recorded before #423 (`cof run --events`)
+//! merged can still exercise. Every fixture now also carries a real
+//! recorded `events.jsonl` (`cof` on the recording machine has
+//! `--events` as of #423); `replay_events` below replays *that*
+//! instead, through `RunModel::observe_event`/`Differ::diff_event`,
+//! covering DESIGN.md §2.1's "With events (exact)" rules the
+//! state-only replay never reaches.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use oscilloscope_core::diff::Differ;
+use oscilloscope_core::diff::{Differ, sort_log_lines};
 use oscilloscope_core::model::{ProcessState, RowStatus, RunModel};
+use oscilloscope_core::observe::parse_event;
 use oscilloscope_core::plan::PlanTree;
 use serde_json::Value;
 
@@ -52,6 +55,16 @@ fn load_fixture(name: &str) -> Fixture {
         snapshots,
         exit_code,
     }
+}
+
+fn load_events(name: &str) -> Vec<Value> {
+    let dir = fixtures_dir().join(name);
+    let text = std::fs::read_to_string(dir.join("events.jsonl"))
+        .unwrap_or_else(|e| panic!("{name}: couldn't read events.jsonl: {e}"));
+    text.lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| serde_json::from_str(line).expect("valid JSON line"))
+        .collect()
 }
 
 fn format_rows(rows: &BTreeMap<String, RowStatus>) -> String {
@@ -118,12 +131,75 @@ fn replay(name: &str) -> String {
     out
 }
 
+/// Replays `name`'s recorded `events.jsonl` through a fresh `Differ`/
+/// `RunModel` — every `start`/`end` in file order, feeding both the
+/// per-event log lines (`Differ::diff_event`) and the model's own
+/// exact-status overlay (`RunModel::observe_event`), then one final
+/// `RunModel::observe` against the fixture's own last snapshot to
+/// render the status table events actually produce (DESIGN.md §2.1's
+/// "With events (exact)" rules), the same no-plan fallback `replay`
+/// uses.
+fn replay_events(name: &str) -> String {
+    let fixture = load_fixture(name);
+    let events = load_events(name);
+    let plan = PlanTree::empty();
+    let mut differ = Differ::new();
+    let mut model = RunModel::new();
+    let mut out = String::new();
+
+    let mut lines = Vec::new();
+    for raw in &events {
+        let Some(event) = parse_event(raw) else {
+            continue;
+        };
+        model.observe_event(&event);
+        lines.extend(differ.diff_event(&event, &plan));
+    }
+    sort_log_lines(&mut lines);
+
+    let _ = writeln!(out, "log:");
+    for line in &lines {
+        let _ = writeln!(out, "  {}", line.text);
+    }
+
+    let interrupted_exit = fixture
+        .snapshots
+        .last()
+        .and_then(|s| s.pointer("/prime/meta/error"))
+        .and_then(Value::as_str)
+        .is_some_and(|e| e.starts_with("Interrupted"));
+    let final_state = fixture.snapshots.last().cloned().unwrap_or(Value::Null);
+    let rows = model.observe(
+        &final_state,
+        &plan,
+        ProcessState::Exited {
+            interrupted: interrupted_exit,
+        },
+    );
+    let _ = writeln!(out, "status:");
+    out.push_str(&format_rows(&rows));
+
+    let _ = writeln!(out, "--- exit ---");
+    let _ = writeln!(out, "exit_code: {}", fixture.exit_code);
+    out
+}
+
 macro_rules! golden_test {
     ($test_name:ident, $fixture:literal) => {
         #[test]
         fn $test_name() {
             let rendered = replay($fixture);
             insta::assert_snapshot!($fixture, rendered);
+        }
+    };
+}
+
+macro_rules! golden_events_test {
+    ($test_name:ident, $fixture:literal) => {
+        #[test]
+        fn $test_name() {
+            let rendered = replay_events($fixture);
+            insta::assert_snapshot!(concat!($fixture, "_events"), rendered);
         }
     };
 }
@@ -141,6 +217,13 @@ golden_test!(each_tree_loop_concurrency, "each_tree_loop_concurrency");
 golden_test!(prompt_chain, "prompt_chain");
 golden_test!(prompt_tree_loop_concurrency, "prompt_tree_loop_concurrency");
 golden_test!(prompt_failing, "prompt_failing");
+
+golden_events_test!(simple_chain_ok_events, "simple_chain_ok");
+golden_events_test!(prompt_chain_events, "prompt_chain");
+golden_events_test!(
+    each_tree_loop_concurrency_events,
+    "each_tree_loop_concurrency"
+);
 
 /// Committed fixtures must never carry a local machine's own path (the
 /// lane contract's standing rule for generated/recorded files): this
