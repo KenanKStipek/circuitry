@@ -254,7 +254,7 @@ fn check_length(expr: &str) -> Result<(), CelError> {
 /// [`electricity_value::MAX_DEPTH`], and the measurements behind the
 /// specific number.
 fn check_nesting_depth(expr: &str) -> Result<(), CelError> {
-    let depth = nesting::max_bracket_depth(expr);
+    let depth = nesting::max_nesting_depth(expr);
     if depth > MAX_NESTING_DEPTH {
         return Err(CelError {
             too_deeply_nested: true,

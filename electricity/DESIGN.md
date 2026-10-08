@@ -1328,16 +1328,22 @@ regardless of which underlying crate is used:
 - **Bindings**: `if`/`while` bind one root, `state`; `expect:` binds three — `value`, `meta`
   (this effect's own outcome, unprefixed), and `state` (the full run state).
 - Max expression length 4096 chars; an empty/whitespace-only expression raises immediately.
-- **Expression nesting** (#394): the `cel` crate's own ANTLR-generated parser and its
-  `antlr4rust` runtime recurse once per level of bracket nesting (`(`/`[`/`{`), and, measured
-  directly, an unoptimized debug build overflows a 2 MiB thread stack at as few as 12 such
-  levels — chained unary `!` and a long `&&`/`||` chain never come close, since `cel`'s
-  precedence-climbing parser handles those in a loop, not one recursive call per operator.
-  `electricity-cel` pre-scans an expression's bracket nesting before ever parsing it and rejects
-  anything over `electricity_cel::MAX_NESTING_DEPTH` (64) with its own `CelError` kind — a
-  crate-specific limit, not §3.1's shared `MAX_DEPTH` (512), because it bounds expression
-  *syntax*, not a `Value` tree. `electricity-cel`'s own `convert` module bounds *that* — a
-  run-time-built `value`/`meta`/`state` argument — by the shared `MAX_DEPTH` instead, rejecting
+- **Expression nesting** (#394): `cel`'s `Env::compile` always uses its ANTLR-generated parser
+  (not the crate's separate, feature-gated `PrattParser`, off by default and not enabled here),
+  whose visitor recurses once per level of bracket nesting (`(`/`[`/`{`) *and* once per link of a
+  binary-operator chain (arithmetic, comparison, equality, `in`) or a member/index/call chain
+  (`.field`, `[i]`, `.method(...)`) — measured directly, an unoptimized debug build overflows a 2
+  MiB thread stack at as few as 12 levels of bracket nesting, and `0+1+1+...`/`state[0][0]...`
+  chains overflow the same stack, in both debug and `--release`, at 1600–1700 and 1300 terms
+  respectively, well inside the 4096-character expression cap. Chained unary `!` and a long
+  `&&`/`||` chain never come close, because the grammar collects a run of either into one node
+  visited once, and `conditionalAnd`/`conditionalOr` are themselves flat, non-recursive
+  productions — not because `cel` parses with a loop instead of recursive descent in general.
+  `electricity-cel` pre-scans an expression's combined bracket-and-chain nesting before ever
+  parsing it and rejects anything over `electricity_cel::MAX_NESTING_DEPTH` (64) with its own
+  `CelError` kind — a crate-specific limit, not §3.1's shared `MAX_DEPTH` (512), because it bounds
+  expression *syntax*, not a `Value` tree. `electricity-cel`'s own `convert` module bounds *that*
+  — a run-time-built `value`/`meta`/`state` argument — by the shared `MAX_DEPTH` instead, rejecting
   with the same `CelError` kind rather than recursing further. `Cargo.toml`'s
   `[profile.dev.package.cel]`/`[profile.dev.package.antlr4rust]` overrides exist so a debug
   build's much larger per-frame stack cost doesn't overflow before either check runs.

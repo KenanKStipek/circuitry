@@ -12,8 +12,13 @@
 //! with a run-time-built `Value` (`state`/`value`/`meta` are never read
 //! through this workspace's own JSON/YAML readers, which enforce that
 //! limit themselves, before reaching here), unlike every *other*
-//! recursive path in this crate, which only ever walks a `cel`-crate-
-//! owned structure already bounded by `nesting::MAX_NESTING_DEPTH`.
+//! recursive path in this crate (the `cel`-crate-owned parse tree, and
+//! this crate's own `paths`/`equality`/`ordering` walks over it), which
+//! is a `cel`-crate-owned structure already bounded by
+//! `nesting::MAX_NESTING_DEPTH` -- not just its *bracket* nesting, but
+//! every binary-operator and member/index/call chain within it too
+//! (`nesting.rs`'s own module docs explain why bracket nesting alone
+//! was not enough).
 
 use std::collections::HashMap;
 use std::fmt;
