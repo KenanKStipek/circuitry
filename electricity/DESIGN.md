@@ -933,7 +933,7 @@ by re-running from the top and skipping whatever the loaded state says already f
 - a named loop resumes at the first gap in its own `meta.completed_passes` contiguous-from-0
   prefix — chain flow only; a tree-flow `each` or an unnamed loop always reruns whole;
   `finally:` is **never** skipped by resume;
-- `document_sha256` guards against resuming against a changed document, refusing unless
+- `document_content_digest` guards against resuming against a changed document, refusing unless
   `--force` is passed (CLI) or the embedding caller explicitly opts in (library);
 - for a **bare run-id** resume (neither `--state` nor `--resume last`, both of which already
   carry their own resolved `input.*`), every key the loaded state's `input` namespace has must be
@@ -1031,11 +1031,23 @@ these before it ever reaches the orchestration's own state:
   `on_run_failure` event for every plugin that loaded. `--out` is written with that partial
   record, the same as any other in-run failure (§6.9).
 - **`runtime.last_run`**: `{run_id, orchestration_path, document_hash, dry_run, validate_only,
-  verbose, started_at, completed_at}`. `document_hash` is the orchestration file's own SHA-256
-  (`null` if it became unreadable between the earlier load and this hash — not treated as fatal
-  here, since the load already succeeded once); it is what a later `--resume`'s safety check
-  compares against (§6.8). `dry_run`/`validate_only`/`verbose` are always `false` for electricity's
-  v1 CLI surface (none of the three flags exist yet — Decisions, above — so these fields are
+  verbose, started_at, completed_at}`. `document_hash` is `document_content_digest`: SHA-256
+  over the orchestration file's own bytes; then, for each prompt file it references
+  (`{file: ...}`), in ascending order of resolved absolute paths compared component by component
+  (Python's `Path` ordering) — its label (UTF-8, `/`-separated, relative to the document's
+  directory, which may start with `../`), its byte length as 8-byte BIG-ENDIAN, then its bytes.
+  The label is location-independent: it never depends on where the project sits on disk, a `../`
+  reference included. Not just every file's bytes concatenated, so moving bytes across a
+  prompt-file boundary still changes the digest. An error while resolving or reading a prompt
+  file silently stops adding files, so the digest covers only what was hashed up to that point.
+  `--resume` also accepts a document hash written by the pre-#407 algorithm (document bytes plus
+  every referenced prompt file's bytes, with no path label or length, concatenated) against a
+  saved state that recorded one, kept as a private, temporary compatibility fallback. The digest
+  is `null` if the document became unreadable between the earlier load and this hash (not
+  treated as fatal here, since the load already succeeded once); it is what a later `--resume`'s
+  safety check compares against (§6.8). `dry_run`/`validate_only`/`verbose` are always `false`
+  for electricity's v1 CLI surface (none of the three flags exist yet — Decisions, above — so
+  these fields are
   always written `false`, not omitted, to keep the state shape identical). `completed_at` starts
   `null` and is filled in on **every** exit path, success or failure alike, alongside `totals`.
 - **`runtime.last_run.totals`**: `{wall_time_s, effects_run, tokens_sent, tokens_received,
@@ -1894,8 +1906,8 @@ JSON-serialized run state**, not a relational row:
   tools-adapters-plugins §4.1's own deferral), not designed here.
 
 `--resume <run-id>` requires `runtime.persistence` to be configured on the orchestration; there
-is no fallback to the observability-only plugins in §10.2. `document_sha256` guards against
-resuming a changed document (§6.8).
+is no fallback to the observability-only plugins in §10.2. `document_content_digest` guards
+against resuming a changed document (§6.8).
 
 ### 10.2 Observability runtime plugins (`runtime.runtime_plugins.*`) — never resumed from
 

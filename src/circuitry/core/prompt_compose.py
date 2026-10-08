@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import os
 import re
 from collections.abc import Iterator, Mapping
 from pathlib import Path
@@ -222,21 +223,27 @@ def document_content_digest(
     """SHA-256 of *resolved_path*'s bytes, plus every prompt file it
     references (#396) — shared by every surface that treats a document's
     bytes as its identity: capability consent (``cof trust``,
-    ``cli.document_consent``) and ``core.use``'s own content digest
-    (``UseRuntime._content_digest``). *confinement_root* is the project a
-    ``{file: ...}`` reference inside *orch* must stay inside — the caller's
-    own confinement rule (a library source's cached tree, say); the nearest
-    ``circuitry.config.json``/``config.json`` when omitted. Best-effort,
-    like ``core.resume.document_sha256``: a document that fails to parse
-    here (it will fail again, loudly, moments later) just falls back to the
-    file's own bytes.
+    ``cli.document_consent``), ``core.use``'s own content digest
+    (``UseRuntime._content_digest``), and the `document_hash` a run stamps
+    at `runtime.last_run` (`cli.runtime_shim.run`, #407) for ``cof run
+    --resume``'s own change check — one algorithm everywhere, rather than
+    `core.resume` walking prompt-file references on its own.
+    *confinement_root* is the project a ``{file: ...}`` reference inside
+    *orch* must stay inside — the caller's own confinement rule (a library
+    source's cached tree, say); the nearest
+    ``circuitry.config.json``/``config.json`` when omitted. Best-effort: a
+    document whose prompt-file references fail to resolve here (it will
+    fail again, loudly, moments later) just falls back to the file's own
+    bytes.
 
     Each prompt file's own path (relative to the document's directory, so
-    the digest doesn't vary with where a checkout happens to sit on disk)
-    and byte length are hashed ahead of its bytes, not just the bytes
-    concatenated with nothing between them — otherwise moving bytes from
-    the end of one prompt file to the start of the next (same total bytes,
-    same file set, different split) would leave the digest unchanged.
+    the digest doesn't vary with where a checkout happens to sit on disk —
+    a ``../`` sibling included, so it doesn't vary with the *project's*
+    location either) and byte length are hashed ahead of its bytes, not
+    just the bytes concatenated with nothing between them — otherwise
+    moving bytes from the end of one prompt file to the start of the next
+    (same total bytes, same file set, different split) would leave the
+    digest unchanged.
     """
     from .prompt_files import default_project_root
 
@@ -255,8 +262,11 @@ def document_content_digest(
         for prompt_file in sorted(set(paths)):
             data = prompt_file.read_bytes()
             try:
-                label = str(prompt_file.relative_to(document_dir))
+                label = Path(os.path.relpath(prompt_file, document_dir)).as_posix()
             except ValueError:
+                # No relative path exists (a different Windows drive) —
+                # the absolute path is the only label left, location
+                # dependence and all.
                 label = str(prompt_file)
             hasher.update(label.encode("utf-8"))
             hasher.update(len(data).to_bytes(8, "big"))

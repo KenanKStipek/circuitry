@@ -27,22 +27,22 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-__all__ = ["document_sha256", "effect_completed_ok"]
+__all__ = ["effect_completed_ok"]
 
 
-def document_sha256(path: Path) -> str:
-    """Content hash of an orchestration file, for resume's change check.
+def _legacy_document_sha256(path: Path) -> str:
+    """The pre-#407 `document_hash` algorithm: *path*'s own bytes, then
+    every referenced prompt file's bytes (sorted, no path label, no
+    length) — every release before #407 wrote this to
+    `state.runtime.last_run.document_hash`.
 
-    Every run stamps this at `state.runtime.last_run.document_hash`
-    (`cli.runtime_shim.run`); `cof run --resume` recomputes it for the
-    document about to run and refuses to resume on a mismatch unless
-    `--force` (#270). Folds in the content of every prompt file
-    (`{file: <path>}`, #396) the document references, in a stable order, so
-    editing a file a declared prompt or a prompt's `template` loads counts
-    as a changed document too — best-effort: a document that fails to
-    parse, or a prompt-file reference `cof check` would itself reject, just
-    falls back to the orchestration YAML's own bytes, the same hash this
-    gave before #396.
+    `cli.app._resolve_resume_state`'s content-hash check (#270) falls back
+    to this when the current `core.prompt_compose.document_content_digest`
+    (the one algorithm every surface now uses, #396/#405/#407) doesn't
+    match a saved state's recorded hash — so a run saved by an older
+    release still resumes without `--force`. COMPATIBILITY FALLBACK ONLY:
+    keep this, and the fallback call, through at least the first tagged
+    release after this one, then remove both.
     """
     hasher = hashlib.sha256()
     hasher.update(path.read_bytes())

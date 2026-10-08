@@ -28,7 +28,6 @@ from ..core.concurrency import RunConcurrencyLimiter
 from ..core.document_check import structural_errors, unknown_key_warnings
 from ..core.dynamic import DynamicRuntime
 from ..core.interface_inputs import check_interface_inputs
-from ..core.resume import document_sha256
 from ..core.runtime_plugins import (
     PLUGIN_CONTRACT_VERSION,
     PluginContext,
@@ -647,7 +646,24 @@ def run(req: RunRequest) -> RunResult:
         state["_run_id"] = run_id
         state["_timestamp"] = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         try:
-            document_hash = document_sha256(req.orchestration_path)
+            from ..core.prompt_compose import document_content_digest
+            from .library_sources import confinement_root_for_document
+
+            # Same confinement root `compile_orchestration` below resolves
+            # for this document (#407), so this is the same digest
+            # `cof trust`/the consent gate compute for it — one algorithm,
+            # not `core.resume`'s own walk over prompt-file references.
+            document_hash = document_content_digest(
+                req.orchestration_path,
+                orch,
+                confinement_root=confinement_root_for_document(
+                    req.orchestration_path,
+                    req.orchestration_path.resolve().parent,
+                    library_registry=library_registry,
+                    is_cache_path=document_is_cache_path,
+                    remote_library_source=req.remote_library_source,
+                ),
+            )
         except OSError:
             # The document check above already loaded this same file; an
             # unreadable path would have failed there first. Still, a race

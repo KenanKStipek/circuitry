@@ -1451,11 +1451,27 @@ than one carried over from a `--state`/persistence seed):
 "last_run": {
   "run_id": "<uuid4>",
   "orchestration_path": "<str path>",
-  "document_hash": "<sha256 of the document file, or null if unreadable>",
+  "document_hash": "<document_content_digest, or null if unreadable>",
   "dry_run": false, "validate_only": false, "verbose": false,
   "started_at": "<iso8601>", "completed_at": null
 }
 ```
+`document_hash` is `document_content_digest`: SHA-256 over the document
+file's own bytes; then, for each prompt file it references (`{file: ...}`),
+in ascending order of resolved absolute paths compared component by
+component (Python's `Path` ordering) — its label (UTF-8, `/`-separated,
+relative to the document's directory, which may start with `../`), its
+byte length as 8-byte BIG-ENDIAN, then its bytes. The label is
+location-independent: it never depends on where the project sits on disk,
+a `../` reference included. Not just every referenced file's bytes
+concatenated, so moving bytes across a prompt-file boundary still changes
+the digest. An error while resolving or reading a prompt file silently
+stops adding files, so the digest covers only what was hashed up to that
+point. `--resume` also accepts a document hash written by the pre-#407
+algorithm (document bytes plus every referenced prompt file's bytes, with
+no path label or length) against a saved state that recorded one, kept as
+a private, temporary compatibility fallback.
+
 `completed_at` and `totals` are filled in on **every** exit path (success or
 failure, §6.5): `totals = {"wall_time_s", "effects_run", "tokens_sent",
 "tokens_received", "cost_usd"}`, computed **live** by `_TotalsAccumulator`
