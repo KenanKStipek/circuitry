@@ -23,10 +23,10 @@
 //! | [`structural`] | B | `core/document_check.py` (orchestrates [`difflib`]/[`schema_instance`]) |
 //! | [`difflib`] | B | `difflib.get_close_matches` (Python stdlib) |
 //! | [`schema_instance`] | B | the `Value` -> schema-instance conversion |
-//! | [`pipeline`] | B | `cli/runtime_shim.py` (`validate`/`run`) |
+//! | [`pipeline`] | B | `cli/runtime_shim.py` (`validate`/`run`, and `core/concurrency.py`'s config-parsing errors) |
 //! | [`compile`] (`containers`/`leaves`) | C | `core/compiler.py` |
 //! | [`state_ns`] | C | `core/state_ns.py` |
-//! | [`groups`] | C | `core/concurrency.py` |
+//! | [`groups`] | C | `core/compiler.py`'s `unknown_concurrency_group_errors` (an effect's `group:` reference; the `max_concurrency`/`concurrency_groups` config-parsing errors are [`pipeline`]'s, lane B) |
 //! | [`cycles`] | C | `core/cycle_check.py` |
 //! | [`compose`] | D | `core/prompt_compose.py` (composition checks) |
 //! | [`prompt_files`] | D | `core/prompt_files.py` |

@@ -5,9 +5,9 @@
 //! document root (`prime.handle`). An effect nested inside a *named*
 //! loop body keeps that loop's pass as a compile-time placeholder
 //! (`PathSegment::Pass`) instead of a concrete index: the body compiles
-//! once, not once per pass, and the VM (lane B/M0-H) concretizes the
+//! once, not once per pass, and the VM (M0-H) concretizes the
 //! placeholder against the running pass index only when it dispatches.
-//! An *unnamed* `if`/`loop` never contributes a segment at all \u2014 it is
+//! An *unnamed* `if`/`loop` never contributes a segment at all — it is
 //! transparent, writing into the enclosing scope (issue #408).
 
 use serde::Serialize;
@@ -24,7 +24,7 @@ pub enum PathSegment {
 }
 
 /// Identifies which compiled loop a [`PathSegment::Pass`] placeholder
-/// belongs to \u2014 a compile-time ordinal (assigned in document order by
+/// belongs to — a compile-time ordinal (assigned in document order by
 /// the compiler, lane C), not a run-time pass index. The VM concretizes
 /// a placeholder by substituting the loop's *current* pass index for the
 /// `LoopId` it names, never the other way around.

@@ -29,7 +29,7 @@ fn leaked_path_patterns() -> Vec<(&'static str, PathMatcher)> {
         ),
         ("/private/", Box::new(|t: &str| t.contains("/private/"))),
         (
-            "a Windows drive letter (e.g. C:\\\\ or C:/)",
+            "a Windows drive letter (e.g. C:\\ or C:/)",
             Box::new(|t: &str| {
                 // A real path serialized into this JSON would have its
                 // single `\` separator JSON-escaped to two literal
@@ -37,13 +37,30 @@ fn leaked_path_patterns() -> Vec<(&'static str, PathMatcher)> {
                 // (rather than one) avoids matching an ordinary JSON
                 // string escape like "effects:\n" (one literal
                 // backslash followed by `n`), which a naive single-
-                // backslash check flags as a false positive.
+                // backslash check flags as a false positive. The letter
+                // must also not be preceded by another letter or digit
+                // (so it is a standalone drive letter, not the tail of
+                // a word), and the `/` variant must not be followed by
+                // a second `/` -- otherwise an ordinary `https://` URL
+                // (schema `$schema` fields, http tool params) would
+                // match on its `s:/`.
                 let bytes = t.as_bytes();
-                bytes.windows(4).any(|w| {
-                    w[0].is_ascii_alphabetic() && w[1] == b':' && w[2] == b'\\' && w[3] == b'\\'
-                }) || bytes
-                    .windows(3)
-                    .any(|w| w[0].is_ascii_alphabetic() && w[1] == b':' && w[2] == b'/')
+                let boundary_ok = |i: usize| {
+                    i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_')
+                };
+                bytes.windows(4).enumerate().any(|(i, w)| {
+                    boundary_ok(i)
+                        && w[0].is_ascii_alphabetic()
+                        && w[1] == b':'
+                        && w[2] == b'\\'
+                        && w[3] == b'\\'
+                }) || bytes.windows(3).enumerate().any(|(i, w)| {
+                    boundary_ok(i)
+                        && w[0].is_ascii_alphabetic()
+                        && w[1] == b':'
+                        && w[2] == b'/'
+                        && bytes.get(i + 3) != Some(&b'/')
+                })
             }),
         ),
     ]

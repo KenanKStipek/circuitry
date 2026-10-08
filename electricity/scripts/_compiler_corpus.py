@@ -21,18 +21,24 @@ Each case is a dict:
     }
 
 `run_case` materializes *case*'s files into a fresh temporary directory
-(that directory is also the working directory and `HOME` for the
-duration of the run -- the repository's rule for any subprocess or
-in-process run that could otherwise touch a real `HOME`/`trusted.json`),
-then runs, against `case["entry"]`:
+(that directory -- its resolved, symlink-free path, matching the Rust
+harness's own canonicalization -- is also the working directory and
+`HOME` for the duration of the run, and the global-config path
+`circuitry.cli.config` binds at import time is patched underneath it too
+-- the repository's rule for any subprocess or in-process run that
+could otherwise touch a real `HOME`/`trusted.json`), then runs, against
+`case["entry"]`:
 
 - `runtime_shim.validate(...)` -> `{ok, errors, warnings}`;
 - `runtime_shim.run(RunRequest(..., validate_only=True,
   skip_preflight=True, trust_document=True))` -> `RunResult.error`;
-- when the entry document loads as a mapping, `compile_orchestration`
-  dumped as JSON (dataclasses -> dicts, tuples -> lists, frozensets ->
-  sorted lists, the reflector prime -> `"<REFLECTOR_PRIME>"`), else
-  `None`.
+- `compile_orchestration`, confined to the document's own project (the
+  nearest `config.json`, like Circuitry's own loader), dumped as JSON on
+  success (dataclasses -> dicts, tuples -> lists, frozensets -> sorted
+  lists, the reflector prime -> `"<REFLECTOR_PRIME>"`) into `definition`,
+  or `None` with the exception's text in `definition_error` on failure;
+- `document_content_digest`, the same digest `use` and capability
+  consent hash a document's bytes with.
 
 Every recorded string has the temporary root replaced with the literal
 `<root>` (so two runs on different machines/paths produce the same
@@ -50,20 +56,28 @@ import os
 import re
 import sys
 import tempfile
-import uuid
 from pathlib import Path
 from typing import Any
 
+from circuitry.cli import config as _config_module
 from circuitry.cli.orchestration_loader import load_orchestration_file
 from circuitry.cli.runtime_shim import RunRequest, run, validate
 from circuitry.core.compiler import compile_orchestration
 from circuitry.core.primes import REFLECTOR_PRIME_V1
+from circuitry.core.prompt_compose import document_content_digest
+from circuitry.core.prompt_files import default_project_root
 
 _LEAKED_PATH_PATTERNS = [
     re.compile(re.escape(str(Path.home()))),
     re.compile(re.escape(tempfile.gettempdir())),
     re.compile(r"/private/"),
-    re.compile(r"\b[A-Za-z]:[\\/]"),  # a Windows drive letter
+    # A Windows drive letter: a bare letter (not part of a longer word)
+    # followed by ':' and either two literal backslashes (how a real
+    # path's single `\` round-trips through JSON escaping) or a single
+    # `/` not itself followed by another `/` -- the latter exclusion is
+    # what keeps an ordinary `https://` URL or a one-letter YAML key
+    # (`x:` at end of line) from matching.
+    re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]:(?:\\\\|/(?!/))"),
 ]
 
 
@@ -104,21 +118,39 @@ def _dump_definition(obj: Any) -> Any:
     return obj
 
 
-class _DirectoryAndHome:
+class _IsolatedRun:
     """Runs its body with the current working directory and `HOME` both
-    set to *root*, restoring both afterward -- even on an exception.
+    set to *root* (issue #408's Test strategy: "that directory as the
+    working directory and a temporary HOME"), restoring both afterward --
+    even on an exception.
+
+    Also isolates the global-config path the way `tests/conftest.py`'s
+    `_hermetic_global_config` fixture does for pytest: `circuitry.cli.
+    config.GLOBAL_CONFIG_PATH`/`GLOBAL_CONFIG_DIR` are bound once, from
+    `Path.home()`, at import time -- long before this context manager's
+    `HOME` override takes effect -- so `trust_store_path()` (read by
+    `runtime_shim.run`'s capability-consent gate on every case) would
+    otherwise still resolve to the real `~/.config/circuitry/trusted.
+    json` and read or write it.
     """
 
     def __init__(self, root: Path) -> None:
         self._root = root
         self._old_cwd: str | None = None
         self._old_home: str | None = None
+        self._old_global_config_dir: Path | None = None
+        self._old_global_config_path: Path | None = None
 
     def __enter__(self) -> None:
         self._old_cwd = os.getcwd()
         self._old_home = os.environ.get("HOME")
+        self._old_global_config_dir = _config_module.GLOBAL_CONFIG_DIR
+        self._old_global_config_path = _config_module.GLOBAL_CONFIG_PATH
         os.chdir(self._root)
         os.environ["HOME"] = str(self._root)
+        fake_global_config_dir = self._root / ".config-circuitry-global"
+        _config_module.GLOBAL_CONFIG_DIR = fake_global_config_dir
+        _config_module.GLOBAL_CONFIG_PATH = fake_global_config_dir / "config.json"
 
     def __exit__(self, *exc_info: object) -> None:
         if self._old_cwd is not None:
@@ -127,6 +159,10 @@ class _DirectoryAndHome:
             os.environ.pop("HOME", None)
         else:
             os.environ["HOME"] = self._old_home
+        assert self._old_global_config_dir is not None
+        assert self._old_global_config_path is not None
+        _config_module.GLOBAL_CONFIG_DIR = self._old_global_config_dir
+        _config_module.GLOBAL_CONFIG_PATH = self._old_global_config_path
 
 
 def run_case(case: dict[str, Any]) -> dict[str, Any]:
@@ -139,12 +175,10 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
 
     with tempfile.TemporaryDirectory(prefix="electricity-compiler-corpus-") as tmp:
         root = Path(tmp).resolve()
-        entry_home = root / f"home-{uuid.uuid4().hex}"
-        entry_home.mkdir()
         _materialize(case["files"], root)
         entry_path = root / case["entry"]
 
-        with _DirectoryAndHome(entry_home):
+        with _IsolatedRun(root):
             validate_result = validate(
                 entry_path,
                 config=None,
@@ -163,17 +197,35 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
                 )
             )
 
+            document_dir = entry_path.resolve().parent
+            confinement_root = default_project_root(document_dir)
+
             definition: Any = None
+            definition_error: str | None = None
             try:
                 orch = load_orchestration_file(entry_path)
-                compiled = compile_orchestration(
-                    orch=orch,
-                    document_dir=entry_path.resolve().parent,
-                    confinement_root=entry_path.resolve().parent,
-                )
-                definition = _dump_definition(compiled)
-            except Exception:
-                definition = None
+            except Exception as exc:  # recorded, not swallowed
+                definition_error = f"{type(exc).__name__}: {exc}"
+                # Best-effort only for the digest below, which (like
+                # Circuitry's own `document_content_digest`) tolerates a
+                # malformed/absent `orch` -- never for `compile_orchestration`,
+                # which must not report a fabricated empty definition for a
+                # document that never actually loaded.
+                orch = {}
+            else:
+                try:
+                    compiled = compile_orchestration(
+                        orch=orch,
+                        document_dir=document_dir,
+                        confinement_root=confinement_root,
+                    )
+                    definition = _dump_definition(compiled)
+                except Exception as exc:  # recorded, not swallowed
+                    definition_error = f"{type(exc).__name__}: {exc}"
+
+            digest = document_content_digest(
+                entry_path, orch, confinement_root=confinement_root
+            )
 
         error_modes = case.get("error_modes") or {}
         validate_errors = validate_result.get("errors", [])
@@ -190,6 +242,10 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
             "name": case["name"],
             "files": case["files"],
             "entry": case["entry"],
+            "options": {
+                "skip_preflight": skip_preflight,
+                "trust_document": trust_document,
+            },
             "validate": {
                 "ok": validate_result.get("ok", False),
                 "errors": validate_errors,
@@ -197,23 +253,21 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
             },
             "run_error": run_result.error,
             "definition": definition,
+            "definition_error": definition_error,
+            "digest": digest,
             "comparison": comparison,
             "_root": str(root),
-            "_entry_home": str(entry_home),
         }
 
 
-def _normalize_paths(obj: Any, roots: list[str]) -> Any:
+def _normalize_paths(obj: Any, root: str) -> Any:
     if isinstance(obj, str):
-        text = obj
-        for root in roots:
-            text = text.replace(root, "<root>")
-        return text
+        return obj.replace(root, "<root>")
     if isinstance(obj, list):
-        return [_normalize_paths(v, roots) for v in obj]
+        return [_normalize_paths(v, root) for v in obj]
     if isinstance(obj, dict):
         return {
-            k: _normalize_paths(v, roots)
+            k: _normalize_paths(v, root)
             for k, v in obj.items()
             if not k.startswith("_")
         }
@@ -225,10 +279,7 @@ def render_corpus(results: list[dict[str, Any]]) -> str:
     temporary root replaced by `<root>`, refusing to produce output that
     still leaks a real local path.
     """
-    normalized = []
-    for result in results:
-        roots = [result["_root"], result["_entry_home"]]
-        normalized.append(_normalize_paths(result, roots))
+    normalized = [_normalize_paths(result, result["_root"]) for result in results]
 
     text = json.dumps(normalized, indent=2, ensure_ascii=False) + "\n"
     for pattern in _LEAKED_PATH_PATTERNS:

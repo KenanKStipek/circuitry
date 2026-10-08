@@ -28,10 +28,12 @@ pub enum Escape {
 pub struct TemplateText {
     pub source: String,
     /// `true` for the fields where `{{> name}}` partials are allowed
-    /// (runtime-semantics §3.4) — a prompt's `template`/`messages[].content`
-    /// and a declared prompt's own text; `false` everywhere else (tool
-    /// `params`, `use` `inputs`, ...), where a `{{> name}}` fragment is
-    /// only ever template text, never a partial reference.
+    /// (runtime-semantics §3.4's table): prompt `template`/`messages[].
+    /// content`, `yield.template`, a declared prompt's own text, tool
+    /// `prompt`/`params`/`params_json`, and `use.inline`/`use.inputs`.
+    /// `false` only for `if`/`while.template`, `expect.template` and
+    /// asset `ref` — there a `{{> name}}` fragment is always the plain
+    /// malformed-tag error, never a partial reference.
     pub composable: bool,
     pub escape: Escape,
 }

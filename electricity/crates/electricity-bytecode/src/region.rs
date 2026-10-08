@@ -60,6 +60,10 @@ pub enum Region {
     /// `overlay` is `false` for the document root and for a `dynamic`
     /// (runtime-semantics §2.4's "top-level root is not a scope-overlay
     /// container"), and `true` for a loop body and an `if` branch.
+    ///
+    /// Known divergence (crate docs): a chain-flow `dynamic`'s own
+    /// `max_concurrency`/`stop_on_error` have no field here — Circuitry
+    /// documents both as meaningful only under `flow: tree`.
     Block { ops: Vec<Op>, overlay: bool },
     /// A `dynamic`'s `flow: tree` effect list — a *statically known*
     /// branch list only; a tree-mode `each` loop's runtime-sized pass

@@ -555,8 +555,8 @@ A `dynamic`/document-root `finally:` list compiles into a `TryFinally` region wr
 | `prompt` | `NodeKind::Leaf(LeafKind::Prompt)` | Carries the resolved `(adapter, model)` attempt chain *shape* (not resolved values — those are runtime, scoring/routing-dependent) and the pre-rendered template/messages AST. |
 | `tool` | `NodeKind::Leaf(LeafKind::Tool)` | Carries the provider name, the params AST (template nodes + `{from:}` markers + the security-sensitive-key literal check already passed), and the `params_json` template (if any) tagged for `JsonAwareCtx` rendering (§3.3). |
 | `use` | `NodeKind::Leaf(LeafKind::Use)` | Carries the resolution mode (`path`/`inline`), the inputs AST, and — for `inline` — the **uncompiled** template text (compiled to an IR subtree only at *run time*, after rendering produces YAML text, §5.3). A `path:` child resolves in a fixed order — absolute path first, then relative to the current working directory, then relative to the **parent orchestration's own directory** — and that last fallback is re-rooted per nesting level: a `use` nested inside an already-loaded child resolves its own `path:` relative to *that child's* directory, not the original root document's, so composition can descend through several directories of `use` children without every one needing a path relative to wherever the top-level document happened to live. |
-| `loop` | `NodeKind::Control(Region::Loop { .. })` | `each`-chain/`each`-tree/`while` captured in `LoopMode` (above); an unnamed loop compiles identically but dispatches writes into the enclosing scope at run time rather than a child node. |
-| `dynamic` | `NodeKind::Control(Region::Block(..))` (chain) or `NodeKind::Control(Region::Parallel(..))` (tree), wrapped in `Region::TryFinally` if `finally:` is present | The document root itself is a `dynamic` named `"prime"` with no scope-overlay semantics (runtime-semantics §2.4's "top-level root is not a scope-overlay container" — compiled into the IR as a `Block` whose child ops read `ctx` by reference, never through `scope_ctx`). |
+| `loop` | `NodeKind::Control(Region::Loop { .. })` | `each`-chain/`each`-tree/`while` captured in `LoopSpec`/`LoopFlow` (above); an unnamed loop compiles identically but dispatches writes into the enclosing scope at run time rather than a child node. |
+| `dynamic` | `NodeKind::Control(Region::Block { .. })` (chain) or `NodeKind::Control(Region::Parallel { .. })` (tree), wrapped in `Region::TryFinally` if `finally:` is present | The document root itself is a `dynamic` named `"prime"` with no scope-overlay semantics (runtime-semantics §2.4's "top-level root is not a scope-overlay container" — compiled into the IR as a `Block` whose child ops read `ctx` by reference, never through `scope_ctx`). |
 | `if`/`conditional` | `NodeKind::Control(Region::If { .. })` | `mode: cel`'s expression and `mode: model`'s template are both pre-validated at compile time (§4); `threshold:` is carried through to `meta` but never consulted by the interpreter (runtime-semantics §5.6). |
 | `reflector` | `NodeKind::Leaf(LeafKind::Reflector)`, carrying its own `inner: Region` field | Compiles the reflector's own `effects:` (the `inner` dynamic) as an ordinary nested `Region` field on `ReflectorOp`, but the **generated plan** it produces at run time is never part of this compiled IR — see §5.3. |
 
@@ -623,8 +623,9 @@ frame (for scope-overlay rebuilding, §6.3).
 ### 6.2 Scheduling: tokio tasks for parallel branches
 
 Both a `dynamic flow: tree` (`Region::Parallel`, a statically-known branch list) and an `each
-flow: tree` loop (`Region::Loop { mode: LoopMode::EachTree, .. }`, one compiled body replicated
-once per resolved-collection element — §5.1) spawn one `tokio::task::spawn_local` task per
+flow: tree` loop (`Region::Loop { spec: LoopSpec::Each { .. }, flow: LoopFlow::Tree, .. }`, one
+compiled body replicated once per resolved-collection element — §5.1) spawn one
+`tokio::task::spawn_local` task per
 branch/pass, on the single-threaded `LocalSet` runtime (§6.1), through the same scheduling
 primitive, against a **shared, deterministic snapshot taken at the parallel
 dispatch's start** — a shallow copy of `ctx` at that instant (runtime-semantics §5.5) — never each
@@ -690,8 +691,9 @@ filling in detail an earlier draft of this design left to a one-line bytecode-ta
   passes of a `while` loop — the loop runs at least that many passes regardless of what the
   condition would have said on an earlier pass.
 - **`while` always runs sequentially**, even when the orchestration otherwise sets
-  `flow: tree` on it — there is no tree-mode `while` (reflected in `LoopMode::While` carrying no
-  tree variant at all, §5.1); only `each` has a tree/chain choice.
+  `flow: tree` on it — there is no tree-mode `while` (reflected in `LoopSpec::While` carrying no
+  `flow:` choice of its own; `Region::Loop`'s own `flow` field is always `LoopFlow::Chain` for it,
+  §5.1); only `each` has a tree/chain choice.
 - **`each.as`/the implicit `iter` bindings**: `each.as: <name>` binds the current element under
   that name, in addition to the implicit `iter.index`/`iter.count` carried in `ctx` (§6.3).
   **`as:` defaults to `item`, not to no binding at all** — an `each` loop with no `as:` still

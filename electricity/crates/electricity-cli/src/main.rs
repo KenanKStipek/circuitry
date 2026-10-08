@@ -42,7 +42,33 @@ fn classify(args: &[String]) -> Action {
         return Action::Help;
     }
 
-    let dump_ir = args.iter().any(|a| a == "--dump-ir");
+    // Preserves the pre-#408 classification exactly ("Additive only"):
+    // only the first argument decides Run vs. a usage error, so a
+    // trailing unknown flag that used to fall through to the preview's
+    // Run path -- e.g. `electricity c.json d.yml --pretty` -- still
+    // does, and a bare `-` not in first position is still tolerated
+    // the same way. `--dump-ir` is excluded here (handled below) so it
+    // keeps working in first position too.
+    match args.first() {
+        None => return Action::UsageError("no config file or orchestration given".to_string()),
+        Some(first)
+            if first.starts_with('-')
+                && first != "--dump-ir"
+                && !KNOWN_RUN_FLAGS.contains(&first.as_str()) =>
+        {
+            return Action::UsageError(format!("unrecognized option '{first}'"));
+        }
+        _ => {}
+    }
+
+    if !args.iter().any(|a| a == "--dump-ir") {
+        return Action::Run;
+    }
+
+    // The second positional, never the *last* -- `electricity
+    // <config.json> <orchestration.yml> --dump-ir` takes exactly two,
+    // so a third stray positional must not silently become the
+    // orchestration path.
     let mut positionals: Vec<&str> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -51,18 +77,17 @@ fn classify(args: &[String]) -> Action {
             i += 1;
         } else if KNOWN_RUN_FLAGS.contains(&arg) {
             i += 2; // the flag and its value
-        } else if arg.starts_with('-') {
-            return Action::UsageError(format!("unrecognized option '{arg}'"));
         } else {
             positionals.push(arg);
             i += 1;
         }
     }
 
-    match positionals.last() {
-        None => Action::UsageError("no config file or orchestration given".to_string()),
-        Some(orchestration) if dump_ir => Action::DumpIr(orchestration.to_string()),
-        Some(_) => Action::Run,
+    match positionals.get(1) {
+        Some(orchestration) => Action::DumpIr(orchestration.to_string()),
+        None => {
+            Action::UsageError("--dump-ir requires <config.json> <orchestration.yml>".to_string())
+        }
     }
 }
 
@@ -196,6 +221,46 @@ mod unit_tests {
         assert!(matches!(
             classify(&["--dump-ir".to_string()]),
             Action::UsageError(_)
+        ));
+    }
+
+    #[test]
+    fn dump_ir_picks_the_second_positional_not_the_last() {
+        match classify(&[
+            "config.json".to_string(),
+            "orchestration.yml".to_string(),
+            "extra.yml".to_string(),
+            "--dump-ir".to_string(),
+        ]) {
+            Action::DumpIr(path) => assert_eq!(path, "orchestration.yml"),
+            _ => panic!("expected DumpIr"),
+        }
+    }
+
+    #[test]
+    fn trailing_unknown_flag_is_still_a_run_request_not_a_usage_error() {
+        // Pre-#408 behaviour, preserved: only the first argument is
+        // classified; a trailing unknown flag used to fall through to
+        // the preview's Run path (exit 1), not a usage error (exit 2).
+        assert!(matches!(
+            classify(&[
+                "config.json".to_string(),
+                "orchestration.yml".to_string(),
+                "--pretty".to_string(),
+            ]),
+            Action::Run
+        ));
+    }
+
+    #[test]
+    fn bare_dash_not_in_first_position_is_still_a_run_request() {
+        assert!(matches!(
+            classify(&[
+                "config.json".to_string(),
+                "orchestration.yml".to_string(),
+                "-".to_string(),
+            ]),
+            Action::Run
         ));
     }
 }

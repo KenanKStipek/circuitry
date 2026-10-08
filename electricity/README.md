@@ -7,11 +7,14 @@ to an internal bytecode and execute it, producing the same final state as
 tool — schema checking, linting, the wizard, document generation; electricity
 is the production runner.
 
-**This is a preview.** The crates here are a workspace skeleton only: the
-`electricity` binary accepts `--version`/`--help` and otherwise reports that
-it cannot run orchestrations yet and exits non-zero. There is no compiler,
-VM, tool, or adapter implementation in this release. electricity shares the
-Python package's version and release tags; from this repository's next
+**This is a preview.** The crates here are a workspace skeleton: the
+`electricity` binary accepts `--version`/`--help`, and `--dump-ir` runs the
+`electricity-compiler`/`electricity-bytecode` load-and-check pipeline and
+prints its IR as unstable debugging JSON, but otherwise `electricity`
+reports that it cannot run orchestrations yet and exits non-zero. There is
+no VM, tool, or adapter implementation in this release, and the compiler
+itself is still landing one lane at a time (issue #408). electricity shares
+the Python package's version and release tags; from this repository's next
 release on, its binaries and a container image are attached to the GitHub
 release alongside the Python distributions, marked as a preview.
 

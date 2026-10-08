@@ -80,6 +80,12 @@ pub enum RoutingOverride {
 /// `PromptDefinition.template`/`.messages` — exactly one of the two is
 /// present, mirroring the Python dataclass's own either/or fields rather
 /// than inventing a third "neither" state the compiler already rejects.
+///
+/// Known divergence (crate docs): Python's two fields aren't mutually
+/// exclusive by construction, only by convention — a document setting
+/// both compiles, and `template` wins at run time (`core/prompt.py`'s
+/// `_materialize_input`), so the compiler discards `messages` in that
+/// case rather than carrying a value nothing ever reads.
 #[derive(Debug, Clone, Serialize)]
 pub enum PromptContent {
     Template(TemplateText),

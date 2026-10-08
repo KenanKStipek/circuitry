@@ -47,7 +47,16 @@ pub struct Program {
     /// collision checks (`DynamicDefinition.effect_names`, root only,
     /// same folding as `prompts` above).
     pub effect_names: BTreeSet<String>,
-    pub document: DocumentInfo,
+    /// `None` from `electricity_compiler::compile_document` itself: its
+    /// `DocumentOrigin::File` only carries `document_dir`/
+    /// `confinement_root`, and a `Generated` origin has no directory or
+    /// confinement root at all, so `compile_document` (which sees
+    /// neither the path as given nor the document's raw bytes the
+    /// digest needs) cannot build one. `check_report`/`check_for_run`
+    /// (lane B's `pipeline` module, which read both before calling
+    /// `compile_document`) fill this in for a real file; it stays
+    /// `None` for a document with no file of its own.
+    pub document: Option<DocumentInfo>,
     /// The document's own `runtime:` block, merged over the config
     /// file's `runtime:` block key by key at run time (#408's CLI
     /// section) — carried here unmerged, as the document wrote it.

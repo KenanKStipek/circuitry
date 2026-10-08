@@ -5,6 +5,10 @@
       "doc.yml": "effects:\n  - type: prompt\n    name: greet\n    template: 'Hello, {{input.name}}!'\n"
     },
     "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
     "validate": {
       "ok": true,
       "errors": [],
@@ -48,6 +52,8 @@
         "greet"
       ]
     },
+    "definition_error": null,
+    "digest": "a1b52d6a6126012fab7308b324c2f56333f300c3171eac531b5126fe06d9f621",
     "comparison": {
       "validate_errors": [],
       "run_error": null
@@ -59,6 +65,10 @@
       "doc.yml": ""
     },
     "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
     "validate": {
       "ok": false,
       "errors": [
@@ -80,6 +90,8 @@
       "prompts": {},
       "effect_names": []
     },
+    "definition_error": null,
+    "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "comparison": {
       "validate_errors": [
         "exact"
@@ -93,6 +105,10 @@
       "doc.yml": "effects:\n  - type: prompt\n    name: step\n    template: 'a'\n  - type: prompt\n    name: step\n    template: 'b'\n"
     },
     "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
     "validate": {
       "ok": false,
       "errors": [
@@ -102,6 +118,8 @@
     },
     "run_error": "Duplicate effect name 'step' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
     "definition": null,
+    "definition_error": "ValueError: Duplicate effect name 'step' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
+    "digest": "d92d8d6153282423217ef470cf8e17d6f5a77c1c7049f5938eaf3ab4f0ac5d49",
     "comparison": {
       "validate_errors": [
         "exact"
@@ -115,6 +133,10 @@
       "doc.txt": "effects: []\n"
     },
     "entry": "doc.txt",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
     "validate": {
       "ok": false,
       "errors": [
@@ -124,6 +146,8 @@
     },
     "run_error": "Unsupported orchestration format: .txt. Supported: .json, .toon, .yaml, .yml",
     "definition": null,
+    "definition_error": "ValueError: Unsupported orchestration format: .txt. Supported: .json, .toon, .yaml, .yml",
+    "digest": "97f26cb17f03004ddfa97ac5a2b5375573d78d4effdc6df37c56cf47f7bfbef8",
     "comparison": {
       "validate_errors": [
         "exact"
@@ -137,6 +161,10 @@
       "doc.yml": "- 1\n- 2\n"
     },
     "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
     "validate": {
       "ok": false,
       "errors": [
@@ -146,6 +174,8 @@
     },
     "run_error": "Orchestration YAML must be a mapping/object at the root.",
     "definition": null,
+    "definition_error": "ValueError: Orchestration YAML must be a mapping/object at the root.",
+    "digest": "bb3b465728f1bf8bf324241affecb2270b689801d5b44cc8dffe5f9def657c0b",
     "comparison": {
       "validate_errors": [
         "exact"

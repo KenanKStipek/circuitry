@@ -9,8 +9,10 @@
 // stub has nothing to check them against yet.
 #![allow(dead_code)]
 
+use electricity_compiler::CheckOptions;
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::path::Path;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
@@ -33,15 +35,53 @@ pub struct Comparison {
     pub run_error: Option<String>,
 }
 
+/// The case's own `skip_preflight`/`trust_document` -- `_compiler_
+/// corpus.py`'s `run_case` always records both (its own `options.get(
+/// ..., True)` default), so this is never actually absent in a
+/// generated file; `Option` on `Case::options` only covers a
+/// hand-written fixture that omits it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CaseOptions {
+    pub skip_preflight: bool,
+    pub trust_document: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Case {
     pub name: String,
     pub files: BTreeMap<String, FileContent>,
     pub entry: String,
+    #[serde(default)]
+    pub options: Option<CaseOptions>,
     pub validate: ValidateResult,
     pub run_error: Option<String>,
     pub definition: Option<serde_json::Value>,
+    #[serde(default)]
+    pub definition_error: Option<String>,
+    #[serde(default)]
+    pub digest: Option<String>,
     pub comparison: Comparison,
+}
+
+impl Case {
+    /// The [`CheckOptions`] this case was recorded against --
+    /// `_compiler_corpus.py`'s own defaults (`skip_preflight: true,
+    /// trust_document: true`) when the case carries no `options` of
+    /// its own, matching `run_case`'s `options.get(..., True)`. Using
+    /// `CheckOptions::default()` instead (`false`/`false`) would run
+    /// every golden case against the wrong settings.
+    pub fn check_options(&self) -> CheckOptions {
+        match &self.options {
+            Some(options) => CheckOptions {
+                skip_preflight: options.skip_preflight,
+                trust_document: options.trust_document,
+            },
+            None => CheckOptions {
+                skip_preflight: true,
+                trust_document: true,
+            },
+        }
+    }
 }
 
 /// `expected` compared against `actual` per *mode*: `"exact"` is a
@@ -52,4 +92,12 @@ pub fn matches(mode: &str, expected: &str, actual: &str) -> bool {
         "location" => !actual.is_empty(),
         _ => expected == actual,
     }
+}
+
+/// Replaces *root*'s own path with `<root>` in *actual* -- the Rust-
+/// side counterpart of `_compiler_corpus.py`'s own normalization, so an
+/// error or digest produced against a freshly materialized temp case
+/// compares equal to the golden file's own `<root>`-normalized text.
+pub fn normalize(actual: &str, root: &Path) -> String {
+    actual.replace(&*root.to_string_lossy(), "<root>")
 }

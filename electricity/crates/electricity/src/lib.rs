@@ -56,11 +56,19 @@ pub fn dump_ir(orchestration_path: &Path) -> Result<String, String> {
     };
     let program = electricity_compiler::check_for_run(orchestration_path, &options)
         .map_err(|err| err.to_string())?;
-    let wrapper = serde_json::json!({
-        "ir_version": "unstable",
-        "program": program,
-    });
-    serde_json::to_string_pretty(&wrapper).map_err(|err| err.to_string())
+    // `serde_json::json!` would `.unwrap()` internally on a `Program`
+    // that fails to serialize (e.g. a non-UTF-8 `PathBuf` in
+    // `DocumentInfo`) -- reporting that as an `Err` on stderr instead
+    // of panicking matters here specifically, since a `--dump-ir`
+    // failure is this crate's one promise never to crash.
+    let program_value = serde_json::to_value(&program).map_err(|err| err.to_string())?;
+    let mut wrapper = serde_json::Map::with_capacity(2);
+    wrapper.insert(
+        "ir_version".to_string(),
+        serde_json::Value::from("unstable"),
+    );
+    wrapper.insert("program".to_string(), program_value);
+    serde_json::to_string_pretty(&serde_json::Value::Object(wrapper)).map_err(|err| err.to_string())
 }
 
 #[cfg(test)]

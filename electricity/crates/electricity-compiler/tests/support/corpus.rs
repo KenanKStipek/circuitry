@@ -29,6 +29,12 @@ impl Drop for TempCase {
 
 /// Materializes *files* into a fresh temporary directory unique to this
 /// process and *tag* (so two tests running concurrently never collide).
+///
+/// The returned root is canonicalized (`fs::canonicalize`, resolving
+/// any symlink in the temp directory's own path, e.g. macOS's `/tmp` ->
+/// `/private/tmp`) -- the same resolved form `_compiler_corpus.py`
+/// records (`Path(tmp).resolve()`), so [`super::reference::normalize`]
+/// strips the same string on both sides.
 pub fn materialize(tag: &str, files: &BTreeMap<String, FileContent>) -> TempCase {
     let root = std::env::temp_dir().join(format!(
         "electricity-compiler-golden-{tag}-{}-{}",
@@ -36,6 +42,7 @@ pub fn materialize(tag: &str, files: &BTreeMap<String, FileContent>) -> TempCase
         unique_suffix()
     ));
     fs::create_dir_all(&root).expect("create temp case root");
+    let root = fs::canonicalize(&root).expect("canonicalize temp case root");
 
     // Symlinks after every plain/binary file, same ordering rule as the
     // Python side: a symlink's target may be a file this same case

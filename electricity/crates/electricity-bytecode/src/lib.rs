@@ -48,6 +48,28 @@
 //! - `PromptDefinition.prompt_type: "image"` has no [`effects::PromptType`]
 //!   variant: Circuitry's own compiler refuses it outright
 //!   (`core/compiler.py`), so no compiled `Program` can carry it.
+//! - `DynamicDefinition.max_concurrency`/`.stop_on_error` have no
+//!   counterpart on [`region::Region::Block`] (a chain-flow `dynamic`):
+//!   Circuitry's own compiler carries both unconditionally but documents
+//!   them as "only meaningful when flow=\"tree\"" (`core/compiler.py`'s
+//!   own comment), so [`region::Region::Parallel`] (tree flow) is the
+//!   only variant that keeps them. A test projecting the IR back into
+//!   Python's dumped `DynamicDefinition` JSON must ignore both fields
+//!   for a chain-flow `dynamic`, not expect them reproduced.
+//! - [`effects::PromptContent`] is either/or (`Template`/`Messages`),
+//!   matching `PromptDefinition.template`/`.messages`' own either/or
+//!   *shape* — but Python's two fields aren't mutually exclusive by
+//!   construction, only by convention: a document that sets both
+//!   compiles, and `core/prompt.py`'s `_materialize_input` prefers
+//!   `template` whenever it's truthy, so `messages` is already dead at
+//!   run time in that case. The compiler (lane C) reproduces that by
+//!   choosing `Template` and discarding `messages` when a document sets
+//!   both — a deliberate, behavior-preserving drop, not an oversight.
+//! - Every `u32`/`u64` field here (loop/concurrency limits) narrows
+//!   Python's unbounded `int` (checked only against the JSON Schema's
+//!   own minimum, if any) to a fixed width. A document whose limit
+//!   exceeds the IR's width is out of scope for M0: no known Circuitry
+//!   orchestration sets one anywhere near `u32::MAX`.
 
 pub mod defaults;
 pub mod effects;
