@@ -291,8 +291,8 @@ fn compile_effect(
             )
         }
         other => Err(CompileError(format!(
-            "Unsupported effect type at '{effect_path}': {:?}.",
-            other
+            "Unsupported effect type at '{effect_path}': {}",
+            Value::Str(other.to_string()).py_repr()
         ))),
     }
 }
