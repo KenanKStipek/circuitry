@@ -1701,7 +1701,7 @@ starts, from whichever worker thread runs it:
 
 ```json
 {"v":1,"seq":0,"ts":"2026-10-08T19:56:22.433Z","ev":"run_start","run_id":"…","orchestration":"do-thing.yml","engine":"cof 0.2.0","pid":4242}
-{"v":1,"seq":7,"ts":"…","ev":"dispatch","path":"prime.each_tree","branches":3}
+{"v":1,"seq":7,"ts":"…","ev":"dispatch","path":"prime.each_tree","branches":3,"concurrency":2}
 {"v":1,"seq":8,"ts":"…","ev":"start","id":8,"path":"prime.each_tree.iter_0.t_nap"}
 {"v":1,"seq":12,"ts":"…","ev":"end","id":8,"path":"prime.each_tree.iter_0.t_nap","ok":true,"ms":1008}
 {"v":1,"seq":99,"ts":"…","ev":"run_end","ok":false,"error":"Interrupted (Ctrl-C/SIGINT)","signal":"SIGINT"}
@@ -1715,7 +1715,7 @@ starts, from whichever worker thread runs it:
 | `ev` | `run_start`, `dispatch`, `start`, `end` or `run_end`. |
 | `id` | Unique per effect *instance* — a pass or a branch each gets its own, so `start`/`end` pair up even when several instances share a path (an unnamed loop body). An `end` whose `start` was not seen on this stream (a double-fire; the start predates this `--events` writer, which cannot happen for `cof` itself but is a rule any reader must handle) carries `id: null`, with no `ms`. |
 | `path` | The absolute state path, as in `--live-state`. |
-| `dispatch` | Sent once by a tree loop or tree `dynamic` before its branches start — the existing `concurrent_dispatch` callback, composed with (never replaced by) this stream. `branches` is that callback's own number: the concurrency ceiling, not necessarily the total branch count — every branch when `max_concurrency` is unset, else `min(max_concurrency, count)`. A 3-item `each` loop under `max_concurrency: 2` sends `"branches":2`, not 3. |
+| `dispatch` | Sent once by a tree loop or tree `dynamic` before its branches start — the existing `concurrent_dispatch` callback, composed with (never replaced by) this stream. `branches` is the true branch count: the loop's item total, or the dynamic's `len(effects)`. `concurrency` is the ceiling the pool actually enforces — every branch when `max_concurrency` is unset (so `branches == concurrency`), else `min(max_concurrency, branches)`. A 3-item `each` loop under `max_concurrency: 2` sends `"branches":3,"concurrency":2`. |
 | `ok` | On `end`: whether the effect's `meta.error` is `null`. On `run_end`: whether the run succeeded. |
 | `error` | Present only when `ok` is false: the first 500 characters of the effect's (or run's) error text, exactly as it appears in state. |
 | `signal` | On `run_end` after an interruption: `SIGINT`, `SIGTERM` or `SIGHUP`. |

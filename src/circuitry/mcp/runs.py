@@ -153,11 +153,16 @@ class RunManager:
         )
         cfg = resolve_config()
 
-        def _on_concurrent_dispatch(_effect_path: str, branch_count: int) -> None:
+        def _on_concurrent_dispatch(
+            _effect_path: str, concurrency: int, _total: int
+        ) -> None:
+            # `_total` (the true branch count, added for `--events`, #423) is
+            # not this run manager's concern: it settles on `concurrency`,
+            # the ceiling the pool actually enforces, same as before.
             with run._lock:
                 # Accumulate, not overwrite: this dispatch replaces the one
                 # settle point it was itself going to contribute with
-                # *branch_count* of its own (0 if the tree/dynamic is empty
+                # *concurrency* of its own (0 if the tree/dynamic is empty
                 # and resolves without dispatching anything) — so a tree
                 # nested inside another tree branch or a `use:` child adds
                 # to what's still outstanding instead of clobbering it.
@@ -165,7 +170,7 @@ class RunManager:
                 # settle point immediately after it fires; real completions
                 # (`_on_branch_settled`) are what bring it down from there.
                 run.expected_concurrent = max(
-                    1, run.expected_concurrent + branch_count - 1
+                    1, run.expected_concurrent + concurrency - 1
                 )
                 run._lock.notify_all()
 

@@ -32,10 +32,25 @@ def test_run_start_is_first_line(tmp_path: Path) -> None:
     assert lines[0]["ts"].endswith("Z")
 
 
+def test_dispatch_payload_carries_branches_and_concurrency(tmp_path: Path) -> None:
+    """`branches` is the true branch total; `concurrency` is the ceiling
+    the pool actually enforces — the two differ whenever `max_concurrency`
+    caps a loop or dynamic below its item/effect count (#423)."""
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_dispatch("prime.each", 2, 3)
+    log.close()
+
+    dispatch = _lines(tmp_path / "events.jsonl")[0]
+    assert dispatch["ev"] == "dispatch"
+    assert dispatch["path"] == "prime.each"
+    assert dispatch["branches"] == 3
+    assert dispatch["concurrency"] == 2
+
+
 def test_seq_strictly_increasing_across_event_kinds(tmp_path: Path) -> None:
     log = EventLog(tmp_path / "events.jsonl")
     log.run_start(run_id="r1", orchestration="o.yml")
-    log.on_dispatch("prime.each", 2)
+    log.on_dispatch("prime.each", 2, 3)
     log.on_start("prime.each.iter_0.t", {})
     log.on_complete("prime.each.iter_0.t", {"meta": {"error": None}})
     log.run_end(ok=True, error=None, signal=None)
@@ -292,7 +307,7 @@ def test_no_torn_lines_under_concurrent_writers(tmp_path: Path) -> None:
 
     def writer(n: int) -> None:
         for i in range(50):
-            log.on_dispatch(f"prime.w{n}", i)
+            log.on_dispatch(f"prime.w{n}", i, i)
 
     threads = [threading.Thread(target=writer, args=(n,)) for n in range(6)]
     for t in threads:

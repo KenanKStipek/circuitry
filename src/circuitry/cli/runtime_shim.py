@@ -136,10 +136,12 @@ class RunRequest:
     # ``on_effect_start``.
     effect_start_observer: Callable[[str, dict[str, Any]], None] | None = None
     # Fired once, before any of its branches start, by a ``flow: tree`` loop
-    # or a parallel ``dynamic`` — ``(effect_path, branch_count)``. MCP's
-    # RunManager uses this to wait for a real per-run "settle" signal instead
-    # of a fixed debounce window a scheduling delay can race (#237).
-    concurrent_dispatch_observer: Callable[[str, int], None] | None = None
+    # or a parallel ``dynamic`` — ``(effect_path, concurrency, total)``. MCP's
+    # RunManager uses ``concurrency`` (the ceiling the pool actually enforces)
+    # to wait for a real per-run "settle" signal instead of a fixed debounce
+    # window a scheduling delay can race (#237); it ignores ``total`` (the
+    # true branch count, added for ``--events``, #423).
+    concurrent_dispatch_observer: Callable[[str, int, int], None] | None = None
     # Fired once per branch of a dispatch announced via
     # ``concurrent_dispatch_observer``, as soon as that branch's own
     # execution genuinely finishes — ``(effect_path,)``. Lets MCP's
@@ -958,7 +960,7 @@ def run(req: RunRequest) -> RunResult:
         effect_observers: list[Callable[[str, dict[str, Any]], None]] = [
             totals_accumulator.observe
         ]
-        dispatch_observers: list[Callable[[str, int], None]] = []
+        dispatch_observers: list[Callable[[str, int, int], None]] = []
         if event_log is not None:
             start_observers.append(event_log.on_start)
             effect_observers.append(event_log.on_complete)
@@ -1263,8 +1265,8 @@ def _compose_effect_observers(
 
 
 def _compose_dispatch_observers(
-    observers: list[Callable[[str, int], None]],
-) -> Callable[[str, int], None] | None:
+    observers: list[Callable[[str, int, int], None]],
+) -> Callable[[str, int, int], None] | None:
     """Fold ``--events``' own dispatch observer and ``RunRequest.concurrent_dispatch_observer``
     into the single callback ``Store`` takes — ``--events`` composes with it,
     never replaces it (#419)."""
@@ -1273,9 +1275,9 @@ def _compose_dispatch_observers(
     if len(observers) == 1:
         return observers[0]
 
-    def fan_out(path: str, branches: int) -> None:
+    def fan_out(path: str, concurrency: int, total: int) -> None:
         for observer in observers:
-            observer(path, branches)
+            observer(path, concurrency, total)
 
     return fan_out
 

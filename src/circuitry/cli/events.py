@@ -151,7 +151,7 @@ class EventLog:
         except Exception as exc:
             self._disable("run_start", exc)
 
-    def on_dispatch(self, path: str, branches: int) -> None:
+    def on_dispatch(self, path: str, concurrency: int, total: int) -> None:
         if self._disabled:
             return
         try:
@@ -165,7 +165,8 @@ class EventLog:
                         "ts": _now_iso_ms(),
                         "ev": "dispatch",
                         "path": path,
-                        "branches": branches,
+                        "branches": total,
+                        "concurrency": concurrency,
                     }
                 )
         except Exception as exc:

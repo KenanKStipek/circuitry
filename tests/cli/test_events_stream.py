@@ -100,11 +100,12 @@ effects:
     dispatches = [e for e in events if e["ev"] == "dispatch"]
     assert len(dispatches) == 1
     assert dispatches[0]["path"] == "prime.each_tree"
-    # `branches` is the concurrency ceiling the existing
-    # `concurrent_dispatch` callback reports (`min(max_concurrency, total)`),
-    # not the loop's total pass count (3 here) — see the reference's
-    # `dispatch` row (#419 review finding 1).
-    assert dispatches[0]["branches"] == 2
+    # `branches` is the loop's true pass count; `concurrency` is the
+    # ceiling the existing `concurrent_dispatch` callback reports
+    # (`min(max_concurrency, total)`) — see the reference's `dispatch`
+    # row (#423).
+    assert dispatches[0]["branches"] == 3
+    assert dispatches[0]["concurrency"] == 2
 
     container_start = next(
         e for e in events if e["ev"] == "start" and e["path"] == "prime.each_tree"
@@ -148,6 +149,91 @@ effects:
     end_ids = [e["id"] for e in events if e["ev"] == "end"]
     assert sorted(start_ids) == sorted(end_ids)
     assert len(start_ids) == len(set(start_ids))
+
+
+def test_tree_dynamic_max_concurrency_dispatch_carries_both_numbers(
+    tmp_path: Path,
+) -> None:
+    """A parallel `dynamic` (`flow: tree`), three effects, `max_concurrency: 2`:
+    the one `dispatch` event carries the true branch total (3) and the
+    concurrency ceiling the pool actually enforces (2) (#423)."""
+    orch = tmp_path / "tree_dynamic.yml"
+    orch.write_text(
+        """
+effects:
+  - type: dynamic
+    name: fan_out
+    flow: tree
+    max_concurrency: 2
+    effects:
+      - type: tool
+        name: t_one
+        provider: shell
+        params: {command: sleep, args: ["0.1"], allowed_commands: ["sleep"]}
+      - type: tool
+        name: t_two
+        provider: shell
+        params: {command: sleep, args: ["0.1"], allowed_commands: ["sleep"]}
+      - type: tool
+        name: t_three
+        provider: shell
+        params: {command: sleep, args: ["0.1"], allowed_commands: ["sleep"]}
+""".lstrip("\n"),
+        encoding="utf-8",
+    )
+    out_path = tmp_path / "out.json"
+    events_path = tmp_path / "events.jsonl"
+
+    proc = _run_cof(orch, out_path=out_path, events_path=events_path)
+    stdout, stderr = _communicate(proc, timeout=20.0, label="waiting for the run to finish")
+
+    assert proc.returncode == 0, (stdout, stderr)
+    events = _events(events_path)
+    dispatches = [e for e in events if e["ev"] == "dispatch"]
+    assert len(dispatches) == 1
+    assert dispatches[0]["path"] == "prime.fan_out"
+    assert dispatches[0]["branches"] == 3
+    assert dispatches[0]["concurrency"] == 2
+
+
+def test_tree_each_without_max_concurrency_branches_equal_concurrency(
+    tmp_path: Path,
+) -> None:
+    """No `max_concurrency`: every item runs at once, so `branches` and
+    `concurrency` report the same number (#423)."""
+    orch = tmp_path / "tree_each_unbounded.yml"
+    orch.write_text(
+        """
+effects:
+  - type: loop
+    name: each_tree
+    flow: tree
+    each: {in: input.items, as: x}
+    body:
+      - type: tool
+        name: t_nap
+        provider: shell
+        params:
+          command: sleep
+          args: ["0.1"]
+          allowed_commands: ["sleep"]
+""".lstrip("\n"),
+        encoding="utf-8",
+    )
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"items": ["a", "b", "c"]}), encoding="utf-8")
+    out_path = tmp_path / "out.json"
+    events_path = tmp_path / "events.jsonl"
+
+    proc = _run_cof(orch, out_path=out_path, events_path=events_path, state_path=state_path)
+    stdout, stderr = _communicate(proc, timeout=20.0, label="waiting for the run to finish")
+
+    assert proc.returncode == 0, (stdout, stderr)
+    events = _events(events_path)
+    dispatches = [e for e in events if e["ev"] == "dispatch"]
+    assert len(dispatches) == 1
+    assert dispatches[0]["branches"] == 3
+    assert dispatches[0]["concurrency"] == 3
 
 
 def test_unnamed_loop_body_passes_get_distinct_ids(tmp_path: Path) -> None:
