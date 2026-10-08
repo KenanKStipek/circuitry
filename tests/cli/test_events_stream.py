@@ -13,7 +13,6 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -49,10 +48,6 @@ def _run_cof(
 
 def _events(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-
-
-def _ts(event: dict[str, Any]) -> datetime:
-    return datetime.fromisoformat(event["ts"].replace("Z", "+00:00"))
 
 
 def _communicate(proc: subprocess.Popen[str], *, timeout: float, label: str) -> tuple[str, str]:
@@ -105,6 +100,10 @@ effects:
     dispatches = [e for e in events if e["ev"] == "dispatch"]
     assert len(dispatches) == 1
     assert dispatches[0]["path"] == "prime.each_tree"
+    # `branches` is the concurrency ceiling the existing
+    # `concurrent_dispatch` callback reports (`min(max_concurrency, total)`),
+    # not the loop's total pass count (3 here) — see the reference's
+    # `dispatch` row (#419 review finding 1).
     assert dispatches[0]["branches"] == 2
 
     container_start = next(
@@ -133,8 +132,9 @@ effects:
     assert all(container_end["seq"] > pass_ends[i]["seq"] for i in range(3))
 
     # max_concurrency: 2 — pass 2 only ever starts once pass 0 or pass 1
-    # has already ended.
-    assert _ts(pass_starts[2]) >= min(_ts(pass_ends[0]), _ts(pass_ends[1]))
+    # has already ended. `seq` gives a strict order; wall-clock `ts` is
+    # only millisecond-precision and could tie.
+    assert pass_starts[2]["seq"] > min(pass_ends[0]["seq"], pass_ends[1]["seq"])
 
     # No torn lines anywhere in the stream.
     raw_lines = events_path.read_text(encoding="utf-8").splitlines()
@@ -142,6 +142,12 @@ effects:
         json.loads(line)
     seqs = [e["seq"] for e in events]
     assert seqs == list(range(len(seqs)))
+
+    # Every `start` in the whole stream pairs with exactly one `end`.
+    start_ids = [e["id"] for e in events if e["ev"] == "start"]
+    end_ids = [e["id"] for e in events if e["ev"] == "end"]
+    assert sorted(start_ids) == sorted(end_ids)
+    assert len(start_ids) == len(set(start_ids))
 
 
 def test_unnamed_loop_body_passes_get_distinct_ids(tmp_path: Path) -> None:
@@ -179,6 +185,49 @@ effects:
     assert len(starts) == 3
     assert {e["id"] for e in starts} == {e["id"] for e in ends}
     assert len({e["id"] for e in starts}) == 3
+
+
+def test_unnamed_tree_loop_body_passes_get_distinct_ids_across_threads(tmp_path: Path) -> None:
+    """An unnamed `flow: tree` loop runs every pass on its own worker
+    thread, all sharing the parent's path (#419 review finding 7) — the
+    per-thread stack keyed by path must still pair each pass's own
+    `start` with its own `end`, not some other thread's."""
+    orch = tmp_path / "unnamed_tree_loop.yml"
+    orch.write_text(
+        """
+effects:
+  - type: loop
+    flow: tree
+    each: {in: input.items, as: x}
+    body:
+      - type: tool
+        name: t
+        provider: shell
+        params:
+          command: sleep
+          args: ["0.2"]
+          allowed_commands: ["sleep"]
+""".lstrip("\n"),
+        encoding="utf-8",
+    )
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"items": ["a", "b", "c"]}), encoding="utf-8")
+    out_path = tmp_path / "out.json"
+    events_path = tmp_path / "events.jsonl"
+
+    proc = _run_cof(orch, out_path=out_path, events_path=events_path, state_path=state_path)
+    stdout, stderr = _communicate(proc, timeout=20.0, label="waiting for the run to finish")
+
+    assert proc.returncode == 0, (stdout, stderr)
+    events = _events(events_path)
+    starts = [e for e in events if e["ev"] == "start" and e["path"] == "prime.t"]
+    ends = [e for e in events if e["ev"] == "end" and e["path"] == "prime.t"]
+    assert len(starts) == 3
+    assert len(ends) == 3
+    assert {e["id"] for e in starts} == {e["id"] for e in ends}
+    assert len({e["id"] for e in starts}) == 3
+    for e in ends:
+        assert e["ok"] is True
 
 
 def test_failing_effect_on_error_continue_truncates_error(tmp_path: Path) -> None:
@@ -241,7 +290,7 @@ effects:
     run_end = events[-1]
     assert run_end["ev"] == "run_end"
     assert run_end["ok"] is False
-    assert len(run_end["error"]) <= 500
+    assert len(run_end["error"]) == 500
     assert "signal" not in run_end
 
 
@@ -527,3 +576,67 @@ def test_run_end_is_emitted_after_the_live_state_mirrors_final_write(
 
     assert result.ok, result.error
     assert order == ["live_state_close", "run_end"]
+
+
+def test_run_library_events_writes_the_stream(tmp_path: Path, monkeypatch: Any) -> None:
+    """`cof run-library --events <f>` wires the same stream as `cof run`
+    (#419 review finding 7: nothing previously exercised `run-library`)."""
+    import pytest
+
+    pytest.importorskip("typer")
+    from typing import ClassVar
+
+    from typer.testing import CliRunner
+
+    from circuitry.cli import app as app_module
+    from circuitry.cli.app import app
+
+    orch = tmp_path / "noop.yml"
+    orch.write_text(
+        """
+effects:
+  - type: tool
+    name: step
+    provider: shell
+    params:
+      command: echo
+      args: ["hi"]
+""".lstrip("\n"),
+        encoding="utf-8",
+    )
+
+    class _Asset:
+        asset_id = "demo"
+        version = "1.0.0"
+        source = "test"
+        file_path = orch
+        metadata: ClassVar[dict] = {}
+
+    monkeypatch.setattr(app_module, "fetch_shared_orchestration", lambda **kwargs: _Asset())
+
+    out_path = tmp_path / "out.json"
+    events_path = tmp_path / "events.jsonl"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "run-library",
+            "demo",
+            "--out",
+            str(out_path),
+            "--events",
+            str(events_path),
+            "--allow-capabilities",
+            "shell",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    events = _events(events_path)
+    assert events[0]["ev"] == "run_start"
+    assert events[-1]["ev"] == "run_end"
+    assert events[-1]["ok"] is True
+    start = next(e for e in events if e["ev"] == "start" and e["path"] == "prime.step")
+    end = next(e for e in events if e["ev"] == "end" and e["path"] == "prime.step")
+    assert start["id"] == end["id"]
+    assert end["ok"] is True

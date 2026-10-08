@@ -411,8 +411,9 @@ call with three bounded steps:
    same inline-identity cycle guard as a `use` child, same namespaced
    observability (child effects announce under the decomposing effect's node
    via `on_effect_start`/`on_effect_complete` and `cof run --events <file>`;
-   `--live-state` shows each one only once it finishes, same as any other
-   effect). The value at `result_path` is
+   `--live-state` shows each one only once it finishes — like a tree branch,
+   never while it runs — since the chunk runs in its own isolated store
+   until it merges back). The value at `result_path` is
    written at the **original effect's own path**, so a downstream
    `{{prime.<name>.value}}` reference resolves unchanged and nothing else in
    the orchestration knows the substitution happened.
