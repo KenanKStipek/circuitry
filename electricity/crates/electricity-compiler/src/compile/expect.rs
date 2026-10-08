@@ -64,19 +64,21 @@ pub(crate) fn compile_expect(
                 .unwrap_or_else(|| "cel".to_string());
             let mode = mode_raw.trim().to_lowercase();
             if mode == "model" {
-                let template = raw
+                // Python strips only to test emptiness; the stored
+                // `template` is the raw (untrimmed) value, so a block
+                // scalar's trailing newline survives.
+                let template_raw = raw
                     .get(&Value::Str("template".to_string()))
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty());
-                let Some(template) = template else {
+                    .and_then(Value::as_str);
+                let is_non_empty = template_raw.is_some_and(|s| !s.trim().is_empty());
+                let Some(template_raw) = template_raw.filter(|_| is_non_empty) else {
                     return Err(CompileError(format!(
                         "{effect_type} effect at '{effect_path}': expect mode 'model' \
                          requires a non-empty 'template' field."
                     )));
                 };
                 let text = template_text(
-                    template,
+                    template_raw,
                     effect_path,
                     "expect.template",
                     false,

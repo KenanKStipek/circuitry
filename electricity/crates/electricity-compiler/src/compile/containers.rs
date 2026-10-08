@@ -101,7 +101,7 @@ fn labels_of(dict: &Dict) -> Option<Value> {
 }
 
 /// Ports `core/compiler.py::_scope_child`.
-fn scope_child(scope_path: &str, child_name: &str) -> String {
+pub(crate) fn scope_child(scope_path: &str, child_name: &str) -> String {
     if scope_path.is_empty() {
         child_name.to_string()
     } else {
@@ -285,6 +285,7 @@ fn compile_effect(
                 ctx,
                 effect,
                 path,
+                scope_path,
                 effect_path,
                 &valid_name,
                 loop_names,
@@ -411,6 +412,7 @@ fn compile_conditional(
         effect_path,
         "Conditional",
         "if",
+        "CEL expression",
         loop_names,
         validated_name.as_deref(),
     )?;
@@ -502,6 +504,7 @@ fn compile_condition_labeled(
     effect_path: &str,
     message_prefix: &str,
     field: &str,
+    cel_label: &str,
     loop_names: &BTreeSet<String>,
     effect_name: Option<&str>,
 ) -> Result<Condition, CompileError> {
@@ -521,7 +524,7 @@ fn compile_condition_labeled(
         };
         let expr = expr.py_str();
         validate_cel_expr(&expr, effect_path, loop_names)?;
-        validate_cel_syntax(&expr, effect_path, effect_name, "CEL expression")?;
+        validate_cel_syntax(&expr, effect_path, effect_name, cel_label)?;
         let strict = get_bool_default(def, "strict", false);
         Ok(Condition::Cel { expr, strict })
     } else {
@@ -679,6 +682,7 @@ fn compile_loop(
                 effect_path,
                 "Loop while",
                 "while",
+                "Loop while CEL expression",
                 &body_loop_names,
                 validated_name.as_deref(),
             )?;
@@ -723,7 +727,7 @@ fn compile_loop(
         _ => None,
     };
     if let Some(collect_name) = &collect {
-        if validated_name.is_none() {
+        if !collect_name.is_empty() && validated_name.is_none() {
             return Err(CompileError(format!(
                 "Loop at '{effect_path}' sets 'collect: {collect_name}' but has no \
                  'name': collected values are written under the loop's own node, \

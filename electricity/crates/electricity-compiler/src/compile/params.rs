@@ -180,18 +180,24 @@ pub(crate) fn build_tool_params(
     effect_path: &str,
     loop_names: &BTreeSet<String>,
 ) -> Result<ParamNode, CompileError> {
-    for sensitive_key in SECURITY_SENSITIVE_PARAM_KEYS {
-        if let Some(value) = params.get(&Value::Str(sensitive_key.to_string())) {
-            check_no_reference(value, name, &format!("params.{sensitive_key}"))?;
-        }
-    }
-    build_param_node(
+    // Python's `_compile_tool` runs `_check_param_leaves` (the template/
+    // reference walk below) over the whole `params` dict first, then
+    // `_check_security_sensitive_param_leaf` once per sensitive key --
+    // so a malformed template anywhere in `params` is reported before a
+    // by-reference `allowed_commands` leaf is.
+    let node = build_param_node(
         &Value::Dict(params.clone()),
         name,
         effect_path,
         "params",
         loop_names,
-    )
+    )?;
+    for sensitive_key in SECURITY_SENSITIVE_PARAM_KEYS {
+        if let Some(value) = params.get(&Value::Str(sensitive_key.to_string())) {
+            check_no_reference(value, name, &format!("params.{sensitive_key}"))?;
+        }
+    }
+    Ok(node)
 }
 
 /// Builds the [`ParamNode::Map`] for a `use` effect's `inputs:` -- see
@@ -203,19 +209,42 @@ pub(crate) fn build_use_inputs(
     effect_path: &str,
     loop_names: &BTreeSet<String>,
 ) -> Result<ParamNode, CompileError> {
-    let mut map = IndexMap::new();
-    for (key, value) in inputs {
-        let key_str = match key {
+    fn key_str(key: &Value) -> String {
+        match key {
             Value::Str(s) => s.clone(),
             other => other.py_str(),
-        };
+        }
+    }
+
+    // Python's `_compile_use` checks every input in two separate
+    // passes over the whole `inputs` dict: every string value as a
+    // template first, then every `{from: ...}` value's reference path
+    // -- not interleaved key by key.
+    for (key, value) in inputs {
+        if let Value::Str(_) = value {
+            check_templates(
+                value,
+                effect_path,
+                &format!("inputs.{}", key_str(key)),
+                true,
+            )?;
+        }
+    }
+    for (key, value) in inputs {
         if let Some(path) = reference_path_only(value) {
             validate_reference_path(
                 &path,
-                &format!("Use effect '{name}' input '{key_str}'"),
+                &format!("Use effect '{name}' input '{}'", key_str(key)),
                 effect_path,
                 loop_names,
             )?;
+        }
+    }
+
+    let mut map = IndexMap::new();
+    for (key, value) in inputs {
+        let key_str = key_str(key);
+        if let Some(path) = reference_path_only(value) {
             map.insert(
                 key_str,
                 ParamNode::From {
@@ -226,7 +255,6 @@ pub(crate) fn build_use_inputs(
             continue;
         }
         if let Value::Str(s) = value {
-            check_templates(value, effect_path, &format!("inputs.{key_str}"), true)?;
             map.insert(
                 key_str,
                 ParamNode::Template(TemplateText::new(s.clone(), true, Escape::Html)),

@@ -16,7 +16,7 @@ use electricity_bytecode::effects::{
     UseSource, YieldOp,
 };
 use electricity_bytecode::path::EffectPath;
-use electricity_bytecode::{Escape, LeafKind, NodeKind, OnError, Op, Region};
+use electricity_bytecode::{Escape, LeafKind, NodeKind, OnError, Op, ParamNode, Region};
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
 use std::collections::BTreeMap;
@@ -227,13 +227,15 @@ pub(crate) fn compile_prompt(
         _ => Vec::new(),
     };
 
+    // Python's `_compile_prompt` keeps `params`/`inputs` as the raw
+    // dict (an `isinstance(dict)` filter only): neither is
+    // template-checked, reference-checked, or walked for a
+    // security-sensitive leaf -- `prompt.py`/`yield_effect.py` merge
+    // `inputs` into the run-time context as-is, and `prompt.py` passes
+    // `params` straight to the adapter. Unlike a tool's `params` or a
+    // `use` effect's `inputs`, these are never Mustache fields.
     let model_params = match effect.get(&Value::Str("params".to_string())) {
-        Some(Value::Dict(params)) => Some(crate::compile::params::build_tool_params(
-            params,
-            name,
-            effect_path,
-            &BTreeSet::new(),
-        )?),
+        Some(value @ Value::Dict(_)) => Some(ParamNode::Literal(value.clone())),
         _ => None,
     };
 
@@ -243,12 +245,7 @@ pub(crate) fn compile_prompt(
     let deterministic = get_bool_default(effect, "deterministic", false);
 
     let inputs = match effect.get(&Value::Str("inputs".to_string())) {
-        Some(Value::Dict(inputs)) => Some(build_use_inputs(
-            inputs,
-            name,
-            effect_path,
-            &BTreeSet::new(),
-        )?),
+        Some(value @ Value::Dict(_)) => Some(ParamNode::Literal(value.clone())),
         _ => None,
     };
 
@@ -611,8 +608,10 @@ pub(crate) fn compile_yield(
     }
     let text = template_text(&template, effect_path, "template", true, Escape::None)?;
 
+    // `_compile_yield` keeps `inputs` raw, same as `_compile_prompt`'s
+    // (this module's own doc comment on `compile_prompt` explains why).
     let inputs = match effect.get(&Value::Str("inputs".to_string())) {
-        Some(Value::Dict(d)) => Some(build_use_inputs(d, name, effect_path, &BTreeSet::new())?),
+        Some(value @ Value::Dict(_)) => Some(ParamNode::Literal(value.clone())),
         _ => None,
     };
 
@@ -631,11 +630,13 @@ pub(crate) fn compile_reflector(
     ctx: &mut Ctx,
     effect: &Dict,
     path: &EffectPath,
+    scope_path: &str,
     effect_path: &str,
     name: &str,
     loop_names: &BTreeSet<String>,
 ) -> Result<Op, CompileError> {
     let own_path = path.push_name(name);
+    let inner_scope = crate::compile::containers::scope_child(scope_path, name);
 
     let flow = normalize_flow(
         crate::compile::coerce::first_truthy(&[
@@ -658,7 +659,7 @@ pub(crate) fn compile_reflector(
         ctx,
         inner_effects,
         &own_path,
-        name,
+        &inner_scope,
         &format!("{effect_path}.effects"),
         loop_names,
         &mut seen,
@@ -688,16 +689,18 @@ pub(crate) fn compile_reflector(
         .unwrap_or_else(|| electricity_bytecode::defaults::GENERATED_KEY.to_string());
     let stop_on_done = get_bool_default(effect, "stop_on_done", true);
 
+    // `prime_template` is a Python `str.format` string (reflector.py),
+    // never a Mustache template -- `_compile_reflector` does
+    // `str(prime_template)` with no syntax check at all, so neither
+    // branch here runs one.
     let prime_template_raw = optional_str(effect, "prime_template");
     let prime_template = match prime_template_raw {
-        Some(raw) => template_text(&raw, effect_path, "prime_template", false, Escape::None)?,
-        None => template_text(
+        Some(raw) => electricity_bytecode::TemplateText::new(raw, false, Escape::None),
+        None => electricity_bytecode::TemplateText::new(
             crate::reflector_prime::REFLECTOR_PRIME,
-            effect_path,
-            "prime_template",
             false,
             Escape::None,
-        )?,
+        ),
     };
 
     let max_effects = crate::compile::coerce::first_truthy(&[

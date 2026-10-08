@@ -63,10 +63,10 @@ pub fn compile_document(
     document: &Value,
     origin: &DocumentOrigin,
 ) -> Result<Program, CompileError> {
+    crate::state_ns::validate_bare_input_refs(document)?;
+
     let declared_prompts = prompt_files::compile_declared_prompts(document, origin)?;
     compose::check_prompt_composition(document, &declared_prompts)?;
-
-    crate::state_ns::validate_bare_input_refs(document)?;
 
     let root_path = EffectPath::root();
     let mut ctx = Ctx::new();
