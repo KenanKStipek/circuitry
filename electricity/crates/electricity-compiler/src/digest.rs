@@ -173,15 +173,33 @@ mod tests {
     use super::*;
     use electricity_value::Dict;
     use std::fs;
+    use std::ops::Deref;
 
-    fn temp_dir(tag: &str) -> PathBuf {
+    /// A temporary directory removed when dropped, so a test's own
+    /// scratch tree doesn't outlive it on disk.
+    struct TempDir(PathBuf);
+
+    impl Deref for TempDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_dir(tag: &str) -> TempDir {
         let root = std::env::temp_dir().join(format!(
             "electricity-digest-test-{tag}-{}-{:?}",
             std::process::id(),
             std::time::SystemTime::now()
         ));
         fs::create_dir_all(&root).unwrap();
-        fs::canonicalize(&root).unwrap()
+        TempDir(fs::canonicalize(&root).unwrap())
     }
 
     fn file_value_dict(path: &str) -> Value {
