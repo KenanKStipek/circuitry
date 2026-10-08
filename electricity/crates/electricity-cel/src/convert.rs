@@ -88,25 +88,29 @@ fn int_to_cel(i: &IntValue) -> Result<cel::Value, Overflow> {
 /// key) drops that entry rather than mapping it to some placeholder key:
 /// CEL map keys must be `bool`/`int`/`uint`/`string`, and there is no
 /// value in that set that represents "no counterpart" the way `null` does
-/// for a value position. A real orchestration's `state` is keyed by
-/// effect/namespace names (always strings) at every level this matters;
-/// this only affects a key buried in user data read via `value`/`meta`.
+/// for a value position. This is a known divergence from Circuitry's own
+/// `_to_cel`, documented (with its reachability — a plain YAML date key
+/// under `state.input` triggers it, not just data buried in `value`/
+/// `meta`) in `lib.rs`'s crate docs. A key too large for `i64` raises
+/// [`Overflow`] instead of being dropped, matching every other big-int
+/// read.
 fn dict_to_cel(entries: &electricity_value::Dict) -> Result<CelMap, Overflow> {
     let mut map = HashMap::with_capacity(entries.len());
     for (key, value) in entries {
-        if let Some(key) = to_cel_key(key) {
+        if let Some(key) = to_cel_key(key)? {
             map.insert(key, to_cel(value)?);
         }
     }
     Ok(CelMap { map: Arc::new(map) })
 }
 
-fn to_cel_key(key: &Value) -> Option<Key> {
+fn to_cel_key(key: &Value) -> Result<Option<Key>, Overflow> {
     match key {
-        Value::Bool(b) => Some(Key::Bool(*b)),
-        Value::Int(IntValue::Small(n)) => Some(Key::Int(*n)),
-        Value::Str(s) => Some(Key::String(Arc::new(s.clone()))),
-        _ => None,
+        Value::Bool(b) => Ok(Some(Key::Bool(*b))),
+        Value::Int(IntValue::Small(n)) => Ok(Some(Key::Int(*n))),
+        Value::Int(IntValue::Big(_)) => Err(Overflow),
+        Value::Str(s) => Ok(Some(Key::String(Arc::new(s.clone())))),
+        _ => Ok(None),
     }
 }
 
@@ -155,5 +159,13 @@ mod tests {
             panic!("expected a map");
         };
         assert_eq!(map.map.len(), 1);
+    }
+
+    #[test]
+    fn dict_key_overflow_raises_instead_of_dropping() {
+        let huge: num_bigint::BigInt = "100000000000000000000".parse().unwrap();
+        let mut d: Dict = Dict::new();
+        d.insert(Value::from(huge), Value::from(1_i64));
+        assert_eq!(to_cel(&Value::Dict(d)), Err(Overflow));
     }
 }

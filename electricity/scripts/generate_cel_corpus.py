@@ -54,6 +54,12 @@ OUTPUT = (
     / "corpus.json"
 )
 
+#: Distinguishes "not passed" (default to ``{}``) from an explicit
+#: ``None`` for `expect()`'s ``value``/``meta``/``state`` -- a few cases
+#: (null ordering) need the latter to actually reach `_to_cel` as CEL
+#: `null`, not be silently defaulted away.
+_UNSET = object()
+
 
 # ---------------------------------------------------------------------
 # Tagged encoding (see generate_value_corpus.py for the same scheme)
@@ -133,14 +139,14 @@ def condition(
 def expect(
     expr: str,
     *,
-    value: object = None,
-    meta: object = None,
-    state: object = None,
+    value: object = _UNSET,
+    meta: object = _UNSET,
+    state: object = _UNSET,
     exact_error: bool = False,
 ) -> dict:
-    value = {} if value is None else value
-    meta = {} if meta is None else meta
-    state = {} if state is None else state
+    value = {} if value is _UNSET else value
+    meta = {} if meta is _UNSET else meta
+    state = {} if state is _UNSET else state
     make_outcome = _outcome_exact if exact_error else _outcome
     outcome = make_outcome(
         lambda: evaluate_cel_expect(expr, value=value, meta=meta, state=state)
@@ -322,6 +328,7 @@ def build_corpus() -> list[dict]:
             "state.prime.tick.value.price <= 10",
             {"prime": {"tick": {"value": None}}},
             strict=True,
+            exact_error=True,
         ),
         condition(
             "state.prime.tick.value.price <= state.input.stop",
@@ -440,6 +447,137 @@ def build_corpus() -> list[dict]:
         ),
         expect("meta.missing == 1", value={}, meta={}, state={}),
     ]
+
+    # --- re-review of #379, finding 1: `paths::project` must not corrupt
+    # a scalar a longer, has()-guarded path extends past it. A previous
+    # version inserted `{}` over an already-placed, non-dict value the
+    # moment a longer path tried to continue through it, which made an
+    # *unrelated, unguarded* read of the shorter path see the wrong thing.
+    cases += [
+        condition(
+            "state.p.v == 'done' || has(state.p.v.price)",
+            {"p": {"v": "done"}},
+        ),
+        condition(
+            "has(state.p.v.price) ? state.p.v.price > 1 : state.p.v == 'skip'",
+            {"p": {"v": "skip"}},
+        ),
+        condition(
+            "has(state.t.primary) || size(state.t) > 0",
+            {"t": [1]},
+        ),
+    ]
+
+    # --- re-review of #379, finding 3 (+4): has() beyond a plain dotted
+    # chain. `cel`'s own, native `has()` only evaluates gracefully for
+    # the *last* segment; everything before it is a plain selection that
+    # raises the moment it hits an index, a missing key or the wrong
+    # type. cel-python's own `has()` is "the whole argument evaluated
+    # without error" (`evaluation.py`'s `ident_arg` `has`), covering an
+    # index and a comprehension's own loop variable too.
+    cases += [
+        condition("has(state.l[0].x)", {"l": []}),
+        condition("has(state.m[state.k].x)", {"m": {}, "k": "a"}),
+        condition(
+            "state.rows.all(r, !has(r.a.b) || r.a.b > 0)",
+            {"rows": [{}]},
+        ),
+        # A loop variable named like one of the usual roots must shadow
+        # it: a root-matched-by-name version of this rewrite always read
+        # the *outer* `value` instead of the comprehension's own.
+        expect(
+            "value.items.all(value, has(value.x))",
+            value={"items": [{"x": 1}]},
+        ),
+    ]
+
+    # --- re-review of #379, finding 2 (+8): the ordering matrix's
+    # remaining gaps --------------------------------------------------
+    cases += [
+        # `bytes` ordering: a previous fix-pass fallback (`Value::partial_cmp`)
+        # had no `Bytes` arm and raised here, a regression from plain `cel`.
+        condition("state.a < state.b", {"a": b"a", "b": b"b"}),
+        condition("state.a <= state.b", {"a": b"ab", "b": b"ab"}),
+        # `bool` is a plain `int` subclass in celpy with no ordering
+        # override, so it tolerates a numeric type on either side --
+        # unlike `int` itself, which raises against anything but another
+        # `int` (`state.n > state.flag` below).
+        condition("state.flag < state.n", {"flag": True, "n": 2}),
+        condition("state.f > state.flag", {"f": 1.5, "flag": True}),
+        condition("state.n > state.flag", {"n": 2, "flag": True}),
+        # A `NaN` resolves every comparison to `false` in celpy (plain
+        # `float` behaviour), never raising the way plain `cel`'s own
+        # comparer does.
+        condition("state.n < 1.0", {"n": float("nan")}),
+        # `null` never orders against anything, including itself --
+        # exercised in `expect` mode so the absent-path convention (a
+        # `None` leaf under `state.` is itself "absent") doesn't
+        # short-circuit the comparison before it runs.
+        expect("value <= value", value=None),
+        expect("value < 1", value=None),
+    ]
+
+    # --- re-review of #379, finding 5: equality/`in` inside a container.
+    # celpy's own `ListType`/`MapType.__eq__` delegate to each element's
+    # `__eq__`, which for `IntType`/`UintType`/`DoubleType` raises unless
+    # the other side is the exact same type -- caught by the top-level
+    # `_==_`/`_!=_` override and turned into "not equal" (never true for
+    # two containers); `in` has no such fallback and raises outright.
+    cases += [
+        condition("state.a == [1, 2]", {"a": [1.0, 2.0]}),
+        condition("state.a != [1, 2]", {"a": [1.0, 2.0]}),
+        condition("state.m != {'a': 1.0}", {"m": {"a": 1}}),
+        condition("state.m == {'a': 1.0}", {"m": {"a": 1}}),
+        condition("1 in state.l", {"l": [1.0]}),
+        condition("state.x in ['a', 'b']", {"x": 1}),
+    ]
+
+    # --- re-review of #379, finding 2/9: exact message text, more
+    # characters. `{expr!r}` (Python's `repr()`) switches outer quote and
+    # escapes based on content; each of these exercises a character the
+    # first fix pass's probe (a bare `'`) didn't.
+    cases += [
+        condition(
+            "state.prime.tick.value == \"it's open\"",
+            {},
+            strict=True,
+            exact_error=True,
+        ),
+        condition(
+            "state.prime.tick.value == 'she said \"hi\"'",
+            {},
+            strict=True,
+            exact_error=True,
+        ),
+        condition(
+            "state.prime.tick.value == 'back\\\\slash'",
+            {},
+            strict=True,
+            exact_error=True,
+        ),
+        condition(
+            "state.prime.tick.value == '''line1\nline2'''",
+            {},
+            strict=True,
+            exact_error=True,
+        ),
+        condition(
+            "state.prime.tick.value == 'h\u00e9llo w\u00f6rld'",
+            {},
+            strict=True,
+            exact_error=True,
+        ),
+    ]
+
+    # --- re-review of #379, finding 6 (declined, documented in
+    # electricity-cel's `lib.rs` crate docs instead of fixed): a
+    # `Value::Dict` key with no CEL `Key` counterpart collapses, in
+    # Python, into a single `null` key holding the last value written --
+    # `cel::objects::Key` cannot represent `null` as a map key at all, so
+    # electricity-cel drops every such entry instead of colliding them
+    # into one. Deliberately NOT a corpus case: pinning it here would
+    # assert parity on a documented, permanent divergence rather than a
+    # bug this crate can fix.
 
     return cases
 

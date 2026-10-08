@@ -3406,7 +3406,7 @@
     "mode": "condition",
     "outcome": {
       "kind": "error",
-      "message": null
+      "message": "CEL expression 'state.prime.tick.value.price <= 10' reads unset state path 'state.prime.tick.value.price' and is marked strict."
     },
     "state": {
       "t": "dict",
@@ -4470,5 +4470,724 @@
       "t": "dict",
       "v": []
     }
+  },
+  {
+    "expr": "state.p.v == 'done' || has(state.p.v.price)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "p"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "v"
+                },
+                {
+                  "t": "str",
+                  "v": "done"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "has(state.p.v.price) ? state.p.v.price > 1 : state.p.v == 'skip'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "p"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "v"
+                },
+                {
+                  "t": "str",
+                  "v": "skip"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "has(state.t.primary) || size(state.t) > 0",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "t"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "has(state.l[0].x)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": []
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "has(state.m[state.k].x)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": []
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "k"
+          },
+          {
+            "t": "str",
+            "v": "a"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.rows.all(r, !has(r.a.b) || r.a.b > 0)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "rows"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "dict",
+                "v": []
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "value.items.all(value, has(value.x))",
+    "meta": {
+      "t": "dict",
+      "v": []
+    },
+    "mode": "expect",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "value": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "items"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "dict",
+                "v": [
+                  [
+                    {
+                      "t": "str",
+                      "v": "x"
+                    },
+                    {
+                      "t": "int",
+                      "v": "1"
+                    }
+                  ]
+                ]
+              }
+            ]
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "expr": "state.a < state.b",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "bytes",
+            "v": "61"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "t": "bytes",
+            "v": "62"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.a <= state.b",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "bytes",
+            "v": "6162"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "t": "bytes",
+            "v": "6162"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.flag < state.n",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "flag"
+          },
+          {
+            "t": "bool",
+            "v": true
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.f > state.flag",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "f"
+          },
+          {
+            "bits": "3ff8000000000000",
+            "t": "float"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "flag"
+          },
+          {
+            "t": "bool",
+            "v": true
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.n > state.flag",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "flag"
+          },
+          {
+            "t": "bool",
+            "v": true
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.n < 1.0",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "bits": "7ff8000000000000",
+            "t": "float"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "value <= value",
+    "meta": {
+      "t": "dict",
+      "v": []
+    },
+    "mode": "expect",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "value": {
+      "t": "none"
+    }
+  },
+  {
+    "expr": "value < 1",
+    "meta": {
+      "t": "dict",
+      "v": []
+    },
+    "mode": "expect",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "value": {
+      "t": "none"
+    }
+  },
+  {
+    "expr": "state.a == [1, 2]",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "bits": "3ff0000000000000",
+                "t": "float"
+              },
+              {
+                "bits": "4000000000000000",
+                "t": "float"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.a != [1, 2]",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "bits": "3ff0000000000000",
+                "t": "float"
+              },
+              {
+                "bits": "4000000000000000",
+                "t": "float"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.m != {'a': 1.0}",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "int",
+                  "v": "1"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.m == {'a': 1.0}",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "int",
+                  "v": "1"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "1 in state.l",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "bits": "3ff0000000000000",
+                "t": "float"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.x in ['a', 'b']",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "x"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.prime.tick.value == \"it's open\"",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL expression 'state.prime.tick.value == \"it\\'s open\"' reads unset state path 'state.prime.tick.value' and is marked strict."
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": true
+  },
+  {
+    "expr": "state.prime.tick.value == 'she said \"hi\"'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL expression 'state.prime.tick.value == \\'she said \"hi\"\\'' reads unset state path 'state.prime.tick.value' and is marked strict."
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": true
+  },
+  {
+    "expr": "state.prime.tick.value == 'back\\\\slash'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL expression \"state.prime.tick.value == 'back\\\\\\\\slash'\" reads unset state path 'state.prime.tick.value' and is marked strict."
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": true
+  },
+  {
+    "expr": "state.prime.tick.value == '''line1\nline2'''",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL expression \"state.prime.tick.value == '''line1\\nline2'''\" reads unset state path 'state.prime.tick.value' and is marked strict."
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": true
+  },
+  {
+    "expr": "state.prime.tick.value == 'héllo wörld'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL expression \"state.prime.tick.value == 'héllo wörld'\" reads unset state path 'state.prime.tick.value' and is marked strict."
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": true
   }
 ]

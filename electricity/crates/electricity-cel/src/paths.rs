@@ -1,6 +1,7 @@
 //! The structural absent-path walk behind `evaluate_condition`
 //! (runtime-semantics.md §4.4, ports `_collect_state_paths`/
-//! `_first_unresolved`, `core/cel_eval.py`).
+//! `_first_unresolved`, `core/cel_eval.py`), and the AST rewrite behind
+//! `has()` and strict-type operators (DESIGN.md §7.2).
 //!
 //! Reading an unset `state.` path is decided *before* evaluation, by
 //! walking the parsed expression for every dotted `state.` read, not by
@@ -8,11 +9,11 @@
 //! time, and a genuinely malformed expression must still raise rather
 //! than silently resolve to "absent".
 
-use cel::common::ast::{EntryExpr, Expr, IdedExpr, LiteralValue};
-use cel::common::types::CelBool;
+use cel::common::ast::{CallExpr, EntryExpr, Expr, IdedExpr, LiteralValue};
+use cel::common::types::CelString;
 use electricity_value::{Dict, Value};
 
-use crate::ordering;
+use crate::{equality, ordering};
 
 /// A `state.`-rooted dotted read the parse tree contains, and whether it
 /// is guarded by `has(...)`.
@@ -25,10 +26,10 @@ pub struct StatePath {
 /// Every `state.` path *expr* reads, plus whether `state` is also named as
 /// a value in its own right (`size(state)`) — in which case no projection
 /// could narrow what the expression might read, the same distinction
-/// `_Compiled.reads_whole_state` draws in `core/cel_eval.py`. Unused by
-/// `evaluate_condition` today (the whole `state` binding is always built),
-/// kept because it is the direct, tested port of the Python structural
-/// walk the absent-path convention depends on.
+/// `_Compiled.reads_whole_state` draws in `core/cel_eval.py`. Both fields
+/// feed [`evaluate_condition`](crate::evaluate_condition): `paths` into
+/// [`project`] (what to convert) and the absent-path check (what must
+/// resolve), `reads_whole_state` into the choice between the two.
 #[derive(Debug, Clone, Default)]
 pub struct Collected {
     pub paths: Vec<StatePath>,
@@ -120,96 +121,97 @@ fn walk(expr: &Expr, out: &mut Collected, guarded: bool) {
 }
 
 /// Rewrites *node*'s parse tree in place so `cel` never has to evaluate
-/// a `has(...)` call or a numeric ordering operator the way it natively
-/// would (DESIGN.md §7.2):
+/// a `has(...)` call or a strict-type operator the way it natively would
+/// (DESIGN.md §7.2):
 ///
-/// - Every `has(...)` argument that is a pure dotted chain rooted at one
-///   of *roots* (`state`/`value`/`meta`) becomes a `bool` literal,
-///   computed by [`has_result`] walking the matching `Value` directly —
-///   cel-python's own rule (`evaluation.py`'s `ident_arg` `has`: "the
-///   argument evaluated without error"), not `cel`'s. `cel`'s own
-///   `has()` only evaluates gracefully for the *last* segment
-///   (`objects.rs`'s `select_field`); every segment before it is a
-///   plain, non-test field selection that raises `NoSuchKey`/an overload
-///   error the moment it hits a missing key or a non-container —
-///   patching the bound data to paper over that (as a prior version of
-///   this function did) leaks fabricated empty dicts into every other
-///   read of the same path in the same expression. Replacing the whole
-///   node with a literal avoids the problem instead of working around
-///   it: there is no data to patch, and nothing for a patch to leak
-///   into.
-/// - Every `_<_`/`_<=_`/`_>_`/`_>=_` call becomes a call to this crate's
-///   own [`ordering`] functions, which raise for an `int` on the *left*
-///   compared against a different numeric type (`state.n < 1.5`) the
-///   way `celtypes.IntType`'s own `@type_matched` does and `cel`'s own
-///   `PartialOrd for Value` does not — asymmetrically, matching celpy:
-///   `celtypes.UintType`/`DoubleType` never override ordering at all, so
-///   `1.5 > state.n` doesn't raise (DESIGN.md §7.2, §3.2's naive/aware
-///   split is unrelated).
+/// - Every `has(...)` call becomes `<safe-navigation chain>.hasValue()`
+///   when its argument is a chain of plain field selections and `[...]`
+///   indices (see [`to_optional`]): `has(a.b[c].d)` becomes
+///   `(a.?b[?c].?d).hasValue()`, built from `cel`'s own optional-value
+///   primitives (`_?._`/`_[?_]`, on by default — `Env::with_optional_support`),
+///   not a custom function. `cel`'s `_?._`/`_[?_]` already turn *any*
+///   evaluation failure along the chain — a missing key, an out-of-range
+///   index, a selection through the wrong type — into `optional.none()`
+///   rather than raising (`objects.rs`'s `unwrap_optional`/`index_into`),
+///   which is exactly cel-python's own rule for `has()`: "the argument
+///   evaluated without error" (`evaluation.py`'s `ident_arg` `has`), not
+///   "the last segment alone resolves gracefully" the way `cel`'s own,
+///   native `has()` treats it. Because every step becomes ordinary
+///   evaluation under `?.`/`[?]` — not a Rust-side walk against a
+///   snapshot of `state`/`value`/`meta` taken before evaluation — this
+///   handles a chain rooted at *any* identifier, including a
+///   comprehension's own loop variable (`value.items.all(value, has(value.x))`
+///   correctly tests the inner, loop-bound `value`, not the outer root a
+///   prior, name-matching version of this rewrite confused it for), and
+///   an index whose key is itself an arbitrary sub-expression
+///   (`has(state.m[state.k].x)`), with no data to patch and nothing for
+///   a patch to leak into.
+/// - Every `_<_`/`_<=_`/`_>_`/`_>=_`/`_==_`/`_!=_`/`@in` call becomes a
+///   call to [`ordering`]'s or [`equality`]'s own functions, which
+///   reproduce celpy's exact rules (comment on each module) rather than
+///   `cel`'s own, more permissive ones.
 ///
-/// A `has()` argument that isn't a pure dotted chain (an index, a call)
-/// or whose root isn't one of *roots* (a comprehension's own loop
-/// variable, say) is left for `cel` to evaluate as-is, matching this
+/// A `has(...)` argument [`to_optional`] can't rewrite (anything other
+/// than a chain of field selections and indices — a macro, a plain
+/// function call) is left for `cel` to evaluate as-is, matching this
 /// function's own restriction before the rewrite existed.
-pub fn rewrite(node: &mut IdedExpr, roots: &[(&str, &Value)]) {
+pub fn rewrite(node: &mut IdedExpr) {
     if let Expr::Select(select) = &node.expr {
         if select.test {
-            let chain = dotted_chain(&node.expr)
-                .map(|segments| segments.into_iter().map(String::from).collect::<Vec<_>>());
-            if let Some(chain) = chain {
-                if let Some(&(_, root)) = roots.iter().find(|&&(name, _)| name == chain[0]) {
-                    let present = has_result(root, &chain[1..]);
-                    node.expr = Expr::Literal(LiteralValue::Boolean(if present {
-                        CelBool::TRUE
-                    } else {
-                        CelBool::FALSE
-                    }));
-                    return;
-                }
+            if let Some(operand) = to_optional(&select.operand.expr) {
+                let chain = opt_select(operand, &select.field);
+                node.expr = Expr::Call(CallExpr {
+                    func_name: "hasValue".to_string(),
+                    target: Some(Box::new(IdedExpr { id: 0, expr: chain })),
+                    args: Vec::new(),
+                });
+                return;
             }
         }
     }
     if let Expr::Call(call) = &mut node.expr {
         if call.target.is_none() && call.args.len() == 2 {
-            if let Some(name) = ordering::strict_function_name(&call.func_name) {
+            if let Some(name) = ordering::strict_function_name(&call.func_name)
+                .or_else(|| equality::strict_function_name(&call.func_name))
+            {
                 call.func_name = name.to_string();
             }
         }
     }
     match &mut node.expr {
-        Expr::Select(select) => rewrite(&mut select.operand, roots),
+        Expr::Select(select) => rewrite(&mut select.operand),
         Expr::Call(call) => {
             if let Some(target) = &mut call.target {
-                rewrite(target, roots);
+                rewrite(target);
             }
             for arg in &mut call.args {
-                rewrite(arg, roots);
+                rewrite(arg);
             }
         }
         Expr::Comprehension(c) => {
-            rewrite(&mut c.iter_range, roots);
-            rewrite(&mut c.accu_init, roots);
-            rewrite(&mut c.loop_cond, roots);
-            rewrite(&mut c.loop_step, roots);
-            rewrite(&mut c.result, roots);
+            rewrite(&mut c.iter_range);
+            rewrite(&mut c.accu_init);
+            rewrite(&mut c.loop_cond);
+            rewrite(&mut c.loop_step);
+            rewrite(&mut c.result);
         }
         Expr::List(list) => {
             for item in &mut list.elements {
-                rewrite(item, roots);
+                rewrite(item);
             }
         }
         Expr::Map(map) => {
             for entry in &mut map.entries {
                 if let EntryExpr::MapEntry(e) = &mut entry.expr {
-                    rewrite(&mut e.key, roots);
-                    rewrite(&mut e.value, roots);
+                    rewrite(&mut e.key);
+                    rewrite(&mut e.value);
                 }
             }
         }
         Expr::Struct(s) => {
             for entry in &mut s.entries {
                 if let EntryExpr::StructField(f) = &mut entry.expr {
-                    rewrite(&mut f.value, roots);
+                    rewrite(&mut f.value);
                 }
             }
         }
@@ -217,27 +219,63 @@ pub fn rewrite(node: &mut IdedExpr, roots: &[(&str, &Value)]) {
     }
 }
 
-/// Whether *chain* (the segments after the root; the last one is the
-/// field `has()` tests) is present in *root*, matching cel-python's
-/// `has()` exactly: every segment up to the last must resolve through a
-/// `Value::Dict`, and the last only has to be a key that *exists* — its
-/// value, even `Value::None`, doesn't matter (`evaluation.py`'s
-/// `member_dot`, a plain dict lookup, not a presence-of-non-null check).
-fn has_result(root: &Value, chain: &[String]) -> bool {
-    let mut current = root;
-    for part in &chain[..chain.len() - 1] {
-        let Value::Dict(dict) = current else {
-            return false;
-        };
-        let Some(next) = dict.get(&Value::Str(part.clone())) else {
-            return false;
-        };
-        current = next;
+/// *expr* rewritten into CEL's safe-navigation form (`_?._` for a field
+/// selection, `_[?_]` for an index), or `None` if *expr* isn't a chain of
+/// those over a leaf (an identifier or a literal) — a macro, a plain
+/// function call, anything [`rewrite`]'s own restriction already left
+/// alone before `has()` could rewrite at all. Every step this *can*
+/// convert never raises: a missing key, a missing index or a selection
+/// through the wrong type all become `optional.none()`
+/// (`objects.rs`'s `unwrap_optional`/`index_into`, `Err(_) =>
+/// CelOptional::none()`), and a later step chains off a `None` by simply
+/// propagating it, never re-evaluating.
+fn to_optional(expr: &Expr) -> Option<Expr> {
+    match expr {
+        Expr::Ident(_) | Expr::Literal(_) => Some(expr.clone()),
+        Expr::Select(select) if !select.test => {
+            let operand = to_optional(&select.operand.expr)?;
+            Some(opt_select(operand, &select.field))
+        }
+        Expr::Call(call)
+            if call.target.is_none()
+                && call.args.len() == 2
+                && call.func_name == cel::common::ast::operators::INDEX =>
+        {
+            let operand = to_optional(&call.args[0].expr)?;
+            Some(Expr::Call(CallExpr {
+                func_name: cel::common::ast::operators::OPT_INDEX.to_string(),
+                target: None,
+                args: vec![
+                    IdedExpr {
+                        id: 0,
+                        expr: operand,
+                    },
+                    call.args[1].clone(),
+                ],
+            }))
+        }
+        _ => None,
     }
-    let Value::Dict(dict) = current else {
-        return false;
-    };
-    dict.contains_key(&Value::Str(chain[chain.len() - 1].clone()))
+}
+
+/// `*operand*.?*field*` (`_?._`), the optional-select `cel` already
+/// implements — a missing field, or a selection through a type that
+/// doesn't support one, both become `optional.none()`.
+fn opt_select(operand: Expr, field: &str) -> Expr {
+    Expr::Call(CallExpr {
+        func_name: cel::common::ast::operators::OPT_SELECT.to_string(),
+        target: None,
+        args: vec![
+            IdedExpr {
+                id: 0,
+                expr: operand,
+            },
+            IdedExpr {
+                id: 0,
+                expr: Expr::Literal(LiteralValue::String(CelString::from(field.to_string()))),
+            },
+        ],
+    })
 }
 
 /// A minimal `Value::Dict` carrying just the subtrees *paths* names out
@@ -248,12 +286,15 @@ fn has_result(root: &Value, chain: &[String]) -> bool {
 /// make [`crate::convert::to_cel`] reject the conversion — `_to_cel` in
 /// Python only ever sees the projected subset too.
 ///
-/// Unlike `_project`, this doesn't special-case an already-captured
-/// subtree by object identity (Python's `placed is value` check): with
-/// *paths* sorted shortest-first, a longer path's walk only ever reuses
-/// or extends a dict a shorter path already placed, so skipping that
-/// check changes nothing about the final shape, only how much redundant
-/// (but harmless) re-insertion happens getting there.
+/// *paths* sorted shortest-first, so a whole subtree a shorter path
+/// already placed is reused, not re-entered — mirroring Python's own
+/// `if placed is value: break` by comparing *values*, not identities
+/// (`Value` has no cheap notion of the latter): when the two are equal,
+/// nothing a longer path could add is missing, and — the bug a previous
+/// version of this had (issue #379 review finding 1) — overwriting
+/// `target[part]` with a placeholder `{}` just because *value* itself
+/// isn't a dict would otherwise corrupt what the shorter path already
+/// placed there.
 pub fn project(state: &Value, paths: &[StatePath]) -> Value {
     let mut unique: Vec<&str> = paths.iter().map(|p| p.path.as_str()).collect();
     unique.sort_by_key(|p| (p.matches('.').count(), *p));
@@ -271,18 +312,18 @@ pub fn project(state: &Value, paths: &[StatePath]) -> Value {
             let Some(value) = source_dict.get(&Value::Str(part.to_string())) else {
                 break;
             };
-            if index == segments.len() - 1 {
-                target.insert(Value::Str(part.to_string()), value.clone());
+            let key = Value::Str(part.to_string());
+            if target.get(&key) == Some(value) {
                 break;
             }
-            if !matches!(
-                target.get(&Value::Str(part.to_string())),
-                Some(Value::Dict(_))
-            ) {
-                target.insert(Value::Str(part.to_string()), Value::Dict(Dict::new()));
+            if index == segments.len() - 1 {
+                target.insert(key, value.clone());
+                break;
             }
-            let Some(Value::Dict(next_target)) = target.get_mut(&Value::Str(part.to_string()))
-            else {
+            if !matches!(target.get(&key), Some(Value::Dict(_))) {
+                target.insert(key.clone(), Value::Dict(Dict::new()));
+            }
+            let Some(Value::Dict(next_target)) = target.get_mut(&key) else {
                 unreachable!("just inserted or already a dict")
             };
             target = next_target;
@@ -340,8 +381,9 @@ pub fn first_unresolved<'a>(paths: &'a [StatePath], state: &Value) -> Option<&'a
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cel::Env;
+    use cel::{Context, Env};
     use electricity_value::Dict;
+    use std::sync::Arc;
 
     fn compile(expr: &str) -> IdedExpr {
         Env::stdlib().compile(expr).unwrap().expression().clone()
@@ -408,47 +450,38 @@ mod tests {
         assert_eq!(paths, vec![("state.m", true), ("state.k", true)]);
     }
 
+    #[test]
+    fn macro_variable_is_not_a_state_path() {
+        let c = collect_state_paths(&compile("state.input.items.all(i, i > 0)"));
+        let paths: Vec<&str> = c.paths.iter().map(|p| p.path.as_str()).collect();
+        assert_eq!(paths, vec!["state.input.items"]);
+    }
+
+    #[test]
+    fn bare_state_is_whole_state_read() {
+        let c = collect_state_paths(&compile("size(state) == 2"));
+        assert!(c.paths.is_empty());
+        assert!(c.reads_whole_state);
+    }
+
+    fn eval(expr: &str, state: &Value) -> cel::Value {
+        let env = Arc::new(Env::stdlib());
+        let program = env.compile(expr).unwrap();
+        let mut tree = program.expression().clone();
+        rewrite(&mut tree);
+        let mut ctx = Context::with_env(Arc::clone(&env));
+        ordering::register(&mut ctx);
+        equality::register(&mut ctx);
+        ctx.add_variable_from_value("state", crate::convert::to_cel(state).unwrap());
+        cel::Value::resolve(&tree, &ctx).unwrap()
+    }
+
     fn dict_value(pairs: Vec<(&str, Value)>) -> Value {
         let mut d = Dict::new();
         for (k, v) in pairs {
             d.insert(Value::Str(k.to_string()), v);
         }
         Value::Dict(d)
-    }
-
-    #[test]
-    fn has_result_requires_every_intermediate_segment_present() {
-        let state = dict_value(vec![("input", dict_value(vec![("n", Value::from(5_i64))]))]);
-        assert!(has_result(&state, &["input".to_string(), "n".to_string()]));
-        assert!(!has_result(
-            &state,
-            &["input".to_string(), "missing".to_string()]
-        ));
-        assert!(!has_result(
-            &state,
-            &["missing".to_string(), "n".to_string()]
-        ));
-    }
-
-    #[test]
-    fn has_result_is_true_for_a_present_null_value() {
-        // A key mapped to `Value::None` is still *present*: cel-python's
-        // `has()` is "the dict lookup didn't raise", not "the value
-        // isn't null" (evaluation.py's member_dot).
-        let state = dict_value(vec![("a", Value::None)]);
-        assert!(has_result(&state, &["a".to_string()]));
-    }
-
-    #[test]
-    fn has_result_is_false_through_a_non_dict_intermediate() {
-        // A disabled node writes `{"value": None}`; selecting a further
-        // field through that `None` is the exact case `cel`'s own `has()`
-        // raises on instead of returning false (finding 1).
-        let state = dict_value(vec![("value", Value::None)]);
-        assert!(!has_result(
-            &state,
-            &["value".to_string(), "price".to_string()]
-        ));
     }
 
     #[test]
@@ -459,12 +492,60 @@ mod tests {
         // `has()` saw the first's fabricated `{}` and returned `true`
         // where cel-python returns `false` (finding 1).
         let state = Value::Dict(Dict::new());
-        let mut tree = compile("!has(state.a.b) || has(state.a.b.c)");
-        rewrite(&mut tree, &[("state", &state)]);
-        let env = cel::Env::stdlib();
-        let mut ctx = cel::Context::with_env(std::sync::Arc::new(env));
-        ctx.add_variable_from_value("state", crate::convert::to_cel(&state).unwrap());
-        assert_eq!(cel::Value::resolve(&tree, &ctx), Ok(cel::Value::Bool(true)));
+        assert_eq!(
+            eval("!has(state.a.b) || has(state.a.b.c)", &state),
+            cel::Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn has_on_a_disabled_node_is_false_not_an_error() {
+        let state = dict_value(vec![(
+            "prime",
+            dict_value(vec![("x", dict_value(vec![("value", Value::None)]))]),
+        )]);
+        assert_eq!(
+            eval("has(state.prime.x.value.price)", &state),
+            cel::Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn has_on_a_list_index_is_false_not_an_error() {
+        // finding 3: `has()`'s argument contains an index, not just a
+        // dotted chain — `cel`'s own, native `has()` only evaluates
+        // gracefully for the *last* segment, so it raises here; the
+        // safe-navigation rewrite handles every step.
+        let state = dict_value(vec![("l", Value::List(vec![]))]);
+        assert_eq!(eval("has(state.l[0].x)", &state), cel::Value::Bool(false));
+    }
+
+    #[test]
+    fn has_on_a_map_index_is_false_not_an_error() {
+        let state = dict_value(vec![
+            ("m", Value::Dict(Dict::new())),
+            ("k", Value::Str("a".to_string())),
+        ]);
+        assert_eq!(
+            eval("has(state.m[state.k].x)", &state),
+            cel::Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn has_inside_all_respects_the_loop_variable_not_the_outer_root() {
+        // finding 4: a loop variable named like one of the usual roots
+        // (`value`/`state`/`meta`) must shadow it inside the macro — the
+        // old rewrite matched `has()`'s root by name alone and always
+        // read the *outer* binding.
+        let state = dict_value(vec![(
+            "rows",
+            Value::List(vec![dict_value(vec![("a", dict_value(vec![]))])]),
+        )]);
+        assert_eq!(
+            eval("state.rows.all(r, !has(r.a.b) || r.a.b > 0)", &state),
+            cel::Value::Bool(true)
+        );
     }
 
     #[test]
@@ -509,17 +590,32 @@ mod tests {
     }
 
     #[test]
-    fn macro_variable_is_not_a_state_path() {
-        let c = collect_state_paths(&compile("state.input.items.all(i, i > 0)"));
-        let paths: Vec<&str> = c.paths.iter().map(|p| p.path.as_str()).collect();
-        assert_eq!(paths, vec!["state.input.items"]);
-    }
-
-    #[test]
-    fn bare_state_is_whole_state_read() {
-        let c = collect_state_paths(&compile("size(state) == 2"));
-        assert!(c.paths.is_empty());
-        assert!(c.reads_whole_state);
+    fn project_does_not_corrupt_a_scalar_a_longer_guarded_path_extends() {
+        // finding 1: `state.p.v == 'done' || has(state.p.v.price)` on
+        // `{p: {v: 'done'}}`. `state.p.v` (unguarded) and
+        // `state.p.v.price` (has()-guarded) are both collected; a
+        // previous version of `project` inserted `{}` over the already-
+        // placed string `'done'` once it found `v` wasn't a dict, which
+        // made the *unguarded* `state.p.v == 'done'` read see `{}`
+        // instead.
+        let state = dict_value(vec![(
+            "p",
+            dict_value(vec![("v", Value::Str("done".into()))]),
+        )]);
+        let projected = project(
+            &state,
+            &[
+                StatePath {
+                    path: "state.p.v".to_string(),
+                    guarded: false,
+                },
+                StatePath {
+                    path: "state.p.v.price".to_string(),
+                    guarded: true,
+                },
+            ],
+        );
+        assert_eq!(projected, state);
     }
 
     #[test]

@@ -146,10 +146,24 @@ fn golden_corpus_matches_circuitrys_real_cel_evaluator() {
                 // Text from `cel`/`lark` itself only has to fail at the
                 // same place with a non-empty message, not match
                 // word-for-word (DESIGN.md §1, §12) — but it still has
-                // to have *a* message, not a silently empty one.
-                if err.to_string().is_empty() {
+                // to have *a* message, not a silently empty one, and it
+                // must still carry Circuitry's own, exact prefix: every
+                // non-Circuitry-worded failure is wrapped as
+                // `CEL evaluation failed for {expr!r}: {cause}` by both
+                // entry points (`lib.rs`), never left bare.
+                let actual_message = err.to_string();
+                let expected_prefix = format!(
+                    "CEL evaluation failed for {}: ",
+                    electricity_value::Value::Str(case.expr.clone()).py_repr()
+                );
+                if actual_message.is_empty() {
                     failures.push(format!(
                         "case {i}: error for {:?} has an empty message",
+                        case.expr
+                    ));
+                } else if !actual_message.starts_with(&expected_prefix) {
+                    failures.push(format!(
+                        "case {i}: error for {:?} is missing Circuitry's own prefix\n  expected prefix: {expected_prefix:?}\n  got:             {actual_message:?}",
                         case.expr
                     ));
                 }

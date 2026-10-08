@@ -24,20 +24,63 @@
 //!
 //! A `Value::Int` too large for CEL's 64-bit `int`, if the expression
 //! actually reads it, is a `CelError` from both entry points
-//! (`convert::Overflow`). This is a deliberate, evidence-backed
-//! deviation for [`evaluate_expect`]: `evaluate_cel_expect` in
-//! `core/cel_eval.py` converts `value`/`meta`/`state` *before* its own
-//! `try`/`except`, so the matching `ValueError` there escapes uncaught
-//! instead of becoming a `CelEvaluationError` — `core.expect`'s caller
-//! only catches the latter, so that overload would crash the run rather
-//! than fail the expectation. Reproducing a different Rust panic for
-//! parity with an inconsistency between Circuitry's own two entry points
-//! (one wraps this error, the other doesn't) isn't worth it; raising a
-//! `CelError` the same way [`evaluate_condition`] already does is a
-//! strictly safer, still fail-loud choice for the one entry point whose
-//! Python counterpart doesn't itself fail loud here.
+//! (`convert::Overflow`, [`CelError::is_overflow`]). For
+//! [`evaluate_condition`] this matches Python exactly: `_project`
+//! narrows what `_to_cel` ever sees to what the expression reads, so an
+//! unread big int elsewhere in `state` never raises, and one the
+//! expression *does* read is `ValueError("overflow")`, wrapped into
+//! `CelEvaluationError` the same as any other evaluation failure.
+//!
+//! For [`evaluate_expect`] this is a deliberate, evidence-backed
+//! deviation, not parity: `evaluate_cel_expect` in `core/cel_eval.py`
+//! converts `value`/`meta`/`state` *before* its own `try`/`except`, so
+//! the matching `ValueError` escapes **uncaught** — it is not a
+//! `CelEvaluationError`, and the two call sites that invoke
+//! `core.expect` handle that raw `ValueError` differently from each
+//! other and from a failed expectation:
+//!
+//! - `core.tool`'s attempt loop (`tool.py`) catches every exception from
+//!   the attempt, `ValueError` included: the attempt fails and is
+//!   retried up to the step's `retry:` policy, `meta.error` becomes
+//!   `"overflow"`, and `meta.expect` is never set (a failed expectation
+//!   sets it). `on_error: fail` then re-raises the bare `ValueError`.
+//! - `core.use` (`use.py`) catches it too, but re-raises a `ValueError`
+//!   **immediately, with no retry** — `meta.error` is `"overflow"`, and
+//!   `on_error: fail`'s message is `"use '<name>' -> <label>: overflow"`.
+//!
+//! Both differ from a genuinely failed expectation (`meta.expect.error`
+//! set, `meta.error` becoming `"expect failed: <summary>"`, retried up
+//! to `max_attempts` for `use`). This crate raises a `CelError` here —
+//! the same shape [`evaluate_condition`] already uses for its own
+//! overflow — rather than reproducing either Python outcome exactly;
+//! [`CelError::is_overflow`] lets a future caller distinguish this case
+//! and reproduce whichever of the two Python behaviours it is wiring up
+//! to (tool vs. use) if that parity ever matters, rather than baking in
+//! a guess now.
+//!
+//! Known divergence: a `Value::Dict` key with no CEL
+//! [`cel::objects::Key`] counterpart (anything other than
+//! `bool`/`int`/`string` — a `float`, a `None`, a bare `date`, a nested
+//! `list`/`dict`) is **dropped** by `convert::to_cel` rather than mapped
+//! to some placeholder. This is reachable from an ordinary
+//! orchestration, not just a key buried deep in `value`/`meta`: a YAML
+//! input file's `2026-01-01: x` is a date key, and PyYAML resolves an
+//! unquoted float- or null-looking key the same way, so `state.input`
+//! can hold any of them directly. Circuitry's own `_to_cel`
+//! (`core/cel_eval.py`) instead converts such a key to `None` (or keeps
+//! a float/datetime key as its own CEL-less type) —
+//! `celtypes.MapType.__setitem__` never validates keys — so several
+//! date keys collapse into a single `null` key holding the last value,
+//! and `size()` counts it. `cel::objects::Key` cannot represent `null`
+//! (or a float, or a nested container) as a map key at all, so
+//! reproducing Python's collapse-to-one-null-key behavior isn't an
+//! option here; dropping the entry is the least-wrong of the choices
+//! actually available. A `Value::Int` too large for `i64` as a dict key
+//! raises `convert::Overflow` instead of being dropped, matching every
+//! other big-int read.
 
 mod convert;
+mod equality;
 mod ordering;
 mod paths;
 
@@ -68,6 +111,7 @@ pub const MAX_EXPR_LENGTH: usize = 4096;
 pub struct CelError {
     message: String,
     expression: String,
+    overflow: bool,
 }
 
 impl CelError {
@@ -75,12 +119,23 @@ impl CelError {
         CelError {
             message,
             expression: expression.to_string(),
+            overflow: false,
         }
     }
 
     /// The CEL expression that failed.
     pub fn expression(&self) -> &str {
         &self.expression
+    }
+
+    /// Whether this is a big-int-overflow failure (`convert::Overflow`)
+    /// rather than a parse/compile/evaluation failure — see the module
+    /// docs' note on [`evaluate_expect`]'s big-int deviation: a future
+    /// caller that wants to reproduce Circuitry's own `core.tool`/
+    /// `core.use` handling of that specific case, rather than treating
+    /// it like any other `CelError`, can branch on this.
+    pub fn is_overflow(&self) -> bool {
+        self.overflow
     }
 }
 
@@ -130,10 +185,13 @@ fn compile(env: &Env, expr: &str) -> Result<cel::Program, CelError> {
 /// large for CEL's 64-bit `int`, wrapped the same way a genuine
 /// evaluation failure is.
 fn overflow_err(expr: &str) -> CelError {
-    CelError::new(
-        expr,
-        format!("CEL evaluation failed for {}: overflow", py_repr(expr)),
-    )
+    CelError {
+        overflow: true,
+        ..CelError::new(
+            expr,
+            format!("CEL evaluation failed for {}: overflow", py_repr(expr)),
+        )
+    }
 }
 
 /// Python `bool(result)` applied to whatever a CEL expression evaluated
@@ -195,7 +253,9 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
             ));
         }
         log::warn!(
-            "CEL expression {expr:?} reads unset state path {unresolved:?}; condition is false"
+            "CEL expression {} reads unset state path {}; condition is false",
+            py_repr(expr),
+            py_repr(unresolved)
         );
         return Ok(false);
     }
@@ -211,10 +271,11 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
     };
 
     let mut tree = program.expression().clone();
-    paths::rewrite(&mut tree, &[("state", state)]);
+    paths::rewrite(&mut tree);
 
     let mut ctx = Context::with_env(Arc::clone(&env));
     ordering::register(&mut ctx);
+    equality::register(&mut ctx);
     ctx.add_variable_from_value(
         "state",
         convert::to_cel(&projected_state).map_err(|_| overflow_err(expr))?,
@@ -253,13 +314,11 @@ pub fn evaluate_expect(
     let program = compile(&env, expr)?;
 
     let mut tree = program.expression().clone();
-    paths::rewrite(
-        &mut tree,
-        &[("value", value), ("meta", meta), ("state", state)],
-    );
+    paths::rewrite(&mut tree);
 
     let mut ctx = Context::with_env(Arc::clone(&env));
     ordering::register(&mut ctx);
+    equality::register(&mut ctx);
     ctx.add_variable_from_value(
         "value",
         convert::to_cel(value).map_err(|_| overflow_err(expr))?,
