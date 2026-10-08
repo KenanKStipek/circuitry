@@ -5303,6 +5303,120 @@
     }
   },
   {
+    "name": "use_cycle_through_a_childs_duplicate_path_key_last_value_rejoins_the_cycle",
+    "files": {
+      "entry.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n",
+      "a.yml": "effects:\n  - type: use\n    name: s\n    path: nowhere.yml\n    path: entry.yml\n"
+    },
+    "entry": "entry.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Cycle: <root>/entry.yml → <root>/a.yml → <root>/entry.yml"
+      ],
+      "warnings": []
+    },
+    "run_error": "Cycle: <root>/entry.yml → <root>/a.yml → <root>/entry.yml",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "s",
+          "ref": null,
+          "path": "a.yml",
+          "orchestration": null,
+          "inline": null,
+          "inputs": null,
+          "outputs": null,
+          "validate": true,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "s"
+      ]
+    },
+    "definition_error": null,
+    "digest": "98dd97986d8c2733b217eb84b9ad590aeb1055440403658aad5d9c7f3c334d6f",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "use_cycle_through_a_childs_duplicate_path_key_last_value_leaves_the_cycle",
+    "files": {
+      "entry.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n",
+      "a.yml": "effects:\n  - type: use\n    name: s\n    path: entry.yml\n    path: nowhere.yml\n"
+    },
+    "entry": "entry.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "s",
+          "ref": null,
+          "path": "a.yml",
+          "orchestration": null,
+          "inline": null,
+          "inputs": null,
+          "outputs": null,
+          "validate": true,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "s"
+      ]
+    },
+    "definition_error": null,
+    "digest": "98dd97986d8c2733b217eb84b9ad590aeb1055440403658aad5d9c7f3c334d6f",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
     "name": "use_cycle_through_a_child_with_a_duplicate_key",
     "files": {
       "entry.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n",

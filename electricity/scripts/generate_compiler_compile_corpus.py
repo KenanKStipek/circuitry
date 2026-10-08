@@ -1426,6 +1426,44 @@ add({
 })
 
 add({
+    # Second review of #415, finding 4: `use_cycle_through_a_child_with_
+    # a_duplicate_key` repeats the *same* value ("name: s" twice), so it
+    # doesn't actually prove last-key-wins -- this probe's duplicate
+    # `path:` key has two *different* values, and the *later* one
+    # points back into the cycle.
+    "name": "use_cycle_through_a_childs_duplicate_path_key_last_value_rejoins_the_cycle",
+    "files": {
+        "entry.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n",
+        "a.yml": (
+            "effects:\n"
+            "  - type: use\n"
+            "    name: s\n"
+            "    path: nowhere.yml\n"
+            "    path: entry.yml\n"
+        ),
+    },
+    "entry": "entry.yml",
+})
+
+add({
+    # Same duplicate key, reversed: the *earlier* value would rejoin
+    # the cycle, but the *later* (winning) one points somewhere
+    # unrelated -- the opposite outcome from the case above.
+    "name": "use_cycle_through_a_childs_duplicate_path_key_last_value_leaves_the_cycle",
+    "files": {
+        "entry.yml": "effects:\n  - type: use\n    name: s\n    path: a.yml\n",
+        "a.yml": (
+            "effects:\n"
+            "  - type: use\n"
+            "    name: s\n"
+            "    path: entry.yml\n"
+            "    path: nowhere.yml\n"
+        ),
+    },
+    "entry": "entry.yml",
+})
+
+add({
     # Finding 13: a duplicate key in a `use` *child* (never the entry
     # document, which Circuitry's main loader -- not
     # `core/cycle_check.py::load_orch`'s plain `yaml.safe_load` --

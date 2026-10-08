@@ -1482,3 +1482,86 @@ fn construct_mapping_node_lenient(pairs: &[(Rc<Node>, Rc<Node>)]) -> Result<Valu
     }
     Ok(Value::Dict(dict))
 }
+
+#[cfg(test)]
+mod last_key_wins_tests {
+    use super::{load_yaml, load_yaml_last_key_wins};
+    use electricity_value::Value;
+
+    /// Second review of #415, finding 4: `load_yaml_last_key_wins`
+    /// keeps the *last* value for a repeated own key, at the *first*
+    /// occurrence's position -- plain `dict` literal semantics, not
+    /// `_UniqueKeyLoader`'s. A corpus case with two *equal* repeated
+    /// values (`name: s` twice) doesn't actually pin this; this does.
+    #[test]
+    fn duplicate_key_with_different_values_keeps_the_last_value_at_the_first_position() {
+        let value = load_yaml_last_key_wins("a: 1\nb: 2\na: 3\n").expect("lenient load");
+        let dict = value.as_dict().expect("a mapping");
+        assert_eq!(
+            dict.keys().map(Value::as_str).collect::<Vec<_>>(),
+            vec![Some("a"), Some("b")],
+            "the repeated key keeps its first position"
+        );
+        assert_eq!(
+            dict.get(&Value::Str("a".to_string())),
+            Some(&Value::from(3_i64))
+        );
+        assert_eq!(
+            dict.get(&Value::Str("b".to_string())),
+            Some(&Value::from(2_i64))
+        );
+    }
+
+    #[test]
+    fn merge_key_plus_an_overriding_own_key() {
+        let value =
+            load_yaml_last_key_wins("base: &b\n  a: 1\n  b: 2\nmerged:\n  <<: *b\n  a: 99\n")
+                .expect("lenient load");
+        let dict = value.as_dict().expect("a mapping");
+        let merged = dict
+            .get(&Value::Str("merged".to_string()))
+            .and_then(Value::as_dict)
+            .expect("merged is a mapping");
+        assert_eq!(
+            merged.get(&Value::Str("a".to_string())),
+            Some(&Value::from(99_i64)),
+            "the own key overrides the merged-in value"
+        );
+        assert_eq!(
+            merged.get(&Value::Str("b".to_string())),
+            Some(&Value::from(2_i64)),
+            "a merged-in key not overridden still comes through"
+        );
+    }
+
+    /// A bare `=` own key: `load_yaml_last_key_wins` loads it as the
+    /// literal string `"="` (plain `yaml.safe_load`'s own behaviour --
+    /// no `flatten_mapping` pre-pass retags it, so it is never anything
+    /// but an ordinary scalar key); `load_yaml`'s own duplicate-key
+    /// pre-pass hits it first, still tagged as YAML's "value" tag
+    /// (`tag:yaml.org,2002:value`, which has no scalar constructor of
+    /// its own), and errors.
+    #[test]
+    fn bare_equals_own_key_loads_as_the_string_where_load_yaml_errors() {
+        let text = "m:\n  =: 1\n";
+
+        let value = load_yaml_last_key_wins(text).expect("lenient load");
+        let inner = value
+            .as_dict()
+            .expect("a mapping")
+            .get(&Value::Str("m".to_string()))
+            .and_then(Value::as_dict)
+            .expect("m is a mapping");
+        assert_eq!(
+            inner.get(&Value::Str("=".to_string())),
+            Some(&Value::from(1_i64)),
+            "a bare '=' own key loads as the literal string \"=\""
+        );
+
+        assert!(
+            load_yaml(text).is_err(),
+            "load_yaml's own duplicate-key pre-pass does not retag a bare '=' key, \
+             so it reaches resolve_scalar_value still tagged as YAML's value tag"
+        );
+    }
+}
