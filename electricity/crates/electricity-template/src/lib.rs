@@ -90,9 +90,8 @@ mod tokenizer;
 
 pub use electricity_value::Value;
 pub use render::{JsonAwareCtx, PlainCtx, SpliceCtx};
-pub use tokenizer::Tag;
 
-use tokenizer::{TokenizeError, TokenizeFailure};
+use tokenizer::{Tag, TokenizeError, TokenizeFailure};
 
 /// The deepest a template's `{{#section}}`/`{{^section}}` tags may nest
 /// before tokenizing rejects it with [`TemplateError::is_too_deeply_nested`]
@@ -260,31 +259,6 @@ pub fn template_syntax_error(template: &str) -> Option<String> {
         Err(ValidateFailure::Syntax(msg)) => Some(msg),
         Err(ValidateFailure::Other(msg)) => Some(msg),
     }
-}
-
-/// Tokenizes *template* with chevron's default grammar, **not** rejecting
-/// a partial tag (`{{> name}}`) the way [`template_syntax_error`]/
-/// [`render_template`] do -- added for lane D of electricity-compiler's
-/// issue #408 (minimal stand-in ahead of lane C's own crate additions,
-/// per #408's "D uses C's `tokens()`; if C hasn't merged, D adds a
-/// minimal one and C rebases on it"), which needs the raw token stream
-/// to syntax-check a declared prompt (`{{> name}}` is valid syntax
-/// there, by design -- `core/prompt_compose.py`'s own
-/// `template_syntax_error(text, allow_partials=True)`) and to scan it
-/// for a set-delimiter tag (`{{=...=}}`), which a declared prompt may
-/// never use (it would change the delimiters of whatever template
-/// includes it).
-///
-/// `Ok` carries every token chevron's tokenizer would produce, partials
-/// included; `Err` carries the same single-line description
-/// [`template_syntax_error`] itself would report for a genuinely
-/// malformed template (an unclosed tag, a mismatched section close, an
-/// empty tag) -- it does not distinguish [`TokenizeFailure::Depth`]
-/// from the rest, since a caller checking declared-prompt syntax wants
-/// only "parses or not", the same question [`template_syntax_error`]
-/// answers.
-pub fn tokens(template: &str) -> Result<Vec<Tag>, String> {
-    tokenizer::tokenize(template).map_err(|err| err.failure.describe())
 }
 
 /// Render *template* against *root* through *ctx* ([`PlainCtx`] for every
@@ -572,22 +546,5 @@ mod tests {
         let ctx = dict(vec![("items", Value::List(vec![Value::Int(1.into())]))]);
         let err = render_template("{{items}}", &ctx, &json_ctx, "params_json").unwrap_err();
         assert_eq!(err.to_string(), "params_json: could not render: boom");
-    }
-
-    #[test]
-    fn tokens_does_not_reject_a_partial() {
-        let result = tokens("{{> name}}").unwrap();
-        assert_eq!(result, vec![Tag::Partial("name".to_string())]);
-    }
-
-    #[test]
-    fn tokens_reports_set_delimiter() {
-        let result = tokens("{{=<% %>=}}").unwrap();
-        assert_eq!(result, vec![Tag::SetDelimiter("<% %>".to_string())]);
-    }
-
-    #[test]
-    fn tokens_reports_a_malformed_template_as_a_single_line_description() {
-        assert_eq!(tokens("{{a").unwrap_err(), "unclosed tag at line 1");
     }
 }
