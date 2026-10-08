@@ -151,13 +151,12 @@ A `prompt` is one model call. Some work needs an agent: read the code, edit it, 
   timeout_ms: 3600000
   params:
     engine: claude_code
-    permission_mode: acceptEdits
     cwd: "{{input.repo}}"
     prompt: |
       Make the failing test pass without changing the test itself.
 
       {{prime.search.value}}
-    tools: ["Bash(pytest:*)"]
+    tools: [Read, Grep, Glob, Edit, Write, "Bash(pytest:*)"]
     exclude_tools: [WebFetch, WebSearch]
     result_file: .agent/result.json
     result_schema:
@@ -170,7 +169,7 @@ A `prompt` is one model call. Some work needs an agent: read the code, edit it, 
 
 The prompt goes to the CLI in a file (pi) or on stdin (Claude Code), never on the command line, so it can be as long as the task needs. `result_file` is the session's contract: the agent is told to write that JSON file, the plugin validates it against `result_schema`, and `prime.fix_test.value` is the parsed object — here a real `tests_pass` boolean a later `if` can branch on. A missing or invalid file gets exactly one repair turn in the same session, quoting the errors; still invalid, the effect fails with them. Without `result_file`, `value` is the agent's final reply. `meta.raw` records the session id (a later effect's `session` param resumes it), the turns, tool calls, tokens and cost, and the path of a compact transcript — the transcript itself stays out of state. The session runs in its own process group: `timeout_ms` (here an hour, for the whole session) or a cancelled run stops the CLI and everything the agent started.
 
-**The agent is not sandboxed.** It runs with your permissions: it can edit or delete any file you can, run any program, and reach the network. The engine's own tool lists are how you narrow it, and the engines read them differently. For pi, `tools` is an allowlist and `exclude_tools` a denylist (`--tools`/`--exclude-tools`). For Claude Code, `exclude_tools` (`--disallowedTools`) is the hard deny, while `tools` (`--allowedTools`) only pre-approves tools to run without a permission prompt — it takes nothing away, and under `permission_mode: bypassPermissions` it restricts nothing. A headless Claude Code session denies whatever needs approval and was not pre-approved, so the example above sets `acceptEdits` to let it edit files (its result file included) and pre-approves `pytest` in `tools`; without either, it could not even write the result file. For the same reason `agent` carries the `shell`, `fs-write` and `network` capabilities, so a document that is not your own needs the same consent to run one as to run `shell`. Every param, the config block that picks the default engine and each CLI's binary, and the full result contract are in [`docs/plugins/agent.md`](../plugins/agent.md).
+**The agent is not sandboxed.** It runs with your permissions: it can edit or delete any file you can, run any program, and reach the network. The engine's own tool lists are how you narrow it, and the two engines differ in detail. For pi, `tools` is an allowlist and `exclude_tools` a denylist (`--tools`/`--exclude-tools`). For Claude Code, `tools` (`--tools`, its entries also pre-approved with `--allowedTools`) is an allowlist: the session has only the built-in tools it names, and under the default `dontAsk` mode every other call is denied. `exclude_tools` (`--disallowedTools`) is a hard deny in every permission mode. The example lists what the session needs (file tools, and `Bash` limited to `pytest`) and leaves `permission_mode` out; `Write` or `Edit` is what lets it write `result_file`. A Claude Code session also ignores its repository's own settings (hooks, the API key helper, project MCP servers) unless `trust_project_settings: true` is set, and gets the repository's root `CLAUDE.md` appended to its prompt. For the same reason `agent` carries the `shell`, `fs-write` and `network` capabilities, so a document that is not your own needs the same consent to run one as to run `shell`. Every param, the config block that picks the default engine and each CLI's binary, and the full result contract are in [`docs/plugins/agent.md`](../plugins/agent.md).
 
 ### MCP servers as tool providers
 

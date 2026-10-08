@@ -113,12 +113,17 @@ Implementation: [`src/circuitry/plugins/shell.py`](../src/circuitry/plugins/shel
 **The `agent` tool is not sandboxed.** It runs a whole pi or Claude Code
 session with the user's own permissions: the agent can edit or delete any
 file the user can, run any program and reach the network, and its `cwd` is
-where it starts, not a boundary. The only narrowing is the engine's own
-tool lists — pi's `--tools`/`--exclude-tools`; Claude Code's
-`--disallowedTools` (a hard deny) and `--permission-mode`, with
-`--allowedTools` only pre-approving tools rather than restricting them —
-and, unlike `shell`'s allowlist, those params may be templated or come from
-`params_json`. Circuitry therefore tags `agent` with the `shell`,
+where it starts, not a boundary. The narrowing is the engine's own
+tool lists — pi's `--tools`/`--exclude-tools`; for Claude Code, `--tools`
+(an allowlist, its entries also pre-approved with `--allowedTools`) under
+`--permission-mode dontAsk` by default, where a specifier such as
+`Bash(pytest:*)` limits its tool only in that mode, and `--disallowedTools`,
+a hard deny in every mode — and, unlike `shell`'s allowlist, those params
+may be templated or come from `params_json`. A Claude Code session also
+ignores its repository's own settings (hooks, the API key helper, project MCP
+servers) unless `trust_project_settings` is set, and gets the repository
+root's `CLAUDE.md` appended to its prompt; without `tools`, Claude Code's own
+default mode (`auto`) decides which calls run. Circuitry therefore tags `agent` with the `shell`,
 `fs-write` and `network` capabilities, so a document that is not the
 user's own needs the same consent to run one as to run `shell` (see
 [Section 9](#9-capability-consent-for-a-document-that-is-not-the-users-own)),
