@@ -1,0 +1,26 @@
+[package]
+name = "electricity-cel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "CEL evaluation for electricity, behind Circuitry's own strict/non-strict layer"
+
+[dependencies]
+electricity-value = { path = "../electricity-value" }
+# The CEL engine itself (DESIGN.md §7.2): chosen over cel-core for its
+# larger user base and active maintenance. `regex` backs `matches()`
+# (§7.3); `chrono` is needed for its Timestamp type. `ext_encoders`
+# (base64.encode/decode) is default but unused here, so it's dropped.
+cel = { version = "0.15", default-features = false, features = ["regex", "chrono"] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+# `logger.warning` parity for the absent-path convention (DESIGN.md §7.2):
+# a no-op unless a binary later installs a logger, same as Python's
+# `logging` when nothing configures a handler.
+log = "0.4"
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+num-bigint = "0.5"
