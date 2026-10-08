@@ -6,11 +6,12 @@
 //! error shapes.
 
 use crate::{
-    CheckOptions, CheckReport, DocumentOrigin, RunCheckError, compile_document, digest,
-    load_document, not_implemented, structural_errors, unknown_key_warnings,
+    CheckOptions, CheckReport, DocumentOrigin, RunCheckError, compile_document, cycles, digest,
+    groups, load_document, not_implemented, structural_errors, unknown_key_warnings,
 };
 use electricity_bytecode::Program;
 use electricity_value::Value;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 /// `runtime.max_concurrency`/`runtime.concurrency_groups` configuration
@@ -29,7 +30,13 @@ pub(crate) fn concurrency_config_errors(runtime_block: Option<&Value>) -> Vec<St
 /// trust_document=...)`.
 ///
 /// Order (once lane B lands): [`load_document`], [`structural_errors`]/
-/// [`unknown_key_warnings`], then [`concurrency_config_errors`].
+/// [`unknown_key_warnings`], [`concurrency_config_errors`],
+/// [`compile_document`] (lane C), [`groups::unknown_group_errors`]
+/// (lane C) against the merged runtime config's
+/// `runtime.concurrency_groups` keys, then [`cycles::detect_cycles`]
+/// (lane C) -- `validate()`'s own order (`cli/runtime_shim.py:1358` for
+/// the group check). Each error shape is `validate()`'s own: a flat
+/// `errors` list, with no `"Orchestration validation failed:"` prefix.
 ///
 /// Stub (lane A): always reports `ok: false` with one error until lane B
 /// lands.
@@ -45,12 +52,59 @@ pub fn check_report(path: &Path, options: &CheckOptions) -> CheckReport {
             };
         }
     };
+    let warnings = unknown_key_warnings(&document);
+
     let mut errors = structural_errors(&document);
     errors.extend(concurrency_config_errors(None));
-    let warnings = unknown_key_warnings(&document);
+    if !errors.is_empty() {
+        return CheckReport {
+            ok: false,
+            errors,
+            warnings,
+        };
+    }
+
+    // A rough stand-in for the nearest-`config.json` walk, as in
+    // `check_for_run` below -- lane B replaces this with the real walk.
+    let confinement_root = path.parent().unwrap_or(path).to_path_buf();
+    let origin = DocumentOrigin::File {
+        document_dir: confinement_root.clone(),
+        confinement_root,
+    };
+
+    let program = match compile_document(&document, &origin) {
+        Ok(program) => program,
+        Err(err) => {
+            return CheckReport {
+                ok: false,
+                errors: vec![err.0],
+                warnings,
+            };
+        }
+    };
+
+    // Placeholder: lane B passes the merged runtime config's
+    // `concurrency_groups` keys here instead of an empty set.
+    let group_errors = groups::unknown_group_errors(&program, &BTreeSet::new());
+    if !group_errors.is_empty() {
+        return CheckReport {
+            ok: false,
+            errors: group_errors,
+            warnings,
+        };
+    }
+
+    if let Err(err) = cycles::detect_cycles(&document, &origin) {
+        return CheckReport {
+            ok: false,
+            errors: vec![err.0],
+            warnings,
+        };
+    }
+
     CheckReport {
-        ok: errors.is_empty(),
-        errors,
+        ok: true,
+        errors: Vec::new(),
         warnings,
     }
 }
@@ -61,11 +115,18 @@ pub fn check_report(path: &Path, options: &CheckOptions) -> CheckReport {
 ///
 /// Order (once lane B lands): [`load_document`], the structural and
 /// concurrency-configuration errors (as [`RunCheckError::Structural`]),
-/// then [`compile_document`] (lane C, as [`RunCheckError::Compile`]).
-/// `Program.document` ([`electricity_bytecode::DocumentInfo`]) is
-/// filled in here, not by `compile_document` itself -- this function
-/// has *path*'s raw bytes (via [`digest::document_content_digest`]),
-/// which `compile_document` never sees.
+/// then [`compile_document`] (lane C, as [`RunCheckError::Compile`]),
+/// then [`groups::unknown_group_errors`] (lane C, as
+/// [`RunCheckError::Structural`], matching `run()`'s own
+/// `"Orchestration validation failed:"`-prefixed `raise`) against the
+/// merged runtime config's `runtime.concurrency_groups` keys, then
+/// [`cycles::detect_cycles`] (lane C, as [`RunCheckError::Cycle`]) --
+/// `run(validate_only=True)`'s own order (`cli/runtime_shim.py:756` for
+/// the group check). `Program.document`
+/// ([`electricity_bytecode::DocumentInfo`]) is filled in here, not by
+/// `compile_document` itself -- this function has *path*'s raw bytes
+/// (via [`digest::document_content_digest`]), which `compile_document`
+/// never sees.
 ///
 /// Stub (lane A): always fails until lane B lands.
 pub fn check_for_run(path: &Path, options: &CheckOptions) -> Result<Program, RunCheckError> {
@@ -90,6 +151,15 @@ pub fn check_for_run(path: &Path, options: &CheckOptions) -> Result<Program, Run
     };
     let mut program =
         compile_document(&document, &origin).map_err(|err| RunCheckError::Compile(err.0))?;
+
+    // Placeholder: lane B passes the merged runtime config's
+    // `concurrency_groups` keys here instead of an empty set.
+    let group_errors = groups::unknown_group_errors(&program, &BTreeSet::new());
+    if !group_errors.is_empty() {
+        return Err(RunCheckError::Structural(group_errors));
+    }
+
+    cycles::detect_cycles(&document, &origin).map_err(|err| RunCheckError::Cycle(err.0))?;
 
     if let Ok(computed_digest) = digest::document_content_digest(path, &document, &confinement_root)
     {

@@ -4,9 +4,14 @@
 //! duplicate-key check, an unreadable child treated as empty), with no
 //! library lookup, reporting `Cycle: a → b → a`.
 //!
-//! Called from `compile::compile_document` (lane C, same lane), last --
-//! `use` cycles can only be detected once every `use` effect's
-//! `path:`/`orchestration:` child is known.
+//! Called from `pipeline.rs` (lane B), after a document compiles, in
+//! both `check_for_run` and `check_report` -- mirroring
+//! `cli/runtime_shim.py`'s own two calls to `core/cycle_check.py`'s
+//! `detect_cycles`, right after the concurrency-group check
+//! ([`crate::groups::unknown_group_errors`]): `use` cycles can only be
+//! detected once every `use` effect's `path:`/`orchestration:` child is
+//! known, which needs a compiled document, not `compile_document`
+//! itself.
 
 use crate::{CompileError, DocumentOrigin};
 use electricity_value::Value;
