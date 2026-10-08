@@ -39,6 +39,12 @@ pub(crate) enum Tag {
 pub(crate) enum TokenizeFailure {
     Syntax(String),
     Index(String),
+    /// `{{#.../{{^...` nesting deeper than [`crate::MAX_SECTION_DEPTH`],
+    /// carrying the depth reached -- checked here, as each one opens,
+    /// rather than once the whole token stream is built, so an
+    /// over-nested template is rejected before `render::build_tree`/
+    /// `render::render_nodes` would ever see it.
+    Depth(usize),
 }
 
 /// A tokenize failure, plus every token already pushed before it
@@ -63,6 +69,12 @@ impl TokenizeFailure {
     pub(crate) fn describe(&self) -> String {
         let raw = match self {
             TokenizeFailure::Syntax(msg) | TokenizeFailure::Index(msg) => msg,
+            TokenizeFailure::Depth(depth) => {
+                return format!(
+                    "template nesting too deep ({depth} levels, max {})",
+                    crate::MAX_SECTION_DEPTH
+                );
+            }
         };
         raw.split_whitespace().collect::<Vec<_>>().join(" ")
     }
@@ -131,6 +143,9 @@ impl<'a> Tokenizer<'a> {
                 "section" | "inverted section" => {
                     self.open_sections.push(tag_key.clone());
                     self.last_tag_line = self.current_line;
+                    if self.open_sections.len() > crate::MAX_SECTION_DEPTH {
+                        return Err(TokenizeFailure::Depth(self.open_sections.len()));
+                    }
                 }
                 "end" => {
                     let last_section = self.open_sections.pop().ok_or_else(|| {

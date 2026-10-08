@@ -93,21 +93,61 @@ pub use render::{JsonAwareCtx, PlainCtx, SpliceCtx};
 
 use tokenizer::{Tag, TokenizeError, TokenizeFailure};
 
+/// The deepest a template's `{{#section}}`/`{{^section}}` tags may nest
+/// before tokenizing rejects it with [`TemplateError::is_too_deeply_nested`]
+/// rather than letting `render::build_tree`/`render::render_nodes`
+/// recurse that deep -- checked by `tokenizer.rs`'s own
+/// `open_sections` stack as tags are read, the same place that already
+/// catches an unbalanced section/end pair, so an over-nested template
+/// never reaches the tree-building or rendering stage at all.
+///
+/// Deliberately **not** [`electricity_value::MAX_DEPTH`] (512), and far
+/// smaller: this crate's own rendering walk
+/// (`render::render_with_pushed_scope`) clones the *entire* current scope
+/// stack on every section it descends into, so render time grows with
+/// the *cube* of section depth, not linearly -- measured directly
+/// (`tests/nesting_limit.rs`'s module docs): rendering 300 levels of
+/// nested sections against matching data took 8 seconds on the machine
+/// this was measured on; 400 took 18. 512 would be a full minute or
+/// more for a single template render, a real denial-of-service on its
+/// own regardless of whether it could also overflow the stack (which,
+/// measured separately, it does too, somewhere between 350 and 400
+/// levels on a 2 MiB debug-build stack). 64 keeps a render at the limit
+/// well under a second (measured at ~125ms) and nowhere near either
+/// boundary, with no need for the `[profile.dev.package.*]`
+/// opt-level overrides `electricity-yaml`/`electricity-cel` need for
+/// their own, much larger limits.
+pub const MAX_SECTION_DEPTH: usize = 64;
+
 /// Why a template could not be rendered. Mirrors `core/templates.py`'s
 /// `TemplateError`, keeping its two-tier message exactly: a malformed
 /// template (an unclosed tag, a mismatched section close, an unsupported
 /// partial) says `"malformed Mustache template"`; a render-time failure
-/// against the data it was handed says `"could not render"`.
+/// against the data it was handed says `"could not render"`. A third
+/// kind, [`TemplateError::is_too_deeply_nested`], has no Python
+/// counterpart at all: `core/templates.py` has no section-depth limit
+/// (`MAX_SECTION_DEPTH`'s own docs), so this is purely a Rust-side
+/// safety addition, not parity with a case Circuitry itself rejects.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TemplateError {
     label: String,
     kind: TemplateErrorKind,
 }
 
+impl TemplateError {
+    /// Whether this is a section-nesting-too-deep failure
+    /// ([`MAX_SECTION_DEPTH`]) rather than a malformed template or a
+    /// render-time failure against the data it was handed.
+    pub fn is_too_deeply_nested(&self) -> bool {
+        matches!(self.kind, TemplateErrorKind::Depth(_))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TemplateErrorKind {
     Syntax(String),
     Render(String),
+    Depth(usize),
 }
 
 impl std::fmt::Display for TemplateError {
@@ -119,6 +159,13 @@ impl std::fmt::Display for TemplateError {
             TemplateErrorKind::Render(msg) => {
                 write!(f, "{}: could not render: {msg}", self.label)
             }
+            TemplateErrorKind::Depth(depth) => {
+                write!(
+                    f,
+                    "{}: template nesting too deep ({depth} levels, max {MAX_SECTION_DEPTH}).",
+                    self.label
+                )
+            }
         }
     }
 }
@@ -128,6 +175,7 @@ impl std::error::Error for TemplateError {}
 enum ValidateFailure {
     Syntax(String),
     Other(String),
+    Depth(usize),
 }
 
 /// The first partial tag's name among *tokens*, in order, if any.
@@ -176,6 +224,7 @@ fn validate_and_reject_partials(template: &str) -> Result<Vec<Tag>, ValidateFail
             match failure {
                 TokenizeFailure::Syntax(_) => Err(ValidateFailure::Syntax(failure.describe())),
                 TokenizeFailure::Index(_) => Err(ValidateFailure::Other(failure.describe())),
+                TokenizeFailure::Depth(depth) => Err(ValidateFailure::Depth(depth)),
             }
         }
     }
@@ -187,9 +236,26 @@ fn validate_and_reject_partials(template: &str) -> Result<Vec<Tag>, ValidateFail
 /// whether the failure is chevron's own `ChevronError` or, in the one
 /// case chevron itself doesn't raise that type for (an empty tag,
 /// `{{}}`), a plain index-out-of-range message.
+///
+/// A section nested past MAX_SECTION_DEPTH is deliberately not reported
+/// here: core/templates.py has no section-depth limit at all
+/// (MAX_SECTION_DEPTH's own docs above), so Python's
+/// template_syntax_error tokenizes a 65-deep template exactly like any
+/// other and returns None -- cof check passes it, and the eventual
+/// failure (deep enough rendering) only ever surfaces from
+/// render_template, as "could not render", never as a syntax error.
+/// Reporting Depth here instead would make cof check reject a template
+/// electricity's own render_template would otherwise still attempt and
+/// fail with its own, more specific TemplateError::is_too_deeply_nested
+/// -- and would make this crate's compile-time check stricter than
+/// Circuitry's own, the one divergence this port otherwise avoids
+/// introducing on purpose. Letting tokenizing continue past a
+/// too-deep section, rather than stopping there, can also surface a
+/// genuine syntax error later in the same template that stopping early
+/// would have hidden.
 pub fn template_syntax_error(template: &str) -> Option<String> {
     match validate_and_reject_partials(template) {
-        Ok(_) => None,
+        Ok(_) | Err(ValidateFailure::Depth(_)) => None,
         Err(ValidateFailure::Syntax(msg)) => Some(msg),
         Err(ValidateFailure::Other(msg)) => Some(msg),
     }
@@ -221,6 +287,12 @@ pub fn render_template(
             return Err(TemplateError {
                 label: label.to_string(),
                 kind: TemplateErrorKind::Render(msg),
+            });
+        }
+        Err(ValidateFailure::Depth(depth)) => {
+            return Err(TemplateError {
+                label: label.to_string(),
+                kind: TemplateErrorKind::Depth(depth),
             });
         }
     };

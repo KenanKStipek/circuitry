@@ -24,7 +24,7 @@
 //!
 //! A `Value::Int` too large for CEL's 64-bit `int`, if the expression
 //! actually reads it, is a `CelError` from both entry points
-//! (`convert::Overflow`, [`CelError::is_overflow`]). For
+//! (`convert::ConvertError::Overflow`, [`CelError::is_overflow`]). For
 //! [`evaluate_condition`] this matches Python exactly: `_project`
 //! narrows what `_to_cel` ever sees to what the expression reads, so an
 //! unread big int elsewhere in `state` never raises, and one the
@@ -76,7 +76,7 @@
 //! reproducing Python's collapse-to-one-null-key behavior isn't an
 //! option here; dropping the entry is the least-wrong of the choices
 //! actually available. A `Value::Int` too large for `i64` as a dict key
-//! raises `convert::Overflow` instead of being dropped, matching every
+//! raises `convert::ConvertError::Overflow` instead of being dropped, matching every
 //! other big-int read.
 //!
 //! `has(X)` is rewritten, at parse time, into
@@ -139,6 +139,7 @@ mod convert;
 mod equality;
 mod indexing;
 mod macros;
+mod nesting;
 mod ordering;
 mod paths;
 
@@ -147,6 +148,8 @@ use std::sync::{Arc, OnceLock};
 
 use cel::{Context, Env};
 use electricity_value::Value;
+
+pub use nesting::MAX_NESTING_DEPTH;
 
 /// Python's `repr()` of a `str`, used to match `core/cel_eval.py`'s own
 /// `{expr!r}`/`{unresolved!r}` messages word for word: a message
@@ -170,6 +173,7 @@ pub struct CelError {
     message: String,
     expression: String,
     overflow: bool,
+    too_deeply_nested: bool,
 }
 
 impl CelError {
@@ -178,6 +182,7 @@ impl CelError {
             message,
             expression: expression.to_string(),
             overflow: false,
+            too_deeply_nested: false,
         }
     }
 
@@ -186,7 +191,7 @@ impl CelError {
         &self.expression
     }
 
-    /// Whether this is a big-int-overflow failure (`convert::Overflow`)
+    /// Whether this is a big-int-overflow failure (`convert::ConvertError::Overflow`)
     /// rather than a parse/compile/evaluation failure — see the module
     /// docs' note on [`evaluate_expect`]'s big-int deviation: a future
     /// caller that wants to reproduce Circuitry's own `core.tool`/
@@ -194,6 +199,18 @@ impl CelError {
     /// it like any other `CelError`, can branch on this.
     pub fn is_overflow(&self) -> bool {
         self.overflow
+    }
+
+    /// Whether this is a nesting-too-deep failure: either the expression
+    /// itself nested more than [`MAX_NESTING_DEPTH`] levels of brackets
+    /// deep (rejected before parsing, `nesting.rs`'s module docs), or a
+    /// `value`/`meta`/`state` argument nested more than
+    /// [`electricity_value::MAX_DEPTH`] levels deep (rejected while
+    /// converting it, `convert.rs`'s module docs) — never a
+    /// parse/compile/evaluation failure against well-formed, bounded
+    /// input.
+    pub fn is_too_deeply_nested(&self) -> bool {
+        self.too_deeply_nested
     }
 }
 
@@ -230,6 +247,28 @@ fn check_length(expr: &str) -> Result<(), CelError> {
     Ok(())
 }
 
+/// Rejects an expression nested (parens/brackets/map-and-list literals)
+/// more than [`MAX_NESTING_DEPTH`] levels deep, *before* handing it to
+/// `cel`'s own parser — see `nesting.rs`'s module docs for why this
+/// crate needs its own limit, measured independently of
+/// [`electricity_value::MAX_DEPTH`], and the measurements behind the
+/// specific number.
+fn check_nesting_depth(expr: &str) -> Result<(), CelError> {
+    let depth = nesting::max_nesting_depth(expr);
+    if depth > MAX_NESTING_DEPTH {
+        return Err(CelError {
+            too_deeply_nested: true,
+            ..CelError::new(
+                expr,
+                format!(
+                    "CEL expression nesting too deep ({depth} levels, max {MAX_NESTING_DEPTH})."
+                ),
+            )
+        });
+    }
+    Ok(())
+}
+
 fn compile(env: &Env, expr: &str) -> Result<cel::Program, CelError> {
     env.compile(expr).map_err(|e| {
         CelError::new(
@@ -249,6 +288,30 @@ fn overflow_err(expr: &str) -> CelError {
             expr,
             format!("CEL evaluation failed for {}: overflow", py_repr(expr)),
         )
+    }
+}
+
+/// A `value`/`meta`/`state` argument nested past
+/// [`electricity_value::MAX_DEPTH`] (`convert.rs`'s own module docs) —
+/// wrapped the same way a genuine evaluation failure is, same as
+/// [`overflow_err`].
+fn convert_depth_err(expr: &str) -> CelError {
+    CelError {
+        too_deeply_nested: true,
+        ..CelError::new(
+            expr,
+            format!(
+                "CEL evaluation failed for {}: nesting too deep",
+                py_repr(expr)
+            ),
+        )
+    }
+}
+
+fn convert_err(expr: &str, err: convert::ConvertError) -> CelError {
+    match err {
+        convert::ConvertError::Overflow => overflow_err(expr),
+        convert::ConvertError::Depth => convert_depth_err(expr),
     }
 }
 
@@ -295,6 +358,7 @@ fn truthy(value: &cel::Value) -> bool {
 /// legitimately false condition.
 pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<bool, CelError> {
     check_length(expr)?;
+    check_nesting_depth(expr)?;
     let env = stdlib_env();
     let program = compile(&env, expr)?;
 
@@ -338,7 +402,7 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
     macros::register(&mut ctx);
     ctx.add_variable_from_value(
         "state",
-        convert::to_cel(&projected_state).map_err(|_| overflow_err(expr))?,
+        convert::to_cel(&projected_state).map_err(|e| convert_err(expr, e))?,
     );
     let result = cel::Value::resolve(&tree, &ctx).map_err(|e| {
         CelError::new(
@@ -370,6 +434,7 @@ pub fn evaluate_expect(
     state: &Value,
 ) -> Result<bool, CelError> {
     check_length(expr)?;
+    check_nesting_depth(expr)?;
     let env = stdlib_env();
     let program = compile(&env, expr)?;
 
@@ -383,15 +448,15 @@ pub fn evaluate_expect(
     macros::register(&mut ctx);
     ctx.add_variable_from_value(
         "value",
-        convert::to_cel(value).map_err(|_| overflow_err(expr))?,
+        convert::to_cel(value).map_err(|e| convert_err(expr, e))?,
     );
     ctx.add_variable_from_value(
         "meta",
-        convert::to_cel(meta).map_err(|_| overflow_err(expr))?,
+        convert::to_cel(meta).map_err(|e| convert_err(expr, e))?,
     );
     ctx.add_variable_from_value(
         "state",
-        convert::to_cel(state).map_err(|_| overflow_err(expr))?,
+        convert::to_cel(state).map_err(|e| convert_err(expr, e))?,
     );
     let result = cel::Value::resolve(&tree, &ctx).map_err(|e| {
         CelError::new(
