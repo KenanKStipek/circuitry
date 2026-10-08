@@ -4,20 +4,23 @@
 //! prints this stream today regardless of `effective_log_mode`'s
 //! answer.
 //!
-//! The two forms share one top-level command: `watch` is a real
-//! `clap` subcommand, and anything else is captured by
-//! `#[command(external_subcommand)]` and reparsed as [`RunArgs`] — so
-//! `-e key=value` and the other run flags are only recognized *after*
-//! the orchestration positional, matching the usage synopsis in
-//! [`ABOUT`] (and `cof run`'s own flags-after-positionals order,
-//! DESIGN.md §4.1).
+//! The two forms share no top-level `clap` command: `osp watch ...` is
+//! dispatched by a plain string check on the first argument (`watch`
+//! is therefore reserved — an orchestration literally named `watch`
+//! needs a `./watch` or `watch.yml` path instead), and everything else
+//! parses directly as [`RunArgs`]. A `clap` derive otherwise mixes
+//! flags and positionals in any order on its own; the #422 review's
+//! "flags work before the positionals" only broke under the O-0
+//! stub's `#[command(external_subcommand)]` dispatch, which matched
+//! the *first* token against the top level's own (empty) flag set
+//! before ever reaching `RunArgs` — this dispatch avoids that entirely.
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, ValueEnum};
 use oscilloscope_core::diff::Differ;
 use oscilloscope_core::engine::{CofEngine, ElectricityEngine, Engine, EngineError, RunSpec};
 use oscilloscope_core::model::RunModel;
@@ -36,23 +39,8 @@ and shows it running.
   osp <orchestration> [config.json] [-e key=value]... [--engine cof|electricity] [--out-dir DIR] [--log]
   osp watch <dir | state.live.json> [--plan doc.yml]";
 
-#[derive(Parser)]
-#[command(name = "osp", version = VERSION, about = ABOUT)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Attach to a run osp did not start.
-    Watch(WatchArgs),
-    #[command(external_subcommand)]
-    Run(Vec<String>),
-}
-
 #[derive(Parser, Debug)]
-#[command(name = "osp")]
+#[command(name = "osp", version = VERSION, about = ABOUT)]
 struct RunArgs {
     orchestration: String,
     config: Option<String>,
@@ -378,17 +366,17 @@ fn report_clap_error(err: clap::Error) -> ExitCode {
 }
 
 fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
-    let cli = match Cli::try_parse_from(args) {
-        Ok(cli) => cli,
-        Err(err) => return report_clap_error(err),
-    };
-    match cli.command {
-        Commands::Watch(args) => do_watch(args),
-        Commands::Run(raw) => {
-            match RunArgs::try_parse_from(std::iter::once("osp".to_string()).chain(raw)) {
-                Ok(args) => do_run(args),
-                Err(err) => report_clap_error(err),
-            }
+    let args: Vec<String> = args.into_iter().collect();
+    if args.get(1).map(String::as_str) == Some("watch") {
+        let watch_args = std::iter::once("osp watch".to_string()).chain(args.into_iter().skip(2));
+        match WatchArgs::try_parse_from(watch_args) {
+            Ok(args) => do_watch(args),
+            Err(err) => report_clap_error(err),
+        }
+    } else {
+        match RunArgs::try_parse_from(args) {
+            Ok(args) => do_run(args),
+            Err(err) => report_clap_error(err),
         }
     }
 }
@@ -421,8 +409,26 @@ mod tests {
     }
 
     #[test]
-    fn unknown_flag_before_the_orchestration_is_a_usage_error() {
-        assert_eq!(run(args(&["-e", "k=v", "do-thing.yml"])), ExitCode::from(2));
+    fn an_actually_unknown_flag_is_a_usage_error() {
+        assert_eq!(
+            run(args(&["--bogus-flag", "do-thing.yml"])),
+            ExitCode::from(2)
+        );
+    }
+
+    #[test]
+    fn recognized_flags_work_before_the_orchestration_positional() {
+        // DESIGN.md §4.1/issue #424's own synopsis: "Flags may also
+        // appear before the positionals." `do-thing.yml` here doesn't
+        // exist, so this still exits non-zero (a couldn't-launch-cof or
+        // compile-failure path) — the point is that `-e`/`--engine`
+        // *parse* before the positional rather than erroring as unknown.
+        let code = run(args(&["-e", "k=v", "--log", "do-thing.yml"]));
+        assert_ne!(
+            code,
+            ExitCode::from(2),
+            "flags before the positional should parse"
+        );
     }
 
     #[test]
@@ -437,6 +443,26 @@ mod tests {
         std::fs::write(&doc, "effects: []\n").unwrap();
         let code = run(args(&[doc.to_str().unwrap(), "--engine", "electricity"]));
         assert_eq!(code, ExitCode::from(2));
+    }
+
+    #[test]
+    fn watch_is_dispatched_to_watch_args_not_run_args() {
+        // "watch" with no target is a WatchArgs usage error (missing
+        // the required `target` positional) — proving dispatch reached
+        // WatchArgs, not RunArgs (which has no required `target` field).
+        assert_eq!(run(args(&["watch"])), ExitCode::from(2));
+    }
+
+    #[test]
+    fn watch_attaches_to_a_run_directory_with_only_a_final_state() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("state.live.json"),
+            r#"{"runtime":{"last_run":{"completed_at":"t"}},"prime":{"value":true,"meta":{"error":null}}}"#,
+        )
+        .unwrap();
+        let code = run(args(&["watch", dir.path().to_str().unwrap()]));
+        assert_eq!(code, ExitCode::from(0));
     }
 
     #[test]

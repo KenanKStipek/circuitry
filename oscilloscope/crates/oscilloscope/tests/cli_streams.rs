@@ -15,7 +15,7 @@ fn run(args: &[&str]) -> std::process::Output {
 
 #[test]
 fn a_usage_error_prints_to_stderr_not_stdout() {
-    let out = run(&["-e", "k=v", "do-thing.yml"]);
+    let out = run(&["--bogus-flag", "do-thing.yml"]);
     assert_eq!(out.status.code(), Some(2));
     assert!(
         out.stdout.is_empty(),
