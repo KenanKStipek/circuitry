@@ -1712,7 +1712,7 @@ it starts, from whichever worker thread runs it:
 | `seq` | Strictly increasing in file order. |
 | `ts` | Wall-clock UTC, millisecond precision. |
 | `ev` | `run_start`, `dispatch`, `start`, `end` or `run_end`. |
-| `id` | Unique per effect *instance* — a pass or a branch each gets its own, so `start`/`end` pair up even when several instances share a path (an unnamed loop body). |
+| `id` | Unique per effect *instance* — a pass or a branch each gets its own, so `start`/`end` pair up even when several instances share a path (an unnamed loop body). An `end` whose `start` was not seen on this stream (a double-fire; the start predates this `--events` writer, which cannot happen for `cof` itself but is a rule any reader must handle) carries `id: null`, with no `ms`. |
 | `path` | The absolute state path, as in `--live-state`. |
 | `dispatch` | Sent once by a tree loop or tree `dynamic` before its branches start — the existing `concurrent_dispatch` callback, composed with (never replaced by) this stream. |
 | `ok` | On `end`: whether the effect's `meta.error` is `null`. On `run_end`: whether the run succeeded. |

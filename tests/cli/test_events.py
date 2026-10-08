@@ -138,6 +138,41 @@ def test_end_ok_false_carries_truncated_error(tmp_path: Path) -> None:
     assert len(end["error"]) == 500
 
 
+def test_complete_without_a_matching_start_gets_a_null_id_and_no_crash(
+    tmp_path: Path,
+) -> None:
+    """A completion this instance never saw the start of -- e.g. a
+    composed observer upstream raised and the runtime's own `finally:`
+    fired `on_complete` again for the same instance (#419 review) -- is
+    not an error: it writes `end` with `id: null` and no `ms`, and the
+    stream keeps going."""
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_complete("prime.step", {"meta": {"error": None}})
+    log.run_start(run_id="r1", orchestration="o.yml")  # still writing
+    log.close()
+
+    events = _lines(tmp_path / "events.jsonl")
+    end = events[0]
+    assert end["ev"] == "end"
+    assert end["id"] is None
+    assert "ms" not in end
+    assert end["ok"] is True
+    assert events[1]["ev"] == "run_start"
+
+
+def test_a_double_complete_is_not_an_error(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_start("prime.step", {})
+    log.on_complete("prime.step", {"meta": {"error": None}})
+    log.on_complete("prime.step", {"meta": {"error": None}})  # the double-fire
+    log.close()
+
+    ends = [e for e in _lines(tmp_path / "events.jsonl") if e["ev"] == "end"]
+    assert len(ends) == 2
+    assert ends[0]["id"] is not None and "ms" in ends[0]
+    assert ends[1]["id"] is None and "ms" not in ends[1]
+
+
 def test_run_end_ok_omits_error_and_signal(tmp_path: Path) -> None:
     log = EventLog(tmp_path / "events.jsonl")
     log.run_end(ok=True, error=None, signal=None)
@@ -175,6 +210,14 @@ def test_file_is_created_or_truncated_at_construction(tmp_path: Path) -> None:
     lines = path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     assert "stale" not in lines[0]
+
+
+def test_creates_missing_parent_directories(tmp_path: Path) -> None:
+    path = tmp_path / "deep" / "nested" / "events.jsonl"
+    log = EventLog(path)
+    log.run_start(run_id="r1", orchestration="o.yml")
+    assert log.close() is False
+    assert path.exists()
 
 
 def test_unwritable_path_disables_writes_without_raising(tmp_path: Path) -> None:
@@ -220,6 +263,28 @@ def test_close_returns_false_when_nothing_ever_failed(tmp_path: Path) -> None:
     log = EventLog(tmp_path / "events.jsonl")
     log.run_start(run_id="r1", orchestration="o.yml")
     assert log.close() is False
+
+
+def test_an_unexpected_non_oserror_also_disables_further_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Not just an `OSError` writing the file -- any unexpected exception
+    anywhere in a method's body must not escape and must not re-fail on
+    every subsequent call (#419 review)."""
+    log = EventLog(tmp_path / "events.jsonl")
+    log.run_start(run_id="r1", orchestration="o.yml")
+
+    def boom(data: str) -> int:
+        raise RuntimeError("not an OSError")
+
+    monkeypatch.setattr(log._file, "write", boom)
+    log.on_start("prime.step", {})  # must not raise
+    log.on_complete("prime.step", {"meta": {"error": None}})  # already disabled
+    assert log.close() is True
+
+    lines = _lines(tmp_path / "events.jsonl")
+    assert len(lines) == 1
+    assert lines[0]["ev"] == "run_start"
 
 
 def test_no_torn_lines_under_concurrent_writers(tmp_path: Path) -> None:

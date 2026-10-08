@@ -1617,7 +1617,7 @@ file never sees a torn line except a trailing one still being written.
 | `seq` | Strictly increasing in file order, starting at `0`. |
 | `ts` | Wall-clock UTC, millisecond precision, `isoformat(timespec="milliseconds")` with the `+00:00` suffix replaced by `Z`. |
 | `ev` | `run_start`, `dispatch`, `start`, `end` or `run_end`. |
-| `id` | Present on `start`/`end` only. Unique per effect *instance* — a loop pass or a tree branch each get their own — from one counter, incremented under the same lock as every write. An unnamed loop's repeated pass, or several `flow: tree` branches sharing one path, still pair `start` with the right `end`: `EventLog` keeps a per-thread stack keyed by path (`threading.local`), since one effect instance's `start` and `end` always arrive on the same thread (including nested instances) — `on_start` pushes, `on_complete` pops. |
+| `id` | Present on `start`/`end` only. Unique per effect *instance* — a loop pass or a tree branch each get their own — from one counter, incremented under the same lock as every write. An unnamed loop's repeated pass, or several `flow: tree` branches sharing one path, still pair `start` with the right `end`: `EventLog` keeps a per-thread stack keyed by path (`threading.local`), since one effect instance's `start` and `end` always arrive on the same thread (including nested instances) — `on_start` pushes, `on_complete` pops. **An `end` whose `start` was not seen carries `id: null`** (and no `ms`) rather than erroring — a double-fire of `fire_effect_complete` (e.g. a composed observer upstream raised, and the runtime's own `finally:` fired completion again for the same instance) must never propagate into the run; popping from an empty per-path stack is exactly this case, not a bug to raise on. |
 | `path` | The absolute dotted state path, exactly as in `--live-state` and in scripted-replies keys (`electricity/docs/spec/scripted-replies.md`). |
 | `dispatch` | `path`/`branches` only. Sent once by a tree loop or tree `dynamic` before its branches start — the reference composes this with the pre-existing `Store.concurrent_dispatch` callback (`RunRequest.concurrent_dispatch_observer`) rather than replacing it; both observers fire. |
 | `ok` | On `end`: `node["meta"]["error"] is None`. On `run_end`: whether the run succeeded. |
@@ -1638,9 +1638,12 @@ file never sees a torn line except a trailing one still being written.
   `finally:`) — seeing `run_end` means that final snapshot is already on
   disk.
 
-**Failures never fail the run.** A failure to open the file at construction,
-or any later `OSError` writing a line, is logged once (a warning) and then
-ignored for the rest of that run — exactly the same contract
+**Failures never fail the run.** A failure to open the file at construction
+(the parent directory is created first, like `--live-state`), or any later
+failure writing a line — not just an `OSError`, *any* exception a write
+raises — is logged once (a warning) and then ignored for the rest of that
+run: every public method on the reference's own `EventLog` catches its own
+exceptions and disables further writes, exactly the same contract
 `--live-state` already has. `run()` folds that into one warning on
 `RunResult.warnings`, the same way a `--live-state` write failure does.
 

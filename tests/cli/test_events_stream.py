@@ -388,6 +388,95 @@ effects:
     assert len(warning_lines) == 1, (stdout, stderr)
 
 
+def _normalize_for_comparison(value: Any) -> Any:
+    """Strip wall-clock/run-id fields that legitimately differ between two
+    otherwise-identical runs (timestamps, `run_id`, `totals.wall_time_s`),
+    so two runs of the same orchestration can be compared for equality."""
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, sub in value.items():
+            if key in ("_run_id", "_timestamp", "created_at", "completed_at"):
+                continue
+            cleaned = sub
+            if key == "runtime" and isinstance(sub, dict):
+                cleaned = {k: v for k, v in sub.items() if k != "last_run"}
+            out[key] = _normalize_for_comparison(cleaned)
+        return out
+    if isinstance(value, list):
+        return [_normalize_for_comparison(v) for v in value]
+    return value
+
+
+def test_events_never_changes_a_failing_runs_outcome(tmp_path: Path) -> None:
+    """A failing tool (`on_error: continue`, swallowed) and a failing
+    prompt (default `on_error: fail`, propagates and fails the run) must
+    produce the same final state and exit code with and without
+    `--events` — the stream never affects the run it observes (#419
+    review)."""
+    replies_path = tmp_path / "replies.yaml"
+    replies_path.write_text(
+        "prime.fails_fail:\n  - error:\n      kind: server_error\n", encoding="utf-8"
+    )
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "default_adapter": "scripted",
+                "default_model": "test",
+                "runtime": {
+                    "adapters": {"scripted": {"replies_file": str(replies_path)}}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    orch = tmp_path / "orch.yml"
+    orch.write_text(
+        """
+effects:
+  - type: tool
+    name: fails_continue
+    provider: shell
+    on_error: continue
+    params:
+      command: bash
+      args: ["-c", "exit 1"]
+      allowed_commands: ["bash"]
+  - type: prompt
+    name: fails_fail
+    template: "ask something"
+""".lstrip("\n"),
+        encoding="utf-8",
+    )
+
+    out_path = tmp_path / "out.json"
+
+    def run_once(*, with_events: bool) -> tuple[int, dict[str, Any]]:
+        args = [
+            sys.executable, "-m", "circuitry.cli.app", "run", str(orch),
+            "--config", str(config_path), "--out", str(out_path), "--quiet",
+        ]
+        if with_events:
+            args += ["--events", str(tmp_path / "events.jsonl")]
+        proc = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=20.0,
+            env=_sandboxed_env(tmp_path),
+            cwd=tmp_path,
+            check=False,
+        )
+        return proc.returncode, json.loads(out_path.read_text(encoding="utf-8"))
+
+    code_without, state_without = run_once(with_events=False)
+    code_with, state_with = run_once(with_events=True)
+
+    assert code_without == code_with == 1
+    assert _normalize_for_comparison(state_without) == _normalize_for_comparison(state_with)
+    assert (tmp_path / "events.jsonl").exists()
+
+
 def test_run_end_is_emitted_after_the_live_state_mirrors_final_write(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
