@@ -1,0 +1,6 @@
+{
+  "spec_case": "C6",
+  "description": "if: {mode: cel, expr: has(state.input.x) && state.input.x > 1} with x absent — has() exempts the path from the absent-path warning, so the whole expression evaluates normally and short-circuits false (electricity/docs/spec/runtime-semantics.md §4.4).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

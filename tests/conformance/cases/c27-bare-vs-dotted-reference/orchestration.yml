@@ -1,0 +1,14 @@
+name: c27-bare-vs-dotted-reference
+effects:
+  - type: tool
+    name: step1
+    provider: json
+    params: {mode: stringify, input: {marker: "one"}}
+  - type: tool
+    name: step2
+    provider: json
+    params:
+      mode: stringify
+      input:
+        bare: "{{step1.value}}"
+        dotted: "{{prime.step1.value}}"

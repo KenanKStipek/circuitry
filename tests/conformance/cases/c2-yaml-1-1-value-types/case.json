@@ -1,0 +1,6 @@
+{
+  "spec_case": "C2",
+  "description": "YAML 1.1 scalar resolution via PyYAML's safe loader: on/off/yes/no booleans, 0x hex, leading-zero octal, sexagesimal duration, and a `<<` merge key overridden by the mapping's own key (electricity/docs/spec/runtime-semantics.md §1.1).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

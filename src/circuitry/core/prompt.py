@@ -33,6 +33,7 @@ from ..output import live_region as _live_region
 from .answers import AnswerParseError, parse_boolean_answer, parse_number_answer
 from .cancellation import get_token
 from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
+from .effect_identity import model_call
 from .store import Store
 from .templates import render_template
 
@@ -709,7 +710,7 @@ class PromptRuntime:
                     if limiter is not None
                     else nullcontext()
                 )
-                with concurrency_cm, live_cm:
+                with concurrency_cm, live_cm, model_call(store, self.defn.name):
                     res, decoded_value, attempts_meta, generation_error = (
                         self._generate_with_fallbacks(
                             prompt=prompt_sent,
