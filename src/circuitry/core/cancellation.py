@@ -621,25 +621,41 @@ def _communicate_promptly(
     fully written inside that first short slice was simply never resumed
     or closed, and a child that hadn't yet finished reading stdin waited
     for EOF until *timeout* itself, or forever with no timeout). Instead,
-    if there is input to send, a helper thread (the same shape CPython's
-    own Windows ``communicate`` uses for stdin) writes and closes it on
-    its own, and ``proc.stdin`` is set to ``None`` first so ``communicate``
-    — now only ever called with ``input=None`` — never touches it itself:
-    stdout/stderr are its only job here. The thread isn't joined: once the
-    deadline is hit or the process is killed, the reader going away
-    unblocks a pending write with ``BrokenPipeError`` on its own almost at
-    once, and joining unconditionally would reintroduce the exact
-    unbounded-wait bug class this module exists to close, this time
-    inside the one place meant to guarantee *timeout* itself.
+    if there is input to send *and* ``proc.stdin`` is a real pipe (a
+    ``subprocess.Popen`` always has one whenever ``run_tracked`` passed
+    ``input``; a bare duck-typed test double usually does not), a helper
+    thread (the same shape CPython's own Windows ``communicate`` uses for
+    stdin) writes and closes it on its own, and ``proc.stdin`` is set to
+    ``None`` first so ``communicate`` — now only ever called with
+    ``input=None`` — never touches it itself: stdout/stderr are its only
+    job here. The thread isn't joined: once the deadline is hit or the
+    process is killed, the reader going away unblocks a pending write
+    with ``BrokenPipeError`` on its own almost at once, and joining
+    unconditionally would reintroduce the exact unbounded-wait bug class
+    this module exists to close, this time inside the one place meant to
+    guarantee *timeout* itself. Without a real ``proc.stdin`` to hand to a
+    thread, this falls back to the pre-fix shape (*input* on the first
+    call, ``None`` after) — safe there only because none of this
+    catalog's own ``Popen`` test doubles actually model a retry losing
+    unwritten input.
     """
-    if proc.stdin is not None and input is not None:
-        stdin, proc.stdin = proc.stdin, None
+    # getattr, not proc.stdin: a Popen-like test double that never
+    # models a `stdin` attribute at all (most of this catalog's own
+    # subprocess.Popen fakes) must keep working exactly as before --
+    # for those, falling back to passing *input* to `communicate()` on
+    # the first call only (the pre-fix shape) is safe, since none of
+    # them actually exercise a retry that would lose it.
+    stdin = getattr(proc, "stdin", None)
+    threaded_stdin = input is not None and stdin is not None
+    if threaded_stdin:
+        proc.stdin = None
         threading.Thread(target=_feed_stdin, args=(stdin, input), daemon=True).start()
     if timeout is None:
         deadline = None
     else:
         deadline = time.monotonic() + timeout
         full_timeout = timeout
+    first = True
     while True:
         if deadline is None:
             slice_timeout = poll_seconds
@@ -649,9 +665,13 @@ def _communicate_promptly(
                 raise subprocess.TimeoutExpired(proc.args, full_timeout)
             slice_timeout = min(poll_seconds, remaining)
         try:
-            return proc.communicate(timeout=slice_timeout)
+            if threaded_stdin:
+                return proc.communicate(timeout=slice_timeout)
+            return proc.communicate(
+                input=input if first else None, timeout=slice_timeout
+            )
         except subprocess.TimeoutExpired:
-            continue
+            first = False
 
 
 def run_tracked(
