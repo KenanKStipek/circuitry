@@ -581,65 +581,82 @@ declare its own `prompts:` inline — only `file:` sources require a file.
 
 **Expansion algorithm**, run against a template string *T* and a context
 *ctx* (the same ctx `render_template` would use), before *T* reaches
-`render_template`:
+`render_template`. The whole expansion — including every declared prompt
+*T* pulls in, recursively — shares one synthetic-key counter and one
+`extra` dict of resolved effect values (step 2b below): a per-call counter
+would let two sibling references, nested inside two different declared
+prompts, mint the same key and overwrite each other's value.
 
 1. Find every `{{> name}}` tag in *T* — matched the same way chevron's own
    tokenizer does (the sigil `>` must immediately follow `{{`, no leading
    space; `name` is everything up to `}}`, stripped). A name must match
    `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$` (optionally dotted);
    anything else is a render-time error (`TemplateError`).
-2. For each tag, resolve its text:
-   - **`name` (no dot) is a declared prompt**: recursively run this same
-     algorithm (step 1–4) on that prompt's own raw text, against the *same*
-     ctx, then render the result with `escape=False` (§3.1) — producing the
-     prompt's final text. Re-entering a name already being expanded
-     (directly or through another declared prompt) is a cycle — render-time
-     error; `cof check` (§1.4) already rejects a cycle that is purely among
-     declared prompts statically, so reaching this at run time means a
-     generated document.
-   - **Otherwise (an effect reference)**: walk `ctx["prime"]` by `name`'s
-     dot-separated segments, then `.value` — exactly the same dict/list
-     walk `{from: path}` references use (§3.5): a `Mapping` indexes by key,
-     a list/tuple by integer segment, anything else or a missing key stops
-     the walk. If the **first** segment is not even a key of `ctx["prime"]`
-     at all, that is an unknown-name render-time error (`TemplateError`) —
-     a document generated at run time is not statically checked, so this is
-     the backstop (§1.4's static check already catches it for anything that
-     *is* statically checkable). Otherwise, a walk that ends in `None`
-     (missing deeper segment, or an effect whose `value` is `None` —
-     skipped, or failed under `on_error: continue`) resolves to `""`;
-     otherwise `str()` of whatever it finds (same stringification §3.2
-     describes for an ordinary `{{{...}}}` splice).
-   - Either way, drop exactly one trailing `\n` or `\r\n` from the resolved
-     text (not two, not a whole trailing blank region — one line break,
-     checked as a literal suffix).
-3. Bind the resolved text to a fresh synthetic context key (unique per tag
-   within this one expansion, e.g. `__circuitry_partial_0__`) added to a
-   **shallow copy** of *ctx* — the original `input`/`prime`/`runtime` objects
-   are untouched, only new top-level keys are added.
-4. Replace the `{{> name}}` tag's exact source span with `{{{<synthetic
-   key>}}}` — a same-shaped triple-stache tag, not a text splice — so the
-   resolved text (which may itself contain literal `{{`/`}}`, e.g. a model
-   reply) is inserted **verbatim** by the ordinary Mustache render in step 5
-   below: chevron appends a triple-stache value directly to its output
-   accumulator without re-tokenizing it, exactly like any other
-   `{{{prime.x.value}}}` splice, so it can never be parsed as a new tag.
-   Everything in *T* outside the tag's own span — literal text, other tags,
-   sections — is untouched character-for-character.
-5. Render the rewritten template (now containing zero `{{> ...}}` tags, so
-   `render_template`'s own partial check passes trivially) against the
-   context from step 3, with whatever `escape` the surrounding field would
-   have used anyway (§3.4's table) — the synthetic keys' own values are
-   never escaped regardless, since they are already-resolved text spliced
-   with `{{{...}}}` syntax.
-
-Sections spanning a `{{> name}}` tag (`{{#x}}...{{> name}}...{{/x}}`) are
-unaffected by this rewrite — the tag becomes a same-shaped `{{{...}}}` tag
-in place, so the section's own tokenization is untouched; the expansion does
-*not* see per-iteration section scope, since it runs once over the whole
-template string before Mustache evaluates any section at all (a documented
-simplification — a declared prompt/effect reference inside a `{{#list}}`
-section resolves once, against the outer ctx, not per element).
+2. For each tag, in turn:
+   - **`name` (no dot) is a declared prompt (2a):** recursively run this
+     same algorithm on that prompt's own raw text, against the *same* ctx
+     and the *same* shared counter/`extra` — producing a rewritten
+     fragment (zero `{{> ...}}` tags left in it, but still carrying
+     whatever `{{x}}`/`{{{x}}}`/`{{#section}}` tags it had, unrendered).
+     Re-entering a name already being expanded (directly or through
+     another declared prompt) is a cycle — render-time error; `cof check`
+     (§1.4) already rejects a cycle that is purely among declared prompts
+     statically, so reaching this at run time means a generated document.
+     Rewrite every `variable`/`no escape` tag in the fragment to an
+     explicit no-escape tag (`{{x}}` and `{{{x}}}` alike become `{{&x}}`,
+     reusing chevron's own tokenizer to reproduce sections/comments
+     correctly) — a declared prompt's own tags never HTML-escape, even one
+     spliced into a field that otherwise does (#397) — and reject a
+     `set delimiter` token the same way `cof check` does statically (a
+     declared prompt may not change the delimiters of whatever template it
+     lands in). Drop exactly one trailing `\n`/`\r\n` from the fragment,
+     then **splice its text directly into *T*'s own source**, replacing
+     the tag's span character-for-character — not a value bound to a
+     context key: chevron will tokenize and render this text as if it had
+     always been part of *T*, seeing whatever Mustache section scope the
+     `{{> name}}` tag itself sat inside (a fragment reused inside a
+     `{{#list}}` section sees each item, not one shared top-level context —
+     *not* a once-only, outer-ctx-only simplification).
+   - **Otherwise, an effect reference (2b):** walk `ctx["prime"]` by
+     `name`'s dot-separated segments, then `.value` — exactly the same
+     dict/list walk `{from: path}` references use (§3.5): a `Mapping`
+     indexes by key, a list/tuple by integer segment, anything else or a
+     missing key stops the walk. If the **first** segment is not even a
+     key of `ctx["prime"]`: a real effect name somewhere else in the
+     *compiled* document (its first segment is in the compiled root's own
+     effect-name set, gathered once, regardless of nesting — an untaken
+     `if` branch, an unscheduled `flow: tree` sibling, one later in a
+     chain) resolves to `""`, the same as a `None` below; genuinely unknown
+     — not even a name anywhere in the document — is the
+     render-time-backstop error (`TemplateError`), for a generated
+     document not statically checked (§1.4's static check already catches
+     an unknown name for anything that *is* statically checkable).
+     Otherwise, a walk that ends in `None` (missing deeper segment, or an
+     effect whose `value` is `None` — skipped, or failed under
+     `on_error: continue`) resolves to `""`; otherwise `str()` of whatever
+     it finds (same stringification §3.2 describes for an ordinary
+     `{{{...}}}` splice). Drop exactly one trailing `\n`/`\r\n` from the
+     resolved text. Bind it to a fresh synthetic context key (the one
+     counter shared by the whole expansion, e.g. `__circuitry_partial_0__`)
+     added to a **shallow copy** of *ctx* — the original
+     `input`/`prime`/`runtime` objects are untouched, only new top-level
+     keys are added — then replace the tag's own span with `{{{<synthetic
+     key>}}}`: a same-shaped triple-stache tag, not a text splice, so the
+     resolved text (which may itself contain literal `{{`/`}}`, e.g. a
+     model reply) is inserted **verbatim** by the render in step 3 below —
+     chevron appends a triple-stache value directly to its output
+     accumulator without re-tokenizing it, so it can never be parsed as a
+     new tag, even one that looks like `{{=<% %>=}}`.
+3. Once every `{{> name}}` tag — *T*'s own, and every declared prompt it
+   pulled in, recursively — has been replaced this way, render the
+   rewritten template (now containing zero `{{> ...}}` tags, so
+   `render_template`'s own partial check passes trivially) against *ctx*
+   plus every synthetic key step 2b added, with whatever `escape` the
+   surrounding field would have used anyway (§3.4's table). A declared
+   prompt's own tags, rewritten to explicit no-escape in step 2a, never
+   escape regardless of that surrounding `escape`; an effect reference's
+   synthetic key is likewise never escaped, since §3.4's triple-stache
+   splice already never is.
 
 **`cof check`'s static checks** (`check_prompt_composition()`, §1.4) scan
 only the exact fields §3.4 marks `{{> name}}`: yes — not `if.template`/

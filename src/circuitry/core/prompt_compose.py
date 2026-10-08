@@ -43,8 +43,9 @@ own compile time.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -507,7 +508,9 @@ def check_prompt_composition(
 
     root: dict[str, dict[str, Any]] = {}
 
-    def check_name(name: str, *, where: str) -> None:
+    def check_name(
+        name: str, *, where: str, bare_chain: tuple[Mapping[str, dict[str, Any]], ...]
+    ) -> None:
         head = name.split(".", 1)[0]
         if head in declared:
             if "." in name:
@@ -518,6 +521,26 @@ def check_prompt_composition(
                 )
                 return
             return  # declared always wins; collision already reported once, above
+        if "." not in name:
+            # Bare lookup: innermost scope first (a named `if`'s own branch
+            # may have pushed its own children here — see the
+            # `_SCOPE_INTRODUCING_TYPES`/bare_chain comment below), then
+            # `root` for everything bare-visible document-wide.
+            for scope in reversed(bare_chain):
+                if head in scope:
+                    node = scope[head]
+                    if not node["text_producing"]:
+                        errors.append(
+                            f"{where}: '{{{{> {name}}}}}' names effect '{head}' "
+                            f"(type '{node['type']}'), which is neither a 'yield' "
+                            "nor a text 'prompt'."
+                        )
+                    return
+            errors.append(f"{where}: '{{{{> {name}}}}}' does not name a declared prompt or effect.")
+            return
+        # Dotted lookup always resolves from `root`, regardless of where the
+        # reference itself sits — a dotted name reaches a nested/composed
+        # effect's own state "from anywhere in the document" (#396 §2).
         if head not in root:
             errors.append(f"{where}: '{{{{> {name}}}}}' does not name a declared prompt or effect.")
             return
@@ -526,6 +549,16 @@ def check_prompt_composition(
         for seg in segments[1:]:
             children = node.get("children") or {}
             if seg not in children:
+                if node["type"] in _SCOPE_INTRODUCING_TYPES:
+                    # Unlike `loop`/`use` below, every child of a named
+                    # `if`/`dynamic` IS tracked here (`walk` populates
+                    # `children` for exactly these types) — a missing
+                    # segment under one is a genuine unknown name, not a
+                    # container this model simply doesn't follow into.
+                    errors.append(
+                        f"{where}: '{{{{> {name}}}}}' does not name a declared "
+                        "prompt or effect."
+                    )
                 return  # shallow-path trust: a container this model doesn't follow
             node = children[seg]
         if not node["text_producing"]:
@@ -535,7 +568,12 @@ def check_prompt_composition(
                 "text 'prompt'."
             )
 
-    def walk(effects: Any, container_path: str, out: dict[str, dict[str, Any]]) -> None:
+    def walk(
+        effects: Any,
+        container_path: str,
+        out: dict[str, dict[str, Any]],
+        bare_chain: tuple[Mapping[str, dict[str, Any]], ...],
+    ) -> None:
         if not isinstance(effects, list):
             return
         for effect in effects:
@@ -562,7 +600,7 @@ def check_prompt_composition(
                             f"{effect_path}: '{{{{> {name}}}}}' is not a valid name."
                         )
                         continue
-                    check_name(name, where=effect_path)
+                    check_name(name, where=effect_path, bare_chain=bare_chain)
             name = effect.get("name")
             etype = str(effect.get("type") or "").strip().lower()
             # Only the nested dict a named if/dynamic was just given above
@@ -571,20 +609,36 @@ def check_prompt_composition(
             # `out`, so nested names land there (dotted-reachable from
             # anywhere), never merged back up into the enclosing scope.
             next_out = out
+            next_bare_chain = bare_chain
             if isinstance(name, str) and name and etype in _SCOPE_INTRODUCING_TYPES:
                 next_out = out[name]["children"]
+                if etype == "if":
+                    # A named `if`'s own branch gets `ConditionalRuntime`'s
+                    # documented within-branch shorthand at run time (an
+                    # earlier branch step is visible to a later one both as
+                    # `prime.<step>` and bare — `core.conditional`/
+                    # `core.scope`): push this branch's own children onto
+                    # the bare-visible chain too, so a sibling can bare-
+                    # reference another sibling in the *same* branch without
+                    # making them visible outside it (the chain is never
+                    # threaded back up to the caller). `dynamic` gets no
+                    # such shorthand at run time — its own `ctx` never
+                    # rebinds per container — so its children stay off the
+                    # bare chain, exactly as the existing "rejected even
+                    # from inside it" test already pins.
+                    next_bare_chain = (*bare_chain, next_out)
             for field in _CHILD_LISTS:
-                walk(effect.get(field), f"{effect_path}.{field}", next_out)
+                walk(effect.get(field), f"{effect_path}.{field}", next_out, next_bare_chain)
 
-    walk(orch.get("effects") or orch.get("steps") or [], "effects", root)
-    walk(orch.get("finally") or [], "finally", root)
+    walk(orch.get("effects") or orch.get("steps") or [], "effects", root, (root,))
+    walk(orch.get("finally") or [], "finally", root, (root,))
 
     for prompt_name, text in declared.items():
         for name in sorted(partial_references(text)):
             if not _NAME_SHAPE.match(name):
                 errors.append(f"prompts.{prompt_name}: '{{{{> {name}}}}}' is not a valid name.")
                 continue
-            check_name(name, where=f"prompts.{prompt_name}")
+            check_name(name, where=f"prompts.{prompt_name}", bare_chain=(root,))
 
     errors.extend(_declared_prompt_cycles(declared))
     return errors
@@ -761,12 +815,22 @@ def _expand(
     known_names: frozenset[str],
     label: str,
     seen: frozenset[str],
-) -> tuple[str, dict[str, str]]:
-    extra: dict[str, str] = {}
-    counter = 0
+    counter: Iterator[int],
+    extra: dict[str, str],
+) -> str:
+    """*template*, with every ``{{> name}}`` tag replaced, mutating *extra*
+    in place with one entry per resolved effect reference.
+
+    *counter* is a single shared sequence (``itertools.count()``), passed
+    down unchanged through every recursive call this expansion makes — a
+    declared prompt nested inside another template is expanded by its own
+    recursive ``_expand`` call, and a fresh ``counter``/``extra`` pair per
+    call would let two sibling references (one inside a nested declared
+    prompt, one beside it) mint the same synthetic key and collide in the
+    single ``extra`` dict the whole render ultimately shares.
+    """
 
     def replace(match: re.Match[str]) -> str:
-        nonlocal counter
         name = match.group(1).strip()
         if not _NAME_SHAPE.match(name):
             raise TemplateError(f"{label}: '{{{{> {name}}}}}' is not a valid name.")
@@ -774,26 +838,25 @@ def _expand(
         if "." not in name and head in declared:
             if name in seen:
                 raise TemplateError(f"{label}: cycle among declared prompts at '{name}'.")
-            fragment, nested_extra = _expand(
+            fragment = _expand(
                 declared[name],
                 ctx=ctx,
                 declared=declared,
                 known_names=known_names,
                 label=f"prompts.{name}",
                 seen=seen | {name},
+                counter=counter,
+                extra=extra,
             )
-            extra.update(nested_extra)
             fragment = _unescape_variable_tags(fragment, label=f"prompts.{name}")
             return _drop_one_trailing_newline(fragment)
         text = _resolve_effect_text(name, head, ctx=ctx, known_names=known_names, label=label)
         text = _drop_one_trailing_newline(text)
-        key = f"__circuitry_partial_{counter}__"
-        counter += 1
+        key = f"__circuitry_partial_{next(counter)}__"
         extra[key] = text
         return f"{{{{{{{key}}}}}}}"
 
-    rewritten = _PARTIAL_TAG.sub(replace, template)
-    return rewritten, extra
+    return _PARTIAL_TAG.sub(replace, template)
 
 
 def render_with_composition(
@@ -819,13 +882,16 @@ def render_with_composition(
     declared-prompt fragment's own tags are pre-rewritten to never escape
     regardless (#397).
     """
-    rewritten, extra = _expand(
+    extra: dict[str, str] = {}
+    rewritten = _expand(
         template,
         ctx=ctx,
         declared=declared or {},
         known_names=known_effect_names,
         label=label,
         seen=frozenset(),
+        counter=itertools.count(),
+        extra=extra,
     )
     merged_ctx = {**ctx, **extra} if extra else ctx
     return render_template(rewritten, merged_ctx, label=label, escape=escape)

@@ -526,10 +526,11 @@ the gate the original run applied.
 A declared prompt, a `prompt`/`yield` effect's `template`, or a message's
 `content` can name a file instead of carrying its text inline (#396). The
 file is read when the document is loaded and compiled — before any effect
-runs, and before capability consent (§9) is even computed, since the
-compiled tree is what consent walks. A document that can name an arbitrary
-path could otherwise read anything the host process can: credentials,
-another project's source, `/etc/passwd`.
+runs. Capability consent (§9) runs before that compile step, but its own
+digest (`document_content_digest`) reads every prompt file the raw,
+uncompiled document names, independently of the later compile — so a
+document that can name an arbitrary path could otherwise read anything the
+host process can: credentials, another project's source, `/etc/passwd`.
 
 **Mitigation.** The path is a literal relative path (no `{{ }}` — a path
 built at render time can never reach this; it is read at compile time, from

@@ -1978,7 +1978,7 @@ The following rules are sufficient for generating structurally correct Circuitry
 
 **State path addressing:**
 14. In templates (Mustache): use `{{input.<name>}}` for caller-supplied input (never bare `{{key}}` — that is a hard error when `key` matches a declared `interface.inputs` name); use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
-14a. In prompt text (a `prompt`/`yield` effect's `template`/`messages`, a declared `prompts:` entry, a prompt file): `{{x}}` does not HTML-escape. `{{> name}}` splices in a declared prompt or a `yield`/text-`prompt` effect's own text, verbatim, never re-rendered — see [Prompt composition](#prompt-composition).
+14a. In prompt text (a `prompt`/`yield` effect's `template`/`messages`, a declared `prompts:` entry, a prompt file): `{{x}}` does not HTML-escape. `{{> name}}` splices in a declared prompt's own text (rendered in place, against the including template's own context) or a `yield`/text-`prompt` effect's resolved value (verbatim, never re-rendered, so a model's reply cannot inject a tag) — see [Prompt composition](#prompt-composition).
 15. In CEL expressions (`if.expr`, `while.expr`): always use the full prefix `state.prime.<name>.value`. Never omit `state.`.
 16. Loop `each.in` must be a root-relative path to a JSON array — `input.<name>`, `prime.<name>.value`, or a `runtime.` path — or a binding of an enclosing loop (its `each.as` name), e.g. `s.crops` inside a loop whose `each.as` is `s`. `input.*` is a first-class source; it need not point to a `prompt_type: json` effect. Bare keys that name no binding in scope and `state.`-prefixed spellings are hard errors here.
 

@@ -170,6 +170,26 @@ def test_declared_prompt_trailing_newline_is_dropped_once() -> None:
     assert store.get("prime.y.value") == "Plain, direct.\nNext line"
 
 
+def test_two_declared_prompts_each_nesting_a_different_yield_do_not_collide() -> None:
+    """Each `{{> a}}`/`{{> b}}` reference recurses into its own declared
+    prompt, which in turn splices in a different yield's value. Both nested
+    references must keep their own resolved text -- a shared synthetic-key
+    counter across the two recursive expansions would let the second
+    reference's key collide with (and overwrite) the first's."""
+    orch = {
+        "prompts": {"a": "{{> x}}", "b": "{{> y}}"},
+        "effects": [
+            {"type": "yield", "name": "x", "template": "X"},
+            {"type": "yield", "name": "y", "template": "Y"},
+            {"type": "yield", "name": "first", "template": "{{> a}}-{{> b}}"},
+            {"type": "yield", "name": "second", "template": "{{> y}} {{> a}}"},
+        ],
+    }
+    store = _run(orch)
+    assert store.get("prime.first.value") == "X-Y"
+    assert store.get("prime.second.value") == "Y X"
+
+
 # ── section scope: text splicing, not a pre-rendered value (decision C) ─────
 
 
@@ -333,6 +353,24 @@ def test_a_text_prompts_reply_is_spliced_verbatim_including_literal_braces() -> 
     assert store.get("prime.wrap.value") == (
         "Reply: here is {{input.secret}} and {{> nope}}"
     )
+
+
+def test_a_text_prompts_reply_containing_a_set_delimiter_tag_stays_literal() -> None:
+    """A model reply is spliced in with a triple-brace tag, bound to a
+    synthetic context key, and never re-rendered -- so even a tag chevron
+    would otherwise treat specially (`{{=<% %>=}}`, which would change the
+    delimiters of anything actually re-rendered) is inserted as plain text,
+    not interpreted.
+    """
+    orch = {
+        "effects": [
+            {"type": "prompt", "name": "gen", "template": "Say something."},
+            {"type": "yield", "name": "wrap", "template": "Reply: {{> gen}}"},
+        ],
+    }
+    adapter = _mock_adapter(response="{{=<% %>=}}<%input.secret%>")
+    store = _run(orch, adapter=adapter, initial_state={"input": {"secret": "s"}})
+    assert store.get("prime.wrap.value") == "Reply: {{=<% %>=}}<%input.secret%>"
 
 
 def test_a_declared_prompt_that_includes_a_yield_inside_a_loop_body() -> None:
@@ -555,6 +593,96 @@ def test_a_dotted_name_into_a_declared_prompt_is_a_compile_error() -> None:
         )
 
 
+def test_a_bare_name_resolves_a_sibling_inside_the_same_named_ifs_branch() -> None:
+    """Unlike a named `dynamic`, a named `if`'s own branch gives an earlier
+    step to a later one both dotted and bare (`core.conditional`'s own
+    `scope_ctx` overlay) -- a bare `{{> a}}` referencing an earlier sibling
+    in the *same* branch must resolve at `cof check`, not be rejected as an
+    unknown name."""
+    store = _run(
+        {
+            "effects": [
+                {
+                    "type": "if",
+                    "name": "gate",
+                    "if": {"mode": "cel", "expr": "true"},
+                    "then": [
+                        {"type": "yield", "name": "a", "template": "A"},
+                        {"type": "yield", "name": "b", "template": "{{> a}}"},
+                    ],
+                    "else": [],
+                }
+            ]
+        }
+    )
+    assert store.get("prime.gate.b.value") == "A"
+
+
+def test_a_bare_name_from_a_named_ifs_branch_sibling_is_still_not_visible_outside_it() -> None:
+    """The within-branch shorthand above is scoped to that branch alone --
+    it must not leak the named `if`'s children into the document's own
+    top-level bare namespace."""
+    with pytest.raises(ValueError, match=r"'\{\{> a\}\}' does not name"):
+        compile_orchestration(
+            orch={
+                "effects": [
+                    {
+                        "type": "if",
+                        "name": "gate",
+                        "if": {"mode": "cel", "expr": "true"},
+                        "then": [{"type": "yield", "name": "a", "template": "A"}],
+                        "else": [],
+                    },
+                    {"type": "yield", "name": "after", "template": "{{> a}}"},
+                ]
+            }
+        )
+
+
+def test_a_typo_in_a_dotted_name_under_a_named_if_is_a_compile_error() -> None:
+    """Every child of a named `if`/`dynamic` is known at compile time, so a
+    typo'd segment (`outlin` for `outline`) must be reported, not silently
+    trusted the way an untracked container's (`loop`, `use`) would be."""
+    with pytest.raises(ValueError, match=r"'\{\{> pipeline\.outlin\}\}' does not name"):
+        compile_orchestration(
+            orch={
+                "effects": [
+                    {
+                        "type": "if",
+                        "name": "pipeline",
+                        "if": {"mode": "cel", "expr": "true"},
+                        "then": [{"type": "yield", "name": "outline", "template": "x"}],
+                        "else": [],
+                    },
+                    {"type": "yield", "name": "y", "template": "{{> pipeline.outlin}}"},
+                ]
+            }
+        )
+
+
+def test_a_typo_in_a_dotted_name_under_a_loop_stays_trusted() -> None:
+    """`loop`/`use` are deliberately not tracked the way a named `if`/
+    `dynamic` is (#396's own shallow-path trust for a container this model
+    doesn't follow into) -- a typo'd segment there is still a run-time
+    concern, not a `cof check` error."""
+    store = _run(
+        {
+            "effects": [
+                {
+                    "type": "loop",
+                    "name": "per_item",
+                    "collect": "line",
+                    "each": {"in": "input.items", "as": "item"},
+                    "body": [{"type": "yield", "name": "step", "template": "{{item}}"}],
+                },
+                {"type": "yield", "name": "y", "template": "[{{> per_item.nonsense}}]"},
+            ]
+        },
+        initial_state={"input": {"items": ["a"]}},
+    )
+    assert store.get("prime.y.value") == "[]"
+
+
 def test_an_untaken_if_branchs_effect_renders_empty_not_an_error() -> None:
     """`{{> name}}` names a real effect in the document, but the branch that
     would have written it never ran -- renders "", exactly like a bare
@@ -589,6 +717,40 @@ def test_an_effect_referenced_before_it_runs_renders_empty_not_an_error() -> Non
     )
     assert store.get("prime.before.value") == "[]"
     assert store.get("prime.later.value") == "x"
+
+
+def test_a_flow_tree_siblings_name_renders_empty_before_it_has_written() -> None:
+    """`flow: tree` gives siblings no ordering from `{{> name}}` -- a
+    sibling's name is a real, known effect in the document, but may not
+    have written its value yet when another sibling renders -- renders an
+    empty string, the same untaken-branch/forward-reference fallback, not
+    a run-time error.
+
+    Exercised directly against the compiled document's own
+    `known_effect_names`/`prompts` rather than by racing two real threads --
+    `flow: tree` schedules its siblings concurrently with no guaranteed
+    order, so asserting on which one wins the race would be flaky; what
+    #396 promises is this fallback, which does not depend on which sibling
+    happens to run first.
+    """
+    from circuitry.core.prompt_compose import render_with_composition
+
+    root = compile_orchestration(
+        orch={
+            "flow": "tree",
+            "effects": [
+                {"type": "yield", "name": "a", "template": "A"},
+                {"type": "yield", "name": "b", "template": "[{{> a}}]"},
+            ],
+        }
+    )
+    rendered = render_with_composition(
+        "[{{> a}}]",
+        {"prime": {}},
+        declared=root.prompts,
+        known_effect_names=root.effect_names,
+    )
+    assert rendered == "[]"
 
 
 def test_an_unknown_name_inside_a_file_sourced_template_is_a_compile_error(
