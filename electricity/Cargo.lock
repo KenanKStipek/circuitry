@@ -127,6 +127,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "electricity-template"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "electricity-value",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "electricity-value"
 version = "0.1.0"
 dependencies = [
