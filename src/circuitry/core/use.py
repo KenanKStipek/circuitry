@@ -473,6 +473,32 @@ class UseRuntime:
             return Path(str(self._pin["cache_path"]))
         return default_project_root(document_dir)
 
+    def _content_digest(self, resolved_path: Path, child_orch: dict[str, Any]) -> str:
+        """SHA-256 of *resolved_path*'s bytes, plus every prompt file it
+        references (#396) — capability consent (``cof trust``) is recorded
+        by this digest, so editing a referenced prompt file must ask again
+        exactly as editing the orchestration YAML itself already does.
+        Best-effort, like ``core.resume.document_sha256``: a document that
+        fails to parse here (it will fail again, loudly, moments later)
+        just falls back to the file's own bytes.
+        """
+        from .prompt_compose import referenced_prompt_file_paths
+
+        hasher = hashlib.sha256()
+        hasher.update(resolved_path.read_bytes())
+        try:
+            document_dir = resolved_path.resolve().parent
+            paths = referenced_prompt_file_paths(
+                child_orch,
+                document_dir=document_dir,
+                confinement_root=self._confinement_root_for(document_dir),
+            )
+            for prompt_file in sorted(set(paths)):
+                hasher.update(prompt_file.read_bytes())
+        except Exception:
+            pass
+        return hasher.hexdigest()
+
     def _check_interface(
         self,
         orch: dict[str, Any],
@@ -558,8 +584,8 @@ class UseRuntime:
 
         resolved_path = self._resolve_orchestration()
         identity = str(resolved_path.resolve())
-        digest = hashlib.sha256(resolved_path.read_bytes()).hexdigest()
         child_orch = load_orchestration_file(resolved_path)
+        digest = self._content_digest(resolved_path, child_orch)
         # A path/ref child gets the same structural check `cof check` gives a
         # file named on the command line — `cof check` on the parent never
         # loads it, and nothing else would before it runs.

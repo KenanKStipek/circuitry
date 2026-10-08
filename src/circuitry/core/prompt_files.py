@@ -56,21 +56,22 @@ def default_project_root(document_dir: Path) -> Path:
         current = current.parent
 
 
-def resolve_prompt_file(
+def resolve_prompt_file_path(
     path_str: str,
     *,
     document_dir: Path,
     confinement_root: Path,
     field: str,
-) -> str:
-    """Read and return the text of a ``{file: <path_str>}`` prompt source.
+) -> Path:
+    """The resolved, confined filesystem path a ``{file: <path_str>}`` names.
 
     *path_str* is resolved against *document_dir* (never *confinement_root*
     itself — ``../shared/x.md`` is a sibling of the document, not of the
     project root), then checked, after symlinks are resolved, against
     *confinement_root*. Raises :class:`PromptFileError`, naming *field*, for
-    an absolute path, a ``{{ }}`` template tag, a path that escapes the
-    project, or a file that is missing, unreadable, not UTF-8, or too large.
+    an absolute path, a ``{{ }}`` template tag, or a path that escapes the
+    project — existence/readability is :func:`resolve_prompt_file`'s own
+    concern, once it has a path to read.
     """
     if not isinstance(path_str, str) or not path_str.strip():
         raise PromptFileError(f"{field}: 'file' must be a non-empty string path.")
@@ -100,6 +101,25 @@ def resolve_prompt_file(
             f"{field}: 'file' {path_str!r} resolves outside the project "
             f"({confinement_resolved}) — 'file:' paths must stay inside it."
         )
+    return resolved
+
+
+def resolve_prompt_file(
+    path_str: str,
+    *,
+    document_dir: Path,
+    confinement_root: Path,
+    field: str,
+) -> str:
+    """Read and return the text of a ``{file: <path_str>}`` prompt source.
+
+    Raises :class:`PromptFileError`, naming *field*, for anything
+    :func:`resolve_prompt_file_path` rejects, or a file that is missing,
+    unreadable, not UTF-8, or too large.
+    """
+    resolved = resolve_prompt_file_path(
+        path_str, document_dir=document_dir, confinement_root=confinement_root, field=field
+    )
 
     if not resolved.exists():
         raise PromptFileError(f"{field}: 'file' {path_str!r} does not exist.")

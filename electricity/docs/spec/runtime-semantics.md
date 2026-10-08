@@ -196,6 +196,16 @@ raises on things the schema itself cannot express:
   tree passes run in parallel, so there is no well-defined previous pass.
 - A `use` effect must set exactly one of `ref`/`path`/`orchestration`
   (deprecated)/`inline`.
+- Prompt composition (#396, `core/prompt_compose.py` `check_prompt_composition()`):
+  a `{{> name}}` naming neither a declared `prompts:` entry nor an effect
+  anywhere in the document; a name that is both a declared prompt and an
+  effect name; a `{{> name}}` naming an effect that is neither `yield` nor a
+  `prompt` with `prompt_type` unset/`text`; a cycle among declared prompts'
+  own `{{> name}}` references. A `yield` effect additionally rejects the
+  model-only keys listed in §5.9 at compile time (schema
+  `additionalProperties: false` on `YieldEffect`). A `{file: <path>}` prompt
+  source (declared prompt, `template`, `messages[].content`) is read and
+  validated at this same compile step — see §3.6.
 
 ### 1.5 `interface.inputs`
 
@@ -440,7 +450,14 @@ applied) — see §9 Quirk Q1, a critical parity risk.
 Mustache via `chevron` (`core/templates.py`). `{{name}}` HTML-escapes;
 `{{{name}}}`/`{{&name}}` does not. Confirmed: `{{s}}` on `"<b>&'\""` →
 `"&lt;b&gt;&amp;'&quot;"` (both `<`/`>`/`&` and `"` escaped, `'` left alone —
-this is `chevron`'s own escaping table, not configurable per-site). Sections
+this is `chevron`'s own escaping table). This is per-call, not a global
+setting (#397): `render_template(..., escape=False)` makes *every* `{{name}}`
+in that one render behave like `{{{name}}}` — implemented
+(`core/templates.py`) as a `contextvars.ContextVar` read by a module-level
+replacement of chevron's own `_html_escape`, set/reset around the one
+`chevron.render()` call, so it never leaks across a concurrent render on
+another thread. `render_template`'s own default is unchanged (`escape=True`);
+only the call sites in §3.4 marked "prompt text" pass `escape=False`. Sections
 `{{#x}}...{{/x}}` iterate a list (binding each element as the section's
 context — `{{.}}` for a scalar element, `{{field}}` for a dict element) or
 render once if `x` is truthy-and-not-a-list (a dict or `True`); inverted
@@ -494,15 +511,30 @@ unrendered text (confirmed in `core/prompt.py:453` `execute()`: a
 
 Every string-bearing field below is Mustache-rendered against the current
 `ctx` (root state plus whatever the enclosing scope overlay/sibling-merge
-adds, §2.4): prompt `template`, each `messages[].content`, tool `prompt`,
-every string leaf of tool `params` (recursively, except `{from:...}` leaves
-— see §3.5), tool `params_json` (rendered as **one** template producing a
-JSON-object-shaped string, parsed with `json.loads` after rendering — not
-rendered leaf-by-leaf), `use.inline` (rendered **once**, against the
-*parent's* context, before the result is parsed as YAML — see §9 Quirk Q3),
-every string leaf of `use.inputs` that is not a `{from:...}` reference,
-`if.template`/`while.template` (model-mode conditions), `expect.template`
-(model-mode expect), asset `ref` (image paths/URLs).
+adds, §2.4). Each is marked **prompt text** (`escape=False`, §3.1; `{{>
+name}}` composition, §3.6 — both together) or **escaped** (chevron's
+default; `{{> name}}` composition still applies to the four marked so, but
+anything else in the same template keeps escaping):
+
+| Field | Escaping | `{{> name}}` |
+|---|---|---|
+| prompt `template` | prompt text | yes |
+| prompt `messages[].content` | prompt text | yes |
+| `yield.template` (§5.9) | prompt text | yes |
+| declared `prompts.<name>` (§3.6) | prompt text | yes |
+| tool `prompt` | escaped | yes |
+| tool `params` (every string leaf, recursively, except `{from:...}`, §3.5) | escaped | yes |
+| tool `params_json` (one template, `json.loads`-parsed after rendering — not leaf-by-leaf) | escaped | yes |
+| `use.inline` (rendered **once**, against the *parent's* context, before the result is parsed as YAML — §9 Quirk Q3) | escaped | yes |
+| `use.inputs` (every string leaf that is not a `{from:...}` reference) | escaped | yes |
+| `if.template`/`while.template` (model-mode conditions) | escaped | no — unconditional partial error |
+| `expect.template` (model-mode expect) | escaped | no — unconditional partial error |
+| asset `ref` (image paths/URLs) | escaped | no — unconditional partial error |
+
+"No — unconditional partial error": these three never reach §3.6's expansion
+at all, so a `{{> name}}` tag in one of them is always the plain partial
+error §3.3/§1.4 already describe for any other malformed tag — identical
+before and after #396.
 
 ### 3.5 `{from: path}` references
 
@@ -521,6 +553,139 @@ nothing from 'PATH'"` message, `core/use.py:446`). `{from: ...}` is rejected
 at compile time for any value that is syntactically a mapping with keys
 other than exactly `{from}` or `{from, default}` — any other mapping shape
 (extra keys) is a literal value, passed through unrendered as a plain dict.
+
+### 3.6 Prompt composition: `{{> name}}`, declared `prompts:`, and prompt files (#396)
+
+`core/prompt_compose.py`. Expanded **before** a template ever reaches the
+ordinary Mustache render (§3.1) — `render_template()` itself is unchanged
+and still unconditionally rejects an unexpanded `{{> name}}` with today's
+message (`core/templates.py` `_reject_partials`); electricity's own
+template corpus is generated from that function, so this expansion is a
+separate, earlier pass, not a change to it.
+
+**Declared prompts.** A document's top-level `prompts:` is a map of name to
+either a string or `{file: <path>}` (§3.6.2). Compiled once per document into
+`{name: raw_template_text}` — `file:` sources are read at **compile** time
+(§1.4), the text itself is not rendered until it is actually spliced in.
+Carried on the compiled root `DynamicDefinition.prompts` (`core/dynamic.py`)
+and threaded into the run's shared `runtime_config` dict under the private
+key `core/prompt_compose.py:RUNTIME_CONFIG_KEY` (`"_prompts"`) — the same
+ambient-dict convention as `_orchestration_dir`/the concurrency limiter.
+Every leaf effect reads it from there at render time
+(`declared_prompts(self.runtime_config)`). A `use` child gets this key
+**overwritten**, never merged, with its own document's `prompts:` (`{}` if
+it declares none) — "a child document sees only its own declared prompts".
+A document generated at run time (a reflector/decompose plan, a
+`use: inline` child) compiles with no file of its own (§3.6.2), but *can*
+declare its own `prompts:` inline — only `file:` sources require a file.
+
+**Expansion algorithm**, run against a template string *T* and a context
+*ctx* (the same ctx `render_template` would use), before *T* reaches
+`render_template`:
+
+1. Find every `{{> name}}` tag in *T* — matched the same way chevron's own
+   tokenizer does (the sigil `>` must immediately follow `{{`, no leading
+   space; `name` is everything up to `}}`, stripped). A name must match
+   `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$` (optionally dotted);
+   anything else is a render-time error (`TemplateError`).
+2. For each tag, resolve its text:
+   - **`name` (no dot) is a declared prompt**: recursively run this same
+     algorithm (step 1–4) on that prompt's own raw text, against the *same*
+     ctx, then render the result with `escape=False` (§3.1) — producing the
+     prompt's final text. Re-entering a name already being expanded
+     (directly or through another declared prompt) is a cycle — render-time
+     error; `cof check` (§1.4) already rejects a cycle that is purely among
+     declared prompts statically, so reaching this at run time means a
+     generated document.
+   - **Otherwise (an effect reference)**: walk `ctx["prime"]` by `name`'s
+     dot-separated segments, then `.value` — exactly the same dict/list
+     walk `{from: path}` references use (§3.5): a `Mapping` indexes by key,
+     a list/tuple by integer segment, anything else or a missing key stops
+     the walk. If the **first** segment is not even a key of `ctx["prime"]`
+     at all, that is an unknown-name render-time error (`TemplateError`) —
+     a document generated at run time is not statically checked, so this is
+     the backstop (§1.4's static check already catches it for anything that
+     *is* statically checkable). Otherwise, a walk that ends in `None`
+     (missing deeper segment, or an effect whose `value` is `None` —
+     skipped, or failed under `on_error: continue`) resolves to `""`;
+     otherwise `str()` of whatever it finds (same stringification §3.2
+     describes for an ordinary `{{{...}}}` splice).
+   - Either way, drop exactly one trailing `\n` or `\r\n` from the resolved
+     text (not two, not a whole trailing blank region — one line break,
+     checked as a literal suffix).
+3. Bind the resolved text to a fresh synthetic context key (unique per tag
+   within this one expansion, e.g. `__circuitry_partial_0__`) added to a
+   **shallow copy** of *ctx* — the original `input`/`prime`/`runtime` objects
+   are untouched, only new top-level keys are added.
+4. Replace the `{{> name}}` tag's exact source span with `{{{<synthetic
+   key>}}}` — a same-shaped triple-stache tag, not a text splice — so the
+   resolved text (which may itself contain literal `{{`/`}}`, e.g. a model
+   reply) is inserted **verbatim** by the ordinary Mustache render in step 5
+   below: chevron appends a triple-stache value directly to its output
+   accumulator without re-tokenizing it, exactly like any other
+   `{{{prime.x.value}}}` splice, so it can never be parsed as a new tag.
+   Everything in *T* outside the tag's own span — literal text, other tags,
+   sections — is untouched character-for-character.
+5. Render the rewritten template (now containing zero `{{> ...}}` tags, so
+   `render_template`'s own partial check passes trivially) against the
+   context from step 3, with whatever `escape` the surrounding field would
+   have used anyway (§3.4's table) — the synthetic keys' own values are
+   never escaped regardless, since they are already-resolved text spliced
+   with `{{{...}}}` syntax.
+
+Sections spanning a `{{> name}}` tag (`{{#x}}...{{> name}}...{{/x}}`) are
+unaffected by this rewrite — the tag becomes a same-shaped `{{{...}}}` tag
+in place, so the section's own tokenization is untouched; the expansion does
+*not* see per-iteration section scope, since it runs once over the whole
+template string before Mustache evaluates any section at all (a documented
+simplification — a declared prompt/effect reference inside a `{{#list}}`
+section resolves once, against the outer ctx, not per element).
+
+**`cof check`'s static checks** (`check_prompt_composition()`, §1.4) scan
+only the exact fields §3.4 marks `{{> name}}`: yes — not `if.template`/
+`while.template`/`expect.template`/asset `ref`, and (field-scoped per effect
+type, not blanket) a `prompt`/`yield`'s `inputs:` is **not** scanned (those
+values are merged into context as-is, never rendered, so prose that happens
+to contain `{{> ...}}`-looking text there is not a composition tag) while a
+`use` effect's `inputs:` **is** (those values *are* rendered, §3.4).
+
+#### 3.6.1 `type: yield` — see §5.9.
+
+#### 3.6.2 Prompt files: `{file: <path>}`
+
+Can replace the text of a declared prompt, a `prompt`/`yield` effect's
+`template`, or a message's `content`. Resolved and read at **compile** time
+(§1.4), never mid-run — the resulting string is used exactly as inline text
+would be from that point on (including by §3.6's expansion, which never
+knows or cares whether a declared prompt's text came from a literal string
+or a file).
+
+- `<path>` must be a literal string (no `{{`/`}}` substring) and relative
+  (not absolute). Resolved against the **directory of the document that
+  names it** — not the project root.
+- After resolving symlinks, the resolved path must equal, or be a
+  descendant of, a **confinement root**: for an ordinary filesystem
+  document (run by path, or a `use: path:`/legacy `orchestration:` child),
+  the directory of the nearest `circuitry.config.json`/`config.json` at or
+  above the document's own directory, or the document's own directory when
+  none is found. For a `use: ref:`/`cof run-library` document served from a
+  refreshable (`github`-type) library source, the confinement root is that
+  source's cached tree at the pinned commit instead (never a
+  `circuitry.config.json` search) — any other library source (`folder`,
+  `curation`) falls back to the same nearest-config-file rule as an
+  ordinary filesystem document.
+- Violations are compile-time errors naming the field: an absolute path, a
+  path (after symlink resolution) outside the confinement root, a missing
+  file, an unreadable file, a file that is not valid UTF-8, a file over
+  1 MiB (`core/prompt_files.py:MAX_PROMPT_FILE_BYTES`).
+- A document with no file of its own — generated at run time (a
+  reflector/decompose plan, a `use: inline` child), or with no path at all
+  (stdin, an SDK string) — cannot use `file:` anywhere: compile error,
+  independent of the checks above (there is no document directory to
+  resolve against).
+- Anything that identifies a document by its content (consent-by-digest,
+  §9's `--resume` document-hash check) includes every prompt file's content
+  it loaded, not just the orchestration YAML's own bytes.
 
 ---
 
@@ -1540,6 +1705,10 @@ the run is fully deterministic.
 | C25 | Ctrl-C (SIGINT) and SIGTERM delivered mid-run, each with a `finally:` on the root | signal harness | `finally:` runs in both cases; exit codes 130 vs 143 respectively; `--out` written in both cases with `runtime.last_run.completed_at` set (§6.5, §8.4) |
 | C26 | `runtime.complexity.scoring.enabled` true vs. absent, identical document/inputs otherwise | n/a | `meta.complexity` key present/absent — every *other* byte of state identical (§5.8) |
 | C27 | Top-level plain `effects:` list, step 2 reads step 1 via bare `{{step1.value}}` and via `{{prime.step1.value}}` | n/a | Bare form empty, dotted form resolves (Q1) — the single most important parity assertion in this list |
+| C28 | `type: yield` with a plain template, no `model`/`adapter` configured at all | n/a | `prime.<name>.value` is the rendered text; no adapter call is attempted (§3.6, §5.9) |
+| C29 | Declared `prompts:` map, `{{> name}}` splicing a declared prompt into another declared prompt and into a `yield` template, with the declared prompt's text ending in `\n` | n/a | Nested declared-prompt expansion; the one-trailing-newline-drop rule (§3.6) |
+| C30 | Two `{{> name}}` tags concatenated in one tool `params` string, each naming a different `yield` effect | n/a | Both splice in, unescaped by the surrounding (escaped) tool-param context (§3.4, §3.6) |
+| C31 | `yield` template `{{x}}` with `inputs: {x: '"<b>&'}`, vs. the same value through a tool `params` string | n/a | Prompt text (`yield.template`) renders `{{x}}` unescaped; the tool param still HTML-escapes it (§3.1, §3.4) |
 
 ---
 

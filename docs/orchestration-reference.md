@@ -30,6 +30,7 @@ Top-level fields of an orchestration YAML file:
 | `version` | string | no | — | Free-form version string for **this document**, e.g. `"1.2.0"` |
 | `interface` | object | no | — | Declared `inputs` / `outputs` — see [Interface](#interface) |
 | `finally` | array | no | — | Cleanup effects, run after `effects` completes — success, failure or cancellation alike. Also legal on a `dynamic` effect, nowhere else — see [`dynamic`](#dynamic) and [Errors](./guidebook/05-errors.md) |
+| `prompts` | object | no | — | Declared prompts — named text any template in the document can splice in with `{{> name}}`. See [Prompt composition](#prompt-composition) |
 
 Other top-level keys: `description` (free text for readers of the file) and two that feed the run's configuration, `runtime:` and `plugins:` (below). Any other key is ignored, and `cof check` says so — see [What `cof check` and `cof run` reject](#what-cof-check-and-cof-run-reject). How much of `runtime:` and `plugins:` applies depends on how the document reached `cof`:
 
@@ -73,7 +74,7 @@ effects:
 - **An unknown key** on an effect or at the top level is ignored, so it is reported. One that is a near miss of a key that effect knows — `whlie:`, `max_iteration:`, `temlpate:`, or `adapter:` on a `prompt` where `provider:` belongs — is an **error** naming the key it meant. Any other unknown key is a **warning**. Inside `each:`, `if:`/`while:` conditions, `retries:`, `messages:` and `assets:` entries, every key is known, so any other key is a schema error.
 - **An `interface.inputs` default that doesn't match its declared `type`** is an error naming the input, the type and the value — the same rule a caller-supplied value is checked against once it's filled in, but without that check's string coercion: a YAML/JSON default is already a typed value, not a CLI `-e`/`use:` value crossing as text, so a quoted numeral (`default: "3"` for an `integer` input) is flagged with a hint to remove the quotes rather than silently accepted.
 - **A loop needs exactly one of `each` or `while`.** One with neither would run zero passes and report a clean termination.
-- **A malformed Mustache template** — an unclosed tag (`{{input.topic}`), a section closed under the wrong name, a partial tag (`{{> name}}`, not supported — see [Mustache Template Interpolation](#mustache-template-interpolation)) — is an error naming the field, wherever a template is rendered: a prompt's `template` or `messages`, a tool's `prompt`, `params` and `params_json`, a model-mode `if`/`while` template, a `use` effect's `inline` and string `inputs`. Were one to reach a run anyway, rendering it fails the effect under its `on_error`; the raw text is never sent on.
+- **A malformed Mustache template** — an unclosed tag (`{{input.topic}`), a section closed under the wrong name — is an error naming the field, wherever a template is rendered: a prompt's `template` or `messages`, a `yield`'s `template`, a declared prompt, a tool's `prompt`, `params` and `params_json`, a model-mode `if`/`while` template, a `use` effect's `inline` and string `inputs`. Were one to reach a run anyway, rendering it fails the effect under its `on_error`; the raw text is never sent on. A partial tag (`{{> name}}`) is well-formed in the fields [Prompt composition](#prompt-composition) lists — subject to its own checks there — and still unconditionally an error everywhere else (see [Mustache Template Interpolation](#mustache-template-interpolation)).
 - **`group:` on anything but a `tool`/`prompt` effect** is an error — a container (`dynamic`, `loop`, `use`, `if`, `reflector`) never dispatches itself, so it can never hold the concurrency-group slot the field would name. **A `group:` name `runtime.concurrency_groups` doesn't define** is also an error. See [Concurrency Limits](#concurrency-limits).
 
 `cof check` also **warns** when a tool's `params.args` holds a value YAML read as a number, boolean or null: the tool receives `str()` of it, so an unquoted `0x1` arrives as `1`, `off` as `False`, `-0` as `0`. Quote the argument.
@@ -1123,6 +1124,102 @@ The runtime tracks a per-execution call stack of resolved orchestration paths. I
 
 ---
 
+### `yield`
+
+Renders `template` and stores the text — a prompt as a *value*, with no model call and no token count. Works in every flow and container (`if`, loops, dynamics, `use` children) and with `--resume`, exactly like any other leaf effect. A render failure goes through `on_error`, like any other effect's failure.
+
+**State output path:** `prime.<name>.value`
+
+| Field | Type | Required | Default | Constraints |
+|-------|------|----------|---------|-------------|
+| `type` | `"yield"` | yes | — | |
+| `name` | string | yes | — | Pattern `^[A-Za-z_][A-Za-z0-9_]*$`; `iter_<N>` reserved; `value`/`meta`/`input`/`prime`/`runtime` reserved |
+| `template` | string or `{file: <path>}` | yes | — | Mustache template; see [Prompt composition](#prompt-composition) for `{{> name}}` and `{file: ...}`. `{{x}}` does not HTML-escape (prompt text, like a prompt's own `template`) |
+| `inputs` | object | no | — | Prompt-local key/value pairs for template rendering, same as a `prompt` effect's |
+| `description` | string | no | — | Human-readable description |
+| `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
+
+Model-only keys — `prompt_type`, `schema`, `model`, `provider`, `provider_fallbacks`, `params`, `retries`, `timeout_ms`, `deterministic`, `assets`, `group`, `messages` — are not accepted: a `yield` effect never calls a model.
+
+**Example — building a value other effects reference:**
+```yaml
+- type: yield
+  name: brief
+  template: |
+    Audience: {{input.audience}}
+    Tone: professional, concise.
+- type: prompt
+  name: draft
+  template: |
+    {{> brief}}
+    Write a paragraph about {{input.topic}}.
+```
+
+---
+
+## Prompt Composition
+
+A prompt is often built from reusable pieces: a house style, a set of rules, a brief another effect produced. Three features compose them, without a model call for the ones that don't need one.
+
+### Declared prompts (`prompts:`)
+
+A top-level `prompts:` map declares named text, as a string or `{file: <path>}` (below):
+
+```yaml
+prompts:
+  voice: |
+    Plain, direct sentences. No marketing language.
+  rules:
+    file: prompts/rules.md
+
+effects:
+  - type: prompt
+    name: draft
+    template: |
+      {{> voice}}
+      Summarize {{input.topic}} in five lines.
+      {{> rules}}
+```
+
+A declared prompt's own text is a template, rendered — recursively, so one declared prompt may include another — against the same context as wherever it is spliced in. Its own `{{x}}` tags never HTML-escape, wherever it is included (see the no-escape rule under [Mustache Template Interpolation](#mustache-template-interpolation)).
+
+### `{{> name}}`
+
+`{{> name}}` splices text into a template. It works in every prompt template and messages entry, every `yield` template, every declared prompt, every prompt file, a tool's `params`/`prompt`/`params_json`, and a `use` effect's `inputs`/`inline` — and it can appear any number of times, so several pieces can be concatenated in one string (`prompt: "{{> look}}, {{> shot}}"`). `name` is either:
+
+- **A declared prompt** (above).
+- **A `yield` effect, or a `prompt` effect whose reply is text** (`prompt_type` unset or `text`). The text it produced is inserted verbatim and never rendered again, so a model's reply containing literal `{{...}}` cannot inject a tag — it inserts exactly what `{{{prime.<name>.value}}}` would insert at that point. A dotted name (`{{> pipeline.outline}}`) is the effect at `prime.pipeline.outline` — the same reach a bare `{{prime.pipeline.outline.value}}` already has into a nested/composed effect's own state. An effect that was skipped, or that failed under `on_error: continue`, renders as an empty string, as `{{{prime.<name>.value}}}` does.
+
+The inserted text drops one final line break (`\n` or `\r\n`): `{{> voice}}` alone on its own line does not add a blank line, and `the {{> tone}} tone` stays one sentence. Nothing else about surrounding whitespace changes — no Mustache standalone-partial re-indentation.
+
+`cof check` rejects: an unknown name; a name that is both declared and an effect; an effect that is neither a `yield` nor a text `prompt`; a cycle among declared prompts. A template that reaches a run anyway (a generated reflector/decompose plan, a `use: inline` child) fails the same way, under the effect's `on_error`. A child document run with `use` sees only its own declared `prompts:` — never the parent's.
+
+Everywhere else a template renders — an `if`/`while` model template, `expect.template`, an asset's `ref` — `{{> name}}` is still unconditionally an error (see the last bullet under [Mustache Template Interpolation](#mustache-template-interpolation)).
+
+### Prompt files (`{file: <path>}`)
+
+`{file: <path>}` can replace the text of a declared prompt, a `prompt` effect's `template`, a message's `content`, or a `yield`'s `template`. The file's text is used exactly as inline text would be — as a template, rendered with the same context.
+
+- `<path>` is a literal relative path (no `{{ }}`), resolved against the directory of the document that names it.
+- After symlinks are resolved, it must stay inside the document's project: the directory of the nearest `circuitry.config.json`/`config.json` at or above the document, or the document's own directory when there is none. `../prompts/x.md` is fine as long as it stays inside. Absolute paths and paths that leave the project are errors.
+- A library document (`use: ref:`, `cof run-library`) resolves against its own file in the library source and must stay inside that source's tree instead — for a `github` source, the cached tree at the pinned commit.
+- Files are read when the document is loaded and compiled, never mid-run. `cof check` reports, naming the field, a file that is missing, unreadable, not UTF-8, or larger than 1 MiB.
+- A document generated at run time (a reflector/decompose plan, a `use: inline` child) cannot use `file:` — that is a compile error. Neither can a document with no file of its own (stdin, an SDK string).
+
+```yaml
+prompts:
+  style_guide:
+    file: prompts/style.md
+
+effects:
+  - type: prompt
+    name: draft
+    template:
+      file: prompts/draft.md
+```
+
+---
+
 ## Concurrency Limits
 
 `runtime.max_concurrency` and `runtime.concurrency_groups` cap how many
@@ -1346,7 +1443,9 @@ Templates use Mustache syntax (`{{...}}`). Two kinds of references:
 - Never use a bare `{{<name>}}` for caller-supplied input — always include the `input.` prefix; a bare reference matching a declared `interface.inputs` name is a hard error from `cof check`
 - Nested effects always include their parent dynamic name in the path
 - A malformed tag (`{{input.topic}`, a section closed under the wrong name) is an error from `cof check` and `cof run`, never text sent on as written
-- **Circuitry does not support partials.** A `{{> name}}` tag is an error: `cof check` reports it, naming the field and the tag, and at run time the render fails without reading any file — one reaching a run anyway (a generated reflector/decompose plan, a `use: inline` child) fails the same way under the effect's `on_error`. (chevron, the renderer Circuitry uses, would otherwise read `name.mustache` from the working directory — not from the orchestration's own directory, and not from any declared input.)
+- **In prompt text, `{{x}}` does not HTML-escape.** A `prompt` effect's `template` and each `messages` entry's `content`, a `yield` effect's `template`, a declared `prompts:` entry, and a prompt file (`{file: <path>}`, see [Prompt composition](#prompt-composition)) all render `{{x}}` exactly like `{{{x}}}`/`{{&x}}` — prompts are not HTML, so escaping only corrupted the quoted text, code, JSON and XML-style tags they commonly carry. Everywhere else a template renders — tool `params`/`prompt`, `params_json`, a `use` effect's `inputs`/`inline`, an `if`/`while` model template, an asset's `ref` — `{{x}}` still HTML-escapes as before; use `{{{x}}}`/`{{&x}}` there.
+- **`{{> name}}` splices in a declared prompt or an effect's text** — see [Prompt composition](#prompt-composition) for the full rule. It works in exactly the fields the no-escape rule above lists, plus tool `params`/`prompt`/`params_json` and `use` `inputs`/`inline` (where it still HTML-escapes anything else in the same template). Anywhere else — an `if`/`while` model template, an asset's `ref`, `expect.template` — a bare `{{> name}}` is still unconditionally an error, exactly as below.
+- **A `{{> name}}` naming anything else is an error.** `cof check` reports it, naming the field and the tag; at run time the render fails without reading any file, and one reaching a run anyway (a generated reflector/decompose plan, a `use: inline` child) fails the same way under the effect's `on_error`. (chevron, the renderer Circuitry uses, would otherwise read `name.mustache` from the working directory — not from the orchestration's own directory, and not from any declared input — which is why Circuitry never hands it a template containing one.)
 
 ### CEL Expressions
 
@@ -1862,13 +1961,14 @@ The following rules are sufficient for generating structurally correct Circuitry
 4. Valid `flow` values: `chain` (sequential) and `tree` (parallel). Write nothing else — `chain_of_thought`/`cot` and `tree_of_thought`/`tot` still parse but are deprecated and warned about.
 
 **Effect types and required fields:**
-5. Valid `type` values: `prompt`, `dynamic`, `if`, `loop`, `reflector`, `tool`, `use`. (`conditional` still parses as an alias of `if` but is deprecated and warned about — always write `if`.)
+5. Valid `type` values: `prompt`, `dynamic`, `if`, `loop`, `reflector`, `tool`, `use`, `yield`. (`conditional` still parses as an alias of `if` but is deprecated and warned about — always write `if`.)
 6. `prompt`: requires `name` and exactly one of `template` or `messages`. Optional: `prompt_type` (default `text`), `schema` (required when `prompt_type: json`). Do NOT use `prompt_type: image` — use `type: tool, provider: comfyui` for image generation.
 7. `dynamic`: requires `name`, `effects` (non-empty array), optional `flow` (default `chain`).
 8. `if`: requires `if` (condition object) and `then` (array). `name` is optional. `else` is optional.
 9. `loop`: requires `body` (non-empty array) and exactly one of `each` or `while`. `name` is optional.
 10. `reflector`: requires `name` and `effects` (non-empty array).
 11. `tool`: requires `name` and `provider`. Tool effects are for non-LLM side-effects only — generating images, processing video/audio, file conversion. Never use a tool effect for text summarization, analysis, writing, coding, or data extraction — those are `prompt` effects. Supported providers: `ffmpeg` (requires `params.input` and `params.output`), `comfyui` (requires `prompt` and `model` as top-level fields; `params` for sampler settings). Top-level `prompt` supports Mustache rendering. All string values in `params` also support Mustache rendering.
+11a. `yield`: requires `name` and `template`. No model call — renders `template` and stores the text. Does not accept `prompt_type`, `schema`, `model`, `provider`, `provider_fallbacks`, `params`, `retries`, `timeout_ms`, `deterministic`, `assets`, `group`, or `messages`.
 
 **Naming:**
 12. All `name` values must match `^[A-Za-z_][A-Za-z0-9_]*$` — letters, digits, underscores; must start with letter or underscore; no spaces or dots. The pattern `iter_<N>` (e.g. `iter_0`) is reserved and must not be used as a name. `value`, `meta`, `input`, `prime` and `runtime` are also reserved — each collides with a structural slot the runtime itself writes.
@@ -1878,6 +1978,7 @@ The following rules are sufficient for generating structurally correct Circuitry
 
 **State path addressing:**
 14. In templates (Mustache): use `{{input.<name>}}` for caller-supplied input (never bare `{{key}}` — that is a hard error when `key` matches a declared `interface.inputs` name); use `{{prime.<name>.value}}` for top-level effect outputs; use `{{prime.<dynamic_name>.<child_name>.value}}` for outputs nested inside a dynamic.
+14a. In prompt text (a `prompt`/`yield` effect's `template`/`messages`, a declared `prompts:` entry, a prompt file): `{{x}}` does not HTML-escape. `{{> name}}` splices in a declared prompt or a `yield`/text-`prompt` effect's own text, verbatim, never re-rendered — see [Prompt composition](#prompt-composition).
 15. In CEL expressions (`if.expr`, `while.expr`): always use the full prefix `state.prime.<name>.value`. Never omit `state.`.
 16. Loop `each.in` must be a root-relative path to a JSON array — `input.<name>`, `prime.<name>.value`, or a `runtime.` path — or a binding of an enclosing loop (its `each.as` name), e.g. `s.crops` inside a loop whose `each.as` is `s`. `input.*` is a first-class source; it need not point to a `prompt_type: json` effect. Bare keys that name no binding in scope and `state.`-prefixed spellings are hard errors here.
 

@@ -1,0 +1,14 @@
+name: c30-tool-param-concat
+effects:
+  - type: yield
+    name: look
+    template: "wide <shot>"
+  - type: yield
+    name: shot
+    template: "35mm & wide"
+  - type: tool
+    name: own_tag
+    provider: json
+    params:
+      mode: stringify
+      input: "{{> look}}, {{> shot}}, own tag: {{input.extra}}"

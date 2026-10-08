@@ -521,6 +521,46 @@ now also carries that run's own `remote_library_source` classification
 through the stash, closing a second hole (also #337) where a replay skipped
 the gate the original run applied.
 
+### 10. Prompt files (`{file: <path>}`)
+
+A declared prompt, a `prompt`/`yield` effect's `template`, or a message's
+`content` can name a file instead of carrying its text inline (#396). The
+file is read when the document is loaded and compiled — before any effect
+runs, and before capability consent (§9) is even computed, since the
+compiled tree is what consent walks. A document that can name an arbitrary
+path could otherwise read anything the host process can: credentials,
+another project's source, `/etc/passwd`.
+
+**Mitigation.** The path is a literal relative path (no `{{ }}` — a path
+built at render time can never reach this; it is read at compile time, from
+the document's own text) resolved against the directory of the document
+that names it, then — after symlinks are resolved, so a symlink inside the
+project pointing outside it is still caught — checked against *that
+document's project*: the directory of the nearest
+`circuitry.config.json`/`config.json` at or above it, or its own directory
+when there is none. A library document (`use: ref:`, `cof run-library`)
+resolves the same way but is confined to its source's own tree instead — for
+a `github` source, the cached tree at the pinned commit, never anywhere else
+on disk. An absolute path, or one that resolves outside the confinement
+root, is a `cof check`/compile error naming the field, same as a missing,
+unreadable, non-UTF-8, or over-1-MiB file. A document generated at run time
+(a reflector/decompose plan, a `use: inline` child) cannot use `file:` at
+all — it has no file of its own to resolve a relative path against, so this
+is a compile error there too, not a narrower check. Implementation:
+[`src/circuitry/core/prompt_files.py`](../src/circuitry/core/prompt_files.py).
+
+**Residual risk.** Confinement is to a *project*, not to the one file a
+`use: ref:`/`path:` child itself is — a prompt file anywhere else under the
+same project (or the same library source's tree) is reachable, by design
+(so `../shared/voice.md` works across sibling documents). A host that
+trusts a document at all is already trusting everything under its project
+by this same reasoning §1 and §6 already apply to `use: inline`/`path:`
+children and project config discovery. Content a prompt file carries (and a
+declared prompt's own text) is itself prompt text once rendered — it is
+never treated as something else — and a `{{> name}}` splicing it in never
+re-renders the result, so a file's own content cannot carry a template tag
+that executes again (see [Mustache Template Interpolation](./orchestration-reference.md#mustache-template-interpolation)).
+
 ---
 
 ## What Circuitry does NOT defend against

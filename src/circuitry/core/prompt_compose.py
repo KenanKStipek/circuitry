@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from .templates import TemplateError, render_template
@@ -43,6 +44,7 @@ __all__ = [
     "check_prompt_composition",
     "compile_declared_prompts",
     "declared_prompts",
+    "referenced_prompt_file_paths",
     "render_with_composition",
 ]
 
@@ -120,6 +122,67 @@ def compile_declared_prompts(
             confinement_root=confinement_root,
         )
     return declared
+
+
+def referenced_prompt_file_paths(
+    orch: Mapping[str, Any], *, document_dir: Path, confinement_root: Path
+) -> list[Path]:
+    """Every ``{file: <path>}`` prompt source *orch* resolves to, best-effort.
+
+    For anything that identifies a document by its content (``--resume``'s
+    document-hash check, capability consent) — their content is as much a
+    part of the document's identity as the orchestration YAML's own bytes
+    (#396). Swallows every :class:`~circuitry.core.prompt_files.PromptFileError`
+    rather than raising: this walk is a best-effort hashing aid, not a
+    validation pass (``compile_declared_prompts``/``cof check`` already
+    raise on a genuine violation, with the field name a caller here has
+    lost).
+    """
+    from .prompt_files import PromptFileError, resolve_prompt_file_path
+
+    paths: list[Path] = []
+
+    def resolve(value: Any) -> None:
+        if (
+            isinstance(value, Mapping)
+            and set(value) == {"file"}
+            and isinstance(value.get("file"), str)
+        ):
+            try:
+                paths.append(
+                    resolve_prompt_file_path(
+                        value["file"],
+                        document_dir=document_dir,
+                        confinement_root=confinement_root,
+                        field="file",
+                    )
+                )
+            except PromptFileError:
+                pass
+
+    prompts = orch.get("prompts")
+    if isinstance(prompts, Mapping):
+        for value in prompts.values():
+            resolve(value)
+
+    def walk(effects: Any) -> None:
+        if not isinstance(effects, list):
+            return
+        for effect in effects:
+            if not isinstance(effect, Mapping):
+                continue
+            resolve(effect.get("template"))
+            messages = effect.get("messages")
+            if isinstance(messages, list):
+                for message in messages:
+                    if isinstance(message, Mapping):
+                        resolve(message.get("content"))
+            for field in _CHILD_LISTS:
+                walk(effect.get(field))
+
+    walk(orch.get("effects") or orch.get("steps") or [])
+    walk(orch.get("finally"))
+    return paths
 
 
 # ── static (cof check) validation ───────────────────────────────────────────

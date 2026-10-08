@@ -1,0 +1,5 @@
+name: c28-yield-no-model
+effects:
+  - type: yield
+    name: brief
+    template: "Topic: {{input.topic}}"
