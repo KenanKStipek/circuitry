@@ -27,7 +27,8 @@ enum Expected {
     KnownDivergence {
         #[allow(dead_code)]
         python_repr: String,
-        rust_error_tag: String,
+        rust_error_tag: Option<String>,
+        rust_error_contains: Option<String>,
     },
 }
 
@@ -76,16 +77,30 @@ fn golden_corpus() {
                     case.yaml
                 )),
             },
-            Expected::Error { line, column: _ } => match result {
+            Expected::Error { line, column } => match result {
                 // "Same line/column *region*", not an exact column: PyYAML
                 // sometimes marks the tag token, sometimes the resolved
                 // scalar text, for what is -- either way -- a third-party
                 // failure that only needs a non-empty message at the same
-                // place (DESIGN.md §1, §12), so only the line is checked.
+                // place (DESIGN.md §1, §12). The line must match exactly;
+                // the column may drift a little (a scanner-level
+                // 1.1-vs-1.2 tokenizing difference, e.g. a tab's exact
+                // reported width), so it's checked within a small
+                // tolerance rather than not at all.
                 Err(e) => {
                     if let Some(line) = line {
                         match e.mark() {
-                            Some(mark) if mark.line == line => {}
+                            Some(mark) if mark.line == line => {
+                                if let Some(column) = column {
+                                    let diff = mark.column.abs_diff(column);
+                                    if diff > 2 {
+                                        failures.push(format!(
+                                            "case {i} ({:?}): error column mismatch: expected column {column} (\u{00b1}2), got column {} ({e})",
+                                            case.yaml, mark.column
+                                        ));
+                                    }
+                                }
+                            }
                             Some(mark) => failures.push(format!(
                                 "case {i} ({:?}): error line mismatch: expected line {line}, got line {} ({e})",
                                 case.yaml, mark.line
@@ -106,20 +121,33 @@ fn golden_corpus() {
                     value.py_repr()
                 )),
             },
-            Expected::KnownDivergence { rust_error_tag, .. } => match result {
-                Err(YamlError::UnresolvableTag { tag, .. }) if tag == rust_error_tag => {}
-                Err(other) => failures.push(format!(
-                    "case {i} ({:?}): expected UnresolvableTag({rust_error_tag:?}), got {other}",
-                    case.yaml
-                )),
-                Ok(value) => failures.push(format!(
-                    "case {i} ({:?}): expected a documented-divergence error, got value {:?} \
-                     (electricity-yaml newly supports this tag -- update the generator's \
-                     `known_divergence_cases` and this test)",
-                    case.yaml,
-                    value.py_repr()
-                )),
-            },
+            Expected::KnownDivergence { rust_error_tag, rust_error_contains, .. } => {
+                let matched = match &result {
+                    Err(YamlError::UnresolvableTag { tag, .. }) => {
+                        rust_error_tag.as_deref() == Some(tag.as_str())
+                    }
+                    Err(other) => rust_error_contains
+                        .as_deref()
+                        .is_some_and(|needle| other.to_string().contains(needle)),
+                    Ok(_) => false,
+                };
+                if matched {
+                    continue;
+                }
+                match result {
+                    Err(other) => failures.push(format!(
+                        "case {i} ({:?}): expected error tag {rust_error_tag:?} / message containing {rust_error_contains:?}, got {other}",
+                        case.yaml
+                    )),
+                    Ok(value) => failures.push(format!(
+                        "case {i} ({:?}): expected a documented-divergence error, got value {:?} \
+                         (electricity-yaml newly supports this -- update the generator's \
+                         `known_divergence_cases` and this test)",
+                        case.yaml,
+                        value.py_repr()
+                    )),
+                }
+            }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

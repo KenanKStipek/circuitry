@@ -41,12 +41,18 @@ fn bool_re() -> &'static regex::Regex {
 fn float_re() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
     RE.get_or_init(|| {
+        // The trailing `\n?` matches CPython's own un-flagged `$`, which
+        // (unlike this crate's regex crate) also matches just before a
+        // single trailing `\n` -- needed for a literal/folded block
+        // scalar (whose text always ends in one) forced through implicit
+        // resolution by a bare `!` (confirmed: `! |\n  12\n` is the int
+        // `12` under Circuitry's real loader, not a string).
         regex::Regex::new(
             r"(?x)^(?:[-+]?(?:[0-9][0-9_]*)\.[0-9_]*(?:[eE][-+][0-9]+)?
                     |\.[0-9][0-9_]*(?:[eE][-+][0-9]+)?
                     |[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*
                     |[-+]?\.(?:inf|Inf|INF)
-                    |\.(?:nan|NaN|NAN))$",
+                    |\.(?:nan|NaN|NAN))\n?$",
         )
         .unwrap()
     })
@@ -55,12 +61,13 @@ fn float_re() -> &'static regex::Regex {
 fn int_re() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
     RE.get_or_init(|| {
+        // See `float_re`'s comment on the trailing `\n?`.
         regex::Regex::new(
             r"(?x)^(?:[-+]?0b[0-1_]+
                     |[-+]?0[0-7_]+
                     |[-+]?(?:0|[1-9][0-9_]*)
                     |[-+]?0x[0-9a-fA-F_]+
-                    |[-+]?[1-9][0-9_]*(?::[0-5]?[0-9])+)$",
+                    |[-+]?[1-9][0-9_]*(?::[0-5]?[0-9])+)\n?$",
         )
         .unwrap()
     })
@@ -156,7 +163,10 @@ pub fn construct_bool(text: &str) -> Option<bool> {
 /// or plain decimal. Arbitrary-precision throughout (Python ints are
 /// unbounded).
 pub fn construct_int(text: &str) -> Option<IntValue> {
-    let stripped = text.replace('_', "");
+    // Python's `int()` strips surrounding whitespace itself (needed for
+    // both an explicit `!!int " 42 "` and a bare-`!`-forced block scalar,
+    // whose text always carries a trailing `\n`).
+    let stripped = text.trim().replace('_', "");
     let (negative, rest) = split_sign(&stripped)?;
     let magnitude = if rest == "0" {
         BigInt::from(0)
@@ -185,7 +195,9 @@ pub fn construct_int(text: &str) -> Option<IntValue> {
 /// lowercases, then a sign, then `.inf`/`.nan`, `H:MM:SS[.ff]`
 /// sexagesimal, or a plain `f64` parse.
 pub fn construct_float(text: &str) -> Option<f64> {
-    let stripped = text.replace('_', "").to_lowercase();
+    // See `construct_int`'s comment: Python's `float()` strips
+    // surrounding whitespace the same way.
+    let stripped = text.trim().replace('_', "").to_lowercase();
     let (negative, rest) = split_sign(&stripped)?;
     let sign = if negative { -1.0 } else { 1.0 };
     if rest == ".inf" {
@@ -198,12 +210,20 @@ pub fn construct_float(text: &str) -> Option<f64> {
         return Some(f64::NAN);
     }
     if rest.contains(':') {
-        let mut total = 0.0_f64;
-        for part in rest.split(':') {
+        // `constructor.py:283-289` adds from the *last* digit group to the
+        // first (`value += digit*base; base *= 60`), which rounds once per
+        // group starting from the smallest; summing left-to-right instead
+        // (`total*60 + part`) rounds in a different order and can land on
+        // a different double for a value exactly halfway between two of
+        // them (e.g. `1:30:00.06`) -- copy PyYAML's own order exactly.
+        let mut value = 0.0_f64;
+        let mut base = 1.0_f64;
+        for part in rest.rsplit(':') {
             non_empty(part)?;
-            total = total * 60.0 + part.parse::<f64>().ok()?;
+            value += part.parse::<f64>().ok()? * base;
+            base *= 60.0;
         }
-        return Some(sign * total);
+        return Some(sign * value);
     }
     non_empty(rest)?;
     rest.parse::<f64>().ok().map(|v| sign * v)
@@ -217,6 +237,12 @@ pub fn construct_float(text: &str) -> Option<f64> {
 pub fn construct_timestamp(text: &str) -> Option<Value> {
     let caps = timestamp_re().captures(text)?;
     let year: i32 = caps.name("year")?.as_str().parse().ok()?;
+    // Python's `datetime.date`/`datetime.datetime` reject year 0 (`MINYEAR
+    // == 1`); `chrono::NaiveDate` has no such floor, so without this check
+    // `0000-01-01` would load here where Circuitry's real loader raises.
+    if year < 1 {
+        return None;
+    }
     let month: u32 = caps.name("month")?.as_str().parse().ok()?;
     let day: u32 = caps.name("day")?.as_str().parse().ok()?;
     let date = NaiveDate::from_ymd_opt(year, month, day)?;
@@ -307,10 +333,14 @@ fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
             _ => None,
         }
     }
+    // PyYAML's `construct_yaml_binary` (`base64.decodebytes`, over
+    // `binascii.a2b_base64`) silently discards *any* byte outside the
+    // alphabet and its `=` padding before decoding -- not just
+    // whitespace (confirmed: `"aGVs!bG8="` decodes to `b"hello"`).
     let filtered: Vec<u8> = input
         .iter()
         .copied()
-        .filter(|b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+        .filter(|&b| value(b).is_some() || b == b'=')
         .collect();
     let core = filtered
         .iter()

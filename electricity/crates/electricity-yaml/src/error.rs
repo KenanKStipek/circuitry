@@ -77,35 +77,48 @@ impl YamlError {
 
 impl fmt::Display for YamlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // `Mark` is 0-indexed throughout (PyYAML's own `Mark` convention);
+        // displaying it 1-indexes both fields, matching PyYAML's own
+        // `Mark.__str__` and the `DuplicateKey` message above.
         match self {
             YamlError::Scan { message, mark } => {
-                write!(f, "{message} at line {}, column {}", mark.line, mark.column)
+                write!(
+                    f,
+                    "{message} at line {}, column {}",
+                    mark.line + 1,
+                    mark.column + 1
+                )
             }
             YamlError::MultipleDocuments { mark } => write!(
                 f,
                 "expected a single document in the stream at line {}, column {}",
-                mark.line, mark.column
+                mark.line + 1,
+                mark.column + 1
             ),
             YamlError::DuplicateKey { message } => write!(f, "{message}"),
             YamlError::UnresolvableTag { tag, mark } => write!(
                 f,
                 "could not determine a constructor for the tag {tag:?} at line {}, column {}",
-                mark.line, mark.column
+                mark.line + 1,
+                mark.column + 1
             ),
             YamlError::InvalidScalar { type_name, mark } => write!(
                 f,
                 "invalid {type_name} scalar at line {}, column {}",
-                mark.line, mark.column
+                mark.line + 1,
+                mark.column + 1
             ),
             YamlError::UnhashableKey { mark } => write!(
                 f,
                 "found unhashable key at line {}, column {}",
-                mark.line, mark.column
+                mark.line + 1,
+                mark.column + 1
             ),
             YamlError::InvalidMerge { mark } => write!(
                 f,
                 "expected a mapping or list of mappings for merging at line {}, column {}",
-                mark.line, mark.column
+                mark.line + 1,
+                mark.column + 1
             ),
         }
     }

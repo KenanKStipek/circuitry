@@ -370,6 +370,11 @@
     "repr": "{'a': 1000.5}"
   },
   {
+    "yaml": "a: 1:30:00.06\n",
+    "kind": "value",
+    "repr": "{'a': 5400.0599999999995}"
+  },
+  {
     "yaml": "a: ~\n",
     "kind": "value",
     "repr": "{'a': None}"
@@ -455,6 +460,12 @@
     "repr": "{'a': datetime.datetime(2024, 1, 2, 3, 4, 5)}"
   },
   {
+    "yaml": "a: 0000-01-01\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
     "yaml": "a: !!str on\n",
     "kind": "value",
     "repr": "{'a': 'on'}"
@@ -474,6 +485,21 @@
     "kind": "error",
     "line": null,
     "column": null
+  },
+  {
+    "yaml": "a: !!int \" 42 \"\n",
+    "kind": "value",
+    "repr": "{'a': 42}"
+  },
+  {
+    "yaml": "a: !!float \" 1.5 \"\n",
+    "kind": "value",
+    "repr": "{'a': 1.5}"
+  },
+  {
+    "yaml": "a: ! |\n  12\n",
+    "kind": "value",
+    "repr": "{'a': 12}"
   },
   {
     "yaml": "a: !!bool YeS\n",
@@ -525,6 +551,11 @@
     "column": 3
   },
   {
+    "yaml": "a: !!binary \"aGVs!bG8=\"\n",
+    "kind": "value",
+    "repr": "{'a': b'hello'}"
+  },
+  {
     "yaml": "a: ! on\n",
     "kind": "value",
     "repr": "{'a': True}"
@@ -567,6 +598,18 @@
     "kind": "known_divergence",
     "python_repr": "{'a': [('x', 1), ('y', 2)]}",
     "rust_error_tag": "tag:yaml.org,2002:pairs"
+  },
+  {
+    "yaml": "a: &a [*a]\n",
+    "kind": "known_divergence",
+    "python_repr": "{'a': [[...]]}",
+    "rust_error_contains": "self-referential anchor is not supported"
+  },
+  {
+    "yaml": "x: &k a\nm:\n  *k: 1\n",
+    "kind": "known_divergence",
+    "python_repr": "{'x': 'a', 'm': {'a': 1}}",
+    "rust_error_contains": "found unknown anchor"
   },
   {
     "yaml": "a: =\n",
@@ -617,6 +660,17 @@
     "kind": "error",
     "line": 0,
     "column": 3
+  },
+  {
+    "yaml": "a: &x 1\nb: &x 2\n",
+    "kind": "error",
+    "line": 1,
+    "column": 3
+  },
+  {
+    "yaml": "x: &k a\nm:\n  *k : 1\n  *k : 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'a' at line 1, column 4 (first defined at line 1, column 4); YAML would silently keep only the last one"
   },
   {
     "yaml": "base: &base\n  x: 1\n  y: 2\nderived:\n  <<: *base\n  y: 3\n",
@@ -706,6 +760,31 @@
     "message": "duplicate key 'b' at line 3, column 3 (first defined at line 2, column 3); YAML would silently keep only the last one"
   },
   {
+    "yaml": "!!str a: 1\n!!str a: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'a' at line 2, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "a:\n  .nan: 1\n  .nan: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key nan at line 3, column 3 (first defined at line 2, column 3); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "a:\n  b: 1\n  b: 2\na: 3\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'a' at line 4, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "a: !!int x\na: 1\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'a' at line 2, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "? [1, 2]\n: v\na: 1\na: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'a' at line 4, column 1 (first defined at line 3, column 1); YAML would silently keep only the last one"
+  },
+  {
     "yaml": "",
     "kind": "value",
     "repr": "None"
@@ -741,5 +820,29 @@
     "yaml": "a:\n  - 1\n  - 2\n  -\n    x: 1\n",
     "kind": "value",
     "repr": "{'a': [1, 2, {'x': 1}]}"
+  },
+  {
+    "yaml": "a: [1, 2\n",
+    "kind": "error",
+    "line": 1,
+    "column": 0
+  },
+  {
+    "yaml": "a: b: c\n",
+    "kind": "error",
+    "line": 0,
+    "column": 4
+  },
+  {
+    "yaml": "a:\n  b: 1\n c: 2\n",
+    "kind": "error",
+    "line": 2,
+    "column": 1
+  },
+  {
+    "yaml": "a:\n\tb: 1\n",
+    "kind": "error",
+    "line": 1,
+    "column": 0
   }
 ]

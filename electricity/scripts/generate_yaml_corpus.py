@@ -140,6 +140,11 @@ def float_cases() -> list[dict]:
         "a: .nan\n", "a: .NaN\n", "a: .NAN\n",
         "a: 1:30:00.5\n", "a: -1:30:00.5\n",
         "a: 1_000.5\n",
+        # exactly halfway between two doubles once summed in PyYAML's own
+        # right-to-left order (`digit*base` from the smallest unit up,
+        # `base *= 60`) -- round-half-to-even then lands one ulp below
+        # what summing the parts left-to-right would give
+        "a: 1:30:00.06\n",
     ]
     return [case(y) for y in yaml_texts]
 
@@ -175,6 +180,7 @@ def timestamp_cases() -> list[dict]:
         "a: 2024-01-02T03:04:05.123456Z\n",
         "a: 2024-01-02t03:04:05z\n",
         "a: 2024-01-02  03:04:05\n",  # multiple spaces, no T
+        "a: 0000-01-01\n",  # error: Python's `datetime.date` rejects year 0
     ]
     return [case(y) for y in yaml_texts]
 
@@ -190,6 +196,9 @@ def explicit_tag_cases() -> list[dict]:
         "a: !!str 123\n",
         "a: !!int \"42\"\n",  # forced int from a quoted scalar
         "a: !!int abc\n",  # error: not a valid int literal
+        "a: !!int \" 42 \"\n",  # Python's `int()` strips the surrounding whitespace itself
+        "a: !!float \" 1.5 \"\n",  # ... and so does `float()`
+        "a: ! |\n  12\n",  # a literal block scalar forced to implicit resolution: an int, trailing newline and all
         "a: !!bool YeS\n",  # explicit bool: case-insensitive, unlike implicit
         "a: !!bool banana\n",  # error: not a recognized bool literal
         "a: !!float \"1.5\"\n",
@@ -199,6 +208,7 @@ def explicit_tag_cases() -> list[dict]:
         "a: !!timestamp not-a-date\n",  # error
         "a: !!binary aGVsbG8=\n",
         "a: !!binary \"not base64!\"\n",  # error
+        "a: !!binary \"aGVs!bG8=\"\n",  # a stray non-alphabet byte: skipped, not an error
         "a: ! on\n",  # bare non-specific tag: still fully implicit, any style
         "a: ! \"on\"\n",  # ... even quoted (confirmed against the real loader)
         "a: ! [1, 2]\n",  # ... and on a sequence/mapping, same as no tag at all
@@ -258,6 +268,33 @@ def known_divergence_cases() -> list[dict]:
                 "rust_error_tag": rust_error_tag,
             }
         )
+    # Divergences whose Rust side fails with something other than an
+    # `UnresolvableTag` -- matched against the error's `Display` instead
+    # of a tag (`repr()`, not `_stable_repr()`: Python's own `repr()`
+    # already breaks a reference cycle on its own as `[...]`, but
+    # `_stable_repr()`'s plain recursion would loop forever on one).
+    for yaml_text, rust_error_contains in [
+        # PyYAML builds a real self-referential structure (it registers
+        # an anchor before composing its own children); electricity-yaml
+        # doesn't support that (DESIGN.md §3.2).
+        ("a: &a [*a]\n", "self-referential anchor is not supported"),
+        # A bare alias immediately followed by `:` with no space, used as
+        # a mapping key: PyYAML's (YAML 1.1) scanner accepts it; saphyr-
+        # parser 0.1.0 (YAML 1.2)'s simple-key lookahead does not, raising
+        # its own "found unknown anchor" instead -- a scanner-level
+        # 1.1-vs-1.2 difference, not anything this crate's composer
+        # controls.
+        ("x: &k a\nm:\n  *k: 1\n", "found unknown anchor"),
+    ]:
+        value = load_yaml(yaml_text)
+        cases.append(
+            {
+                "yaml": yaml_text,
+                "kind": "known_divergence",
+                "python_repr": repr(value),
+                "rust_error_contains": rust_error_contains,
+            }
+        )
     return cases
 
 
@@ -288,6 +325,13 @@ def anchor_cases() -> list[dict]:
         "a: &x {p: 1, q: 2}\nb: *x\n",
         "items:\n  - &x {n: 1}\n  - *x\n  - *x\n",
         "a: *undefined\n",  # error: undefined alias
+        "a: &x 1\nb: &x 2\n",  # error: a reused anchor name
+        # an alias used as a mapping key, then duplicated -- the position
+        # for both is the *anchor's* own, confirmed against the real
+        # loader (a space before `:` sidesteps a saphyr-parser 0.1.0
+        # scanner limitation around a bare alias directly against `:`,
+        # itself recorded as a known divergence below)
+        "x: &k a\nm:\n  *k : 1\n  *k : 2\n",
     ]
     return [case(y) for y in yaml_texts]
 
@@ -327,6 +371,22 @@ def duplicate_key_cases() -> list[dict]:
         "1.0: a\n1: b\n",
         "'1': a\n1: b\n",  # NOT a duplicate: string key vs int key
         "a:\n  b: 1\n  b: 2\nc: 3\n",  # nested mapping
+        # a tag in front of each key: the position is the *tag's* own
+        # start, not the resolved scalar's (confirmed: column 1 both
+        # times against the real loader, not column 7)
+        "!!str a: 1\n!!str a: 2\n",
+        # PyYAML's `construct_yaml_float` returns the one shared
+        # `nan_value` object for every `.nan` scalar, so two of them
+        # collide in CPython's dict despite `NaN != NaN` generally
+        "a:\n  .nan: 1\n  .nan: 2\n",
+        # the *outer* `a` is the duplicate Python reports, never descending
+        # into the first `a`'s own (otherwise-fine) nested mapping to find
+        # a `b` that only looks duplicated once `a` has already failed
+        "a:\n  b: 1\n  b: 2\na: 3\n",
+        # the duplicate on `a` itself must win over a sibling value that
+        # would otherwise fail first in a naive depth-first walk
+        "a: !!int x\na: 1\n",
+        "? [1, 2]\n: v\na: 1\na: 2\n",
     ]
     return [case(y) for y in yaml_texts]
 
@@ -345,6 +405,10 @@ def structural_cases() -> list[dict]:
         "? [1, 2]\n: v\n",  # error: unhashable (list) key
         "a: [1, [2, 3], {b: 4}]\n",
         "a:\n  - 1\n  - 2\n  -\n    x: 1\n",
+        "a: [1, 2\n",  # error: unclosed flow sequence
+        "a: b: c\n",  # error: a second `:` isn't allowed in this context
+        "a:\n  b: 1\n c: 2\n",  # error: inconsistent block-mapping indentation
+        "a:\n\tb: 1\n",  # error: a tab can't start a block-mapping entry
     ]
     return [case(y) for y in yaml_texts]
 
