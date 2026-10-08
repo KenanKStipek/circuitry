@@ -9,6 +9,10 @@ hand-ported, independently-drifting copy. The moment the two directories
 disagree, ``--check`` fails loudly rather than letting `electricity-schema`
 silently produce a different accept/reject verdict than `cof check`.
 
+Compared and written as bytes, not text: a text-mode round trip normalizes
+line endings, which would let a CRLF/LF drift pass ``--check`` despite the
+byte-for-byte claim above.
+
 Usage: python3 generate_schema_copy.py [--check]
 """
 
@@ -34,13 +38,13 @@ def main() -> int:
     for source in sources:
         wanted_names.add(source.name)
         dest = _DEST_DIR / source.name
-        text = source.read_text(encoding="utf-8")
-        current = dest.read_text(encoding="utf-8") if dest.exists() else None
-        if current != text:
+        data = source.read_bytes()
+        current = dest.read_bytes() if dest.exists() else None
+        if current != data:
             stale.append(str(dest))
             if not check:
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(text, encoding="utf-8")
+                dest.write_bytes(data)
 
     extra = (
         [str(p) for p in _DEST_DIR.glob("*.json") if p.name not in wanted_names]

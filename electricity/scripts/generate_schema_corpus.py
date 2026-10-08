@@ -219,6 +219,31 @@ def orchestration_cases() -> list[dict]:
                 "finally": [{"type": "tool", "name": "cleanup", "provider": "ffmpeg"}],
             },
         ),
+        (
+            # fancy-regex's "$" doesn't match just before a trailing "\n" the way
+            # Python re's does; electricity-schema normalizes NamePattern's patterns
+            # so this stays valid on both sides (a YAML "|" block scalar routinely
+            # ends in exactly this).
+            "name_with_trailing_newline_still_matches_pattern",
+            {"effects": [{"type": "tool", "name": "fetch\n", "provider": "ffmpeg"}]},
+        ),
+        (
+            "flow_enum_valid",
+            {"flow": "tree_of_thought", "effects": []},
+        ),
+        (
+            "retries_valid",
+            {
+                "effects": [
+                    {
+                        "type": "tool",
+                        "name": "t",
+                        "provider": "ffmpeg",
+                        "retries": {"max_attempts": 3, "backoff_ms": 100},
+                    }
+                ]
+            },
+        ),
     ]
 
     invalid: list[tuple[str, Any]] = [
@@ -274,6 +299,69 @@ def orchestration_cases() -> list[dict]:
             {
                 "interface": {"inputs": {"it's": {"type": 123}}},
                 "effects": [],
+            },
+        ),
+        (
+            # interface.inputs/outputs and use.outputs keys are free-form
+            # (additionalProperties), so a digit-string key is a real,
+            # reachable case -- it must be bracket-quoted ($.interface.inputs['1'])
+            # rather than mistaken for an array index ($.interface.inputs[1]).
+            "interface_inputs_digit_string_key",
+            {
+                "interface": {"inputs": {"1": {"type": 5}}},
+                "effects": [],
+            },
+        ),
+        (
+            "name_bad_character",
+            {"effects": [{"type": "tool", "name": "bad name", "provider": "ffmpeg"}]},
+        ),
+        (
+            "name_leading_digit",
+            {"effects": [{"type": "tool", "name": "1abc", "provider": "ffmpeg"}]},
+        ),
+        (
+            "name_reserved_word",
+            {"effects": [{"type": "tool", "name": "value", "provider": "ffmpeg"}]},
+        ),
+        (
+            "name_iter_reserved",
+            {"effects": [{"type": "tool", "name": "iter_3", "provider": "ffmpeg"}]},
+        ),
+        (
+            # A non-ASCII (but Unicode-decimal) digit: Python re's \d matches it,
+            # ASCII-only [A-Za-z0-9_] doesn't, so this trips *both* NamePattern
+            # clauses -- two errors at the same location, not one.
+            "name_iter_reserved_unicode_digit",
+            {"effects": [{"type": "tool", "name": "iter_\u0663", "provider": "ffmpeg"}]},
+        ),
+        (
+            "flow_enum_invalid",
+            {"flow": "bogus", "effects": []},
+        ),
+        (
+            "retries_max_attempts_below_minimum",
+            {
+                "effects": [
+                    {
+                        "type": "tool",
+                        "name": "t",
+                        "provider": "ffmpeg",
+                        "retries": {"max_attempts": 0},
+                    }
+                ]
+            },
+        ),
+        (
+            "loop_body_nested_missing_provider",
+            {
+                "effects": [
+                    {
+                        "type": "loop",
+                        "each": {"in": "prime.x.value"},
+                        "body": [{"type": "tool", "name": "t"}],
+                    }
+                ]
             },
         ),
     ]

@@ -306,6 +306,50 @@
     "valid": true
   },
   {
+    "document": {
+      "effects": [
+        {
+          "name": "fetch\n",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "name_with_trailing_newline_still_matches_pattern",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": [],
+      "flow": "tree_of_thought"
+    },
+    "locations": [],
+    "name": "flow_enum_valid",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "t",
+          "provider": "ffmpeg",
+          "retries": {
+            "backoff_ms": 100,
+            "max_attempts": 3
+          },
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [],
+    "name": "retries_valid",
+    "schema": "orchestration",
+    "valid": true
+  },
+  {
     "document": {},
     "locations": [
       "top level"
@@ -482,6 +526,166 @@
       "interface.inputs['it\\'s'].type"
     ],
     "name": "interface_inputs_key_needing_escape",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [],
+      "interface": {
+        "inputs": {
+          "1": {
+            "type": 5
+          }
+        }
+      }
+    },
+    "locations": [
+      "interface.inputs['1'].type"
+    ],
+    "name": "interface_inputs_digit_string_key",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "bad name",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0].name"
+    ],
+    "name": "name_bad_character",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "1abc",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0].name"
+    ],
+    "name": "name_leading_digit",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "value",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0].name"
+    ],
+    "name": "name_reserved_word",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "iter_3",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0].name"
+    ],
+    "name": "name_iter_reserved",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "iter_٣",
+          "provider": "ffmpeg",
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0].name",
+      "effects[0].name"
+    ],
+    "name": "name_iter_reserved_unicode_digit",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [],
+      "flow": "bogus"
+    },
+    "locations": [
+      "flow"
+    ],
+    "name": "flow_enum_invalid",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "name": "t",
+          "provider": "ffmpeg",
+          "retries": {
+            "max_attempts": 0
+          },
+          "type": "tool"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0].retries.max_attempts"
+    ],
+    "name": "retries_max_attempts_below_minimum",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "document": {
+      "effects": [
+        {
+          "body": [
+            {
+              "name": "t",
+              "type": "tool"
+            }
+          ],
+          "each": {
+            "in": "prime.x.value"
+          },
+          "type": "loop"
+        }
+      ]
+    },
+    "locations": [
+      "effects[0].body[0]"
+    ],
+    "name": "loop_body_nested_missing_provider",
     "schema": "orchestration",
     "valid": false
   },
