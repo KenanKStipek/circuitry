@@ -70,7 +70,12 @@ pub use error::{Mark, YamlError};
 /// untrusted input that must fail with a distinct, catchable error here
 /// rather than exhausting the stack or hitting an uncatchable
 /// `RecursionError`.
-pub const MAX_DEPTH: usize = 512;
+///
+/// Re-exported from [`electricity_value::MAX_DEPTH`] -- the limit every
+/// crate in this workspace that reads, writes or evaluates nested data
+/// shares (#394), not a number this crate happens to have picked to
+/// match independently.
+pub const MAX_DEPTH: usize = electricity_value::MAX_DEPTH;
 
 /// The most `Node`s expanding every `*alias` in a document may clone, in
 /// total, before loading fails with [`YamlError::AliasExpansionTooLarge`]

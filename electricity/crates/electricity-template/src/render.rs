@@ -360,9 +360,15 @@ pub(crate) fn render_nodes(
             Node::Variable(key) => out.push_str(&render_variable_escaped(key, scopes, ctx)?),
             Node::NoEscape(key) => out.push_str(&render_variable_raw(key, scopes, ctx)?),
             Node::Section(key, body) => {
-                let value = get_key(key, scopes)?;
-                if let Value::List(items) = value {
-                    for element in items {
+                let mut value = get_key(key, scopes)?;
+                // `Value::List(items) = value` would move `items` out of
+                // a type that implements `Drop` (electricity-value's
+                // iterative `Drop` impl), which Rust never allows,
+                // regardless of this being the enum's only field --
+                // `mem::take` swaps the `Vec` out instead, leaving `value`
+                // an (unused) empty list behind.
+                if let Value::List(items) = &mut value {
+                    for element in std::mem::take(items) {
                         if truthy(&element) {
                             out.push_str(&render_with_pushed_scope(body, element, scopes, ctx)?);
                         }

@@ -5,7 +5,20 @@
 //! live reference back into the caller's data beyond what CEL itself can
 //! express, and anything with no CEL counterpart becomes CEL `null` —
 //! except a `Value::Int` too large for `i64`, which [`to_cel`] rejects
-//! with [`Overflow`] rather than silently mapping to `null`.
+//! with [`ConvertError::Overflow`] rather than silently mapping to
+//! `null`, and a *value* nested deeper than
+//! [`electricity_value::MAX_DEPTH`], which [`to_cel`] rejects with
+//! [`ConvertError::Depth`] rather than recursing further — reachable
+//! with a run-time-built `Value` (`state`/`value`/`meta` are never read
+//! through this workspace's own JSON/YAML readers, which enforce that
+//! limit themselves, before reaching here), unlike every *other*
+//! recursive path in this crate (the `cel`-crate-owned parse tree, and
+//! this crate's own `paths`/`equality`/`ordering` walks over it), which
+//! is a `cel`-crate-owned structure already bounded by
+//! `nesting::MAX_NESTING_DEPTH` -- not just its *bracket* nesting, but
+//! every binary-operator and member/index/call chain within it too
+//! (`nesting.rs`'s own module docs explain why bracket nesting alone
+//! was not enough).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -15,18 +28,31 @@ use cel::objects::{Key, Map as CelMap};
 use chrono::{FixedOffset, TimeZone};
 use electricity_value::{IntValue, Value};
 
-/// *value* held a `Value::Int` too large for `i64`: CEL's `int` is a
-/// 64-bit signed integer by spec, unlike Python's unbounded `int`.
-/// `celtypes.IntType.__new__` (`celpy`) raises `ValueError("overflow")`
-/// for exactly this case rather than tolerating it — so this, not a
-/// silent `null`, is `_to_cel`'s real behavior for a big int the
-/// expression actually reads (`core/cel_eval.py`).
+/// Why [`to_cel`] could not convert a `Value`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Overflow;
+pub enum ConvertError {
+    /// *value* held a `Value::Int` too large for `i64`: CEL's `int` is a
+    /// 64-bit signed integer by spec, unlike Python's unbounded `int`.
+    /// `celtypes.IntType.__new__` (`celpy`) raises `ValueError("overflow")`
+    /// for exactly this case rather than tolerating it — so this, not a
+    /// silent `null`, is `_to_cel`'s real behavior for a big int the
+    /// expression actually reads (`core/cel_eval.py`).
+    Overflow,
+    /// *value* nested deeper than [`electricity_value::MAX_DEPTH`] —
+    /// never produced by this workspace's own JSON/YAML readers, but
+    /// reachable from a run-time-built `Value` (a future state merge or
+    /// a loop that wraps a value — not a CEL evaluation result: neither
+    /// [`crate::evaluate_condition`] nor [`crate::evaluate_expect`]
+    /// produces a `Value` at all, only a `bool`).
+    Depth,
+}
 
-impl fmt::Display for Overflow {
+impl fmt::Display for ConvertError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "overflow")
+        match self {
+            ConvertError::Overflow => write!(f, "overflow"),
+            ConvertError::Depth => write!(f, "nesting too deep"),
+        }
     }
 }
 
@@ -45,7 +71,24 @@ impl fmt::Display for Overflow {
 /// already the same CEL value by the time either reaches an expression;
 /// there is no naive/aware split left to reproduce inside CEL itself (the
 /// split in DESIGN.md §3.2 is `Value`'s own ordering, used outside CEL).
-pub fn to_cel(value: &Value) -> Result<cel::Value, Overflow> {
+pub fn to_cel(value: &Value) -> Result<cel::Value, ConvertError> {
+    to_cel_at_depth(value, 0)
+}
+
+/// *depth* is this call's own nesting level (0 at the root), checked
+/// against [`electricity_value::MAX_DEPTH`] before recursing into a
+/// `List`/`Dict` child -- not [`Value::depth`] computed once up front,
+/// so a value deep enough to matter is rejected as soon as the walk
+/// reaches that depth rather than after a full, separate traversal just
+/// to measure it. Shares [`Value::depth`]'s own off-by-one against
+/// `electricity-json`'s reader/writer for an empty innermost container
+/// (that function's own docs): an empty `List`/`Dict` never recurses
+/// here either, so the deepest *checked* level is one less than
+/// `electricity-json` would count for the same shape.
+fn to_cel_at_depth(value: &Value, depth: usize) -> Result<cel::Value, ConvertError> {
+    if depth > electricity_value::MAX_DEPTH {
+        return Err(ConvertError::Depth);
+    }
     Ok(match value {
         Value::None => cel::Value::Null,
         Value::Bool(b) => cel::Value::Bool(*b),
@@ -56,11 +99,11 @@ pub fn to_cel(value: &Value) -> Result<cel::Value, Overflow> {
         Value::List(items) => {
             let mut out = Vec::with_capacity(items.len());
             for item in items {
-                out.push(to_cel(item)?);
+                out.push(to_cel_at_depth(item, depth + 1)?);
             }
             cel::Value::List(Arc::new(out))
         }
-        Value::Dict(entries) => cel::Value::Map(dict_to_cel(entries)?),
+        Value::Dict(entries) => cel::Value::Map(dict_to_cel(entries, depth)?),
         Value::Date(_) => cel::Value::Null,
         Value::DateTime(naive, offset) => {
             let offset = offset.unwrap_or_else(|| FixedOffset::east_opt(0).expect("0 is valid"));
@@ -76,10 +119,10 @@ pub fn to_cel(value: &Value) -> Result<cel::Value, Overflow> {
     })
 }
 
-fn int_to_cel(i: &IntValue) -> Result<cel::Value, Overflow> {
+fn int_to_cel(i: &IntValue) -> Result<cel::Value, ConvertError> {
     match i {
         IntValue::Small(n) => Ok(cel::Value::Int(*n)),
-        IntValue::Big(_) => Err(Overflow),
+        IntValue::Big(_) => Err(ConvertError::Overflow),
     }
 }
 
@@ -92,23 +135,23 @@ fn int_to_cel(i: &IntValue) -> Result<cel::Value, Overflow> {
 /// `_to_cel`, documented (with its reachability — a plain YAML date key
 /// under `state.input` triggers it, not just data buried in `value`/
 /// `meta`) in `lib.rs`'s crate docs. A key too large for `i64` raises
-/// [`Overflow`] instead of being dropped, matching every other big-int
-/// read.
-fn dict_to_cel(entries: &electricity_value::Dict) -> Result<CelMap, Overflow> {
+/// [`ConvertError::Overflow`] instead of being dropped, matching every
+/// other big-int read.
+fn dict_to_cel(entries: &electricity_value::Dict, depth: usize) -> Result<CelMap, ConvertError> {
     let mut map = HashMap::with_capacity(entries.len());
     for (key, value) in entries {
         if let Some(key) = to_cel_key(key)? {
-            map.insert(key, to_cel(value)?);
+            map.insert(key, to_cel_at_depth(value, depth + 1)?);
         }
     }
     Ok(CelMap { map: Arc::new(map) })
 }
 
-fn to_cel_key(key: &Value) -> Result<Option<Key>, Overflow> {
+fn to_cel_key(key: &Value) -> Result<Option<Key>, ConvertError> {
     match key {
         Value::Bool(b) => Ok(Some(Key::Bool(*b))),
         Value::Int(IntValue::Small(n)) => Ok(Some(Key::Int(*n))),
-        Value::Int(IntValue::Big(_)) => Err(Overflow),
+        Value::Int(IntValue::Big(_)) => Err(ConvertError::Overflow),
         Value::Str(s) => Ok(Some(Key::String(Arc::new(s.clone())))),
         _ => Ok(None),
     }
@@ -147,7 +190,7 @@ mod tests {
     #[test]
     fn big_int_overflow_is_rejected_not_nulled() {
         let huge: num_bigint::BigInt = "100000000000000000000".parse().unwrap();
-        assert_eq!(to_cel(&Value::from(huge)), Err(Overflow));
+        assert_eq!(to_cel(&Value::from(huge)), Err(ConvertError::Overflow));
     }
 
     #[test]
@@ -166,6 +209,6 @@ mod tests {
         let huge: num_bigint::BigInt = "100000000000000000000".parse().unwrap();
         let mut d: Dict = Dict::new();
         d.insert(Value::from(huge), Value::from(1_i64));
-        assert_eq!(to_cel(&Value::Dict(d)), Err(Overflow));
+        assert_eq!(to_cel(&Value::Dict(d)), Err(ConvertError::Overflow));
     }
 }

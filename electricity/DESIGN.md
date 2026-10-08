@@ -221,6 +221,23 @@ too.
   `Value` method, since the two type systems diverge (CEL has no `Date`, `Value` has no CEL
   `Duration`/`Timestamp` distinction from `DateTime`/an interval).
 
+**Nesting depth.** `electricity_value::MAX_DEPTH` (512) is the one shared limit every crate in
+this workspace that reads, writes or evaluates nested data checks against, rather than each
+picking its own number (#394): `electricity-json` and `electricity-yaml` re-export it directly
+for their own readers/writers (§3.2, §3.4); `electricity-cel`'s `convert` module bounds its own
+recursion by it when converting a run-time-built `value`/`meta`/`state` argument (§7.2) — CEL
+expression *syntax* nesting is a distinct, much smaller limit of its own, `MAX_NESTING_DEPTH`,
+for reasons specific to that crate's parser (§7.2); `electricity-template`'s own section-nesting
+limit, `MAX_SECTION_DEPTH`, is smaller still, for reasons specific to its renderer (§3.3). A
+`Value` read through this workspace's own JSON/YAML loaders can never exceed `MAX_DEPTH`, but one
+built at run time (a future state merge or a loop that wraps a value — nothing in this workspace
+yet converts a `cel::Value` back into this crate's `Value`, so a CEL evaluation result specifically
+is not one of today's examples) is not automatically bounded by it — `Value::depth()` lets a caller check before relying on
+`py_str`/`py_repr`/equality/hashing/`py_partial_cmp`, every one of which recurses over nested
+values and assumes the invariant rather than enforcing it. `Drop` is the one exception: it is
+iterative regardless of depth, because a `Value` deeper than expected, dropped on a worker
+thread, must not abort the whole process no matter how it got that deep.
+
 ### 3.2 YAML: a PyYAML-1.1 composer on `saphyr-parser`
 
 No Rust YAML library implements YAML 1.1's implicit-scalar resolution (rust-ecosystem.md items
@@ -306,6 +323,16 @@ A malformed template is a compile-time error (`template_syntax_error`, runtime-s
 a render-time failure against unrenderable data is the dispatching effect's own failure, handled
 by that effect's `on_error` (runtime-semantics §3.3) — never silently sent through as raw,
 unrendered text.
+
+**Section nesting.** `{{#section}}`/`{{^section}}` tags may nest at most
+`electricity_template::MAX_SECTION_DEPTH` (64) deep, rejected at tokenize time with its own
+`TemplateError` kind (#394) — smaller than §3.1's shared `MAX_DEPTH` (512), and for a different
+reason: rendering a deeply nested section isn't only a stack-depth concern (the tree-walking
+renderer recurses once per level) but a CPU-time one, since the renderer clones its whole current
+scope stack on every section it descends into, making render time grow with the *cube* of
+nesting depth. 64 keeps a render at the limit itself fast, not merely safe. Dotted-name
+resolution (`a.b.c`) is an ordinary loop over a `.`-split name, never recursion, so it needs no
+limit of its own regardless of how long a dotted name is.
 
 **The `params_json` asymmetry (Q2) is preserved exactly, not unified.** Every ordinary template
 site renders a spliced list/dict via `py_str`. Only the context used for a tool's `params_json`
@@ -1242,7 +1269,7 @@ regardless of which underlying crate is used:
   value, which is the sandbox boundary (no expression can reach an attribute/method/class
   through state). Two values this doesn't hold for, both documented (not just in the PR) as known
   divergences in `electricity-cel`'s own crate docs: an `int` too large for CEL's 64-bit `int`
-  raises (`ValueError("overflow")` in cel-python, `convert::Overflow` here) rather than becoming
+  raises (`ValueError("overflow")` in cel-python, `convert::ConvertError::Overflow` here) rather than becoming
   `null`, read directly or as a dict key; and a dict key with no CEL key counterpart (a `float`,
   `None`, a bare `date` — reachable from an ordinary YAML input file, not just data buried in
   `value`/`meta`) is **dropped** here, where cel-python converts it to `None` and so collapses
@@ -1302,6 +1329,35 @@ regardless of which underlying crate is used:
 - **Bindings**: `if`/`while` bind one root, `state`; `expect:` binds three — `value`, `meta`
   (this effect's own outcome, unprefixed), and `state` (the full run state).
 - Max expression length 4096 chars; an empty/whitespace-only expression raises immediately.
+- **Expression nesting** (#394): `cel`'s `Env::compile` always uses its ANTLR-generated parser
+  (not the crate's separate, feature-gated `PrattParser`, off by default and not enabled here),
+  whose visitor recurses once per level of bracket nesting (`(`/`[`/`{`) *and* once per link of a
+  binary-operator chain (arithmetic, comparison, equality, `in`) or a member/index/call chain
+  (`.field`, `[i]`, `.method(...)`) — measured directly, an unoptimized debug build overflows a 2
+  MiB thread stack at as few as 12 levels of bracket nesting, and `0+1+1+...`/`state[0][0]...`
+  chains overflow the same stack, in both debug and `--release`, at 1600–1700 and 1300 terms
+  respectively, well inside the 4096-character expression cap. Chained unary `!` and a long
+  `&&`/`||` chain never come close, because the grammar collects a run of either into one node
+  visited once, and `conditionalAnd`/`conditionalOr` are themselves flat, non-recursive
+  productions — not because `cel` parses with a loop instead of recursive descent in general.
+  `electricity-cel` pre-scans an expression's combined bracket-and-chain nesting before ever
+  parsing it and rejects anything over `electricity_cel::MAX_NESTING_DEPTH` (64) with its own
+  `CelError` kind — a crate-specific limit, not §3.1's shared `MAX_DEPTH` (512), because it bounds
+  expression *syntax*, not a `Value` tree. `electricity-cel`'s own `convert` module bounds *that*
+  — a run-time-built `value`/`meta`/`state` argument — by the shared `MAX_DEPTH` instead, rejecting
+  with the same `CelError` kind rather than recursing further. `Cargo.toml`'s
+  `[profile.dev.package.cel]`/`[profile.dev.package.antlr4rust]` overrides exist so a debug
+  build's much larger per-frame stack cost doesn't overflow before either check runs. Circuitry's
+  own `core/cel_eval.py` has no equivalent pre-scan: `celpy`'s parser raises Python's own
+  `RecursionError` well before a native stack overflow, in principle a graceful, catchable failure
+  for this exact input — but `_compile`'s own `except Exception` handler that would turn it into
+  `CelValidationError` can itself re-trigger a second `RecursionError` formatting the first one's
+  message (`str(exc)`, still deep in the same exhausted recursion budget), which escapes
+  **uncaught** past every call site in `core/cel_eval.py` as a bare `RecursionError`, confirmed
+  directly (`evaluate_cel("0" + "+1" * 2000, {})` raises `RecursionError`, not
+  `CelEvaluationError`). `electricity-cel`'s pre-scan means it never reaches an equivalent native
+  stack overflow to begin with, which incidentally also means it rejects this input more cleanly
+  than Circuitry's own evaluator does today.
 
 ### 7.3 Regex engines
 
