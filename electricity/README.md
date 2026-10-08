@@ -29,6 +29,15 @@ cargo test --workspace
 `cargo build --release -p electricity-cli` produces the `electricity` binary
 at `target/release/electricity`.
 
+Every folder under `crates/` is a workspace member (`members = ["crates/*"]`): a new
+crate needs no edit to the member list, and a stray folder there without a
+`Cargo.toml` breaks every cargo command.
+
+Generators in `scripts/generate_*.py` write checked-in expected outputs from
+Circuitry's own Python code. Each one supports `--check`, and CI runs all of
+them (`pip install -e .` from the repository root first, then
+`python3 scripts/generate_<name>.py --check` from `electricity/`).
+
 ## Read more
 
 - [`DESIGN.md`](DESIGN.md) — the full design: architecture, the Value model,
