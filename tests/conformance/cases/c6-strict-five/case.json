@@ -1,0 +1,7 @@
+{
+  "spec_case": "C6",
+  "description": "Same as c6-strict-absent, run with x=5 (electricity/docs/spec/runtime-semantics.md §4.4).",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "x=5"]
+}

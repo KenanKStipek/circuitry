@@ -24,6 +24,7 @@ from ..output import live_region as _live_region
 from ..plugins.base import ToolResult
 from .cancellation import get_token
 from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
+from .effect_identity import model_call
 from .expect import ExpectDef, evaluate_expect, expect_failure_summary
 from .prompt import RetryPolicyDef
 from .store import Store
@@ -785,16 +786,17 @@ class ToolRuntime:
                 # left unbalanced (#273 review).
                 if self.defn.expect is not None:
                     try:
-                        outcome = evaluate_expect(
-                            self.defn.expect,
-                            value=node["value"],
-                            meta=meta,
-                            ctx=ctx,
-                            adapter=self.adapter,
-                            model=self.model,
-                            timeout_seconds=timeout_seconds,
-                            effect_label=f"tool '{self.defn.name}'",
-                        )
+                        with model_call(store, self.defn.name):
+                            outcome = evaluate_expect(
+                                self.defn.expect,
+                                value=node["value"],
+                                meta=meta,
+                                ctx=ctx,
+                                adapter=self.adapter,
+                                model=self.model,
+                                timeout_seconds=timeout_seconds,
+                                effect_label=f"tool '{self.defn.name}'",
+                            )
                     except Exception as expect_exc:
                         failure = expect_exc
                         retryable = True

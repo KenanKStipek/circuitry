@@ -1,0 +1,7 @@
+name: c2-duplicate-key
+effects:
+  - type: tool
+    name: a
+    provider: json
+    params: {mode: stringify, input: 1}
+name: c2-duplicate-key-again
