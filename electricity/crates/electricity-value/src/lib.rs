@@ -365,15 +365,37 @@ impl Value {
 /// and drops each node after already emptying its own children into that
 /// same stack, so by the time a node's own (otherwise-recursive) `Drop`
 /// runs, it has no children left and returns immediately.
+///
+/// A `List`/`Dict` with no `List`/`Dict` child of its own -- the common
+/// case; a template render clones and drops a whole scope stack on
+/// every section, and most state is flat -- skips building that stack
+/// at all: none of its children can recurse either way, so the
+/// ordinary per-field drop glue is exactly as safe and does not cost
+/// this `impl` a `Vec`/`flat_map`/`collect` it would not otherwise need.
 impl Drop for Value {
     fn drop(&mut self) {
+        let has_container_child = match self {
+            Value::List(items) => items.iter().any(is_container),
+            Value::Dict(entries) => entries
+                .iter()
+                .any(|(k, v)| is_container(k) || is_container(v)),
+            _ => return,
+        };
+        if !has_container_child {
+            // No child can recurse either, so the ordinary per-field
+            // drop glue below (about to run for every field of this
+            // `List`/`Dict` regardless) is exactly as safe, and this
+            // `impl` doesn't need to pay for a `Vec`/`flat_map`/`collect`
+            // it would not otherwise use.
+            return;
+        }
         let mut pending: Vec<Value> = match self {
             Value::List(items) => std::mem::take(items),
             Value::Dict(entries) => std::mem::take(entries)
                 .into_iter()
                 .flat_map(|(k, v)| [k, v])
                 .collect(),
-            _ => return,
+            _ => unreachable!("matched List/Dict above"),
         };
         while let Some(mut value) = pending.pop() {
             match &mut value {
@@ -389,6 +411,10 @@ impl Drop for Value {
             // (end of this loop iteration) cannot recurse any further.
         }
     }
+}
+
+fn is_container(value: &Value) -> bool {
+    matches!(value, Value::List(_) | Value::Dict(_))
 }
 
 // ---------------------------------------------------------------------

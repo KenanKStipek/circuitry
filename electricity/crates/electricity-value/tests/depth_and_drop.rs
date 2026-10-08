@@ -97,9 +97,44 @@ fn drop_of_a_pathologically_deep_value_does_not_overflow_a_2mib_stack() {
     });
 }
 
+fn nested_dict(depth: usize) -> Value {
+    let mut v = Value::from(1_i64);
+    for _ in 0..depth {
+        let mut d = electricity_value::Dict::new();
+        d.insert(Value::from("k"), v);
+        v = Value::Dict(d);
+    }
+    v
+}
+
+fn hash_of(v: &Value) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    v.hash(&mut h);
+    h.finish()
+}
+
 /// A `Dict` nested inside itself (as both key-chain and value-chain) also
 /// has to drop iteratively — `Drop`'s own `pending` stack flattens both
 /// a `Dict`'s keys and its values, not just a `List`'s items.
+/// The shortcut that skips building an explicit `pending` stack for a
+/// `List`/`Dict` with no container child (`lib.rs`'s own `Drop` docs)
+/// must still drop every scalar field -- nothing here overflows a 2 MiB
+/// stack either way (there is nothing to recurse into), so this is a
+/// correctness check, not a stack-safety one.
+#[test]
+fn drop_of_a_flat_dict_and_list_drops_every_scalar() {
+    let mut d = electricity_value::Dict::new();
+    d.insert(Value::from("a"), Value::from(1_i64));
+    d.insert(Value::from("b"), Value::Str("x".repeat(64)));
+    drop(Value::Dict(d));
+    drop(Value::List(vec![
+        Value::from(1_i64),
+        Value::Str("x".repeat(64)),
+        Value::None,
+    ]));
+}
+
 #[test]
 fn drop_of_a_deeply_nested_dict_does_not_overflow_a_2mib_stack() {
     run_on_2mib_stack(|| {
@@ -110,5 +145,63 @@ fn drop_of_a_deeply_nested_dict_does_not_overflow_a_2mib_stack() {
             v = Value::Dict(d);
         }
         drop(v);
+    });
+}
+
+/// `py_str`/`py_repr`/equality/hashing/`py_partial_cmp` all still recurse
+/// (`lib.rs`'s own module docs on the `depth ≤ MAX_DEPTH` invariant they
+/// assume rather than enforce) -- unlike `Drop`, which is iterative
+/// regardless of depth. A value at exactly `MAX_DEPTH` is the one depth
+/// every caller that checks [`Value::depth`] first is expected to still
+/// call these with, so each must stay safe there on the same 2 MiB
+/// stack `Drop`'s own tests above use, for both a `List` and a `Dict`
+/// chain.
+#[test]
+fn py_str_at_exactly_the_limit_on_a_2mib_stack() {
+    run_on_2mib_stack(|| {
+        assert!(!nested_list(MAX_DEPTH).py_str().is_empty());
+        assert!(!nested_dict(MAX_DEPTH).py_str().is_empty());
+    });
+}
+
+#[test]
+fn py_repr_at_exactly_the_limit_on_a_2mib_stack() {
+    run_on_2mib_stack(|| {
+        assert!(!nested_list(MAX_DEPTH).py_repr().is_empty());
+        assert!(!nested_dict(MAX_DEPTH).py_repr().is_empty());
+    });
+}
+
+#[test]
+fn equality_at_exactly_the_limit_on_a_2mib_stack() {
+    run_on_2mib_stack(|| {
+        assert!(nested_list(MAX_DEPTH).py_eq(&nested_list(MAX_DEPTH)));
+        assert!(nested_dict(MAX_DEPTH).py_eq(&nested_dict(MAX_DEPTH)));
+    });
+}
+
+#[test]
+fn hash_at_exactly_the_limit_on_a_2mib_stack() {
+    run_on_2mib_stack(|| {
+        assert_eq!(
+            hash_of(&nested_list(MAX_DEPTH)),
+            hash_of(&nested_list(MAX_DEPTH))
+        );
+        assert_eq!(
+            hash_of(&nested_dict(MAX_DEPTH)),
+            hash_of(&nested_dict(MAX_DEPTH))
+        );
+    });
+}
+
+#[test]
+fn py_partial_cmp_at_exactly_the_limit_on_a_2mib_stack() {
+    run_on_2mib_stack(|| {
+        assert_eq!(
+            nested_list(MAX_DEPTH)
+                .py_partial_cmp(&nested_list(MAX_DEPTH))
+                .unwrap(),
+            Some(std::cmp::Ordering::Equal)
+        );
     });
 }
