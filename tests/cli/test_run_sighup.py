@@ -87,9 +87,14 @@ def _interrupted_tree_dynamic_orchestration(tmp_path: Path) -> tuple[Path, Path,
     """
     pidfile = tmp_path / "branch_pid"
     started = tmp_path / "branch_started"
+    # `exec` the tail command (#385 round 3): see the matching comment in
+    # `test_run_cancel_parallel.py`'s own `_branch_tool` for why a plain
+    # `sleep N` as the last of several `;`-separated commands can leave a
+    # cancellation's `killpg` racing the kernel's own registration of the
+    # child macOS's /bin/bash (3.2) forks to run it.
     script = (
         f"if [ -f {started} ]; then exit 0; fi; "
-        f"echo $$ > {pidfile}; touch {started}; sleep {_BRANCH_SLEEP_SECONDS}"
+        f"echo $$ > {pidfile}; touch {started}; exec sleep {_BRANCH_SLEEP_SECONDS}"
     )
     body = f"""
 effects:
@@ -313,7 +318,7 @@ effects:
         provider: shell
         params:
           command: bash
-          args: ["-c", "echo $$ > {pidfile}; touch {started}; sleep {_BRANCH_SLEEP_SECONDS}"]
+          args: ["-c", "echo $$ > {pidfile}; touch {started}; exec sleep {_BRANCH_SLEEP_SECONDS}"]
           allowed_commands: ["bash"]
     finally:
       - type: tool
@@ -321,7 +326,7 @@ effects:
         provider: shell
         params:
           command: bash
-          args: ["-c", "touch {cleanup_started}; sleep 5"]
+          args: ["-c", "touch {cleanup_started}; exec sleep 5"]
           allowed_commands: ["bash"]
 """.lstrip("\n")
     orch = tmp_path / "second_signal_after_sighup.yml"

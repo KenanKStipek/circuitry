@@ -79,7 +79,18 @@ def _branch_tool(name: str, *, pidfile: Path, started: Path) -> str:
     """A `tool: shell` effect: records its own pid and a 'started' marker
     before sleeping, so a test can wait for (and later assert on) exactly
     those two things without a fixed sleep of its own."""
-    script = f"echo $$ > {pidfile}; touch {started}; sleep {_BRANCH_SLEEP_SECONDS}"
+    # `exec` the tail command (#385 round 3): plain `sleep N` as the last
+    # of several `;`-separated commands makes macOS's /bin/bash (3.2) fork
+    # a *child* process to run it rather than exec into it, so the pid
+    # recorded above is bash's own, not the long-lived process -- a
+    # cancellation's `killpg` on that pid's process group then races the
+    # kernel's own registration of that just-forked child into the group,
+    # which can (rarely, confirmed under load) leave it alive, still
+    # holding this step's own stdout/stderr pipes open past bash's own
+    # death and the run that is waiting for them to close. `exec` removes
+    # the extra process entirely: bash becomes `sleep`, same pid, so
+    # there is nothing left to race.
+    script = f"echo $$ > {pidfile}; touch {started}; exec sleep {_BRANCH_SLEEP_SECONDS}"
     return f"""
       - type: tool
         name: {name}
@@ -132,7 +143,7 @@ def _parallel_loop_orchestration(
     pidfiles = [tmp_path / f"pid_{i}" for i in range(n_iterations)]
     started = [tmp_path / f"started_{i}" for i in range(n_iterations)]
     scripts = [
-        f"echo $$ > {pidfiles[i]}; touch {started[i]}; sleep {_BRANCH_SLEEP_SECONDS}"
+        f"echo $$ > {pidfiles[i]}; touch {started[i]}; exec sleep {_BRANCH_SLEEP_SECONDS}"
         for i in range(n_iterations)
     ]
     body = f"""
@@ -333,7 +344,7 @@ effects:
         provider: shell
         params:
           command: bash
-          args: ["-c", "echo $$ > {pidfile}; touch {started}; sleep {_BRANCH_SLEEP_SECONDS}"]
+          args: ["-c", "echo $$ > {pidfile}; touch {started}; exec sleep {_BRANCH_SLEEP_SECONDS}"]
           allowed_commands: ["bash"]
     finally:
       - type: tool
@@ -341,7 +352,7 @@ effects:
         provider: shell
         params:
           command: bash
-          args: ["-c", "touch {cleanup_started}; sleep 5"]
+          args: ["-c", "touch {cleanup_started}; exec sleep 5"]
           allowed_commands: ["bash"]
 """.lstrip("\n")
     orch = tmp_path / "second_signal.yml"
@@ -421,14 +432,14 @@ effects:
         on_error: continue
         params:
           command: bash
-          args: ["-c", "echo $$ > {a_pidfile}; touch {a_started}; sleep {_BRANCH_SLEEP_SECONDS}"]
+          args: ["-c", "echo $$ > {a_pidfile}; touch {a_started}; exec sleep {_BRANCH_SLEEP_SECONDS}"]
           allowed_commands: ["bash"]
       - type: tool
         name: b
         provider: shell
         params:
           command: bash
-          args: ["-c", "touch {b_started}; sleep {_BRANCH_SLEEP_SECONDS}"]
+          args: ["-c", "touch {b_started}; exec sleep {_BRANCH_SLEEP_SECONDS}"]
           allowed_commands: ["bash"]
 """.lstrip("\n")
     orch = tmp_path / "loop_on_error_continue.yml"
@@ -493,7 +504,7 @@ effects:
         provider: shell
         params:
           command: bash
-          args: ["-c", "touch {started}; sleep {_BRANCH_SLEEP_SECONDS}"]
+          args: ["-c", "touch {started}; exec sleep {_BRANCH_SLEEP_SECONDS}"]
           allowed_commands: ["bash"]
     finally:
       - type: dynamic
@@ -558,7 +569,7 @@ def _interrupted_dynamic_orchestration(tmp_path: Path) -> tuple[Path, Path]:
     started = tmp_path / "slow_started"
     script = (
         f"if [ -f {started} ]; then exit 0; fi; "
-        f"touch {started}; sleep {_BRANCH_SLEEP_SECONDS}"
+        f"touch {started}; exec sleep {_BRANCH_SLEEP_SECONDS}"
     )
     body = f"""
 effects:

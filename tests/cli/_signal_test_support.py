@@ -90,6 +90,83 @@ def _diagnosis_header(
     return f"{label}: child still running ({', '.join(bits)})"
 
 
+def _process_group_and_pipe_diagnostics(pid: int | None) -> str:
+    """``ps``/``lsof`` evidence of *pid*'s own session and process group,
+    taken before anything is killed (#385 round 3).
+
+    A stuck `cof run` child's own stack dump (from the SIGABRT below)
+    only ever showed that a worker thread was blocked in `communicate`'s
+    own `select()` — never *why* the pipe it was reading never reached
+    EOF. The actual answer, found this way: `tests/cli`'s own branch
+    scripts are plain multi-statement `bash -c '...; sleep N'` strings,
+    and macOS's `/bin/bash` (3.2) forks a *child* process for a non-tail
+    command like that `sleep` rather than exec'ing into it, so the
+    recorded branch pid (bash's own ``$$``) and the process actually
+    still holding the pipe's write end open are two different pids in
+    the same process group. `kill_process_group`'s own `killpg` targets
+    every pid in that group at once and reliably kills both in the
+    overwhelming majority of runs — the process that didn't die here
+    lost a genuine kernel-level race between that `killpg` and the
+    `fork()` that had just created it, a window `kill_process_group`
+    itself cannot close from outside: a signal delivered to a process
+    group cannot reach a member the kernel hasn't finished registering
+    into that group yet. (Fixed at the source, in the test fixtures that
+    hit it: ``exec``'ing the branch's own tail command removes the extra
+    forked process the race needs entirely — see the scripts below.)
+    This stays here anyway, permanently: the same race could in
+    principle show up again for any future branch script this suite
+    adds that still forks instead of exec'ing, and a future failure
+    should not need this investigation repeated from scratch.
+
+    *pid* is matched against ``ps``'s own ``pgid``/``sess`` columns, not
+    just ``pid`` -- a process-group leader killed by ``killpg`` is gone
+    long before this runs, but ``pgid``/``sess`` keep reporting its
+    original pid for as long as any group member (including one that won
+    the race above) survives it.
+    """
+    if pid is None:
+        return "(no branch pid recorded to diagnose)"
+    ps = subprocess.run(
+        ["ps", "-eo", "pid,ppid,pgid,sess,stat,etime,command"],
+        capture_output=True,
+        text=True,
+        timeout=5.0,
+        check=False,
+    )
+    header, *rows = ps.stdout.splitlines() or [""]
+    want = str(pid)
+    group_lines = [
+        row
+        for row in rows
+        if len(row.split(maxsplit=6)) >= 4 and want in row.split(maxsplit=6)[1:4]
+    ]
+    group_pids = [row.split(maxsplit=1)[0] for row in group_lines]
+    sections = [
+        f"ps (every process in branch pid {pid}'s own session/process "
+        "group, by pgid/sess, before anything is killed):\n"
+        + (
+            "\n".join([header, *group_lines])
+            if group_lines
+            else "(none found -- the whole group is already gone)"
+        )
+    ]
+    lsof_pids = sorted({*group_pids, str(os.getpid())})
+    lsof = subprocess.run(
+        ["lsof", "-p", ",".join(lsof_pids)],
+        capture_output=True,
+        text=True,
+        timeout=5.0,
+        check=False,  # a dead pid among lsof_pids is expected and not an error
+    )
+    sections.append(
+        "lsof for those pids plus this test process itself (a PIPE node "
+        "listed under more than one pid is still held open by whichever "
+        "one isn't this test process -- that's the EOF this test is "
+        "still waiting for):\n" + (lsof.stdout or lsof.stderr or "(no output)")
+    )
+    return "\n\n".join(sections)
+
+
 def _diagnose_and_fail(
     proc: subprocess.Popen[str],
     *,
@@ -99,10 +176,12 @@ def _diagnose_and_fail(
     pid: int | None = None,
 ) -> None:
     """Fail the test with everything needed to debug a stuck `cof run`
-    child: its own stdout/stderr, plus (via SIGABRT + this module's own
+    child: its own stdout/stderr, the branch's own process-group/pipe
+    state (:func:`_process_group_and_pipe_diagnostics`, captured before
+    anything below is killed), plus (via SIGABRT + this module's own
     `PYTHONFAULTHANDLER=1`) a dump of every thread's Python stack — never
     a bare `TimeoutExpired`/`TimeoutError` with none of that (#385
-    review).
+    review, round 3).
 
     SIGABRT, not SIGKILL: faulthandler installs itself for exactly the
     signals a fatal crash would send (SIGABRT included), dumps first,
@@ -110,6 +189,7 @@ def _diagnose_and_fail(
     the child still exits, just not silently. Falls back to SIGKILL only
     if SIGABRT itself doesn't finish the job in time.
     """
+    diagnostics = _process_group_and_pipe_diagnostics(pid)
     if proc.poll() is None:
         proc.send_signal(signal.SIGABRT)
         try:
@@ -122,6 +202,8 @@ def _diagnose_and_fail(
     header = _diagnosis_header(label=label, timeout=timeout, elapsed=elapsed, pid=pid)
     pytest.fail(
         f"{header}\n"
+        f"--- process group / pipe state at the moment of the timeout ---\n"
+        f"{diagnostics}\n"
         f"--- stdout ---\n{stdout}\n"
         "--- stderr (includes a PYTHONFAULTHANDLER stack dump of every "
         "thread, from SIGABRT, if the child was still alive) ---\n"
@@ -140,6 +222,7 @@ def _diagnose_and_fail_no_pipes(
     """Like `_diagnose_and_fail`, for the one scenario where stdout/stderr
     can't be read here at all: the caller closed its own read end of both
     pipes already, to simulate a closed terminal."""
+    diagnostics = _process_group_and_pipe_diagnostics(pid)
     if proc.poll() is None:
         proc.send_signal(signal.SIGABRT)
         try:
@@ -153,5 +236,7 @@ def _diagnose_and_fail_no_pipes(
     pytest.fail(
         f"{header} "
         f"(stdout/stderr already closed by this test; returncode after "
-        f"SIGABRT+kill: {returncode})"
+        f"SIGABRT+kill: {returncode})\n"
+        f"--- process group / pipe state at the moment of the timeout ---\n"
+        f"{diagnostics}"
     )
