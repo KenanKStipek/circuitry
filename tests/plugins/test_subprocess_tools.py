@@ -30,6 +30,7 @@ from curl_test_support import (
     read_config_url,
 )
 
+from circuitry.core import cancellation
 from circuitry.plugins import build_plugin
 from circuitry.plugins._subprocess import (
     GenericSubprocessTool,
@@ -169,7 +170,12 @@ def test_run_binary_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert r.exit_code == 0
     assert validate_tool_result(r, plugin_name="generic") == []
     assert captured["cmd"] == ["/usr/bin/echo", "hi"]
-    assert captured["communicate_kwargs"]["timeout"] == 5
+    # run_tracked (#385 follow-up) slices a long `timeout` into short polls
+    # rather than handing the whole thing to one `communicate()` call, so
+    # the signal-handling main thread returns to bytecode that often
+    # regardless of which thread a signal reaches — each individual call
+    # gets the poll slice, not the step's own full timeout.
+    assert captured["communicate_kwargs"]["timeout"] == cancellation._SIGNAL_POLL_SECONDS
     assert captured["kwargs"]["text"] is True
 
 

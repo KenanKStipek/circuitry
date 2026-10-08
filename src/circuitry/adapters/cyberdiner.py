@@ -69,6 +69,7 @@ import urllib.request
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from ..core.cancellation import acquire_promptly
 from ..preflight import CheckResult
 from .base import GenerateOptions, GenerateResult, ignored_options_warning
 
@@ -257,7 +258,7 @@ class CyberdinerAdapter:
                 model=model, prompt=prompt, timeout_seconds=timeout_seconds
             )
         else:
-            sem.acquire()
+            acquire_promptly(sem)
             try:
                 result = self._generate(
                     model=model, prompt=prompt, timeout_seconds=timeout_seconds

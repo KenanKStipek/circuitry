@@ -125,9 +125,14 @@ def test_closed_terminal_sighup_does_not_abort_cleanup(tmp_path: Path) -> None:
 
     # Idempotent: a `--resume` rerun of this same unfinished branch exits
     # at once instead of sleeping the full duration all over again.
+    # `exec` the tail command (#385 round 3): see the matching comment in
+    # `test_run_cancel_parallel.py`'s own `_branch_tool` for why a plain
+    # `sleep N` as the last of several `;`-separated commands can leave a
+    # cancellation's `killpg` racing the kernel's own registration of the
+    # child macOS's /bin/bash (3.2) forks to run it.
     script = (
         f"if [ -f {started} ]; then exit 0; fi; "
-        f"echo $$ > {pidfile}; touch {started}; sleep {_BRANCH_SLEEP_SECONDS}"
+        f"echo $$ > {pidfile}; touch {started}; exec sleep {_BRANCH_SLEEP_SECONDS}"
     )
     orch = tmp_path / "pty_sighup.yml"
     orch.write_text(

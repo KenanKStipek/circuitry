@@ -16,7 +16,6 @@ be left alone entirely.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import signal
 import subprocess
@@ -25,6 +24,13 @@ import time
 from pathlib import Path
 
 import pytest
+from _signal_test_support import (
+    _diagnose_and_fail,
+    _diagnose_and_fail_no_pipes,
+    _pid_alive,
+    _sandboxed_env,
+    _wait_for_paths,
+)
 
 requires_bash = pytest.mark.skipif(
     shutil.which("bash") is None, reason="requires the 'bash' binary"
@@ -38,51 +44,37 @@ requires_sighup = pytest.mark.skipif(
 _BRANCH_SLEEP_SECONDS = 60
 
 #: How long a cancelled run may take to actually exit — loose on purpose,
-#: what matters is "nowhere near _BRANCH_SLEEP_SECONDS".
-_STOP_BOUND_SECONDS = 10.0
+#: what matters is "nowhere near _BRANCH_SLEEP_SECONDS", not a tight bound
+#: (#356's own rationale), derived from it rather than a literal so the
+#: two can't quietly drift apart (#385 review). #385 first widened this to
+#: 30s to tolerate what looked like scheduling starvation under heavy
+#: machine load; investigating the one real CI failure found a genuine
+#: bug instead — a signal landing on a tree-flow/parallel-loop *worker*
+#: thread (not this process's main thread) was never noticed until the
+#: branch finished on its own, because `as_completed()` sat in one
+#: unbounded wait the whole time (now fixed: `core.cancellation.
+#: as_completed_promptly`, used by `core.dynamic`/`core.loop`). With that
+#: fixed, this goes back to a tight-ish bound — `test_run_sighup_pty.py`'s
+#: own 20.0 has never been reported flaky even under load.
+_STOP_BOUND_SECONDS = _BRANCH_SLEEP_SECONDS / 3
 
-_CREDENTIAL_ENV_VARS = (
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "CYBERDINER_TOKEN",
-    "CYBERDINER_EXPO_URL",
-    "GH_TOKEN",
-    "GITHUB_TOKEN",
-    "GH_AUTH_TOKEN",
-    "NPM_TOKEN",
-    "NPM_TOKEN_GITHUB",
-    "NODE_AUTH_TOKEN",
-)
+#: How long `communicate()`/`wait()` are given to actually observe the
+#: child exit before a timeout here is treated as a real failure — wider
+#: than `_STOP_BOUND_SECONDS` itself, so a genuinely slow (not hung)
+#: machine gets a little headroom to actually read the exit before the
+#: test gives up; `elapsed < _STOP_BOUND_SECONDS` below is what actually
+#: proves promptness once the child does exit. Still well under
+#: `_BRANCH_SLEEP_SECONDS` (asserted below) so a run that was genuinely
+#: never cancelled still fails here rather than quietly waiting it out.
+#: `core.cancellation.wait_for_cancelled_branches` itself now waits with
+#: no total time limit of its own (#385 follow-up — an earlier revision's
+#: fixed grace period there let a branch outlive `token.reset()` and
+#: start a further effect uncancelled), so the only thing the headroom
+#: above `_STOP_BOUND_SECONDS` still covers is a killed branch's worker
+#: thread actually being scheduled and noticed, ordinarily near-instant.
+_COMMUNICATE_TIMEOUT_SECONDS = _STOP_BOUND_SECONDS + 10.0
+assert _COMMUNICATE_TIMEOUT_SECONDS < _BRANCH_SLEEP_SECONDS
 
-
-def _sandboxed_env(tmp_path: Path) -> dict[str, str]:
-    """A child-process env with a fake $HOME (CLAUDE.md hermeticity) and no
-    credentials — this suite has no adapter to use them, real or fake."""
-    home = tmp_path / "home"
-    home.mkdir(exist_ok=True)
-    env = {k: v for k, v in os.environ.items() if k not in _CREDENTIAL_ENV_VARS}
-    env["HOME"] = str(home)
-    return env
-
-
-def _wait_for_paths(paths: list[Path], *, timeout: float = 15.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if all(p.exists() for p in paths):
-            return
-        time.sleep(0.02)
-    missing = [str(p) for p in paths if not p.exists()]
-    raise TimeoutError(f"never started within {timeout}s: {missing}")
-
-
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 def _interrupted_tree_dynamic_orchestration(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -95,9 +87,14 @@ def _interrupted_tree_dynamic_orchestration(tmp_path: Path) -> tuple[Path, Path,
     """
     pidfile = tmp_path / "branch_pid"
     started = tmp_path / "branch_started"
+    # `exec` the tail command (#385 round 3): see the matching comment in
+    # `test_run_cancel_parallel.py`'s own `_branch_tool` for why a plain
+    # `sleep N` as the last of several `;`-separated commands can leave a
+    # cancellation's `killpg` racing the kernel's own registration of the
+    # child macOS's /bin/bash (3.2) forks to run it.
     script = (
         f"if [ -f {started} ]; then exit 0; fi; "
-        f"echo $$ > {pidfile}; touch {started}; sleep {_BRANCH_SLEEP_SECONDS}"
+        f"echo $$ > {pidfile}; touch {started}; exec sleep {_BRANCH_SLEEP_SECONDS}"
     )
     body = f"""
 effects:
@@ -187,17 +184,20 @@ def test_sighup_mid_run_kills_branch_runs_finally_and_is_resumable(
     try:
         _wait_for_paths([started])
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for the branch to start")
 
     t0 = time.monotonic()
     proc.send_signal(signal.SIGHUP)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+        _diagnose_and_fail(
+            proc,
+            timeout=_COMMUNICATE_TIMEOUT_SECONDS,
+            label="waiting for SIGHUP to stop the run",
+            elapsed=time.monotonic() - t0,
+            pid=int(pidfile.read_text(encoding="utf-8").strip()),
+        )
     elapsed = time.monotonic() - t0
 
     assert proc.returncode == 129, (stdout, stderr)
@@ -249,18 +249,21 @@ def test_double_sighup_back_to_back_does_not_abort_cleanup(tmp_path: Path) -> No
     try:
         _wait_for_paths([started])
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for the branch to start")
 
     t0 = time.monotonic()
     proc.send_signal(signal.SIGHUP)
     proc.send_signal(signal.SIGHUP)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+        _diagnose_and_fail(
+            proc,
+            timeout=_COMMUNICATE_TIMEOUT_SECONDS,
+            label="waiting for the double SIGHUP to stop the run",
+            elapsed=time.monotonic() - t0,
+            pid=int(pidfile.read_text(encoding="utf-8").strip()),
+        )
     elapsed = time.monotonic() - t0
 
     assert proc.returncode == 129, (stdout, stderr)
@@ -315,7 +318,7 @@ effects:
         provider: shell
         params:
           command: bash
-          args: ["-c", "echo $$ > {pidfile}; touch {started}; sleep {_BRANCH_SLEEP_SECONDS}"]
+          args: ["-c", "echo $$ > {pidfile}; touch {started}; exec sleep {_BRANCH_SLEEP_SECONDS}"]
           allowed_commands: ["bash"]
     finally:
       - type: tool
@@ -323,7 +326,7 @@ effects:
         provider: shell
         params:
           command: bash
-          args: ["-c", "touch {cleanup_started}; sleep 5"]
+          args: ["-c", "touch {cleanup_started}; exec sleep 5"]
           allowed_commands: ["bash"]
 """.lstrip("\n")
     orch = tmp_path / "second_signal_after_sighup.yml"
@@ -334,26 +337,33 @@ effects:
     try:
         _wait_for_paths([started])
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for the branch to start")
 
     t0 = time.monotonic()
     proc.send_signal(signal.SIGHUP)
     try:
-        _wait_for_paths([cleanup_started], timeout=10.0)
+        _wait_for_paths([cleanup_started])
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(
+            proc,
+            timeout=20.0,
+            label="waiting for cleanup to start after the first SIGHUP",
+            elapsed=time.monotonic() - t0,
+            pid=int(pidfile.read_text(encoding="utf-8").strip()),
+        )
     # cleanup's own `sleep 5` is still running — exactly the "cleanup still
     # in progress" window the second signal must cut through at once.
     proc.send_signal(sig)
     try:
-        stdout, stderr = proc.communicate(timeout=_STOP_BOUND_SECONDS + 5)
+        stdout, stderr = proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+        _diagnose_and_fail(
+            proc,
+            timeout=_COMMUNICATE_TIMEOUT_SECONDS,
+            label="waiting for the second signal to end the run",
+            elapsed=time.monotonic() - t0,
+            pid=int(pidfile.read_text(encoding="utf-8").strip()),
+        )
     elapsed = time.monotonic() - t0
 
     assert proc.returncode == expected_code, (stdout, stderr)
@@ -382,13 +392,7 @@ def test_sighup_with_closed_stdout_stderr_still_cleans_up(tmp_path: Path) -> Non
     try:
         _wait_for_paths([started])
     except TimeoutError:
-        proc.kill()
-        if proc.stdout is not None:
-            proc.stdout.close()
-        if proc.stderr is not None:
-            proc.stderr.close()
-        proc.wait(timeout=15)
-        raise
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for the branch to start")
 
     assert proc.stdout is not None
     assert proc.stderr is not None
@@ -398,10 +402,15 @@ def test_sighup_with_closed_stdout_stderr_still_cleans_up(tmp_path: Path) -> Non
     t0 = time.monotonic()
     proc.send_signal(signal.SIGHUP)
     try:
-        returncode = proc.wait(timeout=_STOP_BOUND_SECONDS + 5)
+        returncode = proc.wait(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+        _diagnose_and_fail_no_pipes(
+            proc,
+            timeout=_COMMUNICATE_TIMEOUT_SECONDS,
+            label="waiting for SIGHUP to stop the run (pipes closed)",
+            elapsed=time.monotonic() - t0,
+            pid=int(pidfile.read_text(encoding="utf-8").strip()),
+        )
     elapsed = time.monotonic() - t0
 
     assert returncode == 129
@@ -479,16 +488,15 @@ effects:
     try:
         _wait_for_paths([started])
     except TimeoutError:
-        proc.kill()
-        proc.communicate(timeout=15)
-        raise
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for the (unignored) step to start")
 
     proc.send_signal(signal.SIGHUP)
     try:
         stdout, stderr = proc.communicate(timeout=15)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+        _diagnose_and_fail(
+            proc, timeout=15.0, label="waiting for the ignored-SIGHUP run to finish"
+        )
 
     assert proc.returncode == 0, (stdout, stderr)
     assert "Traceback" not in stderr, stderr
