@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 /// Exception: pass`: a failure resolving the document's directory or
 /// reading any one referenced prompt file silently stops adding files,
 /// leaving the digest as whatever was hashed before that point.
-pub(crate) fn document_content_digest(
+pub fn document_content_digest(
     resolved_path: &Path,
     document: &Value,
     confinement_root: &Path,
@@ -297,11 +297,12 @@ mod tests {
     /// document_content_digest` on the same tree (a document under
     /// `docs/`, a `{file: ../shared/voice.md}` declared prompt): both
     /// produced `59877614ff1e02817ecb5507898af22dbaca7f5ab5ceb5f1f3658f824adc01d5`.
-    /// `tests/golden_compose.rs`'s own corpus-driven cases cover this
-    /// same shape once lane C's `compile_document` can reach the digest
-    /// step through the public API; this test pins the exact bytes in
-    /// the meantime, directly against this crate's own `pub(crate)`
-    /// function.
+    /// `tests/golden_compose.rs`'s own `every_case_digest_matches_
+    /// circuitry` test now covers this same shape (and every other
+    /// corpus case) directly against this crate's public
+    /// [`document_content_digest`], independent of whether
+    /// `compile_document` itself can reach it yet; this test keeps the
+    /// exact bytes pinned at the unit level too.
     #[test]
     fn matches_circuitrys_own_digest_for_a_parent_directory_prompt_file() {
         let dir = temp_dir("matches-circuitry");

@@ -71,6 +71,7 @@ pub mod state_ns;
 pub mod structural;
 
 pub use compile::compile_document;
+pub use digest::document_content_digest;
 pub use load::load_document;
 pub use pipeline::{check_for_run, check_report};
 pub use structural::{structural_errors, unknown_key_warnings};

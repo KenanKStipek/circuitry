@@ -57,9 +57,12 @@ pub fn materialize(tag: &str, files: &BTreeMap<String, FileContent>) -> TempCase
             FileContent::Text(text) => {
                 fs::write(&dest, text).expect("write text file");
             }
-            FileContent::BytesHex { bytes_hex } => {
+            FileContent::BytesHex { bytes_hex, mode } => {
                 let bytes = decode_hex(bytes_hex);
                 fs::write(&dest, bytes).expect("write binary file");
+                if let Some(mode) = mode {
+                    apply_mode(&dest, mode);
+                }
             }
             FileContent::Symlink { symlink } => {
                 symlinks.push((dest, symlink.clone()));
@@ -84,6 +87,21 @@ fn make_symlink(target: &str, dest: &Path) {
     // Windows by the test itself, not here.
     let _ = std::os::windows::fs::symlink_file(target, dest);
 }
+
+/// *mode* (an octal permission string, e.g. `"000"`) applied to *dest*
+/// -- the Rust-side counterpart of `_compiler_corpus.py::_materialize`'s
+/// own `dest.chmod(int(content["mode"], 8))`. Unix-only, same as
+/// [`make_symlink`]'s own permission-bit dependence; a case carrying a
+/// `mode` is skipped on Windows by the test itself, not here.
+#[cfg(unix)]
+fn apply_mode(dest: &Path, mode: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let bits = u32::from_str_radix(mode, 8).expect("valid octal mode string");
+    fs::set_permissions(dest, fs::Permissions::from_mode(bits)).expect("chmod temp file");
+}
+
+#[cfg(windows)]
+fn apply_mode(_dest: &Path, _mode: &str) {}
 
 fn decode_hex(hex: &str) -> Vec<u8> {
     assert!(hex.len() % 2 == 0, "odd-length hex string: {hex:?}");
