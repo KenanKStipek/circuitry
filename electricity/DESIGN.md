@@ -245,14 +245,14 @@ applies PyYAML's own regex table to every plain scalar (runtime-semantics §1.1)
   `==`/`!=` between a naive and an aware datetime are well-defined and simply **return**
   `False`/`True` (Python's own "never equal across awareness" rule — this never raises), while an
   *ordering* comparison (`<`, `<=`, `>`, `>=`) between the two **raises** `TypeError`. `str()`
-  never raises either way, since it only ever looks at one value. electricity's CEL layer (§7.2)
-  must reproduce this split exactly — `_==_`/`_!=_` return `False`/`True`, the ordering operators
-  raise — while `py_str` simply formats whichever value it's given and never needs to raise for
-  this reason at all. **Settled 2026-10-06**: whether `cel`'s own ordering operators already
-  raise on a naive/aware mismatch the way cel-python's do is decided empirically, by the
-  differential corpus against cel-python (§12) — not a judgment call made in advance of running
-  it. If the corpus finds a gap, electricity's CEL layer wraps the ordering operators so they
-  raise on exactly the same inputs cel-python does;
+  never raises either way, since it only ever looks at one value. This split is `Value`'s own,
+  used outside CEL — **settled 2026-10-07, empirically, by the differential corpus (§12) against
+  cel-python, per issue #379**: it does not carry over into CEL at all. `cel-python`'s own
+  `_to_cel()`/`celtypes.TimestampType.__new__` default a naive `datetime` to UTC
+  (`tzinfo=source.tzinfo or datetime.timezone.utc`) the moment it is converted, so a naive and a
+  UTC-aware datetime are already the identical CEL value by the time either reaches an
+  expression — there is no naive/aware distinction left inside CEL for electricity's CEL layer
+  (§7.2) to reproduce, and no wrapping of `cel`'s ordering operators is needed for this reason;
 - `<<` merge keys, including a list of maps to merge, with later/explicit keys winning
   (runtime-semantics §1.1's confirmed `{x:1,y:2}` + `{<<: *base, y: 3}` → `{x:1, y:3}`);
 - `=` (the `tag:yaml.org,2002:value` tag) is a load error, matching PyYAML's SafeLoader having
