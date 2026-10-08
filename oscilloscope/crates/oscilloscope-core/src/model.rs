@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+use crate::observe::Event;
 use crate::plan::{Flow, PlanTree};
 
 /// One effect node's `{value, meta}` shape, flattened to its dotted
@@ -196,19 +197,70 @@ pub enum ProcessState {
     },
 }
 
+/// A tree container's own `dispatch` event (DESIGN.md §2.1 rule 4):
+/// `branches` is the true total, `concurrency` the running ceiling when
+/// the stream carries it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DispatchInfo {
+    pub branches: u64,
+    pub concurrency: Option<u64>,
+}
+
 /// Tracks per-path status across a run's observations, from state alone
-/// (DESIGN.md §2.1's "From state alone (best effort)" rules). Events
-/// support lands with `cof run --events` (#419); until a run carries
-/// them this is the only source `RunModel` has.
+/// (DESIGN.md §2.1's "From state alone (best effort)" rules) plus
+/// whatever `--events` dispatch info has arrived (#419): a stream from
+/// a `cof` without `--events` simply never calls `observe_event`, so
+/// every status still comes from `observe`'s own state-only rules.
 pub struct RunModel {
     last_created_at: BTreeMap<String, String>,
+    dispatch: BTreeMap<String, DispatchInfo>,
 }
 
 impl RunModel {
     pub fn new() -> Self {
         RunModel {
             last_created_at: BTreeMap::new(),
+            dispatch: BTreeMap::new(),
         }
+    }
+
+    /// Feeds one parsed `--events` line in. Only `Dispatch` is tracked
+    /// today (DESIGN.md §2.1 rule 4's exact bound); the other variants
+    /// are reserved for the events-based exact-status rules once a plan
+    /// and an event stream are both available end to end.
+    pub fn observe_event(&mut self, event: &Event) {
+        if let Event::Dispatch {
+            path,
+            branches,
+            concurrency,
+            ..
+        } = event
+        {
+            self.dispatch.insert(
+                path.clone(),
+                DispatchInfo {
+                    branches: *branches,
+                    concurrency: *concurrency,
+                },
+            );
+        }
+    }
+
+    /// The most recent `dispatch` event recorded for `path`, if any.
+    pub fn dispatch_info(&self, path: &str) -> Option<DispatchInfo> {
+        self.dispatch.get(path).copied()
+    }
+
+    /// The exact running-or-queued bound for a tree container
+    /// (DESIGN.md §2.1 rule 4): its `dispatch` event's `concurrency`
+    /// when the stream has it, else its `branches` (every unfinished
+    /// child could in principle be running at once). `None` without a
+    /// `dispatch` event at all — the state-only estimate (`max_concurrency`
+    /// from the plan, or "≤ cpu-dependent" with none) is a renderer's
+    /// own fallback, not this method's job.
+    pub fn running_or_queued_bound(&self, path: &str) -> Option<u64> {
+        let info = self.dispatch_info(path)?;
+        Some(info.concurrency.unwrap_or(info.branches))
     }
 
     /// Recomputes every row's status from one snapshot, the plan, and
@@ -329,6 +381,21 @@ impl RunModel {
             }
         }
 
+        // Tree-flow rule (DESIGN.md §2.1 rule 4): an unfinished child of
+        // a *running* tree container is running or queued, and the two
+        // can't be told apart from state alone. Unlike the chain-flow
+        // heuristic above, a container that hasn't even started yet
+        // (absent from state) leaves its children merely pending — tree
+        // dynamics/`each` loops do write their own node promptly (§1.3),
+        // so its total absence is a real signal, not a write-lag gap.
+        if entry.parent_flow == Some(Flow::Tree) {
+            if let Some(parent) = parent_path(path) {
+                if flat.get(&parent).is_some_and(NodeMeta::is_running) {
+                    return RowStatus::new(StatusKind::RunningOrQueued);
+                }
+            }
+        }
+
         RowStatus::new(StatusKind::Pending)
     }
 
@@ -388,7 +455,120 @@ pub fn run_status(state: Option<&Value>, process: ProcessState) -> RunStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::observe::Event;
     use serde_json::json;
+
+    #[test]
+    fn dispatch_event_is_recorded_and_retrievable() {
+        let mut model = RunModel::new();
+        assert!(model.dispatch_info("prime.each_tree").is_none());
+        model.observe_event(&Event::Dispatch {
+            ts: "t".to_string(),
+            path: "prime.each_tree".to_string(),
+            branches: 3,
+            concurrency: Some(2),
+        });
+        assert_eq!(
+            model.dispatch_info("prime.each_tree"),
+            Some(DispatchInfo {
+                branches: 3,
+                concurrency: Some(2)
+            })
+        );
+    }
+
+    #[test]
+    fn running_or_queued_bound_prefers_concurrency_over_branches() {
+        let mut model = RunModel::new();
+        assert_eq!(model.running_or_queued_bound("prime.fan"), None);
+        model.observe_event(&Event::Dispatch {
+            ts: "t".to_string(),
+            path: "prime.fan".to_string(),
+            branches: 5,
+            concurrency: None,
+        });
+        assert_eq!(model.running_or_queued_bound("prime.fan"), Some(5));
+        model.observe_event(&Event::Dispatch {
+            ts: "t".to_string(),
+            path: "prime.fan".to_string(),
+            branches: 5,
+            concurrency: Some(2),
+        });
+        assert_eq!(model.running_or_queued_bound("prime.fan"), Some(2));
+    }
+
+    #[test]
+    fn an_unfinished_child_of_a_running_tree_container_is_running_or_queued() {
+        use electricity_bytecode::{EffectPath, LeafKind, NodeKind, OnError, Op, Region, ToolOp};
+
+        let root_path = EffectPath::root();
+        let fan_path = root_path.push_name("fan");
+        let branch_a = fan_path.push_name("a");
+        let branch_b = fan_path.push_name("b");
+        let tool = |path: EffectPath, name: &str| Op {
+            path,
+            name: Some(name.to_string()),
+            kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+                provider: "shell".to_string(),
+                params: electricity_bytecode::ParamNode::Literal(electricity_value::Value::None),
+                params_json: None,
+                prompt: None,
+                model: None,
+                timeout_ms: None,
+                retries: Default::default(),
+                expect: None,
+                description: None,
+                group: None,
+            }))),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = electricity_bytecode::Program {
+            root: Op {
+                path: root_path,
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops: vec![Op {
+                        path: fan_path,
+                        name: Some("fan".to_string()),
+                        kind: NodeKind::Control(Region::Parallel {
+                            branches: vec![tool(branch_a, "a"), tool(branch_b, "b")],
+                            max_concurrency: None,
+                            stop_on_error: false,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    }],
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            },
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = crate::plan::PlanTree::from_program(&program);
+
+        let mut model = RunModel::new();
+        // "a" finished; "fan" itself is still running; "b" never
+        // appears (tree branches are invisible while running, §1.4).
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "tree"},
+            "fan": {"value": null, "meta": {"completed_at": null},
+                "a": {"value": "", "meta": {"completed_at": "t1", "error": null}}
+            }
+        }});
+        let rows = model.observe(&state, &plan, ProcessState::Running);
+        assert_eq!(rows["prime.fan.b"].kind, StatusKind::RunningOrQueued);
+        assert_eq!(rows["prime.fan.a"].kind, StatusKind::Done);
+    }
 
     #[test]
     fn flattens_nested_nodes_and_skips_last_alias() {

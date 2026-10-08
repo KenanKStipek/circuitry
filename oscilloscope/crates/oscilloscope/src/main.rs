@@ -20,7 +20,10 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use clap::{Parser, Subcommand, ValueEnum};
 use oscilloscope_core::diff::Differ;
 use oscilloscope_core::engine::{CofEngine, ElectricityEngine, Engine, EngineError, RunSpec};
-use oscilloscope_core::observe::{EventsTailer, LiveStatePoller, POLL_INTERVAL, duration_seconds};
+use oscilloscope_core::model::RunModel;
+use oscilloscope_core::observe::{
+    EventsTailer, LiveStatePoller, POLL_INTERVAL, duration_seconds, parse_event,
+};
 use oscilloscope_core::plan::PlanTree;
 use oscilloscope_core::supervise::{SignalWatcher, SupervisedChild, exit_code};
 
@@ -219,6 +222,11 @@ fn do_run(args: RunArgs) -> ExitCode {
     let mut live_poller = LiveStatePoller::new(spec.live_state_path());
     let mut events_tailer = EventsTailer::new(spec.events_path());
     let mut differ = Differ::new();
+    // Dispatch info (branches/concurrency, DESIGN.md §2.1 rule 4) is
+    // tracked as soon as events arrive, even though nothing renders it
+    // back yet: there's no TUI before O-2, and --log's own output comes
+    // from `differ` alone.
+    let mut model = RunModel::new();
 
     let mut signals = SignalWatcher::new().ok();
     let mut signal_count: u32 = 0;
@@ -265,11 +273,10 @@ fn do_run(args: RunArgs) -> ExitCode {
             print_line(&mut out, &mut clock, None, &format!("engine: {line}"));
         }
         drain(&mut out, &mut clock, &mut live_poller, &mut differ, &plan);
-        for _event in events_tailer.poll() {
-            // Event-driven log lines land once `cof run --events` is on
-            // PATH in the field; state-only diffing already covers
-            // every case reachable without it (engine.caps().events
-            // gates whether osp even asked for the stream).
+        for raw_event in events_tailer.poll() {
+            if let Some(event) = parse_event(&raw_event) {
+                model.observe_event(&event);
+            }
         }
 
         if let Ok(Some(status)) = child.try_wait() {
@@ -325,6 +332,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     let mut live_poller = LiveStatePoller::new(&live_state_path);
     let mut events_tailer = EventsTailer::new(run_dir.join("events.jsonl"));
     let mut differ = Differ::new();
+    let mut model = RunModel::new();
     let mut signals = SignalWatcher::new().ok();
 
     let final_state = loop {
@@ -341,7 +349,11 @@ fn do_watch(args: WatchArgs) -> ExitCode {
                 break state;
             }
         }
-        for _event in events_tailer.poll() {}
+        for raw_event in events_tailer.poll() {
+            if let Some(event) = parse_event(&raw_event) {
+                model.observe_event(&event);
+            }
+        }
         std::thread::sleep(POLL_INTERVAL);
     };
 

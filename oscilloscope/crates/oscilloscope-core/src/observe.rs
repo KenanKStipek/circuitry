@@ -142,6 +142,99 @@ impl EventsTailer {
     }
 }
 
+/// One parsed `--events` line (DESIGN.md §3). `v`/`seq` aren't carried
+/// through: osp only orders by `ts`, same as a state diff, and the
+/// tailer already delivers lines in file order.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Event {
+    RunStart {
+        ts: String,
+        run_id: String,
+    },
+    /// Sent once by a tree loop or tree dynamic before its branches
+    /// start. `branches` is the true total (an `each` loop's item
+    /// count, or a `dynamic`'s effect count); `concurrency`, when the
+    /// stream has it, is the running ceiling (DESIGN.md §2.1 rule 4) —
+    /// optional, so a stream from a `cof` built before it was added
+    /// still parses.
+    Dispatch {
+        ts: String,
+        path: String,
+        branches: u64,
+        concurrency: Option<u64>,
+    },
+    Start {
+        ts: String,
+        id: Option<i64>,
+        path: String,
+    },
+    End {
+        ts: String,
+        id: Option<i64>,
+        path: String,
+        ok: bool,
+        ms: Option<u64>,
+        error: Option<String>,
+    },
+    RunEnd {
+        ts: String,
+        ok: bool,
+        error: Option<String>,
+        signal: Option<String>,
+    },
+}
+
+/// Parses one already-deserialized `--events` line. An unrecognized
+/// `ev` (a future addition) or a line missing a field this version
+/// needs returns `None` rather than an error — a reader that can't
+/// make sense of one future line shouldn't stop reading the rest of
+/// the stream (same tolerance as `EventsTailer::poll`'s own per-line
+/// parse failures).
+pub fn parse_event(value: &Value) -> Option<Event> {
+    let ts = value.get("ts")?.as_str()?.to_string();
+    match value.get("ev")?.as_str()? {
+        "run_start" => Some(Event::RunStart {
+            ts,
+            run_id: value.get("run_id")?.as_str()?.to_string(),
+        }),
+        "dispatch" => Some(Event::Dispatch {
+            ts,
+            path: value.get("path")?.as_str()?.to_string(),
+            branches: value.get("branches")?.as_u64()?,
+            concurrency: value.get("concurrency").and_then(Value::as_u64),
+        }),
+        "start" => Some(Event::Start {
+            ts,
+            id: value.get("id").and_then(Value::as_i64),
+            path: value.get("path")?.as_str()?.to_string(),
+        }),
+        "end" => Some(Event::End {
+            ts,
+            id: value.get("id").and_then(Value::as_i64),
+            path: value.get("path")?.as_str()?.to_string(),
+            ok: value.get("ok")?.as_bool()?,
+            ms: value.get("ms").and_then(Value::as_u64),
+            error: value
+                .get("error")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        }),
+        "run_end" => Some(Event::RunEnd {
+            ts,
+            ok: value.get("ok")?.as_bool()?,
+            error: value
+                .get("error")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            signal: value
+                .get("signal")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        }),
+        _ => None,
+    }
+}
+
 /// Parses two `cof`-style timestamps (ISO-8601 UTC) and returns the
 /// elapsed seconds between them. Used for a log line's duration
 /// (DESIGN.md §2.4) and `--log`'s `mm:ss.s` elapsed clock (§6.2).
@@ -202,6 +295,63 @@ mod tests {
     fn tailer_on_a_missing_file_returns_nothing() {
         let mut tailer = EventsTailer::new("/nonexistent-osp-events/events.jsonl");
         assert!(tailer.poll().is_empty());
+    }
+
+    #[test]
+    fn parse_event_reads_dispatch_with_and_without_concurrency() {
+        let with_concurrency: Value = serde_json::from_str(
+            r#"{"v":1,"seq":7,"ts":"t","ev":"dispatch","path":"prime.each_tree","branches":3,"concurrency":2}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_event(&with_concurrency),
+            Some(Event::Dispatch {
+                ts: "t".to_string(),
+                path: "prime.each_tree".to_string(),
+                branches: 3,
+                concurrency: Some(2),
+            })
+        );
+
+        let without_concurrency: Value = serde_json::from_str(
+            r#"{"v":1,"seq":7,"ts":"t","ev":"dispatch","path":"prime.each_tree","branches":3}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_event(&without_concurrency),
+            Some(Event::Dispatch {
+                ts: "t".to_string(),
+                path: "prime.each_tree".to_string(),
+                branches: 3,
+                concurrency: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_event_reads_end_with_null_id() {
+        let value: Value = serde_json::from_str(
+            r#"{"v":1,"seq":1,"ts":"t","ev":"end","id":null,"path":"prime.x","ok":true}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_event(&value),
+            Some(Event::End {
+                ts: "t".to_string(),
+                id: None,
+                path: "prime.x".to_string(),
+                ok: true,
+                ms: None,
+                error: None
+            })
+        );
+    }
+
+    #[test]
+    fn parse_event_ignores_an_unrecognized_ev() {
+        let value: Value =
+            serde_json::from_str(r#"{"v":1,"seq":1,"ts":"t","ev":"something_future"}"#).unwrap();
+        assert_eq!(parse_event(&value), None);
     }
 
     #[test]
