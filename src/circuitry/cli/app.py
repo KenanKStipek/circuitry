@@ -145,18 +145,9 @@ app = typer.Typer(
 
 
 def _resolve_version() -> str:
-    from importlib.metadata import PackageNotFoundError
-    from importlib.metadata import version as pkg_version
+    from .version import resolve_version
 
-    # Distribution name is `circuitry-cof` on PyPI; the legacy `circuitry`
-    # lookup is kept as a fallback for editable installs that pre-date the
-    # rename.
-    for dist in ("circuitry-cof", "circuitry"):
-        try:
-            return pkg_version(dist)
-        except PackageNotFoundError:
-            continue
-    return "0.1.0+unknown"
+    return resolve_version()
 
 
 def _version_callback(value: bool) -> None:
@@ -932,6 +923,12 @@ def run_cmd(
         help="Mirror state atomically to this file while the run goes (at most every "
         "0.5 s, and once more when it ends). For live monitoring.",
     ),
+    events: Path | None = typer.Option(
+        None, "--events",
+        help="Write a JSONL stream of effect starts and ends to this file as the run "
+        "goes (created or truncated up front). Shows what --live-state cannot: a "
+        "running tree branch, use child, or chain leaf.",
+    ),
     env_vars: list[str] | None = typer.Option(
         None, "-e",
         help="Inline state variable (KEY=VALUE). Repeatable.",
@@ -1081,6 +1078,7 @@ def run_cmd(
         quiet = stashed.get("quiet", False)
         verbose = stashed.get("verbose", False)
         live_state = Path(stashed["live_state"]) if stashed.get("live_state") else None
+        events = Path(stashed["events"]) if stashed.get("events") else None
         env_vars = stashed.get("env_vars")
         tail = stashed.get("tail", False)
         skip_preflight = stashed.get("skip_preflight", False)
@@ -1238,6 +1236,8 @@ def run_cmd(
         console.print(f"[bold]State (out):[/bold] {out or '—'}")
         if live_state:
             console.print(f"[bold]Live state:[/bold] {live_state}")
+        if events:
+            console.print(f"[bold]Events:[/bold] {events}")
         if decompose_out:
             console.print(f"[bold]Decompose out:[/bold] {decompose_out}")
         if adapter:
@@ -1303,6 +1303,7 @@ def run_cmd(
         show_loop_progress=_show_loop_progress(verbose=verbose, quiet=quiet, json_out=json_out),
         config=cfg,
         live_state_path=live_state,
+        events_path=events,
         skip_preflight=skip_preflight,
         profile_name=profile,
         profile_record=profile_record,
@@ -1376,6 +1377,7 @@ def run_cmd(
             "quiet": quiet,
             "verbose": verbose,
             "live_state": str(live_state) if live_state else None,
+            "events": str(events) if events else None,
             "env_vars": redact_env_pairs(env_vars),
             "tail": tail,
             "skip_preflight": skip_preflight,
@@ -1545,6 +1547,12 @@ def run_library_cmd(
         help="Mirror state atomically to this file while the run goes (at most every "
         "0.5 s, and once more when it ends). For live monitoring.",
     ),
+    events: Path | None = typer.Option(
+        None, "--events",
+        help="Write a JSONL stream of effect starts and ends to this file as the run "
+        "goes (created or truncated up front). Shows what --live-state cannot: a "
+        "running tree branch, use child, or chain leaf.",
+    ),
     env_vars: list[str] | None = typer.Option(
         None, "-e",
         help="Inline state variable (KEY=VALUE). Repeatable.",
@@ -1663,6 +1671,8 @@ def run_library_cmd(
         console.print(f"[bold]State (out):[/bold] {out or '—'}")
         if live_state:
             console.print(f"[bold]Live state:[/bold] {live_state}")
+        if events:
+            console.print(f"[bold]Events:[/bold] {events}")
         if adapter:
             console.print(f"[bold]Adapter (override):[/bold] {adapter}")
         if model:
@@ -1710,6 +1720,7 @@ def run_library_cmd(
         show_loop_progress=_show_loop_progress(verbose=verbose, quiet=quiet, json_out=json_out),
         config=effective_cfg,
         live_state_path=live_state,
+        events_path=events,
         skip_preflight=skip_preflight,
         profile_name=profile,
         adapter_override=adapter,

@@ -13,3 +13,6 @@ path = "src/main.rs"
 
 [dependencies]
 electricity = { path = "../electricity" }
+
+[dev-dependencies]
+serde_json = "1"

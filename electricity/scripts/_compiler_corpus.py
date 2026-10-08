@@ -56,7 +56,14 @@ could otherwise touch a real `HOME`/`trusted.json`), then runs, against
   lists, the reflector prime -> `"<REFLECTOR_PRIME>"`) into `definition`,
   or `None` with the exception's text in `definition_error` on failure;
 - `document_content_digest`, the same digest `use` and capability
-  consent hash a document's bytes with.
+  consent hash a document's bytes with;
+- `core.lint.lint_orchestration(orch)` alone (not the rest of
+  `validate()`'s own combined `warnings` list), recorded separately as
+  `lint_warnings` -- electricity-compiler's `check_report` does not
+  reproduce these advisories at all (issue #428), so a case whose
+  document trips one carries it here rather than in `validate`'s own
+  `warnings`, which the Rust harness compares after subtracting this
+  list.
 
 Every recorded string has the temporary root replaced with the literal
 `<root>` (so two runs on different machines/paths produce the same
@@ -81,6 +88,7 @@ from circuitry.cli import config as _config_module
 from circuitry.cli.orchestration_loader import load_orchestration_file
 from circuitry.cli.runtime_shim import RunRequest, run, validate
 from circuitry.core.compiler import compile_orchestration
+from circuitry.core.lint import lint_orchestration
 from circuitry.core.primes import REFLECTOR_PRIME_V1
 from circuitry.core.prompt_compose import document_content_digest
 from circuitry.core.prompt_files import default_project_root
@@ -201,12 +209,27 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
         entry_path = root / case["entry"]
 
         with _IsolatedRun(root):
-            validate_result = validate(
-                entry_path,
-                config=None,
-                skip_preflight=skip_preflight,
-                trust_document=trust_document,
-            )
+            try:
+                validate_result = validate(
+                    entry_path,
+                    config=None,
+                    skip_preflight=skip_preflight,
+                    trust_document=trust_document,
+                )
+            except Exception as exc:
+                # `validate()` reads the orchestration file's raw text
+                # itself, outside the broad `except Exception` the rest
+                # of the function is wrapped in (`cli/runtime_shim.py`'s
+                # own `text = orchestration_path.read_text(...)`), so a
+                # missing file or undecodable bytes raise straight out
+                # of this call instead of returning the usual `{ok,
+                # errors, warnings}` shape -- recorded the same way a
+                # `definition_error` below is, not swallowed.
+                validate_result = {
+                    "ok": False,
+                    "errors": [f"{type(exc).__name__}: {exc}"],
+                    "warnings": [],
+                }
             run_result = run(
                 RunRequest(
                     orchestration_path=entry_path,
@@ -224,6 +247,16 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
 
             definition: Any = None
             definition_error: str | None = None
+            # `validate()`'s own `lint_orchestration(orch)` call -- the
+            # advisory warnings electricity-compiler's `check_report`
+            # does not reproduce at all (issue #428: lint parity is a
+            # follow-up, not assigned to any #408 lane). Recorded
+            # separately from `warnings` below so the Rust harness can
+            # compare everything else exactly while subtracting these.
+            # Only computed once the document actually loads -- same as
+            # `validate()`, whose own `lint_warnings` variable never
+            # gains `lint_orchestration`'s contribution on a load error.
+            lint_warnings: list[str] = []
             try:
                 orch = load_orchestration_file(entry_path)
             except Exception as exc:  # recorded, not swallowed
@@ -235,6 +268,7 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
                 # document that never actually loaded.
                 orch = {}
             else:
+                lint_warnings = lint_orchestration(orch)
                 try:
                     compiled = compile_orchestration(
                         orch=orch,
@@ -245,9 +279,20 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
                 except Exception as exc:  # recorded, not swallowed
                     definition_error = f"{type(exc).__name__}: {exc}"
 
-            digest = document_content_digest(
-                entry_path, orch, confinement_root=confinement_root
-            )
+            try:
+                digest = document_content_digest(
+                    entry_path, orch, confinement_root=confinement_root
+                )
+            except OSError:
+                # `document_content_digest` reads *entry_path*'s own raw
+                # bytes itself, unconditionally and outside any of its
+                # own `try`/`except` -- a case whose entry is missing
+                # (or otherwise unreadable) never reaches it in
+                # ordinary use (`validate`/`run` would have failed on
+                # the same read already), but this helper calls it
+                # regardless of whether `orch` loaded, so it must
+                # tolerate the same failure here.
+                digest = None
 
         error_modes = case.get("error_modes") or {}
         validate_errors = validate_result.get("errors", [])
@@ -273,6 +318,7 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
                 "errors": validate_errors,
                 "warnings": validate_result.get("warnings", []),
             },
+            "lint_warnings": lint_warnings,
             "run_error": run_result.error,
             "definition": definition,
             "definition_error": definition_error,

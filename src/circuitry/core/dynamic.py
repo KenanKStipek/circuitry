@@ -427,10 +427,12 @@ class DynamicRuntime:
                 # since that's the real ceiling the pool enforces, not the
                 # total item count — lets a listener (MCP's RunManager) wait
                 # for a real completion/pause count instead of guessing from
-                # a debounce window (#237).
+                # a debounce window (#237); the true branch total goes along
+                # for `--events` (#423).
                 store.fire_concurrent_dispatch(
                     self.defn.name,
                     min(max_workers, len(self.defn.effects)),
+                    len(self.defn.effects),
                 )
 
                 # Set by a worker that just failed, before it re-raises

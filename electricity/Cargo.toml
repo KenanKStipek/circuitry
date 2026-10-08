@@ -45,3 +45,20 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.antlr4rust]
 opt-level = 2
+
+# electricity-compiler's structural checks (the near-miss unknown-key
+# walk, the group: placement walk, and the Value -> JSON-Schema-instance
+# conversion feeding the jsonschema crate's own recursive validator) walk
+# a document once per nesting level, same as electricity-yaml's composer
+# above -- confirmed directly (issue #408's lane B depth-safety test,
+# tests/depth_safety.rs): an unoptimized debug build overflows a 2 MiB
+# thread stack at 255 levels of nested `dynamic` effects, well under
+# electricity-yaml's own MAX_DEPTH (512) for that shape. electricity-schema
+# feeds the same jsonschema crate's own recursive validator and shares the
+# same fix.
+[profile.dev.package.electricity-compiler]
+opt-level = 2
+[profile.dev.package.electricity-schema]
+opt-level = 2
+[profile.dev.package.jsonschema]
+opt-level = 2

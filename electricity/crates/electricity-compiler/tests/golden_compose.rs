@@ -2,27 +2,28 @@
 //! golden cases: every message in `core/prompt_files.py` and in
 //! `core/prompt_compose.py`'s compile-time composition checks.
 //!
-//! `check_for_run` always fails at `load_document` (lane B's own stub)
-//! before reaching any of this lane's own code, so every case here
-//! calls this crate's public [`compile_document`] directly instead --
-//! parsing the entry file with `electricity-yaml` (a lane A/merged-crate
-//! dependency, unaffected by lane B's stub) the same way `load_document`
-//! eventually will, and building a [`DocumentOrigin::File`] from the
-//! entry's own parent directory (every *now-testable* case's project
-//! root -- none of them sit under a nested `circuitry.config.json`/
-//! `config.json`). [`compile_document`]'s error carries the exact same
-//! text `RunCheckError::Compile` would wrap verbatim once lane B lands,
-//! since lane D's own `prompt_files::compile_declared_prompts`/
-//! `compose::check_prompt_composition` run first inside it, before lane
-//! C's own effect-by-effect compile step.
+//! `load_document` (lane B) and `compile_document` (lane C's
+//! effect-by-effect compile step, now landed) are both implemented.
+//! Every case here still calls this crate's public [`compile_document`]
+//! directly -- parsing the entry file with `electricity-yaml` (a lane
+//! A/merged-crate dependency) the same way `load_document` does, and
+//! building a [`DocumentOrigin::File`] from the entry's own parent
+//! directory (every case's project root -- none of them sit under a
+//! nested `circuitry.config.json`/`config.json`) -- rather than going
+//! through `check_for_run` itself, since that path also runs lane B's
+//! own structural/concurrency checks first, which these cases don't
+//! exercise. [`compile_document`]'s error carries the exact same text
+//! `RunCheckError::Compile` wraps verbatim, since lane D's own
+//! `prompt_files::compile_declared_prompts`/`compose::
+//! check_prompt_composition` run first inside it, before lane C's own
+//! effect-by-effect compile step.
 //!
-//! A case whose document fails at the declared-prompts or composition
-//! step is fully testable now. A case whose composition *succeeds*
-//! reaches lane C's own unconditional "not implemented" gap next, so
-//! its real (`run_error: None`) outcome can't be reproduced yet --
-//! `#[ignore]`d, naming lane C, exactly like `golden_smoke.rs`'s own
-//! precedent. The digest is independent of that gap, though
-//! (`document_content_digest` runs against the parsed document
+//! A case whose document fails at the declared-prompts, composition, or
+//! effect-compile step is checked against its `definition_error`
+//! ([`assert_compile_error_matches`]); a case whose document compiles
+//! all the way through is checked against its `run_error: None`
+//! ([`assert_compile_succeeds`]). The digest is independent of either
+//! outcome (`document_content_digest` runs against the parsed document
 //! directly, never through `compile_document`), so
 //! [`every_case_digest_matches_circuitry`] below verifies every case's
 //! recorded `digest` right now, success or failure alike.
@@ -72,8 +73,9 @@ fn load_case(name: &str) -> Case {
         .unwrap_or_else(|| panic!("no case named {name:?} in golden/compose.json"))
 }
 
-/// Parses *entry* the way `load_document` eventually will (lane B),
-/// without depending on its still-stubbed implementation.
+/// Parses *entry* the same way `load_document` (lane B) does, without
+/// going through its own suffix/empty-file/duplicate-key checks (this
+/// corpus's cases never exercise those).
 fn load_value(entry: &Path) -> electricity_value::Value {
     let text = std::fs::read_to_string(entry).expect("read entry file");
     electricity_yaml::load_yaml(&text).expect("entry file parses as YAML")
@@ -254,9 +256,10 @@ run_error_case!(
     "dotted_reference_to_a_missing_segment_under_a_named_if"
 );
 
-// -- cases whose document passes declared-prompts and composition, so they
-// -- reach lane C's own unconditional gap next (`compile_document`'s
-// -- "not implemented" stub) rather than Circuitry's own real outcome.
+// -- cases whose document passes declared-prompts, composition, and
+// -- lane C's own effect compilation: these assert the same success
+// -- outcome Circuitry's own compile_orchestration reports for the
+// -- same document (`run_error` is None in the corpus).
 
 fn assert_compile_succeeds(name: &str) {
     let case = load_case(name);
@@ -275,29 +278,21 @@ fn assert_compile_succeeds(name: &str) {
 }
 
 #[test]
-#[ignore = "passes composition and reaches lane C's own compile gap; \
-            un-ignore once lane C's compile_document lands"]
 fn prompts_file_crlf_translated_succeeds_against_circuitry() {
     assert_compile_succeeds("prompts_file_crlf_translated");
 }
 
 #[test]
-#[ignore = "passes composition and reaches lane C's own compile gap; \
-            un-ignore once lane C's compile_document lands"]
 fn dotted_reference_reaches_into_a_named_if_from_anywhere_succeeds_against_circuitry() {
     assert_compile_succeeds("dotted_reference_reaches_into_a_named_if_from_anywhere");
 }
 
 #[test]
-#[ignore = "passes composition and reaches lane C's own compile gap; \
-            un-ignore once lane C's compile_document lands"]
 fn dotted_self_reference_from_inside_the_same_named_if_succeeds_against_circuitry() {
     assert_compile_succeeds("dotted_self_reference_from_inside_the_same_named_if");
 }
 
 #[test]
-#[ignore = "passes composition and reaches lane C's own compile gap; \
-            un-ignore once lane C's compile_document lands"]
 fn dotted_self_reference_from_inside_a_named_dynamic_succeeds_against_circuitry() {
     assert_compile_succeeds("dotted_self_reference_from_inside_a_named_dynamic");
 }
@@ -308,22 +303,16 @@ fn dotted_self_reference_from_inside_a_named_dynamic_succeeds_against_circuitry(
 /// for where it *is* verified right now, independent of compile
 /// succeeding.
 #[test]
-#[ignore = "compile_document itself is lane C's gap; the digest is \
-            verified independently by every_case_digest_matches_circuitry"]
 fn digest_with_no_prompt_files_succeeds_against_circuitry() {
     assert_compile_succeeds("digest_with_no_prompt_files");
 }
 
 #[test]
-#[ignore = "compile_document itself is lane C's gap; the digest is \
-            verified independently by every_case_digest_matches_circuitry"]
 fn digest_includes_a_referenced_prompt_file_succeeds_against_circuitry() {
     assert_compile_succeeds("digest_includes_a_referenced_prompt_file");
 }
 
 #[test]
-#[ignore = "compile_document itself is lane C's gap; the digest is \
-            verified independently by every_case_digest_matches_circuitry"]
 fn digest_includes_a_parent_directory_prompt_file_succeeds_against_circuitry() {
     assert_compile_succeeds("digest_includes_a_parent_directory_prompt_file");
 }

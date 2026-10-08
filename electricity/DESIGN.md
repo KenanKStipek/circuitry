@@ -419,7 +419,30 @@ two. Both forms always end with a trailing `\n` (matching `cli/app.py`'s `_write
       (§4 step 3, #380) cannot produce this suffix on `jsonschema` 0.26, whose
       `OneOfNotValid`/`AnyOf` variants carry no sub-error list to pick from; the compiler lane
       built here either re-validates the losing branches by hand or needs a `jsonschema` upgrade
-      that exposes them, whichever lands first);
+      that exposes them, whichever lands first). The document is first converted into the JSON-
+      Schema instance shape (`electricity-compiler`'s `schema_instance` module): a non-string
+      `Dict` key (YAML's bare `yes:`/`1:`) is rendered so it can never collide with a real schema
+      property name (and `electricity-schema`'s own `json_path_from_pointer` decodes it back
+      into Python's own `json_path` rendering for an `int`/`bool` key — `1:` → `[1]`, `yes:` →
+      `[True]`). **Known divergence**: for any other hashable non-string key (a float, `None`, a
+      date/datetime, bytes), Python's own `json_path` raises `TypeError` instead, collapsing the
+      whole structural check into one error rather than this location's own; not reproduced here
+      (`electricity-compiler`'s own `schema_instance` module doc has the full rationale) — the
+      location instead falls back to a non-empty, best-effort quoted rendering of the key's own
+      `repr()` text. A `datetime.date`/`datetime.datetime`/`bytes`/`NaN`/`Infinity` value (an
+      unquoted YAML timestamp, an explicit `!!binary`, a non-finite float literal) is rendered so
+      it fails every `"type"` keyword — including `"object"` — the same way Python's own
+      `isinstance` check does, via an override of the `"type"` keyword itself
+      (`electricity-schema`'s own `type_keyword_factory`, replacing rather than supplementing the
+      built-in validator) — not the marker representation alone, which a bare `"type": "object"`
+      position would otherwise pass. The same crate also drops any `"required"`/
+      `"additionalProperties"`/other object-shape keyword error such a marker's own JSON-object
+      encoding would otherwise spuriously trigger, matching Python, which never runs those
+      validators against a non-`dict` instance in the first place. **Known divergence**: `minimum`/
+      `maximum` against an `Infinity`/`-Infinity` value still only vacuously pass rather than
+      enforcing a finite bound (e.g. `threshold: .inf` passes where Python raises `maximum`), a
+      live, deliberate trade-off against a panic risk in the `jsonschema` crate's own
+      arbitrary-precision number handling, not an oversight;
    3. `group:` placement errors (leaf effects only);
    4. `interface.inputs.<k>.type` must be one of the six recognized types;
    5. `interface.inputs.<k>.default` type-mismatch (already-typed data, not CLI text).
@@ -2192,8 +2215,10 @@ divergence.
 | — | **`--resume <run-id>` input re-pass rule**: every key the loaded state's `input` namespace has must be re-supplied via `-e`, not just one. | **Copy** — implemented in §6.8's resume-safety checks. | No. |
 | — | **CLI usage-error exit code `2`**: not one of the four codes in an earlier draft's CLI-surface assumption. | **Settled 2026-10-06** (`0`/`1`/`130`/`143` plus `2` for usage errors, as `cof`/click; `129` for SIGHUP since Circuitry #357) — §6.9 now also maps which specific pre-run failures get `1` versus `2`, matching the reference's own case-by-case `BadParameter` handling rather than grouping every usage error under one code. | No — settled; listed here as the record of the decision. |
 | — | **`electricity-template`'s confirmed chevron divergences** (§3.3): a falsy root `{{.}}`, bytes iterated in a section, the `getattr`-attribute-fallback mismatch (tracked upstream as #389), `int()` leniency, `\x1c`-`\x1f` counted as whitespace, and a same-key inverted section inside a list section — full description of each in the crate's own module docs (`electricity-template/src/lib.rs`), not duplicated here. | **Copy by output everywhere reachable; leave these as-is** — none is reachable by an ordinary orchestration template (state is always a dict; values come from YAML/JSON/tool output). The `getattr` one is a genuine Circuitry rendering bug, tracked as a separate upstream issue (#389) rather than fixed in electricity. | No — each judged unreachable in production documents; re-scan if a future document shape needs one. |
+| — | **`use.inputs`'s compile-time template/reference checks** (`electricity-compiler`'s `compile::params` module): Circuitry's own `_compile_use` only checks a top-level string/`{from: ...}` value, never recursing into a nested dict/list the way a tool's `params` walk does. | **Copy the shallowness** rather than reusing the deeper `params` walk, to avoid rejecting a document Circuitry's own compiler accepts — full rationale in `compile::params`'s own module docs. | No — matches Circuitry exactly; re-scan if a future document relies on a nested template inside `use.inputs` (Circuitry itself would not render it either). |
 | — | **`electricity-compiler`'s prompt-file confinement-root resolve** (#406): `core/prompt_files.py` lets a confinement root's own non-strict `Path.resolve()` raise an *uncaught* `RuntimeError` rather than a `PromptFileError`, reachable only behind a symlink *loop* (on CPython 3.11, that is the only case `resolve(strict=False)` raises in; a merely dangling/broken, non-looping chain resolves fine) — full description in the crate's own module docs (`electricity-compiler/src/prompt_files.rs`), not duplicated here. | **Return a `CompileError` instead of panicking** — Rust has no equivalent of an arbitrary uncaught exception type escaping a `Result`-returning function; not pinned by a corpus case, since the OS error text is errno-message dependent even in CPython itself. | No — an edge case neither engine's own behavior here is load-bearing for any production document. |
 | — | **`electricity-compiler`'s symlink-chain cap** (#406): `resolve_non_strict` caps any symlink chain (looping or not) at 40 hops rather than CPython's own structural loop detection, which raises as soon as it revisits a path regardless of chain length. | **Accept** — an approximation of the OS's own `ELOOP`; both reject an abusively long/looping chain, just not at exactly the same point or with exactly the same error text. | No — unreachable by any ordinary orchestration's prompt files. |
+| — | **`electricity-compiler`'s nested-effect-container depth limit**: `compile_effects_in_scope` rejects more than `MAX_COMPILE_DEPTH` (128) nested effect containers (`dynamic`/`if`/`loop`/reflector) with its own distinct error. Circuitry has no fixed limit of its own kind — its YAML loader and its schema-instance check each raise Python's own `RecursionError` first, at a caller-dependent depth, well before `compile_orchestration`'s own stack frames would. | **Accept the gap** — electricity is strictly *more* permissive on an ordinary document here (full rationale and the measured debug-build overflow point in the crate's own module docs, `electricity-compiler/src/compile/containers.rs`); both engines still fail past some depth, just not the same one. | No — the same "more permissive" direction `electricity-yaml`'s own structural depth limit already documents; no production document nests anywhere near 128 containers. |
 | — | **`electricity-compiler`'s "could not be read" OS error text** (#406): the text after that prefix is `std::io::Error`'s own `Display`, never a byte-for-byte match for Python's `OSError.__str__` (e.g. Rust's `Permission denied (os error 13)` vs. Python's `[Errno 13] Permission denied: '<path>'`). | **Compare the Circuitry-owned prefix exactly; the OS-specific suffix by location only** (DESIGN.md §1, §12) — pinned by `tests/golden_compose.rs`'s own `prompts_file_unreadable_matches_circuitrys_own_prefix`. | No — third-party/OS text, never compared word for word anywhere else in this port either. |
 
 ---

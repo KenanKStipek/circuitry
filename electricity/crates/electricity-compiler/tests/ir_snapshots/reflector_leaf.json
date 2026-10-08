@@ -1,0 +1,116 @@
+{
+  "adapter": null,
+  "document": null,
+  "effect_names": [
+    "propose_steps",
+    "think"
+  ],
+  "interface": null,
+  "model": null,
+  "prompts": {},
+  "root": {
+    "enabled": true,
+    "kind": {
+      "Control": {
+        "Block": {
+          "ops": [
+            {
+              "enabled": true,
+              "kind": {
+                "Leaf": {
+                  "Reflector": {
+                    "generated_key": "generated",
+                    "inner": {
+                      "Block": {
+                        "ops": [
+                          {
+                            "enabled": true,
+                            "kind": {
+                              "Leaf": {
+                                "Prompt": {
+                                  "assets": [],
+                                  "content": {
+                                    "Template": {
+                                      "composable": true,
+                                      "escape": "None",
+                                      "source": "p"
+                                    }
+                                  },
+                                  "description": null,
+                                  "deterministic": false,
+                                  "group": null,
+                                  "inputs": null,
+                                  "model": null,
+                                  "model_params": null,
+                                  "prompt_type": "Text",
+                                  "provider": null,
+                                  "provider_fallbacks": [],
+                                  "retries": {
+                                    "backoff_ms": 1000,
+                                    "max_attempts": 1
+                                  },
+                                  "routing_override": null,
+                                  "schema": null,
+                                  "timeout_ms": null
+                                }
+                              }
+                            },
+                            "labels": null,
+                            "name": "propose_steps",
+                            "on_error": "Fail",
+                            "path": [
+                              {
+                                "Name": "prime"
+                              },
+                              {
+                                "Name": "think"
+                              },
+                              {
+                                "Name": "propose_steps"
+                              }
+                            ]
+                          }
+                        ],
+                        "overlay": false
+                      }
+                    },
+                    "max_effects": 8,
+                    "max_iterations": 1,
+                    "plan_from_step": "propose_steps",
+                    "prime_template": {
+                      "composable": false,
+                      "escape": "None",
+                      "source": "CRITICAL: Your output will be parsed by a YAML parser and then validated as a Circuitry orchestration.\n\nYou MUST output ONE valid YAML document, and NOTHING ELSE.\nDo NOT wrap in ``` fences.\nDo NOT output '---' or multiple YAML documents.\nDo NOT include any markdown formatting (no **, *, backticks, headings, bullet prose).\n\nOUTPUT SHAPE (required):\ndone: <true|false>\neffects:\n  - type: prompt\n    name: <snake_case>\n    template: <string>\n  - type: dynamic\n    name: <snake_case>\n    flow: chain\n    effects: [ ... ]\n  - type: use\n    name: <snake_case>\n    ref: <library_name>\n    inputs: {{ ... }}\n\nHARD RULES:\n- The top-level YAML MUST be a dict with these keys: done, effects.\n- effects MUST be a YAML list.\n- Each effect MUST be a YAML dict containing at minimum:\n  - type (one of: prompt, dynamic, loop, if, use, tool)\n  - name (snake_case, letters/numbers/underscore only)\n  - AND the required fields for that type:\n    - prompt: template (non-empty string)\n    - dynamic: effects (a list), optional flow (chain|tree)\n    - loop: body (a list of effects), plus each or while\n    - if: if (condition), then (effects list)\n    - use: ref (library name) or path (filesystem) or inline (YAML template)\n    - tool: provider (plugin name)\n- NEVER emit alternative schemas such as:\n  - plan:\n  - plan: {{ effects: ... }}\n  - step_1:\n  - id/action/description-only effects\n- NEVER include '*' characters outside of a YAML quoted string (single or double quotes).\n- Keep descriptions inside YAML strings only.\n\n=== LANGUAGE: SIMPLIFIED TECHNICAL ENGLISH ===\nWrite the plan's step descriptions and every effect's `template` in\nSimplified Technical English (ASD-STE100 style). Small models and humans\nread this text next — short, imperative, unambiguous sentences carry\nfurther than free-register prose.\n- One instruction per sentence. Do not join two instructions with \"and\" or\n  \"then\" — write two sentences instead.\n- Active voice. Imperative mood for instructions: \"Write the summary.\",\n  not \"The summary should be written.\"\n- Procedural sentences (instructions, steps): 20 words or fewer.\n- Descriptive sentences (facts, context): 25 words or fewer.\n- One meaning per word. Use the same word for the same thing every time —\n  never swap \"step\" for \"phase\" for \"stage\".\n- No noun cluster longer than 3 words. Write \"the user login form\", not\n  \"the user account login authentication form\".\n- No vague verbs. \"handle\", \"manage\", \"process\", and \"deal with\" name\n  nothing — name the actual action: \"validate\", \"write\", \"delete\", \"send\".\n- Do not drop articles: write \"the file\", \"a question\" — never \"file\" or\n  \"question\" alone as a noun phrase.\nThese rules govern every `template` you generate, not just this prompt's\nown prose.\n\nCONTEXT:\nGoal:\n{goal}\n\nAdditional Context (may be empty):\n{context}\n\nTASK:\nGenerate Circuitry effects to advance the Goal.\n- Keep the total number of top-level effects <= {max_effects}.\n- Prefer a small number of high-leverage effects.\n- Use prompts to ask for missing info or to produce artifacts.\n- Use dynamics to group related prompts.\n- Use `use` to invoke existing orchestrations by name.\n\nEXAMPLE (this is the exact style you must follow, in Simplified Technical\nEnglish; do not copy the content literally):\ndone: false\neffects:\n  - type: prompt\n    name: clarify_requirements\n    template: \"Ask 3 short questions about the goal. Ask about the missing constraints.\"\n\n  - type: dynamic\n    name: draft_plan\n    flow: chain\n    effects:\n      - type: prompt\n        name: propose_architecture\n        template: \"Propose a minimal architecture. List the key components.\"\n\n      - type: prompt\n        name: define_milestones\n        template: \"List 3 milestones. Give one acceptance criterion for each milestone.\"\n\n  - type: prompt\n    name: summarize_next_actions\n    template: \"Summarize the next actions. Write 5 bullets in one YAML string.\"\n\nEND. Output YAML only.\n"
+                    },
+                    "stop_on_done": true
+                  }
+                }
+              },
+              "labels": null,
+              "name": "think",
+              "on_error": "Fail",
+              "path": [
+                {
+                  "Name": "prime"
+                },
+                {
+                  "Name": "think"
+                }
+              ]
+            }
+          ],
+          "overlay": false
+        }
+      }
+    },
+    "labels": null,
+    "name": "prime",
+    "on_error": "Fail",
+    "path": [
+      {
+        "Name": "prime"
+      }
+    ]
+  },
+  "runtime_block": null
+}

@@ -855,19 +855,34 @@ def test_factory_cyberdiner_defaults_when_config_absent() -> None:
 def test_max_in_flight_zero_does_not_gate_concurrent_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The default (0) is unbounded — no semaphore, no behavior change."""
+    """The default (0) is unbounded — no semaphore, no behavior change.
+
+    A shared ``threading.Barrier`` (not a sleep) makes the overlap
+    deterministic: all six ungated calls must arrive together, so the peak
+    is exactly 6 on any machine, under any load. If a regression ever
+    gated the calls, fewer than six would arrive and the barrier itself
+    times out — the broken-barrier error is recorded and re-raised in the
+    main thread so the test fails loudly instead of hanging.
+    """
     import threading
-    import time as _time
 
     active = [0]
     peak = [0]
     lock = threading.Lock()
+    barrier = threading.Barrier(6, timeout=5)
+    barrier_errors: list[BaseException] = []
+    thread_errors: list[BaseException] = []
 
     def fake_urlopen(req: Any, timeout: float = 0) -> _FakeResponse:
         with lock:
             active[0] += 1
             peak[0] = max(peak[0], active[0])
-        _time.sleep(0.05)
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError as exc:
+            with lock:
+                barrier_errors.append(exc)
+            raise
         with lock:
             active[0] -= 1
         job = {"data": {"jobId": "job-1", "status": "complete", "result": "ok"}}
@@ -876,16 +891,30 @@ def test_max_in_flight_zero_does_not_gate_concurrent_calls(
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
     adapter = _adapter()  # max_in_flight defaults to 0
-    threads = [
-        threading.Thread(
-            target=adapter.generate, kwargs={"model": "cheap", "prompt": "hi", "timeout_seconds": 5}
-        )
-        for _ in range(6)
-    ]
+
+    def _run() -> None:
+        try:
+            adapter.generate(model="cheap", prompt="hi", timeout_seconds=5)
+        except BaseException as exc:  # re-raised in the main thread below
+            with lock:
+                thread_errors.append(exc)
+
+    threads = [threading.Thread(target=_run) for _ in range(6)]
     for t in threads:
         t.start()
     for t in threads:
-        t.join()
+        t.join(timeout=10)
+    assert all(not t.is_alive() for t in threads), (
+        "a thread did not finish within the join timeout; it must have deadlocked"
+    )
+
+    if barrier_errors:
+        raise AssertionError(
+            "not all six concurrent calls reached the barrier together — a "
+            "regression must be gating max_in_flight=0 calls"
+        ) from barrier_errors[0]
+    if thread_errors:
+        raise thread_errors[0]
 
     assert peak[0] == 6
 
@@ -896,19 +925,35 @@ def test_max_in_flight_caps_concurrent_submissions(
     """A caller past max_in_flight blocks until a job completes, instead of
     piling every submission onto the fleet at once (circuitry#77: bursts
     deeper than the fleet drains within CyberDiner's claim window died
-    TimedOut and were retried)."""
-    import threading
-    import time as _time
+    TimedOut and were retried).
 
+    A shared ``threading.Barrier`` sized to the cap replaces the sleep: each
+    of the three waves of (at most) two concurrent calls must arrive at the
+    barrier together, so hitting the cap is asserted deterministically
+    instead of inferred from a wall-clock window. If a regression ever
+    under-caps (fewer than two calls ever run together), the barrier times
+    out instead of the test hanging or silently passing.
+    """
+    import threading
+
+    cap = 2
     active = [0]
     peak = [0]
     lock = threading.Lock()
+    barrier = threading.Barrier(cap, timeout=5)
+    barrier_errors: list[BaseException] = []
+    thread_errors: list[BaseException] = []
 
     def fake_urlopen(req: Any, timeout: float = 0) -> _FakeResponse:
         with lock:
             active[0] += 1
             peak[0] = max(peak[0], active[0])
-        _time.sleep(0.05)
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError as exc:
+            with lock:
+                barrier_errors.append(exc)
+            raise
         with lock:
             active[0] -= 1
         job = {"data": {"jobId": "job-1", "status": "complete", "result": "ok"}}
@@ -916,20 +961,38 @@ def test_max_in_flight_caps_concurrent_submissions(
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    adapter = _adapter(max_in_flight=2)
+    adapter = _adapter(max_in_flight=cap)
     results: list[str] = []
 
     def _run() -> None:
-        results.append(adapter.generate(model="cheap", prompt="hi", timeout_seconds=5).text)
+        try:
+            text = adapter.generate(model="cheap", prompt="hi", timeout_seconds=5).text
+        except BaseException as exc:  # re-raised in the main thread below
+            with lock:
+                thread_errors.append(exc)
+        else:
+            with lock:
+                results.append(text)
 
     threads = [threading.Thread(target=_run) for _ in range(6)]
     for t in threads:
         t.start()
     for t in threads:
-        t.join()
+        t.join(timeout=10)
+    assert all(not t.is_alive() for t in threads), (
+        "a thread did not finish within the join timeout; it must have deadlocked"
+    )
 
-    assert peak[0] <= 2
-    assert results == ["ok"] * 6
+    if barrier_errors:
+        raise AssertionError(
+            f"fewer than {cap} concurrent calls ever reached the barrier together "
+            "— max_in_flight must not be reaching its cap"
+        ) from barrier_errors[0]
+    if thread_errors:
+        raise thread_errors[0]
+
+    assert peak[0] == cap
+    assert sorted(results) == ["ok"] * 6
 
 
 # ---------------------------------------------------------------------------

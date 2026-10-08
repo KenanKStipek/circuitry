@@ -148,7 +148,7 @@ effects:
 
 ## Isolation and observation
 
-Isolated *state*, shared *observation*. The child's effects are reported to the parent run's observers — `--live-state`, the TUI, every runtime plugin's `on_effect_start` / `on_effect_complete` — at paths namespaced under the `use` node: a child effect `test_run` inside `use: tests` announces as `prime.tests.test_run`, and a `use` inside a `use` composes the same way. Watchers see the whole tree unfolding; what actually lands in parent state is still exactly what the output mode says.
+Isolated *state*, shared *observation*. The child's effects are reported to the parent run's observers — the TUI, every runtime plugin's `on_effect_start` / `on_effect_complete`, and `cof run --events <file>` — at paths namespaced under the `use` node: a child effect `test_run` inside `use: tests` announces as `prime.tests.test_run`, and a `use` inside a `use` composes the same way. `--events` shows the whole tree unfolding live; `--live-state` only shows a child effect once it finishes — like a tree branch, never while it runs, since the child runs in its own isolated store until it merges back — so a still-running one is not there yet. What actually lands in parent state is still exactly what the output mode says.
 
 **Cycles are rejected.** The compiler walks the static `use` graph across sources — A in a folder, B in the hub cache, A again — and refuses at validation. The runtime keeps a per-execution stack of resolved paths and hashes rendered inline YAML, so a cycle that closes only at run time is caught too. Two utilities that legitimately need each other are a sign of a third utility they both need.
 
