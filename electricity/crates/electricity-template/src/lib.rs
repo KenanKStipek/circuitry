@@ -13,6 +13,84 @@
 //! let out = render_template("hello {{name}}", &ctx, &PlainCtx, "template").unwrap();
 //! assert_eq!(out, "hello world");
 //! ```
+//!
+//! ## Known divergences from chevron
+//!
+//! This port matches chevron by output for every shape the production
+//! document sets and the conformance corpus exercise (`render.rs`'s module
+//! docs). The following are confirmed differences against real chevron,
+//! each judged unreachable by an ordinary orchestration template (state is
+//! always a dict; values come from YAML/JSON/tool output) and left as-is
+//! rather than fixed in this port:
+//!
+//! - **Falsy root `{{.}}`.** `{{.}}` never falls through chevron's usual
+//!   falsy-to-`""` collapse (`_get_key` returns `scopes[0]` for `"."`
+//!   before that collapse would apply), so `{{.}}` against a falsy,
+//!   non-numeric root (`{}`, `[]`, `None`) renders Python's `str()` of it
+//!   (`"{}"`, `"[]"`, `"None"`). This port's `stringify_for_variable`
+//!   applies the same falsy-collapse to every scope, including the `.`
+//!   case, so it renders `""` there instead. Needs a root that is itself
+//!   falsy and a template that reads `{{.}}` directly against it.
+//! - **Bytes iterated in a section.** Python's `bytes` registers as a
+//!   `collections.abc.Sequence`, so `{{#data}}...{{/data}}` over a
+//!   `bytes` value iterates it byte by byte, each byte an `int` scope.
+//!   This port's `Value::List` is the only section-iterable type, so
+//!   `Value::Bytes` renders its section body once, with the whole byte
+//!   string as scope, like any other truthy scalar.
+//! - **The attribute-fallback mismatch (tracked upstream, not here).**
+//!   `_get_key`'s second lookup step is `getattr(scope, child)`: inside a
+//!   section whose scope is a `str` (or any Python object), a tag whose
+//!   name happens to match one of that object's attributes or methods
+//!   (`count`, `index`, `format`, a date's `.isoformat`/`.year`, ...)
+//!   resolves to Python's description of that attribute/bound method —
+//!   e.g. `{{#title}}{{title}}{{/title}}` with `title: "Intro"` renders
+//!   `<built-in method title of str object at 0x...>`, not `"Intro"` —
+//!   instead of falling through to the next scope up the way a plain
+//!   missing key would. The text contains a memory address, so it cannot
+//!   be ported byte for byte even in principle. This port has no
+//!   `getattr` step at all, so a name shadowing an attribute/method
+//!   simply falls through to the outer scope — the value a template
+//!   author actually meant. This is a genuine Circuitry rendering bug
+//!   (reachable by an ordinary `{{#title}}{{title}}{{/title}}`-shaped
+//!   template), tracked as a separate upstream issue rather than fixed or
+//!   reproduced in this port.
+//! - **`int()` leniency.** Python's `int()` accepts leading/trailing
+//!   whitespace (`" 1"`), underscore digit grouping (`"1_0"` == 10), and
+//!   arbitrary precision. A dotted segment or set-delimiter split in this
+//!   port parses with `str::parse::<i64>`, which accepts none of those.
+//!   Needs a dotted key or index written with internal whitespace,
+//!   underscores, or a number past `i64::MAX`.
+//! - **`\x1c`-`\x1f` as whitespace.** Python's `str.isspace()` (chevron's
+//!   standalone-tag whitespace check) treats the C0 control characters
+//!   `\x1c`-`\x1f` (FS/GS/RS/US) as whitespace; Rust's `char::is_whitespace`
+//!   does not. A standalone-tag line padded with only these characters is
+//!   trimmed by chevron but not by this port. Needs one of these four
+//!   control characters on a line with a tag.
+//! - **An empty set-delimiter tag.** `{{= =}}` sets both delimiters to
+//!   `""`; chevron's own literal-splitting (`template.split('', 1)`)
+//!   raises `ValueError` on an empty separator, which it catches by
+//!   treating the *entire rest of the template* as one literal — no more
+//!   tags are ever recognized after it. This port's literal-splitting
+//!   does not special-case an empty delimiter the same way, so it keeps
+//!   tokenizing tags normally afterward. Needs a template that sets an
+//!   empty delimiter and still expects tags afterward to stop parsing.
+//! - **A same-key inverted section inside a list section.** Chevron
+//!   gathers a list section's body by counting nested `('section', key)`
+//!   opens against `('end', key)` closes to find its own matching end —
+//!   but an inner *inverted* section with the same key is never counted
+//!   as an open, so its `{{/key}}` is miscounted as closing the outer
+//!   section early (e.g. `{{#a}}{{^a}}x{{/a}}{{/a}}`). This port builds a
+//!   real tree (`render.rs`'s `build_tree`) from a stack that already
+//!   distinguishes `Section`/`InvertedSection`, so it nests correctly
+//!   instead of reproducing chevron's miscount. Needs a list section
+//!   containing an inverted section that reuses the same key.
+//!
+//! Every lookup in `render.rs` (`get_key`/`walk_dotted`/`step`) clones the
+//! `Value` it resolves rather than walking by reference; correct, and
+//! simple, but it means `render_with_pushed_scope` copies the whole scope
+//! stack — root state included — once per list element. No caller exists
+//! yet to measure against; walking by reference instead is a later
+//! optimization, not a correctness fix, and is deliberately deferred.
 
 mod render;
 mod tokenizer;

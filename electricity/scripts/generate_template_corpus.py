@@ -120,6 +120,9 @@ def syntax_templates() -> list[str]:
         "x\n{{! c }}  ",  # standalone tag at EOF keeps its trailing whitespace
         "{{> p}}{{/x}}",  # a partial wins over a later unopened close
         "{{> p}}{{}}",  # a partial wins over a later empty-tag index error
+        "{{/x}}{{> p}}",  # a failure at the very first tag wins (no earlier partial)
+        "{{=<% %>=}}<%> p%><%/x%>",  # a set-delimiter tag before the partial still finds it
+        "{{#a}}{{> p}}",  # a partial inside a section that is never closed
     ]
 
 
@@ -269,6 +272,9 @@ def build_render_cases() -> list[dict]:
     # --- a partial wins over a later tokenize failure (lazy generator) ---
     cases.append(render_case("{{> p}}{{/x}}", {}))
     cases.append(render_case("{{> p}}{{}}", {}))
+    cases.append(render_case("{{/x}}{{> p}}", {}))
+    cases.append(render_case("{{=<% %>=}}<%> p%><%/x%>", {}))
+    cases.append(render_case("{{#a}}{{> p}}", {"a": True}))
 
     # --- JsonAwareCtx: the params_json splice serializer ---
     cases.append(render_case("{{x}}", {"x": [1, 2, 3]}, label="params_json", json_aware=True))
@@ -300,6 +306,16 @@ def build_render_cases() -> list[dict]:
     cases.append(render_case("{{x.0}}", {"x": 1}))
     cases.append(render_case("{{x.0}}", {"x": 1.5}))
     cases.append(render_case("{{x.0}}", {"x": datetime.date(2020, 1, 2)}))
+    cases.append(render_case("{{x.0}}", {"x": utc_dt}))
+    cases.append(render_case("{{x.0}}", {"x": 0}))
+    cases.append(render_case("{{x.0}}", {"x": False}))
+    cases.append(render_case("{{x.0}}", {"x": 0.0}))
+
+    # --- a non-numeric dotted segment on a scalar falls through to the
+    # next scope, same as a dict/list miss (never the TypeError a numeric
+    # segment raises) ---
+    cases.append(render_case("{{x.name}}", {"x": None}))
+    cases.append(render_case("{{#n}}{{label}}{{/n}}", {"n": 5, "label": "OUTER"}))
 
     # --- more section/inverted nesting and nested falsy-list suppression ---
     cases.append(

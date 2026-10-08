@@ -1461,6 +1461,50 @@
     {
       "ctx": {
         "t": "dict",
+        "v": []
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": "template: malformed Mustache template: Trying to close tag \"x\" Looks like it was not opened. line 2",
+      "render_ok": null,
+      "template": "{{/x}}{{> p}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": "template: malformed Mustache template: partials are not supported: {{> p}}",
+      "render_ok": null,
+      "template": "{{=<% %>=}}<%> p%><%/x%>"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": "template: malformed Mustache template: partials are not supported: {{> p}}",
+      "render_ok": null,
+      "template": "{{#a}}{{> p}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
         "v": [
           [
             {
@@ -1949,6 +1993,148 @@
           [
             {
               "t": "str",
+              "v": "x"
+            },
+            {
+              "naive": "2020-01-02T03:04:05.000000",
+              "offset_seconds": 0,
+              "t": "datetime"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": "template: could not render: 'datetime.datetime' object is not subscriptable",
+      "render_ok": null,
+      "template": "{{x.0}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "int",
+              "v": "0"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": "template: could not render: 'int' object is not subscriptable",
+      "render_ok": null,
+      "template": "{{x.0}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": "template: could not render: 'bool' object is not subscriptable",
+      "render_ok": null,
+      "template": "{{x.0}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "bits": "0000000000000000",
+              "t": "float"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": "template: could not render: 'float' object is not subscriptable",
+      "render_ok": null,
+      "template": "{{x.0}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{x.name}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "n"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "label"
+            },
+            {
+              "t": "str",
+              "v": "OUTER"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "OUTER",
+      "template": "{{#n}}{{label}}{{/n}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
               "v": "a"
             },
             {
@@ -2326,6 +2512,18 @@
     {
       "syntax_error": "partials are not supported: {{> p}}",
       "template": "{{> p}}{{}}"
+    },
+    {
+      "syntax_error": "Trying to close tag \"x\" Looks like it was not opened. line 2",
+      "template": "{{/x}}{{> p}}"
+    },
+    {
+      "syntax_error": "partials are not supported: {{> p}}",
+      "template": "{{=<% %>=}}<%> p%><%/x%>"
+    },
+    {
+      "syntax_error": "partials are not supported: {{> p}}",
+      "template": "{{#a}}{{> p}}"
     }
   ]
 }

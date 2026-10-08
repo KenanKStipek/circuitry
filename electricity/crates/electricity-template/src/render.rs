@@ -8,8 +8,9 @@
 //! recursive tree walk: [`crate::tokenizer::tokenize`] already validates
 //! section/end-tag balance, so turning the flat token stream into a tree
 //! ([`build_tree`]) can't fail, and the tree walk below reproduces every
-//! chevron quirk confirmed against the real library (see the inline
-//! comments) by output, not by internal mechanism.
+//! chevron quirk this port is pinned against (see the inline comments and
+//! `lib.rs`'s "Known divergences from chevron" section for the
+//! confirmed exceptions) by output, not by internal mechanism.
 
 use electricity_value::Value;
 
