@@ -62,17 +62,31 @@ fn help_prints_usage_and_preview_notice_and_exits_zero() {
     assert!(stdout.contains("preview"));
 }
 
+/// `electricity <config.json> <doc>` runs `check_for_run` first (issue
+/// #408's CLI section). An empty document is one of the few checks
+/// fully resolvable without lane C's own compiler, so its exact text
+/// -- not just a marker naming an unimplemented lane -- is a stable
+/// thing to assert here.
 #[test]
-fn run_request_fails_with_preview_message_and_exit_code_one() {
-    let (mut cmd, _home) = command("run");
+fn run_request_fails_with_the_checks_own_error_text_and_exit_code_one() {
+    let (mut cmd, home) = command("run");
+    let config = home.path.join("config.json");
+    let doc = home.path.join("doc.yml");
+    fs::write(&config, "{}").unwrap();
+    fs::write(&doc, "").unwrap();
     let output = cmd
-        .args(["config.json", "orchestration.yml"])
+        .args([config.to_str().unwrap(), doc.to_str().unwrap()])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("cannot run orchestrations yet"));
-    assert!(stderr.contains("cof run"));
+    // The "required property" text past the location is the Rust
+    // `jsonschema` crate's own (third-party) wording, not required to
+    // match Circuitry's Python `jsonschema` text word for word
+    // (DESIGN.md §1/§12) -- only the "Orchestration validation failed:"
+    // wrapper and the location are Circuitry's own.
+    assert!(stderr.starts_with("Orchestration validation failed:\n  - top level: "));
+    assert!(stderr.contains("required property"), "{stderr}");
 }
 
 #[test]

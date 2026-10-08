@@ -295,6 +295,28 @@ fn profile_schema() -> &'static Value {
     SCHEMA.get_or_init(|| load_schema(include_str!("../schema/profile.schema.json")))
 }
 
+/// The `"properties"` key names of `$defs.<def_name>` in the bundled
+/// `orchestration.schema.json`, or `None` if `def_name` isn't defined
+/// there -- generic schema introspection for a caller that needs to
+/// know a schema definition's own key set without re-parsing the file
+/// itself (`core.document_check`'s per-effect-type known-key table is
+/// Circuitry's own business logic, built from this).
+pub fn orchestration_def_properties(def_name: &str) -> Option<std::collections::BTreeSet<String>> {
+    let defs = orchestration_schema().get("$defs")?.as_object()?;
+    let properties = defs.get(def_name)?.get("properties")?.as_object()?;
+    Some(properties.keys().cloned().collect())
+}
+
+/// The top-level `"properties"` key names of the bundled
+/// `orchestration.schema.json`.
+pub fn orchestration_top_level_properties() -> std::collections::BTreeSet<String> {
+    orchestration_schema()
+        .get("properties")
+        .and_then(Value::as_object)
+        .map(|props| props.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
 fn orchestration_validator() -> &'static jsonschema::Validator {
     static VALIDATOR: OnceLock<jsonschema::Validator> = OnceLock::new();
     VALIDATOR.get_or_init(|| {

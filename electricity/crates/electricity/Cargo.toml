@@ -13,4 +13,6 @@ path = "src/lib.rs"
 
 [dependencies]
 electricity-compiler = { path = "../electricity-compiler" }
+electricity-json = { path = "../electricity-json" }
+electricity-value = { path = "../electricity-value" }
 serde_json = "1"

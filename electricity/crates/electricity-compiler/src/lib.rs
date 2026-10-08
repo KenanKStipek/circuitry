@@ -24,6 +24,7 @@
 //! | [`difflib`] | B | `difflib.get_close_matches` (Python stdlib) |
 //! | [`schema_instance`] | B | the `Value` -> schema-instance conversion |
 //! | [`pipeline`] | B | `cli/runtime_shim.py` (`validate`/`run`, and `core/concurrency.py`'s config-parsing errors) |
+//! | [`project_root`] | B | `core/prompt_files.py::default_project_root` |
 //! | [`compile`] (`containers`/`leaves`) | C | `core/compiler.py` |
 //! | [`state_ns`] | C | `core/state_ns.py` |
 //! | [`groups`] | C | `core/compiler.py`'s `unknown_concurrency_group_errors` (an effect's `group:` reference; the `max_concurrency`/`concurrency_groups` config-parsing errors are [`pipeline`]'s, lane B) |
@@ -53,6 +54,7 @@ pub mod digest;
 pub mod groups;
 pub mod load;
 pub mod pipeline;
+pub mod project_root;
 pub mod prompt_files;
 pub mod reflector_prime;
 pub mod schema_instance;
@@ -64,6 +66,7 @@ pub use load::load_document;
 pub use pipeline::{check_for_run, check_report};
 pub use structural::{structural_errors, unknown_key_warnings};
 
+use electricity_value::Value;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -143,11 +146,21 @@ impl std::error::Error for RunCheckError {}
 
 /// Options shared by [`check_report`] and [`check_for_run`] — the
 /// `skip_preflight`/`trust_document` flags `cli/runtime_shim.py`'s
-/// `validate`/`run` both take.
+/// `validate`/`run` both take, plus what the pipeline needs from the
+/// *config file* itself (issue #408's lane B section): its own
+/// `runtime:` block, merged under the document's own (document wins
+/// key by key — electricity trusts every document, DESIGN.md §11).
+/// `None` — the default, and what every golden corpus case runs
+/// with, since Circuitry's own ground truth always calls
+/// `validate`/`run` with `config=None` — behaves exactly like an
+/// empty config: the merged runtime is just the document's own
+/// `runtime:` block, unchanged. Populated by the `electricity` CLI
+/// alone, from the `config.json` positional argument.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CheckOptions {
     pub skip_preflight: bool,
     pub trust_document: bool,
+    pub config_runtime: Option<Value>,
 }
 
 /// Matches `runtime_shim.validate(...)`'s return shape.

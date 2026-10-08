@@ -1,12 +1,14 @@
 //! Preview skeleton of the electricity library crate.
 //!
 //! This release ships no VM, tool, or adapter implementation (see
-//! `../../DESIGN.md`); [`run_orchestration`] always fails with
-//! [`PreviewUnsupported`]. [`dump_ir`] is the one exception
-//! (issue #408's CLI section): an unstable debugging aid that runs the
-//! compiler's `check_for_run` and prints the result, wired all the way
-//! through even though `electricity-compiler` itself is still a lane A
-//! stub -- see that crate's docs for which lane fills in each piece.
+//! `../../DESIGN.md`). [`run_orchestration`] runs
+//! `electricity_compiler::check_for_run` first (issue #408's CLI
+//! section) and only ever reports one of two outcomes --
+//! [`RunOutcome::CheckFailed`] on a check failure, or
+//! [`RunOutcome::PreviewRefusal`] once a document actually checks out,
+//! since there is still no VM to run it with. [`dump_ir`] is a
+//! separate, unstable debugging aid that runs the same check and
+//! prints the result as JSON.
 
 use std::fmt;
 use std::path::Path;
@@ -34,9 +36,63 @@ impl fmt::Display for PreviewUnsupported {
 
 impl std::error::Error for PreviewUnsupported {}
 
-/// Always returns `Err(PreviewUnsupported)`: this preview has no compiler or VM.
-pub fn run_orchestration() -> Result<(), PreviewUnsupported> {
-    Err(PreviewUnsupported)
+/// Runs *orchestration_path* the way `electricity <config.json> <doc> ...`
+/// does (issue #408's CLI section): [`electricity_compiler::check_for_run`]
+/// first, trusting the document and skipping preflight, with
+/// *config_path*'s own `runtime:` block (if the file exists and parses)
+/// merged under the document's own, key by key -- then, on success,
+/// still this preview's one refusal, since there is no VM yet.
+///
+/// A [`RunOutcome::CheckFailed`] carries [`electricity_compiler::check_for_run`]'s
+/// own error text verbatim -- the exact text the CLI writes to stderr on a
+/// check failure (issue #408's CLI section: "On failure: exactly the error
+/// text on stderr, exit 1"). [`RunOutcome::PreviewRefusal`] is the
+/// unconditional "On success: keep the current preview refusal" branch.
+pub fn run_orchestration(config_path: &Path, orchestration_path: &Path) -> RunOutcome {
+    let options = electricity_compiler::CheckOptions {
+        skip_preflight: true,
+        trust_document: true,
+        config_runtime: config_runtime_block(config_path),
+    };
+    match electricity_compiler::check_for_run(orchestration_path, &options) {
+        Ok(_) => RunOutcome::PreviewRefusal(PreviewUnsupported),
+        Err(err) => RunOutcome::CheckFailed(err.to_string()),
+    }
+}
+
+/// Why [`run_orchestration`] didn't run the orchestration -- either
+/// outcome is a CLI failure (exit 1) in this preview release; the two
+/// variants exist only so the CLI can tell which text to print.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunOutcome {
+    /// [`electricity_compiler::check_for_run`]'s own error text.
+    CheckFailed(String),
+    /// The check passed; this preview still has no VM to run it with.
+    PreviewRefusal(PreviewUnsupported),
+}
+
+impl fmt::Display for RunOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RunOutcome::CheckFailed(message) => write!(f, "{message}"),
+            RunOutcome::PreviewRefusal(preview) => write!(f, "{preview}"),
+        }
+    }
+}
+
+/// *config_path*'s own `runtime:` block, or `None` when the file doesn't
+/// exist, isn't valid UTF-8 JSON, or has no such key -- lenient on
+/// purpose (issue #408's lane B section only asks for "what the
+/// pipeline needs from the config file, i.e. its runtime: block", not
+/// full config-file validation, which stays `cof`'s own job).
+fn config_runtime_block(config_path: &Path) -> Option<electricity_value::Value> {
+    let bytes = std::fs::read(config_path).ok()?;
+    let text = String::from_utf8(bytes).ok()?;
+    let value = electricity_json::loads(&text).ok()?;
+    value
+        .as_dict()?
+        .get(&electricity_value::Value::Str("runtime".to_string()))
+        .cloned()
 }
 
 /// `{"ir_version": "unstable", "program": ...}`, 2-space indented, for
@@ -53,6 +109,7 @@ pub fn dump_ir(orchestration_path: &Path) -> Result<String, String> {
     let options = electricity_compiler::CheckOptions {
         skip_preflight: true,
         trust_document: true,
+        config_runtime: None,
     };
     let program = electricity_compiler::check_for_run(orchestration_path, &options)
         .map_err(|err| err.to_string())?;
@@ -84,10 +141,50 @@ mod tests {
     }
 
     #[test]
-    fn run_orchestration_is_unsupported() {
-        let err = run_orchestration().unwrap_err();
-        let message = err.to_string();
-        assert!(message.contains("cannot run orchestrations yet"));
-        assert!(message.contains("cof run"));
+    fn run_orchestration_refuses_a_document_that_checks_out() {
+        let dir = std::env::temp_dir().join(format!(
+            "electricity-run-orchestration-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("config.json");
+        let doc = dir.join("doc.yml");
+        std::fs::write(&config, "{}").unwrap();
+        std::fs::write(&doc, "effects: []\n").unwrap();
+
+        let outcome = run_orchestration(&config, &doc);
+        let message = outcome.to_string();
+        // `effects: []` is structurally valid and has no `runtime:`
+        // configuration error, so it reaches `compile_document` --
+        // still a lane C stub today, hence `CheckFailed`, not
+        // `PreviewRefusal`, until that lane lands.
+        assert!(matches!(outcome, RunOutcome::CheckFailed(_)), "{outcome:?}");
+        assert!(message.contains("not implemented in lane"), "{message}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn run_orchestration_reports_a_check_failure_verbatim() {
+        let dir = std::env::temp_dir().join(format!(
+            "electricity-run-orchestration-test-fail-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("config.json");
+        let doc = dir.join("doc.yml");
+        std::fs::write(&doc, "").unwrap();
+
+        let outcome = run_orchestration(&config, &doc);
+        let message = outcome.to_string();
+        // The "required property" text past the location is the Rust
+        // `jsonschema` crate's own (third-party) wording, not required
+        // to match Circuitry's Python `jsonschema` text word for word
+        // (DESIGN.md §1/§12) -- only the `"Orchestration validation
+        // failed:"` wrapper and the location are Circuitry's own.
+        assert!(message.starts_with("Orchestration validation failed:\n  - top level: "));
+        assert!(message.contains("required property"), "{message}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

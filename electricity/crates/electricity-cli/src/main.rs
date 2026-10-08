@@ -1,9 +1,9 @@
-//! `electricity` — the CLI binary. This preview release has no VM: every
-//! run request fails with a message pointing to `cof run`.
-//! `--version`/`--help` succeed; `--dump-ir` runs the compiler's
-//! `check_for_run` and prints its result (issue #408's CLI section) --
-//! currently always a failure, since `electricity-compiler` is still a
-//! lane A stub.
+//! `electricity` — the CLI binary. This preview release has no VM: a run
+//! request runs `electricity_compiler::check_for_run` first (issue #408's
+//! CLI section) and, on success, still refuses with a message pointing to
+//! `cof run` -- only a check failure prints that failure's own exact text
+//! instead. `--version`/`--help` succeed; `--dump-ir` runs the same check
+//! and prints the result as JSON.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -25,9 +25,30 @@ Options:
 enum Action {
     Version,
     Help,
-    Run,
+    Run(String, String),
     DumpIr(String),
     UsageError(String),
+}
+
+/// Every positional argument in *args*, skipping `--dump-ir` and each
+/// known run flag's own value -- the one list both `Action::Run` (its
+/// first two: `<config.json> <orchestration.yml>`) and `Action::DumpIr`
+/// (its second) are built from.
+fn positionals(args: &[String]) -> Vec<&str> {
+    let mut result = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        if arg == "--dump-ir" {
+            i += 1;
+        } else if KNOWN_RUN_FLAGS.contains(&arg) {
+            i += 2; // the flag and its value
+        } else {
+            result.push(arg);
+            i += 1;
+        }
+    }
+    result
 }
 
 /// Run flags the usage text advertises (`-e key=value`, `--out`, `--profile`):
@@ -62,28 +83,22 @@ fn classify(args: &[String]) -> Action {
     }
 
     if !args.iter().any(|a| a == "--dump-ir") {
-        return Action::Run;
+        let found = positionals(args);
+        return match (found.first(), found.get(1)) {
+            (Some(config), Some(orchestration)) => {
+                Action::Run(config.to_string(), orchestration.to_string())
+            }
+            _ => Action::UsageError("no config file or orchestration given".to_string()),
+        };
     }
 
     // The second positional, never the *last* -- `electricity
     // <config.json> <orchestration.yml> --dump-ir` takes exactly two,
     // so a third stray positional must not silently become the
     // orchestration path.
-    let mut positionals: Vec<&str> = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        let arg = args[i].as_str();
-        if arg == "--dump-ir" {
-            i += 1;
-        } else if KNOWN_RUN_FLAGS.contains(&arg) {
-            i += 2; // the flag and its value
-        } else {
-            positionals.push(arg);
-            i += 1;
-        }
-    }
+    let found = positionals(args);
 
-    match positionals.get(1) {
+    match found.get(1) {
         Some(orchestration) => Action::DumpIr(orchestration.to_string()),
         None => {
             Action::UsageError("--dump-ir requires <config.json> <orchestration.yml>".to_string())
@@ -107,8 +122,17 @@ fn main() -> ExitCode {
             println!("{USAGE}");
             ExitCode::SUCCESS
         }
-        Action::Run => {
-            eprintln!("{}", electricity::run_orchestration().unwrap_err());
+        Action::Run(config_path, orchestration_path) => {
+            // On failure: exactly the error text on stderr, exit 1
+            // (issue #408's CLI section). On success: still exit 1
+            // with the preview refusal -- there is no VM yet.
+            eprintln!(
+                "{}",
+                electricity::run_orchestration(
+                    Path::new(&config_path),
+                    Path::new(&orchestration_path)
+                )
+            );
             ExitCode::from(1)
         }
         Action::DumpIr(orchestration_path) => {
@@ -166,7 +190,7 @@ mod unit_tests {
     fn positional_args_are_a_run_request() {
         assert!(matches!(
             classify(&["config.json".to_string(), "orchestration.yml".to_string()]),
-            Action::Run
+            Action::Run(_, _)
         ));
     }
 
@@ -179,7 +203,7 @@ mod unit_tests {
                 "config.json".to_string(),
                 "orchestration.yml".to_string()
             ]),
-            Action::Run
+            Action::Run(_, _)
         ));
         assert!(matches!(
             classify(&[
@@ -188,7 +212,7 @@ mod unit_tests {
                 "config.json".to_string(),
                 "orchestration.yml".to_string()
             ]),
-            Action::Run
+            Action::Run(_, _)
         ));
     }
 
@@ -248,7 +272,7 @@ mod unit_tests {
                 "orchestration.yml".to_string(),
                 "--pretty".to_string(),
             ]),
-            Action::Run
+            Action::Run(_, _)
         ));
     }
 
@@ -260,7 +284,7 @@ mod unit_tests {
                 "orchestration.yml".to_string(),
                 "-".to_string(),
             ]),
-            Action::Run
+            Action::Run(_, _)
         ));
     }
 }

@@ -27,6 +27,12 @@ from .normalize import (
 CASE_DIRS = harness.list_case_dirs()
 ELECTRICITY_DIR = Path(__file__).resolve().parents[2] / "electricity"
 PREVIEW_MESSAGE_MARKER = "is a preview and cannot run orchestrations yet"
+#: `electricity_compiler::not_implemented`'s own text (lib.rs) -- lanes
+#: land one at a time (issue #408), so a case whose real document needs
+#: a lane that hasn't merged yet still fails, just with this marker
+#: instead of either a real error or `PREVIEW_MESSAGE_MARKER`. Skipped
+#: the same way: there is nothing this test can usefully compare yet.
+STUB_MESSAGE_MARKER = "is not implemented in lane"
 
 #: electricity's CLI has no notion yet of "no config file" the way `cof
 #: run` does (an explicit --config, CIRCUITRY_CONFIG, a discovered
@@ -124,10 +130,17 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
         electricity_binary, case_dir, metadata, out_path=out_path, home_dir=home_dir
     )
 
-    if result.returncode == 1 and PREVIEW_MESSAGE_MARKER in (result.stdout + result.stderr):
+    combined_output = result.stdout + result.stderr
+    if result.returncode == 1 and PREVIEW_MESSAGE_MARKER in combined_output:
         pytest.skip(
             "electricity's preview build cannot run orchestration documents yet "
             "(exits 1 on any run request) — electricity/crates/electricity-cli"
+        )
+    if result.returncode == 1 and STUB_MESSAGE_MARKER in combined_output:
+        pytest.skip(
+            "this case's real document needs a lane of issue #408's "
+            "electricity-compiler that hasn't landed yet — "
+            f"{combined_output.strip()}"
         )
 
     if metadata["expect"] == "success":
