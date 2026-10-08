@@ -1,19 +1,37 @@
-name: electricity release build
+name: rust release build
 
-# Reusable workflow: builds electricity's release archives (musl Linux
-# x86_64/aarch64 via cargo-zigbuild, macOS aarch64 natively) and validates
-# the multi-arch container image built from the two musl binaries. This
-# workflow never pushes anything, on a PR or on a release tag: the
-# container image only reaches ghcr.io from release.yml's own
-# `publish-image` job, which runs after every build here AND the Python
-# wheel/sdist have succeeded, so a failed Python build can never leave a
-# published image behind (#359).
+# Reusable workflow: builds a Rust workspace's release archives (musl Linux
+# x86_64/aarch64 via cargo-zigbuild, macOS aarch64 natively). Generalized
+# from electricity's own build (issue #420) so oscilloscope's `osp` reuses
+# it unchanged — `inputs.build-image` keeps the container-image job
+# electricity-only, since osp ships no image. This workflow never pushes
+# anything, on a PR or on a release tag: the container image only reaches
+# ghcr.io from release.yml's own `publish-image` job, which runs after
+# every build here AND the Python wheel/sdist have succeeded, so a failed
+# Python build can never leave a published image behind (#359).
 
 on:
   workflow_call:
+    inputs:
+      workspace-dir:
+        description: "Cargo workspace directory (relative to the repo root)"
+        type: string
+        default: electricity
+      binary-crate:
+        description: "The crate (`-p <name>`) that builds the binary"
+        type: string
+        default: electricity-cli
+      binary-name:
+        description: "The built binary's name, and the archive name prefix"
+        type: string
+        default: electricity
+      build-image:
+        description: "Also build (never push) a container image from the two musl binaries"
+        type: boolean
+        default: true
     outputs:
       version:
-        description: "electricity workspace version that was built"
+        description: "Workspace version that was built"
         value: ${{ jobs.version.outputs.version }}
 
 jobs:
@@ -28,7 +46,7 @@ jobs:
       - uses: actions/checkout@v4
       - id: extract
         run: |
-          version="$(grep -m1 '^version = ' electricity/Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
+          version="$(grep -m1 '^version = ' ${{ inputs.workspace-dir }}/Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build-archives:
@@ -59,8 +77,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: electricity
-          key: ${{ matrix.target }}
+          workspaces: ${{ inputs.workspace-dir }}
+          key: ${{ inputs.workspace-dir }}-${{ matrix.target }}
 
       - name: Install zig
         if: matrix.zigbuild
@@ -74,21 +92,22 @@ jobs:
 
       - name: Build (cargo-zigbuild)
         if: matrix.zigbuild
-        working-directory: electricity
-        run: cargo zigbuild --release --target ${{ matrix.target }} -p electricity-cli
+        working-directory: ${{ inputs.workspace-dir }}
+        run: cargo zigbuild --release --target ${{ matrix.target }} -p ${{ inputs.binary-crate }}
 
       - name: Build (cargo)
         if: ${{ !matrix.zigbuild }}
-        working-directory: electricity
-        run: cargo build --release --target ${{ matrix.target }} -p electricity-cli
+        working-directory: ${{ inputs.workspace-dir }}
+        run: cargo build --release --target ${{ matrix.target }} -p ${{ inputs.binary-crate }}
 
       - name: Package archive
-        working-directory: electricity
+        working-directory: ${{ inputs.workspace-dir }}
         run: |
           version="${{ needs.version.outputs.version }}"
-          stage="electricity-${version}-${{ matrix.target }}"
+          name="${{ inputs.binary-name }}"
+          stage="${name}-${version}-${{ matrix.target }}"
           mkdir -p "$stage"
-          cp "target/${{ matrix.target }}/release/electricity" "$stage/"
+          cp "target/${{ matrix.target }}/release/${name}" "$stage/"
           cp ../LICENSE "$stage/"
           cp README.md "$stage/"
           tar czf "$stage.tar.gz" "$stage"
@@ -96,14 +115,15 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: electricity-${{ matrix.target }}
+          name: ${{ inputs.binary-name }}-${{ matrix.target }}
           path: |
-            electricity/electricity-*.tar.gz
-            electricity/electricity-*.tar.gz.sha256
+            ${{ inputs.workspace-dir }}/${{ inputs.binary-name }}-*.tar.gz
+            ${{ inputs.workspace-dir }}/${{ inputs.binary-name }}-*.tar.gz.sha256
           if-no-files-found: error
 
   build-image:
     name: container image (build only, never pushed)
+    if: inputs.build-image
     needs: [version, build-archives]
     runs-on: ubuntu-latest
     permissions:
@@ -113,23 +133,24 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: "electricity-*-unknown-linux-musl"
-          path: electricity/dist
+          pattern: "${{ inputs.binary-name }}-*-unknown-linux-musl"
+          path: ${{ inputs.workspace-dir }}/dist
           merge-multiple: true
 
       - name: Unpack binaries for the image build context
-        working-directory: electricity
+        working-directory: ${{ inputs.workspace-dir }}
         run: |
           version="${{ needs.version.outputs.version }}"
+          name="${{ inputs.binary-name }}"
           mkdir -p dist/linux/amd64 dist/linux/arm64
-          tar xzf "dist/electricity-${version}-x86_64-unknown-linux-musl.tar.gz" -C dist/linux/amd64 --strip-components=1
-          tar xzf "dist/electricity-${version}-aarch64-unknown-linux-musl.tar.gz" -C dist/linux/arm64 --strip-components=1
+          tar xzf "dist/${name}-${version}-x86_64-unknown-linux-musl.tar.gz" -C dist/linux/amd64 --strip-components=1
+          tar xzf "dist/${name}-${version}-aarch64-unknown-linux-musl.tar.gz" -C dist/linux/arm64 --strip-components=1
 
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/build-push-action@v6
         with:
-          context: electricity
-          file: electricity/Dockerfile
+          context: ${{ inputs.workspace-dir }}
+          file: ${{ inputs.workspace-dir }}/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: false
