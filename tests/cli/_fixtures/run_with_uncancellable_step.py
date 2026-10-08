@@ -12,7 +12,7 @@ such as an in-flight MCP call or the `service` tool's own subprocess) by
 adding it straight to `plugins.factory.PLUGIN_REGISTRY` before calling
 `run()`, which a real `cof run` subprocess has no way to do from outside.
 
-Usage: ``run_with_uncancellable_step.py <orchestration.yml>``
+Usage: ``run_with_uncancellable_step.py <orchestration.yml> [state.json]``
 """
 
 from __future__ import annotations
@@ -71,15 +71,16 @@ class _UncancellableBlockPlugin:
 
 def main() -> int:
     orch_path = Path(sys.argv[1])
+    state_path = Path(sys.argv[2]) if len(sys.argv) > 2 else None
     PLUGIN_REGISTRY["test_block"] = lambda cfg: _UncancellableBlockPlugin()
 
     req = RunRequest(
         orchestration_path=orch_path,
-        state_path=None,
+        state_path=state_path,
         out_path=None,
         dry_run=False,
         validate_only=False,
-        initial_state={},
+        initial_state=None if state_path is not None else {},
         config=CircuitryConfig(),
         skip_preflight=True,
     )
@@ -87,6 +88,8 @@ def main() -> int:
         result = run(req)
 
     if not result.ok:
+        if not (result.interrupted or result.sigterm or result.sighup):
+            print(f"run failed: {result.error}", file=sys.stderr)
         return (
             143
             if result.sigterm
