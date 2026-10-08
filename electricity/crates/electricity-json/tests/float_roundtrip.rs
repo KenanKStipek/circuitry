@@ -59,3 +59,29 @@ fn non_finite_literals_round_trip() {
         assert!(round_trip(f64::NAN, mode).is_nan());
     }
 }
+
+/// Fixed values alongside the random sample above: the sign of zero, the
+/// smallest and largest finite magnitudes, and the `1e16`/`1e-4` digit-
+/// count boundaries `electricity-value`'s float repr switches format at.
+#[test]
+fn float_repr_edge_values_round_trip() {
+    let edge_values = [
+        0.0,
+        -0.0,
+        f64::MIN_POSITIVE,
+        -f64::MIN_POSITIVE,
+        5e-324, // smallest subnormal
+        -5e-324,
+        f64::MAX,
+        f64::MIN,
+        1e16,
+        9.999999999999998e15,
+        1e-4,
+        9.999999999999999e-5,
+    ];
+    for mode in [WriteMode::COMPACT, WriteMode::PRETTY] {
+        for f in edge_values {
+            assert_eq!(round_trip(f, mode).to_bits(), f.to_bits(), "f = {f:?}");
+        }
+    }
+}

@@ -2,6 +2,11 @@
 //! (DESIGN.md §3.4, rust-ecosystem.md item 22), rather than bending
 //! `serde_json`'s `ryu`-based formatter and ASCII-only string encoder to
 //! Python's rules.
+//!
+//! Known difference from CPython 3.11, inherited from `electricity-value`
+//! (see its `py_str` doc): an integer longer than 4300 decimal digits
+//! writes its full digits here, where CPython's `json.dumps` raises
+//! `ValueError` converting it to a string (`sys.set_int_max_str_digits`).
 
 use electricity_value::{Dict, Value};
 use std::cmp::Ordering;
@@ -53,9 +58,8 @@ pub enum WriteError {
     /// variant exists so the writer stays total instead of panicking if
     /// one ever slips through.
     UnhashableKeyType { type_name: &'static str },
-    /// `sort_keys=True` tried to compare two original keys (or, when keys
-    /// are equal, two values for those keys — CPython's `sorted(dct.items())`
-    /// sorts the full `(key, value)` tuples) of incomparable types.
+    /// `sort_keys=True` tried to compare two original keys of incomparable
+    /// types.
     IncomparableKeys {
         left: &'static str,
         right: &'static str,
@@ -93,9 +97,11 @@ impl fmt::Display for WriteError {
 impl std::error::Error for WriteError {}
 
 /// What happens to a `Value` variant `json.dumps` itself can't encode
-/// (`Date`/`DateTime`/`Bytes`): raise (every write site except one), or
-/// stringify it with [`Value::py_str`] the way `json.dumps(x, default=str)`
-/// does (the redacted-`raw` size-cap path, `cli/tool.py`'s `_capped_raw`,
+/// (`Date`/`DateTime`/`Bytes`): raise, or stringify it with
+/// [`Value::py_str`] the way `json.dumps(x, default=str)` does (used by
+/// `core/tool.py`'s redacted-`raw` size-cap path `_capped_raw`, its
+/// `__str__` methods, the json plugin, and the persistence plugins —
+/// `default=str` itself is generic, not one specific caller's quirk;
 /// runtime-semantics.md §8.2/DESIGN.md §3.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OnUnsupported {
@@ -253,50 +259,57 @@ fn float_to_json(f: f64) -> String {
     }
 }
 
-/// `sorted(dct.items())`: sorts the **original** `(key, value)` tuples —
-/// comparing keys first and only falling through to values when two keys
-/// are themselves equal (`1`/`1.0`/`True` collide as dict keys, but need
-/// not collide as *values*) — before any key is stringified, so e.g.
-/// `{1: ..., 2: ..., 10: ...}` sorts numerically, never lexicographically
-/// (DESIGN.md §3.4). Raises [`WriteError::IncomparableKeys`] the same way
-/// CPython's `sorted()` raises `TypeError` for an incomparable pair;
-/// exactly which pair a comparison-sort happens to compare first when
-/// several incomparable pairs exist is an implementation detail this
-/// doesn't try to match (the message text doesn't have to, either —
-/// DESIGN.md §1/§12).
+/// `sorted(dct.items())` compares `(key, value)` tuples, but two distinct
+/// entries in a `Dict` are never Python-equal except when both keys are
+/// `NaN` (the only way `Dict` ever holds "equal" keys twice — any other
+/// pair of equal keys would have collapsed to one entry when the `Dict`
+/// was built). Tuple comparison only consults the second element once the
+/// first compares equal, and a `NaN` key is never equal even to another
+/// `NaN` (`nan == nan` is `False`), so CPython's own tuple comparison for
+/// `sorted()` only ever looks at keys here, never values: this sorts by
+/// key alone, before any key is stringified, so e.g. `{1: ..., 2: ...,
+/// 10: ...}` sorts numerically, never lexicographically (DESIGN.md §3.4).
+/// Raises [`WriteError::IncomparableKeys`] the same way CPython's
+/// `sorted()` raises `TypeError` for an incomparable pair; exactly which
+/// pair a comparison-sort happens to compare first when several
+/// incomparable pairs exist is an implementation detail this doesn't try
+/// to match (the message text doesn't have to, either — DESIGN.md §1/§12).
 fn sorted_items(dict: &Dict) -> Result<Vec<(&Value, &Value)>, WriteError> {
-    let mut items: Vec<(&Value, &Value)> = dict.iter().collect();
-    let mut error: Option<WriteError> = None;
-    items.sort_by(|a, b| {
-        if error.is_some() {
-            return Ordering::Equal;
-        }
-        match tuple_py_cmp(a, b) {
-            Ok(ordering) => ordering,
-            Err(e) => {
-                error = Some(e);
-                Ordering::Equal
+    // A hand-written stable insertion sort, not `[T]::sort_by`: `py_cmp`
+    // folds an incomparable `NaN` pair to `Ordering::Equal` (below) so the
+    // *result* matches CPython's own output (a `NaN` key is never swapped
+    // past, keeping its original position — confirmed directly against
+    // CPython for every case in the golden corpus), but that fold isn't a
+    // real total order (it isn't transitive once a third, orderable key
+    // is involved), and std's `sort_by` documents that it may panic for a
+    // comparator that isn't one. Insertion sort never relies on that
+    // contract for safety — it only ever does pairwise comparisons and
+    // array shifts — so it can't panic no matter what `py_cmp` returns,
+    // while still producing CPython's exact output for every realistic
+    // (small) dict. O(n^2) is for that safety property, not speed; dict
+    // sizes this writes are never large enough for it to matter.
+    let mut items: Vec<(&Value, &Value)> = Vec::with_capacity(dict.len());
+    for entry in dict.iter() {
+        let mut pos = items.len();
+        while pos > 0 {
+            if py_cmp(entry.0, items[pos - 1].0)? == Ordering::Less {
+                pos -= 1;
+            } else {
+                break;
             }
         }
-    });
-    match error {
-        Some(e) => Err(e),
-        None => Ok(items),
+        items.insert(pos, entry);
     }
-}
-
-fn tuple_py_cmp(a: &(&Value, &Value), b: &(&Value, &Value)) -> Result<Ordering, WriteError> {
-    let key_ordering = py_cmp(a.0, b.0)?;
-    if key_ordering != Ordering::Equal {
-        return Ok(key_ordering);
-    }
-    py_cmp(a.1, b.1)
+    Ok(items)
 }
 
 /// A total order over `Value` for sort purposes: `Ok(None)` (one side is
-/// `NaN`, numerically unordered) is folded to `Ordering::Equal` so the
-/// sort stays well-defined — Python's own sort order for a `NaN` key is
-/// itself not a meaningful contract to reproduce exactly.
+/// `NaN`, numerically unordered — the only way two distinct `Dict` keys
+/// can compare Python-equal, see [`sorted_items`]) is folded to
+/// `Ordering::Equal` so [`sorted_items`]' insertion sort never needs to
+/// move a `NaN` key past another entry — Python's own sort order for a
+/// `NaN` key is itself not a meaningful contract to reproduce beyond
+/// that.
 fn py_cmp(a: &Value, b: &Value) -> Result<Ordering, WriteError> {
     match a.py_partial_cmp(b) {
         Ok(Some(ordering)) => Ok(ordering),

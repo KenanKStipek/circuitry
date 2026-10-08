@@ -34,8 +34,9 @@ OUTPUT = (
 # One mode per `json.dumps` call electricity-json's writer has to match:
 # the two `--out` serializations (compact / pretty, runtime-semantics.md
 # §8.3) plus `ensure_ascii=False` on its own (both values of the flag are
-# load-bearing, DESIGN.md §3.4) and the redacted-`raw` size-cap path's
-# `default=str` call (`cli/tool.py`'s `_capped_raw`).
+# load-bearing, DESIGN.md §3.4) and the generic `default=str` style used
+# by `core/tool.py`'s redacted-`raw` size-cap path (`_capped_raw`) and
+# several other callers (DESIGN.md §3.4).
 MODES: list[dict] = [
     {"name": "compact", "indent": None, "sort_keys": False, "ensure_ascii": True, "default_str": False},
     {"name": "pretty", "indent": 2, "sort_keys": True, "ensure_ascii": True, "default_str": False},
@@ -120,6 +121,7 @@ def build_corpus() -> list[dict]:
         "hello",
         "both\" and '",
         "tab\tnewline\nreturn\r\x00\x1f",
+        "\b\f\x7f",  # backspace/form-feed named escapes, then plain DEL
         "caf\u00e9",
         "\U0001f600",  # supplementary-plane emoji: surrogate pair under ensure_ascii
         # Lists.
@@ -129,18 +131,33 @@ def build_corpus() -> list[dict]:
         # Dicts: plain string keys (compact keeps insertion order, pretty sorts).
         {},
         {"b": 2, "a": 1, "c": 3},
+        {"caf\u00e9": 1},  # a non-ASCII key, both ensure_ascii settings
         # Numeric dict keys: pretty must sort numerically (1, 2, 10), never
         # lexicographically ("1", "10", "2") -- DESIGN.md §3.4.
         {10: "ten", 1: "one", 2: "two"},
+        # The whole numeric-tower family in one dict: True sorts as 1,
+        # between 0.5 and 2 -- never grouped by Python type.
+        {True: "bool-key", 0.5: "half-key", 2: "int-key"},
         # Non-str key stringification: True -> "true", None -> "null",
         # a float key via its own repr rule.
         {True: "bool-key"},
         {None: "none-key"},
         {2.5: "float-key"},
         {float("nan"): "nan-key"},
+        # Two NaN keys are two distinct entries (nan != nan, so neither
+        # collapses the other as a dict key); sort_keys must not raise
+        # comparing them, or comparing one against an ordinary key.
+        {float("nan"): "a", 1.0: 2},
+        {float("nan"): "a", float("nan"): 1},
         # Mixed key types: compact succeeds (no sort needed), pretty must
         # raise sort_keys=True comparing an int to a str.
         {0: "int-key", "s": "str-key"},
+        # None can never be ordered against anything, including under
+        # sort_keys with only one other (otherwise-orderable) key.
+        {None: "none-key", 1: "int-key"},
+        # A nested dict also gets sorted under sort_keys, not just the
+        # top level; an empty nested container stays empty either way.
+        {"z": {"b": 2, "a": 1}, "a": {}, "b": []},
         # Values json.dumps itself can't encode without default=: the
         # writer raises, default_str stringifies via py_str instead.
         b"raw bytes \x00\xff",

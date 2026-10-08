@@ -3,7 +3,11 @@
 ``json.loads``, plus Circuitry's own duplicate-key check (DESIGN.md §3.4,
 runtime-semantics.md §1.2, issue #377).
 
-Each case is one JSON text and what reading it produces: the parsed value
+Each case is one JSON text, which of electricity-json's two reader entry
+points it exercises (``entry``: ``"loads"`` for plain ``json.loads``
+semantics only, ``"load_json"`` for ``core/json_load.load_json`` semantics
+only, or ``"both"`` when the two can't differ -- anything without a
+repeated object key), and what reading it produces: the parsed value
 (tagged the same way ``generate_value_corpus.py`` tags a `Value`) for valid
 input; Circuitry's own ``DuplicateKeyError`` message, word for word, for a
 repeated object key (``core/json_load.py``); or, for malformed JSON, only
@@ -60,22 +64,37 @@ def encode(value: object) -> dict:
 
 def valid_case(text: str) -> dict:
     value = json.loads(text)
-    return {"text": text, "expect": {"kind": "ok", "value": encode(value)}}
+    return {"text": text, "entry": "both", "expect": {"kind": "ok", "value": encode(value)}}
 
 
-def duplicate_key_case(text: str) -> dict:
+def duplicate_key_cases(text: str) -> list[dict]:
+    """One ``loads`` case (plain ``json.loads``: last value wins) and one
+    ``load_json`` case (Circuitry's own loader: raises) for the same text
+    -- the two entry points can only disagree on a repeated object key."""
+    loads_value = json.loads(text)
     try:
         load_json(text)
     except DuplicateKeyError as e:
-        return {"text": text, "expect": {"kind": "duplicate_key", "message": str(e)}}
-    raise AssertionError(f"expected a DuplicateKeyError for {text!r}")
+        load_json_case = {
+            "text": text,
+            "entry": "load_json",
+            "expect": {"kind": "duplicate_key", "message": str(e)},
+        }
+    else:
+        raise AssertionError(f"expected a DuplicateKeyError for {text!r}")
+    loads_case = {
+        "text": text,
+        "entry": "loads",
+        "expect": {"kind": "ok", "value": encode(loads_value)},
+    }
+    return [loads_case, load_json_case]
 
 
 def syntax_error_case(text: str) -> dict:
     try:
         json.loads(text)
     except json.JSONDecodeError as e:
-        return {"text": text, "expect": {"kind": "syntax", "pos": e.pos}}
+        return {"text": text, "entry": "both", "expect": {"kind": "syntax", "pos": e.pos}}
     raise AssertionError(f"expected a JSONDecodeError for {text!r}")
 
 
@@ -101,6 +120,7 @@ def build_corpus() -> list[dict]:
         '"tab\\tnewline\\nreturn\\r"',
         '"\\u00e9\\u4e2d\\ud83d\\ude00"',  # é, 中, then a surrogate-pair emoji
         '"\\u0041"',  # a BMP escape for an otherwise-plain ASCII letter
+        '"a\\/b"',  # \/ is accepted though JSON never requires escaping it
         "[]",
         "[1, 2, 3]",
         '[1, "a", null, true, 1.5, [2, 3]]',
@@ -138,9 +158,14 @@ def build_corpus() -> list[dict]:
         "1 2",
         "{}}",
         '{"a": 1} extra',
+        '"\\u+041"',  # a leading '+' is never a valid \uXXXX hex digit
+        '"\\u0041',  # \uXXXX escape with nothing after it, not even the closing quote
+        '"\\ud800\\udc00',  # same, mid-surrogate-pair
+        '"a\x01b"',  # an unescaped control character inside a string
     ]
     cases = [valid_case(t) for t in valid_texts]
-    cases += [duplicate_key_case(t) for t in duplicate_key_texts]
+    for t in duplicate_key_texts:
+        cases += duplicate_key_cases(t)
     cases += [syntax_error_case(t) for t in syntax_error_texts]
     return cases
 

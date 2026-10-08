@@ -14,6 +14,11 @@
 //! they only need to fail at the same position with a non-empty message;
 //! [`ReadError::DuplicateKey`]'s message is Circuitry's own and matches
 //! `core/json_load.py` word for word.
+//!
+//! Known difference from CPython 3.11, inherited from `electricity-value`
+//! (see its own module doc): an integer literal longer than 4300 decimal
+//! digits parses successfully here, where CPython's `int(...)` raises
+//! `ValueError` (`sys.set_int_max_str_digits`).
 
 use electricity_value::{Dict, IntValue, Value};
 use std::fmt;
@@ -42,10 +47,31 @@ impl fmt::Display for ReadError {
 
 impl std::error::Error for ReadError {}
 
-/// `json.loads(text)` into a [`Value`], raising [`ReadError::DuplicateKey`]
-/// where `core/json_load.py`'s `load_json` would (and plain `json.loads`
-/// would silently keep only the last key).
+/// Plain `json.loads(text)` into a [`Value`]: an object literal with a
+/// repeated key silently keeps only the last value, exactly like CPython's
+/// `json.loads`. Every call site except the orchestration-document loader
+/// uses this (`core/tool.py`'s `params_json` and `_capped_raw`,
+/// `plugins/json.py`, `core/prompt.py`'s model-reply parsing, `cli/app.py`'s
+/// `-e` values and state stores). Use [`load_json`] for `.json`
+/// orchestration documents, which need the stricter, path-naming
+/// duplicate-key error instead (runtime-semantics.md §1.2).
 pub fn loads(text: &str) -> Result<Value, ReadError> {
+    let raw = parse(text)?;
+    Ok(materialize_last_wins(raw))
+}
+
+/// `core/json_load.load_json(text)`: like [`loads`], but raises
+/// [`ReadError::DuplicateKey`] naming the dotted path of the first
+/// repeated object key instead of silently keeping the last value. Every
+/// `.json` orchestration document the runtime loads — a file, a library
+/// ref, a `use` child loaded by `path:` — goes through this, never plain
+/// [`loads`] (`cli/orchestration_loader.py`).
+pub fn load_json(text: &str) -> Result<Value, ReadError> {
+    let raw = parse(text)?;
+    materialize_duplicate_checked(raw, "")
+}
+
+fn parse(text: &str) -> Result<Raw, ReadError> {
     let chars: Vec<char> = text.chars().collect();
     let parser = Parser { chars: &chars };
     let start = parser.skip_ws(0);
@@ -54,12 +80,13 @@ pub fn loads(text: &str) -> Result<Value, ReadError> {
     if end != chars.len() {
         return Err(parser.syntax("Extra data", end));
     }
-    materialize(raw, "")
+    Ok(raw)
 }
 
-/// One JSON object's or array's contents, not yet checked for duplicate
-/// keys — mirrors `core/json_load.py`'s `_RawObject`: built bottom-up by
-/// the parser, then walked top-down by [`materialize`] so each key's
+/// One JSON object's or array's contents, shared by both materializers
+/// (not yet checked for duplicate keys for [`load_json`]'s sake) — mirrors
+/// `core/json_load.py`'s `_RawObject`: built bottom-up by the parser, then
+/// walked top-down by [`materialize_duplicate_checked`] so each key's
 /// dotted path is known by the time a duplicate is found.
 enum Raw {
     Null,
@@ -71,7 +98,33 @@ enum Raw {
     Object(Vec<(String, Raw)>),
 }
 
-fn materialize(raw: Raw, path: &str) -> Result<Value, ReadError> {
+/// [`loads`]'s materialization: no path tracking, no duplicate check — a
+/// repeated key's later value simply overwrites the earlier one in place
+/// (`Dict::insert`, an `IndexMap`, keeps the key's first position and
+/// updates the value on a repeat insert), exactly matching a Python dict
+/// literal with a repeated key.
+fn materialize_last_wins(raw: Raw) -> Value {
+    match raw {
+        Raw::Null => Value::None,
+        Raw::Bool(b) => Value::Bool(b),
+        Raw::Int(i) => Value::Int(i),
+        Raw::Float(f) => Value::Float(f),
+        Raw::Str(s) => Value::Str(s),
+        Raw::List(items) => Value::List(items.into_iter().map(materialize_last_wins).collect()),
+        Raw::Object(pairs) => {
+            let mut result: Dict = Dict::new();
+            for (key, value) in pairs {
+                result.insert(Value::Str(key), materialize_last_wins(value));
+            }
+            Value::Dict(result)
+        }
+    }
+}
+
+/// [`load_json`]'s materialization: mirrors `core/json_load.py`'s own
+/// `_materialize`, walking top-down so each key's dotted path is known by
+/// the time a duplicate is found.
+fn materialize_duplicate_checked(raw: Raw, path: &str) -> Result<Value, ReadError> {
     match raw {
         Raw::Null => Ok(Value::None),
         Raw::Bool(b) => Ok(Value::Bool(b)),
@@ -81,7 +134,10 @@ fn materialize(raw: Raw, path: &str) -> Result<Value, ReadError> {
         Raw::List(items) => {
             let mut out = Vec::with_capacity(items.len());
             for (i, item) in items.into_iter().enumerate() {
-                out.push(materialize(item, &format!("{path}[{i}]"))?);
+                out.push(materialize_duplicate_checked(
+                    item,
+                    &format!("{path}[{i}]"),
+                )?);
             }
             Ok(Value::List(out))
         }
@@ -101,7 +157,7 @@ fn materialize(raw: Raw, path: &str) -> Result<Value, ReadError> {
                 } else {
                     format!("{path}.{key}")
                 };
-                let materialized = materialize(value, &child_path)?;
+                let materialized = materialize_duplicate_checked(value, &child_path)?;
                 result.insert(Value::Str(key), materialized);
             }
             Ok(Value::Dict(result))
@@ -308,13 +364,27 @@ impl Parser<'_> {
     }
 
     /// `pos` is the index of the `u` itself (matching
-    /// `json.decoder._decode_uXXXX`'s own `pos` argument).
+    /// `json.decoder._decode_uXXXX`'s own `pos` argument). Two things
+    /// CPython's own `_json.c` scanner checks that are easy to miss
+    /// reimplementing this by hand, both confirmed directly against
+    /// CPython 3.11:
+    /// - the 4 escape characters must be `[0-9a-fA-F]` *only* — unlike
+    ///   Rust's own `u32::from_str_radix(_, 16)`, CPython never accepts a
+    ///   sign, so e.g. `\u+041` is "Invalid \uXXXX escape", not `A`;
+    /// - the check is `start + 4 >= len`, not `> len`: a `\uXXXX` escape
+    ///   with nothing at all after its 4th hex digit (not even the
+    ///   closing quote) is also "Invalid \uXXXX escape" at `pos`, not
+    ///   "Unterminated string" at the opening quote.
     fn decode_u_escape(&self, pos: usize) -> Result<(u32, usize), ReadError> {
         let start = pos + 1;
-        if start + 4 > self.chars.len() {
+        if start + 4 >= self.chars.len() {
             return Err(self.syntax("Invalid \\uXXXX escape", pos));
         }
-        let hex: String = self.chars[start..start + 4].iter().collect();
+        let hex = &self.chars[start..start + 4];
+        if !hex.iter().all(char::is_ascii_hexdigit) {
+            return Err(self.syntax("Invalid \\uXXXX escape", pos));
+        }
+        let hex: String = hex.iter().collect();
         u32::from_str_radix(&hex, 16)
             .map(|v| (v, start + 4))
             .map_err(|_| self.syntax("Invalid \\uXXXX escape", pos))
