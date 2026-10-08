@@ -188,6 +188,22 @@ def test_call_generate_without_options_adds_no_warning() -> None:
     assert result.warnings == ()
 
 
+def test_call_generate_passes_a_json_schema_without_warning_anyone() -> None:
+    """#366: ``json_schema`` reaches an adapter that takes options (claude_code
+    asks its CLI for matching output), and is never an ignored option: the
+    runtime validates the reply against the schema either way."""
+    options = GenerateOptions(json_schema={"type": "object"})
+    modern = call_generate(
+        OptionsAdapter(), model="m", prompt="p", timeout_seconds=5, options=options
+    )
+    assert modern.raw["options"] is options
+    assert modern.warnings == ()
+    legacy = call_generate(
+        LegacyAdapter(), model="m", prompt="p", timeout_seconds=5, options=options
+    )
+    assert legacy.warnings == ()
+
+
 # ---------- ollama ----------
 
 

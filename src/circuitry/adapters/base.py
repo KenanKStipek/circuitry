@@ -31,6 +31,8 @@ class GenerateResult:
     finish_reason: str | None = None
     #: Things the adapter could not honour, e.g. options it ignored.
     warnings: tuple[str, ...] = ()
+    #: The call's cost in US dollars, when the provider reports one.
+    cost_usd: float | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,11 @@ class GenerateOptions:
     ``messages`` are the effect's role-tagged turns; when present they replace
     the flattened ``prompt`` for adapters that can send real turns. ``images``
     go with the last user turn.
+
+    ``json_schema`` is the effect's ``schema`` when it expects JSON, for an
+    adapter that can ask its provider for output matching it
+    (``claude_code``). The runtime validates the reply against it either
+    way, so an adapter that ignores it is not warned about.
     """
 
     temperature: float | None = None
@@ -87,6 +94,7 @@ class GenerateOptions:
     deterministic: bool = False
     messages: tuple[ChatMessage, ...] = ()
     images: tuple[ImageInput, ...] = ()
+    json_schema: Mapping[str, Any] | None = None
 
     def set_fields(self) -> list[str]:
         """The fields carrying a value, named the way a warning shows them.
@@ -110,7 +118,7 @@ class GenerateOptions:
         return names
 
     def is_empty(self) -> bool:
-        return not self.set_fields() and not self.deterministic
+        return not self.set_fields() and not self.deterministic and self.json_schema is None
 
 
 def ignored_options_warning(

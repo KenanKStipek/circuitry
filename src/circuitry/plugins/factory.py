@@ -109,6 +109,7 @@ from .rerank import RerankPlugin
 from .rss import RssPlugin
 from .s3_tool import S3ToolPlugin
 from .screenshot import ScreenshotPlugin
+from .service import ServicePlugin
 from .shell import ShellPlugin
 from .slack import SlackPlugin
 from .surrealdb import DEFAULT_URL as _SURREALDB_DEFAULT_URL
@@ -322,6 +323,13 @@ def _build_shell(cfg: dict[str, Any]) -> ToolPlugin:
             )
         pinned = tuple(pinned)
     return ShellPlugin(pinned_allowed_commands=pinned)
+
+
+def _build_service(cfg: dict[str, Any]) -> ToolPlugin:
+    state_dir = cfg.get("state_dir")
+    if state_dir is not None and not isinstance(state_dir, str):
+        raise ValueError("runtime.plugins.service.state_dir must be a path string.")
+    return ServicePlugin(state_dir=state_dir or None)
 
 
 def _build_gpg(cfg: dict[str, Any]) -> ToolPlugin:
@@ -546,6 +554,7 @@ PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "linter": _build_linter,
     "ocr": _build_ocr,
     "shell": _build_shell,
+    "service": _build_service,
     "gpg": _build_gpg,
     "diff_patch": _build_diff_patch,
     "pdf_render": _build_pdf_render,

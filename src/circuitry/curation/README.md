@@ -12,7 +12,7 @@ The library is organised by category — what role the file plays in your orches
 | **`utilities/`** | The agent needs a small composable building block to call from a recipe via `use:`. Each utility has a single declared output and is individually runnable. | `summarize`, `critique`, `refine`, `judge`, `classify`, `decompose`, `extract`, `route` |
 | **`patterns/`** | Showing the agent how primitives compose. These are runnable templates that exercise multi-step shapes. | `all_primitives`, `critique_refine_loop`, `parallel_then_judge`, `classify_then_route` |
 | **`recipes/`** | Real end-to-end workflows. These are what you'd ship to a user — full prompts, structured outputs, composed utilities. | `article_summarizer`, `comic_strip`, `research_brief`, `code_review`, `meeting_notes` |
-| **`agents/`** | Orchestrations that build or improve other orchestrations. These are the meta layer — feed them when the agent's job is to author or refactor YAML, not run domain logic. | `meta_orchestrator`, `improver`, `improver_judge` |
+| **`agents/`** | Orchestrations that build or improve other orchestrations — the meta layer: feed them when the agent's job is to author or refactor YAML, not run domain logic — plus `agent_loop`, an orchestration that is itself a tool-using agent (see `docs/agent-loop.md`). | `meta_orchestrator`, `improver`, `improver_judge`, `agent_loop` |
 
 ## Composition contract
 

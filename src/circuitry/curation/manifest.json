@@ -526,6 +526,66 @@
       "example": "cof run agents/decompose --state source.json"
     },
     {
+      "name": "agents/agent_loop",
+      "file": "agents/agent_loop.yml",
+      "category": "agents",
+      "intent": "A tool-using agent made of a loop, a JSON prompt and read-only tool effects.",
+      "description": "A tool-using agent. Each pass reads a transcript file, asks the model for one {thought, tool, args, done, answer} decision, runs at most one read-only tool inside workdir (list a directory, read a file, ripgrep, git status/log/diff/show) and appends the step to the transcript. Stops when the model says done or after max_steps passes. Unknown tools and paths outside workdir are reported back to the model, never run. Names no adapter or model.",
+      "when_to_use": "When the model should choose its own next look at a directory or repository \u2014 answering a question about code \u2014 rather than follow a fixed plan. The tool set is read-only; see docs/agent-loop.md for adding write tools and what that changes.",
+      "primitives": [
+        "loop",
+        "prompt",
+        "conditional",
+        "tool"
+      ],
+      "difficulty": "advanced",
+      "backends": [
+        "llm",
+        "tool"
+      ],
+      "inputs": {
+        "task": {
+          "type": "string",
+          "required": true,
+          "description": "What the agent should find out or answer."
+        },
+        "workdir": {
+          "type": "string",
+          "required": false,
+          "description": "Directory the read-only tools may look at. Default \".\"."
+        },
+        "max_steps": {
+          "type": "integer",
+          "required": false,
+          "description": "Most loop passes (one model call each). Default 8, capped at 50."
+        },
+        "transcript": {
+          "type": "string",
+          "required": false,
+          "description": "Transcript file path, overwritten if it exists. Default $TMPDIR/circuitry-agent-loop-<uuid>.md, never inside workdir."
+        }
+      },
+      "outputs": {
+        "answer": {
+          "type": "string",
+          "path": "prime.answer.value",
+          "description": "The model's final answer, or a note that max_steps ran out first."
+        },
+        "transcript": {
+          "type": "string",
+          "path": "prime.transcript_file.value",
+          "description": "Path of the transcript file."
+        }
+      },
+      "tags": [
+        "agent",
+        "tool-use",
+        "read-only",
+        "transcript"
+      ],
+      "example": "cof run agents/agent_loop -e task=\"Where is the retry backoff capped?\" -e workdir=."
+    },
+    {
       "name": "learn/cel_showcase",
       "file": "learn/cel_showcase.yml",
       "category": "learn",

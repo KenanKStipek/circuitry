@@ -102,11 +102,11 @@ Seventy-odd ship in-tree. By purpose:
 | Sandboxed execution | `python_eval`, `shell` |
 | Text processing | `awk`, `sed`, `diff_patch` |
 | Network | `dns`, `whois`, `ping`, `traceroute`, `port_check` |
-| System | `system_info`, `process_list`, `env_vars` |
+| System | `system_info`, `process_list`, `env_vars`, `service` |
 | Crypto / markup | `gpg`, `xml`, `html_extract` |
 | MCP | `mcp` — any tool on any MCP server |
 
-`cof list --extensions` prints the exact compiled-in set. Plugins that need optional PyPI packages or external binaries lazy-import; `cof doctor` reports each one's readiness, and `pip install circuitry-cof[<plugin>]` (`[playwright]`, `[github]`, `[embed]`, …) pulls what a plugin needs. `docs/plugins/` documents the media plugins' parameters in full.
+`service` is the one tool whose work outlives its call: it starts a background process (a dev server, a local API), waits until it is ready, and later stops exactly the process group it started — see [Errors → `finally`](./05-errors.md#finally--cleanup-that-always-runs) for stopping it when the run ends. `cof list --extensions` prints the exact compiled-in set. Plugins that need optional PyPI packages or external binaries lazy-import; `cof doctor` reports each one's readiness, and `pip install circuitry-cof[<plugin>]` (`[playwright]`, `[github]`, `[embed]`, …) pulls what a plugin needs. `docs/plugins/` documents the media plugins' parameters in full.
 
 The plugins that wrap a command-line program (`git`, `gh`, `ripgrep`, `pytest`, `ffmpeg`, `imagemagick`, and the other subprocess tools) search `PATH` for it by default. Config can name the exact executable and add to its environment — both machine-specific, so both stay out of the document. Here the agent's `pytest` is the one in the project's own virtual environment, so the tests run against the project's dependencies:
 
@@ -184,7 +184,7 @@ class Adapter(Protocol):
     def check(self) -> CheckResult: ...          # preflight
 ```
 
-`GenerateResult` is `text`, `raw` (the provider's response, verbatim), and optional `tokens_sent` / `tokens_received`. That is the whole contract, and thirty adapters implement it: `ollama`, `openai`, `anthropic`, `gemini`, `mistral`, `cohere`, `groq`, `deepseek`, `xai`, `perplexity`, `together`, `fireworks`, `replicate`, `ai21`, `qwen-dashscope`, `nvidia-nim`, `huggingface-inference`, `watsonx`, `databricks`, `azure-openai`, `cloudflare-workers-ai`; the self-hosted servers `vllm`, `llamacpp`, `lmstudio`, `tgi`; the aggregators `openrouter`, `litellm`; the `cyberdiner` broker; `host_claude`; and `scripted`.
+`GenerateResult` is `text`, `raw` (the provider's response, verbatim), and optional `tokens_sent` / `tokens_received`. That is the whole contract, and thirty-two adapters implement it: `ollama`, `openai`, `anthropic`, `gemini`, `mistral`, `cohere`, `groq`, `deepseek`, `xai`, `perplexity`, `together`, `fireworks`, `replicate`, `ai21`, `qwen-dashscope`, `nvidia-nim`, `huggingface-inference`, `watsonx`, `databricks`, `azure-openai`, `cloudflare-workers-ai`; the self-hosted servers `vllm`, `llamacpp`, `lmstudio`, `tgi`; the aggregators `openrouter`, `litellm`; the `cyberdiner` broker; the coding-agent CLIs `pi` and `claude_code`; `host_claude`; and `scripted`.
 
 An orchestration written for one runs on another with no edits, because the document never named the adapter — [Configuration](04-configuration.md) did. Adapters declare an optional `list_models()` (what `cof list --models <adapter>` calls) and are registered in `ADAPTER_REGISTRY`; [Adapter Conformance](../adapter-conformance.md) is the checklist for writing one, and the `adapter=` parameter of the SDK is how to use one without registering it.
 
