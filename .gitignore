@@ -105,3 +105,8 @@ run.json
 # electricity (Rust workspace build output)
 # ================================
 electricity/target/
+
+# ================================
+# oscilloscope (Rust workspace build output)
+# ================================
+oscilloscope/target/

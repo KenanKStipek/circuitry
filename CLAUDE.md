@@ -5,6 +5,9 @@ Cybernetic orchestration framework (Python). Core library in `src/`, tests in
 `tests/`, bundled orchestration curation in `src/circuitry/curation/`, docs in
 `docs/`. `electricity/` is a preview Rust runner for the same orchestrations
 (its own Cargo workspace; see `electricity/README.md` and `electricity/DESIGN.md`).
+`oscilloscope/` is `osp`, a preview terminal UI that watches an orchestration
+run on either engine (its own Cargo workspace; see `oscilloscope/README.md`
+and `oscilloscope/DESIGN.md`).
 
 ## Minimum verification for any change
 ```
@@ -69,6 +72,25 @@ The workspace `version` in `electricity/Cargo.toml` must always equal
 check); bump both together. Build output stays in `electricity/target/`
 (gitignored). A test that runs the `electricity` binary gets a temporary HOME
 and the credential variables removed, exactly like `cof` subprocesses.
+
+## Rust (`oscilloscope/`)
+`oscilloscope/` is `osp`'s own Cargo workspace (preview, milestone O-0; see
+`oscilloscope/DESIGN.md`). It depends on `electricity`'s `electricity-compiler`
+and `electricity-bytecode` crates by path, so a change to either can break it.
+Any change under `oscilloscope/`, or under `electricity/crates/`, additionally
+needs, run from `oscilloscope/`:
+```
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test --workspace
+```
+Same toolchain rule as electricity's: use the installed stable toolchain as-is,
+never a global install; cross-compiles are verified in CI only
+(`.github/workflows/oscilloscope.yml`). The workspace `version` in
+`oscilloscope/Cargo.toml` must always equal `pyproject.toml`'s, the same rc
+mapping as electricity's (checked by the same Python test and the release
+workflow's tag check); bump all three together. Build output stays in
+`oscilloscope/target/` (gitignored).
 
 ## Changelog — write a fragment, never edit `CHANGELOG.md`
 Every change ships its release note as a **new file**, `changelog.d/<issue-or-pr>.<type>.md`

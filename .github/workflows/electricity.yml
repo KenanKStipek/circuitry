@@ -5,7 +5,7 @@ on:
     paths:
       - "electricity/**"
       - ".github/workflows/electricity.yml"
-      - ".github/workflows/electricity-release-build.yml"
+      - ".github/workflows/rust-release-build.yml"
       - ".github/workflows/release.yml"
       - "pyproject.toml"
   push:
@@ -15,7 +15,7 @@ on:
     paths:
       - "electricity/**"
       - ".github/workflows/electricity.yml"
-      - ".github/workflows/electricity-release-build.yml"
+      - ".github/workflows/rust-release-build.yml"
       - ".github/workflows/release.yml"
       - "pyproject.toml"
 
@@ -97,6 +97,11 @@ jobs:
 
   build:
     name: release build (no publish)
-    uses: ./.github/workflows/electricity-release-build.yml
+    uses: ./.github/workflows/rust-release-build.yml
     permissions:
       contents: read
+    with:
+      workspace-dir: electricity
+      binary-crate: electricity-cli
+      binary-name: electricity
+      build-image: true

@@ -1,0 +1,16 @@
+[package]
+name = "oscilloscope-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "osp (oscilloscope) core library: plan, observe, model, diff, engine, supervise — no terminal code, so a future GUI can reuse it"
+
+[dependencies]
+# Relative to this crate: crates/oscilloscope-core -> oscilloscope -> repo
+# root -> electricity/crates/... . Proves (CI job `electricity/crates/**`
+# path filter) that an electricity change which breaks the compiler or
+# bytecode IR also breaks osp, in the same pass.
+electricity-compiler = { path = "../../../electricity/crates/electricity-compiler" }
+electricity-bytecode = { path = "../../../electricity/crates/electricity-bytecode" }
