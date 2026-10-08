@@ -76,4 +76,10 @@ pub use writer::{WriteError, WriteMode, dumps, dumps_default_str};
 /// will write, before returning [`ReadError::Depth`]/[`WriteError::Depth`]
 /// instead of recursing further — a fixed number, unlike CPython's own
 /// stack-depth-dependent limit (see the module docs above).
-pub const MAX_DEPTH: usize = 512;
+///
+/// Re-exported from [`electricity_value::MAX_DEPTH`] — the same limit
+/// `electricity-yaml` enforces, and the one every crate in this workspace
+/// that reads, writes or evaluates nested data shares (#394), so this is
+/// not a second, independently-chosen number that happens to currently
+/// match.
+pub const MAX_DEPTH: usize = electricity_value::MAX_DEPTH;

@@ -26,6 +26,43 @@ mod string_repr;
 
 pub use int_value::IntValue;
 
+/// The nesting-depth limit shared by every crate in this workspace that
+/// reads, writes or evaluates nested data (`electricity-json`,
+/// `electricity-yaml`, `electricity-cel`'s `convert` module,
+/// `electricity-template`'s section nesting): a document, expression or
+/// template nested deeper than this is rejected with that crate's own
+/// depth error instead of being read, written or converted. One shared
+/// number, rather than each crate picking its own, so "how deep can
+/// nested data in this runtime go" has a single answer regardless of
+/// which format it arrived in (#394).
+///
+/// 512 is half of CPython's default `sys.getrecursionlimit()` (1000 call
+/// frames) — Python's own loaders/evaluators for the same data raise
+/// `RecursionError` well before frame 1000 in practice, since each
+/// logical nesting level costs more than one Python call frame (several
+/// for `json.loads`, more for a CEL evaluation through `celpy`), and
+/// however many frames of the caller's own stack already exist before
+/// Circuitry's loader is entered are *subtracted* from the budget, not
+/// added to it. 512 is comfortably inside that moving target for any
+/// realistic caller depth without being so small that it rejects
+/// documents an ordinary orchestration produces. It is not, and is not
+/// meant to be, the exact frame count at which Python itself would raise
+/// — there is no such exact number (`electricity-json`'s crate docs).
+///
+/// A `Value` built by reading JSON or YAML through this workspace can
+/// never exceed this depth (both readers enforce it while reading, not
+/// after). One built at run time instead — a CEL evaluation result, a
+/// future state merge or loop that wraps a value — is not automatically
+/// bounded by this constant; [`Value::depth`] lets a caller that builds
+/// such a value check it before relying on [`Value::py_str`],
+/// [`Value::py_repr`], equality, hashing or [`Value::py_partial_cmp`],
+/// every one of which recurses over nested values and assumes this
+/// invariant rather than enforcing it itself. [`Drop`] is the one
+/// exception: it is iterative regardless of depth (below), because a
+/// `Value` of unexpected depth dropped on a worker thread must not abort
+/// the process no matter how it got that deep.
+pub const MAX_DEPTH: usize = 512;
+
 use chrono::{Duration, FixedOffset, NaiveDate, NaiveDateTime};
 use indexmap::IndexMap;
 use num_bigint::BigInt;
@@ -271,6 +308,86 @@ impl Value {
 
     fn is_numeric_tower(&self) -> bool {
         matches!(self, Value::Bool(_) | Value::Int(_) | Value::Float(_))
+    }
+
+    /// This value's containment depth: 0 for any scalar, or
+    /// `1 + the deepest child's depth` for a `List`/`Dict` (a dict's keys
+    /// count the same as its values -- a key that is itself a nested
+    /// container, however unusual, still contributes to depth). Computed
+    /// with an explicit work stack rather than recursion, so calling this
+    /// on an already arbitrarily deep `Value` (one built at run time,
+    /// never one read through this workspace's own JSON/YAML readers,
+    /// which enforce [`MAX_DEPTH`] themselves) cannot itself overflow the
+    /// stack -- it is exactly the check a caller needs before an
+    /// operation that does recurse ([`Value::py_str`], [`Value::py_repr`],
+    /// equality, hashing, [`Value::py_partial_cmp`]) would be unsafe to
+    /// run on it.
+    pub fn depth(&self) -> usize {
+        let mut max_depth = 0usize;
+        let mut stack: Vec<(&Value, usize)> = vec![(self, 0)];
+        while let Some((value, depth)) = stack.pop() {
+            if depth > max_depth {
+                max_depth = depth;
+            }
+            match value {
+                Value::List(items) => {
+                    for item in items {
+                        stack.push((item, depth + 1));
+                    }
+                }
+                Value::Dict(entries) => {
+                    for (key, val) in entries {
+                        stack.push((key, depth + 1));
+                        stack.push((val, depth + 1));
+                    }
+                }
+                _ => {}
+            }
+        }
+        max_depth
+    }
+}
+
+/// Drops a `Value` tree without ever recursing: the default, derived
+/// `Drop` glue for an enum holding `Vec<Value>`/`IndexMap<Value, Value>`
+/// drops each child in place, which for a `List`/`Dict` means calling
+/// `Value`'s own `Drop` again on every element -- one stack frame per
+/// nesting level. [`MAX_DEPTH`] bounds a `Value` built by reading JSON or
+/// YAML, but not one built at run time (a CEL evaluation result, a future
+/// state merge or loop that wraps a value), and a worker thread's 2 MiB
+/// stack is not generous: overflowing it in `Drop` aborts the whole
+/// process (Rust cannot unwind out of a `Drop` panic the normal way,
+/// and a stack overflow isn't a catchable panic to begin with), unlike
+/// overflowing it in `py_str`/equality/etc., which only need
+/// [`Value::depth`] checked first because *they* can be guarded by a
+/// caller -- nothing guards an implicit drop at the end of a scope. This
+/// impl instead flattens the tree into an explicit, heap-allocated stack
+/// and drops each node after already emptying its own children into that
+/// same stack, so by the time a node's own (otherwise-recursive) `Drop`
+/// runs, it has no children left and returns immediately.
+impl Drop for Value {
+    fn drop(&mut self) {
+        let mut pending: Vec<Value> = match self {
+            Value::List(items) => std::mem::take(items),
+            Value::Dict(entries) => std::mem::take(entries)
+                .into_iter()
+                .flat_map(|(k, v)| [k, v])
+                .collect(),
+            _ => return,
+        };
+        while let Some(mut value) = pending.pop() {
+            match &mut value {
+                Value::List(items) => pending.extend(std::mem::take(items)),
+                Value::Dict(entries) => pending.extend(
+                    std::mem::take(entries)
+                        .into_iter()
+                        .flat_map(|(k, v)| [k, v]),
+                ),
+                _ => {}
+            }
+            // `value`'s own children are now empty, so dropping it here
+            // (end of this loop iteration) cannot recurse any further.
+        }
     }
 }
 
