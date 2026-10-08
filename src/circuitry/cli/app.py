@@ -649,20 +649,22 @@ def _resolve_resume_state(
             # error; a hash that only guards a *future* --resume shouldn't
             # block this one.
             current_hash = None
-        if (
-            current_hash is not None
-            and current_hash != recorded_hash
+        if current_hash is not None and current_hash != recorded_hash:
             # A state saved before #407 recorded the old algorithm's hash
             # (document bytes + each referenced prompt file's bytes, sorted,
             # no label/length) — accept that too, so it still resumes
-            # without --force.
-            and _legacy_document_sha256(orch_path) != recorded_hash
-        ):
-            raise typer.BadParameter(
-                f"{orch_path} changed since the run being resumed (content "
-                "hash differs) — rerun from scratch, or pass --force to "
-                "resume anyway."
-            )
+            # without --force. The document could vanish between the read
+            # above and this one; that's a no-match, not a crash.
+            try:
+                legacy_matches = _legacy_document_sha256(orch_path) == recorded_hash
+            except OSError:
+                legacy_matches = False
+            if not legacy_matches:
+                raise typer.BadParameter(
+                    f"{orch_path} changed since the run being resumed (content "
+                    "hash differs) — rerun from scratch, or pass --force to "
+                    "resume anyway."
+                )
 
     # Safety 2: refuse silently-inherited inputs when there's no args stash
     # to fall back on. --state names its own file (as explicit as it gets)

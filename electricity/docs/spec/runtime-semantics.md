@@ -1451,11 +1451,21 @@ than one carried over from a `--state`/persistence seed):
 "last_run": {
   "run_id": "<uuid4>",
   "orchestration_path": "<str path>",
-  "document_hash": "<sha256 of the document file, or null if unreadable>",
+  "document_hash": "<document_content_digest, or null if unreadable>",
   "dry_run": false, "validate_only": false, "verbose": false,
   "started_at": "<iso8601>", "completed_at": null
 }
 ```
+`document_hash` is `document_content_digest`: SHA-256 of the document file's
+own bytes, then, for each prompt file it references (`{file: ...}`), that
+file's path relative to the document's directory, its byte length as 8
+bytes, then its bytes — not just every referenced file's bytes
+concatenated, so moving bytes across a prompt-file boundary still changes
+the digest. `--resume` also accepts a document hash written by the
+pre-#407 algorithm (document bytes plus every referenced prompt file's
+bytes, with no path label or length) against a saved state that recorded
+one, kept as a private, temporary compatibility fallback.
+
 `completed_at` and `totals` are filled in on **every** exit path (success or
 failure, §6.5): `totals = {"wall_time_s", "effects_run", "tokens_sent",
 "tokens_received", "cost_usd"}`, computed **live** by `_TotalsAccumulator`

@@ -41,8 +41,8 @@ def _legacy_document_sha256(path: Path) -> str:
     (the one algorithm every surface now uses, #396/#405/#407) doesn't
     match a saved state's recorded hash — so a run saved by an older
     release still resumes without `--force`. COMPATIBILITY FALLBACK ONLY:
-    delete this, and the fallback call, once no supported release still
-    writes an old-style hash.
+    keep this, and the fallback call, through at least the first tagged
+    release after this one, then remove both.
     """
     hasher = hashlib.sha256()
     hasher.update(path.read_bytes())

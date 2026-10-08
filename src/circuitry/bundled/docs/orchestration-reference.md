@@ -1825,7 +1825,11 @@ is then no way to tell whether the document changed. A state saved by a
 release before this digest became the one every surface uses still
 resumes without `--force` too: the hash its own, now-retired algorithm
 wrote is accepted as well, as long as the document genuinely hasn't
-changed. It also refuses to resume with *silently inherited* inputs:
+changed — with that old algorithm's own blind spot: it concatenated
+referenced prompt files' bytes with no path label or length between
+them, so moving bytes from the end of one `{file: ...}` prompt source to
+the start of the next left it unchanged, and still does for a state
+carrying it. It also refuses to resume with *silently inherited* inputs:
 `--state <file>` names its own inputs explicitly and `--resume last` loads
 a state that already carries its own resolved `input.*`, but `--resume
 <run-id>` has no such

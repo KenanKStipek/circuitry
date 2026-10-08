@@ -883,9 +883,15 @@ finished with an error" all rerun. A named loop keeps its own `meta.completed_pa
 resume logic lives in `core/loop.py`, out of scope for this plugin/adapter spec but load-bearing
 for `--resume` correctness.
 
-`document_sha256` (`resume.py:33-42`) hashes the orchestration file at run start
-(`state.runtime.last_run.document_hash`) and `--resume` refuses to continue if the document
-changed since, unless `--force`.
+`document_content_digest` (`core/prompt_compose.py:218-270`) hashes the orchestration file at
+run start (`state.runtime.last_run.document_hash`): the document's own bytes, then, for each
+prompt file it references (`{file: ...}`), that file's path relative to the document's
+directory, its byte length as 8 bytes, then its bytes — so moving bytes across a prompt-file
+boundary (same total bytes, same file set, different split) still changes the digest, unlike
+concatenating every file's bytes with nothing between them. `--resume` refuses to continue if the
+document changed since, unless `--force`; it also accepts a document hash written by the
+pre-#407 algorithm (`resume.py:33-42`, kept as a private, temporary compatibility fallback) when
+a saved state recorded one instead.
 
 ### 4.2 B-prime structured persistence (`runtime.runtime_plugins.*`) — observability only, not resumed from
 

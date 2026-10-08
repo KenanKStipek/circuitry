@@ -361,6 +361,61 @@ def test_document_hash_changes_when_bytes_move_between_prompt_files(tmp_path: Pa
     assert hash_before != hash_after
 
 
+def test_resume_accepts_an_unchanged_prompt_file_document_under_the_new_hash(
+    tmp_path: Path,
+) -> None:
+    """The only end-to-end proof that the recompute in `app.py` matches
+    the stamp in `runtime_shim.py` for a document with a `{file: ...}`
+    prompt, confinement root included: an unchanged document resumes
+    without `--force` when the saved state carries the current-algorithm
+    hash, not just the legacy one."""
+    _write(tmp_path / "brief.md", "Say hi.")
+    orch = _write(
+        tmp_path / "chain.yml",
+        "prompts:\n  brief: {file: brief.md}\n"
+        "effects:\n  - type: yield\n    name: y\n    template: \"{{> brief}}\"\n",
+    )
+    out = tmp_path / "run.json"
+
+    first = runner.invoke(app, ["run", str(orch), "--out", str(out)])
+    assert first.exit_code == 0, first.stdout
+
+    resumed = runner.invoke(app, ["run", str(orch), "--state", str(out), "--resume", "x"])
+    assert resumed.exit_code == 0, resumed.stdout
+
+
+def test_resume_refuses_moved_prompt_file_bytes_under_the_new_hash(tmp_path: Path) -> None:
+    """The user-visible fix from #407: under the current algorithm, moving
+    bytes across a prompt-file boundary (same total content, same file
+    set, different split) must still be refused as a content change, not
+    just produce a different hash in isolation."""
+    _write(tmp_path / "a.md", "AB")
+    _write(tmp_path / "b.md", "CD")
+    orch = _write(
+        tmp_path / "chain.yml",
+        "prompts:\n  a: {file: a.md}\n  b: {file: b.md}\n"
+        "effects:\n  - type: yield\n    name: y\n    template: \"{{> a}}{{> b}}\"\n",
+    )
+    out = tmp_path / "run.json"
+
+    first = runner.invoke(app, ["run", str(orch), "--out", str(out)])
+    assert first.exit_code == 0, first.stdout
+
+    # Same four bytes overall ("ABCD"), same two files, moved across the
+    # boundary instead of either file's own content changing.
+    _write(tmp_path / "a.md", "A")
+    _write(tmp_path / "b.md", "BCD")
+
+    blocked = runner.invoke(app, ["run", str(orch), "--state", str(out), "--resume", "x"])
+    assert blocked.exit_code == 1
+    assert "content hash differs" in blocked.stdout
+
+    forced = runner.invoke(
+        app, ["run", str(orch), "--state", str(out), "--resume", "x", "--force"]
+    )
+    assert forced.exit_code == 0, forced.stdout
+
+
 def test_document_hash_equals_document_content_digest_for_the_same_document(
     tmp_path: Path,
 ) -> None:
