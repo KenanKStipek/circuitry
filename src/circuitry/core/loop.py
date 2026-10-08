@@ -526,8 +526,11 @@ class LoopRuntime:
                     # One signal, before any branch starts, naming how many
                     # can ever be concurrently pending — lets a listener
                     # (MCP's RunManager) wait for a real completion/pause
-                    # count instead of guessing from a debounce window (#237).
-                    store.fire_concurrent_dispatch(self.defn.name, effective_concurrency)
+                    # count instead of guessing from a debounce window (#237)
+                    # — and the true branch total, for `--events` (#423).
+                    store.fire_concurrent_dispatch(
+                        self.defn.name, effective_concurrency, total
+                    )
 
                     iter_ctxs: list[tuple[int, dict[str, Any]]] = []
                     for idx, item in enumerate(capped):

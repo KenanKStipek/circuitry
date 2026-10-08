@@ -237,7 +237,7 @@ A named container that executes child effects sequentially (`chain`) or in paral
 
 **Flow semantics:**
 - `chain` — sequential: each effect executes after the previous, and sees all prior outputs in state
-- `tree` — parallel: all effects execute concurrently against the same input snapshot; none see each other's outputs. Each branch reports `on_effect_start` / `on_effect_complete` and reaches `--live-state` while it runs, from its own worker thread
+- `tree` — parallel: all effects execute concurrently against the same input snapshot; none see each other's outputs. Each branch reports `on_effect_start` / `on_effect_complete` from its own worker thread as it dispatches and lands — `cof run --events <file>` streams both live. `--live-state` only ever shows a branch once it has finished; a still-running branch has no node there yet.
 
 **Example — chain (sequential pipeline):**
 ```yaml
@@ -950,7 +950,7 @@ rather than a plain, written-down value — only a literal list counts. See
 
 Runs another orchestration as an isolated sub-step. State is fully isolated: declared `inputs` are passed in as initial state; the parent does not see the child's working state directly. Outputs land at `prime.<name>` according to the namespacing mode (see below).
 
-Isolated state, shared observation: the child's effects are reported to the parent run's observers — `--live-state`, the TUI, and every runtime plugin's `on_effect_start` / `on_effect_complete` — at paths namespaced under the use node (`prime.<name>.<child_effect>`, nesting further for a `use` inside a `use`). Live snapshots mirror the child's in-flight effects under that node for watchers only; what actually lands in parent state is still exactly what the namespacing mode below says.
+Isolated state, shared observation: the child's effects are reported to the parent run's observers — the TUI, every runtime plugin's `on_effect_start` / `on_effect_complete`, and `cof run --events <file>` — at paths namespaced under the use node (`prime.<name>.<child_effect>`, nesting further for a `use` inside a `use`). `--live-state` shows each child effect only once it finishes — like a tree branch, never while it runs, not even by chance, since the child runs in its own isolated store until it merges — so a child still running has no node there yet; what actually lands in parent state is still exactly what the namespacing mode below says.
 
 Config inheritance: the child executes with the exact same resolved `runtime.*` config as the parent run — adapters, tool plugins (including MCP servers), complexity settings — never re-resolved from disk. The child's own `runtime:` and `plugins:` keys are not read at all, so a composed child can change even less than a root document can. See point 30 under "Composition via `use`" below for the one case (a parent-level `runtime:` block of its own) where that can still surprise you.
 
@@ -1051,8 +1051,8 @@ child a value as it is (an array, an object, a number, a boolean) write `{from: 
 #### Complete record (opt-in)
 
 In declared-outputs mode only the declared values land at `prime.<name>.value`; what the
-child did (its commands, answers, decisions) is visible in `--live-state` while it runs and
-then dropped. Set `runtime.state.record_children: true` (in config, or in the orchestration's
+child did (its commands, answers, decisions) is visible in `--live-state` as each child effect
+finishes, then dropped when the `use` completes. Set `runtime.state.record_children: true` (in config, or in the orchestration's
 own `runtime:` block) to keep it: each `use` node keeps its child's effects beside its
 `value` and `meta`, in the same shape live state shows them, at every depth of `use`, and a
 failed child keeps whatever it got to. The run's `--out` file then holds the whole run.
@@ -1686,6 +1686,49 @@ Inside a nested `dynamic`, its own children stay addressable by the short
 sibling path (`{{wrap.nested.value}}`) as well as the absolute one, and a name
 collision resolves to the nearer node — the dynamic's own child wins over an
 outer binding of the same name.
+
+---
+
+## Watching a Run (`cof run --events`)
+
+`cof run --events <file>` (also on `cof run-library`) writes a JSONL stream of
+effect starts and ends as the run goes — one complete JSON line per event,
+created or truncated before the first effect. `--live-state` only ever shows
+a tree branch or a `use` child once it finishes, and shows a running chain
+leaf only if a coalesced write happens to land while it runs (writes are at
+least 0.5 s apart). `--events` reports every one of them the instant it
+starts, from whichever worker thread runs it:
+
+```json
+{"v":1,"seq":0,"ts":"2026-10-08T19:56:22.433Z","ev":"run_start","run_id":"…","orchestration":"do-thing.yml","engine":"cof 0.2.0","pid":4242}
+{"v":1,"seq":7,"ts":"…","ev":"dispatch","path":"prime.each_tree","branches":3,"concurrency":2}
+{"v":1,"seq":8,"ts":"…","ev":"start","id":8,"path":"prime.each_tree.iter_0.t_nap"}
+{"v":1,"seq":12,"ts":"…","ev":"end","id":8,"path":"prime.each_tree.iter_0.t_nap","ok":true,"ms":1008}
+{"v":1,"seq":99,"ts":"…","ev":"run_end","ok":false,"error":"Interrupted (Ctrl-C/SIGINT)","signal":"SIGINT"}
+```
+
+| Field | Meaning |
+|---|---|
+| `v` | Format version, `1`. |
+| `seq` | Strictly increasing in file order. |
+| `ts` | Wall-clock UTC, millisecond precision. |
+| `ev` | `run_start`, `dispatch`, `start`, `end` or `run_end`. |
+| `id` | Unique per effect *instance* — a pass or a branch each gets its own, so `start`/`end` pair up even when several instances share a path (an unnamed loop body). An `end` whose `start` was not seen on this stream (a double-fire; the start predates this `--events` writer, which cannot happen for `cof` itself but is a rule any reader must handle) carries `id: null`, with no `ms`. |
+| `path` | The absolute state path, as in `--live-state`. |
+| `dispatch` | Sent once by a tree loop or tree `dynamic` before its branches start — the existing `concurrent_dispatch` callback, composed with (never replaced by) this stream. `branches` is the true branch count: the loop's item total, or the dynamic's `len(effects)`. `concurrency` is the ceiling the pool actually enforces — every branch when `max_concurrency` is unset (so `branches == concurrency`), else `min(max_concurrency, branches)`. A 3-item `each` loop under `max_concurrency: 2` sends `"branches":3,"concurrency":2`. |
+| `ok` | On `end`: whether the effect's `meta.error` is `null`. On `run_end`: whether the run succeeded. |
+| `error` | Present only when `ok` is false: the first 500 characters of the effect's (or run's) error text, exactly as it appears in state. |
+| `signal` | On `run_end` after an interruption: `SIGINT`, `SIGTERM` or `SIGHUP`. |
+
+`run_start` is always the first line. `run_end` is always the last, written
+only after `--live-state`'s own final write — seeing it means that final
+snapshot is already on disk. A second Ctrl-C/SIGTERM/SIGHUP ends the process
+at once (no cleanup), so no `run_end` is written; a reader treats end of file
+with no `run_end`, plus a dead process, as aborted. A failure to write the
+file (including an unwritable path) is logged once and then ignored — it
+never fails the run, unlike `--live-state`, whose path must be writable up
+front: its first snapshot write happens synchronously, before any effect
+runs, so an unwritable path fails the run at the start.
 
 ---
 

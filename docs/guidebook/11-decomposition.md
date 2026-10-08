@@ -40,7 +40,7 @@ When a prompt's recorded score exceeds `threshold`, the runtime replaces the sin
 
 **2. Validate.** The emitted YAML must parse, pass the full orchestration schema, keep the fan-out within `[2, max_chunks]` — a "decomposition" into one chunk is the original prompt with scaffolding and is refused — and honour the merge contract: a top-level effect named `merge`, producing the same `prompt_type` and `schema` as the source, with `interface.outputs.result` pointing at `prime.merge.value`, and `interface.inputs` declaring every input the source template read, under the same names. An invalid plan never runs.
 
-**3. Execute and write back.** The plan runs as a state-isolated child seeded with a *copy* of the effect's render context — the same inline-identity cycle guard as a `use` child, the same namespaced observability (chunk effects announce under the decomposing effect's node, and live-state snapshots mirror them there). The value at `prime.merge.value` is written at the **original effect's own path**. Downstream, nothing changes.
+**3. Execute and write back.** The plan runs as a state-isolated child seeded with a *copy* of the effect's render context — the same inline-identity cycle guard as a `use` child, the same namespaced observability (chunk effects announce under the decomposing effect's node via `on_effect_start`/`on_effect_complete` and `cof run --events <file>`; `--live-state` shows each one only once it finishes — like a tree branch, never while it runs, since the chunk runs in its own isolated store until it merges back). The value at `prime.merge.value` is written at the **original effect's own path**. Downstream, nothing changes.
 
 The oversized fix, decomposed, looks like a plan you might have written yourself:
 

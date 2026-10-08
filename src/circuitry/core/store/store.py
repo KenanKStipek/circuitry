@@ -68,14 +68,16 @@ class Store:
     effect_start: Callable[[str, dict[str, Any]], None] | None = None
     #: Fired once, synchronously, by a ``flow: tree`` loop or a parallel
     #: ``dynamic`` right before it submits its branches to a thread pool —
-    #: ``(effect_path, branch_count)``. The count already accounts for
-    #: ``max_concurrency`` (the most that can ever be pending at once, not
-    #: the total item count). The one listener today is MCP's
-    #: ``RunManager``, which uses the count to know how many "settle points"
-    #: (a registered prompt, or a branch that finished without one) to wait
-    #: for before ``start_run`` reports a snapshot, instead of guessing from
-    #: a fixed debounce window that a scheduling delay can race (#237).
-    concurrent_dispatch: Callable[[str, int], None] | None = None
+    #: ``(effect_path, concurrency, total)``. ``concurrency`` already
+    #: accounts for ``max_concurrency`` (the most that can ever be pending at
+    #: once, not the total item count); MCP's ``RunManager`` is the one
+    #: listener that uses it, to know how many "settle points" (a registered
+    #: prompt, or a branch that finished without one) to wait for before
+    #: ``start_run`` reports a snapshot, instead of guessing from a fixed
+    #: debounce window that a scheduling delay can race (#237). ``total`` is
+    #: the true branch count — the loop's item total, or ``len(effects)`` for
+    #: a dynamic — added for ``--events``'s own `dispatch` event (#423).
+    concurrent_dispatch: Callable[[str, int, int], None] | None = None
     #: Fired once per branch of a dispatch announced via ``concurrent_dispatch``,
     #: as soon as that branch's own execution genuinely finishes (whether or
     #: not it ever registered a prompt) — ``(effect_path,)``. Lets a listener
@@ -275,14 +277,17 @@ class Store:
             return
         self.effect_complete(self.effect_path(name), effect_result)
 
-    def fire_concurrent_dispatch(self, name: str, branch_count: int) -> None:
+    def fire_concurrent_dispatch(
+        self, name: str, concurrency: int, total: int
+    ) -> None:
         """Notify ``concurrent_dispatch`` (if set) that *name* is about to run
-        *branch_count* branches concurrently — called once, before any of
-        them starts, from the same thread that submits them to the pool.
+        up to *concurrency* branches at once, out of *total* branches overall
+        — called once, before any of them starts, from the same thread that
+        submits them to the pool.
         """
         if self.concurrent_dispatch is None:
             return
-        self.concurrent_dispatch(self.effect_path(name), branch_count)
+        self.concurrent_dispatch(self.effect_path(name), concurrency, total)
 
     def fire_branch_settled(self, name: str) -> None:
         """Notify ``branch_settled`` (if set) that one branch of *name*'s

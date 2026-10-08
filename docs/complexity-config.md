@@ -409,8 +409,11 @@ call with three bounded steps:
 3. **Execute and write back.** The emitted orchestration runs as a
    state-isolated child seeded with a *copy* of the effect's render context —
    same inline-identity cycle guard as a `use` child, same namespaced
-   observability (child effects announce under the decomposing effect's node,
-   and live-state snapshots mirror them there). The value at `result_path` is
+   observability (child effects announce under the decomposing effect's node
+   via `on_effect_start`/`on_effect_complete` and `cof run --events <file>`;
+   `--live-state` shows each one only once it finishes — like a tree branch,
+   never while it runs — since the chunk runs in its own isolated store
+   until it merges back). The value at `result_path` is
    written at the **original effect's own path**, so a downstream
    `{{prime.<name>.value}}` reference resolves unchanged and nothing else in
    the orchestration knows the substitution happened.
