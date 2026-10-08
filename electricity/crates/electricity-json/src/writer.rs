@@ -295,8 +295,9 @@ fn float_to_json(f: f64) -> String {
 ///
 /// Dispatches on whether any key is a `NaN` float, since that's the only
 /// way `py_partial_cmp` ever returns `Ok(None)` ("unordered", not an
-/// error) for a `Dict`'s keys, and the only case CPython's own sort
-/// doesn't reduce to a plain total order:
+/// error) for a `Dict`'s keys once `List`/`Dict` keys (never valid —
+/// Python dict keys must be hashable) are rejected up front, and the
+/// only case CPython's own sort doesn't reduce to a plain total order:
 /// - no `NaN` key: every key pair has a real order (or raises), so a
 ///   single stable O(n log n) sort reproduces CPython's output exactly
 ///   — any correct stable sort over a total order gives the same result.
@@ -306,22 +307,43 @@ fn float_to_json(f: f64) -> String {
 /// - a `NaN` key, 64 or more entries: a documented divergence (below).
 fn sorted_items(dict: &Dict) -> Result<Vec<(&Value, &Value)>, WriteError> {
     let mut items: Vec<(&Value, &Value)> = dict.iter().collect();
-    let has_nan_key = items
-        .iter()
-        .any(|(key, _)| matches!(key, Value::Float(f) if f.is_nan()));
+    for (key, _) in &items {
+        if matches!(key, Value::List(_) | Value::Dict(_)) {
+            // Rejected here, before any comparison: a `List`/`Dict` key
+            // can only have reached this dict by violating the
+            // hashable-keys invariant upstream, and the comparators below
+            // are only total over the key types that remain once this
+            // can't happen (`py_partial_cmp` returns `Ok(None)` for two
+            // lists whenever an element inside them is `NaN`-unordered,
+            // which would otherwise reach `sort_total_order`'s
+            // `unreachable!`).
+            return Err(WriteError::UnhashableKeyType {
+                type_name: key.type_name(),
+            });
+        }
+    }
+    check_all_comparable(&items)?;
+    let has_nan_key = items.iter().any(|(key, _)| is_nan_key(key));
     if !has_nan_key {
-        sort_total_order(&mut items)?;
+        sort_total_order(&mut items);
     } else if items.len() < 64 {
         cpython_small_sort(&mut items)?;
     } else {
         // Known divergence: CPython's full timsort merge for 64+ elements
-        // with a NaN key isn't ported here. This produces *some* stable,
-        // defined order (every NaN key compares equal to everything, as
-        // in the under-64 port's spirit) rather than reproducing CPython's
-        // exact key order for this case.
-        sort_with_nan_as_equal(&mut items)?;
+        // with a NaN key isn't ported here. This produces a *defined*
+        // total preorder instead (see `sort_with_nan_last`) rather than
+        // reproducing CPython's exact key order for this case.
+        sort_with_nan_last(&mut items);
     }
     Ok(items)
+}
+
+/// Whether `py_partial_cmp` can return `Ok(None)` when comparing `key`
+/// against another key — true exactly for a `NaN` float, the only
+/// non-`List`/`Dict` [`Value`] variant `json`'s key types (`str`, `int`,
+/// `float`, `bool`, `None`) are ever numerically unordered for.
+fn is_nan_key(key: &Value) -> bool {
+    matches!(key, Value::Float(f) if f.is_nan())
 }
 
 /// Python `<` between two dict keys, for sort purposes: `Ok(false)` both
@@ -338,43 +360,58 @@ fn py_lt(a: &Value, b: &Value) -> Result<bool, WriteError> {
     }
 }
 
-/// A single stable O(n log n) sort by key, for a dict with no `NaN` key:
-/// every key pair then has a real order or raises, so any correct stable
-/// sort reproduces CPython's own `sorted(dct.items())` key order exactly.
-/// `sort_by`'s comparator can't itself return a `Result`, so an
-/// incomparable pair is recorded in `error` and all later comparisons
-/// return `Ordering::Equal` (making the rest of the sort a no-op) rather
-/// than panicking — the final key order is discarded by returning `Err`.
-fn sort_total_order(items: &mut [(&Value, &Value)]) -> Result<(), WriteError> {
-    let mut error: Option<WriteError> = None;
-    items.sort_by(|a, b| {
-        if error.is_some() {
-            return Ordering::Equal;
+/// Confirms every key is comparable to every other key, before sorting
+/// — shared by every sort path in [`sorted_items`], `NaN` key or not.
+///
+/// Comparing each key only against `items[0]` is enough: for the key
+/// types that can reach [`sorted_items`]'s sort dispatch (`List`/`Dict`
+/// keys are already rejected there, so only `None`/`bool`/`int`/`float`/
+/// `str`/`bytes`/`Date`/`DateTime` remain), comparability-or-not is an
+/// equivalence relation — two keys are comparable exactly when they
+/// share a type (and, for two `DateTime`s, the same naive/aware-ness),
+/// regardless of whether either side is `NaN` — so if `items[0]` is
+/// comparable with both `x` and `y`, `x` and `y` are comparable with
+/// each other too; and if `items[0]` is *not* comparable with some other
+/// key, that pair is caught the moment this reaches it. Doing this once,
+/// before any sort, means every comparator below only has to resolve
+/// `Ok(Some(_))`/`Ok(None)` and can treat `Err` as unreachable — required
+/// for [`sort_total_order`]/[`sort_with_nan_last`]'s `sort_by` calls to
+/// stay genuine total orders over every pair they're asked to compare
+/// (a requirement since Rust 1.81: an inconsistent comparator can panic).
+fn check_all_comparable(items: &[(&Value, &Value)]) -> Result<(), WriteError> {
+    let Some((first, _)) = items.first() else {
+        return Ok(());
+    };
+    for (key, _) in &items[1..] {
+        if first.py_partial_cmp(key).is_err() {
+            return Err(WriteError::IncomparableKeys {
+                left: first.type_name(),
+                right: key.type_name(),
+            });
         }
-        match a.0.py_partial_cmp(b.0) {
-            Ok(Some(ordering)) => ordering,
-            Ok(None) => unreachable!("sort_total_order called with no NaN key present"),
-            Err(_) => {
-                error = Some(WriteError::IncomparableKeys {
-                    left: a.0.type_name(),
-                    right: b.0.type_name(),
-                });
-                Ordering::Equal
-            }
-        }
-    });
-    match error {
-        Some(e) => Err(e),
-        None => Ok(()),
     }
+    Ok(())
+}
+
+/// A single stable O(n log n) sort by key, for a dict with no `NaN` key
+/// and no `List`/`Dict` key (both already rejected by [`sorted_items`]),
+/// once [`check_all_comparable`] has confirmed every key pair has a real
+/// order: any correct stable sort then reproduces CPython's own
+/// `sorted(dct.items())` key order exactly.
+fn sort_total_order(items: &mut [(&Value, &Value)]) {
+    items.sort_by(|a, b| match a.0.py_partial_cmp(b.0) {
+        Ok(Some(ordering)) => ordering,
+        Ok(None) => unreachable!("sort_total_order called with a NaN/List/Dict key present"),
+        Err(_) => unreachable!("check_all_comparable already rejected every incomparable pair"),
+    });
 }
 
 /// A faithful port of CPython 3.11's `listobject.c` `count_run` then
 /// `binarysort` — the exact algorithm `list.sort`/`sorted()` use for a
 /// list short enough (under 64 elements) to never need a full timsort
 /// merge, confirmed directly against CPython for the `NaN`-key
-/// counterexample this is written for (DESIGN.md's sort-algorithm
-/// decision for #377/#384): keys in insertion order `5.0, 6.0, 7.0, NaN,
+/// counterexample this is written for (see the crate's module docs on
+/// [`crate`]): keys in insertion order `5.0, 6.0, 7.0, NaN,
 /// 8.0, 1.0` sort to `1.0, 5.0, 6.0, 7.0, NaN, 8.0` — `count_run` finds
 /// the initial run `[5.0, 6.0, 7.0, NaN, 8.0]` (ascending, since `NaN <
 /// x` and `x < NaN` are both always `False`, so neither comparison ever
@@ -445,30 +482,25 @@ fn binary_insertion_sort(
 }
 
 /// Known divergence (see [`sorted_items`]): for a dict with 64 or more
-/// keys including a `NaN` key, every `NaN` key sorts as equal to every
-/// other key — a stable sort, but not CPython's own order for this case.
-fn sort_with_nan_as_equal(items: &mut [(&Value, &Value)]) -> Result<(), WriteError> {
-    let mut error: Option<WriteError> = None;
-    items.sort_by(|a, b| {
-        if error.is_some() {
-            return Ordering::Equal;
-        }
-        match a.0.py_partial_cmp(b.0) {
-            Ok(Some(ordering)) => ordering,
-            Ok(None) => Ordering::Equal,
-            Err(_) => {
-                error = Some(WriteError::IncomparableKeys {
-                    left: a.0.type_name(),
-                    right: b.0.type_name(),
-                });
-                Ordering::Equal
-            }
-        }
+/// keys including a `NaN` key, every `NaN` key sorts *after* every
+/// non-`NaN` key, and ties (stably, keeping insertion order) with every
+/// other `NaN` key — a defined total preorder, but not CPython's own
+/// order for this case.
+///
+/// Earlier, this treated every `NaN`-involved pair as `Ordering::Equal`
+/// to everything, which isn't transitive (`-1 == NaN == 0`, yet
+/// `-1 < 0`) and could make `sort_by` panic (Rust's sort has required a
+/// consistent/total comparator since 1.81). `is_nan_key(a).cmp(&is_nan_key(b))`
+/// is consistent with every `Ok(Some(_))` order [`check_all_comparable`]
+/// has already confirmed exists for the non-`NaN` pairs, so the
+/// comparator here is a genuine total order (ties are the only place two
+/// elements compare `Equal` without being `py_eq`, which is allowed).
+fn sort_with_nan_last(items: &mut [(&Value, &Value)]) {
+    items.sort_by(|a, b| match a.0.py_partial_cmp(b.0) {
+        Ok(Some(ordering)) => ordering,
+        Ok(None) => is_nan_key(a.0).cmp(&is_nan_key(b.0)),
+        Err(_) => unreachable!("check_all_comparable already rejected every incomparable pair"),
     });
-    match error {
-        Some(e) => Err(e),
-        None => Ok(()),
-    }
 }
 
 fn item_separator(mode: WriteMode) -> &'static str {

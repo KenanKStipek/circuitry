@@ -56,14 +56,14 @@
 //!     keys, but collapse to one here: [`loads`] silently keeps only one;
 //!     [`load_json`] raises [`ReadError::DuplicateKey`], which CPython
 //!     never raises for this input.
-//! - `sort_keys=True` sorts a dict whose keys include a `NaN` float and
-//!   has 64 or more keys with a stable sort that treats every `NaN` key
-//!   as equal to every other key, rather than CPython's own algorithm
-//!   (`count_run` then `binarysort`, for a list under 64 elements;
-//!   `binarysort` within a full timsort merge otherwise) — reproducing
-//!   the exact key order CPython's sort produces for a `NaN` key is only
-//!   done here for dicts with fewer than 64 keys ([`WriteError`]'s
-//!   `sorted_items`, in `writer.rs`).
+//! - `sort_keys=True` sorts a dict whose keys include a `NaN` float and has
+//!   64 or more keys with a stable sort that puts every `NaN` key after
+//!   every non-`NaN` key (ties among multiple `NaN` keys keep their
+//!   insertion order), rather than CPython's own algorithm (`count_run`
+//!   then `binarysort`, for a list under 64 elements; `binarysort`
+//!   within a full timsort merge otherwise) — reproducing the exact key
+//!   order CPython's sort produces for a `NaN` key is only done here for
+//!   dicts with fewer than 64 keys (`sorted_items`, in `writer.rs`).
 
 mod reader;
 mod writer;

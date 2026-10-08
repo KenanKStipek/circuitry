@@ -1,8 +1,8 @@
 //! `sort_keys=True` must sort by key in O(n log n), not O(n^2): a run
 //! state's saved dict (`core/saved_state.py`'s `json.dumps(saved,
 //! indent=2, sort_keys=True)`) is written on every `--out --pretty` run
-//! and can realistically hold tens of thousands of keys (DESIGN.md's
-//! sort-algorithm decision for #377/#384).
+//! and can realistically hold tens of thousands of keys (see
+//! `electricity_json`'s crate docs on its sort-algorithm dispatch).
 
 use electricity_json::{WriteMode, dumps};
 use electricity_value::{Dict, Value};

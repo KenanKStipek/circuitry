@@ -207,7 +207,8 @@ impl Parser<'_> {
     /// default). `depth` is the current `{`/`[` nesting depth, threaded
     /// through to [`Parser::parse_object`]/[`Parser::parse_array`] so
     /// nesting past [`crate::MAX_DEPTH`] returns [`ReadError::Depth`]
-    /// instead of recursing further (DESIGN.md's depth-limit decision).
+    /// instead of recursing further (see the crate's module docs on
+    /// [`crate`]).
     fn parse_value(&self, idx: usize, depth: usize) -> Result<(Raw, usize), ReadError> {
         let Some(&c) = self.chars.get(idx) else {
             return Err(self.syntax("Expecting value", idx));
