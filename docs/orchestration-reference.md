@@ -1696,16 +1696,21 @@ signal), the `service` tool's own `start`/`stop` calls (a service is
 meant to outlive the run, so cancelling the run must not orphan a
 half-started or half-stopped one), and any plain Python-level step that
 never polls back in. Rarely, and only under very heavy CPU load on the
-machine running `cof` itself, the *next* step after one the kill cannot
-reach can still start: Ctrl-C/SIGTERM/SIGHUP is only ever actually
-handled by this process's own main thread, and only once that thread's
-Python interpreter next checks for one — under adversarial contention
-(measured at roughly 3% of runs under a synthetic load of three
-CPU-bound processes competing for the machine's own cores) that check
-can be delayed long enough for a worker thread finishing such a step to
-reach its own next step first. This is a limit of signal delivery
-itself, not of this orchestrator's own polling, which already returns to
-that check several times a second. A killed
+machine running `cof` itself, a step can start after the run has already
+been reported cancelled, and not only on a branch with a step the kill
+cannot reach — Ctrl-C/SIGTERM/SIGHUP is only ever actually handled by
+this process's own main thread, and only once that thread's Python
+interpreter next checks for one, so *any* branch still running at that
+moment can reach its own next step first if that check is delayed long
+enough. Under adversarial contention (a synthetic load of three
+CPU-bound processes competing for the machine's own cores) this has been
+measured happening on roughly 3% of runs, with the main thread's own
+handler recorded running more than three seconds after the signal was
+sent; the run keeps going during that whole delay. What causes a delay
+that long is not yet pinned down — closing it is tracked as a redesign
+in #404, not something this orchestrator's own polling (which otherwise
+returns to that check several times a second) can paper over on its
+own. A killed
 child is sent SIGKILL directly, not the SIGINT/SIGTERM the signal itself
 carried, so a tool with its own graceful-shutdown handling (`ffmpeg`
 finalizing a partial output) never gets the chance; running detached from
