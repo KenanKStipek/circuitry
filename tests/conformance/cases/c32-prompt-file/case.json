@@ -1,0 +1,6 @@
+{
+  "spec_case": "C32",
+  "description": "A declared prompt sourced from {file: ...} (#396 \u00a73.6.2) splices into a yield template exactly as inline text would.",
+  "expect": "success",
+  "cli_args": ["-e", "topic=circuitry"]
+}

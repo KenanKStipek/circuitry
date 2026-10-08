@@ -733,7 +733,25 @@ def run(req: RunRequest) -> RunResult:
                 "Orchestration validation failed:\n"
                 + "\n".join(f"  - {error}" for error in document_errors)
             )
-        root_def = compile_orchestration(orch=orch, root_name="prime")
+        from ..core.prompt_compose import EFFECT_NAMES_RUNTIME_KEY as _EFFECT_NAMES_KEY
+        from ..core.prompt_compose import RUNTIME_CONFIG_KEY as _PROMPTS_KEY
+        from .library_sources import confinement_root_for_document
+
+        _document_dir = req.orchestration_path.resolve().parent
+        root_def = compile_orchestration(
+            orch=orch,
+            root_name="prime",
+            document_dir=_document_dir,
+            confinement_root=confinement_root_for_document(
+                req.orchestration_path,
+                _document_dir,
+                library_registry=library_registry,
+                is_cache_path=document_is_cache_path,
+                remote_library_source=req.remote_library_source,
+            ),
+        )
+        runtime_config[_PROMPTS_KEY] = root_def.prompts
+        runtime_config[_EFFECT_NAMES_KEY] = root_def.effect_names
 
         group_errors = unknown_concurrency_group_errors(
             root_def, concurrency_limiter.group_names
@@ -1227,13 +1245,19 @@ def validate(
     # `cof run`'s own resolution — `is_cache_path` still checks the shared
     # `default_cache_root()` regardless of which sources are configured, so
     # the fallback doesn't reopen the gate this override exists for.
+    # Built unconditionally now (#396 second-review finding 6) — confinement
+    # for a `{file: ...}` prompt source below needs `is_cache_path` whether
+    # or not the caller passed `trust_document`, not just for the host-
+    # settings override above. Still falls back to the curation-only
+    # default on a malformed config, the same tolerance as before.
+    try:
+        library_registry = LibraryRegistry.from_runtime(
+            config.runtime if config is not None else None
+        )
+    except LibrarySourceError:
+        library_registry = LibraryRegistry.default()
+    document_is_cache_path = library_registry.is_cache_path(orchestration_path)
     if trust_document:
-        try:
-            library_registry = LibraryRegistry.from_runtime(
-                config.runtime if config is not None else None
-            )
-        except LibrarySourceError:
-            library_registry = LibraryRegistry.default()
         trust_document = effective_document_trust(
             trust_document, orchestration_path, library_registry
         )
@@ -1288,7 +1312,20 @@ def validate(
                     "warnings": lint_warnings,
                 }
 
-        root_def = compile_orchestration(orch=orch, root_name="prime")
+        from .library_sources import confinement_root_for_document
+
+        _document_dir = orchestration_path.resolve().parent
+        root_def = compile_orchestration(
+            orch=orch,
+            root_name="prime",
+            document_dir=_document_dir,
+            confinement_root=confinement_root_for_document(
+                orchestration_path,
+                _document_dir,
+                library_registry=library_registry,
+                is_cache_path=document_is_cache_path,
+            ),
+        )
 
         # Same merge `run()` applies (document `runtime:` key by key over
         # config, trusted document keeps its whole block) — just enough to

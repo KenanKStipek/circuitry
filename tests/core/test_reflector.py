@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -589,9 +590,11 @@ def test_reflector_invalid_plan_records_error() -> None:
 def test_reflector_generated_plan_with_a_partial_fails_and_reads_no_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A generated plan is model output, never written to a file `cof check`
-    could walk statically — the refusal has to come from the real run, not a
-    monkeypatched compiler check (#354)."""
+    """A generated plan is model output, glued into a `use: inline` child —
+    `inline` is itself a composable field (#396), so a plan containing the
+    literal text `{{> evil}}` is rejected as an unknown name rather than
+    read as a file reference; the file it would have named is never
+    touched (#354)."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "evil.mustache").write_text("LEAKED", encoding="utf-8")
     real_open = io.open
@@ -628,7 +631,7 @@ def test_reflector_generated_plan_with_a_partial_fails_and_reads_no_file(
     root = compile_orchestration(orch=orch)
     store = Store(state={})
 
-    with pytest.raises(RuntimeError, match=r"partials are not supported"):
+    with pytest.raises(RuntimeError, match=re.escape("'{{> evil}}' does not name")):
         DynamicRuntime(root, adapter=adapter, model="test-model").execute(store=store)
 
     planner = store.state["prime"]["planner"]

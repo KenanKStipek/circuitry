@@ -556,6 +556,42 @@ class LibraryRegistry:
                 return True
         return False
 
+    def cached_tree_root(self, path: Path) -> Path | None:
+        """The one commit-pinned subtree *path* was actually fetched into —
+        narrower than :meth:`is_cache_path`'s "inside some cache directory
+        somewhere" (#396 second-review finding 6).
+
+        A `github` source's own ``entries_dir`` (``cache_dir/<sha>``) is
+        exactly the confinement root ``core.library_ref``/``core.use.
+        UseRuntime._confinement_root_for`` already give a ``ref:`` child
+        pinned to that same source — reused here rather than re-derived, so
+        a `cof run <library-name>`/cache-path run gets the identical root a
+        `ref:` child of it would. ``None`` when *path* does not resolve
+        inside any currently configured, already-fetched `github` source's
+        own tree (a removed/unconfigured source still makes
+        :meth:`is_cache_path` true via the shared ``default_cache_root()``
+        fallback, but there is no specific per-commit root left to name —
+        callers fall back to the document's own directory, never to a wider
+        project search, so this stays fail-closed either way).
+        """
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return None
+        for source in self.sources:
+            if not getattr(source, "REFRESHABLE", False):
+                continue
+            entries_dir = getattr(source, "entries_dir", None)
+            if entries_dir is None:
+                continue
+            try:
+                entries_resolved = Path(entries_dir).resolve()
+            except OSError:
+                continue
+            if resolved == entries_resolved or entries_resolved in resolved.parents:
+                return entries_resolved
+        return None
+
     def notices(self, *, source: str | None = None) -> list[str]:
         """User-facing hints from sources that cannot serve entries yet."""
         out: list[str] = []
@@ -618,6 +654,39 @@ class LibraryRegistry:
             source=source.name,
             path=path,
         )
+
+
+def confinement_root_for_document(
+    document_path: Path,
+    document_dir: Path,
+    *,
+    library_registry: LibraryRegistry,
+    is_cache_path: bool,
+    remote_library_source: bool = False,
+) -> Path:
+    """The `{file: ...}` confinement root for *document_path*, shared by
+    every surface that compiles it: ``cli.runtime_shim.run()``/``validate()``
+    and ``cli.trust._trust_document`` (#396 second-review finding 6).
+
+    A document named by a path inside some `github` source's own cache
+    (*is_cache_path*), or resolved from one by bare library name
+    (*remote_library_source*), must stay confined to *that fetched tree* —
+    never ``core.prompt_files.default_project_root``'s ordinary
+    nearest-config-file search, which would walk straight out of the cache
+    and into whatever project config an ancestor of the cache directory
+    happens to carry (``$HOME``, a custom ``XDG_CACHE_HOME``), widening
+    confinement past the one commit this run actually trusts. Falls back to
+    *document_dir* itself, never to the wider search, when the specific
+    per-commit root can't be identified (an unconfigured/removed source
+    still makes *is_cache_path* true via the shared cache-root fallback) —
+    fail-closed either way.
+    """
+    from ..core.prompt_files import default_project_root
+
+    if is_cache_path or remote_library_source:
+        cached_root = library_registry.cached_tree_root(document_path)
+        return cached_root if cached_root is not None else document_dir
+    return default_project_root(document_dir)
 
 
 def _configured_sources(cfg: CircuitryConfig | None) -> list[dict[str, Any]]:

@@ -34,6 +34,11 @@ from .answers import AnswerParseError, parse_boolean_answer, parse_number_answer
 from .cancellation import get_token
 from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .effect_identity import model_call
+from .prompt_compose import (
+    declared_prompts,
+    known_effect_names,
+    render_with_composition,
+)
 from .store import Store
 from .templates import render_template
 
@@ -1394,10 +1399,19 @@ class PromptRuntime:
         """The effect's ``messages`` with each ``content`` rendered; ``()`` for a template."""
         if self.defn.template or not self.defn.messages:
             return ()
+        declared = declared_prompts(self.runtime_config)
+        known_names = known_effect_names(self.runtime_config)
         return tuple(
             ChatMessage(
                 role=msg.role,
-                content=render_template(msg.content, ctx, label=f"messages[{index}].content"),
+                content=render_with_composition(
+                    msg.content,
+                    ctx,
+                    declared=declared,
+                    known_effect_names=known_names,
+                    label=f"messages[{index}].content",
+                    escape=False,
+                ),
             )
             for index, msg in enumerate(self.defn.messages)
         )
@@ -1413,7 +1427,14 @@ class PromptRuntime:
         ``messages`` themselves through :class:`GenerateOptions`.
         """
         if self.defn.template:
-            return render_template(self.defn.template, ctx, label="template")
+            return render_with_composition(
+                self.defn.template,
+                ctx,
+                declared=declared_prompts(self.runtime_config),
+                known_effect_names=known_effect_names(self.runtime_config),
+                label="template",
+                escape=False,
+            )
 
         if messages:
             return "\n\n".join(f"{msg.role}: {msg.content}" for msg in messages)

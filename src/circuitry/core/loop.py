@@ -1388,6 +1388,7 @@ Should the loop continue? Answer (yes/no):"""
         from .reflector import ReflectorDefinition, ReflectorRuntime
         from .tool import ToolDefinition, ToolRuntime
         from .use import UseDefinition, UseRuntime
+        from .yield_effect import YieldDefinition, YieldRuntime
 
         # Create iteration-specific store if named
         if self.defn.name:
@@ -1428,6 +1429,7 @@ Should the loop continue? Answer (yes/no):"""
             is_prompt = isinstance(effect, PromptDefinition)
             is_tool = isinstance(effect, ToolDefinition)
             is_use = isinstance(effect, UseDefinition)
+            is_yield = isinstance(effect, YieldDefinition)
 
             if not is_enabled(effect):
                 _skip_disabled_effect(
@@ -1445,7 +1447,7 @@ Should the loop continue? Answer (yes/no):"""
                 ctx = _scope_ctx(base_ctx, self._local_writes(iter_store, baseline))
                 continue
 
-            if self.verbose and not is_prompt and not is_tool and not is_use:
+            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
                 _console.print(
                     f"{body_indent}[info]→[/info] [{color}]{icon}[/{color}]"
                     f" {name}"
@@ -1615,10 +1617,23 @@ Should the loop continue? Answer (yes/no):"""
                         ancestors=self._child_ancestors if tracker is None else None,
                     ).execute(store=iter_store, ctx=ctx)
 
+                elif isinstance(effect, YieldDefinition):
+                    YieldRuntime(
+                        effect,
+                        runtime_config=self.runtime_config,
+                        dry_run=self.dry_run,
+                        verbose=self.verbose,
+                        depth=self.depth + 1,
+                        display_name=_child_display_name(
+                            name, label_prefix=self._label_prefix, iter_label=iter_label
+                        ),
+                        ancestors=self._child_ancestors if tracker is None else None,
+                    ).execute(store=iter_store, ctx=ctx)
+
                 else:
                     raise TypeError(f"Unsupported effect type: {type(effect)}")
 
-                if self.verbose and not is_prompt and not is_tool and not is_use:
+                if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
                     elapsed = time.monotonic() - t0
                     _console.print(
                         f"{body_indent}[ok]✓[/ok] [{color}]{icon}[/{color}]"
@@ -1626,7 +1641,7 @@ Should the loop continue? Answer (yes/no):"""
                     )
 
             except Exception as _body_exc:
-                if self.verbose and not is_prompt and not is_tool and not is_use:
+                if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
                     elapsed = time.monotonic() - t0
                     _console.print(
                         f"{body_indent}[err]✗[/err] [{color}]{icon}[/{color}]"

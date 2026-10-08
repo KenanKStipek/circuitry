@@ -24,3 +24,24 @@ publish = false
 # -- what CI runs -- within the same stack budget as release.
 [profile.dev.package.electricity-yaml]
 opt-level = 2
+
+# electricity-cel pre-rejects an expression nesting (parens/brackets)
+# deeper than `electricity_cel::MAX_NESTING_DEPTH` before ever handing it
+# to the `cel` crate's own ANTLR-generated parser (`nesting.rs`'s module
+# docs) -- but that pre-scan only protects expressions it runs on; the
+# parser and evaluator underneath still recurse once per nesting level up
+# to whatever `MAX_NESTING_DEPTH` allows through. Measured directly
+# (`tests/nesting_limit.rs`'s module docs): an unoptimized debug build of
+# `cel` and its own ANTLR runtime, `antlr4rust`, overflowed a 2 MiB thread
+# stack at as little as 12 levels of nested parentheses -- an order of
+# magnitude below any limit that would still be useful. Optimizing these
+# two crates (plus `electricity-cel` itself, which also recurses in
+# `convert::to_cel`) the same way `electricity-yaml` already is above
+# keeps `MAX_NESTING_DEPTH` safe on that same 2 MiB stack in debug, not
+# just `--release`.
+[profile.dev.package.electricity-cel]
+opt-level = 2
+[profile.dev.package.cel]
+opt-level = 2
+[profile.dev.package.antlr4rust]
+opt-level = 2

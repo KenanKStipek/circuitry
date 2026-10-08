@@ -169,7 +169,9 @@ def ref_child_requirements(
     *own* whole reachable subtree (so a ref child that itself pulls in
     further children is still fully covered).
     """
-    from ..core.library_ref import build_registry
+    from ..core.library_ref import LibraryRefError, build_registry, resolve_ref
+    from ..core.prompt_compose import document_content_digest
+    from ..core.prompt_files import default_project_root
     from .orchestration_loader import load_orchestration_file
 
     registry = build_registry(runtime)
@@ -178,11 +180,35 @@ def ref_child_requirements(
 
     def visit(node: dict[str, Any], parent_dir: Path | None) -> None:
         for kind, value in collect_use_refs(node):
-            resolved = resolve_reference(
-                kind, value, parent_dir=parent_dir, registry=registry
-            )
-            if resolved is None:
-                continue
+            # A `ref:` edge is resolved through `resolve_ref` directly, not
+            # the plain-Path `resolve_reference` helper, to also get the
+            # library pin's `cache_path` — the confinement root a `{file:
+            # ...}` prompt source in a remote (github) ref child must stay
+            # inside, exactly the rule `core.use.UseRuntime._confinement_root_for`
+            # gives it at run time (#396); the digest the two must agree on
+            # depends on it.
+            resolved: Path
+            if kind == "ref":
+                try:
+                    resolved_ref = resolve_ref(value, registry=registry)
+                except LibraryRefError:
+                    continue
+                if resolved_ref is None:
+                    continue
+                resolved = resolved_ref.path.resolve()
+                confinement_root = (
+                    Path(str(resolved_ref.cache_path))
+                    if resolved_ref.cache_path
+                    else default_project_root(resolved.parent)
+                )
+            else:
+                maybe_resolved = resolve_reference(
+                    kind, value, parent_dir=parent_dir, registry=registry
+                )
+                if maybe_resolved is None:
+                    continue
+                resolved = maybe_resolved
+                confinement_root = default_project_root(resolved.resolve().parent)
             key = str(resolved)
             if key in seen:
                 continue
@@ -200,7 +226,9 @@ def ref_child_requirements(
                     RefChildRequirement(
                         label=key,
                         path=resolved,
-                        digest=document_digest(resolved.read_bytes()),
+                        digest=document_content_digest(
+                            resolved, child_orch, confinement_root=confinement_root
+                        ),
                         required=required_capabilities(
                             child_orch, root_path=resolved, runtime=runtime
                         ),
@@ -286,7 +314,13 @@ def enforce_consent(
     if gate_whole_document:
         required = required_capabilities(orch, root_path=orchestration_path, runtime=runtime)
         if required:
-            digest = document_digest(orchestration_path.read_bytes())
+            # Shared with `cof trust`/`core.use` (#396) — includes every
+            # `{file: ...}` prompt source *orch* references, so a document
+            # whose prompt file changed is asked about again, the same as
+            # one whose YAML changed.
+            from ..core.prompt_compose import document_content_digest
+
+            digest = document_content_digest(orchestration_path, orch)
             ceiling = resolve_consent(
                 str(orchestration_path),
                 digest,

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, Literal, cast
 
 from .cel_eval import validate_cel_syntax
@@ -18,6 +22,13 @@ from .prompt import (
     PromptType,
     RetryPolicyDef,
 )
+from .prompt_compose import (
+    PromptCompositionError,
+    all_effect_names,
+    check_prompt_composition,
+    compile_declared_prompts,
+)
+from .prompt_files import resolve_text_or_file
 from .reflector import ReflectorDefinition
 from .state_ns import (
     validate_bare_input_refs,
@@ -28,6 +39,7 @@ from .state_ns import (
 from .templates import template_syntax_error
 from .tool import _SECURITY_SENSITIVE_PARAM_KEYS, ToolDefinition, param_reference
 from .use import UseDefinition, reference_path
+from .yield_effect import YieldDefinition
 
 EffectDef = (
     DynamicDefinition
@@ -37,6 +49,15 @@ EffectDef = (
     | LoopDefinition
     | ToolDefinition
     | UseDefinition
+    | YieldDefinition
+)
+
+#: Keys a ``yield`` effect never accepts — it never calls a model, so
+#: everything model-shaped about a prompt effect is meaningless on it (#396).
+_YIELD_FORBIDDEN_KEYS = (
+    "prompt_type", "schema", "model", "provider", "provider_fallbacks",
+    "params", "retries", "timeout_ms", "deterministic", "assets", "group",
+    "messages",
 )
 
 _NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -45,6 +66,37 @@ _NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 #: own node (``value``, ``meta``) or merges into the context (``input``,
 #: ``prime``, ``runtime``) — see issue #260 part 3.
 _RESERVED_EFFECT_NAMES = frozenset({"value", "meta", "input", "prime", "runtime"})
+
+#: The document directory/confinement root a ``{file: ...}`` prompt source
+#: resolves against for the orchestration currently being compiled — set for
+#: the duration of one :func:`compile_orchestration` call so the deeply
+#: nested ``_compile_prompt``/``_compile_yield`` calls that actually see a
+#: ``template``/``messages[].content`` field don't need this threaded
+#: through every container-compiling function's signature. ``None`` means
+#: this document has no file of its own (generated at run time, or no path
+#: at all) — see ``core.prompt_files``.
+_DOCUMENT_LOCATION: ContextVar[tuple[Path | None, Path | None]] = ContextVar(
+    "circuitry_document_location", default=(None, None)
+)
+
+
+@contextmanager
+def _document_location(
+    document_dir: Path | None, confinement_root: Path | None
+) -> Iterator[None]:
+    token = _DOCUMENT_LOCATION.set((document_dir, confinement_root))
+    try:
+        yield
+    finally:
+        _DOCUMENT_LOCATION.reset(token)
+
+
+def _current_document_dir() -> Path | None:
+    return _DOCUMENT_LOCATION.get()[0]
+
+
+def _current_confinement_root() -> Path | None:
+    return _DOCUMENT_LOCATION.get()[1]
 
 
 def _scope_child(scope_path: str, child_name: str) -> str:
@@ -111,24 +163,40 @@ def _validate_name(
     return name
 
 
-def _check_templates(value: Any, *, effect_path: str, field: str) -> None:
+def _check_templates(
+    value: Any, *, effect_path: str, field: str, allow_partials: bool = False
+) -> None:
     """Reject a malformed Mustache template (in *value*, walked recursively).
 
     Every string a tool's ``params`` holds is rendered, so nested mappings and
-    lists are walked; non-string leaves are not templates.
+    lists are walked; non-string leaves are not templates. ``allow_partials``
+    lets a well-formed ``{{> name}}`` pass this syntax gate — set only by
+    callers checking one of the fields ``{{> name}}`` composition reaches
+    (#396); ``core.prompt_compose.check_prompt_composition`` separately
+    checks the name itself resolves.
     """
     if isinstance(value, str):
-        reason = template_syntax_error(value)
+        reason = template_syntax_error(value, allow_partials=allow_partials)
         if reason is not None:
             raise ValueError(
                 f"{effect_path}.{field}: malformed Mustache template: {reason}"
             )
     elif isinstance(value, dict):
         for key, item in value.items():
-            _check_templates(item, effect_path=effect_path, field=f"{field}.{key}")
+            _check_templates(
+                item,
+                effect_path=effect_path,
+                field=f"{field}.{key}",
+                allow_partials=allow_partials,
+            )
     elif isinstance(value, list):
         for index, item in enumerate(value):
-            _check_templates(item, effect_path=effect_path, field=f"{field}[{index}]")
+            _check_templates(
+                item,
+                effect_path=effect_path,
+                field=f"{field}[{index}]",
+                allow_partials=allow_partials,
+            )
 
 
 def _compile_retries(effect: dict[str, Any]) -> RetryPolicyDef | None:
@@ -300,44 +368,84 @@ def _normalize_flow(flow: str) -> Literal["chain", "tree"]:
 
 
 def compile_orchestration(
-    *, orch: dict[str, Any], root_name: str = "prime"
+    *,
+    orch: dict[str, Any],
+    root_name: str = "prime",
+    document_dir: Path | None = None,
+    confinement_root: Path | None = None,
 ) -> DynamicDefinition:
-    # Support both 'effects' (spec) and 'steps' (legacy)
-    effects = orch.get("effects") or orch.get("steps") or []
-    # Bare {{name}} refs to this document's declared interface inputs are a
-    # hard error — caller inputs live under the `input` namespace.
-    validate_bare_input_refs(orch)
-    root_seen_names: dict[str, str] = {}
-    compiled_effects = _compile_effects_in_scope(
-        effects=effects,
-        scope_path=root_name,
-        container_path=f"{root_name}.effects",
-        seen_names=root_seen_names,
-    )
+    """Compile *orch* to its effect tree, root ``DynamicDefinition.prompts``
+    carrying its own declared prompts (#396).
 
-    # Cleanup effects, allowed at the document root as well as on a
-    # `dynamic` effect (see `_compile_effect`'s `finally` guard) — same
-    # scope as the main effects, so e.g. a started server's pid is in reach.
-    finally_raw = orch.get("finally") or []
-    compiled_finally = (
-        _compile_effects_in_scope(
-            effects=finally_raw,
+    *document_dir*/*confinement_root* are the document's own directory and
+    the project it must stay inside for a ``{file: ...}`` prompt source
+    (``core.prompt_files``) — ``None`` (the default) for a document with no
+    file of its own: generated at run time (a reflector/decompose plan, a
+    ``use: inline`` child) or with no path at all (stdin, an SDK string),
+    for which ``file:`` is then a compile error. A caller that executes the
+    result threads ``root.prompts`` into ``runtime_config`` under
+    ``core.prompt_compose.RUNTIME_CONFIG_KEY`` itself, fresh for every
+    ``use`` child, so "a child document sees only its own declared prompts"
+    needs no special-casing at the ``use`` boundary.
+    """
+    with _document_location(document_dir, confinement_root):
+        # Support both 'effects' (spec) and 'steps' (legacy)
+        effects = orch.get("effects") or orch.get("steps") or []
+        # Bare {{name}} refs to this document's declared interface inputs are a
+        # hard error — caller inputs live under the `input` namespace.
+        validate_bare_input_refs(orch)
+
+        try:
+            declared_prompts = compile_declared_prompts(
+                orch, document_dir=document_dir, confinement_root=confinement_root
+            )
+        except PromptCompositionError as exc:
+            raise ValueError(str(exc)) from exc
+        composition_errors = check_prompt_composition(
+            orch,
+            declared=declared_prompts,
+            document_dir=document_dir,
+            confinement_root=confinement_root,
+        )
+        if composition_errors:
+            raise ValueError(
+                "Prompt composition errors:\n"
+                + "\n".join(f"  - {e}" for e in composition_errors)
+            )
+
+        root_seen_names: dict[str, str] = {}
+        compiled_effects = _compile_effects_in_scope(
+            effects=effects,
             scope_path=root_name,
-            container_path=f"{root_name}.finally",
+            container_path=f"{root_name}.effects",
             seen_names=root_seen_names,
         )
-        if finally_raw
-        else []
-    )
 
-    flow = _normalize_flow(orch.get("flow") or orch.get("strategy") or "chain")
+        # Cleanup effects, allowed at the document root as well as on a
+        # `dynamic` effect (see `_compile_effect`'s `finally` guard) — same
+        # scope as the main effects, so e.g. a started server's pid is in reach.
+        finally_raw = orch.get("finally") or []
+        compiled_finally = (
+            _compile_effects_in_scope(
+                effects=finally_raw,
+                scope_path=root_name,
+                container_path=f"{root_name}.finally",
+                seen_names=root_seen_names,
+            )
+            if finally_raw
+            else []
+        )
 
-    return DynamicDefinition(
-        name=root_name,
-        effects=compiled_effects,
-        flow=flow,
-        finally_effects=tuple(compiled_finally),
-    )
+        flow = _normalize_flow(orch.get("flow") or orch.get("strategy") or "chain")
+
+        return DynamicDefinition(
+            name=root_name,
+            effects=compiled_effects,
+            flow=flow,
+            finally_effects=tuple(compiled_finally),
+            prompts=declared_prompts,
+            effect_names=all_effect_names(orch),
+        )
 
 
 def apply_effect_overrides(
@@ -664,6 +772,19 @@ def _compile_effect(
             effect_path=effect_path,
             loop_names=loop_names,
         )
+
+    if effect_type == "yield":
+        if name is None:
+            raise ValueError(
+                f"Yield effect at '{effect_path}' is missing required field 'name'."
+            )
+        _validate_name(
+            name=name,
+            effect_type="yield",
+            scope_path=scope_path,
+            effect_path=effect_path,
+        )
+        return _compile_yield(effect, effect_path=effect_path)
 
     if effect_type == "reflector":
         if name is None:
@@ -1029,7 +1150,7 @@ def _check_param_leaves(
         )
         return
     if isinstance(value, str):
-        reason = template_syntax_error(value)
+        reason = template_syntax_error(value, allow_partials=True)
         if reason is not None:
             raise ValueError(
                 f"{effect_path}.{field}: malformed Mustache template: {reason}"
@@ -1113,7 +1234,7 @@ def _compile_tool(
     if prompt is not None and not isinstance(prompt, str):
         prompt = None
 
-    _check_templates(prompt, effect_path=effect_path, field="prompt")
+    _check_templates(prompt, effect_path=effect_path, field="prompt", allow_partials=True)
     _check_param_leaves(
         params, name=str(name), effect_path=effect_path, field="params", loop_names=loop_names
     )
@@ -1121,7 +1242,9 @@ def _compile_tool(
         _check_security_sensitive_param_leaf(
             params[sensitive_key], name=str(name), field=f"params.{sensitive_key}"
         )
-    _check_templates(params_json, effect_path=effect_path, field="params_json")
+    _check_templates(
+        params_json, effect_path=effect_path, field="params_json", allow_partials=True
+    )
 
     model = effect.get("model")
     if model is not None and not isinstance(model, str):
@@ -1224,12 +1347,15 @@ def _compile_use(
     if inputs is not None and not isinstance(inputs, dict):
         inputs = None
 
-    _check_templates(inline, effect_path=effect_path, field="inline")
+    _check_templates(inline, effect_path=effect_path, field="inline", allow_partials=True)
     for input_name, value in (inputs or {}).items():
         # Only string inputs render; a `{from: <path>}` reference does not.
         if isinstance(value, str):
             _check_templates(
-                value, effect_path=effect_path, field=f"inputs.{input_name}"
+                value,
+                effect_path=effect_path,
+                field=f"inputs.{input_name}",
+                allow_partials=True,
             )
 
     # By-reference inputs (`name: {from: <path>}`) pass the resolved value
@@ -1286,6 +1412,57 @@ def _compile_use(
     )
 
 
+def _compile_yield(effect: dict[str, Any], *, effect_path: str) -> YieldDefinition:
+    """Compile a ``yield`` effect — a prompt as a value, no model call (#396)."""
+    name = effect.get("name")
+    if not name:
+        raise ValueError("Yield effect is missing 'name'.")
+
+    forbidden = [key for key in _YIELD_FORBIDDEN_KEYS if key in effect]
+    if forbidden:
+        raise ValueError(
+            f"Yield effect '{name}' does not accept "
+            f"{', '.join(repr(k) for k in forbidden)} — a yield effect never "
+            "calls a model."
+        )
+
+    template_raw = effect.get("template")
+    if template_raw is None:
+        raise ValueError(f"Yield effect '{name}' must have 'template'.")
+    template = resolve_text_or_file(
+        template_raw,
+        field=f"{effect_path}.template",
+        document_dir=_current_document_dir(),
+        confinement_root=_current_confinement_root(),
+    )
+    if not template.strip():
+        raise ValueError(f"Yield effect '{name}': 'template' must not be empty.")
+    _check_templates(template, effect_path=effect_path, field="template", allow_partials=True)
+
+    inputs = effect.get("inputs")
+    if inputs is not None and not isinstance(inputs, dict):
+        inputs = None
+
+    on_error_raw = str(effect.get("on_error") or "fail").strip().lower()
+    on_error: Literal["fail", "skip", "continue"] = (
+        cast(Literal["fail", "skip", "continue"], on_error_raw)
+        if on_error_raw in ("fail", "skip", "continue")
+        else "fail"
+    )
+
+    description = effect.get("description")
+    if description is not None and not isinstance(description, str):
+        description = None
+
+    return YieldDefinition(
+        name=name,
+        template=template,
+        inputs=inputs,
+        on_error=on_error,
+        description=description,
+    )
+
+
 def _compile_prompt(effect: dict[str, Any], *, effect_path: str) -> PromptDefinition:
     """Compile a prompt effect with full spec support."""
     name = effect.get("name")
@@ -1303,7 +1480,17 @@ def _compile_prompt(effect: dict[str, Any], *, effect_path: str) -> PromptDefini
         )
 
     # Primary input form: template or messages
-    template = effect.get("template")
+    template_raw = effect.get("template")
+    template = (
+        resolve_text_or_file(
+            template_raw,
+            field=f"{effect_path}.template",
+            document_dir=_current_document_dir(),
+            confinement_root=_current_confinement_root(),
+        )
+        if template_raw is not None
+        else None
+    )
     messages_raw = effect.get("messages")
 
     messages = None
@@ -1311,18 +1498,26 @@ def _compile_prompt(effect: dict[str, Any], *, effect_path: str) -> PromptDefini
         messages = tuple(
             MessageDef(
                 role=m.get("role", "user"),
-                content=m.get("content", ""),
+                content=resolve_text_or_file(
+                    m.get("content", ""),
+                    field=f"{effect_path}.messages[{index}].content",
+                    document_dir=_current_document_dir(),
+                    confinement_root=_current_confinement_root(),
+                ),
             )
-            for m in messages_raw
+            for index, m in enumerate(messages_raw)
             if isinstance(m, dict)
         )
 
     if not template and not messages:
         raise ValueError(f"Prompt '{name}' must have 'template' or 'messages'.")
-    _check_templates(template, effect_path=effect_path, field="template")
+    _check_templates(template, effect_path=effect_path, field="template", allow_partials=True)
     for index, message in enumerate(messages or ()):
         _check_templates(
-            message.content, effect_path=effect_path, field=f"messages[{index}].content"
+            message.content,
+            effect_path=effect_path,
+            field=f"messages[{index}].content",
+            allow_partials=True,
         )
     if prompt_type_raw not in (
         "text",

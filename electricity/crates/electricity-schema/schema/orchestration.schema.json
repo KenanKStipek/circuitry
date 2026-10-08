@@ -26,6 +26,11 @@
       "description": "Ordered list of top-level effects to execute.",
       "items": { "$ref": "#/$defs/EffectDef" }
     },
+    "prompts": {
+      "type": "object",
+      "description": "Declared prompts, named text any template in the document can splice in with {{> name}} (#396). Each value is a Mustache template string, or {file: <path>} to load it from a file next to the document instead. A declared prompt's own tags never HTML-escape, wherever it is included.",
+      "additionalProperties": { "$ref": "#/$defs/TemplateOrFile" }
+    },
     "finally": {
       "type": "array",
       "description": "Cleanup effects run after 'effects' completes, whether it succeeded or failed, and best-effort on a Ctrl-C/cancellation. Always sequential. The original failure (if any) still propagates after 'finally' runs; a 'finally' failure on a successful run fails it too, unless that finally effect has its own on_error: continue/skip.",
@@ -151,6 +156,21 @@
       ]
     },
 
+    "TemplateOrFile": {
+      "description": "A Mustache template string, or {file: <path>} to load it from a file next to the document instead (#396). The path is literal (no {{ }}) and relative, resolved against the document's own directory, and must stay inside the document's project.",
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "required": ["file"],
+          "additionalProperties": false,
+          "properties": {
+            "file": { "type": "string", "description": "Relative path to the template file." }
+          }
+        }
+      ]
+    },
+
     "MessageDef": {
       "type": "object",
       "required": ["role", "content"],
@@ -160,7 +180,7 @@
           "type": "string",
           "enum": ["system", "user", "assistant", "tool"]
         },
-        "content": { "type": "string" }
+        "content": { "$ref": "#/$defs/TemplateOrFile" }
       }
     },
 
@@ -238,10 +258,14 @@
                   "if": { "properties": { "type": { "const": "use" } } },
                   "then": { "$ref": "#/$defs/UseEffect" },
                   "else": {
-                    "properties": {
-                      "type": {
-                        "enum": ["prompt", "dynamic", "if", "conditional", "loop", "reflector", "tool", "use"],
-                        "description": "Unknown effect type. Must be one of: prompt, dynamic, if, loop, reflector, tool, use. ('conditional' is also accepted as a deprecated alias of 'if'.)"
+                    "if": { "properties": { "type": { "const": "yield" } } },
+                    "then": { "$ref": "#/$defs/YieldEffect" },
+                    "else": {
+                      "properties": {
+                        "type": {
+                          "enum": ["prompt", "dynamic", "if", "conditional", "loop", "reflector", "tool", "use", "yield"],
+                          "description": "Unknown effect type. Must be one of: prompt, dynamic, if, loop, reflector, tool, use, yield. ('conditional' is also accepted as a deprecated alias of 'if'.)"
+                        }
                       }
                     }
                   }
@@ -280,8 +304,8 @@
           "description": "JSON Schema for validating structured output. Enforced as required when prompt_type is json, object, or array."
         },
         "template": {
-          "type": "string",
-          "description": "Mustache template string. Use {{key}} for initial state, {{prime.name.value}} for effect outputs."
+          "$ref": "#/$defs/TemplateOrFile",
+          "description": "Mustache template string, or {file: <path>}. Use {{key}} for initial state, {{prime.name.value}} for effect outputs, {{> name}} to splice in a declared prompt or a yield/text-prompt effect's own text (#396). {{x}} inserts the value as-is, like {{{x}}} — prompt text is not HTML, so it is never escaped (#397)."
         },
         "messages": {
           "type": "array",
@@ -314,6 +338,24 @@
         { "required": ["template"] },
         { "required": ["messages"] }
       ]
+    },
+
+    "YieldEffect": {
+      "type": "object",
+      "required": ["type", "name", "template"],
+      "description": "Renders 'template' and stores the text at prime.<name>.value — a prompt as a value, with no model call and no token count (#396). Works in every flow/container and with --resume, exactly like any other leaf effect.",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "yield" },
+        "name": { "$ref": "#/$defs/NamePattern" },
+        "description": { "type": "string" },
+        "template": {
+          "$ref": "#/$defs/TemplateOrFile",
+          "description": "Mustache template string, or {file: <path>}. Supports {{> name}} (#396); {{x}} is never HTML-escaped, like {{{x}}} (#397)."
+        },
+        "inputs": { "type": "object", "description": "Prompt-local key/value pairs available in template rendering." },
+        "on_error": { "$ref": "#/$defs/OnErrorDefault" }
+      }
     },
 
     "DynamicEffect": {

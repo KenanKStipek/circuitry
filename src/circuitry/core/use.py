@@ -22,9 +22,13 @@ from .expect import ExpectDef, evaluate_expect, expect_failure_summary
 from .interface_inputs import check_interface_inputs
 from .outputs import normalize_outputs
 from .prompt import RetryPolicyDef
+from .prompt_compose import (
+    declared_prompts,
+    known_effect_names,
+    render_with_composition,
+)
 from .store import Store
 from .store.store import replace_node
-from .templates import render_template
 from .yaml_load import load_yaml
 
 logger = logging.getLogger(__name__)
@@ -183,12 +187,20 @@ def _resolve_reference(ctx: Mapping[str, Any], path: str) -> Any:
     return current
 
 
-def _render_inputs(inputs: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+def _render_inputs(
+    inputs: dict[str, Any],
+    ctx: dict[str, Any],
+    *,
+    declared: dict[str, str] | None = None,
+    known_names: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
     """Render input values for a child run.
 
     A by-reference input (``{from: <path>}``) passes the resolved value itself,
     deep-copied so the child can never alias parent state. Strings are
-    Mustache-rendered; anything else passes through unchanged.
+    Mustache-rendered (``{{> name}}`` expanded against *declared* — the
+    *parent's* own declared prompts, #396); anything else passes through
+    unchanged.
     """
     rendered: dict[str, Any] = {}
     for key, value in inputs.items():
@@ -196,7 +208,9 @@ def _render_inputs(inputs: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any
         if path is not None:
             rendered[key] = copy.deepcopy(_resolve_reference(ctx, path))
         elif isinstance(value, str):
-            rendered[key] = render_template(value, ctx, label=f"inputs.{key}")
+            rendered[key] = render_with_composition(
+                value, ctx, declared=declared, known_effect_names=known_names, label=f"inputs.{key}"
+            )
         else:
             rendered[key] = value
     return rendered
@@ -445,6 +459,44 @@ class UseRuntime:
 
         return ", ".join(build_registry(self.runtime_config).source_names) or "none"
 
+    def _confinement_root_for(self, document_dir: Path) -> Path:
+        """The project a `{file: ...}` prompt source in this child must stay
+        inside (#396).
+
+        A `ref:` resolved from a remote (github) source is confined to that
+        source's own cached tree at the pinned commit — ``self._pin``'s
+        ``cache_path``, recorded by ``_resolve_library_ref``. Anything else
+        (a `path:`/legacy `orchestration:` field, or a `ref:` served from a
+        folder/curation source already on disk) is treated like an ordinary
+        filesystem document: confined to the nearest
+        ``circuitry.config.json``/``config.json`` at or above it, or its own
+        directory when there is none (``core.prompt_files``).
+        """
+        from .prompt_files import default_project_root
+
+        if self._pin is not None and self._pin.get("cache_path"):
+            return Path(str(self._pin["cache_path"]))
+        return default_project_root(document_dir)
+
+    def _content_digest(self, resolved_path: Path, child_orch: dict[str, Any]) -> str:
+        """SHA-256 of *resolved_path*'s bytes, plus every prompt file it
+        references (#396) — capability consent (``cof trust``) is recorded
+        by this digest, so editing a referenced prompt file must ask again
+        exactly as editing the orchestration YAML itself already does.
+        Delegates to ``core.prompt_compose.document_content_digest``, the
+        same function ``cof trust``/``cli.document_consent`` use, so a
+        ``ref:`` child consented to from either surface is found by the
+        other at run time (#396 — the two must hash identically).
+        """
+        from .prompt_compose import document_content_digest
+
+        document_dir = resolved_path.resolve().parent
+        return document_content_digest(
+            resolved_path,
+            child_orch,
+            confinement_root=self._confinement_root_for(document_dir),
+        )
+
     def _check_interface(
         self,
         orch: dict[str, Any],
@@ -502,7 +554,13 @@ class UseRuntime:
         """
         if self.defn.inline is not None:
             # Render Mustache template against parent context
-            raw_yaml = render_template(self.defn.inline, ctx, label="inline")
+            raw_yaml = render_with_composition(
+                self.defn.inline,
+                ctx,
+                declared=declared_prompts(self.runtime_config),
+                known_effect_names=known_effect_names(self.runtime_config),
+                label="inline",
+            )
             cleaned = _clean_yaml_fences(raw_yaml)
 
             # Validate against schema
@@ -525,8 +583,8 @@ class UseRuntime:
 
         resolved_path = self._resolve_orchestration()
         identity = str(resolved_path.resolve())
-        digest = hashlib.sha256(resolved_path.read_bytes()).hexdigest()
         child_orch = load_orchestration_file(resolved_path)
+        digest = self._content_digest(resolved_path, child_orch)
         # A path/ref child gets the same structural check `cof check` gives a
         # file named on the command line — `cof check` on the parent never
         # loads it, and nothing else would before it runs.
@@ -820,10 +878,30 @@ class UseRuntime:
                     # composition chains through each file's own location. Inline
                     # children have no file/directory of their own, so they inherit
                     # whatever directory was already in effect.
+                    child_document_dir: Path | None = None
+                    child_confinement_root: Path | None = None
                     if not meta["inline"]:
-                        child_runtime_config["_orchestration_dir"] = str(Path(identity).parent)
+                        child_document_dir = Path(identity).parent
+                        child_runtime_config["_orchestration_dir"] = str(child_document_dir)
+                        child_confinement_root = self._confinement_root_for(child_document_dir)
 
-                    child_root = compile_orchestration(orch=child_orch, root_name="prime")
+                    child_root = compile_orchestration(
+                        orch=child_orch,
+                        root_name="prime",
+                        document_dir=child_document_dir,
+                        confinement_root=child_confinement_root,
+                    )
+                    # "A child document run with `use` sees only its own
+                    # declared prompts" (#396) — set fresh here rather than
+                    # inherited, since `child_runtime_config` started as a
+                    # shallow copy of the parent's.
+                    from .prompt_compose import (
+                        EFFECT_NAMES_RUNTIME_KEY as _EFFECT_NAMES_KEY,
+                    )
+                    from .prompt_compose import RUNTIME_CONFIG_KEY as _PROMPTS_KEY
+
+                    child_runtime_config[_PROMPTS_KEY] = child_root.prompts
+                    child_runtime_config[_EFFECT_NAMES_KEY] = child_root.effect_names
 
                     # The run-wide limiter (if any) is ambient — a `use` child
                     # never declares its own `runtime.concurrency_groups` (see
@@ -853,7 +931,12 @@ class UseRuntime:
                     child_inputs: dict[str, Any] = {}
                     unresolved: dict[str, str] = {}
                     if self.defn.inputs:
-                        child_inputs = _render_inputs(self.defn.inputs, ctx)
+                        child_inputs = _render_inputs(
+                            self.defn.inputs,
+                            ctx,
+                            declared=declared_prompts(self.runtime_config),
+                            known_names=known_effect_names(self.runtime_config),
+                        )
                         unresolved = _unresolved_references(self.defn.inputs, child_inputs)
                     # Check interface first — it fills in declared `default:`s and
                     # coerces declared-typed values — so `meta["inputs"]` below

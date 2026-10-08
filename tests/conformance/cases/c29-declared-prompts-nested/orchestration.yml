@@ -1,0 +1,11 @@
+name: c29-declared-prompts-nested
+prompts:
+  base: "Be concise."
+  voice: |
+    {{> base}} Plain sentences.
+effects:
+  - type: yield
+    name: brief
+    template: |
+      {{> voice}}
+      Next line.

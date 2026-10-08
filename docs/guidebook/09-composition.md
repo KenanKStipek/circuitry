@@ -156,7 +156,7 @@ Isolated *state*, shared *observation*. The child's effects are reported to the 
 
 Errors inside the child are the child's, under its own effects' `on_error`; a child that fails as a whole fails the `use`, under the `use`'s `on_error`. Nothing partial ever lands in the `use` node's `value` — a failed child's scratch state is discarded.
 
-The `use` node keeps a record of the call either way. `meta.inputs` is what the child actually received, `meta.orchestration_sha256` is the SHA-256 of the child's YAML, and `meta.child_errors` lists, as `{path, error}`, every effect inside the child that failed and was skipped under its own `on_error` — so a composed call that went green still says what it lost (`null` when nothing did). To keep the child's own effects in the final state as well, set `runtime.state.record_children: true` in config. Each `use` node then holds its child's effects beside the mapped `value`, at every depth, a failed child's partial record included. That is for the audit trail: downstream effects still read the declared outputs, never the recorded child effects.
+The `use` node keeps a record of the call either way. `meta.inputs` is what the child actually received, `meta.orchestration_sha256` is the SHA-256 of the child's YAML plus every prompt file it references, and `meta.child_errors` lists, as `{path, error}`, every effect inside the child that failed and was skipped under its own `on_error` — so a composed call that went green still says what it lost (`null` when nothing did). To keep the child's own effects in the final state as well, set `runtime.state.record_children: true` in config. Each `use` node then holds its child's effects beside the mapped `value`, at every depth, a failed child's partial record included. That is for the audit trail: downstream effects still read the declared outputs, never the recorded child effects.
 
 ## The library
 
@@ -220,6 +220,29 @@ The utilities are written to chain. A draft reply to the reporter, critiqued aga
 
 `critique` declares one output, `critique` (an object with `score`, `issues`, `strengths`), so `prime.critique_step.value.critique.issues` is the list of things to fix; `refine` declares `refined`. Neither caller repeats a path into the child, and either utility can be reworked internally without touching this document. `patterns/critique_refine_loop` wraps the same two calls in a `while` loop with the model judging when to stop.
 
+## Composing the prompt text itself
+
+The section above pipes a model's *reply* from one step to the next through `inputs:`. A separate mechanism composes *prompt text before any model runs*: a top-level `prompts:` map names reusable passages, and `{{> name}}` splices one — or a `yield`/text-`prompt` effect's own output, inserted verbatim and never re-rendered — into any prompt template, messages entry, tool param, or `use` input, any number of times in one string:
+
+```yaml
+prompts:
+  voice: "Plain, direct sentences. No marketing language."
+
+effects:
+  - type: yield
+    name: rules
+    template: "Cite every claim. Flag anything you are not sure of."
+
+  - type: prompt
+    name: reply
+    template: |
+      {{> voice}}
+      {{> rules}}
+      Reply to the reporter about: {{input.issue}}
+```
+
+`yield` is the same idea as `prompt` with no model call — a template rendered once and stored, for building a value you want to reuse rather than ask a model for. Unlike `inputs:`, this never crosses a `use` boundary: a child document sees only its own declared prompts. See [Prompt composition](../orchestration-reference.md#prompt-composition) in the reference for the full rule, including prompt files (`{file: <path>}`) for a passage worth keeping in its own file.
+
 ## Anti-patterns
 
 **Passing state by reaching.** A `ref` pointing at a state path, or a child template that expects `{{prime.<parent_effect>.value}}`. The only door is `inputs:`.
@@ -237,3 +260,4 @@ The utilities are written to chain. A draft reply to the reporter, critiqued aga
 - [Orchestration Reference → `use`](../orchestration-reference.md#use) and [Outputs](../orchestration-reference.md#outputs).
 - [Library Sources](../library-sources.md) · [Shared Library](../shared-library.md).
 - [`patterns/parallel_then_judge`](../../src/circuitry/curation/patterns/parallel_then_judge.yml) — a tree of candidates and a `judge` utility choosing one.
+- [Orchestration Reference → Prompt composition](../orchestration-reference.md#prompt-composition) (declared `prompts:`, `{{> name}}`, and `{file: <path>}`).

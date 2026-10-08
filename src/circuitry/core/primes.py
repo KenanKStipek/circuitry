@@ -161,7 +161,7 @@ model:     OPTIONAL. Omit — it comes from the user's config.json.
   `critique_draft`. Type-keyword names are generic, so two of them collide as
   siblings — and validation warns about them.
 
-=== THE SEVEN PRIMITIVES ===
+=== THE EIGHT PRIMITIVES ===
 
 1) prompt — one model call. Writes prime.<name>.value.
    Required: type, name, and exactly one of template | messages.
@@ -277,6 +277,29 @@ model:     OPTIONAL. Omit — it comes from the user's config.json.
    Required: type, name, effects (non-empty). Optional: plan_from_step,
    max_iterations, generated_key, stop_on_done, max_effects, prime_template.
    Use it only when the steps genuinely cannot be known up front.
+
+8) yield — renders a template and stores the text. No model call.
+   Required: type, name, template. Optional: inputs, description, on_error.
+   Use it to build a value from a plain template, not from a model — compose
+   it with other effects' text (see COMPOSING PROMPTS below), not to ask for
+   anything.
+     - type: yield
+       name: brief
+       template: "Topic: {{input.topic}}"
+
+=== COMPOSING PROMPTS ===
+A top-level `prompts:` map declares named text. `{{> name}}` splices in a
+declared prompt, or the text of a `yield`/text `prompt` effect, into a prompt
+template or messages, a declared prompt, a tool's params/prompt, or a use
+effect's inputs/inline — never HTML-escaped, even inside a tool param. It can
+appear more than once in one string. Do not use `{file: <path>}` here: the
+validate_yaml tool rejects it for a document that has no file of its own.
+  prompts:
+    voice: "Plain, direct sentences."
+  effects:
+    - type: prompt
+      name: draft
+      template: "{{> voice}} Summarize {{input.topic}}."
 
 === STATE PATHS ===
 State has exactly three root namespaces: input (caller-supplied), prime

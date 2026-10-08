@@ -324,7 +324,14 @@ class ProfileScreen(ViewScreen):
             # The validate-only path: if it does not compile there is no
             # effect tree to pick models for, and saying so beats rendering
             # a tree built from a file the engine would reject.
-            compile_orchestration(orch=orch)
+            from ..core.prompt_files import default_project_root
+
+            _document_dir = choice.path.resolve().parent
+            compile_orchestration(
+                orch=orch,
+                document_dir=_document_dir,
+                confinement_root=default_project_root(_document_dir),
+            )
         except Exception as exc:
             self._choice = None
             self._orch = {}

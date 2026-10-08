@@ -1,0 +1,6 @@
+{
+  "spec_case": "C31",
+  "description": "yield.template renders {{x}} unescaped (prompt text, #397); the same value through a tool params string still HTML-escapes (electricity/docs/spec/runtime-semantics.md §3.1, §3.4).",
+  "expect": "success",
+  "cli_args": ["-e", "x=\"<b>&"]
+}

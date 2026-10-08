@@ -1,0 +1,5 @@
+{
+  "spec_case": "C29",
+  "description": "{{> name}} splices a declared prompt into another declared prompt and into a yield template; the included text's one trailing newline is dropped (electricity/docs/spec/runtime-semantics.md §3.6).",
+  "expect": "success"
+}
