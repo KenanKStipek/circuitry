@@ -1,0 +1,6 @@
+{
+  "spec_case": "C7",
+  "description": "if: {mode: cel, expr: \"1.0 == 1\"} — int/uint/double are one numeric family in CEL and compare across subtype as True (electricity/docs/spec/runtime-semantics.md §4.3). This is the 'if' half of C7 only; the 'while' half is out of scope for this lane.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
