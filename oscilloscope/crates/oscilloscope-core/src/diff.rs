@@ -77,6 +77,16 @@ fn result_summary(node: &NodeMeta) -> String {
     "ok".to_string()
 }
 
+/// A dynamic/`if`/loop container, identified from its own measured
+/// `meta` shape (DESIGN.md §1.2) rather than the plan, since the plan
+/// may not exist (the no-plan fallback, DESIGN.md §5's "Asks" item 5).
+/// Containers get no `▶`/`✓`/`✗` line of their own (DESIGN.md §6.2's
+/// example has none for the root `prime`); their children's lines, and
+/// a container's own `◆`/`⟳` line, already show its progress.
+fn is_container(meta: &Value) -> bool {
+    meta.get("flow").is_some() || meta.get("mode").is_some()
+}
+
 fn on_error_suffix(path: &str, plan: &PlanTree) -> &'static str {
     match plan
         .match_path(path)
@@ -125,8 +135,12 @@ impl Differ {
         let mut lines = Vec::new();
 
         for (path, node) in &flat {
+            let is_container = is_container(&node.meta);
             match self.last.get(path) {
                 None => {
+                    if is_container {
+                        continue;
+                    }
                     // A path appearing for the first time.
                     if node.is_running() {
                         lines.push(LogLine {
@@ -142,28 +156,31 @@ impl Differ {
                     }
                 }
                 Some(prev) => {
-                    if prev.is_running() && !node.is_running() {
-                        lines.push(end_line(path, node, plan));
-                    } else if !prev.is_running() && !node.is_running() {
-                        // A complete node whose `created_at` moved: the
-                        // unnamed-loop-path reuse case (DESIGN.md §2.3).
-                        if prev.created_at != node.created_at {
-                            let pass = self.unnamed_pass_counts.entry(path.clone()).or_insert(0);
-                            *pass += 1;
+                    if !is_container {
+                        if prev.is_running() && !node.is_running() {
+                            lines.push(end_line(path, node, plan));
+                        } else if !prev.is_running() && !node.is_running() {
+                            // A complete node whose `created_at` moved: the
+                            // unnamed-loop-path reuse case (DESIGN.md §2.3).
+                            if prev.created_at != node.created_at {
+                                let pass =
+                                    self.unnamed_pass_counts.entry(path.clone()).or_insert(0);
+                                *pass += 1;
+                                lines.push(LogLine {
+                                    ts: node.created_at.clone(),
+                                    text: format!("▶ {path} #{pass}  {}", summary_for(node)),
+                                });
+                                lines.push(end_line_numbered(path, node, plan, *pass));
+                            }
+                        } else if prev.is_running()
+                            && node.is_running()
+                            && prev.created_at != node.created_at
+                        {
                             lines.push(LogLine {
                                 ts: node.created_at.clone(),
-                                text: format!("▶ {path} #{pass}  {}", summary_for(node)),
+                                text: format!("↻ {path} retry"),
                             });
-                            lines.push(end_line_numbered(path, node, plan, *pass));
                         }
-                    } else if prev.is_running()
-                        && node.is_running()
-                        && prev.created_at != node.created_at
-                    {
-                        lines.push(LogLine {
-                            ts: node.created_at.clone(),
-                            text: format!("↻ {path} retry"),
-                        });
                     }
 
                     if prev.branch.is_none() && node.branch.is_some() {
@@ -208,14 +225,27 @@ impl Differ {
             } else {
                 format!("failed: {}", run_error(state).unwrap_or_default())
             };
+            let run_ts = state
+                .pointer("/runtime/last_run/completed_at")
+                .and_then(Value::as_str)
+                .map(str::to_string);
             lines.push(LogLine {
-                ts: None,
+                ts: run_ts,
                 text: format!("■ run {status_text}{totals_text}"),
             });
         }
 
         self.last = flat;
-        lines.sort_by(|a, b| a.ts.cmp(&b.ts));
+        // `None` (only ever the final run-summary line, when no
+        // timestamp was available at all) sorts last, not first —
+        // `Option`'s own derived order would put it before every real
+        // timestamp instead.
+        lines.sort_by(|a, b| match (&a.ts, &b.ts) {
+            (Some(x), Some(y)) => x.cmp(y),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
         lines
     }
 }
@@ -351,6 +381,32 @@ mod tests {
             .find(|l| l.text.starts_with("✗ prime.flaky"))
             .expect("end line");
         assert!(end.text.contains("(on_error: continue)"));
+    }
+
+    #[test]
+    fn a_container_node_gets_no_start_or_end_line_of_its_own() {
+        let mut differ = Differ::new();
+        let running = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+            "step1": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "provider": "shell"}}
+        }});
+        let lines = differ.diff(&running, &PlanTree::empty());
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.text.contains("prime ") || l.text == "▶ prime")
+        );
+        assert!(lines.iter().any(|l| l.text.starts_with("▶ prime.step1")));
+
+        let done = json!({"prime": {"value": true, "meta": {"completed_at": "t1", "error": null, "flow": "chain"},
+            "step1": {"value": "", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}}
+        }});
+        let lines2 = differ.diff(&done, &PlanTree::empty());
+        assert!(
+            !lines2
+                .iter()
+                .any(|l| l.text.starts_with("✓ prime ") || l.text.starts_with("✓ prime  "))
+        );
+        assert!(lines2.iter().any(|l| l.text.starts_with("✓ prime.step1")));
     }
 
     #[test]

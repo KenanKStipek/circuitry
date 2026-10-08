@@ -10,11 +10,39 @@ processing. A terminal UI comes first; a GUI can reuse the same core later.
 CYBERDINER_TOKEN=... osp do-thing.yml config.json
 ```
 
-**This is a preview and not functional yet.** Milestone O-0 (issue #420)
-only sets up the workspace, crates, CI and release jobs: `osp --version` and
-`osp --help` work, and both `osp <orchestration>` and `osp watch` exit 2
-with a "not implemented yet" message. The run logic lands in milestone O-1,
-the terminal UI in O-2 — see [`DESIGN.md`](DESIGN.md).
+**This is a preview.** Milestone O-1 (issue #424) fills in the core: `osp
+<orchestration>` launches and supervises `cof` (or, once it runs documents,
+electricity), prints a plain-text log of what's running, and exits with the
+engine's own exit code; `osp watch <dir>` attaches to a run `osp` didn't
+start. There is no terminal UI yet — that's milestone O-2 — so every run
+prints the same plain-text stream today, `--log` notwithstanding. See
+[`DESIGN.md`](DESIGN.md).
+
+```
+osp do-thing.yml config.json
+osp do-thing.yml -e key=value --engine cof --out-dir ./run
+osp watch ./run
+```
+
+- With no `config.json`, `cof` resolves its own config layers (global,
+  project, environment) exactly as `cof run` would.
+- `--engine electricity` needs a config (electricity has no config
+  discovery yet) and, until electricity runs documents, just shows
+  electricity's own "preview" message and exit code.
+- Run files (`state.live.json`, `state.json`, `events.jsonl`, `stdout.txt`,
+  `stderr.txt`) go to a fresh temporary directory by default, printed when
+  the run ends; `--out-dir DIR` keeps them in a chosen directory instead —
+  the same layout `osp watch` reads.
+- `cof run --events` (issue #419) is detected from `cof run --help`; without
+  it `osp` falls back to `--live-state`/`--out` alone, state-only (DESIGN.md
+  §2's "From state alone" rules).
+- A document that fails to compile (or an engine whose compiler is still a
+  stub) falls back to a plan-free run: rows come only from what's observed.
+- The first Ctrl-C forwards `SIGINT` to the engine's process group and logs
+  a cancelling notice; a second forwards it again; still running 10s later,
+  `osp` sends `SIGKILL`. `SIGTERM`/`SIGHUP` are forwarded the same way. `osp`
+  always exits with the engine's own exit code, and never leaves it running
+  after `osp` itself exits — including on a panic.
 
 `oscilloscope/` is its own Cargo workspace, versioned in lockstep with the
 rest of this repository (`pyproject.toml`, `electricity/Cargo.toml`). It

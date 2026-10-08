@@ -484,6 +484,11 @@ Polling, every 100 ms, is preferred over `notify`. The live file is replaced by 
 
 ## 7. Open questions (each with a recommendation)
 
+Each row below is already settled: Q1-Q10 here are the same Q1-Q10 the
+owner decided in issue #418's own "Taken here; the owner can override"
+table, kept here with the reasoning rather than as still-open
+questions. None of them are waiting on a decision.
+
 | # | Question | Recommendation |
 |---|---|---|
 | Q1 | Add `--events` to `cof run` (§3) instead of using live state alone? | **Yes.** Without it, tree branches, `use` children and most running leaves are invisible (§1.4). |
