@@ -15,9 +15,18 @@ mypy src
 bash scripts/smoke-curation.sh
 python scripts/sync-bundled-docs.py --check
 python scripts/generate-conformance-cases.py --check
+for g in electricity/scripts/generate_*.py; do python "$g" --check; done
 ```
 CI is `.github/workflows/quality.yml` (pytest matrix 3.10–3.13, ruff, mypy,
 smoke). A PR is shippable when every check is green.
+
+The last line checks the files `electricity/` copies from, or generates with,
+Circuitry's own code (its schemas, and expected outputs from the YAML, JSON,
+template, CEL and schema code). A change to that code can make one stale even
+when nothing under `electricity/` changed; CI checks it in
+`.github/workflows/electricity-generated.yml`. Run the stale generator without
+`--check` and commit the result; if electricity's Rust tests then fail, the
+change altered behaviour electricity reproduces, so say so in the PR.
 
 Install from `requirements-dev.txt` before running any of the above — don't
 trust a `ruff`/`mypy` already on `PATH`. Tool versions are pinned there

@@ -1,0 +1,65 @@
+name: electricity generated files
+
+# Generators in electricity/scripts/ write checked-in files from Circuitry's
+# own Python code: copies of its schemas, and expected outputs taken from the
+# real loaders, renderers and evaluators (and through them PyYAML, chevron,
+# cel-python, jsonschema). A change on either side can make a committed file
+# stale, so this runs for changes to Circuitry's Python package too, not only
+# for changes under electricity/. It needs no Rust: the Rust tests that replay
+# these files run in electricity.yml, which triggers on any change under
+# electricity/, including a regenerated file.
+
+on:
+  pull_request:
+    paths:
+      - "src/circuitry/**"
+      - "pyproject.toml"
+      - "electricity/**"
+      - ".github/workflows/electricity-generated.yml"
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "src/circuitry/**"
+      - "pyproject.toml"
+      - "electricity/**"
+      - ".github/workflows/electricity-generated.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  generated-files:
+    name: generated files are up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Generators may import Circuitry itself (and through it PyYAML, chevron,
+      # cel-python, jsonschema) so that expected outputs come from the real
+      # Python code, never from a re-implementation.
+      - name: install Circuitry for the generators
+        run: python3 -m pip install -e .
+
+      # Every generator under electricity/scripts/ is named generate_*.py and
+      # supports --check (regenerate in memory, fail if the committed file
+      # differs). New generators are picked up here without editing this file.
+      - name: regenerate every generated file and check it is unchanged
+        working-directory: electricity
+        run: |
+          set -uo pipefail
+          failed=0
+          for script in scripts/generate_*.py; do
+            echo "::group::$script --check"
+            if ! python3 "$script" --check; then
+              echo "::error::$script: generated output is stale (run it without --check and commit the result)"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$failed"
