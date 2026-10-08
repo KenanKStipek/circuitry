@@ -441,6 +441,18 @@ class DynamicRuntime:
                     # cancellation path's own non-blocking shutdown is the
                     # only one that ever runs.
                     executor = ThreadPoolExecutor(max_workers=max_workers)
+                    # Built empty, before the try, and filled by a plain
+                    # loop rather than a dict comprehension (#385 review
+                    # P1): a ``KeyboardInterrupt``/``RunCancelledBySignal``
+                    # landing mid-comprehension left this name unbound, so
+                    # the ``except`` below calling ``futures.keys()`` raised
+                    # ``UnboundLocalError`` instead — an ordinary
+                    # ``Exception``, not a cancellation, so the outer
+                    # ``is_cancellation`` check misreported it as a plain
+                    # failure. Filling it incrementally also means any
+                    # branch already submitted before that happens is still
+                    # waited for below, not silently dropped.
+                    futures: dict = {}
                     try:
                         # Each branch's own ``isolated_stores[idx]`` resets
                         # its path prefix (Store.parallel_branches), so a
@@ -452,18 +464,18 @@ class DynamicRuntime:
                         # the outer ``store`` — see loop.py's own tree-flow
                         # dispatch for why (#370 review F2).
                         with nested_container(child_store, None):
-                            futures: dict = {
-                                submit_with_context(
-                                    executor,
-                                    self._execute_branch,
-                                    effect,
-                                    store=isolated_stores[idx],
-                                    ctx=tree_ctx,
-                                    stop_event=stop_event,
-                                    tracker=tree_tracker,
-                                ): idx
-                                for idx, effect in enumerate(self.defn.effects)
-                            }
+                            for idx, effect in enumerate(self.defn.effects):
+                                futures[
+                                    submit_with_context(
+                                        executor,
+                                        self._execute_branch,
+                                        effect,
+                                        store=isolated_stores[idx],
+                                        ctx=tree_ctx,
+                                        stop_event=stop_event,
+                                        tracker=tree_tracker,
+                                    )
+                                ] = idx
                         self._await_tree_branches(
                             futures, tree_errors=tree_errors, store=store
                         )
@@ -474,20 +486,12 @@ class DynamicRuntime:
                         # true. Not ``wait=True`` (see above: unbounded,
                         # and risks the hang #385 found) — but not a bare
                         # ``wait=False`` with no wait at all either:
-                        # ``_wait_futures`` below gives an already-running
-                        # branch's worker thread a bounded window to
+                        # ``wait_for_cancelled_branches`` below waits
+                        # (with no total time limit, only its own polled
+                        # wait — see that function's own docstring) for
+                        # every already-running branch's worker thread to
                         # actually notice its just-killed subprocess and
-                        # return before this re-raises. Without that
-                        # window, a worker still mid-dispatch here can
-                        # race ``sigterm_as_interrupt``'s own
-                        # ``token.reset()`` (``cli.interrupts``, once this
-                        # whole run has unwound the rest of the way out)
-                        # and lose: finding the flag already cleared at
-                        # its *own* next ``get_token().check()``, it would
-                        # start a further effect cancellation no longer
-                        # protects at all (#385 follow-up — load-testing
-                        # this fix's own first draft, which omitted this
-                        # wait entirely, caught exactly that race).
+                        # return before this re-raises.
                         executor.shutdown(wait=False, cancel_futures=True)
                         wait_for_cancelled_branches(futures.keys())
                         raise

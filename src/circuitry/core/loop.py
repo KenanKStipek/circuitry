@@ -597,6 +597,18 @@ class LoopRuntime:
                         executor = ThreadPoolExecutor(
                             max_workers=self.defn.max_concurrency
                         )
+                        # Built empty, before the try, and filled by a
+                        # plain loop rather than a dict comprehension
+                        # (#385 review P1): a ``KeyboardInterrupt``/
+                        # ``RunCancelledBySignal`` landing mid-comprehension
+                        # left this name unbound, so the ``except`` below
+                        # calling ``future_to_idx.keys()`` raised
+                        # ``UnboundLocalError`` instead of a cancellation
+                        # (mirrors dynamic.py's own tree-flow fix). Filling
+                        # it incrementally also means any pass already
+                        # submitted before that happens is still waited for
+                        # below, not silently dropped.
+                        future_to_idx: dict = {}
                         try:
                             # Each branch's own ``isolated_stores[idx]`` resets
                             # its path prefix (Store.parallel_branches), so a
@@ -610,20 +622,20 @@ class LoopRuntime:
                             # the transparent case without formatting a
                             # ``None`` name into the path (#370 review F2).
                             with nested_container(child_store, None):
-                                future_to_idx = {
-                                    submit_with_context(
-                                        executor,
-                                        self._execute_body,
-                                        store=isolated_stores[idx],
-                                        ctx=iter_ctx,
-                                        iteration=idx,
-                                        baseline=baseline,
-                                        parallel=True,
-                                        tracker=tree_tracker,
-                                        iter_label=f"[{idx}]",
-                                    ): idx
-                                    for idx, iter_ctx in iter_ctxs
-                                }
+                                for idx, iter_ctx in iter_ctxs:
+                                    future_to_idx[
+                                        submit_with_context(
+                                            executor,
+                                            self._execute_body,
+                                            store=isolated_stores[idx],
+                                            ctx=iter_ctx,
+                                            iteration=idx,
+                                            baseline=baseline,
+                                            parallel=True,
+                                            tracker=tree_tracker,
+                                            iter_label=f"[{idx}]",
+                                        )
+                                    ] = idx
                             _tree_done = 0
                             # as_completed_promptly, not stdlib
                             # as_completed: a signal landing on a
@@ -674,10 +686,10 @@ class LoopRuntime:
                             # (#356), the same fix as dynamic.py's own
                             # tree flow — see its longer comment on the
                             # identical call, including
-                            # ``wait_for_cancelled_branches``'s own bounded
-                            # (not ``wait=True``, not no-wait-at-all) grace
-                            # period for an already-running pass's worker
-                            # thread.
+                            # ``wait_for_cancelled_branches``'s own
+                            # unbounded, polled wait (not ``wait=True``,
+                            # not no-wait-at-all) for an already-running
+                            # pass's worker thread.
                             executor.shutdown(wait=False, cancel_futures=True)
                             wait_for_cancelled_branches(future_to_idx.keys())
                             raise

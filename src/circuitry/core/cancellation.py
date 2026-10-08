@@ -51,7 +51,6 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from concurrent.futures import Executor, Future
-from concurrent.futures import wait as _wait_futures
 from contextlib import contextmanager
 from multiprocessing.process import BaseProcess
 from typing import Any, TypeVar
@@ -265,12 +264,30 @@ class CancellationToken:
         :meth:`cleanup`, sleeps the full duration like plain ``time.sleep``
         instead — a retry backoff in a ``finally:`` must not abort early
         just because the run it's cleaning up from was already cancelled.
+
+        Polls :attr:`_event` in short slices rather than one single
+        ``wait(timeout=seconds)`` for the whole backoff (#385 follow-up,
+        same reasoning as :func:`as_completed_promptly`): a retry backoff
+        can run on the *main* thread too (a sequential chain's own retry,
+        not just a tree-flow worker's), and a single long wait there is
+        exactly the kind of blocking call that defers a signal delivered
+        to some *other* thread (a ``Live`` refresh thread, the MCP
+        client's own pool thread) until it returns on its own — this
+        thread never gets to execute the bytecode that would run the
+        pending handler until then. Slicing the wait means this thread
+        returns to bytecode at least every poll interval regardless of
+        which thread the signal reached.
         """
         if self.in_cleanup():
             time.sleep(max(0.0, seconds))
             return
-        if self._event.wait(timeout=max(0.0, seconds)):
-            raise RunCancelledBySignal("run cancelled during backoff")
+        remaining = max(0.0, seconds)
+        while True:
+            if self._event.wait(timeout=min(remaining, _SIGNAL_POLL_SECONDS)):
+                raise RunCancelledBySignal("run cancelled during backoff")
+            remaining -= _SIGNAL_POLL_SECONDS
+            if remaining <= 0:
+                break
 
     def in_cleanup(self) -> bool:
         """Whether the current context is inside this token's own
@@ -484,36 +501,123 @@ def as_completed_promptly(
         yield from batch
 
 
-#: How long a tree-flow/parallel-loop's cancellation path (see
-#: :func:`wait_for_cancelled_branches`) waits for an already-running
-#: branch's worker thread to actually notice its just-killed subprocess
-#: and return, before giving up and letting the cancellation propagate
-#: anyway (#385 follow-up).
-#:
-#: Bounded, not ``executor.shutdown(wait=True)``'s unbounded join — a
-#: worker slow to notice under heavy CPU load must not hang this
-#: dynamic/loop forever (what the #385 review's own load-testing of the
-#: ``as_completed`` fix above actually found). But *some* wait is still
-#: required, or a worker that hasn't reached its own next
-#: ``get_token().check()`` yet races ``cli.interrupts.
-#: sigterm_as_interrupt``'s own ``token.reset()`` (once this whole run
-#: has unwound the rest of the way out) and can lose: finding the
-#: cancellation flag already cleared, it would start a further effect
-#: with nothing left to track or kill it — load-testing this fix's own
-#: first draft, which waited not at all, caught exactly that race.
-_CANCEL_GRACE_SECONDS = 5.0
-
-
 def wait_for_cancelled_branches(futures: Iterable[Future[Any]]) -> None:
-    """Give already-running branches a bounded window to notice they were
-    just killed, before a tree-flow dynamic/parallel loop's own
-    cancellation path re-raises past them.
+    """Wait for every already-running branch to actually finish, before a
+    tree-flow dynamic/parallel loop's own cancellation path re-raises past
+    them — with no total time limit, only :func:`as_completed_promptly`'s
+    own polled wait (#385 follow-up).
 
     Call this right after ``executor.shutdown(wait=False,
-    cancel_futures=True)`` in that path — see :data:`_CANCEL_GRACE_SECONDS`
-    for why neither ``wait=True`` nor no wait at all is safe there.
+    cancel_futures=True)`` in that path. An earlier draft of this bounded
+    the wait to a fixed grace period instead: once it elapsed, this
+    function returned with a branch still running, the dynamic/loop
+    re-raised past it, and ``cli.interrupts.sigterm_as_interrupt`` went on
+    to call ``token.reset()`` on its way out of the run. A branch still
+    running at that point then found the cancellation flag already
+    cleared at its own next ``get_token().check()`` and started its next
+    effect with nothing left to track or kill it — silently undoing the
+    very cancellation this function exists to wait out. There is no safe
+    bound to pick instead: the flag must stay set until every branch's own
+    worker thread has actually returned. A second SIGINT/SIGTERM is still
+    handled within one poll interval no matter which thread it reaches,
+    exactly as :func:`as_completed_promptly` already guarantees for the
+    main loop — the only further cost a branch the kill cannot reach adds
+    here is delaying process exit until it returns, same as it already
+    does on an uncancelled run.
     """
-    _wait_futures(list(futures), timeout=_CANCEL_GRACE_SECONDS)
+    for _ in as_completed_promptly(futures):
+        pass
+
+
+def acquire_promptly(
+    sem: threading.Semaphore, *, poll_seconds: float = _SIGNAL_POLL_SECONDS
+) -> None:
+    """``sem.acquire()``, but in short polled slices rather than one
+    unbounded C-level wait (#385 follow-up).
+
+    Same reasoning as :func:`as_completed_promptly`/
+    :meth:`CancellationToken.sleep_or_raise`: a thread blocked here for an
+    adapter's own concurrency slot (e.g. ``adapters.cyberdiner``'s
+    ``max_in_flight``) must keep returning to bytecode, or a signal
+    delivered to some *other* thread goes unnoticed until whoever holds
+    the slot releases it, however long that takes.
+    """
+    while not sem.acquire(timeout=poll_seconds):
+        pass
+
+
+def poll_promptly(
+    conn: Any, timeout: float, *, poll_seconds: float = _SIGNAL_POLL_SECONDS
+) -> bool:
+    """``multiprocessing.connection.Connection.poll(timeout)``, but in
+    short polled slices rather than one single wait (#385 follow-up).
+
+    Same reasoning as :func:`as_completed_promptly`: ``plugins.python_eval``
+    calls this from whichever thread is running that step — a tree-flow
+    worker, or the main thread in a plain sequential chain — to wait for
+    its sandboxed child's result. A single ``poll(wall_seconds)`` is
+    bounded by the step's own timeout already, but that can still be
+    minutes long, during which this thread never returns to bytecode to
+    notice a signal delivered to some *other* thread. *timeout* is kept
+    exactly via a wall-clock deadline computed up front.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        if conn.poll(min(poll_seconds, remaining)):
+            return True
+
+
+def _communicate_promptly(
+    proc: subprocess.Popen[Any],
+    *,
+    input: str | bytes | None,
+    timeout: float | None,
+    poll_seconds: float = _SIGNAL_POLL_SECONDS,
+) -> tuple[Any, Any]:
+    """``proc.communicate()``, but never in one single wait as long as
+    *timeout* itself (#385 follow-up).
+
+    A plain ``proc.communicate(timeout=timeout)`` sits in one ``select()``
+    bounded only by *timeout*, which can be minutes long for a slow curl/
+    ffmpeg step — exactly the kind of single blocking call that defers a
+    signal delivered to some *other* thread (ordinarily the main thread
+    here, in a plain sequential chain, with a Rich ``Live`` refresh thread
+    alive alongside it for the duration of the step) until it returns on
+    its own. Calling ``communicate`` repeatedly with a short *poll_seconds*
+    timeout instead returns this thread to bytecode that often, while
+    *timeout* — the step's own deadline — is kept exactly via a wall-clock
+    deadline computed up front, not reset by each retry.
+
+    Retrying ``communicate()`` after its own ``TimeoutExpired`` is safe:
+    passing *input* again is what the stdlib actually forbids once
+    communication has started (``ValueError: Cannot send input after
+    starting communication``), so this passes it only on the very first
+    call and ``None`` on every retry; stdout/stderr accumulate across
+    calls rather than resetting, so no output is lost to the slicing.
+    """
+    if timeout is None:
+        deadline = None
+    else:
+        deadline = time.monotonic() + timeout
+        full_timeout = timeout
+    first = True
+    while True:
+        if deadline is None:
+            slice_timeout = poll_seconds
+        else:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(proc.args, full_timeout)
+            slice_timeout = min(poll_seconds, remaining)
+        try:
+            return proc.communicate(
+                input=input if first else None, timeout=slice_timeout
+            )
+        except subprocess.TimeoutExpired:
+            first = False
 
 
 def run_tracked(
@@ -573,7 +677,7 @@ def run_tracked(
     )
     with proc, token.track(proc):
         try:
-            stdout, stderr = proc.communicate(input=input, timeout=timeout)
+            stdout, stderr = _communicate_promptly(proc, input=input, timeout=timeout)
         except subprocess.TimeoutExpired:
             kill_process_group(proc)
             proc.wait()

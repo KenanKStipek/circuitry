@@ -11,11 +11,16 @@ shape without a real sleep or a real signal.
 
 from __future__ import annotations
 
+import multiprocessing
 import os
 import signal
+import subprocess
+import sys
 import threading
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from typing import Any
 
 import pytest
@@ -24,10 +29,13 @@ from circuitry.core import cancellation
 from circuitry.core.cancellation import (
     CancellationToken,
     RunCancelledBySignal,
+    acquire_promptly,
     as_completed_promptly,
     kill_process_group,
     kill_tracked_process,
+    poll_promptly,
     submit_with_context,
+    wait_for_cancelled_branches,
 )
 
 
@@ -346,4 +354,223 @@ def test_as_completed_promptly_notices_a_signal_delivered_to_a_worker_thread() -
         f"handler ran at {interrupted_at[0]:.2f}s, not within ~1s of the "
         "0.3s delivery -- as_completed_promptly isn't polling the main "
         "thread back in; it waited for the 2s future instead"
+    )
+
+
+@contextmanager
+def _sigusr1_raises_keyboard_interrupt() -> Iterator[list[float]]:
+    """Installs a SIGUSR1 handler that raises `KeyboardInterrupt` and
+    records when it actually ran, relative to this context's own entry --
+    shared by every pthread_kill test below (#385 follow-up), which
+    otherwise all set up and tear down the identical handler.
+    """
+    interrupted_at: list[float] = []
+    t0 = time.monotonic()
+
+    def handler(signum: int, frame: Any) -> None:
+        interrupted_at.append(time.monotonic() - t0)
+        raise KeyboardInterrupt
+
+    previous = signal.signal(signal.SIGUSR1, handler)
+    try:
+        yield interrupted_at
+    finally:
+        signal.signal(signal.SIGUSR1, previous)
+
+
+def _deliver_sigusr1_after(tid_holder: dict[str, int], *, delay: float = 0.3) -> None:
+    """Starts a daemon thread that force-delivers SIGUSR1 to
+    `tid_holder["tid"]` after *delay* -- the same `signal.pthread_kill`
+    forced-delivery-to-a-worker-thread shape every test below uses to
+    simulate POSIX handing a real signal to a thread other than the one
+    actually blocked in the call under test.
+    """
+
+    def deliver() -> None:
+        time.sleep(delay)
+        signal.pthread_kill(tid_holder["tid"], signal.SIGUSR1)
+
+    threading.Thread(target=deliver, daemon=True).start()
+
+
+@pytest.mark.skipif(
+    not hasattr(signal, "pthread_kill"), reason="signal.pthread_kill is POSIX-only"
+)
+def test_wait_for_cancelled_branches_notices_a_signal_delivered_to_a_worker_thread() -> None:
+    """#385 review P0: an earlier revision bounded this wait to a fixed
+    grace period, so a branch still running once it elapsed could outlive
+    `cli.interrupts.sigterm_as_interrupt`'s own `token.reset()` and start
+    a further effect with nothing left to track or kill it. The real fix
+    is no total time limit at all -- only `as_completed_promptly`'s own
+    polled wait, which this proves still notices a signal delivered to a
+    worker thread within about one poll interval, not the whole branch.
+    """
+    worker_tid: dict[str, int] = {}
+    worker_ready = threading.Event()
+
+    def worker() -> str:
+        worker_tid["tid"] = threading.get_ident()
+        worker_ready.set()
+        time.sleep(2.0)
+        return "done"
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = executor.submit(worker)
+        assert worker_ready.wait(timeout=5.0), "worker thread never started"
+        with _sigusr1_raises_keyboard_interrupt() as interrupted_at:
+            _deliver_sigusr1_after(worker_tid)
+            with pytest.raises(KeyboardInterrupt):
+                wait_for_cancelled_branches([future])
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    assert interrupted_at, "the signal handler never ran at all"
+    assert interrupted_at[0] < 1.0, (
+        f"handler ran at {interrupted_at[0]:.2f}s, not within ~1s of delivery"
+    )
+
+
+@pytest.mark.skipif(
+    not hasattr(signal, "pthread_kill"), reason="signal.pthread_kill is POSIX-only"
+)
+def test_sleep_or_raise_notices_a_signal_delivered_to_a_worker_thread() -> None:
+    """#385 review P1 (wider inventory): a retry backoff can run on the
+    *main* thread too (a sequential chain's own retry, not just a tree-
+    flow worker's) -- the one single `Event.wait(seconds)` this used to do
+    for the whole backoff is exactly the kind of blocking call that defers
+    a signal delivered to some other thread until it returns on its own.
+    """
+    worker_tid: dict[str, int] = {}
+    worker_ready = threading.Event()
+
+    def worker() -> None:
+        worker_tid["tid"] = threading.get_ident()
+        worker_ready.set()
+        time.sleep(2.0)
+
+    threading.Thread(target=worker, daemon=True).start()
+    assert worker_ready.wait(timeout=5.0), "worker thread never started"
+
+    token = CancellationToken()
+    with _sigusr1_raises_keyboard_interrupt() as interrupted_at:
+        _deliver_sigusr1_after(worker_tid)
+        with pytest.raises(KeyboardInterrupt):
+            token.sleep_or_raise(2.0)
+
+    assert interrupted_at, "the signal handler never ran at all"
+    assert interrupted_at[0] < 1.0, (
+        f"handler ran at {interrupted_at[0]:.2f}s, not within ~1s of delivery"
+    )
+
+
+@pytest.mark.skipif(
+    not hasattr(signal, "pthread_kill"), reason="signal.pthread_kill is POSIX-only"
+)
+def test_acquire_promptly_notices_a_signal_delivered_to_a_worker_thread() -> None:
+    """#385 review P1 (wider inventory): `adapters.cyberdiner`'s own
+    `max_in_flight` semaphore wait is untimed and can run on the main
+    thread (a plain sequential chain's own model call) -- a slot that
+    never frees must still notice a signal delivered elsewhere.
+    """
+    worker_tid: dict[str, int] = {}
+    worker_ready = threading.Event()
+
+    def worker() -> None:
+        worker_tid["tid"] = threading.get_ident()
+        worker_ready.set()
+        time.sleep(2.0)
+
+    threading.Thread(target=worker, daemon=True).start()
+    assert worker_ready.wait(timeout=5.0), "worker thread never started"
+
+    sem = threading.Semaphore(0)  # never released -- must still notice promptly
+    with _sigusr1_raises_keyboard_interrupt() as interrupted_at:
+        _deliver_sigusr1_after(worker_tid)
+        with pytest.raises(KeyboardInterrupt):
+            acquire_promptly(sem, poll_seconds=0.1)
+
+    assert interrupted_at, "the signal handler never ran at all"
+    assert interrupted_at[0] < 1.0, (
+        f"handler ran at {interrupted_at[0]:.2f}s, not within ~1s of delivery"
+    )
+
+
+@pytest.mark.skipif(
+    not hasattr(signal, "pthread_kill"), reason="signal.pthread_kill is POSIX-only"
+)
+def test_poll_promptly_notices_a_signal_delivered_to_a_worker_thread() -> None:
+    """#385 review P1 (wider inventory): `plugins.python_eval`'s own
+    `read_conn.poll(wall_seconds)` is bounded by the step's own timeout,
+    but that can still be minutes long -- this must still notice a signal
+    delivered elsewhere well before the child ever responds.
+    """
+    worker_tid: dict[str, int] = {}
+    worker_ready = threading.Event()
+
+    def worker() -> None:
+        worker_tid["tid"] = threading.get_ident()
+        worker_ready.set()
+        time.sleep(2.0)
+
+    threading.Thread(target=worker, daemon=True).start()
+    assert worker_ready.wait(timeout=5.0), "worker thread never started"
+
+    read_conn, write_conn = multiprocessing.Pipe(duplex=False)
+    try:
+        with _sigusr1_raises_keyboard_interrupt() as interrupted_at:
+            _deliver_sigusr1_after(worker_tid)
+            with pytest.raises(KeyboardInterrupt):
+                poll_promptly(read_conn, 2.0, poll_seconds=0.1)
+    finally:
+        read_conn.close()
+        write_conn.close()
+
+    assert interrupted_at, "the signal handler never ran at all"
+    assert interrupted_at[0] < 1.0, (
+        f"handler ran at {interrupted_at[0]:.2f}s, not within ~1s of delivery"
+    )
+
+
+@pytest.mark.skipif(
+    not hasattr(signal, "pthread_kill"), reason="signal.pthread_kill is POSIX-only"
+)
+def test_communicate_promptly_notices_a_signal_delivered_to_a_worker_thread() -> None:
+    """#385 review P1 (wider inventory): `run_tracked`'s own
+    `proc.communicate(timeout=timeout)` is bounded only by the step's own
+    timeout -- a long curl/ffmpeg call, with a Rich `Live` refresh thread
+    alive alongside it -- so this must still notice a signal delivered to
+    that other thread well before the child exits on its own.
+    """
+    worker_tid: dict[str, int] = {}
+    worker_ready = threading.Event()
+
+    def worker() -> None:
+        worker_tid["tid"] = threading.get_ident()
+        worker_ready.set()
+        time.sleep(2.0)
+
+    threading.Thread(target=worker, daemon=True).start()
+    assert worker_ready.wait(timeout=5.0), "worker thread never started"
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(5)"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        with _sigusr1_raises_keyboard_interrupt() as interrupted_at:
+            _deliver_sigusr1_after(worker_tid)
+            with pytest.raises(KeyboardInterrupt):
+                cancellation._communicate_promptly(
+                    proc, input=None, timeout=5.0, poll_seconds=0.1
+                )
+    finally:
+        proc.kill()
+        proc.wait()
+
+    assert interrupted_at, "the signal handler never ran at all"
+    assert interrupted_at[0] < 1.0, (
+        f"handler ran at {interrupted_at[0]:.2f}s, not within ~1s of delivery"
     )

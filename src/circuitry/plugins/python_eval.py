@@ -99,7 +99,7 @@ import signal
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from ..core.cancellation import get_token
+from ..core.cancellation import get_token, poll_promptly
 from ..preflight import CheckResult
 from .base import ToolResult
 
@@ -457,7 +457,7 @@ class PythonEvalPlugin:
             # the child is still writing is what lets a result bigger than
             # the OS pipe buffer (tens of KiB) get through instead of
             # deadlocking the child's write for the whole budget.
-            if not read_conn.poll(wall_seconds):
+            if not poll_promptly(read_conn, wall_seconds):
                 read_conn.close()
                 proc.terminate()
                 proc.join(2)
