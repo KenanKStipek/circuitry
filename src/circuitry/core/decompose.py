@@ -769,16 +769,21 @@ def _run_isolated(
         ),
         _lock=parent_store._lock,
     )
-    # A generated plan declares no prompts of its own (#396) — cleared
-    # rather than inherited, so it can't accidentally resolve a `{{> name}}`
-    # the parent document happens to declare; decompose/reflector plans
-    # aren't taught the composition syntax at all.
+    # A child document run with `use` sees only its own declared prompts
+    # (#396) — same contract here: `root.prompts`/`root.effect_names`, just
+    # compiled from THIS plan's own dict, never the parent's, so a
+    # `{{> name}}` the parent happens to declare can't leak in. Decompose/
+    # reflector plans aren't taught the composition syntax, so `root.prompts`
+    # is ordinarily empty anyway — but using it rather than a hardcoded `{}`
+    # means a plan that happens to be self-consistent (declares its own
+    # `prompts:` and only ever references them) runs the way it compiled,
+    # instead of failing at run time for a name `cof check` already accepted.
     from .prompt_compose import EFFECT_NAMES_RUNTIME_KEY as _EFFECT_NAMES_KEY
     from .prompt_compose import RUNTIME_CONFIG_KEY as _PROMPTS_KEY
 
     child_runtime_config = dict(runtime_config)
-    child_runtime_config[_PROMPTS_KEY] = {}
-    child_runtime_config[_EFFECT_NAMES_KEY] = frozenset()
+    child_runtime_config[_PROMPTS_KEY] = root.prompts
+    child_runtime_config[_EFFECT_NAMES_KEY] = root.effect_names
     DynamicRuntime(
         root,
         adapter=adapter,
