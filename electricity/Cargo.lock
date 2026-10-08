@@ -243,6 +243,20 @@ dependencies = [
 [[package]]
 name = "electricity"
 version = "0.1.0"
+dependencies = [
+ "electricity-compiler",
+ "serde_json",
+]
+
+[[package]]
+name = "electricity-bytecode"
+version = "0.1.0"
+dependencies = [
+ "electricity-value",
+ "indexmap",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "electricity-cel"
@@ -262,6 +276,21 @@ name = "electricity-cli"
 version = "0.1.0"
 dependencies = [
  "electricity",
+]
+
+[[package]]
+name = "electricity-compiler"
+version = "0.1.0"
+dependencies = [
+ "electricity-bytecode",
+ "electricity-cel",
+ "electricity-json",
+ "electricity-schema",
+ "electricity-template",
+ "electricity-value",
+ "electricity-yaml",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -548,6 +577,8 @@ checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]

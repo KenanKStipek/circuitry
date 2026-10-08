@@ -487,46 +487,50 @@ dispatches (`prime.shots.iter_3.handle`); that concretized path is what the stat
 spans, and `--resume` key off, never the placeholder form. Control flow is nested **regions**,
 WASM-style, instead of arbitrary jumps:
 
+The authoritative definitions are the `electricity-bytecode` crate (issue #408, lane A); this is a
+shortened sketch of its shape, not a second source of truth — see that crate's own doc comments
+for the full field-for-field mapping back to Circuitry's `*Definition` dataclasses:
+
 ```rust
 enum Region {
-    Block(Vec<Op>),                                    // a dynamic's or document root's effects:
-    Loop { body: Box<Region>, mode: LoopMode },         // each/while; see LoopMode below
-    If { then_: Box<Region>, else_: Option<Box<Region>> },
+    Block { ops: Vec<Op>, overlay: bool },              // a dynamic's/root's effects, a loop body,
+                                                          // or an if branch; overlay is false for
+                                                          // the root/a dynamic, true for the other two
+    Loop { spec: LoopSpec, body: Box<Region>, flow: LoopFlow, max_concurrency: Option<u32>,
+           max_iterations: Option<u32>, min_iterations: u32, collect: Option<String> },
+    If { cond: Condition, then_: Box<Region>, else_: Option<Box<Region>>, threshold: f64 },
     TryFinally { body: Box<Region>, finally: Box<Region> },
-    Parallel(Vec<Region>),                              // a *statically known* branch list only —
+    Parallel { branches: Vec<Op>, max_concurrency: Option<u32>, stop_on_error: bool },
+                                                          // a *statically known* branch list only —
                                                           // `dynamic flow: tree`'s own effects, never
                                                           // a loop's runtime-sized pass set (below)
 }
 
-enum LoopMode {
-    EachChain,  // each, sequential
-    EachTree,   // each, flow: tree — one compiled `body`, replicated at run time once per element
-                // of the resolved collection and dispatched as a single parallel batch using the
-                // *same scheduling primitives* `Region::Parallel` uses (§6.2: shared snapshot,
-                // semaphore, stop_on_error) — but never materialized as a `Region::Parallel` IR
-                // node, since the branch count isn't known until the collection resolves. This is
-                // the fix for an earlier draft's ambiguity between representing a tree-mode `each`
-                // as `Loop{tree}` and as `Parallel`: it is always `Loop{mode: EachTree}` in the IR;
-                // `Parallel` is reserved for `dynamic flow: tree`'s fixed, compile-time branch list.
-    While,      // always sequential (runtime-semantics §5.5); no tree-mode `while` exists
-}
+// LoopSpec::Each{in_path, as_name, truncate}/While(Condition) replace the sketch's old LoopMode
+// enum; LoopFlow::{Chain, Tree} is `flow:`'s own chain/tree choice, carried as `Region::Loop`'s own
+// field rather than folded into LoopSpec, since a `while` loop still needs the field (always
+// `Chain` — runtime-semantics §5.5; no tree-mode `while` exists) even though only `each` ever varies
+// it. A tree-mode `each` is `Region::Loop { flow: Tree, .. }`, never a `Region::Parallel` — the
+// branch count isn't known until the collection resolves, exactly the ambiguity an earlier draft
+// of this document flagged (resolved the same way, just renamed).
 
-// A leaf effect's own payload — prompt/tool/use/reflector never contain a nested Region of their
-// own (a reflector's `inner` dynamic is a *sibling* field, compiled as an ordinary `Region`, not
-// folded into this enum — see the `reflector` row below).
+// A leaf effect's own payload — prompt/tool/use/yield/reflector never contain a nested Region of
+// their own (a reflector's `inner` dynamic is a *sibling* field, compiled as an ordinary `Region`,
+// not folded into this enum — see the `reflector` row below).
 enum LeafKind {
     Prompt(PromptOp),
     Tool(ToolOp),
     Use(UseOp),
+    Yield(YieldOp),
     Reflector(ReflectorOp),
 }
 
 // A compiled node is *either* a leaf effect *or* a control-flow region that owns its own path —
 // `loop`/`dynamic`/`if` compile directly to `NodeKind::Control`, never to a `LeafKind` variant
-// that then separately wraps a `Region`. This is the other half of the same earlier-draft
-// ambiguity's fix: a `Region` and the `Op` that names it are the same node, not two.
+// that then separately wraps a `Region`. `Leaf` is boxed: `LeafKind`'s largest variant otherwise
+// made this enum far larger than `Region` (clippy::large_enum_variant), with no change in meaning.
 enum NodeKind {
-    Leaf(LeafKind),
+    Leaf(Box<LeafKind>),
     Control(Region),
 }
 
@@ -534,8 +538,9 @@ struct Op {
     path: EffectPath,       // stable id (placeholder form inside a loop body, see above)
     name: Option<String>,   // None for an unnamed loop/conditional (transparent control)
     kind: NodeKind,
-    on_error: OnErrorPolicy,
+    on_error: OnError,
     labels: Option<Value>,
+    enabled: bool,
 }
 ```
 

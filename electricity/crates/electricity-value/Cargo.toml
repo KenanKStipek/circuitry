@@ -22,7 +22,12 @@ num-traits = "0.2"
 # naive-or-fixed-offset split PyYAML's timestamp resolver needs (§3.2 of
 # ../../DESIGN.md); no timezone database is required for that.
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+# `Value`'s own `Serialize` impl (lib.rs's "Debug-only JSON shape" section)
+# is used by electricity-bytecode's IR, which needs it outside of tests —
+# moved out of dev-dependencies for that, with no change to anything this
+# crate already exposed. `derive` stays enabled: the golden-corpus tests
+# derive `Deserialize` on their own fixture types.
+serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -10,3 +10,7 @@ description = "Rust runner for Circuitry orchestrations (preview library crate)"
 [lib]
 name = "electricity"
 path = "src/lib.rs"
+
+[dependencies]
+electricity-compiler = { path = "../electricity-compiler" }
+serde_json = "1"

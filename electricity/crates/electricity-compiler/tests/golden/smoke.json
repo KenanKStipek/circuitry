@@ -1,0 +1,156 @@
+[
+  {
+    "name": "minimal_valid_prompt",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: greet\n    template: 'Hello, {{input.name}}!'\n"
+    },
+    "entry": "doc.yml",
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "greet",
+          "template": "Hello, {{input.name}}!",
+          "messages": null,
+          "prompt_type": "text",
+          "schema": null,
+          "model": null,
+          "provider": null,
+          "provider_fallbacks": null,
+          "routing_override": null,
+          "params": null,
+          "timeout_ms": null,
+          "deterministic": false,
+          "inputs": null,
+          "assets": null,
+          "retries": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "greet"
+      ]
+    },
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "empty_document",
+    "files": {
+      "doc.yml": ""
+    },
+    "entry": "doc.yml",
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Orchestration file is empty."
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - top level: 'effects' is a required property",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "duplicate_effect_name",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: step\n    template: 'a'\n  - type: prompt\n    name: step\n    template: 'b'\n"
+    },
+    "entry": "doc.yml",
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Duplicate effect name 'step' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'."
+      ],
+      "warnings": []
+    },
+    "run_error": "Duplicate effect name 'step' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
+    "definition": null,
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "unsupported_suffix",
+    "files": {
+      "doc.txt": "effects: []\n"
+    },
+    "entry": "doc.txt",
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Unsupported orchestration format: .txt. Supported: .json, .toon, .yaml, .yml"
+      ],
+      "warnings": []
+    },
+    "run_error": "Unsupported orchestration format: .txt. Supported: .json, .toon, .yaml, .yml",
+    "definition": null,
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "non_mapping_root",
+    "files": {
+      "doc.yml": "- 1\n- 2\n"
+    },
+    "entry": "doc.yml",
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Orchestration YAML must be a mapping/object at the root."
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration YAML must be a mapping/object at the root.",
+    "definition": null,
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  }
+]

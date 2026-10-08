@@ -1,29 +1,37 @@
-//! `electricity` — the CLI binary. This preview release has no compiler or
-//! VM: every run request fails with a message pointing to `cof run`, and
-//! `--version`/`--help` are the only two commands that succeed.
+//! `electricity` — the CLI binary. This preview release has no VM: every
+//! run request fails with a message pointing to `cof run`.
+//! `--version`/`--help` succeed; `--dump-ir` runs the compiler's
+//! `check_for_run` and prints its result (issue #408's CLI section) --
+//! currently always a failure, since `electricity-compiler` is still a
+//! lane A stub.
 
+use std::path::Path;
 use std::process::ExitCode;
 
 const USAGE: &str = "\
 Usage: electricity <config.json> <orchestration.yml> [-e key=value]... [--out state.json] [--profile <path>]
+       electricity <config.json> <orchestration.yml> --dump-ir
 
 electricity is a preview: this release cannot run orchestrations yet. Use
-`cof run` instead. --version and --help are the only supported commands.
+`cof run` instead. --version, --help and --dump-ir are the only supported
+commands.
 
 Options:
   -V, --version   Print the version and exit
-  -h, --help      Print this message and exit";
+  -h, --help      Print this message and exit
+  --dump-ir       Print the compiled IR as JSON and exit. Unstable: this
+                  format is a debugging aid and can change in any release.";
 
 enum Action {
     Version,
     Help,
     Run,
+    DumpIr(String),
     UsageError(String),
 }
 
 /// Run flags the usage text advertises (`-e key=value`, `--out`, `--profile`):
-/// recognized in any position, so a request using them is a run request
-/// (exit 1), not a usage error (exit 2).
+/// recognized in any position, each followed by its own value.
 const KNOWN_RUN_FLAGS: &[&str] = &["-e", "--out", "--profile"];
 
 fn classify(args: &[String]) -> Action {
@@ -33,11 +41,27 @@ fn classify(args: &[String]) -> Action {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         return Action::Help;
     }
-    match args.first() {
-        None => Action::UsageError("no config file or orchestration given".to_string()),
-        Some(first) if first.starts_with('-') && !KNOWN_RUN_FLAGS.contains(&first.as_str()) => {
-            Action::UsageError(format!("unrecognized option '{first}'"))
+
+    let dump_ir = args.iter().any(|a| a == "--dump-ir");
+    let mut positionals: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        if arg == "--dump-ir" {
+            i += 1;
+        } else if KNOWN_RUN_FLAGS.contains(&arg) {
+            i += 2; // the flag and its value
+        } else if arg.starts_with('-') {
+            return Action::UsageError(format!("unrecognized option '{arg}'"));
+        } else {
+            positionals.push(arg);
+            i += 1;
         }
+    }
+
+    match positionals.last() {
+        None => Action::UsageError("no config file or orchestration given".to_string()),
+        Some(orchestration) if dump_ir => Action::DumpIr(orchestration.to_string()),
         Some(_) => Action::Run,
     }
 }
@@ -61,6 +85,18 @@ fn main() -> ExitCode {
         Action::Run => {
             eprintln!("{}", electricity::run_orchestration().unwrap_err());
             ExitCode::from(1)
+        }
+        Action::DumpIr(orchestration_path) => {
+            match electricity::dump_ir(Path::new(&orchestration_path)) {
+                Ok(json) => {
+                    println!("{json}");
+                    ExitCode::SUCCESS
+                }
+                Err(message) => {
+                    eprintln!("{message}");
+                    ExitCode::from(1)
+                }
+            }
         }
         Action::UsageError(message) => {
             eprintln!("electricity: {message}");
@@ -128,6 +164,38 @@ mod unit_tests {
                 "orchestration.yml".to_string()
             ]),
             Action::Run
+        ));
+    }
+
+    #[test]
+    fn dump_ir_flag_selects_the_last_positional_as_the_orchestration() {
+        match classify(&[
+            "config.json".to_string(),
+            "orchestration.yml".to_string(),
+            "--dump-ir".to_string(),
+        ]) {
+            Action::DumpIr(path) => assert_eq!(path, "orchestration.yml"),
+            _ => panic!("expected DumpIr"),
+        }
+    }
+
+    #[test]
+    fn dump_ir_flag_recognized_in_first_position_too() {
+        assert!(matches!(
+            classify(&[
+                "--dump-ir".to_string(),
+                "config.json".to_string(),
+                "orchestration.yml".to_string(),
+            ]),
+            Action::DumpIr(_)
+        ));
+    }
+
+    #[test]
+    fn dump_ir_with_no_positionals_is_a_usage_error() {
+        assert!(matches!(
+            classify(&["--dump-ir".to_string()]),
+            Action::UsageError(_)
         ));
     }
 }
