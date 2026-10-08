@@ -59,6 +59,7 @@ from .effective_settings import (
     orchestration_host_setting_warnings,
     resolve_effective_settings,
 )
+from .events import EventLog
 from .interrupts import SigHupInterrupt, SigTermInterrupt
 from .library_sources import LibraryRegistry, LibrarySourceError
 from .live_state import LiveStateMirror
@@ -122,6 +123,9 @@ class RunRequest:
     show_loop_progress: bool = False
     config: CircuitryConfig | None = None
     live_state_path: Path | None = None
+    # ``--events``: a JSONL stream of effect starts and ends, written by
+    # ``cli.events.EventLog`` next to the ``--live-state`` mirror (#419).
+    events_path: Path | None = None
     adapter: Adapter | None = None
     state_observer: Callable[[dict[str, Any]], None] | None = None
     # Per-effect completion notifications: ``(effect_path, effect_node)``,
@@ -412,6 +416,12 @@ def run(req: RunRequest) -> RunResult:
     # serialises under it and writes the file after releasing it.
     store_lock = threading.RLock()
     live_mirror: LiveStateMirror | None = None
+    event_log: EventLog | None = None
+    # The result this run actually produced — read back in `finally:` below
+    # to emit `run_end` (ok/error/signal) only once the result itself is
+    # known, and only when one was actually built (not left `None` by some
+    # exception the `except` tuple below doesn't catch).
+    result: RunResult | None = None
     # Wall time for `state.runtime.last_run.totals` — monotonic, not the
     # `started_at`/`completed_at` ISO timestamps (which a system clock
     # adjustment mid-run could skew).
@@ -917,6 +927,9 @@ def run(req: RunRequest) -> RunResult:
         if req.live_state_path is not None:
             live_mirror = LiveStateMirror(req.live_state_path, store_lock=store_lock)
             callbacks.append(live_mirror)
+        if req.events_path is not None:
+            event_log = EventLog(req.events_path)
+            event_log.run_start(run_id=run_id, orchestration=req.orchestration_path.name)
         if req.state_observer is not None:
             callbacks.append(req.state_observer)
 
@@ -945,6 +958,13 @@ def run(req: RunRequest) -> RunResult:
         effect_observers: list[Callable[[str, dict[str, Any]], None]] = [
             totals_accumulator.observe
         ]
+        dispatch_observers: list[Callable[[str, int], None]] = []
+        if event_log is not None:
+            start_observers.append(event_log.on_start)
+            effect_observers.append(event_log.on_complete)
+            dispatch_observers.append(event_log.on_dispatch)
+        if req.concurrent_dispatch_observer is not None:
+            dispatch_observers.append(req.concurrent_dispatch_observer)
         if plugins:
             _plugin_ctx = PluginContext(
                 run_id=run_id,
@@ -997,7 +1017,7 @@ def run(req: RunRequest) -> RunResult:
             on_write=on_write,
             effect_complete=_compose_effect_observers(effect_observers),
             effect_start=_compose_effect_observers(start_observers),
-            concurrent_dispatch=req.concurrent_dispatch_observer,
+            concurrent_dispatch=_compose_dispatch_observers(dispatch_observers),
             branch_settled=req.branch_settled_observer,
             _lock=store_lock,
         )
@@ -1060,7 +1080,8 @@ def run(req: RunRequest) -> RunResult:
                 state["runtime"]["persistence"]["error"] = str(e)
                 raise RuntimeError(f"Failed to persist runtime state: {e}") from e
 
-        return RunResult(ok=True, state=state, warnings=warnings, out_path=resolved_out)
+        result = RunResult(ok=True, state=state, warnings=warnings, out_path=resolved_out)
+        return result
 
     except (Exception, KeyboardInterrupt, RunCancelledBySignal) as e:
         # Ctrl-C/SIGINT during a long effect dispatch reaches here exactly
@@ -1175,7 +1196,7 @@ def run(req: RunRequest) -> RunResult:
                         persistence_node["error"] = str(persist_exc)
         except Exception:
             logger.exception("Error during error-handling cleanup")
-        return RunResult(
+        result = RunResult(
             ok=False,
             state=state,
             warnings=warnings,
@@ -1185,6 +1206,7 @@ def run(req: RunRequest) -> RunResult:
             sigterm=sigterm,
             sighup=sighup,
         )
+        return result
     finally:
         # The final flush, success or failure: everything recorded after the
         # last effect included, so the mirror ends equal to --out. `warnings`
@@ -1196,6 +1218,32 @@ def run(req: RunRequest) -> RunResult:
                 f"Could not keep --live-state {req.live_state_path} in sync with "
                 "the run; see the log for details."
             )
+        # `run_end` goes out only after the live-state mirror's own final
+        # write above, and only when `run()` actually reached a normal
+        # return (not left `None` by some exception the `except` tuple
+        # above doesn't catch) — a second SIGINT/SIGTERM never reaches
+        # here at all (`cli.interrupts`'s `os._exit`), so that path
+        # correctly never gets a `run_end` either (#419).
+        if event_log is not None:
+            if result is not None:
+                event_log.run_end(
+                    ok=result.ok,
+                    error=result.error,
+                    signal=(
+                        "SIGTERM"
+                        if result.sigterm
+                        else "SIGHUP"
+                        if result.sighup
+                        else "SIGINT"
+                        if result.interrupted
+                        else None
+                    ),
+                )
+            if event_log.close():
+                warnings.append(
+                    f"Could not keep --events {req.events_path} in sync with "
+                    "the run; see the log for details."
+                )
 
 
 def _compose_effect_observers(
@@ -1210,6 +1258,24 @@ def _compose_effect_observers(
     def fan_out(effect_path: str, effect_node: dict[str, Any]) -> None:
         for observer in observers:
             observer(effect_path, effect_node)
+
+    return fan_out
+
+
+def _compose_dispatch_observers(
+    observers: list[Callable[[str, int], None]],
+) -> Callable[[str, int], None] | None:
+    """Fold ``--events``' own dispatch observer and ``RunRequest.concurrent_dispatch_observer``
+    into the single callback ``Store`` takes — ``--events`` composes with it,
+    never replaces it (#419)."""
+    if not observers:
+        return None
+    if len(observers) == 1:
+        return observers[0]
+
+    def fan_out(path: str, branches: int) -> None:
+        for observer in observers:
+            observer(path, branches)
 
     return fan_out
 
