@@ -145,7 +145,7 @@ def build_corpus() -> list[dict]:
         # writer raises, default_str stringifies via py_str instead.
         b"raw bytes \x00\xff",
         datetime.date(2020, 1, 2),
-        datetime.datetime(2020, 1, 2, 3, 4, 5, 123456),
+        datetime.datetime(2020, 1, 2, 3, 4, 5, 123456),  # noqa: DTZ001
         datetime.datetime(
             2020, 1, 2, 3, 4, 5, tzinfo=datetime.timezone(datetime.timedelta(hours=5, minutes=30))
         ),
