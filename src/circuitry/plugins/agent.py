@@ -17,14 +17,19 @@ this module adds the session's contract on top:
   ``tokens`` (``sent``/``received``), ``cost`` when the CLI reports one,
   ``repair_turn``, and ``transcript`` — the path of a compact log this
   plugin writes (one line per tool call and per reply). The transcript
-  itself never goes into state.
+  itself never goes into state. Claude Code adds ``permission_mode``,
+  ``project_settings`` and ``project_instructions``.
 
 The agent runs with the user's own permissions and is not sandboxed; the
 engine's tool lists are the way to narrow it. For pi, ``tools`` is an
-allowlist and ``exclude_tools`` a denylist. For Claude Code,
-``exclude_tools`` (``--disallowedTools``) is the hard deny, while ``tools``
-(``--allowedTools``) only pre-approves tools so they run without a
-permission prompt; it removes none. See ``docs/plugins/agent.md``.
+allowlist and ``exclude_tools`` a denylist. For Claude Code, ``tools`` is an
+allowlist too (``--tools``, its entries pre-approved with ``--allowedTools``
+and run under ``--permission-mode dontAsk`` unless ``permission_mode`` says
+otherwise), and ``exclude_tools`` (``--disallowedTools``) is the hard deny in
+every permission mode. Unless ``trust_project_settings`` is true, a Claude
+Code session also ignores the repository's project settings (hooks, the API
+key helper, its MCP servers) and gets the repository root's ``CLAUDE.md``
+appended to its first prompt. See ``docs/plugins/agent.md``.
 
 Params:
   - ``prompt`` (required, str): multi-line; written to a temporary file
@@ -34,11 +39,11 @@ Params:
     ``runtime.plugins.agent.engine``, else ``pi``.
   - ``cwd`` (optional, str): where the session runs; default the current
     directory.
-  - ``model`` (optional, str); ``thinking`` (pi only); ``permission_mode``
-    (claude_code only).
-  - ``tools`` / ``exclude_tools`` (optional, list[str]): pi ``--tools`` /
-    ``--exclude-tools``; Claude Code ``--allowedTools`` (pre-approval) /
-    ``--disallowedTools`` (deny).
+  - ``model`` (optional, str); ``thinking`` (pi only); ``permission_mode`` and
+    ``trust_project_settings`` (both claude_code only).
+  - ``tools`` / ``exclude_tools`` (optional, list[str]; ``tools`` may not be
+    empty): pi ``--tools`` / ``--exclude-tools``; Claude Code ``--tools`` with
+    ``--allowedTools``, and ``--disallowedTools``.
   - ``session`` (optional, str): resume this session id.
   - ``extra_args`` (optional, list[str]); ``env`` (optional, mapping of
     variables to add); ``unset_env`` (optional, list[str]: replaces the
@@ -59,7 +64,7 @@ import shutil
 import tempfile
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -86,6 +91,14 @@ CLAUDE_CODE = "claude_code"
 ENGINE_BINARIES: dict[str, str] = {PI: "pi", CLAUDE_CODE: "claude"}
 
 DEFAULT_ENGINE = PI
+
+#: The permission mode when ``tools`` is set but ``permission_mode`` is not: a call off the list is denied.
+_TOOLS_PERMISSION_MODE = "dontAsk"
+
+_PROJECT_INSTRUCTIONS_HEADER = (
+    "\n\n---\n\nProject instructions from the repository's CLAUDE.md "
+    "(Claude Code does not load it in this session):\n\n"
+)
 
 #: How many schema errors a repair prompt or a failure message quotes.
 _MAX_QUOTED_ERRORS = 20
@@ -217,6 +230,7 @@ class ClaudeCodeEngine:
 
     options: _EngineOptions
     permission_mode: str = ""
+    trust_project_settings: bool = False
     name: str = CLAUDE_CODE
 
     def run_turn(
@@ -229,10 +243,13 @@ class ClaudeCodeEngine:
     ) -> AgentTurn:
         del scratch_dir  # the prompt goes on stdin
         args: list[str] = []
+        if not self.trust_project_settings:
+            args += ["--setting-sources", "user"]
+        if self.options.tools:
+            args += ["--tools", ",".join(_builtin_tool_names(self.options.tools))]
+            args += ["--allowedTools", *self.options.tools]
         if self.permission_mode:
             args += ["--permission-mode", self.permission_mode]
-        if self.options.tools:
-            args += ["--allowedTools", *self.options.tools]
         if self.options.exclude_tools:
             args += ["--disallowedTools", *self.options.exclude_tools]
         cmd = _stream_json(
@@ -243,6 +260,7 @@ class ClaudeCodeEngine:
                 session_id=session_id,
                 persist_session=True,
                 extra_args=[*args, *self.options.extra_args],
+                strict_mcp=not self.trust_project_settings,
             )
         )
         proc = run_agent_cli(
@@ -299,6 +317,16 @@ def _stream_json(cmd: list[str]) -> list[str]:
     ``stream-json --verbose``, so each tool call is visible in the output."""
     index = cmd.index("--output-format")
     return [*cmd[: index + 1], "stream-json", "--verbose", *cmd[index + 2 :]]
+
+
+def _builtin_tool_names(tools: tuple[str, ...]) -> list[str]:
+    """The distinct built-in tool names in ``tools``, in order; ``mcp__`` entries are not built-in."""
+    names: list[str] = []
+    for entry in tools:
+        name = entry.split("(", 1)[0].strip()
+        if name and not name.startswith("mcp__") and name not in names:
+            names.append(name)
+    return names
 
 
 @dataclass
@@ -578,6 +606,42 @@ def _str_mapping(params: Mapping[str, Any], key: str) -> dict[str, str]:
     return {str(name): str(item) for name, item in value.items()}
 
 
+def _trust_project_settings(params: Mapping[str, Any], engine_name: str) -> bool:
+    value = params.get("trust_project_settings")
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ValueError("agent: params['trust_project_settings'] must be true or false.")
+    if engine_name != CLAUDE_CODE:
+        raise ValueError(
+            "agent: params['trust_project_settings'] applies to engine 'claude_code' only."
+        )
+    return value
+
+
+def _repository_root(cwd: Path) -> Path:
+    start = cwd.resolve()
+    for candidate in (start, *start.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return start
+
+
+def _project_instructions(cwd: Path) -> tuple[str, str] | None:
+    """The repository root's CLAUDE.md as (path, text), or None when none is to be appended."""
+    root = _repository_root(cwd)
+    path = root / "CLAUDE.md"
+    if not path.exists():
+        return None
+    target = path.resolve()
+    if not target.is_file() or not target.is_relative_to(root):
+        return None
+    text = target.read_text(encoding="utf-8", errors="replace")
+    if not text.strip():
+        return None
+    return str(path), text
+
+
 @dataclass(frozen=True)
 class AgentPlugin:
     name: str = "agent"
@@ -609,6 +673,14 @@ class AgentPlugin:
             raise ValueError(
                 "agent: params['permission_mode'] applies to engine 'claude_code' only."
             )
+        trust_project_settings = _trust_project_settings(params, engine_name)
+        tools = _str_list(params, "tools")
+        if params.get("tools") is not None and not tools:
+            raise ValueError(
+                "agent: params['tools'] is empty; leave it out to keep the engine's default tools."
+            )
+        if engine_name == CLAUDE_CODE and tools and not permission_mode:
+            permission_mode = _TOOLS_PERMISSION_MODE
         result_file_param = _optional_str(params, "result_file")
         result_schema = params.get("result_schema")
         if result_schema is not None:
@@ -627,20 +699,36 @@ class AgentPlugin:
             _str_list(params, "unset_env") if params.get("unset_env") is not None
             else DEFAULT_UNSET_ENV
         )
+        project: tuple[str, str] | None = None
+        if engine_name == CLAUDE_CODE and not trust_project_settings:
+            project = _project_instructions(cwd_path)
+            if project is not None:
+                prompt += _PROJECT_INSTRUCTIONS_HEADER + project[1]
         options = _EngineOptions(
             binary=self._resolve_binary(engine_name),
             cwd=str(cwd_path),
             env={**child_env(unset_env), **_str_mapping(params, "env")},
             model=_optional_str(params, "model"),
-            tools=_str_list(params, "tools"),
+            tools=tools,
             exclude_tools=_str_list(params, "exclude_tools"),
             extra_args=_str_list(params, "extra_args"),
         )
         engine: AgentEngine = (
             PiEngine(options, thinking=thinking)
             if engine_name == PI
-            else ClaudeCodeEngine(options, permission_mode=permission_mode)
+            else ClaudeCodeEngine(
+                options,
+                permission_mode=permission_mode,
+                trust_project_settings=trust_project_settings,
+            )
         )
+        claude_raw: dict[str, Any] = {}
+        if engine_name == CLAUDE_CODE:
+            claude_raw = {
+                "permission_mode": permission_mode or None,
+                "project_settings": "trusted" if trust_project_settings else "isolated",
+                "project_instructions": project[0] if project else None,
+            }
 
         # A result left over from an earlier run must not pass for this one.
         if result_file is not None:
@@ -654,7 +742,7 @@ class AgentPlugin:
         # Holds the prompt files while a turn runs, and the transcript after.
         scratch_dir = Path(tempfile.mkdtemp(prefix=f"cof-agent-{engine_name}-"))
         try:
-            return run_agent_session(
+            result = run_agent_session(
                 engine,
                 prompt,
                 session_id=_optional_str(params, "session") or None,
@@ -673,6 +761,7 @@ class AgentPlugin:
             # could read it.
             shutil.rmtree(scratch_dir, ignore_errors=True)
             raise
+        return replace(result, raw={**result.raw, **claude_raw})
 
     def _resolve_binary(self, engine_name: str) -> str:
         configured = self.binaries.get(engine_name)

@@ -32,6 +32,7 @@ from circuitry.plugins.agent import (
     make_plugin,
     run_agent_session,
 )
+from circuitry.plugins.base import ToolResult
 from circuitry.plugins.capabilities import FS_WRITE, NETWORK, SHELL, capabilities_of
 from circuitry.plugins.factory import build_plugin
 
@@ -144,6 +145,25 @@ def _calls(tmp_path: Path) -> list[dict[str, Any]]:
     if not log.exists():
         return []
     return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+
+
+def _run_claude(
+    tmp_path: Path,
+    workdir: Path,
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    **params: Any,
+) -> ToolResult:
+    return _plugin(tmp_path, "claude_code").execute(
+        params={
+            "prompt": "Task.",
+            "cwd": str(cwd or workdir),
+            "env": env or _env(tmp_path, workdir),
+            **params,
+        },
+        timeout_seconds=30,
+    )
 
 
 # ---------- pi ----------
@@ -331,9 +351,156 @@ def test_claude_code_runs_stream_json_with_its_tool_lists_and_stdin_prompt(
     allowed = argv.index("--allowedTools")
     assert argv[allowed + 1 : allowed + 3] == ["Read", "Bash(git log:*)"]
     assert argv[argv.index("--disallowedTools") + 1] == "WebFetch"
-    assert "--tools" not in argv and "--no-session-persistence" not in argv
+    assert argv[argv.index("--tools") + 1] == "Read,Bash"
+    assert "--no-session-persistence" not in argv
     assert call["stdin"] == "First line.\nSecond line."
     assert not any("First line" in arg for arg in argv)
+
+
+def test_claude_code_isolates_repository_settings_by_default(
+    tmp_path: Path, workdir: Path
+) -> None:
+    result = _run_claude(tmp_path, workdir)
+    assert result.ok, result.stderr
+    (call,) = _calls(tmp_path)
+    argv = call["argv"]
+    setting = argv.index("--setting-sources")
+    assert argv[setting + 1] == "user"
+    assert "--strict-mcp-config" in argv
+    assert not {"--tools", "--allowedTools", "--permission-mode"} & set(argv)
+    assert call["stdin"] == "Task."
+    assert result.raw["project_settings"] == "isolated"
+    assert result.raw["project_instructions"] is None
+    assert result.raw["permission_mode"] is None
+
+
+def test_claude_code_appends_the_repository_claude_md_to_the_first_prompt(
+    tmp_path: Path, workdir: Path
+) -> None:
+    (workdir / ".git").mkdir()
+    (workdir / "CLAUDE.md").write_text("Use pytest.\n", encoding="utf-8")
+    result = _run_claude(
+        tmp_path,
+        workdir,
+        result_file="result.json",
+        result_schema=SCHEMA,
+        env=_env(
+            tmp_path, workdir, FAKE_RESULT_FIRST=json.dumps({"summary": "ok", "files": 1})
+        ),
+    )
+    assert result.ok, result.stderr
+    (call,) = _calls(tmp_path)
+    section = (
+        "\n\n---\n\nProject instructions from the repository's CLAUDE.md "
+        "(Claude Code does not load it in this session):\n\nUse pytest.\n"
+    )
+    assert call["stdin"].startswith("Task." + section)
+    assert "When you have finished" in call["stdin"]
+    assert result.raw["project_instructions"] == str((workdir / "CLAUDE.md").resolve())
+
+
+def test_claude_code_repair_turn_does_not_repeat_the_claude_md(
+    tmp_path: Path, workdir: Path
+) -> None:
+    (workdir / ".git").mkdir()
+    (workdir / "CLAUDE.md").write_text("Use pytest.\n", encoding="utf-8")
+    result = _run_claude(
+        tmp_path,
+        workdir,
+        result_file="result.json",
+        env=_env(
+            tmp_path, workdir, FAKE_RESULT_FIRST="{not json", FAKE_RESULT_REPAIR=json.dumps([1])
+        ),
+    )
+    assert result.ok, result.stderr
+    first, repair = _calls(tmp_path)
+    assert "Use pytest." in first["stdin"]
+    assert "Use pytest." not in repair["stdin"]
+    assert "is not valid JSON" in repair["stdin"]
+
+
+@pytest.mark.parametrize("git_entry", ["directory", "file"])
+def test_claude_code_finds_the_root_claude_md_from_a_subdirectory(
+    tmp_path: Path, workdir: Path, git_entry: str
+) -> None:
+    if git_entry == "directory":
+        (workdir / ".git").mkdir()
+    else:
+        (workdir / ".git").write_text("gitdir: ../.git/worktrees/work\n", encoding="utf-8")
+    (workdir / "CLAUDE.md").write_text("Use pytest.\n", encoding="utf-8")
+    sub = workdir / "sub"
+    sub.mkdir()
+    result = _run_claude(tmp_path, workdir, cwd=sub)
+    assert result.ok, result.stderr
+    (call,) = _calls(tmp_path)
+    assert call["stdin"].startswith("Task.")
+    assert "Use pytest." in call["stdin"]
+    assert result.raw["project_instructions"] == str((workdir / "CLAUDE.md").resolve())
+
+
+def test_claude_code_does_not_append_a_claude_md_linked_from_outside_the_repository(
+    tmp_path: Path, workdir: Path
+) -> None:
+    (workdir / ".git").mkdir()
+    outside = tmp_path / "outside.md"
+    outside.write_text("Secret.\n", encoding="utf-8")
+    (workdir / "CLAUDE.md").symlink_to(outside)
+    result = _run_claude(tmp_path, workdir)
+    assert result.ok, result.stderr
+    (call,) = _calls(tmp_path)
+    assert call["stdin"] == "Task."
+    assert result.raw["project_instructions"] is None
+
+
+def test_claude_code_trusted_settings_keep_its_own_discovery(
+    tmp_path: Path, workdir: Path
+) -> None:
+    (workdir / ".git").mkdir()
+    (workdir / "CLAUDE.md").write_text("Use pytest.\n", encoding="utf-8")
+    result = _run_claude(tmp_path, workdir, trust_project_settings=True)
+    assert result.ok, result.stderr
+    (call,) = _calls(tmp_path)
+    assert "--setting-sources" not in call["argv"]
+    assert "--strict-mcp-config" not in call["argv"]
+    assert call["stdin"] == "Task."
+    assert result.raw["project_settings"] == "trusted"
+    assert result.raw["project_instructions"] is None
+
+
+def test_claude_code_tools_are_an_allowlist_that_runs_under_dontask(
+    tmp_path: Path, workdir: Path
+) -> None:
+    tools = ["Read", "Edit", "Bash(git log:*)", "Bash(pytest:*)", "mcp__srv__ping"]
+    result = _run_claude(tmp_path, workdir, tools=tools)
+    assert result.ok, result.stderr
+    (call,) = _calls(tmp_path)
+    argv = call["argv"]
+    assert argv[argv.index("--tools") + 1] == "Read,Edit,Bash"
+    allowed = argv.index("--allowedTools")
+    assert argv[allowed + 1 : allowed + 1 + len(tools)] == tools
+    assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
+    assert result.raw["permission_mode"] == "dontAsk"
+
+
+def test_claude_code_only_mcp_tools_leave_no_builtin_tool(tmp_path: Path, workdir: Path) -> None:
+    result = _run_claude(tmp_path, workdir, tools=["mcp__srv__ping"])
+    assert result.ok, result.stderr
+    (call,) = _calls(tmp_path)
+    argv = call["argv"]
+    assert argv[argv.index("--tools") + 1] == ""
+    assert argv[argv.index("--allowedTools") + 1] == "mcp__srv__ping"
+
+
+def test_claude_code_explicit_permission_mode_replaces_dontask(
+    tmp_path: Path, workdir: Path
+) -> None:
+    result = _run_claude(tmp_path, workdir, tools=["Read"], permission_mode="acceptEdits")
+    assert result.ok, result.stderr
+    (call,) = _calls(tmp_path)
+    argv = call["argv"]
+    assert argv[argv.index("--permission-mode") + 1] == "acceptEdits"
+    assert "dontAsk" not in argv
+    assert result.raw["permission_mode"] == "acceptEdits"
 
 
 def test_claude_code_repair_turn_resumes_the_session(tmp_path: Path, workdir: Path) -> None:
@@ -568,6 +735,10 @@ def test_cancelled_run_stops_the_session_and_its_child(
         ({"prompt": "x", "tools": "read,write"}, "'tools'\\] must be a list of strings"),
         ({"prompt": "x", "cwd": "/no/such/dir/anywhere"}, "is not a directory"),
         ({"prompt": "x", "env": {"OTHER": None}}, "is null; unset_env removes"),
+        ({"prompt": "x", "trust_project_settings": True}, "'claude_code' only"),
+        ({"prompt": "x", "engine": "claude_code", "trust_project_settings": "yes"}, "must be true or false"),
+        ({"prompt": "x", "tools": []}, "'tools'\\] is empty"),
+        ({"prompt": "x", "engine": "claude_code", "tools": []}, "'tools'\\] is empty"),
     ],
 )
 def test_invalid_params_are_rejected_before_the_cli_runs(
