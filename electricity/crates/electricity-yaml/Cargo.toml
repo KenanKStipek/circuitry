@@ -1,0 +1,29 @@
+[package]
+name = "electricity-yaml"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "A PyYAML-compatible YAML 1.1 loader for electricity: Circuitry's own composer and resolver on saphyr-parser"
+
+[dependencies]
+electricity-value = { path = "../electricity-value" }
+# Tokenizes/parses YAML into a span-annotated event stream (scalar style,
+# anchors, tags) -- exactly what the composer below needs. No Rust YAML
+# library implements YAML 1.1's implicit-scalar resolution (every
+# maintained one targets 1.2), so this crate owns that layer itself
+# (DESIGN.md §3.2) on top of saphyr-parser's events.
+saphyr-parser = "0.1"
+num-bigint = "0.5"
+num-traits = "0.2"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+# PyYAML's own implicit-scalar and timestamp regexes (runtime-semantics
+# §1.1) are reused close to verbatim via Rust regex's `(?x)` extended mode,
+# which matches Python's `re.X` whitespace/comment handling, to minimize
+# transcription risk versus a hand-rolled parser.
+regex = "1"
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

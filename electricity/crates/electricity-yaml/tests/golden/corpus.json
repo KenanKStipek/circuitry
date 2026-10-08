@@ -1,0 +1,745 @@
+[
+  {
+    "yaml": "a: on\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a: yes\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a: off\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a: no\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a: 0x1A\n",
+    "kind": "value",
+    "repr": "{'a': 26}"
+  },
+  {
+    "yaml": "a: 017\n",
+    "kind": "value",
+    "repr": "{'a': 15}"
+  },
+  {
+    "yaml": "a: 1:30:00\n",
+    "kind": "value",
+    "repr": "{'a': 5400}"
+  },
+  {
+    "yaml": "a: 2024-01-01\n",
+    "kind": "value",
+    "repr": "{'a': datetime.date(2024, 1, 1)}"
+  },
+  {
+    "yaml": "a: .inf\n",
+    "kind": "value",
+    "repr": "{'a': inf}"
+  },
+  {
+    "yaml": "a: .nan\n",
+    "kind": "value",
+    "repr": "{'a': nan}"
+  },
+  {
+    "yaml": "a: on\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a: On\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a: ON\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a: off\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a: Off\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a: OFF\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a: yes\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a: Yes\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a: YES\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a: no\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a: No\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a: NO\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a: true\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a: True\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a: TRUE\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a: false\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a: False\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a: FALSE\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a: y\n",
+    "kind": "value",
+    "repr": "{'a': 'y'}"
+  },
+  {
+    "yaml": "a: Y\n",
+    "kind": "value",
+    "repr": "{'a': 'Y'}"
+  },
+  {
+    "yaml": "a: n\n",
+    "kind": "value",
+    "repr": "{'a': 'n'}"
+  },
+  {
+    "yaml": "a: N\n",
+    "kind": "value",
+    "repr": "{'a': 'N'}"
+  },
+  {
+    "yaml": "a: 'on'\n",
+    "kind": "value",
+    "repr": "{'a': 'on'}"
+  },
+  {
+    "yaml": "a: \"Yes\"\n",
+    "kind": "value",
+    "repr": "{'a': 'Yes'}"
+  },
+  {
+    "yaml": "a: |\n  on\n",
+    "kind": "value",
+    "repr": "{'a': 'on\\n'}"
+  },
+  {
+    "yaml": "a: 0x1A\n",
+    "kind": "value",
+    "repr": "{'a': 26}"
+  },
+  {
+    "yaml": "a: 0X1a\n",
+    "kind": "value",
+    "repr": "{'a': '0X1a'}"
+  },
+  {
+    "yaml": "a: -0x1A\n",
+    "kind": "value",
+    "repr": "{'a': -26}"
+  },
+  {
+    "yaml": "a: 0b101\n",
+    "kind": "value",
+    "repr": "{'a': 5}"
+  },
+  {
+    "yaml": "a: -0b101\n",
+    "kind": "value",
+    "repr": "{'a': -5}"
+  },
+  {
+    "yaml": "a: 017\n",
+    "kind": "value",
+    "repr": "{'a': 15}"
+  },
+  {
+    "yaml": "a: 0017\n",
+    "kind": "value",
+    "repr": "{'a': 15}"
+  },
+  {
+    "yaml": "a: -017\n",
+    "kind": "value",
+    "repr": "{'a': -15}"
+  },
+  {
+    "yaml": "a: 0o17\n",
+    "kind": "value",
+    "repr": "{'a': '0o17'}"
+  },
+  {
+    "yaml": "a: 1:30:00\n",
+    "kind": "value",
+    "repr": "{'a': 5400}"
+  },
+  {
+    "yaml": "a: -1:30:00\n",
+    "kind": "value",
+    "repr": "{'a': -5400}"
+  },
+  {
+    "yaml": "a: 1:2:3\n",
+    "kind": "value",
+    "repr": "{'a': 3723}"
+  },
+  {
+    "yaml": "a: 1_000_000\n",
+    "kind": "value",
+    "repr": "{'a': 1000000}"
+  },
+  {
+    "yaml": "a: 0x1_A\n",
+    "kind": "value",
+    "repr": "{'a': 26}"
+  },
+  {
+    "yaml": "a: 0b1_01\n",
+    "kind": "value",
+    "repr": "{'a': 5}"
+  },
+  {
+    "yaml": "a: 0\n",
+    "kind": "value",
+    "repr": "{'a': 0}"
+  },
+  {
+    "yaml": "a: -0\n",
+    "kind": "value",
+    "repr": "{'a': 0}"
+  },
+  {
+    "yaml": "a: 00\n",
+    "kind": "value",
+    "repr": "{'a': 0}"
+  },
+  {
+    "yaml": "a: 123456789012345678901234567890\n",
+    "kind": "value",
+    "repr": "{'a': 123456789012345678901234567890}"
+  },
+  {
+    "yaml": "a: 0xFFFFFFFFFFFFFFFFFF\n",
+    "kind": "value",
+    "repr": "{'a': 4722366482869645213695}"
+  },
+  {
+    "yaml": "a: 1e3\n",
+    "kind": "value",
+    "repr": "{'a': '1e3'}"
+  },
+  {
+    "yaml": "a: 1.0\n",
+    "kind": "value",
+    "repr": "{'a': 1.0}"
+  },
+  {
+    "yaml": "a: -1.5\n",
+    "kind": "value",
+    "repr": "{'a': -1.5}"
+  },
+  {
+    "yaml": "a: .5\n",
+    "kind": "value",
+    "repr": "{'a': 0.5}"
+  },
+  {
+    "yaml": "a: 5.\n",
+    "kind": "value",
+    "repr": "{'a': 5.0}"
+  },
+  {
+    "yaml": "a: 1.0e+3\n",
+    "kind": "value",
+    "repr": "{'a': 1000.0}"
+  },
+  {
+    "yaml": "a: 1.0e-3\n",
+    "kind": "value",
+    "repr": "{'a': 0.001}"
+  },
+  {
+    "yaml": "a: 1e3\n",
+    "kind": "value",
+    "repr": "{'a': '1e3'}"
+  },
+  {
+    "yaml": "a: 1.0E+3\n",
+    "kind": "value",
+    "repr": "{'a': 1000.0}"
+  },
+  {
+    "yaml": "a: .inf\n",
+    "kind": "value",
+    "repr": "{'a': inf}"
+  },
+  {
+    "yaml": "a: .Inf\n",
+    "kind": "value",
+    "repr": "{'a': inf}"
+  },
+  {
+    "yaml": "a: .INF\n",
+    "kind": "value",
+    "repr": "{'a': inf}"
+  },
+  {
+    "yaml": "a: -.inf\n",
+    "kind": "value",
+    "repr": "{'a': -inf}"
+  },
+  {
+    "yaml": "a: .nan\n",
+    "kind": "value",
+    "repr": "{'a': nan}"
+  },
+  {
+    "yaml": "a: .NaN\n",
+    "kind": "value",
+    "repr": "{'a': nan}"
+  },
+  {
+    "yaml": "a: .NAN\n",
+    "kind": "value",
+    "repr": "{'a': nan}"
+  },
+  {
+    "yaml": "a: 1:30:00.5\n",
+    "kind": "value",
+    "repr": "{'a': 5400.5}"
+  },
+  {
+    "yaml": "a: -1:30:00.5\n",
+    "kind": "value",
+    "repr": "{'a': -5400.5}"
+  },
+  {
+    "yaml": "a: 1_000.5\n",
+    "kind": "value",
+    "repr": "{'a': 1000.5}"
+  },
+  {
+    "yaml": "a: ~\n",
+    "kind": "value",
+    "repr": "{'a': None}"
+  },
+  {
+    "yaml": "a: null\n",
+    "kind": "value",
+    "repr": "{'a': None}"
+  },
+  {
+    "yaml": "a: Null\n",
+    "kind": "value",
+    "repr": "{'a': None}"
+  },
+  {
+    "yaml": "a: NULL\n",
+    "kind": "value",
+    "repr": "{'a': None}"
+  },
+  {
+    "yaml": "a:\n",
+    "kind": "value",
+    "repr": "{'a': None}"
+  },
+  {
+    "yaml": "a: \n",
+    "kind": "value",
+    "repr": "{'a': None}"
+  },
+  {
+    "yaml": "a: ''\n",
+    "kind": "value",
+    "repr": "{'a': ''}"
+  },
+  {
+    "yaml": "a: 2024-01-01\n",
+    "kind": "value",
+    "repr": "{'a': datetime.date(2024, 1, 1)}"
+  },
+  {
+    "yaml": "a: 2024-1-1\n",
+    "kind": "value",
+    "repr": "{'a': '2024-1-1'}"
+  },
+  {
+    "yaml": "a: 2024-01-02 03:04:05\n",
+    "kind": "value",
+    "repr": "{'a': datetime.datetime(2024, 1, 2, 3, 4, 5)}"
+  },
+  {
+    "yaml": "a: 2024-01-02T03:04:05\n",
+    "kind": "value",
+    "repr": "{'a': datetime.datetime(2024, 1, 2, 3, 4, 5)}"
+  },
+  {
+    "yaml": "a: 2024-01-02T03:04:05Z\n",
+    "kind": "value",
+    "repr": "{'a': datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)}"
+  },
+  {
+    "yaml": "a: 2024-01-02T03:04:05+05:30\n",
+    "kind": "value",
+    "repr": "{'a': datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.timezone(datetime.timedelta(seconds=19800)))}"
+  },
+  {
+    "yaml": "a: 2024-01-02T03:04:05-05:30\n",
+    "kind": "value",
+    "repr": "{'a': datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=66600)))}"
+  },
+  {
+    "yaml": "a: 2024-01-02T03:04:05.123456Z\n",
+    "kind": "value",
+    "repr": "{'a': datetime.datetime(2024, 1, 2, 3, 4, 5, 123456, tzinfo=datetime.timezone.utc)}"
+  },
+  {
+    "yaml": "a: 2024-01-02t03:04:05z\n",
+    "kind": "value",
+    "repr": "{'a': '2024-01-02t03:04:05z'}"
+  },
+  {
+    "yaml": "a: 2024-01-02  03:04:05\n",
+    "kind": "value",
+    "repr": "{'a': datetime.datetime(2024, 1, 2, 3, 4, 5)}"
+  },
+  {
+    "yaml": "a: !!str on\n",
+    "kind": "value",
+    "repr": "{'a': 'on'}"
+  },
+  {
+    "yaml": "a: !!str 123\n",
+    "kind": "value",
+    "repr": "{'a': '123'}"
+  },
+  {
+    "yaml": "a: !!int \"42\"\n",
+    "kind": "value",
+    "repr": "{'a': 42}"
+  },
+  {
+    "yaml": "a: !!int abc\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "a: !!bool YeS\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a: !!bool banana\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "a: !!float \"1.5\"\n",
+    "kind": "value",
+    "repr": "{'a': 1.5}"
+  },
+  {
+    "yaml": "a: !!float xyz\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "a: !!null anything\n",
+    "kind": "value",
+    "repr": "{'a': None}"
+  },
+  {
+    "yaml": "a: !!timestamp \"2024-01-01\"\n",
+    "kind": "value",
+    "repr": "{'a': datetime.date(2024, 1, 1)}"
+  },
+  {
+    "yaml": "a: !!timestamp not-a-date\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "a: !!binary aGVsbG8=\n",
+    "kind": "value",
+    "repr": "{'a': b'hello'}"
+  },
+  {
+    "yaml": "a: !!binary \"not base64!\"\n",
+    "kind": "error",
+    "line": 0,
+    "column": 3
+  },
+  {
+    "yaml": "a: ! on\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a: ! \"on\"\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a: ! [1, 2]\n",
+    "kind": "value",
+    "repr": "{'a': [1, 2]}"
+  },
+  {
+    "yaml": "a: ! {x: 1}\n",
+    "kind": "value",
+    "repr": "{'a': {'x': 1}}"
+  },
+  {
+    "yaml": "a: !custom foo\n",
+    "kind": "error",
+    "line": 0,
+    "column": 3
+  },
+  {
+    "yaml": "a: !!set\n  x: null\n  y: null\n",
+    "kind": "known_divergence",
+    "python_repr": "{'a': {'x', 'y'}}",
+    "rust_error_tag": "tag:yaml.org,2002:set"
+  },
+  {
+    "yaml": "a: !!omap\n  - x: 1\n  - y: 2\n",
+    "kind": "known_divergence",
+    "python_repr": "{'a': [('x', 1), ('y', 2)]}",
+    "rust_error_tag": "tag:yaml.org,2002:omap"
+  },
+  {
+    "yaml": "a: !!pairs\n  - x: 1\n  - y: 2\n",
+    "kind": "known_divergence",
+    "python_repr": "{'a': [('x', 1), ('y', 2)]}",
+    "rust_error_tag": "tag:yaml.org,2002:pairs"
+  },
+  {
+    "yaml": "a: =\n",
+    "kind": "error",
+    "line": 0,
+    "column": 3
+  },
+  {
+    "yaml": "a: <<\n",
+    "kind": "error",
+    "line": 0,
+    "column": 3
+  },
+  {
+    "yaml": "a: !!value foo\n",
+    "kind": "error",
+    "line": 0,
+    "column": 3
+  },
+  {
+    "yaml": "a: !!merge foo\n",
+    "kind": "error",
+    "line": 0,
+    "column": 3
+  },
+  {
+    "yaml": "a: &x hello\nb: *x\n",
+    "kind": "value",
+    "repr": "{'a': 'hello', 'b': 'hello'}"
+  },
+  {
+    "yaml": "a: &x [1, 2, 3]\nb: *x\nc: *x\n",
+    "kind": "value",
+    "repr": "{'a': [1, 2, 3], 'b': [1, 2, 3], 'c': [1, 2, 3]}"
+  },
+  {
+    "yaml": "a: &x {p: 1, q: 2}\nb: *x\n",
+    "kind": "value",
+    "repr": "{'a': {'p': 1, 'q': 2}, 'b': {'p': 1, 'q': 2}}"
+  },
+  {
+    "yaml": "items:\n  - &x {n: 1}\n  - *x\n  - *x\n",
+    "kind": "value",
+    "repr": "{'items': [{'n': 1}, {'n': 1}, {'n': 1}]}"
+  },
+  {
+    "yaml": "a: *undefined\n",
+    "kind": "error",
+    "line": 0,
+    "column": 3
+  },
+  {
+    "yaml": "base: &base\n  x: 1\n  y: 2\nderived:\n  <<: *base\n  y: 3\n",
+    "kind": "value",
+    "repr": "{'base': {'x': 1, 'y': 2}, 'derived': {'x': 1, 'y': 3}}"
+  },
+  {
+    "yaml": "base: &base\n  x: 1\n  y: 2\nderived:\n  z: 9\n  <<: *base\n  y: 3\n",
+    "kind": "value",
+    "repr": "{'base': {'x': 1, 'y': 2}, 'derived': {'x': 1, 'y': 3, 'z': 9}}"
+  },
+  {
+    "yaml": "b1: &b1\n  x: 1\nb2: &b2\n  x: 2\nmerged:\n  <<: [*b1, *b2]\n",
+    "kind": "value",
+    "repr": "{'b1': {'x': 1}, 'b2': {'x': 2}, 'merged': {'x': 1}}"
+  },
+  {
+    "yaml": "b1: &b1\n  x: 1\nb2: &b2\n  y: 2\nmerged:\n  <<: [*b1, *b2]\n  x: 99\n",
+    "kind": "value",
+    "repr": "{'b1': {'x': 1}, 'b2': {'y': 2}, 'merged': {'y': 2, 'x': 99}}"
+  },
+  {
+    "yaml": "a: &a\n  x: 1\nb: &b\n  x: 2\nc:\n  <<: *a\n  <<: *b\n",
+    "kind": "value",
+    "repr": "{'a': {'x': 1}, 'b': {'x': 2}, 'c': {'x': 2}}"
+  },
+  {
+    "yaml": "a: &a\n  x: 1\nb:\n  <<: *a\n  <<: *a\n",
+    "kind": "value",
+    "repr": "{'a': {'x': 1}, 'b': {'x': 1}}"
+  },
+  {
+    "yaml": "a: &a\n  x: 1\nb:\n  <<: *a\n",
+    "kind": "value",
+    "repr": "{'a': {'x': 1}, 'b': {'x': 1}}"
+  },
+  {
+    "yaml": "a: &a\n  x: 1\nb:\n  <<: {p: 9}\n",
+    "kind": "value",
+    "repr": "{'a': {'x': 1}, 'b': {'p': 9}}"
+  },
+  {
+    "yaml": "a:\n  <<: [1, 2]\n",
+    "kind": "error",
+    "line": 1,
+    "column": 7
+  },
+  {
+    "yaml": "a:\n  <<: 5\n",
+    "kind": "error",
+    "line": 1,
+    "column": 6
+  },
+  {
+    "yaml": "a: 1\na: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'a' at line 2, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "1: a\n1: b\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 1 at line 2, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "true: a\nyes: b\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key True at line 2, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "null: a\n~: b\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key None at line 2, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "1.0: a\n1: b\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 1 at line 2, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "'1': a\n1: b\n",
+    "kind": "value",
+    "repr": "{'1': 'a', 1: 'b'}"
+  },
+  {
+    "yaml": "a:\n  b: 1\n  b: 2\nc: 3\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 3, column 3 (first defined at line 2, column 3); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "",
+    "kind": "value",
+    "repr": "None"
+  },
+  {
+    "yaml": "   \n\n",
+    "kind": "value",
+    "repr": "None"
+  },
+  {
+    "yaml": "# just a comment\n",
+    "kind": "value",
+    "repr": "None"
+  },
+  {
+    "yaml": "a: 1\n---\nb: 2\n",
+    "kind": "error",
+    "line": 1,
+    "column": 0
+  },
+  {
+    "yaml": "? [1, 2]\n: v\n",
+    "kind": "error",
+    "line": 0,
+    "column": 2
+  },
+  {
+    "yaml": "a: [1, [2, 3], {b: 4}]\n",
+    "kind": "value",
+    "repr": "{'a': [1, [2, 3], {'b': 4}]}"
+  },
+  {
+    "yaml": "a:\n  - 1\n  - 2\n  -\n    x: 1\n",
+    "kind": "value",
+    "repr": "{'a': [1, 2, {'x': 1}]}"
+  }
+]
