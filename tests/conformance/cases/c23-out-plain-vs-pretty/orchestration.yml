@@ -1,0 +1,6 @@
+name: c23-out-plain-vs-pretty
+effects:
+  - type: tool
+    name: step1
+    provider: json
+    params: {mode: stringify, input: {b: 2, a: 1, c: "é ✓", d: 1.0e-05}}

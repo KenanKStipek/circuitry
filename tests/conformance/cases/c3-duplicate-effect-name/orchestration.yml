@@ -1,0 +1,10 @@
+name: c3-duplicate-effect-name
+effects:
+  - type: tool
+    name: step
+    provider: json
+    params: {mode: stringify, input: 1}
+  - type: tool
+    name: step
+    provider: json
+    params: {mode: stringify, input: 2}

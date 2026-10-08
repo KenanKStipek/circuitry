@@ -1,0 +1,6 @@
+{
+  "spec_case": "C6",
+  "description": "Same expression as c6-absent with strict: true added, x still absent: has() exempts the path even under strict, so this does NOT raise CelEvaluationError — it evaluates exactly like the non-strict case (electricity/docs/spec/runtime-semantics.md §4.4).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

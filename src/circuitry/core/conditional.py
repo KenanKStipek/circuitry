@@ -11,6 +11,7 @@ from ..adapters import Adapter
 from ..output import console as _console
 from .answers import parse_boolean_answer
 from .disabled import is_enabled
+from .effect_identity import model_call
 from .scope import local_writes, scope_ctx
 from .store import Store
 from .templates import render_template
@@ -202,7 +203,7 @@ class ConditionalRuntime:
         # Falling to the else branch is only ever an explicit opt-in via
         # ``on_error: continue``.
         try:
-            result = self._evaluate_condition(ctx=ctx)
+            result = self._evaluate_condition(store=child_store, ctx=ctx)
         except Exception as e:
             if meta:
                 meta["error"] = str(e)
@@ -465,13 +466,13 @@ class ConditionalRuntime:
             "name": effect_name if isinstance(effect_name, str) else None,
         }
 
-    def _evaluate_condition(self, *, ctx: dict[str, Any]) -> bool:
+    def _evaluate_condition(self, *, store: Store, ctx: dict[str, Any]) -> bool:
         """Evaluate the condition and return a boolean result."""
         if self.defn.condition.mode == "cel":
             return self._evaluate_cel(ctx=ctx)
-        return self._evaluate_model(ctx=ctx)
+        return self._evaluate_model(store=store, ctx=ctx)
 
-    def _evaluate_model(self, *, ctx: dict[str, Any]) -> bool:
+    def _evaluate_model(self, *, store: Store, ctx: dict[str, Any]) -> bool:
         """Cybernetic evaluation: invoke model with rendered template."""
         self._model_answer = None
         self._model_tokens_sent = None
@@ -492,11 +493,18 @@ class ConditionalRuntime:
 
 Answer (yes/no):"""
 
-        res = self.adapter.generate(
-            model=self.model,
-            prompt=prompt,
-            timeout_seconds=self.timeout_seconds,
-        )
+        # The decision itself is this conditional's own identity, not a
+        # separately named sub-effect — *store* is already ``child_store``,
+        # whose own path already includes this conditional's name when it
+        # has one (``Store.child``), so ``model_call`` is passed ``None``
+        # rather than ``self.defn.name`` again, which would double it
+        # (``prime.gate.gate``) (#370 review F1).
+        with model_call(store, None):
+            res = self.adapter.generate(
+                model=self.model,
+                prompt=prompt,
+                timeout_seconds=self.timeout_seconds,
+            )
         self._model_answer = res.text
         self._model_tokens_sent = res.tokens_sent
         self._model_tokens_received = res.tokens_received
