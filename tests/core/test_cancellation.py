@@ -206,6 +206,30 @@ def test_kill_process_group_kills_the_whole_group_when_isolated(
     assert proc.killed is False
 
 
+def test_kill_process_group_ignores_a_pgid_reused_by_a_process_we_dont_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#385 round 3: a pgid is only reused once every process that held it
+    has actually been reaped -- but that can happen between one caller's
+    kill reaping the last of them and a later, slower caller (a repeat
+    kill from `_repeat_group_kill`, or simply this function called again)
+    finding that exact number already reassigned to an unrelated process
+    it does not own. `os.killpg` then raises `PermissionError`, which
+    must be swallowed the same way an already-gone group's
+    `ProcessLookupError` already is -- this is a best-effort kill, never
+    a crash."""
+    proc = _FakeTrackedProc()
+    monkeypatch.setattr(os, "getpgid", lambda pid: 999)
+    monkeypatch.setattr(os, "getpgrp", lambda: 777)
+
+    def _reused_pgid_killpg(pgid: int, sig: int) -> None:
+        raise PermissionError("not our process")
+
+    monkeypatch.setattr(os, "killpg", _reused_pgid_killpg)
+
+    kill_process_group(proc)  # type: ignore[arg-type] -- must not raise
+
+
 def test_track_kills_a_process_added_after_cancellation_was_already_requested(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -100,6 +100,16 @@ def kill_process_group(proc: subprocess.Popen[str] | subprocess.Popen[bytes]) ->
     with the child — e.g. an unarmed timeout under the SDK, the MCP
     server, or any embedder that never installs ``cof run``'s signal
     handler. Guard against that case and kill just the child instead.
+
+    ``PermissionError`` is ignored the same as ``ProcessLookupError``
+    (#385 round 3): a pgid is only ever reused once every process that
+    held it has actually been reaped, but once *this* call's own kill
+    (or a repeat of it — see :func:`_repeat_group_kill`) has reaped the
+    last one, a slow caller hitting this function again can still find
+    that exact number reassigned to an unrelated process it does not
+    own, under enough general process churn on the machine (seen once
+    under this suite's own bounded synthetic load, not reproduced
+    since) — best-effort, same as the rest of this function.
     """
     if proc.poll() is not None:
         return
@@ -116,12 +126,12 @@ def kill_process_group(proc: subprocess.Popen[str] | subprocess.Popen[bytes]) ->
     if pgid == os.getpgrp():
         try:
             proc.kill()
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
             pass
         return
     try:
         os.killpg(pgid, signal.SIGKILL)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         pass
 
 
