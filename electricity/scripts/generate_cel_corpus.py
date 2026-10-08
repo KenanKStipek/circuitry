@@ -396,6 +396,15 @@ def build_corpus() -> list[dict]:
         condition("state.a < state.b", {"a": naive_10, "b": aware_15_plus5}),
         condition("state.a < state.b", {"a": naive_10, "b": aware_15_plus1}),
         condition("state.a > state.b", {"a": naive_10, "b": aware_15_plus1}),
+        # Pinned under strict: true too -- ordering a naive against an
+        # aware datetime never raises inside CEL, strict or not (DESIGN.md
+        # §3.2).
+        condition("state.a < state.b", {"a": naive_10, "b": aware_15_plus1}, strict=True),
+        expect(
+            "value < state.b",
+            value=naive_10,
+            state={"b": aware_15_plus1},
+        ),
     ]
 
     # --- a Duration's truthiness is "nonzero", not always true: the top-

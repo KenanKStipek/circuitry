@@ -4088,6 +4088,75 @@
     "strict": false
   },
   {
+    "expr": "state.a < state.b",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "naive": "2020-01-01T10:00:00.000000",
+            "offset_seconds": null,
+            "t": "datetime"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "naive": "2020-01-01T15:00:00.000000",
+            "offset_seconds": 3600,
+            "t": "datetime"
+          }
+        ]
+      ]
+    },
+    "strict": true
+  },
+  {
+    "expr": "value < state.b",
+    "meta": {
+      "t": "dict",
+      "v": []
+    },
+    "mode": "expect",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "naive": "2020-01-01T15:00:00.000000",
+            "offset_seconds": 3600,
+            "t": "datetime"
+          }
+        ]
+      ]
+    },
+    "value": {
+      "naive": "2020-01-01T10:00:00.000000",
+      "offset_seconds": null,
+      "t": "datetime"
+    }
+  },
+  {
     "expr": "state.a - state.b",
     "mode": "condition",
     "outcome": {
