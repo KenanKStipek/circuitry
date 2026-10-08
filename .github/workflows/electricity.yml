@@ -53,8 +53,8 @@ jobs:
         working-directory: electricity
         run: cargo test --workspace
 
-  value-corpus:
-    name: electricity-value golden corpus is up to date
+  generated-files:
+    name: generated files are up to date
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,13 +63,29 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: regenerate the Unicode printable-ranges table and check it is unchanged
-        working-directory: electricity
-        run: python3 scripts/generate_unicode_printable_ranges.py --check
+      # Generators may import Circuitry itself (and through it PyYAML, chevron,
+      # cel-python, jsonschema) so that expected outputs come from the real
+      # Python code, never from a re-implementation.
+      - name: install Circuitry for the generators
+        run: python3 -m pip install -e .
 
-      - name: regenerate the golden corpus and check it is unchanged
+      # Every generator under electricity/scripts/ is named generate_*.py and
+      # supports --check (regenerate in memory, fail if the committed file
+      # differs). New generators are picked up here without editing this file.
+      - name: regenerate every generated file and check it is unchanged
         working-directory: electricity
-        run: python3 scripts/generate_value_corpus.py --check
+        run: |
+          set -uo pipefail
+          failed=0
+          for script in scripts/generate_*.py; do
+            echo "::group::$script --check"
+            if ! python3 "$script" --check; then
+              echo "::error::$script: generated output is stale (run it without --check and commit the result)"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$failed"
 
   msrv:
     name: MSRV check
