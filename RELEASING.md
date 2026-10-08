@@ -8,14 +8,16 @@ matrix, builds the wheel + sdist, publishes to PyPI via OIDC trusted
 publishing, and creates a GitHub Release with the changelog excerpt.
 
 The same tag also covers `electricity/`, the preview Rust runner in this
-repository: the workflow builds its release archives (Linux x86_64/aarch64
-musl, macOS aarch64) in parallel with the Python build, and attaches them
-to the same GitHub release, marked as a **preview**. The container image
+repository, and `oscilloscope/`, the preview `osp` TUI: the workflow builds
+their release archives (Linux x86_64/aarch64 musl, macOS aarch64) in
+parallel with the Python build, and attaches them to the same GitHub
+release, marked as a **preview**. The container image
 (`ghcr.io/kenankstipek/electricity`) is pushed by a dedicated
 `publish-image` job only after the Python wheel/sdist and every
-electricity archive have built and the PyPI upload has succeeded —
+electricity and osp archive have built and the PyPI upload has succeeded —
 nothing publishes anywhere (PyPI, ghcr.io, the GitHub release) unless
-every artifact built, and a failed PyPI upload leaves no image behind.
+every artifact built, and a failed PyPI upload leaves no image behind. osp
+has no container image.
 
 ## One-time setup (per repository)
 
@@ -61,9 +63,10 @@ If quality is red, fix it on `main` before tagging.
 
 ### 2. Bump the version
 
-Edit `pyproject.toml` **and** `electricity/Cargo.toml` — one version
-covers both, and the release workflow's tag check fails if they disagree
-(so does `tests/test_electricity_version.py`):
+Edit `pyproject.toml`, `electricity/Cargo.toml` **and**
+`oscilloscope/Cargo.toml` — one version covers all three, and the release
+workflow's tag check fails if any of them disagree (so does
+`tests/test_electricity_version.py`):
 
 ```toml
 # pyproject.toml
@@ -77,11 +80,23 @@ version = "0.2.0"   # was 0.1.0
 version = "0.2.0"   # was 0.1.0
 ```
 
-For a release-candidate tag, the two files spell the version differently:
-`pyproject.toml` uses PEP 440 (`0.2.0rc1`), but Cargo requires valid semver,
-so `electricity/Cargo.toml` uses `0.2.0-rc.1`. The release workflow's
-`verify-version` job and `tests/test_electricity_version.py` both map one
-form to the other before comparing — see the "Pre-releases" section below.
+```toml
+# oscilloscope/Cargo.toml
+[workspace.package]
+version = "0.2.0"   # was 0.1.0
+```
+
+Then refresh `oscilloscope/Cargo.lock` the same way you would
+`electricity/Cargo.lock` — `cd oscilloscope && cargo update --workspace`,
+or just let the next `cargo build`/`cargo test` there rewrite it, since no
+dependency version changed, only the workspace's own.
+
+For a release-candidate tag, the Cargo files spell the version differently
+from `pyproject.toml`: it uses PEP 440 (`0.2.0rc1`), but Cargo requires
+valid semver, so `electricity/Cargo.toml` and `oscilloscope/Cargo.toml` both
+use `0.2.0-rc.1`. The release workflow's `verify-version` job and
+`tests/test_electricity_version.py` both map one form to the other before
+comparing — see the "Pre-releases" section below.
 
 Decide the bump per [SemVer](https://semver.org/) — with the alpha
 caveat documented in [`docs/stability.md`](docs/stability.md) that 0.x
@@ -130,7 +145,7 @@ release workflow extracts to populate the GitHub Release notes.
 ### 4. Commit, tag, push
 
 ```bash
-git add pyproject.toml electricity/Cargo.toml electricity/Cargo.lock CHANGELOG.md changelog.d   # includes the consumed fragments
+git add pyproject.toml electricity/Cargo.toml electricity/Cargo.lock oscilloscope/Cargo.toml oscilloscope/Cargo.lock CHANGELOG.md changelog.d   # includes the consumed fragments
 git commit -m "release v0.2.0"
 git tag v0.2.0
 git push origin main
@@ -140,16 +155,17 @@ git push origin v0.2.0
 The workflow then:
 
 1. Runs the test matrix on Python 3.9–3.13.
-2. Verifies the tag matches `pyproject.toml`'s **and**
-   `electricity/Cargo.toml`'s version (catches forgot-to-bump tags before
-   they ship).
+2. Verifies the tag matches `pyproject.toml`'s, `electricity/Cargo.toml`'s
+   **and** `oscilloscope/Cargo.toml`'s version (catches forgot-to-bump tags
+   before they ship).
 3. Builds wheel + sdist and runs `twine check` on them, and in parallel
-   builds electricity's release archives and validates its container image
-   (without pushing it yet).
-4. Once both builds succeed: uploads to PyPI via OIDC trusted publishing,
+   builds electricity's and osp's release archives — the same reusable
+   workflow builds both — and validates electricity's container image
+   (without pushing it yet; osp has none).
+4. Once every build succeeds: uploads to PyPI via OIDC trusted publishing,
    then pushes the container image to ghcr.io.
 5. Creates a GitHub Release with the changelog excerpt, the Python
-   artifacts, and electricity's archives/checksums, all attached.
+   artifacts, and electricity's and osp's archives/checksums, all attached.
 
 Watch progress at:
 
@@ -168,9 +184,9 @@ git tag v0.2.0rc1
 git push origin v0.2.0rc1
 ```
 
-Bump `pyproject.toml` to `0.2.0rc1` and `electricity/Cargo.toml` to
-`0.2.0-rc.1` (see step 2 above) — the tag itself always matches
-`pyproject.toml`'s spelling.
+Bump `pyproject.toml` to `0.2.0rc1` and `electricity/Cargo.toml` and
+`oscilloscope/Cargo.toml` to `0.2.0-rc.1` (see step 2 above) — the tag
+itself always matches `pyproject.toml`'s spelling.
 
 The workflow marks these as `--prerelease` on GitHub. PyPI accepts the
 release but `pip install circuitry-cof` won't pick it up by default
@@ -204,9 +220,11 @@ ls -la dist/   # circuitry_cof-<version>.tar.gz + .whl
 | `.github/workflows/release.yml` | The automation |
 | `.github/workflows/quality.yml` | Test / lint / typecheck on every push and PR |
 | `.github/workflows/electricity.yml` | electricity's own fmt/clippy/test/MSRV CI, plus the release build without publishing |
-| `.github/workflows/electricity-release-build.yml` | Reusable workflow: electricity's release archives and container image |
+| `.github/workflows/oscilloscope.yml` | osp's own fmt/clippy/test/MSRV CI, plus the release build without publishing |
+| `.github/workflows/rust-release-build.yml` | Reusable workflow: a Rust workspace's release archives, and electricity's container image (`inputs.build-image`) |
 | `pyproject.toml` | Python version source of truth |
 | `electricity/Cargo.toml` | electricity's version (`[workspace.package]`), kept equal to `pyproject.toml`'s |
+| `oscilloscope/Cargo.toml` | osp's version (`[workspace.package]`), kept equal to `pyproject.toml`'s |
 | `CHANGELOG.md` | Per-release notes; the workflow extracts from here |
 | `changelog.d/` | Per-PR changelog fragments, compiled into `CHANGELOG.md` at release |
 | `scripts/build-changelog.py` | The fragment compiler |
