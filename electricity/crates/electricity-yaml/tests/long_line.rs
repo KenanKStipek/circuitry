@@ -4,11 +4,20 @@
 //! line's start on every call made a single long line -- a one-line
 //! flow mapping, the shape JSON-like plans models often emit -- cost
 //! O(column) per event, O(n^2) overall. `byte_offset` now advances from
-//! an incremental cursor instead; this test is a timing-bounded check
-//! that a regression back to the quadratic form fails loudly rather
-//! than just getting slower.
+//! an incremental cursor instead.
+//!
+//! Compares *growth*, not an absolute wall-clock bound: an absolute
+//! bound has to be loose enough to survive `cargo test --workspace`'s
+//! debug build (where only this crate itself gets `opt-level = 2` --
+//! `saphyr-parser`, `regex` and `electricity-value` build at 0 --
+//! sharing the machine with every other test running in parallel), and
+//! loose enough to survive that is loose enough to miss a real
+//! regression. Going from 10k to 100k keys (10x the input) costs about
+//! 10x the time if this is linear, about 100x if it's quadratic again;
+//! asserting well below 100x catches the regression with headroom to
+//! spare on either side, on any machine, under any load.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 fn flow_mapping(n: usize) -> String {
     let mut text = String::from("{");
@@ -22,22 +31,33 @@ fn flow_mapping(n: usize) -> String {
     text
 }
 
-#[test]
-fn one_line_flow_mapping_with_100k_keys_loads_in_linear_time() {
-    let text = flow_mapping(100_000);
+fn load_and_time(n: usize) -> std::time::Duration {
+    let text = flow_mapping(n);
     let start = Instant::now();
     let value = electricity_yaml::load_yaml(&text).expect("a well-formed flow mapping");
     let elapsed = start.elapsed();
     assert!(!value.py_repr().is_empty());
-    // The quadratic form took tens of seconds (minutes, extrapolating)
-    // for a line this long; the linear one takes well under a second on
-    // any machine this test runs on. A generous bound well clear of
-    // normal machine-load variance, but far below what a reintroduced
-    // O(n^2) would take.
+    elapsed
+}
+
+#[test]
+fn one_line_flow_mapping_scales_linearly_not_quadratically() {
+    // The smallest run's own cost is paid first and discarded: a
+    // process's one-time warm-up (allocator growth, code paths touched
+    // for the first time) would otherwise inflate the ratio's
+    // denominator and hide a real quadratic regression behind a falsely
+    // small one.
+    load_and_time(1_000);
+    let small = load_and_time(10_000);
+    let large = load_and_time(100_000);
+
+    let small_secs = small.as_secs_f64().max(1e-6);
+    let ratio = large.as_secs_f64() / small_secs;
     assert!(
-        elapsed < Duration::from_secs(5),
-        "loading a 100k-key single-line flow mapping took {elapsed:?} -- \
+        ratio < 30.0,
+        "100k keys took {large:?} against 10k keys' {small:?} ({ratio:.1}x) -- \
          Composer::byte_offset may have regressed to its old O(column) \
-         per-call behaviour (quadratic over the whole line)"
+         per-call behaviour (quadratic over the whole line, about 100x \
+         for a 10x input instead of linear's about 10x)"
     );
 }

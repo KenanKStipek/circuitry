@@ -27,6 +27,7 @@ use crate::scalar;
 use electricity_value::{Dict, Value};
 use saphyr_parser::{Event, Marker, Parser, ScalarStyle, Span, StrInput, Tag};
 use std::collections::HashMap;
+use std::rc::Rc;
 
 type Input<'input> = StrInput<'input>;
 
@@ -278,17 +279,32 @@ fn find_anchor_name(gap: &str) -> Option<String> {
 /// Re-walks `gap` up to byte offset `upto`, advancing `start` by however
 /// many characters (and lines) that covers -- `gap`'s own text is always
 /// a handful of punctuation/whitespace characters, so this is cheap.
+/// Counts a lone `\r` (one not immediately followed by `\n`) as its own
+/// line break, same as `\n` and a `\r\n` pair -- matching both
+/// `saphyr_parser::char_traits::is_break` (which already treats a bare
+/// `\r` this way: `Scanner::skip_linebreak`/`skip_nl` increment its own
+/// `Marker`'s line for exactly this case) and PyYAML's `scan_line_break`.
+/// A `\r` that *is* followed by `\n` advances neither `line` nor `col`
+/// here -- the `\n` right after it does both -- so a CRLF pair still
+/// counts as one break, not two.
 fn advance_marker(start: Marker, gap: &str, upto: usize) -> Marker {
     let mut index = start.index();
     let mut line = start.line();
     let mut col = start.col();
-    for ch in gap[..upto].chars() {
+    let mut chars = gap[..upto].chars().peekable();
+    while let Some(ch) = chars.next() {
         index += ch.len_utf8();
-        if ch == '\n' {
-            line += 1;
-            col = 0;
-        } else {
-            col += 1;
+        match ch {
+            '\n' => {
+                line += 1;
+                col = 0;
+            }
+            '\r' if chars.peek() != Some(&'\n') => {
+                line += 1;
+                col = 0;
+            }
+            '\r' => {}
+            _ => col += 1,
         }
     }
     Marker::new(index, line, col)
@@ -300,7 +316,19 @@ fn advance_marker(start: Marker, gap: &str, upto: usize) -> Marker {
 /// `mark` is the node's *true* start -- including a leading anchor
 /// and/or tag, per [`node_prefix_mark`] -- matching PyYAML's own node
 /// `start_mark` exactly (DESIGN.md §3.2).
-#[derive(Clone)]
+///
+/// A container's children are [`Rc`], not owned directly: an anchored
+/// node is reached both from its parent's own `items`/`pairs` (as the
+/// tree is built) and from [`Composer::anchors`] (for a later alias to
+/// find) -- sharing one allocation between those two owners, rather
+/// than deep-copying the whole subtree into `anchors` on top of the one
+/// already built, is what keeps [`Composer::store_anchor`] O(1)
+/// regardless of the anchored subtree's size (`crate::MAX_NODES`'s doc
+/// comment: nested anchors previously multiplied memory by the clone's
+/// size on every level). An [`Event::Alias`] is unaffected by this: it
+/// still charges the anchored node's full expanded [`Node::size`]
+/// against the budget, because [`construct`] -- unlike this tree --
+/// builds a genuinely distinct `Value` for every occurrence.
 enum Node {
     Scalar {
         text: String,
@@ -309,7 +337,7 @@ enum Node {
     },
     Sequence {
         tag: String,
-        items: Vec<Node>,
+        items: Vec<Rc<Node>>,
         mark: Mark,
         /// 1 + the deepest child's own [`Node::depth`] (1 for an empty
         /// sequence) -- computed once, from already-known children, when
@@ -328,7 +356,7 @@ enum Node {
     },
     Mapping {
         tag: String,
-        pairs: Vec<(Node, Node)>,
+        pairs: Vec<(Rc<Node>, Rc<Node>)>,
         mark: Mark,
         /// See [`Node::Sequence`]'s `depth` -- 1 + the deepest key/value's
         /// own depth, 1 for an empty mapping.
@@ -396,9 +424,19 @@ struct Composer<'t> {
     /// (`scanner.rs`'s `Marker.index` field doc, `StrInput::skip`
     /// advancing one `char` at a time), so slicing `text` with it
     /// directly panics or misplaces every mark after a non-ASCII
-    /// character.
+    /// character. Built once, in [`Self::new`], counting `\n`, `\r\n`
+    /// and a lone `\r` as one line break each -- matching
+    /// `saphyr_parser`'s own `Scanner::skip_linebreak` (which already
+    /// moves a `Marker`'s line number across a bare `\r`) -- so a line
+    /// after a lone `\r` has a real entry here instead of silently
+    /// falling through [`Self::byte_offset`]'s out-of-range fallback to
+    /// `text.len()` (see [`advance_marker`]'s doc comment for the same
+    /// fix on the other side of every mark this crate computes).
     line_starts: Vec<usize>,
-    anchors: HashMap<usize, Node>,
+    /// An anchored node, by `saphyr-parser`'s own anchor id -- the same
+    /// `Rc` a later [`Event::Alias`] clones (an O(1) refcount bump, not
+    /// a deep copy: see [`Node`]'s own doc comment).
+    anchors: HashMap<usize, Rc<Node>>,
     anchor_marks: HashMap<String, Mark>,
     /// The last `(Marker, byte offset)` [`Self::byte_offset`] computed --
     /// every marker it's ever asked to convert, across the whole
@@ -432,9 +470,14 @@ struct Composer<'t> {
 impl<'t> Composer<'t> {
     fn new(text: &'t str) -> Self {
         let mut line_starts = vec![0];
-        for (byte, ch) in text.char_indices() {
-            if ch == '\u{000A}' {
-                line_starts.push(byte + 1);
+        let mut chars = text.char_indices().peekable();
+        while let Some((byte, ch)) = chars.next() {
+            match ch {
+                '\n' => line_starts.push(byte + 1),
+                '\r' if chars.peek().map(|&(_, c)| c) != Some('\n') => {
+                    line_starts.push(byte + 1);
+                }
+                _ => {}
             }
         }
         Composer {
@@ -539,10 +582,13 @@ impl<'t> Composer<'t> {
     /// Stores `node` as `anchor_id`'s value for a later [`Event::Alias`]
     /// to clone -- called once `node`'s children are fully composed,
     /// after [`Self::check_anchor_name`] already ran on the same anchor
-    /// before they were.
-    fn store_anchor(&mut self, anchor_id: usize, node: &Node) {
+    /// before they were. `node` is already the same `Rc` being returned
+    /// up to the caller (an `Rc::clone` at each call site, O(1)), so this
+    /// never allocates a copy of the subtree -- only [`Self::alias_node`]
+    /// ever does, and that one is charged against `crate::MAX_NODES`.
+    fn store_anchor(&mut self, anchor_id: usize, node: Rc<Node>) {
         if anchor_id != 0 {
-            self.anchors.insert(anchor_id, node.clone());
+            self.anchors.insert(anchor_id, node);
         }
     }
 
@@ -559,7 +605,7 @@ impl<'t> Composer<'t> {
         parser: &mut Parser<'input, Input<'input>>,
         last_event_end: &mut Marker,
         depth: usize,
-    ) -> Result<Node, YamlError> {
+    ) -> Result<Rc<Node>, YamlError> {
         let before = *last_event_end;
         let (event, span) = pull(parser, last_event_end)?;
         self.compose_from_event(event, span, before, depth, parser, last_event_end)
@@ -586,7 +632,7 @@ impl<'t> Composer<'t> {
         depth: usize,
         parser: &mut Parser<'input, Input<'input>>,
         last_event_end: &mut Marker,
-    ) -> Result<Node, YamlError> {
+    ) -> Result<Rc<Node>, YamlError> {
         // Checked before doing anything else with a container event --
         // in particular, before recursing into any of its children --
         // so a document nested arbitrarily deep in the text itself (not
@@ -618,8 +664,13 @@ impl<'t> Composer<'t> {
     /// [`crate::MAX_NODES`] and [`Self::cloned_nodes`]'s running total,
     /// and only then performs the actual clone -- so a subtree whose
     /// clone would blow the budget is never allocated in the first
-    /// place (`crate::MAX_NODES`'s doc comment).
-    fn alias_node(&mut self, id: usize, span: Span) -> Result<Node, YamlError> {
+    /// place (`crate::MAX_NODES`'s doc comment). The clone itself is
+    /// now just an `Rc::clone` (O(1), no new `Node`s at all) -- the
+    /// budget still charges `size` in full regardless, because
+    /// [`construct`] later walks this same `Rc` once per place it's
+    /// aliased into and builds a genuinely distinct `Value` each time;
+    /// the budget bounds *that* eventual cost, not this tree's own.
+    fn alias_node(&mut self, id: usize, span: Span) -> Result<Rc<Node>, YamlError> {
         let size = match self.anchors.get(&id) {
             Some(node) => node.size(),
             // saphyr-parser itself rejects a genuinely undefined anchor
@@ -644,11 +695,11 @@ impl<'t> Composer<'t> {
             });
         }
         self.cloned_nodes += size;
-        Ok(self
-            .anchors
-            .get(&id)
-            .expect("just looked up by the same id above")
-            .clone())
+        Ok(Rc::clone(
+            self.anchors
+                .get(&id)
+                .expect("just looked up by the same id above"),
+        ))
     }
 
     #[inline(never)]
@@ -660,16 +711,16 @@ impl<'t> Composer<'t> {
         tag: Option<std::borrow::Cow<'input, Tag>>,
         span: Span,
         before: Marker,
-    ) -> Result<Node, YamlError> {
+    ) -> Result<Rc<Node>, YamlError> {
         let (mark, name) = self.node_prefix(span, before, anchor_id != 0);
         self.check_anchor_name(name.as_deref(), mark)?;
         let tag_str = scalar_tag(text.as_ref(), style, tag.as_deref());
-        let node = Node::Scalar {
+        let node = Rc::new(Node::Scalar {
             text: text.into_owned(),
             tag: tag_str,
             mark,
-        };
-        self.store_anchor(anchor_id, &node);
+        });
+        self.store_anchor(anchor_id, Rc::clone(&node));
         Ok(node)
     }
 
@@ -689,7 +740,7 @@ impl<'t> Composer<'t> {
         depth: usize,
         parser: &mut Parser<'input, Input<'input>>,
         last_event_end: &mut Marker,
-    ) -> Result<Node, YamlError> {
+    ) -> Result<Rc<Node>, YamlError> {
         let (mark, name) = self.node_prefix(span, before, anchor_id != 0);
         self.check_anchor_name(name.as_deref(), mark)?;
         let tag_str = container_tag(tag.as_deref(), scalar::TAG_SEQ);
@@ -714,14 +765,14 @@ impl<'t> Composer<'t> {
             return Err(YamlError::NestingTooDeep { mark });
         }
         let node_size = node_size_of(&items);
-        let node = Node::Sequence {
+        let node = Rc::new(Node::Sequence {
             tag: tag_str,
             items,
             mark,
             depth: node_depth,
             size: node_size,
-        };
-        self.store_anchor(anchor_id, &node);
+        });
+        self.store_anchor(anchor_id, Rc::clone(&node));
         Ok(node)
     }
 
@@ -736,7 +787,7 @@ impl<'t> Composer<'t> {
         depth: usize,
         parser: &mut Parser<'input, Input<'input>>,
         last_event_end: &mut Marker,
-    ) -> Result<Node, YamlError> {
+    ) -> Result<Rc<Node>, YamlError> {
         let (mark, name) = self.node_prefix(span, before, anchor_id != 0);
         self.check_anchor_name(name.as_deref(), mark)?;
         let tag_str = container_tag(tag.as_deref(), scalar::TAG_MAP);
@@ -757,14 +808,14 @@ impl<'t> Composer<'t> {
             return Err(YamlError::NestingTooDeep { mark });
         }
         let node_size = node_size_of_pairs(&pairs);
-        let node = Node::Mapping {
+        let node = Rc::new(Node::Mapping {
             tag: tag_str,
             pairs,
             mark,
             depth: node_depth,
             size: node_size,
-        };
-        self.store_anchor(anchor_id, &node);
+        });
+        self.store_anchor(anchor_id, Rc::clone(&node));
         Ok(node)
     }
 }
@@ -772,12 +823,12 @@ impl<'t> Composer<'t> {
 /// 1 + the deepest item's depth (1 for an empty sequence) -- `Node`'s
 /// own `depth()` is already O(1) per child (`crate::MAX_DEPTH`'s doc
 /// comment), so this never itself recurses into a child's structure.
-fn node_depth_of(items: &[Node]) -> usize {
-    1 + items.iter().map(Node::depth).max().unwrap_or(0)
+fn node_depth_of(items: &[Rc<Node>]) -> usize {
+    1 + items.iter().map(|n| n.depth()).max().unwrap_or(0)
 }
 
 /// Same as [`node_depth_of`], over a mapping's key/value pairs.
-fn node_depth_of_pairs(pairs: &[(Node, Node)]) -> usize {
+fn node_depth_of_pairs(pairs: &[(Rc<Node>, Rc<Node>)]) -> usize {
     1 + pairs
         .iter()
         .flat_map(|(k, v)| [k.depth(), v.depth()])
@@ -790,12 +841,12 @@ fn node_depth_of_pairs(pairs: &[(Node, Node)]) -> usize {
 /// *expanded* count its own clone allocated, not 1, so this correctly
 /// propagates a nested alias's cost up through every container it sits
 /// inside, without re-walking any cloned subtree.
-fn node_size_of(items: &[Node]) -> usize {
-    1 + items.iter().map(Node::size).sum::<usize>()
+fn node_size_of(items: &[Rc<Node>]) -> usize {
+    1 + items.iter().map(|n| n.size()).sum::<usize>()
 }
 
 /// Same as [`node_size_of`], over a mapping's key/value pairs.
-fn node_size_of_pairs(pairs: &[(Node, Node)]) -> usize {
+fn node_size_of_pairs(pairs: &[(Rc<Node>, Rc<Node>)]) -> usize {
     1 + pairs
         .iter()
         .map(|(k, v)| k.size() + v.size())
@@ -918,14 +969,16 @@ fn duplicate_key_error(key: &Value, first: Mark, second: Mark) -> YamlError {
 /// running the duplicate-key check on that source's own pairs -- that
 /// check only ever runs for a mapping reached as a value in its own
 /// right, never through a merge).
-fn flatten_pairs<'a>(pairs: &'a [(Node, Node)]) -> Result<Vec<(&'a Node, &'a Node)>, YamlError> {
+fn flatten_pairs<'a>(
+    pairs: &'a [(Rc<Node>, Rc<Node>)],
+) -> Result<Vec<(&'a Node, &'a Node)>, YamlError> {
     let mut merged: Vec<(&'a Node, &'a Node)> = Vec::new();
     let mut own: Vec<(&'a Node, &'a Node)> = Vec::new();
     for (key, value) in pairs {
         if key.is_merge_key() {
             expand_merge_node(value, &mut merged)?;
         } else {
-            own.push((key, value));
+            own.push((key.as_ref(), value.as_ref()));
         }
     }
     let mut flat = merged;
@@ -949,7 +1002,7 @@ fn expand_merge_node<'a>(
             // for the merge-order semantics below.
             let mut submerge: Vec<Vec<(&'a Node, &'a Node)>> = Vec::new();
             for item in items {
-                match item {
+                match item.as_ref() {
                     Node::Mapping { pairs, .. } => submerge.push(flatten_pairs(pairs)?),
                     other => return Err(YamlError::InvalidMerge { mark: other.mark() }),
                 }
@@ -1112,7 +1165,7 @@ fn construct(node: &Node) -> Result<Value, YamlError> {
             }
             items
                 .iter()
-                .map(construct)
+                .map(|item| construct(item))
                 .collect::<Result<_, _>>()
                 .map(Value::List)
         }
@@ -1127,7 +1180,7 @@ fn construct(node: &Node) -> Result<Value, YamlError> {
     }
 }
 
-fn construct_mapping_node(pairs: &[(Node, Node)]) -> Result<Value, YamlError> {
+fn construct_mapping_node(pairs: &[(Rc<Node>, Rc<Node>)]) -> Result<Value, YamlError> {
     let mut seen = SeenKeys::default();
     for (key, _) in pairs {
         if key.is_merge_key() {

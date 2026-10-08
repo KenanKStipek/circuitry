@@ -74,8 +74,9 @@ fn a_few_thousand_block_mapping_levels_errors_cleanly_on_a_2mib_thread() {
 
 /// saphyr-parser 0.1.0's scanner counts flow-collection nesting in its
 /// own `u8` (`flow_level`), overflowing -- with its own, pre-existing
-/// "recursion limit exceeded" `ScanError` -- at 255 levels, *below*
-/// `MAX_DEPTH`. For a flow sequence specifically, that upstream guard
+/// "recursion limit exceeded" `ScanError` -- at 256 levels (255 load
+/// fine; the 256th overflows the `u8`), *below* `MAX_DEPTH`. For a flow
+/// sequence specifically, that upstream guard
 /// fires first, so 100,000 nested `[` never reaches this crate's own
 /// depth check at all; what this test actually guarantees is the
 /// requirement that matters -- no stack overflow -- regardless of which
@@ -156,11 +157,11 @@ fn merge_chain_n_100_000_does_not_crash() {
 /// performing the clone and counting afterward -- with its own error
 /// kind, so a billion-laughs-style alias chain fails fast rather than
 /// exhausting memory. `a0: &a0 [x x 10]`, `a1: &a1 [*a0 x 10]`, ...,
-/// through `a8: &a8 [*a7 x 10]` would clone roughly 10^8 nodes if fully
+/// through `a8: &a8 [*a7 x 10]` would clone roughly 10^9 nodes if fully
 /// expanded (PyYAML shares one object per anchor instead, so this same
 /// document loads cheaply under Circuitry's own loader) -- this must
-/// fail quickly, on the same small stack the depth tests above use,
-/// without ever allocating that expansion.
+/// fail before allocating that expansion, on the same small stack the
+/// depth tests above use.
 fn alias_fan_out(levels: usize, fan_out: usize) -> String {
     let mut text = String::from("a0: &a0 [x,x,x,x,x,x,x,x,x,x]\n");
     for level in 1..levels {
@@ -215,7 +216,7 @@ fn ten_thousand_references_to_a_ten_thousand_item_anchor_is_a_distinct_node_budg
 /// the D3 fix-pass gap: every depth test above used a block mapping or
 /// a *flow* sequence; a flow sequence can't reach `MAX_DEPTH` at all
 /// (saphyr-parser 0.1.0's own flow-nesting counter is a `u8`, overflowing
-/// with its own, unrelated error at 255 levels, well below 512 --
+/// with its own, unrelated error at 256 levels, well below 512 --
 /// `lib.rs`'s "Known divergences"), so this is the one shape that
 /// actually exercises the limit for sequences specifically.
 fn nested_block_sequence(n: usize) -> String {
@@ -272,4 +273,48 @@ fn container_key_one_past_the_limit_is_a_distinct_nesting_error() {
     let text = nested_sequence_key(electricity_yaml::MAX_DEPTH);
     let err = run_on_small_stack(text).unwrap_err();
     assert!(matches!(err, YamlError::NestingTooDeep { .. }));
+}
+
+/// The fourth-review regression for the budget bypass found in
+/// `store_anchor`: storing an anchored node used to deep-clone it
+/// *outside* `MAX_NODES`, so nesting anchors (never aliasing them --
+/// `check_anchor_name` forbids reusing one) around an already-large
+/// subtree multiplied memory by roughly the nesting depth on top of the
+/// subtree's own size, with nothing charged against the budget at all.
+/// `l0`..`l4` is a small alias chain that expands (once, legitimately,
+/// through ordinary `*alias` budget accounting) to a few hundred
+/// thousand nodes; `h`/`a1`..`a450` then nest 450 further anchored
+/// mappings *around* seven references to `l4` -- never aliasing any of
+/// those 450 themselves, so every one of them is pure `store_anchor`
+/// overhead. Before the fix this allocated on the order of
+/// `450 * 7 * l4.size()` nodes (tens of gigabytes); the fix makes
+/// `store_anchor` an `Rc::clone` (O(1)), so this now composes in time
+/// proportional to the document's own, legitimately-expanded size.
+fn nested_anchor_bypass_probe() -> String {
+    let mut text = String::from("l0: &l0 [x,x,x,x,x,x,x,x,x,x]\n");
+    for i in 1..5 {
+        let refs = vec![format!("*l{}", i - 1); 10].join(",");
+        text.push_str(&format!("l{i}: &l{i} [{refs}]\n"));
+    }
+    text.push_str("h: &a1\n");
+    for d in 1..450 {
+        text.push_str(&" ".repeat(d));
+        text.push_str(&format!("k: &a{}\n", d + 1));
+    }
+    text.push_str(&" ".repeat(450));
+    let refs = ["*l4"; 7].join(",");
+    text.push_str(&format!("k: [{refs}]\n"));
+    text
+}
+
+#[test]
+fn nested_anchors_around_a_large_aliased_subtree_do_not_multiply_memory() {
+    let text = nested_anchor_bypass_probe();
+    let start = std::time::Instant::now();
+    let value = run_on_small_stack(text).expect("legitimate, in-budget expansion must still load");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(10),
+        "store_anchor must not re-clone the whole subtree at every one of the 450 nesting levels"
+    );
+    assert!(value.py_repr().starts_with("{'l0':"));
 }

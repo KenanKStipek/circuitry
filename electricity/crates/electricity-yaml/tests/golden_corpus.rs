@@ -21,8 +21,15 @@ enum Expected {
     },
     Error {
         line: Option<usize>,
-        #[allow(dead_code)] // kept for documentation; only the line is checked (see below)
         column: Option<usize>,
+        /// Set only on a non-ASCII variant (`generate_yaml_corpus.py`'s
+        /// `non_ascii_variants`), to its originating case's own index in
+        /// this same array -- always earlier, since `build_corpus` appends
+        /// every variant after the whole base list. See the main loop's
+        /// own comment for why a variant is checked against that case's
+        /// *own* column drift rather than directly against `column`.
+        #[serde(default)]
+        original_index: Option<usize>,
     },
     KnownDivergence {
         #[allow(dead_code)]
@@ -45,12 +52,19 @@ fn golden_corpus() {
     let cases: Vec<Case> = serde_json::from_str(text).expect("golden/corpus.json is valid JSON");
     assert!(!cases.is_empty(), "golden corpus must not be empty");
 
+    // `diffs[i]`, once case `i` has been checked: `mark.column as i64 -
+    // column as i64` when the error's line matched and both sides carry
+    // a column, `None` otherwise -- a variant's own comparison below
+    // looks its original case up here (always at a lower index, so
+    // always already filled in by the time the variant is reached).
+    let mut diffs: Vec<Option<i64>> = Vec::with_capacity(cases.len());
     let mut failures = Vec::new();
-    for (i, case) in cases.into_iter().enumerate() {
+    for (i, case) in cases.iter().enumerate() {
         let result = load_yaml(&case.yaml);
-        match case.expected {
+        let mut own_diff = None;
+        match &case.expected {
             Expected::Value { repr } => match result {
-                Ok(value) if value.py_repr() == repr => {}
+                Ok(value) if value.py_repr() == *repr => {}
                 Ok(value) => failures.push(format!(
                     "case {i} ({:?}): expected value {repr:?}, got {:?}",
                     case.yaml,
@@ -62,7 +76,7 @@ fn golden_corpus() {
                 )),
             },
             Expected::DuplicateKeyError { message } => match result {
-                Err(YamlError::DuplicateKey { message: got }) if got == message => {}
+                Err(YamlError::DuplicateKey { message: got }) if got == *message => {}
                 Err(YamlError::DuplicateKey { message: got }) => failures.push(format!(
                     "case {i} ({:?}): duplicate-key message mismatch:\n  expected {message:?}\n  got      {got:?}",
                     case.yaml
@@ -77,7 +91,7 @@ fn golden_corpus() {
                     case.yaml
                 )),
             },
-            Expected::Error { line, column } => match result {
+            Expected::Error { line, column, original_index } => match result {
                 // "Same line/column *region*", not an exact column: PyYAML
                 // sometimes marks the tag token, sometimes the resolved
                 // scalar text, for what is -- either way -- a third-party
@@ -90,14 +104,48 @@ fn golden_corpus() {
                 Err(e) => {
                     if let Some(line) = line {
                         match e.mark() {
-                            Some(mark) if mark.line == line => {
+                            Some(mark) if mark.line == *line => {
                                 if let Some(column) = column {
-                                    let diff = mark.column.abs_diff(column);
-                                    if diff > 2 {
-                                        failures.push(format!(
-                                            "case {i} ({:?}): error column mismatch: expected column {column} (\u{00b1}2), got column {} ({e})",
-                                            case.yaml, mark.column
-                                        ));
+                                    let diff = mark.column as i64 - *column as i64;
+                                    own_diff = Some(diff);
+                                    match original_index.and_then(|idx| diffs[idx]) {
+                                        // A non-ASCII variant
+                                        // (`generate_yaml_corpus.py`'s
+                                        // `non_ascii_variants`) is compared
+                                        // against its *own* originating case's
+                                        // drift, not directly against `column`:
+                                        // the two transforms (prepending a
+                                        // one-line comment, widening a key's
+                                        // name) never change a legitimate,
+                                        // pre-existing third-party drift (a
+                                        // scanner marking a different token --
+                                        // confirmed above this still allows
+                                        // that), only ever add a *new* one if
+                                        // this crate's own column math ever
+                                        // counts a 2-/3-/4-byte character by
+                                        // its UTF-8 byte width instead of as
+                                        // one character. Exact, never the
+                                        // tolerance below: that tolerance
+                                        // exists for the baseline drift itself,
+                                        // already allowed once, not for
+                                        // whatever a non-ASCII transform adds
+                                        // on top of it.
+                                        Some(original_diff) if diff != original_diff => {
+                                            failures.push(format!(
+                                                "case {i} ({:?}): non-ASCII variant's column drift ({diff}) doesn't match its originating case's own drift ({original_diff}) -- got column {} ({e})",
+                                                case.yaml, mark.column
+                                            ));
+                                        }
+                                        Some(_) => {}
+                                        None => {
+                                            let abs_diff = diff.unsigned_abs();
+                                            if abs_diff > 2 {
+                                                failures.push(format!(
+                                                    "case {i} ({:?}): error column mismatch: expected column {column} (\u{00b1}2), got column {} ({e})",
+                                                    case.yaml, mark.column
+                                                ));
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -131,24 +179,24 @@ fn golden_corpus() {
                         .is_some_and(|needle| other.to_string().contains(needle)),
                     Ok(_) => false,
                 };
-                if matched {
-                    continue;
-                }
-                match result {
-                    Err(other) => failures.push(format!(
-                        "case {i} ({:?}): expected error tag {rust_error_tag:?} / message containing {rust_error_contains:?}, got {other}",
-                        case.yaml
-                    )),
-                    Ok(value) => failures.push(format!(
-                        "case {i} ({:?}): expected a documented-divergence error, got value {:?} \
-                         (electricity-yaml newly supports this -- update the generator's \
-                         `known_divergence_cases` and this test)",
-                        case.yaml,
-                        value.py_repr()
-                    )),
+                if !matched {
+                    match result {
+                        Err(other) => failures.push(format!(
+                            "case {i} ({:?}): expected error tag {rust_error_tag:?} / message containing {rust_error_contains:?}, got {other}",
+                            case.yaml
+                        )),
+                        Ok(value) => failures.push(format!(
+                            "case {i} ({:?}): expected a documented-divergence error, got value {:?} \
+                             (electricity-yaml newly supports this -- update the generator's \
+                             `known_divergence_cases` and this test)",
+                            case.yaml,
+                            value.py_repr()
+                        )),
+                    }
                 }
             }
         }
+        diffs.push(own_diff);
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

@@ -538,6 +538,13 @@ def anchor_cases() -> list[dict]:
         "items:\n  - &x {n: 1}\n  - *x\n  - *x\n",
         "a: *undefined\n",  # error: undefined alias
         "a: &x 1\nb: &x 2\n",  # error: a reused anchor name
+        # same reused-anchor check, across a lone \r (not \r\n or \n):
+        # both loaders count a lone \r as its own line break, so this is
+        # an ordinary parity case, not a divergence (PR #388's fourth
+        # review; previously mishandled by this crate's own byte-offset
+        # bookkeeping, not by saphyr-parser, which already counts it
+        # correctly).
+        "a: &x 1\rb: &x 2\r",
         # an alias used as a mapping key, then duplicated -- the position
         # for both is the *anchor's* own, confirmed against the real
         # loader (a space before `:` sidesteps a saphyr-parser 0.1.0
@@ -755,26 +762,39 @@ def _rename_a_key(yaml_text: str, marker: str) -> str | None:
     return _TOP_LEVEL_A_KEY.sub(f"a{marker}:", yaml_text)
 
 
-def _rebuild_case(original: dict, new_yaml: str) -> dict:
+def _rebuild_case(original: dict, new_yaml: str, original_index: int) -> dict:
     """Rederives `original`'s own *kind* of expected result for
     `new_yaml`, through the real loader -- never by copying `original`'s
     own fields across, since the key-rename transformation (never the
-    comment one) can change the parsed value.
+    comment one) can change the parsed value. Tagged with
+    `original_index` (`original`'s own index in the base corpus, before
+    any variants are appended): `golden_corpus.rs`'s `Expected::Error`
+    arm compares a variant's column *drift* against that same case's
+    own drift, rather than directly against `column` within the
+    ordinary small tolerance (a scanner-level 1.1-vs-1.2 difference in
+    *which* token a third-party error names) -- that tolerance exists
+    for whatever drift the *original* case already has, not for
+    whatever a non-ASCII transform -- renaming a key, or prepending a
+    one-line comment -- adds on top of it, which should always be
+    exactly zero.
     """
     if original.get("note"):  # circuitry#390's own yaml.safe_load-sourced case
-        return {
+        entry = {
             "yaml": new_yaml,
             "kind": "value",
             "repr": repr(yaml.safe_load(new_yaml)),
             "note": original["note"],
         }
-    if original["kind"] == "known_divergence":
-        return _divergence_from_error(
+    elif original["kind"] == "known_divergence":
+        entry = _divergence_from_error(
             new_yaml,
             rust_error_tag=original.get("rust_error_tag"),
             rust_error_contains=original.get("rust_error_contains"),
         )
-    return case(new_yaml)
+    else:
+        entry = case(new_yaml)
+    entry["original_index"] = original_index
+    return entry
 
 
 def non_ascii_variants(cases: list[dict]) -> list[dict]:
@@ -782,10 +802,10 @@ def non_ascii_variants(cases: list[dict]) -> list[dict]:
     for i, original in enumerate(cases):
         marker = NON_ASCII_MARKERS[i % len(NON_ASCII_MARKERS)]
         commented = _prepend_non_ascii_comment(original["yaml"], marker)
-        variants.append(_rebuild_case(original, commented))
+        variants.append(_rebuild_case(original, commented, i))
         renamed = _rename_a_key(original["yaml"], marker)
         if renamed is not None:
-            variants.append(_rebuild_case(original, renamed))
+            variants.append(_rebuild_case(original, renamed, i))
     return variants
 
 
