@@ -429,6 +429,127 @@
     }
   },
   {
+    "name": "prompts_file_dotdot_escapes_the_project",
+    "files": {
+      "proj/doc.yml": "prompts:\n  voice: {file: ../outside.md}\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n",
+      "outside.md": "shh"
+    },
+    "entry": "proj/doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prompts.voice: 'file' '../outside.md' resolves outside the project (<root>/proj) — 'file:' paths must stay inside it."
+      ],
+      "warnings": []
+    },
+    "run_error": "prompts.voice: 'file' '../outside.md' resolves outside the project (<root>/proj) — 'file:' paths must stay inside it.",
+    "definition": null,
+    "definition_error": "PromptFileError: prompts.voice: 'file' '../outside.md' resolves outside the project (<root>/proj) — 'file:' paths must stay inside it.",
+    "digest": "410591ce4796e64ee121363132f1d01518ddbf1459675c25b4a02406fd04d368",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompts_file_symlink_loop_could_not_resolve",
+    "files": {
+      "doc.yml": "prompts:\n  voice: {file: loopA.md}\neffects:\n  - type: yield\n    name: x\n    template: 'hi'\n",
+      "loopA.md": {
+        "symlink": "loopB.md"
+      },
+      "loopB.md": {
+        "symlink": "loopA.md"
+      }
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Symlink loop from '<root>/loopA.md'"
+      ],
+      "warnings": []
+    },
+    "run_error": "Symlink loop from '<root>/loopA.md'",
+    "definition": null,
+    "definition_error": "RuntimeError: Symlink loop from '<root>/loopA.md'",
+    "digest": "0bfe28e3c9d5cb36c24b29cb17e64c949a344a1eded71bbe124086cc38ce0e9d",
+    "comparison": {
+      "validate_errors": [
+        "location"
+      ],
+      "run_error": "location"
+    }
+  },
+  {
+    "name": "effect_template_file_source",
+    "files": {
+      "doc.yml": "effects:\n  - type: yield\n    name: x\n    template: {file: body.md}\n",
+      "body.md": "hi {{> nope}}"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
+    "digest": "b33cbf3e03be4590908c6705ea0741577f501813996105abbee1c522789ac2af",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "effect_messages_content_file_source",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: p1\n    messages:\n      - role: user\n        content: {file: msg.md}\n",
+      "msg.md": "hi {{> nope}}"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
+    "digest": "2c9c5cbe4a078c04f278e90dd0e2748d9f375367330f4b232f3703d653f3ebad",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
     "name": "unknown_partial_name",
     "files": {
       "doc.yml": "effects:\n  - type: yield\n    name: x\n    template: 'hi {{> nope}}'\n"
@@ -946,6 +1067,62 @@
     "definition": null,
     "definition_error": "ValueError: Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
     "digest": "97d419e04fe850278da2c7b3eaff02441e3082997923931a25c4c1b1795c5f6d",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "dotted_reference_to_a_declared_prompt",
+    "files": {
+      "doc.yml": "prompts:\n  greeting: hi\neffects:\n  - type: yield\n    name: ref\n    template: '{{> greeting.x}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - effects[0]: '{{> greeting.x}}' names declared prompt 'greeting', which has no nested state — a declared prompt is plain text, never dotted."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - effects[0]: '{{> greeting.x}}' names declared prompt 'greeting', which has no nested state — a declared prompt is plain text, never dotted.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - effects[0]: '{{> greeting.x}}' names declared prompt 'greeting', which has no nested state — a declared prompt is plain text, never dotted.",
+    "digest": "0fd5d947b8c73caa2024a5d6fed8a880b3feb13e7f38fae9eb5b219421c1d2d9",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "dotted_reference_to_a_missing_segment_under_a_named_if",
+    "files": {
+      "doc.yml": "effects:\n  - type: if\n    name: branch\n    if: {mode: cel, expr: 'true'}\n    then:\n      - type: yield\n        name: inner\n        template: 'hi'\n  - type: yield\n    name: outer\n    template: '{{> branch.missing}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt composition errors:\n  - effects[1]: '{{> branch.missing}}' does not name a declared prompt or effect."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt composition errors:\n  - effects[1]: '{{> branch.missing}}' does not name a declared prompt or effect.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt composition errors:\n  - effects[1]: '{{> branch.missing}}' does not name a declared prompt or effect.",
+    "digest": "1edd64e8d31d386a0c092aa3f25a6c0b76d01b65e3324d3961469969f3a21066",
     "comparison": {
       "validate_errors": [
         "exact"

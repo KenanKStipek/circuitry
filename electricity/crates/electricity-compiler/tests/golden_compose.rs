@@ -159,6 +159,14 @@ run_error_case!(
     prompts_file_symlink_escapes_the_project,
     "prompts_file_symlink_escapes_the_project"
 );
+run_error_case!(
+    prompts_file_dotdot_escapes_the_project,
+    "prompts_file_dotdot_escapes_the_project"
+);
+run_error_case!(
+    prompts_file_symlink_loop_could_not_resolve,
+    "prompts_file_symlink_loop_could_not_resolve"
+);
 
 /// `prompts_file_unreadable`'s own golden `run_error` is only compared
 /// by `"location"` (the OS error text after "could not be read: " is
@@ -231,6 +239,19 @@ run_error_case!(
 run_error_case!(
     tool_params_partial_reference_is_checked,
     "tool_params_partial_reference_is_checked"
+);
+run_error_case!(effect_template_file_source, "effect_template_file_source");
+run_error_case!(
+    effect_messages_content_file_source,
+    "effect_messages_content_file_source"
+);
+run_error_case!(
+    dotted_reference_to_a_declared_prompt,
+    "dotted_reference_to_a_declared_prompt"
+);
+run_error_case!(
+    dotted_reference_to_a_missing_segment_under_a_named_if,
+    "dotted_reference_to_a_missing_segment_under_a_named_if"
 );
 
 // -- cases whose document passes declared-prompts and composition, so they

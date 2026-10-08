@@ -126,7 +126,53 @@ CASES: list[dict] = [
         },
         "entry": "doc.yml",
     },
+    {
+        "name": "prompts_file_dotdot_escapes_the_project",
+        "files": {
+            "proj/doc.yml": "prompts:\n  voice: {file: ../outside.md}\n" + _YIELD,
+            "outside.md": "shh",
+        },
+        "entry": "proj/doc.yml",
+    },
+    {
+        "name": "prompts_file_symlink_loop_could_not_resolve",
+        "files": {
+            "doc.yml": "prompts:\n  voice: {file: loopA.md}\n" + _YIELD,
+            "loopA.md": {"symlink": "loopB.md"},
+            "loopB.md": {"symlink": "loopA.md"},
+        },
+        "entry": "doc.yml",
+        "error_modes": {"validate_errors": ["location"], "run_error": "location"},
+    },
     # -- core/prompt_compose.py: check_prompt_composition ---------------------
+    {
+        "name": "effect_template_file_source",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: yield\n"
+                "    name: x\n"
+                "    template: {file: body.md}\n"
+            ),
+            "body.md": "hi {{> nope}}",
+        },
+        "entry": "doc.yml",
+    },
+    {
+        "name": "effect_messages_content_file_source",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: prompt\n"
+                "    name: p1\n"
+                "    messages:\n"
+                "      - role: user\n"
+                "        content: {file: msg.md}\n"
+            ),
+            "msg.md": "hi {{> nope}}",
+        },
+        "entry": "doc.yml",
+    },
     {
         "name": "unknown_partial_name",
         "files": {
@@ -335,6 +381,39 @@ CASES: list[dict] = [
                 "    name: t1\n"
                 "    provider: process\n"
                 "    params: {command: 'echo {{> nope}}'}\n"
+            )
+        },
+        "entry": "doc.yml",
+    },
+    {
+        "name": "dotted_reference_to_a_declared_prompt",
+        "files": {
+            "doc.yml": (
+                "prompts:\n"
+                "  greeting: hi\n"
+                "effects:\n"
+                "  - type: yield\n"
+                "    name: ref\n"
+                "    template: '{{> greeting.x}}'\n"
+            )
+        },
+        "entry": "doc.yml",
+    },
+    {
+        "name": "dotted_reference_to_a_missing_segment_under_a_named_if",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: if\n"
+                "    name: branch\n"
+                "    if: {mode: cel, expr: 'true'}\n"
+                "    then:\n"
+                "      - type: yield\n"
+                "        name: inner\n"
+                "        template: 'hi'\n"
+                "  - type: yield\n"
+                "    name: outer\n"
+                "    template: '{{> branch.missing}}'\n"
             )
         },
         "entry": "doc.yml",
