@@ -214,7 +214,7 @@
     "digest": "2ed27c1421e6928dbe13dbfdb5c59e1045b30341fe7ebe05700006bc5ac572c0",
     "comparison": {
       "validate_errors": [
-        "exact"
+        "location"
       ],
       "run_error": "location"
     }
@@ -415,7 +415,7 @@
   {
     "name": "near_miss_key_error_and_unrelated_key_warning",
     "files": {
-      "doc.yml": "effects:\n  - type: tool\n    name: t\n    provider: json\n    params: {mode: stringify, input: 1}\n    temlpate: x\n  - type: tool\n    name: t\n    provider: json\n    params: {mode: stringify, input: 1}\n    owner: ops\n"
+      "doc.yml": "effects:\n  - type: tool\n    name: a\n    provider: json\n    prams: {mode: stringify, input: 1}\n  - type: tool\n    name: b\n    provider: json\n    params: {mode: stringify, input: 1}\n    owner: ops\n"
     },
     "entry": "doc.yml",
     "options": {
@@ -425,17 +425,65 @@
     "validate": {
       "ok": false,
       "errors": [
-        "Duplicate effect name 't' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'."
+        "effects[0]: unknown key 'prams' on a 'tool' effect — did you mean 'params'? As written it is ignored."
       ],
       "warnings": [
-        "effects[0]: unknown key 'temlpate' on a 'tool' effect is ignored. Known keys: description, expect, group, model, name, on_error, params, params_json, prompt, provider, retries, timeout_ms, type.",
         "effects[1]: unknown key 'owner' on a 'tool' effect is ignored. Known keys: description, expect, group, model, name, on_error, params, params_json, prompt, provider, retries, timeout_ms, type."
       ]
     },
-    "run_error": "Duplicate effect name 't' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
-    "definition": null,
-    "definition_error": "ValueError: Duplicate effect name 't' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
-    "digest": "bab7782a8ac60ed5b9f12317826c5a843fd6cfc1391faa4f06c44aef3329ec9f",
+    "run_error": "Orchestration validation failed:\n  - effects[0]: unknown key 'prams' on a 'tool' effect — did you mean 'params'? As written it is ignored.",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "a",
+          "provider": "json",
+          "params": {},
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null
+        },
+        {
+          "name": "b",
+          "provider": "json",
+          "params": {
+            "mode": "stringify",
+            "input": 1
+          },
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "a",
+        "b"
+      ]
+    },
+    "definition_error": null,
+    "digest": "8dbf7ffb333984f717b327b6e5f59f14a4bd45650137e76f0823906506cee067",
     "comparison": {
       "validate_errors": [
         "exact"

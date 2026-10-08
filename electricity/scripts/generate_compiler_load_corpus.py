@@ -104,8 +104,11 @@ CASES: list[dict[str, Any]] = [
         "entry": "doc.yml",
         # `load_yaml("false\n") or {}` -- a falsy root becomes `{}`
         # (Python truthiness, not just `is None`), so this loads fine
-        # and only then fails the schema's required-property check.
-        "error_modes": {"validate_errors": ["exact"], "run_error": "location"},
+        # and only then fails the schema's required-property check --
+        # third-party `jsonschema` text on both surfaces here (`check_
+        # report` has no "Orchestration file is empty." short circuit
+        # to beat it to, unlike `empty_yaml_file`'s own case).
+        "error_modes": {"validate_errors": ["location"], "run_error": "location"},
     },
     {
         "name": "non_mapping_root_json",
@@ -156,10 +159,13 @@ CASES: list[dict[str, Any]] = [
             "doc.yml": (
                 "effects:\n"
                 "  - type: tool\n"
-                f"{_TOOL_YML}"
-                "    temlpate: x\n"
+                "    name: a\n"
+                "    provider: json\n"
+                "    prams: {mode: stringify, input: 1}\n"
                 "  - type: tool\n"
-                f"{_TOOL_YML}"
+                "    name: b\n"
+                "    provider: json\n"
+                "    params: {mode: stringify, input: 1}\n"
                 "    owner: ops\n"
             ),
         },
