@@ -36,7 +36,8 @@ crate needs no edit to the member list, and a stray folder there without a
 Generators in `scripts/generate_*.py` write checked-in files from Circuitry's
 own Python code: copies of its schemas, and expected outputs from its real
 loaders, renderers and evaluators. Each one supports `--check`. CI runs all of
-them (`pip install -e .` from the repository root first, then
+them (`pip install -e . -c electricity/scripts/generator-constraints.txt` from
+the repository root first, with Python 3.11, then
 `python3 scripts/generate_<name>.py --check` from `electricity/`) in
 `.github/workflows/electricity-generated.yml`, for any change to Circuitry's
 Python package as well as to `electricity/`, because a change on either side

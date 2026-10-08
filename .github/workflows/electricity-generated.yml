@@ -42,9 +42,11 @@ jobs:
 
       # Generators may import Circuitry itself (and through it PyYAML, chevron,
       # cel-python, jsonschema) so that expected outputs come from the real
-      # Python code, never from a re-implementation.
+      # Python code, never from a re-implementation. Those libraries are pinned
+      # by electricity/scripts/generator-constraints.txt, so a new upstream
+      # release cannot turn this check red with no change in the repository.
       - name: install Circuitry for the generators
-        run: python3 -m pip install -e .
+        run: python3 -m pip install -e . -c electricity/scripts/generator-constraints.txt
 
       # Every generator under electricity/scripts/ is named generate_*.py and
       # supports --check (regenerate in memory, fail if the committed file
