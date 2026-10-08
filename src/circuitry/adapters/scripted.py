@@ -254,9 +254,14 @@ class ScriptedAdapter:
         with self._lock:
             queue = queues.get(path)
             if not queue:
+                # Names only the effect path, never the replies-file path:
+                # this lands verbatim in the run's own `meta.error`/
+                # `fallback_attempts[].error` state (spec §6), which a
+                # conformance harness compares byte-for-byte, and the
+                # replies file is typically a harness-generated temp path
+                # that differs run to run.
                 raise RuntimeError(
-                    f"scripted adapter: no reply configured for path '{path}' "
-                    f"in {self._path()}"
+                    f"scripted adapter: no reply configured for path '{path}'"
                 )
             reply = queue.pop(0)
         if reply.error_kind is not None:

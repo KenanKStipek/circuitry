@@ -59,11 +59,16 @@ always the same string a reader would use to locate that same effect's value the
 An `if`/`while` effect's own `mode: model` decision is not a separately named
 sub-effect — a *named* one (`name: review`) is keyed at its own node, `prime.review`; an
 unnamed (transparent) one is keyed at the path of the container it sits in directly (its
-enclosing node — the loop or conditional writes no node of its own to nest under). Every
-pass of an *unnamed* `flow: tree` loop's model-mode `while` check, or every one of several
-sibling unnamed model-mode `if`s in the same container, therefore shares that one path —
-replies queued there are still consumed strictly in order, just not matched to a
-particular pass or sibling by index.
+enclosing node — the loop or conditional writes no node of its own to nest under). A
+`while` loop's own passes always run one after another, so an unnamed `while`'s repeated
+use of its container's path is still deterministic — each pass consumes the next reply in
+list order. Two cases genuinely share one path across *concurrent* calls, and are
+therefore matched in arrival order, not pass/sibling order: every body call of an unnamed
+`flow: tree` **`each`** loop (its isolated per-pass stores carry no `iter_N` segment
+without a loop name, and `flow: tree` dispatches every pass's body at once); and several
+unnamed model-mode `if`s run as sibling branches of a `flow: tree` dynamic (each branch's
+isolated store shares the dynamic's own path). Give either path identical replies across
+its concurrent callers, or name the loop/conditional so each gets its own path.
 
 Every reply queued for one path is consumed strictly in the order it appears in the
 list — covering a prompt effect's retries (the same effect dispatches again, at the same
@@ -129,6 +134,12 @@ place). An explicit `status: null` is only legal for `timeout`/`connection`; eve
 kind needs one (its own default, or an override), checked at load time rather than left
 to fail the call itself with no path named.
 
+The generated default `message` (when a reply omits one) is the literal string
+`"scripted adapter: <kind> at '<path>'"` — this, like every other error's message, ends
+up verbatim in the run's own `meta.error`/`fallback_attempts[].error` state, which a
+conformance case compares byte-for-byte (`electricity/DESIGN.md`'s normalization rules),
+so an explicit `message` is pinned text; omit it only when the case doesn't assert on it.
+
 ## 5. What is not in scope here
 
 This file only ever answers a *model* call — `prompt` effects, a `tool`/`use` effect's
@@ -145,8 +156,11 @@ defaults to `scripted-replies.yaml`, resolved the same way an explicit relative 
 ## 6. Unmatched calls and leftover replies
 
 A model call whose path has no entry, or whose entry's list is already exhausted, is a
-hard failure for that call, naming the path — the effect's own retry/fallback/`on_error`
-handling then applies to that failure exactly as it would to a real adapter's. A path with
+hard failure for that call, naming the path — the literal string
+`"scripted adapter: no reply configured for path '<path>'"`, never the replies-file's own
+path (which a harness typically generates fresh per run, so it wouldn't compare
+byte-for-byte) — and the effect's own retry/fallback/`on_error` handling then applies to
+that failure exactly as it would to a real adapter's. A path with
 replies still unused at the end of a run is **not** itself a run failure (over-provisioning
 a script is not a bug in the orchestration the script is driving) — Circuitry's own adapter
 exposes the unused counts via `ScriptedAdapter.leftover_replies()` for a conformance
