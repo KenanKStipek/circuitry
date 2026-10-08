@@ -388,7 +388,11 @@ two. Both forms always end with a trailing `\n` (matching `cli/app.py`'s `_write
    Circuitry's exact `"Orchestration validation failed:\n  - ..."` prefix:
    1. unknown-key errors (near-miss/typo detection against the actual key set for that effect
       type, including the `_MISTAKEN_FOR` hardcoded confusables like `adapter`→`provider`);
-   2. JSON-schema errors (Draft7, with the deepest `oneOf` sub-error appended);
+   2. JSON-schema errors (Draft7, with the deepest `oneOf` sub-error appended — `electricity-schema`
+      (§4 step 3, #380) cannot produce this suffix on `jsonschema` 0.26, whose
+      `OneOfNotValid`/`AnyOf` variants carry no sub-error list to pick from; the compiler lane
+      built here either re-validates the losing branches by hand or needs a `jsonschema` upgrade
+      that exposes them, whichever lands first);
    3. `group:` placement errors (leaf effects only);
    4. `interface.inputs.<k>.type` must be one of the six recognized types;
    5. `interface.inputs.<k>.default` type-mismatch (already-typed data, not CLI text).
