@@ -754,10 +754,27 @@ def _communicate_promptly(
         # mode takes `str` input, binary mode takes `bytes`) means *input*
         # matches whichever of these two branches applies.
         assert stdin is not None
-        raw_stdin = getattr(stdin, "buffer", None)
-        if raw_stdin is not None:
+        is_text_mode = hasattr(stdin, "buffer")
+        if is_text_mode:
             assert isinstance(input, str)
             data: bytes = input.encode(stdin.encoding, stdin.errors)
+            # `detach()`, not a plain `.buffer` read (#385 review
+            # regression, confirmed by direct measurement): once this
+            # function returns, `stdin` -- the local name for the
+            # `TextIOWrapper` -- goes out of scope and is garbage
+            # collected almost at once. Its own finalizer still calls
+            # `close()`, which flushes *and closes the buffer it wraps*
+            # even though nothing was ever written through the wrapper
+            # itself -- on *this*, the main thread. That flush blocks for
+            # as long as the writer thread's own in-flight `write()` holds
+            # the buffer's internal lock (a pipe nothing reads never
+            # unblocks it), in C, where no pending signal is ever checked
+            # (measured: ~0.03s before this regression, ~6s after, with a
+            # SIGINT at 1.5s only surfacing at 6.08s). `detach()`
+            # disconnects the wrapper from its buffer first, so its own
+            # finalizer has nothing left to flush or close -- the writer
+            # thread becomes the buffer's only owner.
+            raw_stdin = stdin.detach()
         else:
             raw_stdin = stdin
             assert isinstance(input, bytes)

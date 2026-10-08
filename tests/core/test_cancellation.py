@@ -720,6 +720,62 @@ def test_run_tracked_writer_thread_child_never_reads_stdin() -> None:
     assert result.returncode == 0
 
 
+def test_communicate_promptly_stdin_wrapper_finalizer_does_not_block_the_main_thread() -> None:
+    """#385 review regression (07c754d): `_communicate_promptly` handed
+    the writer thread only `stdin.buffer`, keeping no reference to the
+    `TextIOWrapper` itself alive past this function's own return.
+    CPython garbage collects it almost at once -- its finalizer still
+    calls `close()`, which flushes *and closes the buffer it wraps* even
+    though nothing was ever written through the wrapper itself, on
+    *this*, the main thread. That flush blocks for as long as the
+    writer thread's own in-flight `write()` holds the buffer's internal
+    lock, in C, where no pending signal is ever checked.
+
+    Reproduced with a direct child that never reads its own stdin but
+    spawns a grandchild which inherits that same stdin and outlives the
+    direct child -- the pipe's read end stays open (so the writer
+    thread's `write()` stays blocked on a full pipe) for as long as the
+    grandchild lives, well past `_communicate_promptly`'s own return.
+    Measured at ~6s before the fix (`stdin.detach()` instead of a plain
+    `.buffer` read), ~0.03s after.
+    """
+    grandchild_pid: int | None = None
+    try:
+        direct_child_script = (
+            "import subprocess, sys\n"
+            "gc = subprocess.Popen(\n"
+            "    [sys.executable, '-c', 'import time; time.sleep(3)'],\n"
+            "    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,\n"
+            ")\n"
+            "print(gc.pid)\n"
+            "sys.stdout.flush()\n"
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-c", direct_child_script],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        t0 = time.monotonic()
+        out, _err = cancellation._communicate_promptly(
+            proc, input="x" * (2 * 1024 * 1024), timeout=30.0
+        )
+        elapsed = time.monotonic() - t0
+        grandchild_pid = int(out.strip())
+        assert elapsed < 1.5, (
+            f"_communicate_promptly took {elapsed:.2f}s -- the stdin "
+            "TextIOWrapper's own finalizer blocked the main thread "
+            "flushing/closing a buffer the writer thread still owned"
+        )
+    finally:
+        if grandchild_pid is not None:
+            try:
+                os.kill(grandchild_pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+
 def test_communicate_promptly_does_not_repeat_the_group_kill_during_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
