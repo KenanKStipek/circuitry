@@ -65,6 +65,16 @@ jobs:
         # caller actually ships.
         run: cargo test --release -p electricity-yaml --test nesting_limit
 
+      - name: cargo test --release -p electricity-cel
+        working-directory: electricity
+        # Same reasoning as the electricity-yaml release run above, for
+        # the `[profile.dev.package.electricity-cel]`/`[cel]`/
+        # `[antlr4rust]` overrides (`Cargo.toml`): a release build needs
+        # no override to stay within `MAX_NESTING_DEPTH`'s safety margin
+        # on a 2 MiB stack, so the limit isn't quietly narrower in
+        # release than the debug build this suite otherwise covers.
+        run: cargo test --release -p electricity-cel
+
   msrv:
     name: MSRV check
     runs-on: ubuntu-latest
