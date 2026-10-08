@@ -19,6 +19,10 @@ Each case is a dict:
         },
         "entry": relpath,          # which file is the orchestration itself
         "options": {"skip_preflight": bool, "trust_document": bool},  # optional
+        "inputs": {key: text, ...},  # optional -- the CLI's own -e key=value
+                                      # text pairs (issue #429), seeded as
+                                      # state["input"] for the run_error check
+                                      # only (validate() never consults them).
         "error_modes": {                                              # optional
             "validate_errors": ["exact" | "location", ...],
             "run_error": "exact" | "location" | None,
@@ -202,6 +206,21 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
     options = case.get("options") or {}
     skip_preflight = options.get("skip_preflight", True)
     trust_document = options.get("trust_document", True)
+    # The CLI's own `-e key=value` text pairs (issue #429), seeded as
+    # `state["input"]` straight into `RunRequest.initial_state` --
+    # `run()`'s own `check_interface_inputs` coerces a present text
+    # value to its declared type exactly as a CLI `-e` value does
+    # (`core/interface_inputs.py::_coerce`), the same contract
+    # `CheckOptions.inputs` ports on the Rust side. Deliberately not
+    # routed through `cli/app.py::_parse_env_vars`'s own JSON-sniffing
+    # pre-pass: every case here uses a raw-text value that fails a JSON
+    # parse on its own (`abc`, `1_000`, `yes`, a malformed `[1,2,`), so
+    # the two paths agree -- the one input shape where they could
+    # diverge (a value that JSON-sniffs to a technically-still-wrong
+    # type, e.g. `-e count=5.0` against a declared `integer`) is out of
+    # scope for this corpus; see electricity-compiler's own
+    # `cli_input_value` doc comment for that distinction.
+    inputs: dict[str, str] = case.get("inputs") or {}
 
     with tempfile.TemporaryDirectory(prefix="electricity-compiler-corpus-") as tmp:
         root = Path(tmp).resolve()
@@ -234,6 +253,7 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
                 RunRequest(
                     orchestration_path=entry_path,
                     state_path=None,
+                    initial_state={"input": dict(inputs)} if inputs else None,
                     out_path=None,
                     dry_run=False,
                     validate_only=True,
@@ -312,6 +332,7 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
             "options": {
                 "skip_preflight": skip_preflight,
                 "trust_document": trust_document,
+                "inputs": dict(inputs),
             },
             "validate": {
                 "ok": validate_result.get("ok", False),

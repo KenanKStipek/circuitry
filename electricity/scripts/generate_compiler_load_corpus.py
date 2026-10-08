@@ -267,6 +267,221 @@ CASES: list[dict[str, Any]] = [
         "entry": "doc.yml",
     },
     {
+        # Issue #429: the CLI's `-e` inputs reach `check_for_run` --
+        # these cases pass `CheckOptions.inputs`/`RunRequest.initial_
+        # state["input"]` the same text a `-e` flag would carry.
+        # `string` is the one declared type a CLI-shaped text value can
+        # never fail against (`_restore_raw_text_for_string_inputs`
+        # keeps it literal, and `isinstance(str)` always matches), so
+        # there is no companion "invalid" case for it -- only this one,
+        # proving the exact text survives rather than being JSON-sniffed
+        # away (`06` would otherwise become the int `6`).
+        "name": "interface_input_e_string_value_kept_as_text",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "06"},
+    },
+    {
+        "name": "interface_input_e_number_valid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: number, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "5.5"},
+    },
+    {
+        "name": "interface_input_e_number_invalid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: number, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "notanumber"},
+    },
+    {
+        # `int()`'s own underscore digit separator (PEP 515): `1_000`
+        # isn't valid JSON, so it stays raw text through the CLI's own
+        # JSON-sniffing pre-pass and reaches `_coerce` as text either way.
+        "name": "interface_input_e_integer_with_underscores",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: integer, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "1_000"},
+    },
+    {
+        "name": "interface_input_e_integer_invalid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: integer, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "abc"},
+    },
+    {
+        # `_TRUE_WORDS`/`_FALSE_WORDS`: `cli/app.py`'s own lenient
+        # boolean words, not just `true`/`false`.
+        "name": "interface_input_e_boolean_word_valid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: boolean, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "yes"},
+    },
+    {
+        "name": "interface_input_e_boolean_invalid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: boolean, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "nope"},
+    },
+    {
+        "name": "interface_input_e_array_valid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: array, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "[1,2,3]"},
+    },
+    {
+        # The failure text embeds plain `json.loads`'s own third-party
+        # message (`_coerce`'s `array`/`object` arm) past Circuitry's own
+        # "could not be converted: " -- `error_modes` below only pins
+        # the Circuitry-owned prefix (`location_prefix`'s own location
+        # is text up to the first ": ", which lands exactly there).
+        "name": "interface_input_e_array_invalid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: array, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "[1,2,"},
+        "error_modes": {"run_error": "location_prefix"},
+    },
+    {
+        "name": "interface_input_e_object_valid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: object, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": '{"a": 1}'},
+    },
+    {
+        "name": "interface_input_e_object_invalid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: object, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "notjson"},
+        "error_modes": {"run_error": "location_prefix"},
+    },
+    {
+        "name": "required_interface_input_supplied_via_e_run_succeeds",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    name: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"name": "World"},
+    },
+    {
+        # A document's own declared `default:` is checked structurally
+        # (its own, unconditional, static type check -- `interface_inputs_
+        # default_type_mismatch_with_unquote_hint`'s own case) regardless
+        # of whether `-e` ever overrides it, so a *bad* default can never
+        # prove an override took effect: it fails `check_for_run` either
+        # way. A *valid* default (`3`, structurally fine) with an
+        # *invalid* `-e` override instead proves the override replaced
+        # it, not merely coexisted alongside it -- a silently-kept
+        # default would pass, where this fails on the override's own
+        # text.
+        "name": "default_overridden_by_provided_e_value",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    count: {type: integer, default: 3}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"count": "abc"},
+    },
+    {
+        # An input `interface.inputs` never declares stays allowed
+        # (issue #429: "Undeclared extra inputs stay allowed").
+        "name": "undeclared_extra_e_input_is_allowed",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    name: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"name": "World", "unrelated": "1"},
+    },
+    {
         "name": "missing_entry_file_with_an_unsupported_suffix",
         # The suffix is checked before any read (F2): `check_for_run`
         # reports the unsupported-format message without ever touching

@@ -7,7 +7,8 @@
     "entry": "doc.md",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -36,7 +37,8 @@
     "entry": "doc.toon",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -65,7 +67,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -106,7 +109,8 @@
     "entry": "doc.json",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -135,7 +139,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -164,7 +169,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -193,7 +199,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -234,7 +241,8 @@
     "entry": "doc.json",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -263,7 +271,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -292,7 +301,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -321,7 +331,8 @@
     "entry": "doc.json",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -350,7 +361,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -432,7 +444,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -512,7 +525,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -541,7 +555,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -620,7 +635,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -661,7 +677,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -702,7 +719,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -739,7 +757,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -776,7 +795,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -813,7 +833,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -843,12 +864,574 @@
     }
   },
   {
+    "name": "interface_input_e_string_value_kept_as_text",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "06"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_number_valid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: number, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "5.5"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "9a75ca2b87e3dd1821f546e759e9ff936e863464cf5b662a9915a18334068b02",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_number_invalid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: number, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "notanumber"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'x' declared type 'number' but 'notanumber' could not be converted: could not convert string to float: 'notanumber'",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "9a75ca2b87e3dd1821f546e759e9ff936e863464cf5b662a9915a18334068b02",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_integer_with_underscores",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: integer, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "1_000"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "73c106a9925597d77e56e7812003199c0c98f46de505d835d48d78765792ea57",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_integer_invalid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: integer, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "abc"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'x' declared type 'integer' but 'abc' could not be converted: invalid literal for int() with base 10: 'abc'",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "73c106a9925597d77e56e7812003199c0c98f46de505d835d48d78765792ea57",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_boolean_word_valid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: boolean, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "yes"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "f56bf078f49b832755b4e2a6877022cd54eac39acd59f8001caea52a7866b9f3",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_boolean_invalid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: boolean, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "nope"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'x' declared type 'boolean' but 'nope' could not be converted: 'nope' is not a boolean",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "f56bf078f49b832755b4e2a6877022cd54eac39acd59f8001caea52a7866b9f3",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_array_valid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: array, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "[1,2,3]"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "f771632b07d49da5dc3d84b29923ff46404aa1eca6100e1df83ed2635e6a9334",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_array_invalid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: array, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "[1,2,"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'x' declared type 'array' but '[1,2,' could not be converted: Expecting value: line 1 column 6 (char 5)",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "f771632b07d49da5dc3d84b29923ff46404aa1eca6100e1df83ed2635e6a9334",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "interface_input_e_object_valid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: object, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "{\"a\": 1}"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "07d9bfa006bfa65576bae91d4720ef71086d2668781327202709df0d20b3f511",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_object_invalid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: object, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "notjson"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'x' declared type 'object' but 'notjson' could not be converted: Expecting value: line 1 column 1 (char 0)",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "07d9bfa006bfa65576bae91d4720ef71086d2668781327202709df0d20b3f511",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "required_interface_input_supplied_via_e_run_succeeds",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    name: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "name": "World"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "80f946b323cc5a4220b27924f73ed908f21739dede0e5cb2ebed5ad632f69cbc",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "default_overridden_by_provided_e_value",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    count: {type: integer, default: 3}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "count": "abc"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'count' declared type 'integer' but 'abc' could not be converted: invalid literal for int() with base 10: 'abc'",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "03226346747cf8bb15c326c69c25f3cfe492f885aaef977b3fc88a61ab7c2ecd",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "undeclared_extra_e_input_is_allowed",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    name: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "name": "World",
+        "unrelated": "1"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "80f946b323cc5a4220b27924f73ed908f21739dede0e5cb2ebed5ad632f69cbc",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
     "name": "missing_entry_file_with_an_unsupported_suffix",
     "files": {},
     "entry": "missing.txt",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -879,7 +1462,8 @@
     "entry": "doc.png",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -908,7 +1492,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -972,7 +1557,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1036,7 +1622,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1069,7 +1656,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1151,7 +1739,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,

@@ -244,6 +244,76 @@ fn missing_required_interface_input_is_a_run_only_error() {
 }
 
 #[test]
+fn interface_input_e_string_value_kept_as_text() {
+    run_case("interface_input_e_string_value_kept_as_text");
+}
+
+#[test]
+fn interface_input_e_number_valid() {
+    run_case("interface_input_e_number_valid");
+}
+
+#[test]
+fn interface_input_e_number_invalid() {
+    run_case("interface_input_e_number_invalid");
+}
+
+#[test]
+fn interface_input_e_integer_with_underscores() {
+    run_case("interface_input_e_integer_with_underscores");
+}
+
+#[test]
+fn interface_input_e_integer_invalid() {
+    run_case("interface_input_e_integer_invalid");
+}
+
+#[test]
+fn interface_input_e_boolean_word_valid() {
+    run_case("interface_input_e_boolean_word_valid");
+}
+
+#[test]
+fn interface_input_e_boolean_invalid() {
+    run_case("interface_input_e_boolean_invalid");
+}
+
+#[test]
+fn interface_input_e_array_valid() {
+    run_case("interface_input_e_array_valid");
+}
+
+#[test]
+fn interface_input_e_array_invalid() {
+    run_case("interface_input_e_array_invalid");
+}
+
+#[test]
+fn interface_input_e_object_valid() {
+    run_case("interface_input_e_object_valid");
+}
+
+#[test]
+fn interface_input_e_object_invalid() {
+    run_case("interface_input_e_object_invalid");
+}
+
+#[test]
+fn required_interface_input_supplied_via_e_run_succeeds() {
+    run_case("required_interface_input_supplied_via_e_run_succeeds");
+}
+
+#[test]
+fn default_overridden_by_provided_e_value() {
+    run_case("default_overridden_by_provided_e_value");
+}
+
+#[test]
+fn undeclared_extra_e_input_is_allowed() {
+    run_case("undeclared_extra_e_input_is_allowed");
+}
+
+#[test]
 fn missing_entry_file_with_an_unsupported_suffix() {
     run_case("missing_entry_file_with_an_unsupported_suffix");
 }
@@ -284,6 +354,20 @@ fn every_case_in_the_corpus_has_a_test() {
         "plugins_not_a_list_is_a_run_only_error",
         "plugins_entry_not_a_string_is_a_run_only_error",
         "missing_required_interface_input_is_a_run_only_error",
+        "interface_input_e_string_value_kept_as_text",
+        "interface_input_e_number_valid",
+        "interface_input_e_number_invalid",
+        "interface_input_e_integer_with_underscores",
+        "interface_input_e_integer_invalid",
+        "interface_input_e_boolean_word_valid",
+        "interface_input_e_boolean_invalid",
+        "interface_input_e_array_valid",
+        "interface_input_e_array_invalid",
+        "interface_input_e_object_valid",
+        "interface_input_e_object_invalid",
+        "required_interface_input_supplied_via_e_run_succeeds",
+        "default_overridden_by_provided_e_value",
+        "undeclared_extra_e_input_is_allowed",
         "missing_entry_file_with_an_unsupported_suffix",
         "non_utf8_file_with_an_unsupported_suffix",
     ];
