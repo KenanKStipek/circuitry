@@ -570,6 +570,25 @@ def poll_promptly(
             return True
 
 
+def _feed_stdin(stdin: Any, data: str | bytes) -> None:
+    """Write the whole of *data* to *stdin* and close it, from a thread
+    of its own (#385 follow-up, see ``_communicate_promptly``).
+
+    ``BrokenPipeError`` means the reader (the child, or whatever still
+    held its read end) is gone — nothing left to write to, so this just
+    stops, the same as ``subprocess``'s own ``_stdin_write`` does.
+    """
+    try:
+        stdin.write(data)
+    except BrokenPipeError:
+        pass
+    finally:
+        try:
+            stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+
+
 def _communicate_promptly(
     proc: subprocess.Popen[Any],
     *,
@@ -591,19 +610,36 @@ def _communicate_promptly(
     *timeout* — the step's own deadline — is kept exactly via a wall-clock
     deadline computed up front, not reset by each retry.
 
-    Retrying ``communicate()`` after its own ``TimeoutExpired`` is safe:
-    passing *input* again is what the stdlib actually forbids once
-    communication has started (``ValueError: Cannot send input after
-    starting communication``), so this passes it only on the very first
-    call and ``None`` on every retry; stdout/stderr accumulate across
-    calls rather than resetting, so no output is lost to the slicing.
+    *input* is never handed to ``communicate()`` itself (a regression:
+    CPython 3.11's POSIX ``Popen._communicate`` only ever registers
+    ``stdin`` for writing, and only ever closes it, on the *first* call —
+    ``self.stdin and input`` gates the selector registration, ``not
+    self._communication_started`` gates the close. Passing *input* again
+    on a retry raises ``ValueError: Cannot send input after starting
+    communication``, so an earlier version of this function passed it
+    only on the first call and ``None`` after — but then any input not
+    fully written inside that first short slice was simply never resumed
+    or closed, and a child that hadn't yet finished reading stdin waited
+    for EOF until *timeout* itself, or forever with no timeout). Instead,
+    if there is input to send, a helper thread (the same shape CPython's
+    own Windows ``communicate`` uses for stdin) writes and closes it on
+    its own, and ``proc.stdin`` is set to ``None`` first so ``communicate``
+    — now only ever called with ``input=None`` — never touches it itself:
+    stdout/stderr are its only job here. The thread isn't joined: once the
+    deadline is hit or the process is killed, the reader going away
+    unblocks a pending write with ``BrokenPipeError`` on its own almost at
+    once, and joining unconditionally would reintroduce the exact
+    unbounded-wait bug class this module exists to close, this time
+    inside the one place meant to guarantee *timeout* itself.
     """
+    if proc.stdin is not None and input is not None:
+        stdin, proc.stdin = proc.stdin, None
+        threading.Thread(target=_feed_stdin, args=(stdin, input), daemon=True).start()
     if timeout is None:
         deadline = None
     else:
         deadline = time.monotonic() + timeout
         full_timeout = timeout
-    first = True
     while True:
         if deadline is None:
             slice_timeout = poll_seconds
@@ -613,11 +649,9 @@ def _communicate_promptly(
                 raise subprocess.TimeoutExpired(proc.args, full_timeout)
             slice_timeout = min(poll_seconds, remaining)
         try:
-            return proc.communicate(
-                input=input if first else None, timeout=slice_timeout
-            )
+            return proc.communicate(timeout=slice_timeout)
         except subprocess.TimeoutExpired:
-            first = False
+            continue
 
 
 def run_tracked(

@@ -34,6 +34,7 @@ from circuitry.core.cancellation import (
     kill_process_group,
     kill_tracked_process,
     poll_promptly,
+    run_tracked,
     submit_with_context,
     wait_for_cancelled_branches,
 )
@@ -574,3 +575,103 @@ def test_communicate_promptly_notices_a_signal_delivered_to_a_worker_thread() ->
     assert interrupted_at[0] < 1.0, (
         f"handler ran at {interrupted_at[0]:.2f}s, not within ~1s of delivery"
     )
+
+
+@pytest.mark.parametrize("armed", [False, True], ids=["unarmed", "armed"])
+@pytest.mark.parametrize("timeout", [None, 5.0], ids=["no-step-timeout", "step-timeout"])
+def test_communicate_promptly_delivers_all_stdin_across_slices(
+    monkeypatch: pytest.MonkeyPatch, timeout: float | None, armed: bool
+) -> None:
+    """#385 round 3: a regression in `_communicate_promptly` passed
+    *input* to `proc.communicate()` only on its very first retry slice,
+    `None` on every one after. That loses input, not just the retry
+    itself: CPython 3.11's POSIX `Popen._communicate` registers `stdin`
+    for writing only `if self.stdin and input`, and closes it only `if
+    not self._communication_started` -- both gates true on the first
+    call alone. Any input not fully written inside that first ~0.2s slice
+    was then never resumed, and stdin was never closed, so a child that
+    read stdin after that slice waited for EOF until the step's own
+    timeout, or forever with none. A helper thread now owns writing and
+    closing stdin on its own, independent of `communicate`'s slicing --
+    this drives `run_tracked` itself (not just the helper in isolation)
+    with input well past any pipe buffer and a child that reads late,
+    with and without a step timeout, and whether `CancellationToken` is
+    armed (its own process group) or not.
+    """
+    token = CancellationToken()
+    if armed:
+        token.arm()
+    monkeypatch.setattr(cancellation, "_token", token)
+
+    data = "x" * (1024 * 1024)
+    result = run_tracked(
+        [
+            sys.executable,
+            "-c",
+            "import sys, time; time.sleep(0.5); print(len(sys.stdin.read()))",
+        ],
+        input=data,
+        timeout=timeout,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == str(len(data)), (
+        "child did not receive the full input -- stdin was never resumed/closed "
+        "after the first retry slice"
+    )
+
+
+def test_communicate_promptly_cancellation_while_writing_kills_without_hanging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#385 round 3: input large enough that the writer thread is still
+    blocked on a full pipe -- because the child never reads it -- when
+    cancellation lands (the same `CancellationToken.request()` a real
+    SIGINT/SIGTERM handler calls, killing every tracked process group).
+    `run_tracked` must still return promptly once the kill lands, not
+    hang on the stdin write.
+    """
+    token = CancellationToken()
+    token.arm()
+    monkeypatch.setattr(cancellation, "_token", token)
+
+    def cancel_shortly() -> None:
+        time.sleep(0.3)
+        token.request()
+
+    threading.Thread(target=cancel_shortly, daemon=True).start()
+
+    t0 = time.monotonic()
+    result = run_tracked(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        input="x" * (16 * 1024 * 1024),
+        timeout=None,
+    )
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 5.0, f"run_tracked took {elapsed:.1f}s -- it hung on the write"
+    assert result.returncode != 0, "the child was killed; it cannot have exited 0"
+
+
+def test_communicate_promptly_step_timeout_while_writing_does_not_hang(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#385 round 3: the step's own timeout fires while the writer thread
+    is still blocked on a full pipe (the child never reads it). The
+    timeout must still raise promptly -- `_communicate_promptly` cannot
+    join that thread unconditionally, or an unread child turns the step's
+    own timeout into the same unbounded wait this fix exists to close.
+    """
+    token = CancellationToken()
+    token.arm()
+    monkeypatch.setattr(cancellation, "_token", token)
+
+    t0 = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_tracked(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            input="x" * (16 * 1024 * 1024),
+            timeout=0.5,
+        )
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 5.0, f"run_tracked took {elapsed:.1f}s -- the timeout itself hung"
