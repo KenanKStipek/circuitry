@@ -33,6 +33,8 @@ type Input<'input> = StrInput<'input>;
 /// `yaml.safe_load(text)`, minus silent duplicate keys: `core/yaml_load.py`'s
 /// `load_yaml`.
 pub fn load_yaml(text: &str) -> Result<Value, YamlError> {
+    reject_non_printable(text)?;
+    let text = strip_leading_bom(text);
     let mut parser = Parser::new_from_str(text);
     let mut last_event_end = Marker::new(0, 1, 0);
 
@@ -84,6 +86,67 @@ pub fn load_yaml(text: &str) -> Result<Value, YamlError> {
             unreachable_event(&other)
         }
     }
+}
+
+/// PyYAML's `Reader.check_printable` (`reader.py`): every `str` input is
+/// scanned up front for a character outside PyYAML's own allowed set --
+/// before any tokenizing, so a non-printable character anywhere in the
+/// document (a raw ANSI escape, a stray control byte -- the kind of
+/// thing tool or model output can contain) fails immediately with a
+/// `ReaderError` that carries no mark at all (`reader.py`'s own
+/// `ReaderError.__str__` reports a raw character *position*, not a
+/// line/column `Mark`) -- PyYAML's own reader has no line/column tracking
+/// at this point, since `check_printable` runs before `forward()` is
+/// ever called. `saphyr-parser` 0.1.0 has no such check at all (loading
+/// a document with a raw `\x1b`/`\x80` byte in it silently succeeds), so
+/// this crate owns it, matching the character class exactly: allowed
+/// are tab/LF/CR, printable ASCII (0x20-0x7E), NEL (0x85), and every
+/// non-control, non-surrogate, non-noncharacter codepoint above that
+/// (0xA0-0xD7FF, 0xE000-0xFFFD, 0x10000-0x10FFFF).
+fn reject_non_printable(text: &str) -> Result<(), YamlError> {
+    fn is_printable(c: char) -> bool {
+        matches!(c, '\u{09}' | '\u{0A}' | '\u{0D}' | '\u{85}')
+            || ('\u{20}'..='\u{7E}').contains(&c)
+            || ('\u{A0}'..='\u{D7FF}').contains(&c)
+            || ('\u{E000}'..='\u{FFFD}').contains(&c)
+            || ('\u{10000}'..='\u{10FFFF}').contains(&c)
+    }
+    if let Some((byte, ch)) = text.char_indices().find(|(_, c)| !is_printable(*c)) {
+        let mut line = 0;
+        let mut column = 0;
+        for c in text[..byte].chars() {
+            if c == '\n' {
+                line += 1;
+                column = 0;
+            } else {
+                column += 1;
+            }
+        }
+        return Err(YamlError::Scan {
+            message: format!(
+                "unacceptable character #x{:04x}: special characters are not allowed",
+                ch as u32
+            ),
+            mark: Mark { line, column },
+        });
+    }
+    Ok(())
+}
+
+/// PyYAML's `Scanner.scan_to_next_token` (`scanner.py`): "the byte order
+/// mark is stripped if it's the first character in the stream", and
+/// only then -- a BOM anywhere else in the document is left alone ("we
+/// do not yet support BOM inside the stream", PyYAML's own comment).
+/// `saphyr-parser` 0.1.0 has no such handling at all (a leading BOM
+/// becomes part of the first token's text, e.g. a mapping key literally
+/// named `"\ufeffa"` instead of `"a"`), so this crate owns it too.
+/// Stripping before the composer ever sees the text (rather than, say,
+/// treating it as a zero-width prefix during composition) also matches
+/// PyYAML's own column accounting: the BOM consumes no column at all
+/// (`reader.py`'s `forward`: `elif ch != '\uFEFF': self.column += 1`),
+/// exactly as if it had never been there.
+fn strip_leading_bom(text: &str) -> &str {
+    text.strip_prefix('\u{feff}').unwrap_or(text)
 }
 
 fn unreachable_event(ev: &Event<'_>) -> ! {
@@ -257,6 +320,11 @@ enum Node {
         /// textually-shallow container) in O(1), without re-walking the
         /// cloned subtree (`crate::MAX_DEPTH`'s doc comment).
         depth: usize,
+        /// 1 + every child's own [`Node::size`] -- see [`Node::size`]'s
+        /// doc comment: this is what lets an [`Event::Alias`] know, in
+        /// O(1) and *before* actually cloning anything, how many new
+        /// nodes that one clone is about to allocate.
+        size: usize,
     },
     Mapping {
         tag: String,
@@ -265,6 +333,9 @@ enum Node {
         /// See [`Node::Sequence`]'s `depth` -- 1 + the deepest key/value's
         /// own depth, 1 for an empty mapping.
         depth: usize,
+        /// See [`Node::Sequence`]'s `size` -- 1 + every key/value's own
+        /// [`Node::size`].
+        size: usize,
     },
 }
 
@@ -277,14 +348,34 @@ impl Node {
         }
     }
 
-    /// This node's own nesting depth: 1 for a scalar (a leaf, however
-    /// deep in the tree it sits -- see the `!matches!` exemption in
-    /// [`Composer::compose_from_event`]'s depth check), or the stored
-    /// `depth` for a sequence/mapping.
+    /// This node's own nesting depth: 0 for a scalar -- `MAX_DEPTH`
+    /// bounds how deep a document's *containers* may nest (`lib.rs`'s
+    /// doc comment), and a scalar leaf is not a container, so it must
+    /// not consume one of that budget's own units the way a genuinely
+    /// nested sequence/mapping does (previously 1, which meant a chain
+    /// of exactly `MAX_DEPTH` real containers bottoming in a scalar
+    /// -- the ordinary case for a real document -- was rejected one
+    /// level early; only a chain bottoming in an *empty* container,
+    /// itself still depth 1, actually reached the documented limit) --
+    /// or the stored `depth` for a sequence/mapping.
     fn depth(&self) -> usize {
         match self {
-            Node::Scalar { .. } => 1,
+            Node::Scalar { .. } => 0,
             Node::Sequence { depth, .. } | Node::Mapping { depth, .. } => *depth,
+        }
+    }
+
+    /// How many `Node`s this one is made of, counting an aliased child
+    /// by the size of the subtree an [`Event::Alias`] for it would
+    /// actually clone -- not 1, the way a textually one-line `*x` might
+    /// suggest -- so a container built out of aliases reports the
+    /// *expanded* count its own clone (should something alias *this*
+    /// node in turn) would have to allocate, same as `depth` already
+    /// does for nesting (`crate::MAX_NODES`'s doc comment).
+    fn size(&self) -> usize {
+        match self {
+            Node::Scalar { .. } => 1,
+            Node::Sequence { size, .. } | Node::Mapping { size, .. } => *size,
         }
     }
 
@@ -309,6 +400,33 @@ struct Composer<'t> {
     line_starts: Vec<usize>,
     anchors: HashMap<usize, Node>,
     anchor_marks: HashMap<String, Mark>,
+    /// The last `(Marker, byte offset)` [`Self::byte_offset`] computed --
+    /// every marker it's ever asked to convert, across the whole
+    /// document, only ever moves forward (`last_event_end`/`span.start`
+    /// are themselves monotonic non-decreasing: every event's own span
+    /// starts no earlier than the previous event's ended). Recomputing
+    /// from this cursor by walking forward only the *newly* covered
+    /// characters -- instead of re-scanning from the line's start every
+    /// time, as a single-line flow document (e.g. a JSON-like mapping
+    /// with 100k keys) would otherwise force `node_prefix`'s two calls
+    /// per event to do -- turns what was an O(column) rescan per call,
+    /// O(n^2) over the whole line, back into the O(1)-amortized walk it
+    /// should be. A marker at or before the cursor (never produced by
+    /// the composer itself, but not relied upon) still resolves
+    /// correctly, just via the non-incremental fallback below.
+    offset_cursor: (Marker, usize),
+    /// How many nodes an [`Event::Alias`] has cloned so far, in total,
+    /// across the whole document -- checked against `crate::MAX_NODES`
+    /// *before* each individual clone (using the anchored node's own,
+    /// already-known [`Node::size`], never by performing the clone
+    /// first and counting afterward): a chain of aliases each cloning
+    /// an already-expanded subtree would otherwise blow past available
+    /// memory well before any depth or stack limit ever triggers
+    /// (`crate::MAX_NODES`'s doc comment). Deliberately *not* incremented
+    /// for nodes composed directly from the input text -- those are
+    /// already bounded by the text's own size; only a clone creates
+    /// nodes the input's length doesn't account for.
+    cloned_nodes: usize,
 }
 
 impl<'t> Composer<'t> {
@@ -324,21 +442,39 @@ impl<'t> Composer<'t> {
             line_starts,
             anchors: HashMap::new(),
             anchor_marks: HashMap::new(),
+            offset_cursor: (Marker::new(0, 1, 0), 0),
+            cloned_nodes: 0,
         }
     }
 
     /// `marker`'s byte offset into `text`, computed from its `(line,
-    /// col)` rather than its `index()` (see [`Self::line_starts`]).
-    fn byte_offset(&self, marker: Marker) -> usize {
-        let line_start = self
-            .line_starts
-            .get(marker.line().saturating_sub(1))
-            .copied()
-            .unwrap_or(self.text.len());
-        self.text[line_start..]
-            .char_indices()
-            .nth(marker.col())
-            .map_or(self.text.len(), |(byte, _)| line_start + byte)
+    /// col)` rather than its `index()` (see [`Self::line_starts`]'s own
+    /// doc comment) -- incrementally from [`Self::offset_cursor`] when
+    /// `marker` is on the same line at or after it (see that field's doc
+    /// comment), falling back to a full line-start-relative walk
+    /// otherwise (a new line, or -- never actually produced, but handled
+    /// correctly regardless -- a marker before the cursor).
+    fn byte_offset(&mut self, marker: Marker) -> usize {
+        let (cursor_marker, cursor_byte) = self.offset_cursor;
+        let byte = if marker.line() == cursor_marker.line() && marker.col() >= cursor_marker.col() {
+            let delta = marker.col() - cursor_marker.col();
+            self.text[cursor_byte..]
+                .char_indices()
+                .nth(delta)
+                .map_or(self.text.len(), |(offset, _)| cursor_byte + offset)
+        } else {
+            let line_start = self
+                .line_starts
+                .get(marker.line().saturating_sub(1))
+                .copied()
+                .unwrap_or(self.text.len());
+            self.text[line_start..]
+                .char_indices()
+                .nth(marker.col())
+                .map_or(self.text.len(), |(offset, _)| line_start + offset)
+        };
+        self.offset_cursor = (marker, byte);
+        byte
     }
 
     /// The node's true start mark (anchor/tag-inclusive) and, if it
@@ -348,7 +484,7 @@ impl<'t> Composer<'t> {
     /// `saphyr-parser` has reduced it to just an id/a `Tag` on the event
     /// (see the module docs and [`find_prefix_start`]).
     fn node_prefix(
-        &self,
+        &mut self,
         span: Span,
         last_event_end: Marker,
         has_anchor: bool,
@@ -463,21 +599,7 @@ impl<'t> Composer<'t> {
             });
         }
         match event {
-            Event::Alias(id) => self.anchors.get(&id).cloned().ok_or_else(|| {
-                // saphyr-parser itself rejects a genuinely undefined
-                // anchor name before this point; reaching here means the
-                // anchor is still being composed (a circular reference).
-                // PyYAML registers an anchor before composing its own
-                // children, so it builds a real recursive structure
-                // instead -- an unsupported, known divergence, exercised
-                // by the golden corpus's `known_divergence_cases`
-                // (`generate_yaml_corpus.py`) and checked loosely (by
-                // message, not by value) in `golden_corpus.rs`.
-                YamlError::Scan {
-                    message: "self-referential anchor is not supported".to_string(),
-                    mark: span.start.into(),
-                }
-            }),
+            Event::Alias(id) => self.alias_node(id, span),
             Event::Scalar(text, style, anchor_id, tag) => {
                 self.compose_scalar(text, style, anchor_id, tag, span, before)
             }
@@ -489,6 +611,44 @@ impl<'t> Composer<'t> {
             }
             other => unreachable_event(&other),
         }
+    }
+
+    /// [`Event::Alias`]'s whole handling: looks up the anchored node
+    /// *without* cloning it yet, checks [`Node::size`] against
+    /// [`crate::MAX_NODES`] and [`Self::cloned_nodes`]'s running total,
+    /// and only then performs the actual clone -- so a subtree whose
+    /// clone would blow the budget is never allocated in the first
+    /// place (`crate::MAX_NODES`'s doc comment).
+    fn alias_node(&mut self, id: usize, span: Span) -> Result<Node, YamlError> {
+        let size = match self.anchors.get(&id) {
+            Some(node) => node.size(),
+            // saphyr-parser itself rejects a genuinely undefined anchor
+            // name before this point; reaching here means the anchor is
+            // still being composed (a circular reference). PyYAML
+            // registers an anchor before composing its own children, so
+            // it builds a real recursive structure instead -- an
+            // unsupported, known divergence, exercised by the golden
+            // corpus's `known_divergence_cases` (`generate_yaml_corpus.py`)
+            // and checked loosely (by message, not by value) in
+            // `golden_corpus.rs`.
+            None => {
+                return Err(YamlError::Scan {
+                    message: "self-referential anchor is not supported".to_string(),
+                    mark: span.start.into(),
+                });
+            }
+        };
+        if self.cloned_nodes + size > crate::MAX_NODES {
+            return Err(YamlError::AliasExpansionTooLarge {
+                mark: span.start.into(),
+            });
+        }
+        self.cloned_nodes += size;
+        Ok(self
+            .anchors
+            .get(&id)
+            .expect("just looked up by the same id above")
+            .clone())
     }
 
     #[inline(never)]
@@ -553,11 +713,13 @@ impl<'t> Composer<'t> {
         if node_depth > crate::MAX_DEPTH {
             return Err(YamlError::NestingTooDeep { mark });
         }
+        let node_size = node_size_of(&items);
         let node = Node::Sequence {
             tag: tag_str,
             items,
             mark,
             depth: node_depth,
+            size: node_size,
         };
         self.store_anchor(anchor_id, &node);
         Ok(node)
@@ -594,11 +756,13 @@ impl<'t> Composer<'t> {
         if node_depth > crate::MAX_DEPTH {
             return Err(YamlError::NestingTooDeep { mark });
         }
+        let node_size = node_size_of_pairs(&pairs);
         let node = Node::Mapping {
             tag: tag_str,
             pairs,
             mark,
             depth: node_depth,
+            size: node_size,
         };
         self.store_anchor(anchor_id, &node);
         Ok(node)
@@ -619,6 +783,23 @@ fn node_depth_of_pairs(pairs: &[(Node, Node)]) -> usize {
         .flat_map(|(k, v)| [k.depth(), v.depth()])
         .max()
         .unwrap_or(0)
+}
+
+/// 1 + the sum of every item's own [`Node::size`] -- see
+/// [`Node::size`]'s doc comment; an aliased item's size is already the
+/// *expanded* count its own clone allocated, not 1, so this correctly
+/// propagates a nested alias's cost up through every container it sits
+/// inside, without re-walking any cloned subtree.
+fn node_size_of(items: &[Node]) -> usize {
+    1 + items.iter().map(Node::size).sum::<usize>()
+}
+
+/// Same as [`node_size_of`], over a mapping's key/value pairs.
+fn node_size_of_pairs(pairs: &[(Node, Node)]) -> usize {
+    1 + pairs
+        .iter()
+        .map(|(k, v)| k.size() + v.size())
+        .sum::<usize>()
 }
 
 fn unresolvable(tag: &str, mark: Mark) -> YamlError {

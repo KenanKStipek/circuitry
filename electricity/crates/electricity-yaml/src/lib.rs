@@ -26,17 +26,92 @@ pub use error::{Mark, YamlError};
 /// container, can't compound past it either): `compose.rs`'s
 /// `Composer::compose_from_event` and `node_depth_of`/`node_depth_of_pairs`.
 ///
-/// Circuitry's own composer (`core/yaml_load.py`, on top of PyYAML's
-/// recursive-descent one) raises Python's `RecursionError` at roughly
-/// 490 levels -- below this constant -- rather than erroring with its
-/// own distinct message; electricity is therefore *more* permissive
-/// than Circuitry for a document between roughly 490 and 512 levels
-/// deep, a documented, narrow divergence (this crate's "Known
-/// divergences" section below). A YAML document this deeply nested can
-/// only be model-generated (a reflector/decomposition plan, or a
-/// rendered `use: inline` child) -- untrusted input that must fail with
-/// a distinct, catchable error here rather than exhausting the stack.
+/// This constant is a documented divergence from Circuitry's own
+/// composer in **both** directions, neither of them a fixed boundary:
+///
+/// - **electricity is more permissive for deep block/mapping nesting.**
+///   Circuitry's own composer (`core/yaml_load.py`, on top of PyYAML's
+///   recursive-descent one) spends about two Python stack frames per
+///   nesting level (`Composer.compose_node` calling
+///   `compose_scalar_node`/`compose_sequence_node`/`compose_mapping_node`,
+///   each of which recurses back into `compose_node`), so it raises
+///   Python's own `RecursionError` -- not a `YAMLError`, so
+///   `core/yaml_load.py`'s callers can't catch it the way they catch
+///   every other load failure -- at roughly `(sys.getrecursionlimit() -
+///   (the caller's own already-used frames) - a small constant) / 2`
+///   levels: about 490 measured with no caller frames at Python's
+///   default recursion limit of 1000, but *not* a constant -- measured
+///   against the real loader, a document that loads fine with no extra
+///   caller frames already raises `RecursionError` with as few as ~50
+///   extra frames already on the stack (e.g. called from deeper inside
+///   `cof run`), and every environment's own recursion limit shifts it
+///   further still. electricity is therefore more permissive than
+///   Circuitry for a document between Circuitry's own
+///   (caller-dependent) boundary and this constant, which is fixed.
+/// - **electricity is less permissive for deep *flow* nesting**
+///   (`[...]`/`{...}`) **specifically.** `saphyr-parser` 0.1.0 counts
+///   flow-collection nesting in its own `u8` (`Scanner`'s `flow_level`),
+///   which overflows -- with its own, pre-existing "recursion limit
+///   exceeded" `ScanError`, not `NestingTooDeep` -- at 256 levels,
+///   *below* `MAX_DEPTH`; Circuitry's own loader accepts flow nesting
+///   up to its own, caller-dependent boundary above (roughly 490, same
+///   as block nesting -- PyYAML's composer doesn't distinguish flow
+///   from block style). A flow-nested document between 256 and
+///   Circuitry's own boundary therefore fails here but not there --
+///   checked by `tests/nesting_limit.rs`'s
+///   `one_hundred_thousand_nested_flow_sequences_does_not_crash` (which
+///   only asserts no crash, since *which* of the two layers' errors
+///   comes back for a given depth isn't itself part of the contract).
+///
+/// Both are documented, narrow divergences (this crate's "Known
+/// divergences" section below). A YAML document deeply nested enough
+/// for either direction to matter can only be model-generated (a
+/// reflector/decomposition plan, or a rendered `use: inline` child) --
+/// untrusted input that must fail with a distinct, catchable error here
+/// rather than exhausting the stack or hitting an uncatchable
+/// `RecursionError`.
 pub const MAX_DEPTH: usize = 512;
+
+/// The most `Node`s expanding every `*alias` in a document may clone, in
+/// total, before loading fails with [`YamlError::AliasExpansionTooLarge`]
+/// -- `compose.rs`'s `Composer::alias_node`, checked against the
+/// anchored node's own, already-known `Node::size` *before* the clone
+/// that would exceed it is ever allocated.
+///
+/// `electricity_value::Value` is an owned tree: unlike PyYAML, which
+/// shares one Python object per anchor (`composer.py`'s
+/// `Composer.compose_node` returns `self.anchors[anchor]` directly,
+/// never a copy), every `*alias` here clones the whole subtree behind
+/// it. A chain of aliases each referencing the previous one -- 10
+/// aliases of 10 aliases, 9 levels deep -- clones about 10^9 nodes with
+/// no limit at all, and even a single anchor of linear size (say,
+/// 10,000 items) referenced 10,000 times clones about 10^8 nodes --
+/// both cheap, small documents under PyYAML, both a memory-exhaustion
+/// denial-of-service here. Circuitry parses model-generated YAML with
+/// this loader (a reflector or decomposition plan, or a rendered `use:
+/// inline` child), so an adversarial or malformed anchor chain is not a
+/// hypothetical: it is exactly the kind of document untrusted input can
+/// produce.
+///
+/// 1,000,000 is comfortably above any legitimate document's node count
+/// (even a large plan is several orders of magnitude smaller) and
+/// comfortably below what exhausts memory outright, so a legitimate
+/// document never trips it while an exponential or combinatorial alias
+/// chain fails fast, before allocating the blow-up, rather than slowly
+/// running out of memory.
+///
+/// Circuitry's own loader has no such budget: `core/yaml_load.py`'s
+/// `load_yaml` on top of `yaml.safe_load` shares one object per anchor,
+/// so it loads a document like this cheaply -- and then, if that shared
+/// structure is later serialized (`json.dumps` for a plan's `--out`) or
+/// rendered through a template, Python re-walks and re-expands every
+/// alias as if it were a real copy, which is exactly where a document
+/// that loaded cheaply can still blow up later. This is a documented,
+/// narrow divergence (this crate's "Known divergences" section below):
+/// electricity-yaml fails fast, at load time, with a catchable error;
+/// Circuitry's own loader defers the same failure to whatever uses the
+/// value afterward.
+pub const MAX_NODES: usize = 1_000_000;
 
 // ---------------------------------------------------------------------
 // Known divergences from Circuitry's own loader (`core/yaml_load.py`)
@@ -102,9 +177,62 @@ pub const MAX_DEPTH: usize = 512;
 //   nothing to look for: no punctuation marks a block scalar's start
 //   other than the indicator consumed into the *previous* event's own
 //   span).
+// - **Unicode line-break characters inside a scalar or a lone `\r`
+//   anywhere** (finding 3, PR #388's third review). PyYAML's
+//   `Reader.forward` (`reader.py`) counts U+2028 (LINE SEPARATOR),
+//   U+2029 (PARAGRAPH SEPARATOR), U+0085 (NEL) and a lone `\r` (one
+//   *not* immediately followed by `\n`) as line breaks, exactly like
+//   `\n`; `saphyr-parser` 0.1.0 only ever counts `\r`/`\n` themselves,
+//   and even then only as a *single* line break for a `\r\n` pair,
+//   never a lone `\r`. Two shapes of this, pinned in the golden
+//   corpus where both sides still fail (just one line apart --
+//   `known_divergence_cases`' own U+2028/U+2029/NEL *comment* cases),
+//   can't be pinned at all where it instead changes *which side fails*
+//   (electricity-yaml has no divergence-case shape for "Circuitry
+//   fails, electricity-yaml loads a value" -- D4's own gap, below):
+//   a line-break character *inside a plain scalar* (`a: x<U+2028>y`)
+//   is a scanner error for Circuitry (a plain scalar can't contain a
+//   line break without folding) but loads as an ordinary string
+//   containing that character here; a lone `\r` separating two
+//   anchors (`a: &x 1\rb: &x 2\r`) is Circuitry's own duplicate-anchor
+//   error (two separate lines, so two separate anchors named `x`) but
+//   loads as two ordinary, non-conflicting keys here (one line, as far
+//   as this crate's scanner is concerned).
+// - **Unicode decimal digits under an explicit `!!int`/`!!float` tag**
+//   (finding 3, PR #388's third review): Python's `int()`/`float()`
+//   accept any Unicode decimal digit (Arabic-Indic, fullwidth, ...),
+//   not just ASCII `0`-`9`; `num_bigint::BigInt::from_str_radix` and
+//   Rust's `f64::from_str` don't. Pinned in the golden corpus (an
+//   `!!int "\u0661\u0662"\n"`/`!!float "\uff11.\uff15"` case each),
+//   since here Circuitry succeeds and electricity-yaml fails cleanly
+//   with `InvalidScalar` -- the direction this crate's existing
+//   `known_divergence` kind *can* express.
+// - **A `=` key retagged through one merge, but not through a
+//   sibling's direct (non-merge) reference to the same shared anchor**
+//   (finding 8, PR #388's third review): `SafeConstructor
+//   .flatten_mapping` only retags a bare `=` key to `str` when
+//   reached *through* `<<:`; PyYAML's `MappingNode`s are shared and
+//   mutable, so once one mapping's merge flattens an anchored source
+//   and retags its `=` key in place, any other mapping that reaches
+//   that same node -- including directly, never through a merge of
+//   its own -- sees the already-retagged key too. electricity-yaml
+//   clones a shared anchor per alias instead (`MAX_NODES`'s doc
+//   comment above), so the merge's retag never reaches the original,
+//   separately-held copy a direct reference sees -- which still has
+//   no constructor for a bare `=`, so loading that copy fails where
+//   Circuitry's loader, having already mutated the one shared node,
+//   succeeds. Pinned in the golden corpus.
 //
-// Every case above is pinned in the golden corpus
+// Every case above that *can* be pinned mechanically -- both sides
+// fail differently, or Circuitry succeeds and electricity-yaml fails
+// in a specific, checkable way -- is pinned in the golden corpus
 // (`tests/golden/corpus.json`, generated by
 // `scripts/generate_yaml_corpus.py`'s `known_divergence_cases`), each
 // one labelled as a divergence rather than compared for equality
-// against Circuitry's own loader.
+// against Circuitry's own loader. A few above are not: the anchor-name
+// character-set case, both depth-limit directions (`MAX_DEPTH`'s own
+// doc comment), and the two "Circuitry fails, electricity-yaml loads a
+// value" shapes just above all have Circuitry on the *failing* side,
+// which this crate's `known_divergence` corpus kind has no way to
+// express (D4, PR #388's third review) -- documented here in prose
+// instead.

@@ -31,6 +31,7 @@ Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -406,6 +407,58 @@ def _extra_known_divergence_cases() -> list[dict]:
             "a: 1\na: 2\nb: &b [*b]\n",
             rust_error_contains="self-referential anchor is not supported",
         ),
+        # PyYAML's `int()`/`float()` accept non-ASCII (e.g. Arabic-Indic,
+        # fullwidth) decimal digits under an explicit tag -- the same
+        # digits CPython's own `int`/`float` constructors accept from
+        # any string; `num_bigint::BigInt::from_str_radix` and Rust's
+        # `f64::from_str` don't (finding 3, PR #388's third review).
+        _divergence_from_error(
+            'a: !!int "\u0661\u0662"\n', rust_error_contains="invalid int scalar"
+        ),
+        _divergence_from_error(
+            'a: !!float "\uff11.\uff15"\n', rust_error_contains="invalid float scalar"
+        ),
+        # `flatten_mapping` only retags a bare `=` key to `str` when it's
+        # reached *through* a merge -- a key reached directly, as an
+        # ordinary mapping value (never through `<<:`), is untouched and
+        # still has no constructor. PyYAML's own `MappingNode`s are
+        # mutable and shared: once `b`'s merge flattens `&a` and retags
+        # its `=` key in place, `deep.inner` -- the very same node,
+        # reached directly, not through a merge -- now sees the already-
+        # retagged key too, so it loads fine. electricity-yaml's `Node`
+        # tree instead clones a shared anchor per alias
+        # (`crate::MAX_NODES`'s doc comment): `b`'s merge retags its own
+        # *copy*, leaving `deep.inner`'s own, never-merged node with its
+        # original, un-retagged `=` key -- which still has no
+        # constructor, so loading fails (finding 8, PR #388's third
+        # review).
+        _divergence_from_error(
+            "deep:\n  inner: &a {=: 1}\nb: {<<: *a}\n",
+            rust_error_tag="tag:yaml.org,2002:value",
+        ),
+        # PyYAML's `Reader.forward` (`reader.py`) counts U+2028 (LINE
+        # SEPARATOR), U+2029 (PARAGRAPH SEPARATOR) and U+0085 (NEL) as
+        # line breaks, same as `\n`; `saphyr-parser` 0.1.0 only counts
+        # `\r`/`\n`. Both sides still report the same duplicate key here
+        # (the comment line is skipped by both scanners regardless of
+        # how many *line breaks* it contains), just reporting it one
+        # line apart -- Circuitry's own line is one higher, since it
+        # counts the embedded separator as an extra line break the
+        # comment's own `\n` doesn't repeat (finding 3, PR #388's third
+        # review; the column-in-a-*scalar* -- not a comment -- direction
+        # of this same gap is documented below instead, since there
+        # Circuitry fails outright while electricity-yaml successfully
+        # loads a value, the one direction this corpus's `known_divergence`
+        # kind has no way to express).
+        _divergence_from_error(
+            "# x \u2028\nx: 1\nx: 2\n", rust_error_contains="duplicate key"
+        ),
+        _divergence_from_error(
+            "# x \u2029\nx: 1\nx: 2\n", rust_error_contains="duplicate key"
+        ),
+        _divergence_from_error(
+            "# x \x85\nx: 1\nx: 2\n", rust_error_contains="duplicate key"
+        ),
     ]
 
 
@@ -644,8 +697,123 @@ def non_ascii_cases() -> list[dict]:
     return cases
 
 
+# ---------------------------------------------------------------------
+# D1 (the fix-pass orchestrator notes on PR #388): a non-ASCII variant of
+# *every* case above, mechanically derived -- never handwritten -- so
+# this corpus's non-ASCII coverage isn't limited to the handful of cases
+# that happened to be written with non-ASCII text in mind. Two mechanical
+# transformations, applied to every case's own `yaml` text:
+#
+# - a non-ASCII comment line prepended (`# ...\n`), which shifts every
+#   line number in the case by exactly one and leaves the parsed value
+#   or error *position* on each of those shifted lines otherwise
+#   unchanged -- exercising the same byte-offset-vs-character-index
+#   conversion `node_prefix` relies on (`compose.rs`), just ahead of the
+#   case's own content rather than inside it. Applied to every case,
+#   with no exceptions.
+# - for a case whose own top-level key is the literal placeholder `a`
+#   (the overwhelming majority of this generator's cases): a non-ASCII
+#   suffix appended to that key's own name (`a` -> `a\u00e9`), which
+#   shifts every *column* on that key's own line and in any later
+#   sibling key's reported position, while leaving the case's own
+#   semantics (the *value*, or the duplicate/error condition, under
+#   test) completely untouched -- `a` is never itself a YAML keyword, so
+#   renaming it can't change what the case is actually testing. Applied
+#   only where the case has such a key; skipped otherwise.
+#
+# Each transformation is tried with a 2-byte ("\u00e9"), 3-byte
+# ("\u2014") and 4-byte ("\U0001f642") character in turn, rotating by
+# the case's own index so the corpus as a whole exercises all three
+# without tripling every single case. Every variant's expected result is
+# *rederived from scratch* -- never copied from the original case --
+# through whichever of this file's own case-building paths produced the
+# original (`case()`, a `known_divergence`, or circuitry#390's own
+# `yaml.safe_load`-sourced expectation), so a transformation that
+# happens to change the parsed value (the key rename does; the comment
+# never does) is still checked against the real loader's own answer,
+# never assumed to match the original case's.
+# ---------------------------------------------------------------------
+
+NON_ASCII_MARKERS = ["\u00e9", "\u2014", "\U0001f642"]  # 2, 3, 4 UTF-8 bytes
+
+_TOP_LEVEL_A_KEY = re.compile(r"(?m)^a:")
+
+
+def _prepend_non_ascii_comment(yaml_text: str, marker: str) -> str:
+    return f"# non-ascii marker {marker}\n{yaml_text}"
+
+
+def _rename_a_key(yaml_text: str, marker: str) -> str | None:
+    """`yaml_text` with every top-level `a:` key renamed to `a<marker>:`,
+    or `None` if it has no such key (`a` is only ever a *placeholder*
+    name here, never load-bearing, so renaming every occurrence at once
+    keeps a duplicate-key case testing the same duplicate, a merge case
+    merging the same thing, and so on).
+    """
+    if not _TOP_LEVEL_A_KEY.search(yaml_text):
+        return None
+    return _TOP_LEVEL_A_KEY.sub(f"a{marker}:", yaml_text)
+
+
+def _rebuild_case(original: dict, new_yaml: str) -> dict:
+    """Rederives `original`'s own *kind* of expected result for
+    `new_yaml`, through the real loader -- never by copying `original`'s
+    own fields across, since the key-rename transformation (never the
+    comment one) can change the parsed value.
+    """
+    if original.get("note"):  # circuitry#390's own yaml.safe_load-sourced case
+        return {
+            "yaml": new_yaml,
+            "kind": "value",
+            "repr": repr(yaml.safe_load(new_yaml)),
+            "note": original["note"],
+        }
+    if original["kind"] == "known_divergence":
+        return _divergence_from_error(
+            new_yaml,
+            rust_error_tag=original.get("rust_error_tag"),
+            rust_error_contains=original.get("rust_error_contains"),
+        )
+    return case(new_yaml)
+
+
+def non_ascii_variants(cases: list[dict]) -> list[dict]:
+    variants = []
+    for i, original in enumerate(cases):
+        marker = NON_ASCII_MARKERS[i % len(NON_ASCII_MARKERS)]
+        commented = _prepend_non_ascii_comment(original["yaml"], marker)
+        variants.append(_rebuild_case(original, commented))
+        renamed = _rename_a_key(original["yaml"], marker)
+        if renamed is not None:
+            variants.append(_rebuild_case(original, renamed))
+    return variants
+
+
+# ---------------------------------------------------------------------
+# Finding 3 (PR #388's third review): PyYAML's `Reader` (`reader.py`)
+# strips a leading BOM before scanning ever starts -- no column counted
+# for it (`scan_to_next_token`'s own comment: "the byte order mark is
+# stripped if it's the first character in the stream") -- and rejects
+# any non-printable character (a raw ANSI escape, a stray control byte --
+# exactly what tool or model output can contain) immediately, with a
+# `ReaderError` that carries no mark at all. `saphyr-parser` 0.1.0 has
+# neither check.
+# ---------------------------------------------------------------------
+
+
+def reader_edge_cases() -> list[dict]:
+    yaml_texts = [
+        "\ufeffa: 1\n",
+        # the stripped BOM must not hide this as two different keys
+        "\ufeffa: 1\na: 2\n",
+        'a: "\x1b[0m"\n',  # a raw ANSI escape
+        "a: \x80\n",  # a raw C1 control byte
+    ]
+    return [case(y) for y in yaml_texts]
+
+
 def build_corpus() -> list[dict]:
-    return (
+    base = (
         table_cases()
         + bool_cases()
         + int_cases()
@@ -662,7 +830,9 @@ def build_corpus() -> list[dict]:
         + duplicate_key_cases()
         + structural_cases()
         + non_ascii_cases()
+        + reader_edge_cases()
     )
+    return base + non_ascii_variants(base)
 
 
 def render(cases: list[dict]) -> str:

@@ -681,6 +681,42 @@
     "rust_error_contains": "self-referential anchor is not supported"
   },
   {
+    "yaml": "a: !!int \"١٢\"\n",
+    "kind": "known_divergence",
+    "python_repr": "{'a': 12}",
+    "rust_error_contains": "invalid int scalar"
+  },
+  {
+    "yaml": "a: !!float \"１.５\"\n",
+    "kind": "known_divergence",
+    "python_repr": "{'a': 1.5}",
+    "rust_error_contains": "invalid float scalar"
+  },
+  {
+    "yaml": "deep:\n  inner: &a {=: 1}\nb: {<<: *a}\n",
+    "kind": "known_divergence",
+    "python_repr": "{'deep': {'inner': {'=': 1}}, 'b': {'=': 1}}",
+    "rust_error_tag": "tag:yaml.org,2002:value"
+  },
+  {
+    "yaml": "# x  \nx: 1\nx: 2\n",
+    "kind": "known_divergence",
+    "python_repr": "<DuplicateKeyError: duplicate key 'x' at line 4, column 1 (first defined at line 3, column 1); YAML would silently keep only the last one>",
+    "rust_error_contains": "duplicate key"
+  },
+  {
+    "yaml": "# x  \nx: 1\nx: 2\n",
+    "kind": "known_divergence",
+    "python_repr": "<DuplicateKeyError: duplicate key 'x' at line 4, column 1 (first defined at line 3, column 1); YAML would silently keep only the last one>",
+    "rust_error_contains": "duplicate key"
+  },
+  {
+    "yaml": "# x \nx: 1\nx: 2\n",
+    "kind": "known_divergence",
+    "python_repr": "<DuplicateKeyError: duplicate key 'x' at line 4, column 1 (first defined at line 3, column 1); YAML would silently keep only the last one>",
+    "rust_error_contains": "duplicate key"
+  },
+  {
     "yaml": "base: &base\n  retries: 1\n  timeout: 5\ntemplates:\n  defaults: &defaults\n    <<: *base\n    retries: 2\neffect:\n  <<: *defaults\n",
     "kind": "value",
     "repr": "{'base': {'retries': 1, 'timeout': 5}, 'templates': {'defaults': {'retries': 2, 'timeout': 5}}, 'effect': {'retries': 2, 'timeout': 5}}",
@@ -1016,5 +1052,2013 @@
     "kind": "error",
     "line": 2,
     "column": 3
+  },
+  {
+    "yaml": "﻿a: 1\n",
+    "kind": "value",
+    "repr": "{'a': 1}"
+  },
+  {
+    "yaml": "﻿a: 1\na: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'a' at line 2, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "a: \"\u001b[0m\"\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "a: \n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "# non-ascii marker é\na: on\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "aé: on\n",
+    "kind": "value",
+    "repr": "{'aé': True}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: yes\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a—: yes\n",
+    "kind": "value",
+    "repr": "{'a—': True}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: off\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a🙂: off\n",
+    "kind": "value",
+    "repr": "{'a🙂': False}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: no\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "aé: no\n",
+    "kind": "value",
+    "repr": "{'aé': False}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 0x1A\n",
+    "kind": "value",
+    "repr": "{'a': 26}"
+  },
+  {
+    "yaml": "a—: 0x1A\n",
+    "kind": "value",
+    "repr": "{'a—': 26}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 017\n",
+    "kind": "value",
+    "repr": "{'a': 15}"
+  },
+  {
+    "yaml": "a🙂: 017\n",
+    "kind": "value",
+    "repr": "{'a🙂': 15}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: 1:30:00\n",
+    "kind": "value",
+    "repr": "{'a': 5400}"
+  },
+  {
+    "yaml": "aé: 1:30:00\n",
+    "kind": "value",
+    "repr": "{'aé': 5400}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 2024-01-01\n",
+    "kind": "value",
+    "repr": "{'a': datetime.date(2024, 1, 1)}"
+  },
+  {
+    "yaml": "a—: 2024-01-01\n",
+    "kind": "value",
+    "repr": "{'a—': datetime.date(2024, 1, 1)}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: .inf\n",
+    "kind": "value",
+    "repr": "{'a': inf}"
+  },
+  {
+    "yaml": "a🙂: .inf\n",
+    "kind": "value",
+    "repr": "{'a🙂': inf}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: .nan\n",
+    "kind": "value",
+    "repr": "{'a': nan}"
+  },
+  {
+    "yaml": "aé: .nan\n",
+    "kind": "value",
+    "repr": "{'aé': nan}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: on\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a—: on\n",
+    "kind": "value",
+    "repr": "{'a—': True}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: On\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a🙂: On\n",
+    "kind": "value",
+    "repr": "{'a🙂': True}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: ON\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "aé: ON\n",
+    "kind": "value",
+    "repr": "{'aé': True}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: off\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a—: off\n",
+    "kind": "value",
+    "repr": "{'a—': False}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: Off\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a🙂: Off\n",
+    "kind": "value",
+    "repr": "{'a🙂': False}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: OFF\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "aé: OFF\n",
+    "kind": "value",
+    "repr": "{'aé': False}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: yes\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a—: yes\n",
+    "kind": "value",
+    "repr": "{'a—': True}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: Yes\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a🙂: Yes\n",
+    "kind": "value",
+    "repr": "{'a🙂': True}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: YES\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "aé: YES\n",
+    "kind": "value",
+    "repr": "{'aé': True}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: no\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a—: no\n",
+    "kind": "value",
+    "repr": "{'a—': False}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: No\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a🙂: No\n",
+    "kind": "value",
+    "repr": "{'a🙂': False}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: NO\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "aé: NO\n",
+    "kind": "value",
+    "repr": "{'aé': False}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: true\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a—: true\n",
+    "kind": "value",
+    "repr": "{'a—': True}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: True\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a🙂: True\n",
+    "kind": "value",
+    "repr": "{'a🙂': True}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: TRUE\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "aé: TRUE\n",
+    "kind": "value",
+    "repr": "{'aé': True}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: false\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a—: false\n",
+    "kind": "value",
+    "repr": "{'a—': False}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: False\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "a🙂: False\n",
+    "kind": "value",
+    "repr": "{'a🙂': False}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: FALSE\n",
+    "kind": "value",
+    "repr": "{'a': False}"
+  },
+  {
+    "yaml": "aé: FALSE\n",
+    "kind": "value",
+    "repr": "{'aé': False}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: y\n",
+    "kind": "value",
+    "repr": "{'a': 'y'}"
+  },
+  {
+    "yaml": "a—: y\n",
+    "kind": "value",
+    "repr": "{'a—': 'y'}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: Y\n",
+    "kind": "value",
+    "repr": "{'a': 'Y'}"
+  },
+  {
+    "yaml": "a🙂: Y\n",
+    "kind": "value",
+    "repr": "{'a🙂': 'Y'}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: n\n",
+    "kind": "value",
+    "repr": "{'a': 'n'}"
+  },
+  {
+    "yaml": "aé: n\n",
+    "kind": "value",
+    "repr": "{'aé': 'n'}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: N\n",
+    "kind": "value",
+    "repr": "{'a': 'N'}"
+  },
+  {
+    "yaml": "a—: N\n",
+    "kind": "value",
+    "repr": "{'a—': 'N'}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 'on'\n",
+    "kind": "value",
+    "repr": "{'a': 'on'}"
+  },
+  {
+    "yaml": "a🙂: 'on'\n",
+    "kind": "value",
+    "repr": "{'a🙂': 'on'}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: \"Yes\"\n",
+    "kind": "value",
+    "repr": "{'a': 'Yes'}"
+  },
+  {
+    "yaml": "aé: \"Yes\"\n",
+    "kind": "value",
+    "repr": "{'aé': 'Yes'}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: |\n  on\n",
+    "kind": "value",
+    "repr": "{'a': 'on\\n'}"
+  },
+  {
+    "yaml": "a—: |\n  on\n",
+    "kind": "value",
+    "repr": "{'a—': 'on\\n'}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 0x1A\n",
+    "kind": "value",
+    "repr": "{'a': 26}"
+  },
+  {
+    "yaml": "a🙂: 0x1A\n",
+    "kind": "value",
+    "repr": "{'a🙂': 26}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: 0X1a\n",
+    "kind": "value",
+    "repr": "{'a': '0X1a'}"
+  },
+  {
+    "yaml": "aé: 0X1a\n",
+    "kind": "value",
+    "repr": "{'aé': '0X1a'}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: -0x1A\n",
+    "kind": "value",
+    "repr": "{'a': -26}"
+  },
+  {
+    "yaml": "a—: -0x1A\n",
+    "kind": "value",
+    "repr": "{'a—': -26}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 0b101\n",
+    "kind": "value",
+    "repr": "{'a': 5}"
+  },
+  {
+    "yaml": "a🙂: 0b101\n",
+    "kind": "value",
+    "repr": "{'a🙂': 5}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: -0b101\n",
+    "kind": "value",
+    "repr": "{'a': -5}"
+  },
+  {
+    "yaml": "aé: -0b101\n",
+    "kind": "value",
+    "repr": "{'aé': -5}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 017\n",
+    "kind": "value",
+    "repr": "{'a': 15}"
+  },
+  {
+    "yaml": "a—: 017\n",
+    "kind": "value",
+    "repr": "{'a—': 15}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 0017\n",
+    "kind": "value",
+    "repr": "{'a': 15}"
+  },
+  {
+    "yaml": "a🙂: 0017\n",
+    "kind": "value",
+    "repr": "{'a🙂': 15}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: -017\n",
+    "kind": "value",
+    "repr": "{'a': -15}"
+  },
+  {
+    "yaml": "aé: -017\n",
+    "kind": "value",
+    "repr": "{'aé': -15}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 0o17\n",
+    "kind": "value",
+    "repr": "{'a': '0o17'}"
+  },
+  {
+    "yaml": "a—: 0o17\n",
+    "kind": "value",
+    "repr": "{'a—': '0o17'}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 1:30:00\n",
+    "kind": "value",
+    "repr": "{'a': 5400}"
+  },
+  {
+    "yaml": "a🙂: 1:30:00\n",
+    "kind": "value",
+    "repr": "{'a🙂': 5400}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: -1:30:00\n",
+    "kind": "value",
+    "repr": "{'a': -5400}"
+  },
+  {
+    "yaml": "aé: -1:30:00\n",
+    "kind": "value",
+    "repr": "{'aé': -5400}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 1:2:3\n",
+    "kind": "value",
+    "repr": "{'a': 3723}"
+  },
+  {
+    "yaml": "a—: 1:2:3\n",
+    "kind": "value",
+    "repr": "{'a—': 3723}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 1_000_000\n",
+    "kind": "value",
+    "repr": "{'a': 1000000}"
+  },
+  {
+    "yaml": "a🙂: 1_000_000\n",
+    "kind": "value",
+    "repr": "{'a🙂': 1000000}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: 0x1_A\n",
+    "kind": "value",
+    "repr": "{'a': 26}"
+  },
+  {
+    "yaml": "aé: 0x1_A\n",
+    "kind": "value",
+    "repr": "{'aé': 26}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 0b1_01\n",
+    "kind": "value",
+    "repr": "{'a': 5}"
+  },
+  {
+    "yaml": "a—: 0b1_01\n",
+    "kind": "value",
+    "repr": "{'a—': 5}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 0\n",
+    "kind": "value",
+    "repr": "{'a': 0}"
+  },
+  {
+    "yaml": "a🙂: 0\n",
+    "kind": "value",
+    "repr": "{'a🙂': 0}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: -0\n",
+    "kind": "value",
+    "repr": "{'a': 0}"
+  },
+  {
+    "yaml": "aé: -0\n",
+    "kind": "value",
+    "repr": "{'aé': 0}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 00\n",
+    "kind": "value",
+    "repr": "{'a': 0}"
+  },
+  {
+    "yaml": "a—: 00\n",
+    "kind": "value",
+    "repr": "{'a—': 0}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 123456789012345678901234567890\n",
+    "kind": "value",
+    "repr": "{'a': 123456789012345678901234567890}"
+  },
+  {
+    "yaml": "a🙂: 123456789012345678901234567890\n",
+    "kind": "value",
+    "repr": "{'a🙂': 123456789012345678901234567890}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: 0xFFFFFFFFFFFFFFFFFF\n",
+    "kind": "value",
+    "repr": "{'a': 4722366482869645213695}"
+  },
+  {
+    "yaml": "aé: 0xFFFFFFFFFFFFFFFFFF\n",
+    "kind": "value",
+    "repr": "{'aé': 4722366482869645213695}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 1e3\n",
+    "kind": "value",
+    "repr": "{'a': '1e3'}"
+  },
+  {
+    "yaml": "a—: 1e3\n",
+    "kind": "value",
+    "repr": "{'a—': '1e3'}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: !!int \"- 42\"\n",
+    "kind": "value",
+    "repr": "{'a': -42}"
+  },
+  {
+    "yaml": "a🙂: !!int \"- 42\"\n",
+    "kind": "value",
+    "repr": "{'a🙂': -42}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: !!int \" 0x1A\"\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "aé: !!int \" 0x1A\"\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 1.0\n",
+    "kind": "value",
+    "repr": "{'a': 1.0}"
+  },
+  {
+    "yaml": "a—: 1.0\n",
+    "kind": "value",
+    "repr": "{'a—': 1.0}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: -1.5\n",
+    "kind": "value",
+    "repr": "{'a': -1.5}"
+  },
+  {
+    "yaml": "a🙂: -1.5\n",
+    "kind": "value",
+    "repr": "{'a🙂': -1.5}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: .5\n",
+    "kind": "value",
+    "repr": "{'a': 0.5}"
+  },
+  {
+    "yaml": "aé: .5\n",
+    "kind": "value",
+    "repr": "{'aé': 0.5}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 5.\n",
+    "kind": "value",
+    "repr": "{'a': 5.0}"
+  },
+  {
+    "yaml": "a—: 5.\n",
+    "kind": "value",
+    "repr": "{'a—': 5.0}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 1.0e+3\n",
+    "kind": "value",
+    "repr": "{'a': 1000.0}"
+  },
+  {
+    "yaml": "a🙂: 1.0e+3\n",
+    "kind": "value",
+    "repr": "{'a🙂': 1000.0}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: 1.0e-3\n",
+    "kind": "value",
+    "repr": "{'a': 0.001}"
+  },
+  {
+    "yaml": "aé: 1.0e-3\n",
+    "kind": "value",
+    "repr": "{'aé': 0.001}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 1e3\n",
+    "kind": "value",
+    "repr": "{'a': '1e3'}"
+  },
+  {
+    "yaml": "a—: 1e3\n",
+    "kind": "value",
+    "repr": "{'a—': '1e3'}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 1.0E+3\n",
+    "kind": "value",
+    "repr": "{'a': 1000.0}"
+  },
+  {
+    "yaml": "a🙂: 1.0E+3\n",
+    "kind": "value",
+    "repr": "{'a🙂': 1000.0}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: .inf\n",
+    "kind": "value",
+    "repr": "{'a': inf}"
+  },
+  {
+    "yaml": "aé: .inf\n",
+    "kind": "value",
+    "repr": "{'aé': inf}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: .Inf\n",
+    "kind": "value",
+    "repr": "{'a': inf}"
+  },
+  {
+    "yaml": "a—: .Inf\n",
+    "kind": "value",
+    "repr": "{'a—': inf}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: .INF\n",
+    "kind": "value",
+    "repr": "{'a': inf}"
+  },
+  {
+    "yaml": "a🙂: .INF\n",
+    "kind": "value",
+    "repr": "{'a🙂': inf}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: -.inf\n",
+    "kind": "value",
+    "repr": "{'a': -inf}"
+  },
+  {
+    "yaml": "aé: -.inf\n",
+    "kind": "value",
+    "repr": "{'aé': -inf}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: .nan\n",
+    "kind": "value",
+    "repr": "{'a': nan}"
+  },
+  {
+    "yaml": "a—: .nan\n",
+    "kind": "value",
+    "repr": "{'a—': nan}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: .NaN\n",
+    "kind": "value",
+    "repr": "{'a': nan}"
+  },
+  {
+    "yaml": "a🙂: .NaN\n",
+    "kind": "value",
+    "repr": "{'a🙂': nan}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: .NAN\n",
+    "kind": "value",
+    "repr": "{'a': nan}"
+  },
+  {
+    "yaml": "aé: .NAN\n",
+    "kind": "value",
+    "repr": "{'aé': nan}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 1:30:00.5\n",
+    "kind": "value",
+    "repr": "{'a': 5400.5}"
+  },
+  {
+    "yaml": "a—: 1:30:00.5\n",
+    "kind": "value",
+    "repr": "{'a—': 5400.5}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: -1:30:00.5\n",
+    "kind": "value",
+    "repr": "{'a': -5400.5}"
+  },
+  {
+    "yaml": "a🙂: -1:30:00.5\n",
+    "kind": "value",
+    "repr": "{'a🙂': -5400.5}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: 1_000.5\n",
+    "kind": "value",
+    "repr": "{'a': 1000.5}"
+  },
+  {
+    "yaml": "aé: 1_000.5\n",
+    "kind": "value",
+    "repr": "{'aé': 1000.5}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 1:30:00.06\n",
+    "kind": "value",
+    "repr": "{'a': 5400.0599999999995}"
+  },
+  {
+    "yaml": "a—: 1:30:00.06\n",
+    "kind": "value",
+    "repr": "{'a—': 5400.0599999999995}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: !!float \" .inf\"\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "a🙂: !!float \" .inf\"\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "# non-ascii marker é\na: ~\n",
+    "kind": "value",
+    "repr": "{'a': None}"
+  },
+  {
+    "yaml": "aé: ~\n",
+    "kind": "value",
+    "repr": "{'aé': None}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: null\n",
+    "kind": "value",
+    "repr": "{'a': None}"
+  },
+  {
+    "yaml": "a—: null\n",
+    "kind": "value",
+    "repr": "{'a—': None}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: Null\n",
+    "kind": "value",
+    "repr": "{'a': None}"
+  },
+  {
+    "yaml": "a🙂: Null\n",
+    "kind": "value",
+    "repr": "{'a🙂': None}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: NULL\n",
+    "kind": "value",
+    "repr": "{'a': None}"
+  },
+  {
+    "yaml": "aé: NULL\n",
+    "kind": "value",
+    "repr": "{'aé': None}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na:\n",
+    "kind": "value",
+    "repr": "{'a': None}"
+  },
+  {
+    "yaml": "a—:\n",
+    "kind": "value",
+    "repr": "{'a—': None}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: \n",
+    "kind": "value",
+    "repr": "{'a': None}"
+  },
+  {
+    "yaml": "a🙂: \n",
+    "kind": "value",
+    "repr": "{'a🙂': None}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: ''\n",
+    "kind": "value",
+    "repr": "{'a': ''}"
+  },
+  {
+    "yaml": "aé: ''\n",
+    "kind": "value",
+    "repr": "{'aé': ''}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 2024-01-01\n",
+    "kind": "value",
+    "repr": "{'a': datetime.date(2024, 1, 1)}"
+  },
+  {
+    "yaml": "a—: 2024-01-01\n",
+    "kind": "value",
+    "repr": "{'a—': datetime.date(2024, 1, 1)}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 2024-1-1\n",
+    "kind": "value",
+    "repr": "{'a': '2024-1-1'}"
+  },
+  {
+    "yaml": "a🙂: 2024-1-1\n",
+    "kind": "value",
+    "repr": "{'a🙂': '2024-1-1'}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: 2024-01-02 03:04:05\n",
+    "kind": "value",
+    "repr": "{'a': datetime.datetime(2024, 1, 2, 3, 4, 5)}"
+  },
+  {
+    "yaml": "aé: 2024-01-02 03:04:05\n",
+    "kind": "value",
+    "repr": "{'aé': datetime.datetime(2024, 1, 2, 3, 4, 5)}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 2024-01-02T03:04:05\n",
+    "kind": "value",
+    "repr": "{'a': datetime.datetime(2024, 1, 2, 3, 4, 5)}"
+  },
+  {
+    "yaml": "a—: 2024-01-02T03:04:05\n",
+    "kind": "value",
+    "repr": "{'a—': datetime.datetime(2024, 1, 2, 3, 4, 5)}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 2024-01-02T03:04:05Z\n",
+    "kind": "value",
+    "repr": "{'a': datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)}"
+  },
+  {
+    "yaml": "a🙂: 2024-01-02T03:04:05Z\n",
+    "kind": "value",
+    "repr": "{'a🙂': datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: 2024-01-02T03:04:05+05:30\n",
+    "kind": "value",
+    "repr": "{'a': datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.timezone(datetime.timedelta(seconds=19800)))}"
+  },
+  {
+    "yaml": "aé: 2024-01-02T03:04:05+05:30\n",
+    "kind": "value",
+    "repr": "{'aé': datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.timezone(datetime.timedelta(seconds=19800)))}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 2024-01-02T03:04:05-05:30\n",
+    "kind": "value",
+    "repr": "{'a': datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=66600)))}"
+  },
+  {
+    "yaml": "a—: 2024-01-02T03:04:05-05:30\n",
+    "kind": "value",
+    "repr": "{'a—': datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=66600)))}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 2024-01-02T03:04:05.123456Z\n",
+    "kind": "value",
+    "repr": "{'a': datetime.datetime(2024, 1, 2, 3, 4, 5, 123456, tzinfo=datetime.timezone.utc)}"
+  },
+  {
+    "yaml": "a🙂: 2024-01-02T03:04:05.123456Z\n",
+    "kind": "value",
+    "repr": "{'a🙂': datetime.datetime(2024, 1, 2, 3, 4, 5, 123456, tzinfo=datetime.timezone.utc)}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: 2024-01-02t03:04:05z\n",
+    "kind": "value",
+    "repr": "{'a': '2024-01-02t03:04:05z'}"
+  },
+  {
+    "yaml": "aé: 2024-01-02t03:04:05z\n",
+    "kind": "value",
+    "repr": "{'aé': '2024-01-02t03:04:05z'}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 2024-01-02  03:04:05\n",
+    "kind": "value",
+    "repr": "{'a': datetime.datetime(2024, 1, 2, 3, 4, 5)}"
+  },
+  {
+    "yaml": "a—: 2024-01-02  03:04:05\n",
+    "kind": "value",
+    "repr": "{'a—': datetime.datetime(2024, 1, 2, 3, 4, 5)}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 0000-01-01\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "a🙂: 0000-01-01\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "# non-ascii marker é\na: !!str on\n",
+    "kind": "value",
+    "repr": "{'a': 'on'}"
+  },
+  {
+    "yaml": "aé: !!str on\n",
+    "kind": "value",
+    "repr": "{'aé': 'on'}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: !!str 123\n",
+    "kind": "value",
+    "repr": "{'a': '123'}"
+  },
+  {
+    "yaml": "a—: !!str 123\n",
+    "kind": "value",
+    "repr": "{'a—': '123'}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: !!int \"42\"\n",
+    "kind": "value",
+    "repr": "{'a': 42}"
+  },
+  {
+    "yaml": "a🙂: !!int \"42\"\n",
+    "kind": "value",
+    "repr": "{'a🙂': 42}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: !!int abc\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "aé: !!int abc\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "# non-ascii marker —\na: !!int \" 42 \"\n",
+    "kind": "value",
+    "repr": "{'a': 42}"
+  },
+  {
+    "yaml": "a—: !!int \" 42 \"\n",
+    "kind": "value",
+    "repr": "{'a—': 42}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: !!float \" 1.5 \"\n",
+    "kind": "value",
+    "repr": "{'a': 1.5}"
+  },
+  {
+    "yaml": "a🙂: !!float \" 1.5 \"\n",
+    "kind": "value",
+    "repr": "{'a🙂': 1.5}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: ! |\n  12\n",
+    "kind": "value",
+    "repr": "{'a': 12}"
+  },
+  {
+    "yaml": "aé: ! |\n  12\n",
+    "kind": "value",
+    "repr": "{'aé': 12}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: !!bool YeS\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a—: !!bool YeS\n",
+    "kind": "value",
+    "repr": "{'a—': True}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: !!bool banana\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "a🙂: !!bool banana\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "# non-ascii marker é\na: !!float \"1.5\"\n",
+    "kind": "value",
+    "repr": "{'a': 1.5}"
+  },
+  {
+    "yaml": "aé: !!float \"1.5\"\n",
+    "kind": "value",
+    "repr": "{'aé': 1.5}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: !!float xyz\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "a—: !!float xyz\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: !!null anything\n",
+    "kind": "value",
+    "repr": "{'a': None}"
+  },
+  {
+    "yaml": "a🙂: !!null anything\n",
+    "kind": "value",
+    "repr": "{'a🙂': None}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: !!timestamp \"2024-01-01\"\n",
+    "kind": "value",
+    "repr": "{'a': datetime.date(2024, 1, 1)}"
+  },
+  {
+    "yaml": "aé: !!timestamp \"2024-01-01\"\n",
+    "kind": "value",
+    "repr": "{'aé': datetime.date(2024, 1, 1)}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: !!timestamp not-a-date\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "a—: !!timestamp not-a-date\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: !!binary aGVsbG8=\n",
+    "kind": "value",
+    "repr": "{'a': b'hello'}"
+  },
+  {
+    "yaml": "a🙂: !!binary aGVsbG8=\n",
+    "kind": "value",
+    "repr": "{'a🙂': b'hello'}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: !!binary \"not base64!\"\n",
+    "kind": "error",
+    "line": 1,
+    "column": 3
+  },
+  {
+    "yaml": "aé: !!binary \"not base64!\"\n",
+    "kind": "error",
+    "line": 0,
+    "column": 4
+  },
+  {
+    "yaml": "# non-ascii marker —\na: !!binary \"aGVs!bG8=\"\n",
+    "kind": "value",
+    "repr": "{'a': b'hello'}"
+  },
+  {
+    "yaml": "a—: !!binary \"aGVs!bG8=\"\n",
+    "kind": "value",
+    "repr": "{'a—': b'hello'}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: ! on\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "a🙂: ! on\n",
+    "kind": "value",
+    "repr": "{'a🙂': True}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: ! \"on\"\n",
+    "kind": "value",
+    "repr": "{'a': True}"
+  },
+  {
+    "yaml": "aé: ! \"on\"\n",
+    "kind": "value",
+    "repr": "{'aé': True}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: ! [1, 2]\n",
+    "kind": "value",
+    "repr": "{'a': [1, 2]}"
+  },
+  {
+    "yaml": "a—: ! [1, 2]\n",
+    "kind": "value",
+    "repr": "{'a—': [1, 2]}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: ! {x: 1}\n",
+    "kind": "value",
+    "repr": "{'a': {'x': 1}}"
+  },
+  {
+    "yaml": "a🙂: ! {x: 1}\n",
+    "kind": "value",
+    "repr": "{'a🙂': {'x': 1}}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: !custom foo\n",
+    "kind": "error",
+    "line": 1,
+    "column": 3
+  },
+  {
+    "yaml": "aé: !custom foo\n",
+    "kind": "error",
+    "line": 0,
+    "column": 4
+  },
+  {
+    "yaml": "# non-ascii marker —\n!custom foo\n",
+    "kind": "error",
+    "line": 1,
+    "column": 0
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: ! |\n  ~\n",
+    "kind": "value",
+    "repr": "{'a': None}"
+  },
+  {
+    "yaml": "a🙂: ! |\n  ~\n",
+    "kind": "value",
+    "repr": "{'a🙂': None}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: ! |\n  2024-01-01\n",
+    "kind": "value",
+    "repr": "{'a': datetime.date(2024, 1, 1)}"
+  },
+  {
+    "yaml": "aé: ! |\n  2024-01-01\n",
+    "kind": "value",
+    "repr": "{'aé': datetime.date(2024, 1, 1)}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: ! |\n  .inf\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "a—: ! |\n  .inf\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: !!set\n  x: null\n  y: null\n",
+    "kind": "known_divergence",
+    "python_repr": "{'a': {'x', 'y'}}",
+    "rust_error_tag": "tag:yaml.org,2002:set"
+  },
+  {
+    "yaml": "a🙂: !!set\n  x: null\n  y: null\n",
+    "kind": "known_divergence",
+    "python_repr": "{'a🙂': {'x', 'y'}}",
+    "rust_error_tag": "tag:yaml.org,2002:set"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: !!omap\n  - x: 1\n  - y: 2\n",
+    "kind": "known_divergence",
+    "python_repr": "{'a': [('x', 1), ('y', 2)]}",
+    "rust_error_tag": "tag:yaml.org,2002:omap"
+  },
+  {
+    "yaml": "aé: !!omap\n  - x: 1\n  - y: 2\n",
+    "kind": "known_divergence",
+    "python_repr": "{'aé': [('x', 1), ('y', 2)]}",
+    "rust_error_tag": "tag:yaml.org,2002:omap"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: !!pairs\n  - x: 1\n  - y: 2\n",
+    "kind": "known_divergence",
+    "python_repr": "{'a': [('x', 1), ('y', 2)]}",
+    "rust_error_tag": "tag:yaml.org,2002:pairs"
+  },
+  {
+    "yaml": "a—: !!pairs\n  - x: 1\n  - y: 2\n",
+    "kind": "known_divergence",
+    "python_repr": "{'a—': [('x', 1), ('y', 2)]}",
+    "rust_error_tag": "tag:yaml.org,2002:pairs"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: &a [*a]\n",
+    "kind": "known_divergence",
+    "python_repr": "<RecursionError: maximum recursion depth exceeded>",
+    "rust_error_contains": "self-referential anchor is not supported"
+  },
+  {
+    "yaml": "a🙂: &a [*a]\n",
+    "kind": "known_divergence",
+    "python_repr": "<RecursionError: maximum recursion depth exceeded>",
+    "rust_error_contains": "self-referential anchor is not supported"
+  },
+  {
+    "yaml": "# non-ascii marker é\nx: &k a\nm:\n  *k: 1\n",
+    "kind": "known_divergence",
+    "python_repr": "{'x': 'a', 'm': {'a': 1}}",
+    "rust_error_contains": "found unknown anchor"
+  },
+  {
+    "yaml": "# non-ascii marker —\n!!float nan: 1\n!!float nan: 2\n",
+    "kind": "known_divergence",
+    "python_repr": "{nan: 1, nan: 2}",
+    "rust_error_contains": "duplicate key"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\n? |\n  k\n: 1\n? |\n  k\n: 2\n",
+    "kind": "known_divergence",
+    "python_repr": "<DuplicateKeyError: duplicate key 'k\\n' at line 5, column 3 (first defined at line 2, column 3); YAML would silently keep only the last one>",
+    "rust_error_contains": "duplicate key"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: !!seq x\n[b]: 1\n",
+    "kind": "known_divergence",
+    "python_repr": "<ConstructorError: while constructing a mapping\n  in \"<unicode string>\", line 2, column 1:\n    a: !!seq x\n    ^\nfound unhashable key\n  in \"<unicode string>\", line 3, column 1:\n    [b]: 1\n    ^>",
+    "rust_error_tag": "tag:yaml.org,2002:seq"
+  },
+  {
+    "yaml": "aé: !!seq x\n[b]: 1\n",
+    "kind": "known_divergence",
+    "python_repr": "<ConstructorError: while constructing a mapping\n  in \"<unicode string>\", line 1, column 1:\n    aé: !!seq x\n    ^\nfound unhashable key\n  in \"<unicode string>\", line 2, column 1:\n    [b]: 1\n    ^>",
+    "rust_error_tag": "tag:yaml.org,2002:seq"
+  },
+  {
+    "yaml": "# non-ascii marker —\n!!seq x: 1\na: 1\na: 2\n",
+    "kind": "known_divergence",
+    "python_repr": "<DuplicateKeyError: duplicate key 'a' at line 4, column 1 (first defined at line 3, column 1); YAML would silently keep only the last one>",
+    "rust_error_tag": "tag:yaml.org,2002:seq"
+  },
+  {
+    "yaml": "!!seq x: 1\na—: 1\na—: 2\n",
+    "kind": "known_divergence",
+    "python_repr": "<DuplicateKeyError: duplicate key 'a—' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one>",
+    "rust_error_tag": "tag:yaml.org,2002:seq"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 1\na: 2\nb: &b [*b]\n",
+    "kind": "known_divergence",
+    "python_repr": "<DuplicateKeyError: duplicate key 'a' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one>",
+    "rust_error_contains": "self-referential anchor is not supported"
+  },
+  {
+    "yaml": "a🙂: 1\na🙂: 2\nb: &b [*b]\n",
+    "kind": "known_divergence",
+    "python_repr": "<DuplicateKeyError: duplicate key 'a🙂' at line 2, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one>",
+    "rust_error_contains": "self-referential anchor is not supported"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: !!int \"١٢\"\n",
+    "kind": "known_divergence",
+    "python_repr": "{'a': 12}",
+    "rust_error_contains": "invalid int scalar"
+  },
+  {
+    "yaml": "aé: !!int \"١٢\"\n",
+    "kind": "known_divergence",
+    "python_repr": "{'aé': 12}",
+    "rust_error_contains": "invalid int scalar"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: !!float \"１.５\"\n",
+    "kind": "known_divergence",
+    "python_repr": "{'a': 1.5}",
+    "rust_error_contains": "invalid float scalar"
+  },
+  {
+    "yaml": "a—: !!float \"１.５\"\n",
+    "kind": "known_divergence",
+    "python_repr": "{'a—': 1.5}",
+    "rust_error_contains": "invalid float scalar"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\ndeep:\n  inner: &a {=: 1}\nb: {<<: *a}\n",
+    "kind": "known_divergence",
+    "python_repr": "{'deep': {'inner': {'=': 1}}, 'b': {'=': 1}}",
+    "rust_error_tag": "tag:yaml.org,2002:value"
+  },
+  {
+    "yaml": "# non-ascii marker é\n# x  \nx: 1\nx: 2\n",
+    "kind": "known_divergence",
+    "python_repr": "<DuplicateKeyError: duplicate key 'x' at line 5, column 1 (first defined at line 4, column 1); YAML would silently keep only the last one>",
+    "rust_error_contains": "duplicate key"
+  },
+  {
+    "yaml": "# non-ascii marker —\n# x  \nx: 1\nx: 2\n",
+    "kind": "known_divergence",
+    "python_repr": "<DuplicateKeyError: duplicate key 'x' at line 5, column 1 (first defined at line 4, column 1); YAML would silently keep only the last one>",
+    "rust_error_contains": "duplicate key"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\n# x \nx: 1\nx: 2\n",
+    "kind": "known_divergence",
+    "python_repr": "<DuplicateKeyError: duplicate key 'x' at line 5, column 1 (first defined at line 4, column 1); YAML would silently keep only the last one>",
+    "rust_error_contains": "duplicate key"
+  },
+  {
+    "yaml": "# non-ascii marker é\nbase: &base\n  retries: 1\n  timeout: 5\ntemplates:\n  defaults: &defaults\n    <<: *base\n    retries: 2\neffect:\n  <<: *defaults\n",
+    "kind": "value",
+    "repr": "{'base': {'retries': 1, 'timeout': 5}, 'templates': {'defaults': {'retries': 2, 'timeout': 5}}, 'effect': {'retries': 2, 'timeout': 5}}",
+    "note": "circuitry#390: Circuitry's own load_yaml raises a false DuplicateKeyError on this document; electricity-yaml matches yaml.safe_load instead -- a deliberate, documented divergence from Circuitry's own loader, not from this crate's ground truth in general."
+  },
+  {
+    "yaml": "# non-ascii marker —\na: =\n",
+    "kind": "error",
+    "line": 1,
+    "column": 3
+  },
+  {
+    "yaml": "a—: =\n",
+    "kind": "error",
+    "line": 0,
+    "column": 4
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: <<\n",
+    "kind": "error",
+    "line": 1,
+    "column": 3
+  },
+  {
+    "yaml": "a🙂: <<\n",
+    "kind": "error",
+    "line": 0,
+    "column": 4
+  },
+  {
+    "yaml": "# non-ascii marker é\na: !!value foo\n",
+    "kind": "error",
+    "line": 1,
+    "column": 3
+  },
+  {
+    "yaml": "aé: !!value foo\n",
+    "kind": "error",
+    "line": 0,
+    "column": 4
+  },
+  {
+    "yaml": "# non-ascii marker —\na: !!merge foo\n",
+    "kind": "error",
+    "line": 1,
+    "column": 3
+  },
+  {
+    "yaml": "a—: !!merge foo\n",
+    "kind": "error",
+    "line": 0,
+    "column": 4
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\n{=: 5}\n",
+    "kind": "error",
+    "line": 1,
+    "column": 1
+  },
+  {
+    "yaml": "# non-ascii marker é\na: &x hello\nb: *x\n",
+    "kind": "value",
+    "repr": "{'a': 'hello', 'b': 'hello'}"
+  },
+  {
+    "yaml": "aé: &x hello\nb: *x\n",
+    "kind": "value",
+    "repr": "{'aé': 'hello', 'b': 'hello'}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: &x [1, 2, 3]\nb: *x\nc: *x\n",
+    "kind": "value",
+    "repr": "{'a': [1, 2, 3], 'b': [1, 2, 3], 'c': [1, 2, 3]}"
+  },
+  {
+    "yaml": "a—: &x [1, 2, 3]\nb: *x\nc: *x\n",
+    "kind": "value",
+    "repr": "{'a—': [1, 2, 3], 'b': [1, 2, 3], 'c': [1, 2, 3]}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: &x {p: 1, q: 2}\nb: *x\n",
+    "kind": "value",
+    "repr": "{'a': {'p': 1, 'q': 2}, 'b': {'p': 1, 'q': 2}}"
+  },
+  {
+    "yaml": "a🙂: &x {p: 1, q: 2}\nb: *x\n",
+    "kind": "value",
+    "repr": "{'a🙂': {'p': 1, 'q': 2}, 'b': {'p': 1, 'q': 2}}"
+  },
+  {
+    "yaml": "# non-ascii marker é\nitems:\n  - &x {n: 1}\n  - *x\n  - *x\n",
+    "kind": "value",
+    "repr": "{'items': [{'n': 1}, {'n': 1}, {'n': 1}]}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: *undefined\n",
+    "kind": "error",
+    "line": 1,
+    "column": 3
+  },
+  {
+    "yaml": "a—: *undefined\n",
+    "kind": "error",
+    "line": 0,
+    "column": 4
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: &x 1\nb: &x 2\n",
+    "kind": "error",
+    "line": 2,
+    "column": 3
+  },
+  {
+    "yaml": "a🙂: &x 1\nb: &x 2\n",
+    "kind": "error",
+    "line": 1,
+    "column": 3
+  },
+  {
+    "yaml": "# non-ascii marker é\nx: &k a\nm:\n  *k : 1\n  *k : 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'a' at line 2, column 4 (first defined at line 2, column 4); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: &x\n  - &x 1\n",
+    "kind": "error",
+    "line": 2,
+    "column": 4
+  },
+  {
+    "yaml": "a—: &x\n  - &x 1\n",
+    "kind": "error",
+    "line": 1,
+    "column": 4
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: &x\n  b: &x 1\n  c: [\n",
+    "kind": "error",
+    "line": 2,
+    "column": 5
+  },
+  {
+    "yaml": "a🙂: &x\n  b: &x 1\n  c: [\n",
+    "kind": "error",
+    "line": 1,
+    "column": 5
+  },
+  {
+    "yaml": "# non-ascii marker é\n&m\na: &m 1\n",
+    "kind": "error",
+    "line": 2,
+    "column": 3
+  },
+  {
+    "yaml": "&m\naé: &m 1\n",
+    "kind": "error",
+    "line": 1,
+    "column": 4
+  },
+  {
+    "yaml": "# non-ascii marker —\nbase: &base\n  x: 1\n  y: 2\nderived:\n  <<: *base\n  y: 3\n",
+    "kind": "value",
+    "repr": "{'base': {'x': 1, 'y': 2}, 'derived': {'x': 1, 'y': 3}}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\nbase: &base\n  x: 1\n  y: 2\nderived:\n  z: 9\n  <<: *base\n  y: 3\n",
+    "kind": "value",
+    "repr": "{'base': {'x': 1, 'y': 2}, 'derived': {'x': 1, 'y': 3, 'z': 9}}"
+  },
+  {
+    "yaml": "# non-ascii marker é\nb1: &b1\n  x: 1\nb2: &b2\n  x: 2\nmerged:\n  <<: [*b1, *b2]\n",
+    "kind": "value",
+    "repr": "{'b1': {'x': 1}, 'b2': {'x': 2}, 'merged': {'x': 1}}"
+  },
+  {
+    "yaml": "# non-ascii marker —\nb1: &b1\n  x: 1\nb2: &b2\n  y: 2\nmerged:\n  <<: [*b1, *b2]\n  x: 99\n",
+    "kind": "value",
+    "repr": "{'b1': {'x': 1}, 'b2': {'y': 2}, 'merged': {'y': 2, 'x': 99}}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: &a\n  x: 1\nb: &b\n  x: 2\nc:\n  <<: *a\n  <<: *b\n",
+    "kind": "value",
+    "repr": "{'a': {'x': 1}, 'b': {'x': 2}, 'c': {'x': 2}}"
+  },
+  {
+    "yaml": "a🙂: &a\n  x: 1\nb: &b\n  x: 2\nc:\n  <<: *a\n  <<: *b\n",
+    "kind": "value",
+    "repr": "{'a🙂': {'x': 1}, 'b': {'x': 2}, 'c': {'x': 2}}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: &a\n  x: 1\nb:\n  <<: *a\n  <<: *a\n",
+    "kind": "value",
+    "repr": "{'a': {'x': 1}, 'b': {'x': 1}}"
+  },
+  {
+    "yaml": "aé: &a\n  x: 1\nb:\n  <<: *a\n  <<: *a\n",
+    "kind": "value",
+    "repr": "{'aé': {'x': 1}, 'b': {'x': 1}}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: &a\n  x: 1\nb:\n  <<: *a\n",
+    "kind": "value",
+    "repr": "{'a': {'x': 1}, 'b': {'x': 1}}"
+  },
+  {
+    "yaml": "a—: &a\n  x: 1\nb:\n  <<: *a\n",
+    "kind": "value",
+    "repr": "{'a—': {'x': 1}, 'b': {'x': 1}}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: &a\n  x: 1\nb:\n  <<: {p: 9}\n",
+    "kind": "value",
+    "repr": "{'a': {'x': 1}, 'b': {'p': 9}}"
+  },
+  {
+    "yaml": "a🙂: &a\n  x: 1\nb:\n  <<: {p: 9}\n",
+    "kind": "value",
+    "repr": "{'a🙂': {'x': 1}, 'b': {'p': 9}}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na:\n  <<: [1, 2]\n",
+    "kind": "error",
+    "line": 2,
+    "column": 7
+  },
+  {
+    "yaml": "aé:\n  <<: [1, 2]\n",
+    "kind": "error",
+    "line": 1,
+    "column": 7
+  },
+  {
+    "yaml": "# non-ascii marker —\na:\n  <<: 5\n",
+    "kind": "error",
+    "line": 2,
+    "column": 6
+  },
+  {
+    "yaml": "a—:\n  <<: 5\n",
+    "kind": "error",
+    "line": 1,
+    "column": 6
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\n<<: {=: 1}\n",
+    "kind": "value",
+    "repr": "{'=': 1}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: 1\na: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'a' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "aé: 1\naé: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'aé' at line 2, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "# non-ascii marker —\n1: a\n1: b\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 1 at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\ntrue: a\nyes: b\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key True at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "# non-ascii marker é\nnull: a\n~: b\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key None at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "# non-ascii marker —\n1.0: a\n1: b\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 1 at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\n'1': a\n1: b\n",
+    "kind": "value",
+    "repr": "{'1': 'a', 1: 'b'}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na:\n  b: 1\n  b: 2\nc: 3\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 4, column 3 (first defined at line 3, column 3); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "aé:\n  b: 1\n  b: 2\nc: 3\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 3, column 3 (first defined at line 2, column 3); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "# non-ascii marker —\n!!str a: 1\n!!str a: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'a' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na:\n  .nan: 1\n  .nan: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key nan at line 4, column 3 (first defined at line 3, column 3); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "a🙂:\n  .nan: 1\n  .nan: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key nan at line 3, column 3 (first defined at line 2, column 3); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "# non-ascii marker é\na:\n  b: 1\n  b: 2\na: 3\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'a' at line 5, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "aé:\n  b: 1\n  b: 2\naé: 3\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'aé' at line 4, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: !!int x\na: 1\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'a' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "a—: !!int x\na—: 1\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'a—' at line 2, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\n? [1, 2]\n: v\na: 1\na: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'a' at line 5, column 1 (first defined at line 4, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "? [1, 2]\n: v\na🙂: 1\na🙂: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'a🙂' at line 4, column 1 (first defined at line 3, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: 1\na: 2\n---\nb: 1\n",
+    "kind": "error",
+    "line": 3,
+    "column": 0
+  },
+  {
+    "yaml": "aé: 1\naé: 2\n---\nb: 1\n",
+    "kind": "error",
+    "line": 2,
+    "column": 0
+  },
+  {
+    "yaml": "# non-ascii marker —\na:\n  b: 1\n  b: 2\nc: [\n",
+    "kind": "error",
+    "line": 5,
+    "column": 0
+  },
+  {
+    "yaml": "a—:\n  b: 1\n  b: 2\nc: [\n",
+    "kind": "error",
+    "line": 4,
+    "column": 0
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\n",
+    "kind": "value",
+    "repr": "None"
+  },
+  {
+    "yaml": "# non-ascii marker é\n   \n\n",
+    "kind": "value",
+    "repr": "None"
+  },
+  {
+    "yaml": "# non-ascii marker —\n# just a comment\n",
+    "kind": "value",
+    "repr": "None"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 1\n---\nb: 2\n",
+    "kind": "error",
+    "line": 2,
+    "column": 0
+  },
+  {
+    "yaml": "a🙂: 1\n---\nb: 2\n",
+    "kind": "error",
+    "line": 1,
+    "column": 0
+  },
+  {
+    "yaml": "# non-ascii marker é\n? [1, 2]\n: v\n",
+    "kind": "error",
+    "line": 1,
+    "column": 2
+  },
+  {
+    "yaml": "# non-ascii marker —\na: [1, [2, 3], {b: 4}]\n",
+    "kind": "value",
+    "repr": "{'a': [1, [2, 3], {'b': 4}]}"
+  },
+  {
+    "yaml": "a—: [1, [2, 3], {b: 4}]\n",
+    "kind": "value",
+    "repr": "{'a—': [1, [2, 3], {'b': 4}]}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na:\n  - 1\n  - 2\n  -\n    x: 1\n",
+    "kind": "value",
+    "repr": "{'a': [1, 2, {'x': 1}]}"
+  },
+  {
+    "yaml": "a🙂:\n  - 1\n  - 2\n  -\n    x: 1\n",
+    "kind": "value",
+    "repr": "{'a🙂': [1, 2, {'x': 1}]}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: [1, 2\n",
+    "kind": "error",
+    "line": 2,
+    "column": 0
+  },
+  {
+    "yaml": "aé: [1, 2\n",
+    "kind": "error",
+    "line": 1,
+    "column": 0
+  },
+  {
+    "yaml": "# non-ascii marker —\na: b: c\n",
+    "kind": "error",
+    "line": 1,
+    "column": 4
+  },
+  {
+    "yaml": "a—: b: c\n",
+    "kind": "error",
+    "line": 0,
+    "column": 5
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na:\n  b: 1\n c: 2\n",
+    "kind": "error",
+    "line": 3,
+    "column": 1
+  },
+  {
+    "yaml": "a🙂:\n  b: 1\n c: 2\n",
+    "kind": "error",
+    "line": 2,
+    "column": 1
+  },
+  {
+    "yaml": "# non-ascii marker é\na:\n\tb: 1\n",
+    "kind": "error",
+    "line": 2,
+    "column": 0
+  },
+  {
+    "yaml": "aé:\n\tb: 1\n",
+    "kind": "error",
+    "line": 1,
+    "column": 0
+  },
+  {
+    "yaml": "# non-ascii marker —\na: é\nb: 1\n",
+    "kind": "value",
+    "repr": "{'a': 'é', 'b': 1}"
+  },
+  {
+    "yaml": "a—: é\nb: 1\n",
+    "kind": "value",
+    "repr": "{'a—': 'é', 'b': 1}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\né: 1\n",
+    "kind": "value",
+    "repr": "{'é': 1}"
+  },
+  {
+    "yaml": "# non-ascii marker é\na: — em dash\n",
+    "kind": "value",
+    "repr": "{'a': '— em dash'}"
+  },
+  {
+    "yaml": "aé: — em dash\n",
+    "kind": "value",
+    "repr": "{'aé': '— em dash'}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 🙂\n",
+    "kind": "value",
+    "repr": "{'a': '🙂'}"
+  },
+  {
+    "yaml": "a—: 🙂\n",
+    "kind": "value",
+    "repr": "{'a—': '🙂'}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: 中文\n",
+    "kind": "value",
+    "repr": "{'a': '中文'}"
+  },
+  {
+    "yaml": "a🙂: 中文\n",
+    "kind": "value",
+    "repr": "{'a🙂': '中文'}"
+  },
+  {
+    "yaml": "# non-ascii marker é\n# café — 🙂\na: 1\n",
+    "kind": "value",
+    "repr": "{'a': 1}"
+  },
+  {
+    "yaml": "# café — 🙂\naé: 1\n",
+    "kind": "value",
+    "repr": "{'aé': 1}"
+  },
+  {
+    "yaml": "# non-ascii marker —\na: &x é\nb: *x\n",
+    "kind": "value",
+    "repr": "{'a': 'é', 'b': 'é'}"
+  },
+  {
+    "yaml": "a—: &x é\nb: *x\n",
+    "kind": "value",
+    "repr": "{'a—': 'é', 'b': 'é'}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: &x 1\nb: *x  # café 🙂\n",
+    "kind": "value",
+    "repr": "{'a': 1, 'b': 1}"
+  },
+  {
+    "yaml": "a🙂: &x 1\nb: *x  # café 🙂\n",
+    "kind": "value",
+    "repr": "{'a🙂': 1, 'b': 1}"
+  },
+  {
+    "yaml": "# non-ascii marker é\n# café\n!!str a: 1\n!!str a: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'a' at line 4, column 1 (first defined at line 3, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "# non-ascii marker —\né: 1\né: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'é' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: é\nb: &x 1\nc: &x 2\n",
+    "kind": "error",
+    "line": 3,
+    "column": 3
+  },
+  {
+    "yaml": "a🙂: é\nb: &x 1\nc: &x 2\n",
+    "kind": "error",
+    "line": 2,
+    "column": 3
+  },
+  {
+    "yaml": "# non-ascii marker é\n﻿a: 1\n",
+    "kind": "value",
+    "repr": "{'\\ufeffa': 1}"
+  },
+  {
+    "yaml": "# non-ascii marker —\n﻿a: 1\na: 2\n",
+    "kind": "value",
+    "repr": "{'\\ufeffa': 1, 'a': 2}"
+  },
+  {
+    "yaml": "﻿a: 1\na—: 2\n",
+    "kind": "value",
+    "repr": "{'a': 1, 'a—': 2}"
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: \"\u001b[0m\"\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "a🙂: \"\u001b[0m\"\n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "# non-ascii marker é\na: \n",
+    "kind": "error",
+    "line": null,
+    "column": null
+  },
+  {
+    "yaml": "aé: \n",
+    "kind": "error",
+    "line": null,
+    "column": null
   }
 ]

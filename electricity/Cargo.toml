@@ -11,8 +11,10 @@ publish = false
 
 # electricity-yaml's composer recurses once per nesting level (bounded by
 # its own MAX_DEPTH, never unbounded) and is exercised, deliberately, on a
-# 2 MiB thread stack -- the same size a `cof` subprocess gets. An
-# unoptimized (`opt-level = 0`) debug build's stack frames for that
+# 2 MiB thread stack -- a deliberately small, conservative size, not a
+# measured figure for any specific caller (`tests/nesting_limit.rs`'s own
+# module doc comment). An unoptimized (`opt-level = 0`) debug build's
+# stack frames for that
 # recursion are several times larger than an optimized build's (no dead
 # local elimination, no frame-slot reuse across statements), enough to
 # overflow a 2 MiB stack well under MAX_DEPTH even though the exact same

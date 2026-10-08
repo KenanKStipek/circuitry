@@ -53,6 +53,18 @@ jobs:
         working-directory: electricity
         run: cargo test --workspace
 
+      - name: cargo test --release -p electricity-yaml --test nesting_limit
+        working-directory: electricity
+        # The `[profile.dev.package.electricity-yaml]` opt-level override
+        # (`Cargo.toml`) exists so a *debug* build's larger stack frames
+        # still fit `MAX_DEPTH` on a 2 MiB thread; this release run is
+        # the other half of that claim -- that a release build holds
+        # the same limit on the same stack size *without* the override
+        # (which doesn't apply to `--release` at all), so the limit
+        # isn't quietly narrower for whichever profile a downstream
+        # caller actually ships.
+        run: cargo test --release -p electricity-yaml --test nesting_limit
+
   msrv:
     name: MSRV check
     runs-on: ubuntu-latest

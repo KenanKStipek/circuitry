@@ -60,6 +60,10 @@ pub enum YamlError {
     /// its own, distinct error (never a scanner/parser/composer one,
     /// and never a stack overflow): see `MAX_DEPTH`'s doc comment.
     NestingTooDeep { mark: Mark },
+    /// Expanding an alias (`*x`) would clone more nodes, in total, than
+    /// `crate::MAX_NODES` allows -- checked, and the clone refused,
+    /// *before* it happens: see `MAX_NODES`'s doc comment.
+    AliasExpansionTooLarge { mark: Mark },
 }
 
 impl YamlError {
@@ -74,7 +78,8 @@ impl YamlError {
             | YamlError::InvalidScalar { mark, .. }
             | YamlError::UnhashableKey { mark }
             | YamlError::InvalidMerge { mark }
-            | YamlError::NestingTooDeep { mark } => Some(*mark),
+            | YamlError::NestingTooDeep { mark }
+            | YamlError::AliasExpansionTooLarge { mark } => Some(*mark),
             YamlError::DuplicateKey { .. } => None,
         }
     }
@@ -129,6 +134,13 @@ impl fmt::Display for YamlError {
                 f,
                 "document nesting exceeds the maximum depth ({}) at line {}, column {}",
                 crate::MAX_DEPTH,
+                mark.line + 1,
+                mark.column + 1
+            ),
+            YamlError::AliasExpansionTooLarge { mark } => write!(
+                f,
+                "alias expansion exceeds the maximum number of constructed nodes ({}) at line {}, column {}",
+                crate::MAX_NODES,
                 mark.line + 1,
                 mark.column + 1
             ),
