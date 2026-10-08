@@ -672,6 +672,27 @@ def structural_cases() -> list[dict]:
 
 
 # ---------------------------------------------------------------------
+# An unknown escape character (or, more generally, any other error
+# PyYAML's own scanner marks at a character *inside* a double-quoted
+# scalar) inside a double-quoted scalar: `saphyr-parser` 0.1.0 always
+# marks these at the scalar's own opening quote instead
+# (`resolve_flow_scalar_escape_sequence` in its scanner, which never
+# advances past the `start_mark` it's given), so the composer recomputes
+# the real position by replaying PyYAML's own escape-scanning rules from
+# the scalar's start. The ASCII and non-ASCII forms pin the same fix in
+# both column-counting regimes (characters, never bytes).
+# ---------------------------------------------------------------------
+
+
+def escape_position_cases() -> list[dict]:
+    yaml_texts = [
+        'a: "é\\q"\n',
+        'a: "x\\q"\n',
+    ]
+    return [case(y) for y in yaml_texts]
+
+
+# ---------------------------------------------------------------------
 # Non-ASCII text: `node_prefix`'s gap-scanning converts a `saphyr_parser
 # ::Marker`'s position into a byte offset via its line and column
 # (never its `index()`, which counts *characters*, not bytes, despite
@@ -832,6 +853,43 @@ def reader_edge_cases() -> list[dict]:
     return [case(y) for y in yaml_texts]
 
 
+# ---------------------------------------------------------------------
+# The orchestrator's own verification probes for PR #388's escape-
+# position fix: non-ASCII text inside a scalar, ahead of a reported
+# position (a duplicate key, a scanner/parser error), rather than in a
+# leading comment or a key's own name the way `non_ascii_cases()`'s and
+# `non_ascii_variants()`'s mechanical derivation already cover. All
+# already pass -- pinned here as permanent corpus cases rather than left
+# as throwaway probes.
+# ---------------------------------------------------------------------
+
+
+def scalar_non_ascii_cases() -> list[dict]:
+    yaml_texts = [
+        "a: caf\u00e9\nb: 1\nb: 2\n",
+        'a: "na\u00efve \u2014 r\u00e9sum\u00e9"\nb: 1\nb: 2\n',
+        "a: |\n  h\u00e9llo\n  w\u00f6rld\nb: 1\nb: 2\n",
+        "a: 'x \U0001f642 y'\nk: 1\nk: 2\n",
+        "a: [\u00e9, \u00fc, \U0001f642]\nb: {x: \u00e9, x: 1}\n",
+        "key: value with \u00fcn\u00efc\u00f6d\u00e9\n  bad indent: 1\n",
+        (
+            "effects: [{type: prompt, name: x, template: 'Hi \U0001f642'}, "
+            "{type: tool, name: y, provider: shell, params: {cmd: echo \u00e9}}]\n"
+        ),
+        "a: \u00e9\r\nb: 1\r\nb: 2\r\n",
+        "a: \u00e9\rb: 1\rb: 2\r",
+        "{\u00e9: 1, \u00e9: 2}\n",
+        "msg: >\n  \u00fcn\n  zwei\nmsg: 2\n",
+        'a: "\u4e2d\u6587" \nb: [1, 2\n',
+        (
+            "defaults: &d\n  retries: {max_attempts: 2, backoff_ms: 100}\n  on_error: continue\n"
+            "effects:\n  - <<: *d\n    type: prompt\n    name: a\n    template: |\n"
+            "      R\u00e9sum\u00e9 the text: {{{input.text}}}\n  - <<: *d\n    type: tool\n    name: b\n"
+        ),
+    ]
+    return [case(y) for y in yaml_texts]
+
+
 def build_corpus() -> list[dict]:
     base = (
         table_cases()
@@ -849,8 +907,10 @@ def build_corpus() -> list[dict]:
         + merge_cases()
         + duplicate_key_cases()
         + structural_cases()
+        + escape_position_cases()
         + non_ascii_cases()
         + reader_edge_cases()
+        + scalar_non_ascii_cases()
     )
     return base + non_ascii_variants(base)
 

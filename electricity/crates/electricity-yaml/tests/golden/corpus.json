@@ -1004,6 +1004,18 @@
     "column": 0
   },
   {
+    "yaml": "a: \"é\\q\"\n",
+    "kind": "error",
+    "line": 0,
+    "column": 6
+  },
+  {
+    "yaml": "a: \"x\\q\"\n",
+    "kind": "error",
+    "line": 0,
+    "column": 6
+  },
+  {
     "yaml": "a: é\nb: 1\n",
     "kind": "value",
     "repr": "{'a': 'é', 'b': 1}"
@@ -1080,6 +1092,73 @@
     "kind": "error",
     "line": null,
     "column": null
+  },
+  {
+    "yaml": "a: café\nb: 1\nb: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "a: \"naïve — résumé\"\nb: 1\nb: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "a: |\n  héllo\n  wörld\nb: 1\nb: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 5, column 1 (first defined at line 4, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "a: 'x 🙂 y'\nk: 1\nk: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'k' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "a: [é, ü, 🙂]\nb: {x: é, x: 1}\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'x' at line 2, column 11 (first defined at line 2, column 5); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "key: value with ünïcödé\n  bad indent: 1\n",
+    "kind": "error",
+    "line": 1,
+    "column": 12
+  },
+  {
+    "yaml": "effects: [{type: prompt, name: x, template: 'Hi 🙂'}, {type: tool, name: y, provider: shell, params: {cmd: echo é}}]\n",
+    "kind": "value",
+    "repr": "{'effects': [{'type': 'prompt', 'name': 'x', 'template': 'Hi 🙂'}, {'type': 'tool', 'name': 'y', 'provider': 'shell', 'params': {'cmd': 'echo é'}}]}"
+  },
+  {
+    "yaml": "a: é\r\nb: 1\r\nb: 2\r\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "a: é\rb: 1\rb: 2\r",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "{é: 1, é: 2}\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'é' at line 1, column 8 (first defined at line 1, column 2); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "msg: >\n  ün\n  zwei\nmsg: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'msg' at line 4, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one"
+  },
+  {
+    "yaml": "a: \"中文\" \nb: [1, 2\n",
+    "kind": "error",
+    "line": 2,
+    "column": 0
+  },
+  {
+    "yaml": "defaults: &d\n  retries: {max_attempts: 2, backoff_ms: 100}\n  on_error: continue\neffects:\n  - <<: *d\n    type: prompt\n    name: a\n    template: |\n      Résumé the text: {{{input.text}}}\n  - <<: *d\n    type: tool\n    name: b\n",
+    "kind": "value",
+    "repr": "{'defaults': {'retries': {'max_attempts': 2, 'backoff_ms': 100}, 'on_error': 'continue'}, 'effects': [{'retries': {'max_attempts': 2, 'backoff_ms': 100}, 'on_error': 'continue', 'type': 'prompt', 'name': 'a', 'template': 'Résumé the text: {{{input.text}}}\\n'}, {'retries': {'max_attempts': 2, 'backoff_ms': 100}, 'on_error': 'continue', 'type': 'tool', 'name': 'b'}]}"
   },
   {
     "yaml": "# non-ascii marker é\na: on\n",
@@ -3299,165 +3378,322 @@
     "original_index": 190
   },
   {
-    "yaml": "# non-ascii marker 🙂\na: é\nb: 1\n",
-    "kind": "value",
-    "repr": "{'a': 'é', 'b': 1}",
+    "yaml": "# non-ascii marker 🙂\na: \"é\\q\"\n",
+    "kind": "error",
+    "line": 1,
+    "column": 6,
     "original_index": 191
   },
   {
-    "yaml": "a🙂: é\nb: 1\n",
-    "kind": "value",
-    "repr": "{'a🙂': 'é', 'b': 1}",
+    "yaml": "a🙂: \"é\\q\"\n",
+    "kind": "error",
+    "line": 0,
+    "column": 7,
     "original_index": 191
   },
   {
-    "yaml": "# non-ascii marker é\né: 1\n",
-    "kind": "value",
-    "repr": "{'é': 1}",
+    "yaml": "# non-ascii marker é\na: \"x\\q\"\n",
+    "kind": "error",
+    "line": 1,
+    "column": 6,
     "original_index": 192
   },
   {
-    "yaml": "# non-ascii marker —\na: — em dash\n",
+    "yaml": "aé: \"x\\q\"\n",
+    "kind": "error",
+    "line": 0,
+    "column": 7,
+    "original_index": 192
+  },
+  {
+    "yaml": "# non-ascii marker —\na: é\nb: 1\n",
+    "kind": "value",
+    "repr": "{'a': 'é', 'b': 1}",
+    "original_index": 193
+  },
+  {
+    "yaml": "a—: é\nb: 1\n",
+    "kind": "value",
+    "repr": "{'a—': 'é', 'b': 1}",
+    "original_index": 193
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\né: 1\n",
+    "kind": "value",
+    "repr": "{'é': 1}",
+    "original_index": 194
+  },
+  {
+    "yaml": "# non-ascii marker é\na: — em dash\n",
     "kind": "value",
     "repr": "{'a': '— em dash'}",
-    "original_index": 193
+    "original_index": 195
   },
   {
-    "yaml": "a—: — em dash\n",
+    "yaml": "aé: — em dash\n",
     "kind": "value",
-    "repr": "{'a—': '— em dash'}",
-    "original_index": 193
+    "repr": "{'aé': '— em dash'}",
+    "original_index": 195
   },
   {
-    "yaml": "# non-ascii marker 🙂\na: 🙂\n",
+    "yaml": "# non-ascii marker —\na: 🙂\n",
     "kind": "value",
     "repr": "{'a': '🙂'}",
-    "original_index": 194
+    "original_index": 196
   },
   {
-    "yaml": "a🙂: 🙂\n",
+    "yaml": "a—: 🙂\n",
     "kind": "value",
-    "repr": "{'a🙂': '🙂'}",
-    "original_index": 194
+    "repr": "{'a—': '🙂'}",
+    "original_index": 196
   },
   {
-    "yaml": "# non-ascii marker é\na: 中文\n",
+    "yaml": "# non-ascii marker 🙂\na: 中文\n",
     "kind": "value",
     "repr": "{'a': '中文'}",
-    "original_index": 195
+    "original_index": 197
   },
   {
-    "yaml": "aé: 中文\n",
+    "yaml": "a🙂: 中文\n",
     "kind": "value",
-    "repr": "{'aé': '中文'}",
-    "original_index": 195
+    "repr": "{'a🙂': '中文'}",
+    "original_index": 197
   },
   {
-    "yaml": "# non-ascii marker —\n# café — 🙂\na: 1\n",
+    "yaml": "# non-ascii marker é\n# café — 🙂\na: 1\n",
     "kind": "value",
     "repr": "{'a': 1}",
-    "original_index": 196
+    "original_index": 198
   },
   {
-    "yaml": "# café — 🙂\na—: 1\n",
+    "yaml": "# café — 🙂\naé: 1\n",
     "kind": "value",
-    "repr": "{'a—': 1}",
-    "original_index": 196
+    "repr": "{'aé': 1}",
+    "original_index": 198
   },
   {
-    "yaml": "# non-ascii marker 🙂\na: &x é\nb: *x\n",
+    "yaml": "# non-ascii marker —\na: &x é\nb: *x\n",
     "kind": "value",
     "repr": "{'a': 'é', 'b': 'é'}",
-    "original_index": 197
-  },
-  {
-    "yaml": "a🙂: &x é\nb: *x\n",
-    "kind": "value",
-    "repr": "{'a🙂': 'é', 'b': 'é'}",
-    "original_index": 197
-  },
-  {
-    "yaml": "# non-ascii marker é\na: &x 1\nb: *x  # café 🙂\n",
-    "kind": "value",
-    "repr": "{'a': 1, 'b': 1}",
-    "original_index": 198
-  },
-  {
-    "yaml": "aé: &x 1\nb: *x  # café 🙂\n",
-    "kind": "value",
-    "repr": "{'aé': 1, 'b': 1}",
-    "original_index": 198
-  },
-  {
-    "yaml": "# non-ascii marker —\n# café\n!!str a: 1\n!!str a: 2\n",
-    "kind": "duplicate_key_error",
-    "message": "duplicate key 'a' at line 4, column 1 (first defined at line 3, column 1); YAML would silently keep only the last one",
     "original_index": 199
   },
   {
-    "yaml": "# non-ascii marker 🙂\né: 1\né: 2\n",
-    "kind": "duplicate_key_error",
-    "message": "duplicate key 'é' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one",
+    "yaml": "a—: &x é\nb: *x\n",
+    "kind": "value",
+    "repr": "{'a—': 'é', 'b': 'é'}",
+    "original_index": 199
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: &x 1\nb: *x  # café 🙂\n",
+    "kind": "value",
+    "repr": "{'a': 1, 'b': 1}",
     "original_index": 200
   },
   {
-    "yaml": "# non-ascii marker é\na: é\nb: &x 1\nc: &x 2\n",
-    "kind": "error",
-    "line": 3,
-    "column": 3,
-    "original_index": 201
-  },
-  {
-    "yaml": "aé: é\nb: &x 1\nc: &x 2\n",
-    "kind": "error",
-    "line": 2,
-    "column": 3,
-    "original_index": 201
-  },
-  {
-    "yaml": "# non-ascii marker —\n﻿a: 1\n",
+    "yaml": "a🙂: &x 1\nb: *x  # café 🙂\n",
     "kind": "value",
-    "repr": "{'\\ufeffa': 1}",
+    "repr": "{'a🙂': 1, 'b': 1}",
+    "original_index": 200
+  },
+  {
+    "yaml": "# non-ascii marker é\n# café\n!!str a: 1\n!!str a: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'a' at line 4, column 1 (first defined at line 3, column 1); YAML would silently keep only the last one",
+    "original_index": 201
+  },
+  {
+    "yaml": "# non-ascii marker —\né: 1\né: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'é' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one",
     "original_index": 202
   },
   {
-    "yaml": "# non-ascii marker 🙂\n﻿a: 1\na: 2\n",
+    "yaml": "# non-ascii marker 🙂\na: é\nb: &x 1\nc: &x 2\n",
+    "kind": "error",
+    "line": 3,
+    "column": 3,
+    "original_index": 203
+  },
+  {
+    "yaml": "a🙂: é\nb: &x 1\nc: &x 2\n",
+    "kind": "error",
+    "line": 2,
+    "column": 3,
+    "original_index": 203
+  },
+  {
+    "yaml": "# non-ascii marker é\n﻿a: 1\n",
+    "kind": "value",
+    "repr": "{'\\ufeffa': 1}",
+    "original_index": 204
+  },
+  {
+    "yaml": "# non-ascii marker —\n﻿a: 1\na: 2\n",
     "kind": "value",
     "repr": "{'\\ufeffa': 1, 'a': 2}",
-    "original_index": 203
+    "original_index": 205
   },
   {
-    "yaml": "﻿a: 1\na🙂: 2\n",
+    "yaml": "﻿a: 1\na—: 2\n",
     "kind": "value",
-    "repr": "{'a': 1, 'a🙂': 2}",
-    "original_index": 203
-  },
-  {
-    "yaml": "# non-ascii marker é\na: \"\u001b[0m\"\n",
-    "kind": "error",
-    "line": null,
-    "column": null,
-    "original_index": 204
-  },
-  {
-    "yaml": "aé: \"\u001b[0m\"\n",
-    "kind": "error",
-    "line": null,
-    "column": null,
-    "original_index": 204
-  },
-  {
-    "yaml": "# non-ascii marker —\na: \n",
-    "kind": "error",
-    "line": null,
-    "column": null,
+    "repr": "{'a': 1, 'a—': 2}",
     "original_index": 205
   },
   {
-    "yaml": "a—: \n",
+    "yaml": "# non-ascii marker 🙂\na: \"\u001b[0m\"\n",
     "kind": "error",
     "line": null,
     "column": null,
-    "original_index": 205
+    "original_index": 206
+  },
+  {
+    "yaml": "a🙂: \"\u001b[0m\"\n",
+    "kind": "error",
+    "line": null,
+    "column": null,
+    "original_index": 206
+  },
+  {
+    "yaml": "# non-ascii marker é\na: \n",
+    "kind": "error",
+    "line": null,
+    "column": null,
+    "original_index": 207
+  },
+  {
+    "yaml": "aé: \n",
+    "kind": "error",
+    "line": null,
+    "column": null,
+    "original_index": 207
+  },
+  {
+    "yaml": "# non-ascii marker —\na: café\nb: 1\nb: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 4, column 1 (first defined at line 3, column 1); YAML would silently keep only the last one",
+    "original_index": 208
+  },
+  {
+    "yaml": "a—: café\nb: 1\nb: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one",
+    "original_index": 208
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: \"naïve — résumé\"\nb: 1\nb: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 4, column 1 (first defined at line 3, column 1); YAML would silently keep only the last one",
+    "original_index": 209
+  },
+  {
+    "yaml": "a🙂: \"naïve — résumé\"\nb: 1\nb: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one",
+    "original_index": 209
+  },
+  {
+    "yaml": "# non-ascii marker é\na: |\n  héllo\n  wörld\nb: 1\nb: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 6, column 1 (first defined at line 5, column 1); YAML would silently keep only the last one",
+    "original_index": 210
+  },
+  {
+    "yaml": "aé: |\n  héllo\n  wörld\nb: 1\nb: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 5, column 1 (first defined at line 4, column 1); YAML would silently keep only the last one",
+    "original_index": 210
+  },
+  {
+    "yaml": "# non-ascii marker —\na: 'x 🙂 y'\nk: 1\nk: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'k' at line 4, column 1 (first defined at line 3, column 1); YAML would silently keep only the last one",
+    "original_index": 211
+  },
+  {
+    "yaml": "a—: 'x 🙂 y'\nk: 1\nk: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'k' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one",
+    "original_index": 211
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: [é, ü, 🙂]\nb: {x: é, x: 1}\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'x' at line 3, column 11 (first defined at line 3, column 5); YAML would silently keep only the last one",
+    "original_index": 212
+  },
+  {
+    "yaml": "a🙂: [é, ü, 🙂]\nb: {x: é, x: 1}\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'x' at line 2, column 11 (first defined at line 2, column 5); YAML would silently keep only the last one",
+    "original_index": 212
+  },
+  {
+    "yaml": "# non-ascii marker é\nkey: value with ünïcödé\n  bad indent: 1\n",
+    "kind": "error",
+    "line": 2,
+    "column": 12,
+    "original_index": 213
+  },
+  {
+    "yaml": "# non-ascii marker —\neffects: [{type: prompt, name: x, template: 'Hi 🙂'}, {type: tool, name: y, provider: shell, params: {cmd: echo é}}]\n",
+    "kind": "value",
+    "repr": "{'effects': [{'type': 'prompt', 'name': 'x', 'template': 'Hi 🙂'}, {'type': 'tool', 'name': 'y', 'provider': 'shell', 'params': {'cmd': 'echo é'}}]}",
+    "original_index": 214
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\na: é\r\nb: 1\r\nb: 2\r\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 4, column 1 (first defined at line 3, column 1); YAML would silently keep only the last one",
+    "original_index": 215
+  },
+  {
+    "yaml": "a🙂: é\r\nb: 1\r\nb: 2\r\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one",
+    "original_index": 215
+  },
+  {
+    "yaml": "# non-ascii marker é\na: é\rb: 1\rb: 2\r",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 4, column 1 (first defined at line 3, column 1); YAML would silently keep only the last one",
+    "original_index": 216
+  },
+  {
+    "yaml": "aé: é\rb: 1\rb: 2\r",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'b' at line 3, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one",
+    "original_index": 216
+  },
+  {
+    "yaml": "# non-ascii marker —\n{é: 1, é: 2}\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'é' at line 2, column 8 (first defined at line 2, column 2); YAML would silently keep only the last one",
+    "original_index": 217
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\nmsg: >\n  ün\n  zwei\nmsg: 2\n",
+    "kind": "duplicate_key_error",
+    "message": "duplicate key 'msg' at line 5, column 1 (first defined at line 2, column 1); YAML would silently keep only the last one",
+    "original_index": 218
+  },
+  {
+    "yaml": "# non-ascii marker é\na: \"中文\" \nb: [1, 2\n",
+    "kind": "error",
+    "line": 3,
+    "column": 0,
+    "original_index": 219
+  },
+  {
+    "yaml": "aé: \"中文\" \nb: [1, 2\n",
+    "kind": "error",
+    "line": 2,
+    "column": 0,
+    "original_index": 219
+  },
+  {
+    "yaml": "# non-ascii marker —\ndefaults: &d\n  retries: {max_attempts: 2, backoff_ms: 100}\n  on_error: continue\neffects:\n  - <<: *d\n    type: prompt\n    name: a\n    template: |\n      Résumé the text: {{{input.text}}}\n  - <<: *d\n    type: tool\n    name: b\n",
+    "kind": "value",
+    "repr": "{'defaults': {'retries': {'max_attempts': 2, 'backoff_ms': 100}, 'on_error': 'continue'}, 'effects': [{'retries': {'max_attempts': 2, 'backoff_ms': 100}, 'on_error': 'continue', 'type': 'prompt', 'name': 'a', 'template': 'Résumé the text: {{{input.text}}}\\n'}, {'retries': {'max_attempts': 2, 'backoff_ms': 100}, 'on_error': 'continue', 'type': 'tool', 'name': 'b'}]}",
+    "original_index": 220
   }
 ]

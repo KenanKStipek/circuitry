@@ -520,6 +520,171 @@ impl<'t> Composer<'t> {
         byte
     }
 
+    /// A [`Mark`]'s byte offset into `text`, by the same line-start +
+    /// character-walk as [`Self::byte_offset`]'s fallback branch, but
+    /// taking a `Mark` (this crate's own, already-0-indexed type) and
+    /// not touching [`Self::offset_cursor`] -- used only on an error
+    /// path ([`Self::quoted_scalar_escape_mark`]), where the one-off
+    /// cost of a full walk from the line's start is irrelevant and
+    /// disturbing the cursor used by the hot, success-path conversions
+    /// elsewhere would be wrong regardless.
+    fn mark_byte_offset(&self, mark: Mark) -> usize {
+        let line_start = self
+            .line_starts
+            .get(mark.line)
+            .copied()
+            .unwrap_or(self.text.len());
+        self.text[line_start..]
+            .char_indices()
+            .nth(mark.column)
+            .map_or(self.text.len(), |(offset, _)| line_start + offset)
+    }
+
+    /// Recomputes the mark PyYAML's own scanner would report for one of
+    /// three double-quoted-scalar escape-scanning errors that
+    /// `saphyr-parser` 0.1.0 always marks at the scalar's own opening
+    /// quote (`scanner.rs`'s `resolve_flow_scalar_escape_sequence`,
+    /// whose three `Err` branches all pass through the `start_mark` the
+    /// scalar began at, never a position inside it) -- unlike PyYAML's
+    /// own `scan_flow_scalar_non_spaces`/the escape-handling branch of
+    /// it (`scanner.py`), which advances its own mark character by
+    /// character while scanning and reports the position actually
+    /// reached when the error is raised. Replays that same scan from
+    /// the opening quote, using PyYAML's own `ESCAPE_REPLACEMENTS`/
+    /// `ESCAPE_CODES` tables, far enough to reach the specific error
+    /// `message` names. `None` leaves the caller's original (saphyr)
+    /// mark untouched -- deliberately conservative: this only replays
+    /// plain non-escaped characters, an escaped literal quote, and
+    /// plain space/tab runs on the way to the offending escape, which
+    /// is all three corpus cases exercising this need; a line break
+    /// *inside* the scalar bails out rather than also replicating
+    /// PyYAML's own line-folding rules here. Columns are counted in
+    /// characters, never bytes, matching every other mark this crate
+    /// computes ([`Self::byte_offset`]'s doc comment).
+    fn quoted_scalar_escape_mark(&self, start: Mark, message: &str) -> Option<Mark> {
+        const UNKNOWN_ESCAPE: &str =
+            "while parsing a quoted scalar, found unknown escape character";
+        const BAD_HEX: &str =
+            "while parsing a quoted scalar, did not find expected hexadecimal number";
+        const BAD_UNICODE: &str =
+            "while parsing a quoted scalar, found invalid Unicode character escape code";
+        if message != UNKNOWN_ESCAPE && message != BAD_HEX && message != BAD_UNICODE {
+            return None;
+        }
+
+        let byte = self.mark_byte_offset(start);
+        if self.text.as_bytes().get(byte) != Some(&b'"') {
+            return None;
+        }
+        let chars: Vec<char> = self.text[byte + 1..].chars().collect();
+        let line = start.line;
+        let mut col = start.column + 1;
+        let mut i = 0usize;
+        loop {
+            while i < chars.len()
+                && !matches!(
+                    chars[i],
+                    '\'' | '"'
+                        | '\\'
+                        | '\0'
+                        | ' '
+                        | '\t'
+                        | '\r'
+                        | '\n'
+                        | '\u{85}'
+                        | '\u{2028}'
+                        | '\u{2029}'
+                )
+            {
+                i += 1;
+                col += 1;
+            }
+            match *chars.get(i)? {
+                '"' => return None,
+                '\'' | ' ' | '\t' => {
+                    i += 1;
+                    col += 1;
+                }
+                '\\' => {
+                    i += 1;
+                    col += 1;
+                    let esc = *chars.get(i)?;
+                    match esc {
+                        '0' | 'a' | 'b' | 't' | '\t' | 'n' | 'v' | 'f' | 'r' | 'e' | ' ' | '"'
+                        | '\\' | '/' | 'N' | '_' | 'L' | 'P' => {
+                            i += 1;
+                            col += 1;
+                        }
+                        'x' | 'u' | 'U' => {
+                            let want = match esc {
+                                'x' => 2,
+                                'u' => 4,
+                                _ => 8,
+                            };
+                            i += 1;
+                            col += 1;
+                            let hex_mark = Mark { line, column: col };
+                            let mut ok = true;
+                            for k in 0..want {
+                                match chars.get(i + k) {
+                                    Some(c) if c.is_ascii_hexdigit() => {}
+                                    _ => {
+                                        ok = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            if !ok {
+                                return if message == BAD_HEX {
+                                    Some(hex_mark)
+                                } else {
+                                    None
+                                };
+                            }
+                            let digits: String = chars[i..i + want].iter().collect();
+                            let value = u32::from_str_radix(&digits, 16).ok()?;
+                            if char::from_u32(value).is_none() {
+                                return if message == BAD_UNICODE {
+                                    Some(hex_mark)
+                                } else {
+                                    None
+                                };
+                            }
+                            i += want;
+                            col += want;
+                        }
+                        '\r' | '\n' | '\u{85}' | '\u{2028}' | '\u{2029}' => return None,
+                        _ => {
+                            return if message == UNKNOWN_ESCAPE {
+                                Some(Mark { line, column: col })
+                            } else {
+                                None
+                            };
+                        }
+                    }
+                }
+                '\r' | '\n' | '\u{85}' | '\u{2028}' | '\u{2029}' | '\0' => return None,
+                _ => unreachable!("loop only stops at a character from the stop set above"),
+            }
+        }
+    }
+
+    /// [`Self::quoted_scalar_escape_mark`] applied to a `Scan` error's
+    /// own mark, if it names one of the three errors that function
+    /// recognizes -- every other error variant (and every other `Scan`
+    /// message) passes through unchanged.
+    fn fixup_scalar_error(&self, err: YamlError) -> YamlError {
+        if let YamlError::Scan { message, mark } = &err {
+            if let Some(fixed) = self.quoted_scalar_escape_mark(*mark, message) {
+                return YamlError::Scan {
+                    message: message.clone(),
+                    mark: fixed,
+                };
+            }
+        }
+        err
+    }
+
     /// The node's true start mark (anchor/tag-inclusive) and, if it
     /// carries an anchor, that anchor's name -- both recovered from the
     /// raw text between `last_event_end` and `span.start`, the one place
@@ -607,7 +772,7 @@ impl<'t> Composer<'t> {
         depth: usize,
     ) -> Result<Rc<Node>, YamlError> {
         let before = *last_event_end;
-        let (event, span) = pull(parser, last_event_end)?;
+        let (event, span) = pull(parser, last_event_end).map_err(|e| self.fixup_scalar_error(e))?;
         self.compose_from_event(event, span, before, depth, parser, last_event_end)
     }
 
@@ -747,7 +912,7 @@ impl<'t> Composer<'t> {
         let mut items = Vec::new();
         loop {
             let item_before = *last_event_end;
-            let (ev, sp) = pull(parser, last_event_end)?;
+            let (ev, sp) = pull(parser, last_event_end).map_err(|e| self.fixup_scalar_error(e))?;
             if matches!(ev, Event::SequenceEnd) {
                 break;
             }
@@ -794,7 +959,8 @@ impl<'t> Composer<'t> {
         let mut pairs = Vec::new();
         loop {
             let key_before = *last_event_end;
-            let (kev, ksp) = pull(parser, last_event_end)?;
+            let (kev, ksp) =
+                pull(parser, last_event_end).map_err(|e| self.fixup_scalar_error(e))?;
             if matches!(kev, Event::MappingEnd) {
                 break;
             }
