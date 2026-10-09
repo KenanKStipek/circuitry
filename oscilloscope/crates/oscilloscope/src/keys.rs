@@ -4,7 +4,7 @@
 //! every test here builds its own `Row`s and feeds in key events
 //! directly, with no real terminal involved.
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use oscilloscope_core::render::{FullValueField, Row};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +44,14 @@ pub enum Action {
     /// wait on cancelling at all (watch owns no engine to cancel —
     /// `q` there always just detaches, §6.3).
     Quit,
+    /// Ctrl-C (review finding K3), checked before any dialog and
+    /// never merely dismissing one: the main loop forwards SIGINT at
+    /// once with no confirm while something's running (a second
+    /// Ctrl-C starts the same 10s kill deadline a real repeated
+    /// SIGINT would), quits immediately with nothing running, and in
+    /// `osp watch` always just detaches — the same three cases a real
+    /// forwarded SIGINT already covers in plain mode.
+    CtrlC,
 }
 
 /// The TUI's whole navigation/dialog state (DESIGN.md §6.3). `running`
@@ -91,6 +99,17 @@ impl App {
     /// `visible_rows` below) — navigation and collapse/expand act on
     /// exactly what the user can see, in the order they see it.
     pub fn handle_key(&mut self, key: KeyEvent, rows: &[&Row], running: bool) -> Action {
+        // Finding K3: raw mode turns a real Ctrl-C into `Char('c')`
+        // with the CONTROL modifier, not a distinct key code — caught
+        // here, before any dialog gets a look at it, so it's never
+        // merely a dismiss (the `Dialog::Help`/`FullValue` arms below
+        // close on *any* key) or, worse, the very thing that opens or
+        // confirms the plain `c`/`q` confirm dialog instead of
+        // cancelling at once.
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.dialog = Dialog::None;
+            return Action::CtrlC;
+        }
         match &mut self.dialog {
             Dialog::ConfirmCancel { quit_after } => {
                 let quit_after = *quit_after;
@@ -299,7 +318,7 @@ fn matches_or_has_match(rows: &[Row], row: &Row, pred: &dyn Fn(&Row) -> bool) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyEventKind, KeyEventState, KeyModifiers};
+    use crossterm::event::{KeyEventKind, KeyEventState};
     use oscilloscope_core::model::{RowStatus, StatusKind};
     use oscilloscope_core::render::RowKind;
 
@@ -307,6 +326,15 @@ mod tests {
         KeyEvent {
             code,
             modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn ctrl_key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::CONTROL,
             kind: KeyEventKind::Press,
             state: KeyEventState::NONE,
         }
@@ -514,6 +542,51 @@ mod tests {
         let action = app.handle_key(key(KeyCode::Char('q')), &visible, true);
         assert_eq!(action, Action::Quit);
         assert_eq!(app.dialog, Dialog::None);
+    }
+
+    #[test]
+    fn ctrl_c_while_running_is_its_own_action_not_the_confirm_dialog() {
+        let rows = [row("prime.a", 1, StatusKind::Running)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        let action = app.handle_key(ctrl_key(KeyCode::Char('c')), &visible, true);
+        assert_eq!(action, Action::CtrlC);
+        assert_eq!(app.dialog, Dialog::None, "Ctrl-C never opens a confirm");
+    }
+
+    #[test]
+    fn ctrl_c_with_nothing_running_is_still_its_own_action() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        let action = app.handle_key(ctrl_key(KeyCode::Char('c')), &visible, false);
+        assert_eq!(action, Action::CtrlC);
+    }
+
+    #[test]
+    fn ctrl_c_inside_an_open_dialog_is_never_merely_a_dismiss() {
+        let rows = [row("prime.a", 1, StatusKind::Running)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.handle_key(key(KeyCode::Char('c')), &visible, true);
+        assert!(matches!(
+            app.dialog,
+            Dialog::ConfirmCancel { quit_after: false }
+        ));
+        let action = app.handle_key(ctrl_key(KeyCode::Char('c')), &visible, true);
+        assert_eq!(action, Action::CtrlC);
+        assert_eq!(app.dialog, Dialog::None);
+    }
+
+    #[test]
+    fn a_plain_c_with_no_control_modifier_is_unaffected_by_the_ctrl_c_check() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.handle_key(key(KeyCode::Char('/')), &visible, false);
+        let action = app.handle_key(key(KeyCode::Char('c')), &visible, false);
+        assert_eq!(action, Action::None);
+        assert_eq!(app.dialog, Dialog::FilterInput("c".to_string()));
     }
 
     #[test]

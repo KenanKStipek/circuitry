@@ -585,16 +585,21 @@ const KEY_POLL_INTERVAL: Duration = Duration::from_millis(30);
 /// forwarded signal (DESIGN.md §4.1) — shared by both, since `c`/a
 /// confirmed `q` (§6.3: "cancel, with confirm (= Ctrl-C)") must behave
 /// exactly like Ctrl-C itself, never a separate path that could drift
-/// from it.
+/// from it. `sig` is `Int` for a key (Ctrl-C always means SIGINT) but
+/// the real signal osp itself received for an external one (K2): the
+/// plain loop above already forwards *that* signal unchanged, and the
+/// TUI must too, rather than silently turning every SIGTERM/SIGHUP
+/// into a SIGINT and leaving osp exiting 130 for either.
 fn cancel_once(
     child: &SupervisedChild,
+    sig: ForwardSignal,
     signal_count: &mut u32,
     kill_deadline: &mut Option<Instant>,
     log_lines: &mut Vec<String>,
     clock: &mut Clock,
 ) {
     *signal_count += 1;
-    child.forward(ForwardSignal::Int);
+    child.forward(sig);
     if *signal_count == 1 {
         log_lines.push(format_log_line(
             clock,
@@ -614,15 +619,38 @@ fn format_log_line(clock: &mut Clock, ts: Option<&str>, text: &str) -> String {
     format!("{} {text}", Clock::format(elapsed))
 }
 
+/// How often the TUI's own render state (the plan tree's rows, the
+/// header's effect counts, everything `oscilloscope_core::render::
+/// build` computes) is allowed to be rebuilt from scratch (review
+/// finding K4) — `REDRAW_INTERVAL` caps how often a frame is drawn,
+/// but every ~30ms key-poll tick used to rebuild this *and* recompute
+/// `keys::visible_rows` regardless of whether either observation,
+/// key or resize had actually changed anything since the last one,
+/// which alone cost +0.52s of CPU per wall second on a 400-item tree
+/// loop while nothing was happening at all. The header's own elapsed
+/// time is the one field that's always moving regardless, so a
+/// rebuild is still forced at least this often even with nothing
+/// else dirty, same as `--log`'s own `mm:ss.s` prefix.
+const RENDER_REBUILD_INTERVAL: Duration = Duration::from_secs(1);
+
 /// `osp <doc>`'s own TUI loop (DESIGN.md §6.3): supervises the engine
 /// exactly like `do_run`'s plain loop (the same signal forwarding,
 /// kill-deadline escalation, and observation polling), but renders a
 /// `RenderState` and reads keys instead of printing a plain-text
-/// stream. Ends the moment the engine does (the same point `do_run`'s
-/// own loop ends) — osp does not keep a separate "finished" screen
-/// open afterwards; the plain summary `finish_run` already prints
-/// once the terminal session is torn down is the review surface,
-/// exactly as it already is for `--log`.
+/// stream.
+///
+/// Review finding K1: the engine exiting does not, on its own, end
+/// this loop — only three things do, and only once it has (DESIGN.md
+/// §6.3's final-state screen): a confirmed `q` (`App::
+/// quit_when_finished`), a Ctrl-C cancel, or any external INT/TERM/
+/// HUP osp itself received (`leave_once_exited`, set by all three).
+/// Short of one of those, a run that simply finishes on its own —
+/// ok, failed, or otherwise — leaves this loop showing that final
+/// state (the header's own ok/failed/cancelled/aborted, every row's
+/// final status, `v` and the details pane all still live) until the
+/// user presses `q` (no confirm, nothing left to cancel) or Ctrl-C.
+/// `finish_run`'s plain summary still prints once this loop is well
+/// and truly done, exactly as it already does for `--log`.
 #[allow(clippy::too_many_arguments)]
 fn run_tui(
     mut child: SupervisedChild,
@@ -682,20 +710,51 @@ fn run_tui(
     };
 
     let mut last_draw = Instant::now() - REDRAW_INTERVAL;
+    let mut last_rebuild = Instant::now() - RENDER_REBUILD_INTERVAL;
     let mut dirty = true;
+    let mut exit_status: Option<std::process::ExitStatus> = None;
+    // K1: set once a confirmed `q`, a Ctrl-C cancel, or an external
+    // signal has happened — the only three things that make this loop
+    // leave the instant the engine exits, rather than staying open on
+    // its final state until the user explicitly asks to leave.
+    let mut leave_once_exited = false;
+    let mut render_state = oscilloscope_core::render::build(
+        &document,
+        &engine_name,
+        &plan,
+        &mut model,
+        current_state.as_ref(),
+        ProcessState::Running,
+        start.elapsed().as_secs_f64(),
+        &[],
+    );
+    if app.selected_path.is_none() {
+        app.selected_path = render_state.rows.first().map(|r| r.path.clone());
+    }
 
-    let exit_status = loop {
+    'tui: loop {
         if let Some(watcher) = signals.as_mut() {
-            for _sig in watcher.pending() {
-                cancel_once(
-                    &child,
-                    &mut signal_count,
-                    &mut kill_deadline,
-                    &mut log_lines,
-                    &mut clock,
-                );
+            for sig in watcher.pending() {
+                if exit_status.is_none() {
+                    cancel_once(
+                        &child,
+                        sig,
+                        &mut signal_count,
+                        &mut kill_deadline,
+                        &mut log_lines,
+                        &mut clock,
+                    );
+                }
+                leave_once_exited = true;
                 dirty = true;
             }
+        }
+        // The engine already exited on its own (the finished screen is
+        // up) and a fresh signal just arrived — K1's "any external
+        // signal" trigger applies even then (a SIGHUP in particular
+        // must never wait on a key with the terminal already gone).
+        if leave_once_exited && exit_status.is_some() {
+            break;
         }
         if let Some(deadline) = kill_deadline {
             if Instant::now() >= deadline && matches!(child.try_wait(), Ok(None)) {
@@ -719,55 +778,105 @@ fn run_tui(
             dirty = true;
         }
 
-        let (lines, state) = observe_tick(
-            &mut live_poller,
-            &mut events_tailer,
-            &mut differ,
-            &mut model,
-            &plan,
-        );
-        dirty |= !lines.is_empty();
-        for line in &lines {
-            log_lines.push(format_log_line(&mut clock, line.ts.as_deref(), &line.text));
+        if exit_status.is_none() {
+            let (lines, state) = observe_tick(
+                &mut live_poller,
+                &mut events_tailer,
+                &mut differ,
+                &mut model,
+                &plan,
+            );
+            dirty |= !lines.is_empty();
+            for line in &lines {
+                log_lines.push(format_log_line(&mut clock, line.ts.as_deref(), &line.text));
+            }
+            if let Some(state) = state {
+                current_state = Some(state);
+                dirty = true;
+            }
         }
-        if let Some(state) = state {
-            current_state = Some(state);
+
+        // K4: a full rebuild is forced at least once a second even
+        // with nothing else dirty, so the header's own elapsed time
+        // still visibly ticks while the run is otherwise quiet.
+        if last_rebuild.elapsed() >= RENDER_REBUILD_INTERVAL {
             dirty = true;
         }
 
-        let render_state = oscilloscope_core::render::build(
-            &document,
-            &engine_name,
-            &plan,
-            &mut model,
-            current_state.as_ref(),
-            ProcessState::Running,
-            start.elapsed().as_secs_f64(),
-            &[],
-        );
-        if app.follow {
-            if let Some(target) = App::follow_target(&render_state.rows) {
-                app.selected_path = Some(target.to_string());
+        if dirty {
+            let process = match exit_status {
+                None => ProcessState::Running,
+                Some(_) => ProcessState::Exited {
+                    interrupted: signal_count > 0,
+                },
+            };
+            render_state = oscilloscope_core::render::build(
+                &document,
+                &engine_name,
+                &plan,
+                &mut model,
+                current_state.as_ref(),
+                process,
+                start.elapsed().as_secs_f64(),
+                &[],
+            );
+            last_rebuild = Instant::now();
+            if app.follow {
+                if let Some(target) = App::follow_target(&render_state.rows) {
+                    app.selected_path = Some(target.to_string());
+                }
+            }
+            if app.selected_path.is_none() {
+                app.selected_path = render_state.rows.first().map(|r| r.path.clone());
             }
         }
-        if app.selected_path.is_none() {
-            app.selected_path = render_state.rows.first().map(|r| r.path.clone());
-        }
+        // K4: computed every tick regardless (collapse/filter/errors-
+        // only and the selection itself can change on a key alone),
+        // but cheaply — against whatever `render_state.rows` the last
+        // rebuild above left cached, not a fresh one every tick.
         let visible = keys::visible_rows(&render_state.rows, &app);
 
         if event::poll(KEY_POLL_INTERVAL).unwrap_or(false) {
             if let Ok(ev) = event::read() {
                 match ev {
                     CEvent::Key(key) if key.kind == KeyEventKind::Press => {
-                        let running = matches!(child.try_wait(), Ok(None));
-                        if let keys::Action::Cancel = app.handle_key(key, &visible, running) {
-                            cancel_once(
-                                &child,
-                                &mut signal_count,
-                                &mut kill_deadline,
-                                &mut log_lines,
-                                &mut clock,
-                            );
+                        let running = exit_status.is_none();
+                        match app.handle_key(key, &visible, running) {
+                            keys::Action::Cancel => {
+                                cancel_once(
+                                    &child,
+                                    ForwardSignal::Int,
+                                    &mut signal_count,
+                                    &mut kill_deadline,
+                                    &mut log_lines,
+                                    &mut clock,
+                                );
+                                // K1: only a *confirmed* `q` leaves on
+                                // its own once the engine exits — a
+                                // plain `c` cancels but still shows
+                                // the finished screen afterwards.
+                                if app.quit_when_finished {
+                                    leave_once_exited = true;
+                                }
+                            }
+                            keys::Action::CtrlC => {
+                                if running {
+                                    cancel_once(
+                                        &child,
+                                        ForwardSignal::Int,
+                                        &mut signal_count,
+                                        &mut kill_deadline,
+                                        &mut log_lines,
+                                        &mut clock,
+                                    );
+                                    leave_once_exited = true;
+                                } else {
+                                    // K3: "with nothing running: quit".
+                                    break 'tui;
+                                }
+                            }
+                            keys::Action::Quit => break 'tui,
+                            keys::Action::None => {}
                         }
                         dirty = true;
                     }
@@ -789,9 +898,28 @@ fn run_tui(
             dirty = false;
         }
 
-        if let Ok(Some(status)) = child.try_wait() {
-            break status;
+        if exit_status.is_none() {
+            if let Ok(Some(status)) = child.try_wait() {
+                exit_status = Some(status);
+                dirty = true;
+                if leave_once_exited {
+                    break;
+                }
+            }
         }
+    }
+
+    let exit_status = match exit_status {
+        Some(status) => status,
+        // `Action::Quit`/`Action::CtrlC`'s own "nothing running" arms
+        // are only ever reachable once `exit_status` is already
+        // `Some` (that's exactly what `running`/`App::handle_key`'s
+        // own dialog logic means by "nothing running") — but the
+        // engine is still osp's own child, and must never be left
+        // behind regardless; one more wait costs nothing when it has
+        // already exited, and is the only safety net if that
+        // invariant were ever wrong.
+        None => child.wait().expect("the engine has already exited"),
     };
 
     drop(terminal);
@@ -1109,6 +1237,13 @@ fn do_watch(args: WatchArgs) -> ExitCode {
 /// to supervise or cancel — `q` always just detaches (§6.3: "In `osp
 /// watch`, `q` just detaches"), with no confirm, whether or not the
 /// watched run is still going.
+///
+/// Review finding K1: watching a run that's already finished (or one
+/// that finishes while this is open) stays on that final state until
+/// the user presses `q` or Ctrl-C, same as `run_tui` — it does not
+/// detach back to the shell the instant `run_ended`/a dead pid is
+/// first noticed, which used to show the finished screen for about
+/// one redraw before leaving on its own.
 fn run_tui_watch(
     run_dir: PathBuf,
     live_state_path: PathBuf,
@@ -1156,9 +1291,29 @@ fn run_tui_watch(
     };
 
     let mut last_draw = Instant::now() - REDRAW_INTERVAL;
+    let mut last_rebuild = Instant::now() - RENDER_REBUILD_INTERVAL;
     let mut dirty = true;
+    // K1: once the watched run has ended (by state, by events, or by
+    // its pid going away), this loop keeps running — redrawing the
+    // final state and reading keys — rather than detaching on its
+    // own; only `ended` stops `observe_tick` from polling a run
+    // directory that has nothing left to say.
+    let mut ended = false;
+    let mut render_state = oscilloscope_core::render::build(
+        &document,
+        "watch",
+        &plan,
+        &mut model,
+        last_state.as_ref(),
+        ProcessState::Running,
+        start.elapsed().as_secs_f64(),
+        &[],
+    );
+    if app.selected_path.is_none() {
+        app.selected_path = render_state.rows.first().map(|r| r.path.clone());
+    }
 
-    loop {
+    'tui: loop {
         if let Some(watcher) = signals.as_mut() {
             if let Some(sig) = watcher.pending().into_iter().next() {
                 local_signal = Some(sig);
@@ -1166,82 +1321,102 @@ fn run_tui_watch(
             }
         }
 
-        let (lines, state) = observe_tick(
-            &mut live_poller,
-            &mut events_tailer,
-            &mut differ,
-            &mut model,
-            &plan,
-        );
-        dirty |= !lines.is_empty();
-        for line in &lines {
-            log_lines.push(format_log_line(&mut clock, line.ts.as_deref(), &line.text));
-        }
-        if let Some(state) = state {
-            last_state = Some(state);
-            dirty = true;
-        }
-
-        if last_state
-            .as_ref()
-            .is_some_and(oscilloscope_core::model::run_ended)
-        {
-            break;
-        }
-        if !warned_no_events
-            && last_state.is_some()
-            && model.run_start_pid().is_none()
-            && !model.run_ended_by_events()
-            && !events_path.exists()
-        {
-            log_lines.push(format_log_line(
-                &mut clock,
-                None,
-                "this run has no --events stream; an aborted run can't be detected \
-                 without one. q detaches.",
-            ));
-            warned_no_events = true;
-            dirty = true;
-        }
-        if model.run_ended_by_events() {
-            let (more_lines, state) = observe_tick(
+        if !ended {
+            let (lines, state) = observe_tick(
                 &mut live_poller,
                 &mut events_tailer,
                 &mut differ,
                 &mut model,
                 &plan,
             );
-            for line in &more_lines {
+            dirty |= !lines.is_empty();
+            for line in &lines {
                 log_lines.push(format_log_line(&mut clock, line.ts.as_deref(), &line.text));
             }
             if let Some(state) = state {
                 last_state = Some(state);
+                dirty = true;
             }
-            break;
-        }
-        if let Some(pid) = model.run_start_pid() {
-            if !oscilloscope_core::supervise::process_alive(pid) {
-                break;
+
+            if last_state
+                .as_ref()
+                .is_some_and(oscilloscope_core::model::run_ended)
+            {
+                ended = true;
+            }
+            if !warned_no_events
+                && last_state.is_some()
+                && model.run_start_pid().is_none()
+                && !model.run_ended_by_events()
+                && !events_path.exists()
+            {
+                log_lines.push(format_log_line(
+                    &mut clock,
+                    None,
+                    "this run has no --events stream; an aborted run can't be detected \
+                     without one. q detaches.",
+                ));
+                warned_no_events = true;
+                dirty = true;
+            }
+            if !ended && model.run_ended_by_events() {
+                let (more_lines, state) = observe_tick(
+                    &mut live_poller,
+                    &mut events_tailer,
+                    &mut differ,
+                    &mut model,
+                    &plan,
+                );
+                for line in &more_lines {
+                    log_lines.push(format_log_line(&mut clock, line.ts.as_deref(), &line.text));
+                }
+                if let Some(state) = state {
+                    last_state = Some(state);
+                }
+                ended = true;
+            }
+            if !ended {
+                if let Some(pid) = model.run_start_pid() {
+                    if !oscilloscope_core::supervise::process_alive(pid) {
+                        ended = true;
+                    }
+                }
+            }
+            if ended {
+                dirty = true;
             }
         }
 
-        let render_state = oscilloscope_core::render::build(
-            &document,
-            "watch",
-            &plan,
-            &mut model,
-            last_state.as_ref(),
-            ProcessState::Running,
-            start.elapsed().as_secs_f64(),
-            &[],
-        );
-        if app.follow {
-            if let Some(target) = App::follow_target(&render_state.rows) {
-                app.selected_path = Some(target.to_string());
-            }
+        // K4, same as `run_tui`.
+        if last_rebuild.elapsed() >= RENDER_REBUILD_INTERVAL {
+            dirty = true;
         }
-        if app.selected_path.is_none() {
-            app.selected_path = render_state.rows.first().map(|r| r.path.clone());
+
+        if dirty {
+            let process = if ended {
+                ProcessState::Exited { interrupted: false }
+            } else {
+                ProcessState::Running
+            };
+            render_state = oscilloscope_core::render::build(
+                &document,
+                "watch",
+                &plan,
+                &mut model,
+                last_state.as_ref(),
+                process,
+                start.elapsed().as_secs_f64(),
+                &[],
+            );
+            last_rebuild = Instant::now();
+            if app.follow {
+                if let Some(target) = App::follow_target(&render_state.rows) {
+                    app.selected_path = Some(target.to_string());
+                }
+            }
+            if app.selected_path.is_none() {
+                app.selected_path = render_state.rows.first().map(|r| r.path.clone());
+            }
         }
         let visible = keys::visible_rows(&render_state.rows, &app);
 
@@ -1254,25 +1429,17 @@ fn run_tui_watch(
                         // `c` does nothing, and `q` detaches at once,
                         // with no confirm, whether the watched run is
                         // still going or not.
-                        if let keys::Action::Quit = app.handle_key(key, &visible, false) {
-                            let stdout = std::io::stdout();
-                            let mut out = stdout.lock();
-                            drop(terminal);
-                            drop(_guard);
-                            let code = finish_watch(
-                                &mut out,
-                                &mut clock,
-                                &mut live_poller,
-                                &mut events_tailer,
-                                &mut differ,
-                                &mut model,
-                                &plan,
-                                &run_dir,
-                                &mut last_state,
-                                None,
-                            );
-                            let _ = writeln!(out, "exit {code}");
-                            return ExitCode::from(code as u8);
+                        match app.handle_key(key, &visible, false) {
+                            keys::Action::Quit => break 'tui,
+                            // K3: Ctrl-C in `osp watch` always just
+                            // detaches too, same as `q` — but reports
+                            // the same 130 a real forwarded SIGINT
+                            // would, not the final state's own code.
+                            keys::Action::CtrlC => {
+                                local_signal = Some(ForwardSignal::Int);
+                                break 'tui;
+                            }
+                            keys::Action::Cancel | keys::Action::None => {}
                         }
                         dirty = true;
                     }
@@ -1554,7 +1721,11 @@ mod tests {
             r#"{"runtime":{"last_run":{"completed_at":"t"}},"prime":{"value":true,"meta":{"error":null}}}"#,
         )
         .unwrap();
-        let code = run(args(&["watch", dir.path().to_str().unwrap()]));
+        // Finding 7: `--log` forces the plain stream even on this
+        // test runner's own TTY (an interactive `cargo test` run), so
+        // this never enters the real TUI's raw mode / alternate screen
+        // — and, since K1, never waits on a key nothing here will send.
+        let code = run(args(&["watch", dir.path().to_str().unwrap(), "--log"]));
         assert_eq!(code, ExitCode::from(0));
     }
 
@@ -1584,8 +1755,12 @@ mod tests {
 
         let target = dir.path().to_path_buf();
         let handle = std::thread::spawn(move || {
-            run(std::iter::once("osp".to_string())
-                .chain(["watch".to_string(), target.to_str().unwrap().to_string()]))
+            // Finding 7: `--log`, same reason as the test above.
+            run(std::iter::once("osp".to_string()).chain([
+                "watch".to_string(),
+                target.to_str().unwrap().to_string(),
+                "--log".to_string(),
+            ]))
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
@@ -1618,7 +1793,8 @@ mod tests {
         )
         .unwrap();
 
-        let code = run(args(&["watch", dir.path().to_str().unwrap()]));
+        // Finding 7: `--log`, same reason as the first watch test above.
+        let code = run(args(&["watch", dir.path().to_str().unwrap(), "--log"]));
         assert_eq!(code, ExitCode::from(130));
     }
 

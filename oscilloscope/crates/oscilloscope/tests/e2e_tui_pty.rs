@@ -14,6 +14,7 @@ mod support;
 
 use std::ffi::OsStr;
 use std::fs::File;
+use std::io::Write;
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -90,6 +91,18 @@ fn wait_for_pattern(buf: &Arc<Mutex<Vec<u8>>>, pattern: &[u8], timeout: Duration
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// Writes `bytes` to the pty's master side, i.e. exactly what a key
+/// press on a real terminal would deliver to osp's own raw-mode
+/// stdin — used to send `q` (review finding K1: the TUI now stays
+/// open on a run's own final state until asked to leave) and a raw
+/// Ctrl-C byte (finding K3: raw mode disables the kernel's own
+/// `ISIG`, so `\x03` reaches osp as a plain byte, not a real SIGINT,
+/// exactly as it would on a human's own terminal).
+fn send_bytes(master: &mut File, bytes: &[u8]) {
+    master.write_all(bytes).expect("write to pty master");
+    master.flush().expect("flush pty master");
 }
 
 fn open_slave(path: &std::path::Path) -> OwnedFd {
@@ -185,8 +198,10 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     // plain pipe in `e2e_cof.rs`, but doubly so here: a TUI redrawing
     // at up to 10Hz can fill a pty's own small kernel buffer in well
     // under a second, and nothing draining it would make osp's own
-    // writes block).
-    let captured_buf = drain_continuously(master);
+    // writes block). Reading happens on a dup'd fd so `master` itself
+    // stays free for this test to write a key press back.
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
 
     let doc_arg = doc.as_os_str();
     let config_arg = config.as_os_str();
@@ -196,6 +211,13 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
         &slave_path,
         &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
     );
+
+    // Review finding K1: the run finishes almost at once (an `echo`),
+    // but the TUI now stays open on that final state — `q` (no
+    // confirm, nothing left running) is what actually leaves it.
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"q");
 
     let status = wait_with_timeout(child, Duration::from_secs(30));
     assert!(status.success(), "osp should exit 0, got {status:?}");
@@ -300,6 +322,167 @@ fn a_forwarded_sigint_still_restores_the_terminal() {
     assert_no_leftover_process(work.path());
 }
 
+/// Review finding K2: a forwarded `SIGTERM` must reach the engine as
+/// a real `SIGTERM`, not be silently turned into a `SIGINT` the way
+/// the TUI's own `cancel_once` used to — osp itself still exits with
+/// the POSIX `128+signum` code either way (143), but only because
+/// this asserts the *right* one.
+#[test]
+fn a_forwarded_sigterm_in_the_tui_exits_143() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let captured_buf = drain_continuously(master);
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osp_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+    let pid = child.id() as i32;
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    std::thread::sleep(SIGNAL_DELAY);
+    unsafe {
+        libc::kill(pid, libc::SIGTERM);
+    }
+
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(status.code(), Some(143), "got {status:?}");
+
+    std::thread::sleep(Duration::from_millis(200));
+    let captured = captured_buf.lock().unwrap().clone();
+    let rendered = String::from_utf8_lossy(&captured);
+    assert!(
+        rendered.contains("\u{1b}[?1049l"),
+        "expected an alternate-screen exit sequence after the forwarded signal; got:\n{rendered:?}"
+    );
+
+    assert_no_leftover_process(work.path());
+}
+
+/// Review finding K2, `SIGHUP`'s own exit code (129) — and finding
+/// K1's "a `SIGHUP` must never wait for a key": the terminal is gone
+/// by definition, so this must leave the instant the engine does,
+/// never pausing on the finished screen the way a run that simply
+/// completes on its own now does.
+#[test]
+fn a_forwarded_sighup_in_the_tui_exits_129() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let captured_buf = drain_continuously(master);
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osp_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+    let pid = child.id() as i32;
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    std::thread::sleep(SIGNAL_DELAY);
+    unsafe {
+        libc::kill(pid, libc::SIGHUP);
+    }
+
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(status.code(), Some(129), "got {status:?}");
+
+    std::thread::sleep(Duration::from_millis(200));
+    let captured = captured_buf.lock().unwrap().clone();
+    let rendered = String::from_utf8_lossy(&captured);
+    assert!(
+        rendered.contains("\u{1b}[?1049l"),
+        "expected an alternate-screen exit sequence after the forwarded signal; got:\n{rendered:?}"
+    );
+
+    assert_no_leftover_process(work.path());
+}
+
+/// Review finding K3: raw mode disables the kernel's own `ISIG`, so a
+/// real Ctrl-C keypress never generates a `SIGINT` at all once the
+/// TUI has entered raw mode — the byte `0x03` reaches osp as a plain
+/// key, and `keys::Action::CtrlC` is the only thing that can still
+/// cancel the run and make osp exit 130 the way a real forwarded
+/// SIGINT otherwise would.
+#[test]
+fn ctrl_c_byte_in_the_tui_cancels_and_exits_130() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osp_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\x03");
+
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(status.code(), Some(130), "got {status:?}");
+
+    std::thread::sleep(Duration::from_millis(200));
+    let captured = captured_buf.lock().unwrap().clone();
+    let rendered = String::from_utf8_lossy(&captured);
+    assert!(
+        rendered.contains("\u{1b}[?1049l"),
+        "expected an alternate-screen exit sequence after Ctrl-C; got:\n{rendered:?}"
+    );
+
+    assert_no_leftover_process(work.path());
+}
+
 /// `osp watch`'s own TUI (DESIGN.md §6.3): attaches to a run `osp`
 /// did not start, renders it in the alternate screen the same as a
 /// live `osp <doc>` would, and exits cleanly once the run ends, with
@@ -347,9 +530,17 @@ fn osp_watch_renders_in_the_tui_and_exits_cleanly() {
     assert!(cof_status.success());
 
     let (master, slave_path) = open_pty();
-    let captured_buf = drain_continuously(master);
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
     let run_dir_arg = run_dir.path().as_os_str();
     let child = spawn_osp_on_pty(&home, &slave_path, &[OsStr::new("watch"), run_dir_arg]);
+
+    // Review finding K1: the run `cof` already finished before `osp
+    // watch` ever attached, so the TUI shows the finished screen
+    // immediately — `q` detaches it, same as the run test above.
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"q");
 
     let status = wait_with_timeout(child, Duration::from_secs(30));
     assert!(status.success(), "osp watch should exit 0, got {status:?}");
