@@ -1,11 +1,14 @@
-//! Lane C: tool/`use` params rendering -- `ParamNode` -> `Value`, the
+//! Lane C: tool params rendering -- `ParamNode` -> `Value`, the
 //! `{from: ...}` walk (with `default:`), Mustache leaves, and a tool's
 //! `params_json` overlay (`core/tool.py::_render_params`/
 //! `_render_params_json`/`_deep_merge_params`, ported exactly, minus the
 //! `{{> name}}` prompt-composition splice: out of scope through M0-H --
 //! a document containing one is refused before a run starts, so plain
 //! Mustache rendering is `render_with_composition`'s own behaviour on
-//! every document that reaches this point).
+//! every document that reaches this point). A `use` effect's own
+//! `inputs:` follow a different contract (`core/use.py::_render_inputs`
+//! -- no `default:`, and a `{from:}` that resolves to `None` passes
+//! through as `None` rather than raising) and isn't rendered here.
 //!
 //! `exec::tool::execute_tool` (this crate's own lane C stub, filled in
 //! once lane B's `Store` lands) is the only caller: it renders a tool's
@@ -95,8 +98,13 @@ fn render_node(
             path: reference_path,
             default,
         } => match resolve_reference(ctx, reference_path) {
-            Some(value) => Ok(value),
-            None => match default {
+            // `core/tool.py::_render_params`'s own `_render_value` checks
+            // `if resolved is None:`, not `if ref is missing:` -- a path
+            // that resolves *to* `None` counts as unresolved exactly like
+            // one that doesn't resolve at all, so both fall through to
+            // `default:` (or the same error) rather than rendering `null`.
+            Some(value) if !matches!(value, Value::None) => Ok(value),
+            _ => match default {
                 Some(value) => Ok(value.clone()),
                 None => Err(RenderParamsError::UnresolvedReference {
                     effect_name: effect_name.to_string(),
@@ -354,6 +362,45 @@ mod tests {
         assert_eq!(
             rendered.get(&Value::Str("n".to_string())),
             Some(&Value::from(7i64))
+        );
+    }
+
+    #[test]
+    fn a_from_reference_resolving_to_null_falls_back_to_default() {
+        // Matches `core/tool.py::_render_params`'s `if resolved is None:`
+        // probe: `_render_params({"n": {"from": "input.x", "default": 5}},
+        // {"input": {"x": None}}, name="t")` returns `{"n": 5}`.
+        let mut params = IndexMap::new();
+        params.insert(
+            Value::Str("n".to_string()),
+            ParamNode::From {
+                path: "input.x".to_string(),
+                default: Some(Value::from(5i64)),
+            },
+        );
+        let ctx = ctx_from(vec![("input", ctx_from(vec![("x", Value::None)]))]);
+        let rendered = render_params("t", &params, &ctx).unwrap();
+        assert_eq!(
+            rendered.get(&Value::Str("n".to_string())),
+            Some(&Value::from(5i64))
+        );
+    }
+
+    #[test]
+    fn a_from_reference_resolving_to_null_with_no_default_raises() {
+        let mut params = IndexMap::new();
+        params.insert(
+            Value::Str("n".to_string()),
+            ParamNode::From {
+                path: "input.x".to_string(),
+                default: None,
+            },
+        );
+        let ctx = ctx_from(vec![("input", ctx_from(vec![("x", Value::None)]))]);
+        let err = render_params("t", &params, &ctx).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Tool effect 't' param 'params.n': '{from: input.x}' did not resolve to a value."
         );
     }
 
