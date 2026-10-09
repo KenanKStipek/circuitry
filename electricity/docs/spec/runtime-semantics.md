@@ -1619,6 +1619,14 @@ effect. Every event is one `write()` of one whole line, flushed at once,
 under one lock (`EventLog`'s own `threading.Lock`) — a reader tailing the
 file never sees a torn line except a trailing one still being written.
 
+Each line's own JSON text is exactly `json.dumps(payload, separators=(",",
+":"))` (`EventLog._write_line`): no space after either `,` or `:`, the keys
+in the insertion order the table below lists them in (never sorted),
+`ensure_ascii` left at its default `True` (so a non-ASCII `path` or `error`
+writes as a `\uXXXX` escape, not a literal UTF-8 byte sequence) — distinct
+from both `--out` serializations (§8.3), which space their separators the
+way a bare `json.dumps(payload)` call does.
+
 ```json
 {"v":1,"seq":0,"ts":"2026-10-08T19:56:22.433Z","ev":"run_start","run_id":"…","orchestration":"do-thing.yml","engine":"cof 0.2.0","pid":4242}
 {"v":1,"seq":7,"ts":"…","ev":"dispatch","path":"prime.each_tree","branches":3,"concurrency":2}
