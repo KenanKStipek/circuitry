@@ -1,0 +1,20 @@
+effects:
+  - name: gate
+    type: if
+    if:
+      mode: cel
+      expr: "true"
+    then:
+      - name: chosen
+        type: tool
+        provider: json
+        params:
+          mode: parse
+          input: "\"then-branch\""
+    else:
+      - name: chosen
+        type: tool
+        provider: json
+        params:
+          mode: parse
+          input: "\"else-branch\""

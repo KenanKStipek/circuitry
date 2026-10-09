@@ -1,0 +1,7 @@
+effects:
+  - name: hello
+    type: tool
+    provider: json
+    params:
+      mode: parse
+      input: "\"hi\""

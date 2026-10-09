@@ -332,9 +332,124 @@ prime.ask:
     ),
 ]
 
+# Issue #431's lane E2: documents built only from the M0-H VM's own
+# scope (`tool`/`json`, `dynamic`, a CEL `if`, `finally:` -- the Goal
+# section of #431), each recorded against *both* engines under the
+# same config, so `engine_parity.rs` can assert the two produce the
+# same osp `--log` lines (apart from timing). `shell`/`prompt`/`loop`
+# never appear here: electricity refuses every one of them.
+PARITY_CASES: list[Case] = [
+    Case(
+        name="parity_tool_ok",
+        doc="""\
+effects:
+  - name: hello
+    type: tool
+    provider: json
+    params:
+      mode: parse
+      input: "\\"hi\\""
+""",
+    ),
+    Case(
+        name="parity_tool_failed_continue",
+        doc="""\
+effects:
+  - name: flaky
+    type: tool
+    provider: json
+    on_error: continue
+    params:
+      mode: parse
+      input: "not valid json"
+  - name: cleanup
+    type: tool
+    provider: json
+    params:
+      mode: parse
+      input: "\\"done\\""
+""",
+    ),
+    Case(
+        name="parity_if_taken",
+        doc="""\
+effects:
+  - name: gate
+    type: if
+    if:
+      mode: cel
+      expr: "true"
+    then:
+      - name: chosen
+        type: tool
+        provider: json
+        params:
+          mode: parse
+          input: "\\"then-branch\\""
+    else:
+      - name: chosen
+        type: tool
+        provider: json
+        params:
+          mode: parse
+          input: "\\"else-branch\\""
+""",
+    ),
+    Case(
+        name="parity_finally",
+        doc="""\
+effects:
+  - name: step
+    type: tool
+    provider: json
+    params:
+      mode: parse
+      input: "\\"ok\\""
+finally:
+  - name: cleanup
+    type: tool
+    provider: json
+    params:
+      mode: parse
+      input: "\\"cleaned\\""
+""",
+    ),
+    Case(
+        name="parity_dynamic_chain",
+        doc="""\
+effects:
+  - type: dynamic
+    name: group
+    effects:
+      - name: a
+        type: tool
+        provider: json
+        params:
+          mode: parse
+          input: "\\"a\\""
+      - name: b
+        type: tool
+        provider: json
+        params:
+          mode: parse
+          input: "\\"b\\""
+""",
+    ),
+]
 
-def record_one(case: Case, cof_bin: str) -> None:
-    print(f"recording {case.name} ...", file=sys.stderr)
+
+def record_one(
+    case: Case,
+    engine_bin: str,
+    engine: str = "cof",
+    out_name: str | None = None,
+) -> None:
+    """Records one case against *engine* (``"cof"`` or
+    ``"electricity"``, issue #431's lane E2), under *out_name*
+    (defaulting to ``case.name``, so two engines never clobber each
+    other's fixture when a caller passes a distinct name per engine).
+    """
+    print(f"recording {case.name} ({engine}) ...", file=sys.stderr)
     with tempfile.TemporaryDirectory(prefix="osp-record-") as scratch:
         scratch_path = Path(scratch)
         home = scratch_path / "home"
@@ -375,20 +490,36 @@ def record_one(case: Case, cof_bin: str) -> None:
             env.pop(key, None)
         env["HOME"] = str(home)
 
-        cmd = [
-            cof_bin,
-            "run",
-            str(doc_path),
-            "--config",
-            str(config_path),
-            "--quiet",
-            "--live-state",
-            str(live_state),
-            "--out",
-            str(out_state),
-            "--events",
-            str(events_path),
-        ]
+        if engine == "electricity":
+            # DESIGN.md §4.2's own argv shape: `<config> <doc> -e
+            # k=v... --out <dir>/state.json [--events ...]
+            # [--live-state ...]`.
+            cmd = [
+                engine_bin,
+                str(config_path),
+                str(doc_path),
+                "--out",
+                str(out_state),
+                "--events",
+                str(events_path),
+                "--live-state",
+                str(live_state),
+            ]
+        else:
+            cmd = [
+                engine_bin,
+                "run",
+                str(doc_path),
+                "--config",
+                str(config_path),
+                "--quiet",
+                "--live-state",
+                str(live_state),
+                "--out",
+                str(out_state),
+                "--events",
+                str(events_path),
+            ]
 
         proc = subprocess.Popen(
             cmd,
@@ -481,7 +612,18 @@ def record_one(case: Case, cof_bin: str) -> None:
         events_text = events_path.read_text(encoding="utf-8") if events_path.exists() else ""
 
         write_fixture(
-            case, doc_path, config_path, work, scratch_path, home, snapshots, stdout, stderr, exit_code, events_text
+            case,
+            doc_path,
+            config_path,
+            work,
+            scratch_path,
+            home,
+            snapshots,
+            stdout,
+            stderr,
+            exit_code,
+            events_text,
+            out_name=out_name,
         )
 
 
@@ -522,8 +664,9 @@ def write_fixture(
     stderr: bytes,
     exit_code: int,
     events_text: str = "",
+    out_name: str | None = None,
 ) -> None:
-    out_dir = FIXTURES_DIR / case.name
+    out_dir = FIXTURES_DIR / (out_name or case.name)
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
@@ -596,8 +739,32 @@ def main() -> int:
         print("record_fixtures.py: 'cof' not found on PATH", file=sys.stderr)
         return 1
 
-    for case in CASES:
-        record_one(case, cof_bin)
+    # `--parity-only`: re-record just PARITY_CASES (issue #431's lane
+    # E2), leaving every other committed fixture untouched -- each
+    # snapshot's own `t` is real elapsed time, never reproducible, so
+    # re-running the full CASES list rewrites every fixture's content
+    # with new timing noise even when nothing about the case itself
+    # changed.
+    if "--parity-only" not in sys.argv:
+        for case in CASES:
+            record_one(case, cof_bin, engine="cof")
+
+    # PARITY_CASES always record against `cof`; the `electricity` half
+    # (issue #431's lane E2) only runs when a build is actually on
+    # PATH -- `electricity-cli --features test-tools` isn't part of
+    # an ordinary PATH, and this script's own recordings are a by-hand
+    # tool (its own module docstring), not something CI re-runs.
+    electricity_bin = shutil.which("electricity")
+    for case in PARITY_CASES:
+        record_one(case, cof_bin, engine="cof", out_name=f"{case.name}_cof")
+        if electricity_bin is not None:
+            record_one(case, electricity_bin, engine="electricity", out_name=f"{case.name}_electricity")
+        else:
+            print(
+                f"record_fixtures.py: 'electricity' not found on PATH; "
+                f"skipping the electricity half of {case.name}",
+                file=sys.stderr,
+            )
 
     return check_no_leaked_paths()
 

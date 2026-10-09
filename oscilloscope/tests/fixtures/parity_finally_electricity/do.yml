@@ -1,0 +1,14 @@
+effects:
+  - name: step
+    type: tool
+    provider: json
+    params:
+      mode: parse
+      input: "\"ok\""
+finally:
+  - name: cleanup
+    type: tool
+    provider: json
+    params:
+      mode: parse
+      input: "\"cleaned\""
