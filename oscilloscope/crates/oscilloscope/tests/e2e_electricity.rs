@@ -70,6 +70,9 @@ fn a_simple_run_succeeds_and_prints_the_log() {
     // both flags (the no-events fallback would still produce the
     // three assertions above from `state.json` alone at exit).
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
+    // `doc.yml config.json` is the documented order (DESIGN.md §4.2):
+    // `looks_swapped` must never fire on it.
+    assert!(!stderr.contains("look swapped"), "stderr:\n{stderr}");
     assert!(run_dir.join("events.jsonl").is_file());
     assert!(run_dir.join("state.live.json").is_file());
 }
@@ -129,6 +132,7 @@ fn on_error_continue_still_exits_ok() {
         !stderr.contains("couldn't compile a plan"),
         "stderr:\n{stderr}"
     );
+    assert!(!stderr.contains("look swapped"), "stderr:\n{stderr}");
 }
 
 #[test]
@@ -163,12 +167,14 @@ fn an_invalid_document_fails_and_still_writes_state() {
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
-    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert_eq!(status.code(), Some(1), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run failed"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 1"), "stdout:\n{stdout}");
     assert!(run_dir.join("state.json").is_file());
+    assert!(!stderr.contains("look swapped"), "stderr:\n{stderr}");
 }
 
 #[test]
@@ -204,7 +210,8 @@ fn unsupported_content_is_refused_as_a_pre_execution_failure() {
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
-    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert_eq!(status.code(), Some(1), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run failed"), "stdout:\n{stdout}");
@@ -214,6 +221,7 @@ fn unsupported_content_is_refused_as_a_pre_execution_failure() {
     );
     assert!(stdout.contains("exit 1"), "stdout:\n{stdout}");
     assert!(!run_dir.join("state.json").is_file());
+    assert!(!stderr.contains("look swapped"), "stderr:\n{stderr}");
 }
 
 /// A document whose root blocks on the `test-tools` feature's own

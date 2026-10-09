@@ -320,7 +320,7 @@ fn do_run(args: RunArgs) -> ExitCode {
 
     if args.engine == EngineChoice::Electricity {
         if let Some(cfg) = &config {
-            if oscilloscope_core::engine::looks_swapped(cfg, &orchestration) {
+            if oscilloscope_core::engine::looks_swapped(&orchestration, cfg) {
                 eprintln!(
                     "osp: '{}' and '{}' look swapped — usage is `osp <orchestration> [config.json]`",
                     cfg.display(),

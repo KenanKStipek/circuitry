@@ -296,6 +296,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn looks_swapped_is_false_for_the_documented_order() {
+        // `osp <orchestration> [config.json]` (DESIGN.md §4.2): the
+        // orchestrator's own regression -- `do_run` used to call this
+        // with the two arguments flipped, warning on every correctly
+        // ordered invocation and staying silent on a really swapped
+        // one.
+        let dir = tempfile::tempdir().unwrap();
+        let orchestration = dir.path().join("do.yml");
+        let config = dir.path().join("config.json");
+        std::fs::write(&orchestration, "effects:\n  - name: hello\n").unwrap();
+        std::fs::write(&config, "{}").unwrap();
+        assert!(!looks_swapped(&orchestration, &config));
+    }
+
+    #[test]
+    fn looks_swapped_is_true_for_a_really_swapped_pair() {
+        let dir = tempfile::tempdir().unwrap();
+        let orchestration = dir.path().join("do.yml");
+        let config = dir.path().join("config.json");
+        std::fs::write(&orchestration, "effects:\n  - name: hello\n").unwrap();
+        std::fs::write(&config, "{}").unwrap();
+        // The caller passed `config` first, `orchestration` second --
+        // exactly the swapped-argument case this hint exists for.
+        assert!(looks_swapped(&config, &orchestration));
+    }
+
+    #[test]
     fn cof_command_includes_live_state_out_and_events_when_supported() {
         let engine = CofEngine::with_caps(
             "cof",
