@@ -11,8 +11,16 @@ description = "The M0-H VM: store, execution, cancellation, limiter (electricity
 electricity-value = { path = "../electricity-value" }
 electricity-bytecode = { path = "../electricity-bytecode" }
 electricity-tools = { path = "../electricity-tools" }
+# `exec::conditional`'s own CEL `if` evaluation (`evaluate_condition`).
+electricity-cel = { path = "../electricity-cel" }
 indexmap = { version = "2", features = ["serde"] }
 tokio = { version = "1", features = ["sync", "macros"] }
+# `exec::dynamic`'s own tree-flow dispatch: a bounded set of concurrent,
+# non-`'static` branch futures polled from one task (issue #431's Lane B
+# section: "FuturesUnordered", not `tokio::task::spawn_local`).
+futures = { version = "0.3", default-features = false, features = ["std"] }
+# `created_at`/`completed_at` timestamps, Python `isoformat()`-compatible.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
