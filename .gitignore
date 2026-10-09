@@ -60,6 +60,7 @@ out.json
 *.key
 *.pem
 config.json
+!tests/conformance/cases/*/config.json
 
 # ================================
 # CLI / runtime artifacts

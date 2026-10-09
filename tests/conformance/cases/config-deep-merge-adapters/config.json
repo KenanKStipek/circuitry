@@ -1,0 +1,12 @@
+{
+  "model": "llama3.1:8b",
+  "adapter": "ollama",
+  "runtime": {
+    "adapters": {
+      "ollama": {
+        "base_url": "http://config-host:11434",
+        "timeout_seconds": 99
+      }
+    }
+  }
+}
