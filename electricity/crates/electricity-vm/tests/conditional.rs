@@ -3,13 +3,13 @@
 
 mod support;
 
-use electricity_bytecode::{EffectPath, OnError};
+use electricity_bytecode::{EffectPath, Escape, OnError, ParamNode, TemplateText};
 use electricity_tools::ToolRegistry;
 use electricity_value::Value;
 use electricity_vm::{CancellationToken, Limiter, Store, VmError};
 use support::{
     CancelOnStart, Event, RecordingObserver, TOOL_FAIL_TEXT, cel_if, chain_dynamic, json_registry,
-    run_ctx, tool_leaf, tree_dynamic,
+    json_tool_leaf, run_ctx, tool_leaf, tree_dynamic,
 };
 
 fn root_path() -> EffectPath {
@@ -803,5 +803,198 @@ async fn a_shadowing_steps_bare_name_is_invisible_without_the_branchs_own_names(
         get(meta, "condition_result"),
         Some(&Value::Bool(true)),
         "`own_names` must make the branch's own `shared` visible by bare name"
+    );
+}
+
+#[tokio::test]
+async fn an_ifs_second_branch_step_sees_a_sibling_two_dynamic_levels_under_its_own_sibling() {
+    // Probe E (the orchestrator's own second-review follow-up on PR
+    // #440's F2 fix, `a4ff2cd`): `process` (a named `dynamic`) runs an
+    // unnamed `if` whose branch is `[prep, pipeline]`. `pipeline`'s own
+    // `outline` step writes two `dynamic` levels under `process` --
+    // reachable, from `check` (`pipeline`'s *second* step), only through
+    // `state.prime.process.pipeline.outline.value`. `a4ff2cd`'s overlay
+    // was a `CtxSource::Frozen(Value)` -- a deep copy of `process`'s own
+    // subtree taken the moment `prep` finished, *before* `pipeline` (and
+    // so `outline`) existed -- so `check` could never see it: an
+    // ancestor the branch itself didn't directly write stayed frozen
+    // one level below where the branch's own direct write landed. The
+    // overlay now has to stay a live `NodeRef` (`CtxSource::Live`),
+    // sharing `process`'s own slot by `Rc`, not a snapshot of it.
+    let outline = chain_dynamic(
+        root_path()
+            .push_name("process")
+            .push_name("pipeline")
+            .push_name("outline"),
+        "outline",
+        OnError::Fail,
+        vec![],
+    );
+    let check = cel_if(
+        root_path()
+            .push_name("process")
+            .push_name("pipeline")
+            .push_name("check"),
+        Some("check"),
+        "has(state.prime.process.pipeline.outline.value)",
+        OnError::Fail,
+        vec![],
+        None,
+    );
+    let pipeline = chain_dynamic(
+        root_path().push_name("process").push_name("pipeline"),
+        "pipeline",
+        OnError::Fail,
+        vec![outline, check],
+    );
+    let prep = chain_dynamic(
+        root_path().push_name("process").push_name("prep"),
+        "prep",
+        OnError::Fail,
+        vec![],
+    );
+    let gate = cel_if(
+        root_path().push_name("process"),
+        None,
+        "true",
+        OnError::Fail,
+        vec![prep, pipeline],
+        None,
+    );
+    let process = chain_dynamic(
+        root_path().push_name("process"),
+        "process",
+        OnError::Fail,
+        vec![gate],
+    );
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![process]);
+    let (store, _observer, result) = run(root).await;
+    result.unwrap();
+
+    let snapshot = store.snapshot(&store.root);
+    let root_dict = as_dict(&snapshot);
+    let prime = as_dict(get(root_dict, "prime").unwrap());
+    let process_node = as_dict(get(prime, "process").unwrap());
+    let pipeline_node = as_dict(get(process_node, "pipeline").unwrap());
+    let check_node = as_dict(get(pipeline_node, "check").unwrap());
+    let meta = as_dict(get(check_node, "meta").unwrap());
+    assert_eq!(
+        get(meta, "condition_result"),
+        Some(&Value::Bool(true)),
+        "`prime.process.pipeline.outline.value` must resolve through the live overlay"
+    );
+}
+
+#[tokio::test]
+async fn a_tool_params_template_resolves_the_same_sibling_path_as_probe_e() {
+    // Same shape as the probe-E test above, but through a Mustache
+    // template param on a real `tool` leaf rather than a CEL `if`'s own
+    // condition -- the review's own concern: "a template `{{prime.
+    // process.pipeline.outline.value}}` in a tool param silently
+    // renders ''. That is a realistic document." A missing path here
+    // renders empty, and `json`'s own `parse` mode fails on an empty
+    // `input:` (`"json: parse failed: ..."`). `outline`'s own `value`
+    // is `json: stringify`'s own output for `1` -- the *string* `"1"`
+    // (not its JSON-quoted form: `json: stringify`'s own `value` is
+    // already a plain string) -- which renders, bare, as the text `1`;
+    // Python's own `str()` on a *bool* would render the capitalized
+    // `True`/`False`, not `parse`'s own lowercase JSON spelling, so an
+    // ordinary dynamic's own `value: true` can't tell "resolved" apart
+    // from "silently rendered empty" here the way this string can.
+    let outline = {
+        let mut params = indexmap::IndexMap::new();
+        params.insert(
+            Value::Str("mode".to_string()),
+            ParamNode::Literal(Value::Str("stringify".to_string())),
+        );
+        params.insert(
+            Value::Str("input".to_string()),
+            ParamNode::Literal(1i64.into()),
+        );
+        json_tool_leaf(
+            root_path()
+                .push_name("process")
+                .push_name("pipeline")
+                .push_name("outline"),
+            "outline",
+            params,
+        )
+    };
+    let mut params = indexmap::IndexMap::new();
+    params.insert(
+        Value::Str("mode".to_string()),
+        ParamNode::Literal(Value::Str("parse".to_string())),
+    );
+    params.insert(
+        Value::Str("input".to_string()),
+        ParamNode::Template(TemplateText::new(
+            "{{prime.process.pipeline.outline.value}}".to_string(),
+            true,
+            Escape::Html,
+        )),
+    );
+    let render = json_tool_leaf(
+        root_path()
+            .push_name("process")
+            .push_name("pipeline")
+            .push_name("render"),
+        "render",
+        params,
+    );
+    let pipeline = chain_dynamic(
+        root_path().push_name("process").push_name("pipeline"),
+        "pipeline",
+        OnError::Fail,
+        vec![outline, render],
+    );
+    let prep = chain_dynamic(
+        root_path().push_name("process").push_name("prep"),
+        "prep",
+        OnError::Fail,
+        vec![],
+    );
+    let gate = cel_if(
+        root_path().push_name("process"),
+        None,
+        "true",
+        OnError::Fail,
+        vec![prep, pipeline],
+        None,
+    );
+    let process = chain_dynamic(
+        root_path().push_name("process"),
+        "process",
+        OnError::Fail,
+        vec![gate],
+    );
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![process]);
+
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+    let observer = RecordingObserver::new();
+    electricity_vm::execute_root(
+        &support::program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await
+    .unwrap();
+
+    let snapshot = store.snapshot(&store.root);
+    let root_dict = as_dict(&snapshot);
+    let prime = as_dict(get(root_dict, "prime").unwrap());
+    let process_node = as_dict(get(prime, "process").unwrap());
+    let pipeline_node = as_dict(get(process_node, "pipeline").unwrap());
+    let render_node = as_dict(get(pipeline_node, "render").unwrap());
+    assert_eq!(
+        get(render_node, "value"),
+        Some(&Value::from(1i64)),
+        "the template must resolve `outline`'s write, not silently render empty"
     );
 }

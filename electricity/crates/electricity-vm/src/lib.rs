@@ -28,7 +28,7 @@ pub mod store;
 pub use cancel::CancellationToken;
 pub use limiter::{Limiter, LimiterError, SlotGuard};
 pub use observer::{NullObserver, RunObserver};
-pub use store::{NodeRef, Store, StoreError};
+pub use store::{NodeRef, Slot, Store, StoreError};
 
 use electricity_bytecode::Program;
 use electricity_tools::ToolRegistry;

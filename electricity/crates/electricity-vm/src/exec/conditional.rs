@@ -10,7 +10,7 @@
 
 use super::dynamic::now_iso;
 use super::{BoxExecFuture, CtxChain, CtxSource, execute_op, key, normalize_labels, store_err};
-use crate::{CancellationToken, NodeRef, RunContext, RunObserver, Store, VmError};
+use crate::{CancellationToken, NodeRef, RunContext, RunObserver, Slot, Store, VmError};
 use electricity_bytecode::{Condition, NodeKind, OnError, Op, Region};
 use electricity_value::Value;
 use indexmap::IndexMap;
@@ -133,34 +133,49 @@ fn write_conditional_meta_start(
 /// no-op when it is `None`, exactly mirroring Python's own `if node:`/
 /// `if meta:` guards.
 ///
-/// *ctx_chain* is resolved into a `Value` fresh, separately, for the
-/// condition and for every branch step -- never once, cached, for the
-/// whole call. Python's own `ctx` parameter (what this chain stands
-/// in for) is a live reference: `base_ctx = ctx` binds no new object,
-/// so `base_ctx.get("prime")` -- read again by every `scope_ctx` call
+/// Python's own `ctx` parameter (what *ctx_chain* stands in for) is a
+/// live reference: `base_ctx = ctx` binds no new object, so
+/// `base_ctx.get("prime")` -- read again by every `scope_ctx` call
 /// below -- always sees whatever that live object currently holds,
 /// including a write an *earlier* branch step just made through an
 /// already-existing ancestor path (`state.prime.<dynamic>.<name>`, any
-/// number of `dynamic` levels deep). A single `ctx.clone()` taken once,
-/// up front, cannot reproduce that: `Value` is owned data, not a
-/// reference, so it would freeze every nested value exactly as it
-/// stood at that one moment -- the P0 "a nested container freezes its
-/// own ancestors' state" finding on PR #440. Re-resolving *ctx_chain*
-/// instead -- via [`super::live_ctx`], which walks the still-live
-/// [`crate::NodeRef`]s behind every [`super::CtxSource::Live`] entry
-/// fresh each time -- reproduces that liveness exactly, including its
-/// own wrinkle: once a branch step completes, the overlay this
-/// function builds for the *next* one collapses *ctx_chain*'s current
-/// snapshot into a single [`super::CtxSource::Frozen`] entry (Python's
-/// own `scope_ctx`, whose `merged["prime"] = {**parent, **local}` is a
-/// fresh *shallow copy* of `parent`, not `parent` itself) -- so a
-/// *sibling* container created *after* that snapshot (a `dynamic` two
-/// steps into the same branch, say) is invisible to a bare `state.
-/// prime.<that sibling>` read from a step at or after the one that
-/// collapsed it, in Rust exactly as in Python. The branch's own first
-/// step is the one case nothing has collapsed yet, so it always runs
-/// against *ctx_chain* exactly as received -- still fully live, all
-/// the way up.
+/// number of `dynamic` levels deep, however many steps ago that
+/// ancestor's own container was created). This function never
+/// resolves *ctx_chain* into one `Value` and keeps using that -- a
+/// single such snapshot, taken once up front, cannot reproduce
+/// liveness: `Value` is owned data, not a reference, so it would
+/// freeze every nested value exactly as it stood at that one moment --
+/// the P0 "a nested container freezes its own ancestors' state"
+/// finding on PR #440, found *twice*: once for *ctx_chain* itself
+/// (fixed by threading the chain this far at all, rather than a
+/// resolved `ctx: &Value`), and once more for the overlay this
+/// function rebuilds after every branch step ([`build_overlay`]) --
+/// an *initial* fix collapsed that overlay into a [`super::
+/// CtxSource::Frozen`] `Value` too, which is exactly as wrong one level
+/// later: a branch's own *later* step can create a container nested
+/// two or more `dynamic` levels under an ancestor the overlay already
+/// covers (`state.prime.<outer>.<sibling>.<grandchild>`), and a
+/// `Frozen` snapshot taken before that container existed can never
+/// gain it, no matter how many times it gets rebuilt from a *fresh*
+/// chain read afterward -- the snapshot itself is already inert data
+/// one level down. `build_overlay` instead builds the overlay as a
+/// *detached* [`crate::NodeRef`] whose own [`crate::Slot`]s are cloned
+/// (not snapshotted) from *ctx_chain*'s current state plus *local* --
+/// a [`crate::Slot::Node`] clone is an `Rc` clone of the live node
+/// itself, reproducing Python's own `{**ctx, **local}` dict-literal
+/// construction exactly (a new top-level dict, but every value inside
+/// it the same object the source held) -- and pushes it as a
+/// [`super::CtxSource::Live`] entry, resolved through [`super::
+/// live_ctx`] exactly like any other live node. The one wrinkle this
+/// keeps faithfully: `build_overlay`'s own `parent = ctx.get("prime")`
+/// read happens once, from *ctx_chain* as it stood *before* the current
+/// step ran -- so a sibling container the *next* step itself creates
+/// still isn't visible to that step's own overlay (Python's own
+/// `scope_ctx` has exactly the same gap; `tests/conditional.rs`'s own
+/// "second branch step" test pins this down). The branch's own first
+/// step runs against *ctx_chain* exactly as received -- never wrapped
+/// in an overlay at all, since nothing has been written yet to build
+/// one from.
 #[allow(clippy::too_many_arguments)]
 async fn decide_and_run<'a>(
     op: &'a Op,
@@ -224,10 +239,10 @@ async fn decide_and_run<'a>(
     let baseline: HashSet<Value> = branch_parent.borrow().keys().cloned().collect();
     // The branch's own first step runs against *ctx_chain* exactly as
     // received -- still live. From the second step on, `step_chain`
-    // holds the previous step's own `scope_ctx` overlay, collapsed into
-    // one `Frozen` entry, rebuilt *from ctx_chain again* (never from
-    // the previous overlay) every time -- see `decide_and_run`'s own
-    // doc comment above.
+    // holds a single [`CtxSource::Live`] entry pointing at a *detached*
+    // overlay node ([`build_overlay`]), rebuilt *from ctx_chain again*
+    // (never from the previous overlay) every time -- see
+    // `decide_and_run`'s own doc comment above.
     let mut step_chain: CtxChain = ctx_chain.clone();
     let mut executed: Vec<Value> = Vec::new();
     let mut failure: Option<VmError> = None;
@@ -246,9 +261,8 @@ async fn decide_and_run<'a>(
         {
             Ok(()) => {
                 executed.push(effect_record(child_op, index));
-                let local = local_writes(store, branch_parent, &baseline, &own_names);
-                let fresh_base = super::live_ctx(ctx_chain, store);
-                step_chain = vec![CtxSource::Frozen(scope_ctx(&fresh_base, &local))];
+                let local = local_writes(branch_parent, &baseline, &own_names);
+                step_chain = vec![CtxSource::Live(build_overlay(ctx_chain, &local))];
             }
             Err(e) => {
                 failure = Some(match e {
@@ -343,50 +357,110 @@ fn effect_record(op: &Op, index: usize) -> Value {
 /// `core.scope.local_writes` -- the top-level keys *node* gained since
 /// *baseline*, plus any of *own_names* even if already present in
 /// *baseline* (a step shadowing an enclosing name of the same spelling
-/// still counts as local to this branch).
+/// still counts as local to this branch). Returns [`Slot`]s, not a
+/// snapshot [`Value`]: a [`Slot::Node`] clones its `Rc`, so a container
+/// one of the branch's own steps just created stays the *same* live
+/// node once it lands in [`build_overlay`]'s own detached map, exactly
+/// as Python's `{key: state[key] for key in ...}` carries the same live
+/// dict object forward, never a copy of it.
 fn local_writes(
-    store: &Store,
     node: &NodeRef,
     baseline: &HashSet<Value>,
     own_names: &HashSet<Value>,
-) -> IndexMap<Value, Value> {
-    let snapshot = store.snapshot(node);
-    let Value::Dict(map) = &snapshot else {
-        return IndexMap::new();
-    };
-    map.iter()
+) -> IndexMap<Value, Slot> {
+    node.borrow()
+        .iter()
         .filter(|(k, _)| !baseline.contains(*k) || own_names.contains(*k))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }
 
-/// `core.scope.scope_ctx` -- a shallow `{**ctx, **local}` overlay, with
-/// *local* additionally merged one level inside `ctx["prime"]` so both
-/// the bare (`{{step.value}}`) and `prime`-qualified
-/// (`{{prime.step.value}}`) spellings resolve inside the branch.
-fn scope_ctx(ctx: &Value, local: &IndexMap<Value, Value>) -> Value {
-    if local.is_empty() {
-        return ctx.clone();
-    }
-    let ctx_map = match ctx {
-        Value::Dict(d) => d.clone(),
-        _ => IndexMap::new(),
-    };
-    let mut merged = ctx_map.clone();
-    for (k, v) in local {
-        merged.insert(k.clone(), v.clone());
-    }
-    let prime_key = key("prime");
-    let new_prime = match ctx_map.get(&prime_key) {
-        Some(Value::Dict(parent)) => {
-            let mut np = parent.clone();
-            for (k, v) in local {
-                np.insert(k.clone(), v.clone());
+/// Every entry of *chain*'s own top-level map, [`Slot`]s rather than
+/// resolved values -- [`super::live_ctx`]'s own merge loop, stopping one
+/// level short of turning each entry into an owned [`Value`]. A
+/// [`CtxSource::Live`] entry's own map is borrowed and cloned directly
+/// (a [`Slot::Node`] clone is an `Rc` clone: the live node itself, not a
+/// copy of its contents); a [`CtxSource::Frozen`] entry (a tree's own
+/// one-time snapshot, DESIGN.md §5.5 -- already a plain `Value` with
+/// nothing further live underneath it to preserve) has its own
+/// top-level dict entries wrapped as opaque [`Slot::Value`] leaves.
+fn chain_slots(chain: &CtxChain) -> IndexMap<Value, Slot> {
+    let mut merged: IndexMap<Value, Slot> = IndexMap::new();
+    for source in chain {
+        match source {
+            CtxSource::Live(node) => {
+                for (k, v) in node.borrow().iter() {
+                    merged.insert(k.clone(), v.clone());
+                }
             }
-            Value::Dict(np)
+            CtxSource::Frozen(Value::Dict(map)) => {
+                for (k, v) in map {
+                    merged.insert(k.clone(), Slot::Value(v.clone()));
+                }
+            }
+            CtxSource::Frozen(_) => {}
         }
-        _ => Value::Dict(local.clone()),
-    };
-    merged.insert(prime_key, new_prime);
-    Value::Dict(merged)
+    }
+    merged
+}
+
+/// *node*'s own top-level map as [`Slot`]s, or an empty one if *node*
+/// isn't a tracked [`Slot::Node`] (nor a plain `Value::Dict` leaf) --
+/// [`build_overlay`]'s own `parent = ctx.get("prime")` read.
+fn dict_slots(slot: Option<&Slot>) -> IndexMap<Value, Slot> {
+    match slot {
+        Some(Slot::Node(node)) => node.borrow().clone(),
+        Some(Slot::Value(Value::Dict(map))) => map
+            .iter()
+            .map(|(k, v)| (k.clone(), Slot::Value(v.clone())))
+            .collect(),
+        _ => IndexMap::new(),
+    }
+}
+
+/// `core.scope.scope_ctx` -- `{**ctx, **local}`, with *local*
+/// additionally merged one level inside `ctx["prime"]` so both the bare
+/// (`{{step.value}}`) and `prime`-qualified (`{{prime.step.value}}`)
+/// spellings resolve inside the branch -- built as a *detached* node
+/// (never attached to *store*'s own tree; nothing but this `if`'s own
+/// chain ever points at it), whose map holds cloned [`Slot`]s rather
+/// than a deep-copied [`Value`]: Python's own `{**d}`/dict-literal
+/// construction allocates a *new* dict object, but every *value* inside
+/// it is the exact same object the source dict held -- so a `Slot::Node`
+/// clone (an `Rc` clone, the live node itself) reproduces that exactly,
+/// where cloning a already-materialized `Value` cannot (that copies the
+/// whole subtree, permanently losing liveness below the top level -- the
+/// P0 "a nested container freezes its own ancestors' state" finding on
+/// PR #440, found again on a second review after `CtxSource::Frozen`
+/// alone -- itself still a `Value` under the hood -- turned out to make
+/// exactly the same mistake one level later: a branch's *second* step
+/// could see a sibling *earlier* step's own write, but a container that
+/// sibling itself went on to create nested *two* `dynamic` levels under
+/// an already-live ancestor (`prime.<outer>.<sibling>.<grandchild>`)
+/// still couldn't, because the whole ancestor subtree had already been
+/// snapshotted into inert data one level up). [`super::live_ctx`]
+/// resolves straight through a [`CtxSource::Live`] entry pointing at
+/// this node exactly as it would any other live node -- a detached node
+/// is otherwise an ordinary [`NodeRef`], [`crate::Store::snapshot`]
+/// included, it simply isn't reachable from *store*'s own root.
+fn build_overlay(chain: &CtxChain, local: &IndexMap<Value, Slot>) -> NodeRef {
+    let base = chain_slots(chain);
+    let prime_key = key("prime");
+    let parent_prime = dict_slots(base.get(&prime_key));
+
+    let mut top = base;
+    for (k, v) in local {
+        top.insert(k.clone(), v.clone());
+    }
+
+    let mut prime = parent_prime;
+    for (k, v) in local {
+        prime.insert(k.clone(), v.clone());
+    }
+    top.insert(
+        prime_key,
+        Slot::Node(std::rc::Rc::new(std::cell::RefCell::new(prime))),
+    );
+
+    std::rc::Rc::new(std::cell::RefCell::new(top))
 }

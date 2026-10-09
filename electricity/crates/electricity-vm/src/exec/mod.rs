@@ -97,32 +97,57 @@ pub(crate) fn normalize_labels(labels: Option<&Value>) -> Value {
 ///
 /// A chain entry is either [`CtxSource::Live`] -- re-snapshotted fresh
 /// every time [`live_ctx`] is called, so a write anywhere underneath it
-/// (including one made *after* this entry joined the chain) is always
-/// visible -- or [`CtxSource::Frozen`], a `Value` already materialized
-/// once and never refreshed (a tree's own one-time `dict(ctx)` snapshot,
-/// DESIGN.md ::5.5; an `if` branch's own per-step `scope_ctx` overlay,
-/// Quirk Q1, rebuilt fresh from the branch's own *unmodified* starting
-/// chain on every single step -- never from the previous step's own
-/// overlay, exactly as Python's `scope_ctx(base_ctx, local)` always
-/// re-reads `base_ctx`, never the previous iteration's own rebuilt
-/// `ctx` -- see `exec::conditional`'s own module doc comment. A branch's
-/// *first* step is never wrapped in a `Frozen` entry at all: it runs
-/// against the branch's own starting chain exactly as received, still
-/// live, because freezing it before the branch has written anything of
-/// its own would lose every nested write a step inside it goes on to
-/// make through an already-existing ancestor path -- the P0 "a nested
-/// container freezes its own ancestors' state" finding on PR #440,
-/// which named exactly this). Python's
-/// own `ctx = store.state if ctx_override is None else {**ctx_override,
-/// **store.state}` never actually copies a nested dict -- the dict
-/// literal/spread only ever touches the *top* level, so every nested
-/// value (in particular `ctx["prime"]`, however many `dynamic` levels up
-/// it came from) is the exact same live object `store.state` itself
-/// mutates -- so a Rust `Value`, once cloned out of a [`Store::snapshot`],
-/// can never reproduce that by staying put: it has to be rebuilt from
-/// the *live* [`NodeRef`] chain at the moment it is actually used
-/// instead (issue #431 review, the P0 "a nested container freezes its
-/// own ancestors' state" finding on PR #440).
+/// (including one made *after* this entry joined the chain, however
+/// many `dynamic` levels down) is always visible -- or
+/// [`CtxSource::Frozen`], a `Value` already materialized once and never
+/// refreshed. `Frozen` is correct for exactly one case left in this
+/// crate: a tree's own one-time `dict(ctx)` snapshot (DESIGN.md §5.5),
+/// taken right before dispatch and shared by every branch, matching
+/// Python's own single snapshot moment -- nothing else can mutate any
+/// of a tree's own ancestors while its branches run (each writes into
+/// its own isolated store until the merge), so there is nothing further
+/// for a `Frozen` entry to miss.
+///
+/// An `if` branch's own per-step `scope_ctx` overlay (Quirk Q1) is
+/// *not* a second `Frozen` case, even though it is also rebuilt fresh
+/// from the branch's own *unmodified* starting chain on every single
+/// step (never from the previous step's own overlay, exactly as
+/// Python's `scope_ctx(base_ctx, local)` always re-reads `base_ctx`,
+/// never the previous iteration's own rebuilt `ctx` -- see
+/// `exec::conditional`'s own `build_overlay`). Unlike a tree, nothing
+/// stops a branch's *own* later step from creating a container nested
+/// two or more `dynamic` levels under an ancestor the overlay already
+/// covers (`state.prime.<outer>.<sibling>.<grandchild>`) -- so the
+/// overlay has to go on being live for everything underneath it, not
+/// just the one level `scope_ctx` itself touches. `build_overlay`
+/// builds it as a *detached* [`NodeRef`] (never attached to the real
+/// store tree) whose own [`crate::store::Slot`]s are cloned, not
+/// snapshotted: a [`crate::store::Slot::Node`] clone is an `Rc` clone of
+/// the live node itself, so the overlay's own `prime` entry (and every
+/// other key it carries forward from the chain it was built from) stays
+/// exactly as live as Python's own `{**ctx, **local}` dict-literal
+/// construction, which allocates a new top-level dict but never copies
+/// what each of its *values* point to. It is pushed as a
+/// [`CtxSource::Live`] entry, resolved through [`live_ctx`] exactly like
+/// any other live node (a detached node is an ordinary `NodeRef` in
+/// every other respect). This is the P0 "a nested container freezes its
+/// own ancestors' state" finding on PR #440, found a second time after
+/// an initial fix that gave the overlay a `Frozen(Value)` of its own --
+/// which looked identical to the tree's case above, but was wrong for
+/// exactly the reason the tree's case is safe: something *does* go on
+/// mutating a branch's own ancestors (the branch's own later steps)
+/// while this overlay is in use.
+///
+/// Either way, Python's own `ctx = store.state if ctx_override is None
+/// else {**ctx_override, **store.state}` never actually copies a nested
+/// dict -- the dict literal/spread only ever touches the *top* level,
+/// so every nested value (in particular `ctx["prime"]`, however many
+/// `dynamic` levels up it came from) is the exact same live object
+/// `store.state` itself mutates -- so a Rust `Value`, once cloned out of
+/// a [`Store::snapshot`], can never reproduce that by staying put: it
+/// has to be rebuilt from the *live* [`NodeRef`] chain (or, for the
+/// overlay, a detached one sharing the same live `Slot`s) at the moment
+/// it is actually used instead.
 #[derive(Clone)]
 pub(crate) enum CtxSource {
     Live(NodeRef),

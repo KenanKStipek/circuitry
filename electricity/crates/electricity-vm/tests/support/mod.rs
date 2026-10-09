@@ -23,8 +23,8 @@
 //! that).
 
 use electricity_bytecode::{
-    Condition, DocumentInfo, EffectPath, LeafKind, NodeKind, OnError, Op, Program, Region,
-    RetryPolicy, ToolOp,
+    Condition, DocumentInfo, EffectPath, LeafKind, NodeKind, OnError, Op, ParamNode, Program,
+    Region, RetryPolicy, ToolOp,
 };
 use electricity_tools::ToolRegistry;
 use electricity_value::Value;
@@ -85,6 +85,13 @@ pub fn tool_leaf(path: EffectPath, name: &str) -> Op {
         Value::Str("input".to_string()),
         electricity_bytecode::ParamNode::Literal(Value::Str("not json".to_string())),
     );
+    json_tool_leaf(path, name, params)
+}
+
+/// A `json` tool leaf with *params* exactly as given -- [`tool_leaf`]'s
+/// own general form, for a test that needs a specific `mode`/`input`
+/// (a template param, say) rather than the fixed always-fails shape.
+pub fn json_tool_leaf(path: EffectPath, name: &str, params: IndexMap<Value, ParamNode>) -> Op {
     Op {
         path,
         name: Some(name.to_string()),
