@@ -379,6 +379,8 @@ version = "0.1.0"
 dependencies = [
  "electricity-value",
  "regex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -407,6 +409,8 @@ dependencies = [
  "async-trait",
  "electricity-json",
  "electricity-value",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
