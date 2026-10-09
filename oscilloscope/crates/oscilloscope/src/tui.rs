@@ -603,7 +603,7 @@ mod golden_tests {
             &plan,
             &mut model,
             Some(&state),
-            ProcessState::Exited { interrupted: false },
+            ProcessState::exited(false),
             "cof",
             "prime.a",
         );
@@ -624,7 +624,7 @@ mod golden_tests {
             &plan,
             &mut model,
             Some(&state),
-            ProcessState::Exited { interrupted: false },
+            ProcessState::exited(false),
             "cof",
             "prime.b",
         );
@@ -632,7 +632,17 @@ mod golden_tests {
     }
 
     #[test]
-    fn cancelled() {
+    fn cancelled_row_with_no_final_write_yet() {
+        // The process exited and osp itself forwarded a signal
+        // (`interrupted: true`), but the state it has is a snapshot
+        // from *before* the final write landed (no `runtime` key at
+        // all) -- a transient race, not an ended run. `prime.a`'s own
+        // row still reads cancelled (DESIGN.md §2.1 rule 2), but the
+        // header, which has no sign this run specifically failed, now
+        // correctly reads "aborted" rather than reusing the row's own
+        // `interrupted` flag (the bug the orchestrator measured: see
+        // `header_reads_cancelled_once_the_final_state_lands` below for
+        // the real cancelled-header case).
         let plan = sample_plan();
         let mut model = RunModel::new();
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
@@ -642,7 +652,32 @@ mod golden_tests {
             &plan,
             &mut model,
             Some(&state),
-            ProcessState::Exited { interrupted: true },
+            ProcessState::exited(true),
+            "cof",
+            "prime.a",
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn header_reads_cancelled_once_the_final_state_lands() {
+        // The orchestrator's own regression: a run the user cancelled
+        // (first SIGINT) always gets a final write before cof exits
+        // (DESIGN.md §4.1) -- `runtime.last_run.completed_at` set and
+        // `prime.meta.error` starting with "Interrupted". The header
+        // must read "cancelled", not "failed".
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": false, "meta": {"completed_at": "t1", "error": "Interrupted (Ctrl-C/SIGINT)"},
+            "a": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}}
+        }});
+        let text = snapshot(
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(true),
             "cof",
             "prime.a",
         );
@@ -657,7 +692,31 @@ mod golden_tests {
             &plan,
             &mut model,
             None,
-            ProcessState::Exited { interrupted: false },
+            ProcessState::exited(false),
+            "cof",
+            "prime.a",
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn header_reads_failed_for_an_invalid_document_with_no_final_state() {
+        // The orchestrator's own regression: an invalid document
+        // (cof exits 1 before execution, with no state file and its
+        // own `{"ok": false, "error": ...}` JSON on stdout) must read
+        // "failed", not "aborted" (DESIGN.md §2.1 rule 7's "no ended
+        // state" branch).
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let text = snapshot(
+            &plan,
+            &mut model,
+            None,
+            ProcessState::Exited {
+                interrupted: false,
+                likely_failed: true,
+                has_failure_reason: true,
+            },
             "cof",
             "prime.a",
         );

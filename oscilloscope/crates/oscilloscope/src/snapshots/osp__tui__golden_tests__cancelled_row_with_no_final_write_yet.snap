@@ -3,7 +3,7 @@ source: crates/oscilloscope/src/tui.rs
 expression: text
 ---
 "┌────────────────────────────────────────────────────────────────────┐"
-"│do-thing.yml  cof  cancelled  5.0s  effects 0/3+  ↑0 ↓0             │"
+"│do-thing.yml  cof  aborted  5.0s  effects 0/3+  ↑0 ↓0               │"
 "└────────────────────────────────────────────────────────────────────┘"
 "┌ plan ──────────────────────────────────┐┌ details ─────────────────┐"
 "│⊘ prime                                 ││path   prime.a            │"

@@ -28,7 +28,7 @@ use clap::{Parser, ValueEnum};
 use crossterm::event::{self, Event as CEvent, KeyEventKind};
 use oscilloscope_core::diff::Differ;
 use oscilloscope_core::engine::{CofEngine, ElectricityEngine, Engine, EngineError, RunSpec};
-use oscilloscope_core::model::{ProcessState, RunModel};
+use oscilloscope_core::model::{ProcessState, RunModel, RunStatus, run_status};
 use oscilloscope_core::observe::{
     EventsTailer, LiveStatePoller, POLL_INTERVAL, duration_seconds, parse_event,
 };
@@ -575,14 +575,18 @@ fn finish_run(
             if differ.run_line_emitted() {
                 return None;
             }
-            let text = match failure_reason_fallback(run_dir, model) {
-                Some(err) => format!(
-                    "■ run failed: {}",
-                    oscilloscope_core::diff::format_reason_for_summary(&err)
+            Some(oscilloscope_core::diff::LogLine {
+                ts: None,
+                text: unended_run_summary_text(
+                    final_state.as_ref(),
+                    // DESIGN.md §2.1 rule 7: the real exit code being
+                    // exactly 1 is what cof exits with for a
+                    // pre-execution validation failure (§4.1).
+                    exit_status.code() == Some(1),
+                    run_dir,
+                    model,
                 ),
-                None => "■ run aborted (no final state)".to_string(),
-            };
-            Some(oscilloscope_core::diff::LogLine { ts: None, text })
+            })
         });
     if let Some(line) = summary {
         print_line(out, clock, line.ts.as_deref(), &line.text);
@@ -865,8 +869,15 @@ fn run_tui(
         if dirty {
             let process = match exit_status {
                 None => ProcessState::Running,
-                Some(_) => ProcessState::Exited {
+                // DESIGN.md §2.1 rule 7: `likely_failed` is the real
+                // exit code being exactly 1 (what cof exits with for
+                // a pre-execution validation failure, §4.1), never
+                // `signal_count` -- a run cancelled by a forwarded
+                // signal exits 130/143/129, not 1.
+                Some(status) => ProcessState::Exited {
                     interrupted: signal_count > 0,
+                    likely_failed: status.code() == Some(1),
+                    has_failure_reason: failure_reason_fallback(&run_dir, &model).is_some(),
                 },
             };
             render_state = oscilloscope_core::render::build(
@@ -1066,6 +1077,40 @@ fn failure_reason_fallback(run_dir: &Path, model: &RunModel) -> Option<String> {
         .map(str::to_string)
         .or_else(|| read_stdout_json_error(&run_dir.join("stdout.txt")))
         .or_else(|| last_nonempty_stderr_line(&run_dir.join("stderr.txt")))
+}
+
+/// The plain `--log` summary's own synthetic line for a run that
+/// never reached `differ.finish` at all (DESIGN.md §2.1 rule 7's
+/// "process exited with no ended state" branch): shared by
+/// `finish_run` (which has a real exit code) and `finish_watch`
+/// (which has none, and passes `likely_failed` from `run_end`'s own
+/// `ok` instead, K4). Goes through the same `run_status` the TUI
+/// header and `Differ::finish` use, so the three surfaces can't
+/// label the same run differently -- this is the K6 fix: an invalid
+/// document (`likely_failed`, with cof's own stdout JSON as the
+/// reason) must read "failed", not "aborted".
+fn unended_run_summary_text(
+    state: Option<&serde_json::Value>,
+    likely_failed: bool,
+    run_dir: &Path,
+    model: &RunModel,
+) -> String {
+    let reason = failure_reason_fallback(run_dir, model).filter(|r| !r.is_empty());
+    let process = ProcessState::Exited {
+        interrupted: false,
+        likely_failed,
+        has_failure_reason: reason.is_some(),
+    };
+    match run_status(state, process) {
+        RunStatus::Failed => format!(
+            "■ run failed: {}",
+            reason
+                .as_deref()
+                .map(oscilloscope_core::diff::format_reason_for_summary)
+                .unwrap_or_default()
+        ),
+        _ => "■ run aborted (no final state)".to_string(),
+    }
 }
 
 /// One observation tick's lines, from whichever of state and events
@@ -1501,7 +1546,14 @@ fn run_tui_watch(
 
         if dirty {
             let process = if ended {
-                ProcessState::Exited { interrupted: false }
+                // DESIGN.md §2.1 rule 7: `osp watch` owns no process
+                // of its own, so `run_end`'s own `ok` stands in for a
+                // real exit code of 1.
+                ProcessState::Exited {
+                    interrupted: false,
+                    likely_failed: model.run_end_ok() == Some(false),
+                    has_failure_reason: failure_reason_fallback(&run_dir, &model).is_some(),
+                }
             } else {
                 ProcessState::Running
             };
@@ -1673,7 +1725,15 @@ fn finish_watch(
             }
             Some(oscilloscope_core::diff::LogLine {
                 ts: None,
-                text: "■ run aborted (no final state)".to_string(),
+                text: unended_run_summary_text(
+                    final_state.as_ref(),
+                    // DESIGN.md §2.1 rule 7: `osp watch` owns no
+                    // process of its own, so `run_end`'s own `ok`
+                    // stands in for a real exit code of 1.
+                    model.run_end_ok() == Some(false),
+                    run_dir,
+                    model,
+                ),
             })
         });
     if let Some(line) = summary {

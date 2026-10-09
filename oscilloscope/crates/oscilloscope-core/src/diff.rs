@@ -7,7 +7,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use electricity_bytecode::OnError;
 use serde_json::Value;
 
-use crate::model::{NodeMeta, RunModel, flatten_state, run_ended, run_error, run_ok, run_totals};
+use crate::model::{
+    EndedOutcome, NodeMeta, RunModel, ended_outcome, flatten_state, run_ended, run_error,
+    run_totals,
+};
 use crate::observe::Event;
 use crate::plan::PlanTree;
 
@@ -438,12 +441,16 @@ impl Differ {
     /// ran) has no error of its own to report. The caller supplies one
     /// in priority order: a `run_end` event's own `error`, then cof's
     /// pre-execution stdout JSON, then the engine's last stderr line.
+    ///
+    /// The ok/cancelled/failed split is `ended_outcome` (DESIGN.md
+    /// §2.1 rule 7's first bullet), the same one `run_status` uses for
+    /// the TUI header — a run the user cancelled must read "cancelled"
+    /// here too, not "failed".
     pub fn finish(&mut self, state: &Value, fallback_reason: Option<&str>) -> Option<LogLine> {
         if self.run_line_emitted || !run_ended(state) {
             return None;
         }
         self.run_line_emitted = true;
-        let ok = run_ok(state);
         let totals = run_totals(state);
         let totals_text = totals
             .as_ref()
@@ -451,16 +458,22 @@ impl Differ {
             .and_then(Value::as_f64)
             .map(|w| format!("  {w:.1}s"))
             .unwrap_or_default();
-        let status_text = if ok {
-            "ok".to_string()
-        } else {
-            match run_error(state).filter(|e| !e.is_empty()) {
+        let status_text = match ended_outcome(state) {
+            EndedOutcome::Ok => "ok".to_string(),
+            EndedOutcome::Cancelled => {
+                // `ended_outcome` only returns `Cancelled` when
+                // `run_error` is `Some` and starts with "Interrupted",
+                // so this is always present — no fallback needed.
+                let reason = run_error(state).unwrap_or_default();
+                format!("cancelled: {}", format_reason_for_summary(&reason))
+            }
+            EndedOutcome::Failed => match run_error(state).filter(|e| !e.is_empty()) {
                 Some(reason) => format!("failed: {}", format_reason_for_summary(&reason)),
                 None => match fallback_reason.filter(|r| !r.is_empty()) {
                     Some(reason) => format!("failed: {}", format_reason_for_summary(reason)),
                     None => "failed".to_string(),
                 },
-            }
+            },
         };
         let run_ts = state
             .pointer("/runtime/last_run/completed_at")
@@ -1010,12 +1023,14 @@ mod tests {
     }
 
     #[test]
-    fn finish_reports_an_interrupted_run_as_failed_even_with_an_open_event_sourced_path() {
+    fn finish_reports_an_interrupted_run_as_cancelled_even_with_an_open_event_sourced_path() {
         // M1: there is no `open_event_paths` gate left to release --
         // an effect interrupted mid-flight never gets its own `end`
         // event at all, but that no longer matters, since the caller
         // decides when to call `finish`, from a state it already
-        // knows is final.
+        // knows is final. The run itself was cancelled, not failed
+        // (DESIGN.md §2.1 rule 7): `prime.meta.error` starts with
+        // "Interrupted".
         let mut differ = Differ::new();
         differ.diff_event(
             &Event::Start {
@@ -1031,7 +1046,29 @@ mod tests {
             "prime": {"value": false, "meta": {"completed_at": "t1", "error": "Interrupted (Ctrl-C/SIGINT)"}}
         });
         let line = differ.finish(&state, None).expect("a summary line");
-        assert!(line.text.starts_with("■ run failed"), "{line:?}");
+        assert!(
+            line.text
+                .starts_with("■ run cancelled: Interrupted (Ctrl-C/SIGINT)"),
+            "{line:?}"
+        );
+    }
+
+    #[test]
+    fn finish_reports_a_real_failure_distinctly_from_a_cancelled_run() {
+        // The orchestrator's own regression: an ended run whose error
+        // does *not* start with "Interrupted" must still read
+        // "failed", never "cancelled".
+        let mut differ = Differ::new();
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": false, "meta": {"completed_at": "t1", "error": "prime.a: /bin/ls failed (exit 1): ls: no"}}
+        });
+        let line = differ.finish(&state, None).expect("a summary line");
+        assert!(
+            line.text
+                .starts_with("■ run failed: prime.a: /bin/ls failed"),
+            "{line:?}"
+        );
     }
 
     #[test]

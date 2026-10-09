@@ -176,10 +176,9 @@ Two inputs feed these rules: the plan (§5), and a sequence of observations. An 
    - **With events:** the container's own `dispatch` event gives an exact bound instead of this estimate — `branches` is the true total (so progress reads "`done` of `branches`" instead of the plan's own, possibly data-dependent, count), and `concurrency`, when the stream has it, is the exact running ceiling in place of the `max_concurrency`/`cpu`-guess above.
 5. A running `use`: its plan children (from compiling a `path` child) follow rule 1. An `inline` child has no static plan, so its children are discovered from the observations.
 6. A retry: a running tool node whose `created_at` moved forward is **retrying (attempt ≥ 2)**. A prompt retry cannot be detected from state.
-7. Run status:
-   - `runtime.last_run.completed_at` set means the run **ended**; `ok` is `prime.meta.error == null`.
-   - The process exit code always wins: 0, 1, 129, 130, 143.
-   - An exit with the file still at `completed_at: null` means the run was **aborted** (second signal, SIGKILL, crash).
+7. Run status (one function, shared by the TUI header, the plain `--log` summary and `osp watch`):
+   - `runtime.last_run.completed_at` set means the run **ended**: **ok** if `prime.meta.error` is `null`, **cancelled** if it starts with `"Interrupted"` (a confirmed `q`, a Ctrl-C cancel, or a forwarded SIGINT/SIGTERM/SIGHUP always reach this branch, §4.1), otherwise **failed**.
+   - The process exited with no ended state: **failed** only when the exit code is exactly 1 *and* there is a pre-execution failure reason (`cof`'s own stdout JSON, or a `run_end` event's error) -- the shape of a document invalid enough that nothing ever ran (§4.1). Otherwise **aborted** (a second signal, SIGKILL, a crash: no final write). `osp watch`, which owns no process of its own, reads `--events`' own `run_end.ok == false` in place of the exit code.
 
 ### 2.2 Why a node was skipped
 
