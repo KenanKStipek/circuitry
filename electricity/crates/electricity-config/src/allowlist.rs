@@ -28,6 +28,7 @@
 //! behaviour it could get out of sync with.
 
 use crate::config::CircuitryConfig;
+use crate::util::is_truthy;
 use electricity_value::{Dict, Value};
 use std::collections::BTreeSet;
 
@@ -169,7 +170,12 @@ pub fn walk_orchestration_refs(
                 }
             }
         }
-        let effects = get(orch, "effects").or_else(|| get(orch, "steps"));
+        // `orch.get("effects") or orch.get("steps")`: Python's `or`
+        // falls back on an explicit `null`/`[]` `effects`, not only an
+        // absent one.
+        let effects = get(orch, "effects")
+            .filter(|v| is_truthy(Some(v)))
+            .or_else(|| get(orch, "steps"));
         walk_effects(effects, &mut adapters, &mut tools);
         walk_effects(get(orch, "finally"), &mut adapters, &mut tools);
     }
