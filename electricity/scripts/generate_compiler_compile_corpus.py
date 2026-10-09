@@ -128,6 +128,21 @@ add({
     "entry": "doc.yml",
 })
 
+# This case's own `definition.params` can't, by itself, prove `1` (int)
+# and `'1'` (str) stayed distinct keys: both this golden JSON file and
+# the Rust-side projection stringify a param key the same way
+# (`electricity_json::stringify_key`) before putting it in a JSON
+# object, so two keys that stringify alike collapse to one -- keeping
+# only the last value -- on *both* sides, the same way `json.dumps`
+# itself collapses them when Circuitry's own corpus helper serializes
+# `_dump_definition`'s raw dict. A compiler that incorrectly
+# `py_str`-collapsed the two keys at compile time, before this corpus
+# ever stringifies anything, would still pass this comparison. The
+# actual regression test for that collapse is a Rust-only unit test
+# (`compile::params::tests::non_string_keys_are_kept_as_value_not_
+# stringified`), which inspects the compiled `IndexMap<Value, _>`
+# directly, before either side's JSON stringification throws the
+# distinction away.
 add({
     "name": "tool_params_int_key",
     "files": {"doc.yml": (
