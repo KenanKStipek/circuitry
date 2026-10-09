@@ -1,10 +1,11 @@
 //! Replays `electricity/scripts/generate_store_corpus.py`'s own op
-//! sequences against this crate's real `Store`, and checks the
-//! materialized result matches Circuitry's own `core.store.store.Store`
+//! sequences against this crate's real `Store`, and checks `Store::
+//! snapshot`'s result matches Circuitry's own `core.store.store.Store`
 //! byte-for-byte -- including key *order*, since `Value`'s own `PartialEq`
 //! (Python dict `==` semantics) doesn't check it (`electricity-value`'s
 //! crate docs), and a `meta` key's order is part of `--out`'s own contract
-//! (issue #431's Lane B section).
+//! (issue #431's Lane B section). An `"alias"` case additionally checks
+//! `Store::saved` against Circuitry's own real `compact_last_aliases`.
 //!
 //! The corpus itself uses the tagged `{"t": ..., "v": ...}` encoding
 //! `generate_value_corpus.py`'s own `encode` uses (`decode` below is its
@@ -92,6 +93,30 @@ fn apply_op(store: &Store, parent: &electricity_vm::NodeRef, op: &serde_json::Va
                     .unwrap();
             }
         }
+        "alias" => {
+            // *path* and *target* always share the same ancestors --
+            // `generate_store_corpus.py`'s own `apply_op` enforces that,
+            // matching `Store::alias`'s own single-parent signature.
+            let (alias_key, ancestors) = segments.split_last().expect("path is never empty");
+            let target_path = op["target"].as_str().expect("op.target is a string");
+            let target_key = target_path
+                .rsplit('.')
+                .next()
+                .expect("target path is never empty");
+            let mut node = parent.clone();
+            for segment in ancestors {
+                node = store
+                    .ensure_dict(&node, Value::Str(segment.to_string()))
+                    .unwrap();
+            }
+            store
+                .alias(
+                    &node,
+                    Value::Str(alias_key.to_string()),
+                    &Value::Str(target_key.to_string()),
+                )
+                .unwrap();
+        }
         other => panic!("unknown corpus op {other:?}"),
     }
 }
@@ -142,7 +167,7 @@ fn store_corpus_matches_circuitrys_own_store() {
                 for op in case["ops"].as_array().expect("case.ops is an array") {
                     apply_op(&store, &store.root, op);
                 }
-                store.materialize(&store.root)
+                store.snapshot(&store.root)
             }
             "merge" => {
                 let store = Store::new();
@@ -165,7 +190,19 @@ fn store_corpus_matches_circuitrys_own_store() {
                     }
                 }
                 store.merge(&store.root, branches).unwrap();
-                store.materialize(&store.root)
+                store.snapshot(&store.root)
+            }
+            "alias" => {
+                let store = Store::new();
+                for op in case["ops"].as_array().expect("case.ops is an array") {
+                    apply_op(&store, &store.root, op);
+                }
+                let snapshot = store.snapshot(&store.root);
+                assert_matches_in_order(&snapshot, &expected, name);
+                let expected_saved = decode(&case["expected_saved"]);
+                let saved = store.saved(&store.root);
+                assert_matches_in_order(&saved, &expected_saved, &format!("{name} (saved)"));
+                continue;
             }
             other => panic!("case {name:?} has an unknown kind {other:?}"),
         };

@@ -515,5 +515,878 @@
         ]
       ]
     }
+  },
+  {
+    "name": "branch_overwrites_a_parent_tracked_container_key",
+    "kind": "merge",
+    "initial": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "cfg"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "int",
+                  "v": "1"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "branch_ops": [
+      [
+        {
+          "op": "set",
+          "path": "cfg.b",
+          "value": {
+            "t": "int",
+            "v": "2"
+          }
+        }
+      ]
+    ],
+    "expected_state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "cfg"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "b"
+                },
+                {
+                  "t": "int",
+                  "v": "2"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "name": "non_string_keys_inside_a_plain_dict_value",
+    "kind": "sequence",
+    "ops": [
+      {
+        "op": "set",
+        "path": "lookup",
+        "value": {
+          "t": "dict",
+          "v": [
+            [
+              {
+                "t": "int",
+                "v": "1"
+              },
+              {
+                "t": "str",
+                "v": "one"
+              }
+            ],
+            [
+              {
+                "t": "int",
+                "v": "2"
+              },
+              {
+                "t": "str",
+                "v": "two"
+              }
+            ],
+            [
+              {
+                "t": "str",
+                "v": "three"
+              },
+              {
+                "t": "int",
+                "v": "3"
+              }
+            ]
+          ]
+        }
+      }
+    ],
+    "expected_state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "lookup"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "str",
+                  "v": "one"
+                }
+              ],
+              [
+                {
+                  "t": "int",
+                  "v": "2"
+                },
+                {
+                  "t": "str",
+                  "v": "two"
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "three"
+                },
+                {
+                  "t": "int",
+                  "v": "3"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "name": "ensure_dict_descends_into_a_plain_dict_value",
+    "kind": "sequence",
+    "ops": [
+      {
+        "op": "set",
+        "path": "tool_output",
+        "value": {
+          "t": "dict",
+          "v": [
+            [
+              {
+                "t": "str",
+                "v": "nested"
+              },
+              {
+                "t": "dict",
+                "v": [
+                  [
+                    {
+                      "t": "str",
+                      "v": "x"
+                    },
+                    {
+                      "t": "int",
+                      "v": "1"
+                    }
+                  ],
+                  [
+                    {
+                      "t": "str",
+                      "v": "y"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                ]
+              }
+            ]
+          ]
+        }
+      },
+      {
+        "op": "ensure_dict",
+        "path": "tool_output.nested"
+      },
+      {
+        "op": "set",
+        "path": "tool_output.nested.y",
+        "value": {
+          "t": "int",
+          "v": "2"
+        }
+      }
+    ],
+    "expected_state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "tool_output"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "nested"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "x"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ],
+                    [
+                      {
+                        "t": "str",
+                        "v": "y"
+                      },
+                      {
+                        "t": "int",
+                        "v": "2"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "name": "last_aliased_to_an_iter_sibling_is_compacted_to_a_ref",
+    "kind": "alias",
+    "ops": [
+      {
+        "op": "set",
+        "path": "prime.lp.iter_2.value",
+        "value": {
+          "t": "str",
+          "v": "done"
+        }
+      },
+      {
+        "op": "alias",
+        "path": "prime.lp.last",
+        "target": "prime.lp.iter_2"
+      }
+    ],
+    "expected_state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "prime"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "lp"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "iter_2"
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "str",
+                              "v": "done"
+                            }
+                          ]
+                        ]
+                      }
+                    ],
+                    [
+                      {
+                        "t": "str",
+                        "v": "last"
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "str",
+                              "v": "done"
+                            }
+                          ]
+                        ]
+                      }
+                    ]
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "expected_saved": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "prime"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "lp"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "iter_2"
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "str",
+                              "v": "done"
+                            }
+                          ]
+                        ]
+                      }
+                    ],
+                    [
+                      {
+                        "t": "str",
+                        "v": "last"
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "$ref"
+                            },
+                            {
+                              "t": "str",
+                              "v": "iter_2"
+                            }
+                          ]
+                        ]
+                      }
+                    ]
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "name": "an_unaliased_last_is_left_untouched",
+    "kind": "alias",
+    "ops": [
+      {
+        "op": "set",
+        "path": "prime.lp.iter_0.value",
+        "value": {
+          "t": "int",
+          "v": "1"
+        }
+      },
+      {
+        "op": "set",
+        "path": "prime.lp.last",
+        "value": {
+          "t": "str",
+          "v": "not an alias"
+        }
+      }
+    ],
+    "expected_state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "prime"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "lp"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "iter_0"
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "int",
+                              "v": "1"
+                            }
+                          ]
+                        ]
+                      }
+                    ],
+                    [
+                      {
+                        "t": "str",
+                        "v": "last"
+                      },
+                      {
+                        "t": "str",
+                        "v": "not an alias"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "expected_saved": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "prime"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "lp"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "iter_0"
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "int",
+                              "v": "1"
+                            }
+                          ]
+                        ]
+                      }
+                    ],
+                    [
+                      {
+                        "t": "str",
+                        "v": "last"
+                      },
+                      {
+                        "t": "str",
+                        "v": "not an alias"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "name": "several_iter_siblings_alias_the_same_node_the_last_one_wins",
+    "kind": "alias",
+    "ops": [
+      {
+        "op": "set",
+        "path": "prime.lp.iter_2.value",
+        "value": {
+          "t": "int",
+          "v": "1"
+        }
+      },
+      {
+        "op": "alias",
+        "path": "prime.lp.iter_5",
+        "target": "prime.lp.iter_2"
+      },
+      {
+        "op": "alias",
+        "path": "prime.lp.last",
+        "target": "prime.lp.iter_2"
+      }
+    ],
+    "expected_state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "prime"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "lp"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "iter_2"
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "int",
+                              "v": "1"
+                            }
+                          ]
+                        ]
+                      }
+                    ],
+                    [
+                      {
+                        "t": "str",
+                        "v": "iter_5"
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "int",
+                              "v": "1"
+                            }
+                          ]
+                        ]
+                      }
+                    ],
+                    [
+                      {
+                        "t": "str",
+                        "v": "last"
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "int",
+                              "v": "1"
+                            }
+                          ]
+                        ]
+                      }
+                    ]
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "expected_saved": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "prime"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "lp"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "iter_2"
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "int",
+                              "v": "1"
+                            }
+                          ]
+                        ]
+                      }
+                    ],
+                    [
+                      {
+                        "t": "str",
+                        "v": "iter_5"
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "int",
+                              "v": "1"
+                            }
+                          ]
+                        ]
+                      }
+                    ],
+                    [
+                      {
+                        "t": "str",
+                        "v": "last"
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "$ref"
+                            },
+                            {
+                              "t": "str",
+                              "v": "iter_5"
+                            }
+                          ]
+                        ]
+                      }
+                    ]
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "name": "a_last_that_is_its_own_tracked_dict_matching_no_sibling",
+    "kind": "alias",
+    "ops": [
+      {
+        "op": "set",
+        "path": "prime.lp.last.value",
+        "value": {
+          "t": "int",
+          "v": "1"
+        }
+      }
+    ],
+    "expected_state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "prime"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "lp"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "last"
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "int",
+                              "v": "1"
+                            }
+                          ]
+                        ]
+                      }
+                    ]
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "expected_saved": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "prime"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "lp"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "last"
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "int",
+                              "v": "1"
+                            }
+                          ]
+                        ]
+                      }
+                    ]
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    }
   }
 ]

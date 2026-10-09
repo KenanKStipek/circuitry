@@ -25,12 +25,13 @@ state.items(): child_store.state[key] = value`) rather than
 coalesced-for-`--live-state` mechanism `core/dynamic.py` never calls to
 produce its own final merge.
 
-`last`-alias compaction (`core/saved_state.py::compact_last_aliases`) is
-deliberately not in this corpus: that function isn't part of `Store`
-itself (`core/loop.py` does the aliasing; `core/saved_state.py` does the
-compaction), and `loop` is out of scope for M0-H's interpreter. electricity
--vm's own `Store::alias`/`Store::materialize` tests cover that mechanism
-directly against DESIGN.md §6.7's documented shape instead.
+`"alias"` cases additionally exercise `core/saved_state.py::
+compact_last_aliases` directly -- `Store` itself has no `alias` operation
+of its own (`core/loop.py` does the aliasing, by plain dict assignment:
+`node["last"] = node[iter_key]`), so an `"alias"` op's own *path*/*target*
+is applied the same way, always under the one shared parent `Store.alias`
+(electricity-vm's own addition, ready for a later milestone's loop body)
+also requires.
 
 Usage: python3 generate_store_corpus.py [--check]
 """
@@ -41,6 +42,7 @@ import json
 import sys
 from pathlib import Path
 
+from circuitry.core.saved_state import compact_last_aliases
 from circuitry.core.store.store import Store
 
 OUTPUT = (
@@ -71,23 +73,58 @@ def encode(value: object) -> dict:
     raise TypeError(f"no tagged encoding for {type(value)!r}")
 
 
+def apply_op(store: Store, op: dict) -> None:
+    """Applies one `{"op": "set"|"ensure_dict"|"alias", ...}` corpus op to
+    *store*. `"alias"`'s own *path*/*target* must share the same
+    ancestors -- the Rust side's `Store::alias` takes one parent plus two
+    keys under it, the same shape `core/loop.py`'s own `node["last"] =
+    node[iter_key]` always has (both sides of that assignment already
+    share the loop body's own node)."""
+    kind = op["op"]
+    if kind == "set":
+        store.set(op["path"], op["value"])
+    elif kind == "ensure_dict":
+        store.ensure_dict(op["path"])
+    elif kind == "alias":
+        *alias_ancestors, alias_key = op["path"].split(".")
+        *target_ancestors, target_key = op["target"].split(".")
+        if alias_ancestors != target_ancestors:
+            raise ValueError("alias and target must share the same parent")
+        parent = store.ensure_dict(".".join(alias_ancestors)) if alias_ancestors else store.state
+        parent[alias_key] = parent[target_key]
+    else:
+        raise ValueError(f"unknown op {kind!r}")
+
+
 def sequence_case(name: str, ops: list[dict]) -> dict:
-    """Runs *ops* (`{"op": "set", "path": ..., "value": ...}` or
-    `{"op": "ensure_dict", "path": ...}`) against one fresh `Store` in
-    order, and records the resulting state."""
+    """Runs *ops* against one fresh `Store` in order, and records the
+    resulting state."""
     store = Store(state={})
     for op in ops:
-        if op["op"] == "set":
-            store.set(op["path"], op["value"])
-        elif op["op"] == "ensure_dict":
-            store.ensure_dict(op["path"])
-        else:
-            raise ValueError(f"unknown op {op['op']!r}")
+        apply_op(store, op)
     return {
         "name": name,
         "kind": "sequence",
         "ops": [encode_op(op) for op in ops],
         "expected_state": encode(store.state),
+    }
+
+
+def alias_case(name: str, ops: list[dict]) -> dict:
+    """Runs *ops* (`set`/`ensure_dict`/`alias`) against one fresh `Store`,
+    then records both the plain state and `compact_last_aliases`'s own
+    saved form of it -- the ground truth for `Store::snapshot` and
+    `Store::saved` respectively."""
+    store = Store(state={})
+    for op in ops:
+        apply_op(store, op)
+    saved = compact_last_aliases(store.state)
+    return {
+        "name": name,
+        "kind": "alias",
+        "ops": [encode_op(op) for op in ops],
+        "expected_state": encode(store.state),
+        "expected_saved": encode(saved),
     }
 
 
@@ -100,10 +137,7 @@ def merge_case(name: str, initial: dict, branch_ops: list[list[dict]]) -> dict:
     branches = store.parallel_branches(len(branch_ops))
     for branch, ops in zip(branches, branch_ops, strict=True):
         for op in ops:
-            if op["op"] == "set":
-                branch.set(op["path"], op["value"])
-            else:
-                raise ValueError(f"unknown op {op['op']!r}")
+            apply_op(branch, op)
     for branch in branches:
         for key, value in branch.state.items():
             store.state[key] = value
@@ -120,6 +154,8 @@ def encode_op(op: dict) -> dict:
     encoded = {"op": op["op"], "path": op["path"]}
     if "value" in op:
         encoded["value"] = encode(op["value"])
+    if "target" in op:
+        encoded["target"] = op["target"]
     return encoded
 
 
@@ -188,6 +224,57 @@ def build_corpus() -> list[dict]:
             "an_empty_branch_contributes_nothing",
             initial={"already": "here"},
             branch_ops=[[], [{"op": "set", "path": "new", "value": "value"}]],
+        ),
+        merge_case(
+            "branch_overwrites_a_parent_tracked_container_key",
+            initial={"cfg": {"a": 1}},
+            branch_ops=[[{"op": "set", "path": "cfg.b", "value": 2}]],
+        ),
+        sequence_case(
+            "non_string_keys_inside_a_plain_dict_value",
+            [
+                {"op": "set", "path": "lookup", "value": {1: "one", 2: "two", "three": 3}},
+            ],
+        ),
+        sequence_case(
+            "ensure_dict_descends_into_a_plain_dict_value",
+            [
+                {"op": "set", "path": "tool_output", "value": {"nested": {"x": 1}}},
+                {"op": "ensure_dict", "path": "tool_output.nested"},
+                {"op": "set", "path": "tool_output.nested.y", "value": 2},
+            ],
+        ),
+        alias_case(
+            "last_aliased_to_an_iter_sibling_is_compacted_to_a_ref",
+            [
+                {"op": "set", "path": "prime.lp.iter_2.value", "value": "done"},
+                {"op": "alias", "path": "prime.lp.last", "target": "prime.lp.iter_2"},
+            ],
+        ),
+        alias_case(
+            "an_unaliased_last_is_left_untouched",
+            [
+                {"op": "set", "path": "prime.lp.iter_0.value", "value": 1},
+                {"op": "set", "path": "prime.lp.last", "value": "not an alias"},
+            ],
+        ),
+        alias_case(
+            "several_iter_siblings_alias_the_same_node_the_last_one_wins",
+            [
+                {"op": "set", "path": "prime.lp.iter_2.value", "value": 1},
+                # `iter_5` deliberately aliased to the exact same node as
+                # `iter_2` -- not a shape `core/loop.py` itself ever
+                # produces, but the generic tie-break
+                # `_aliased_iter_key`'s own reverse scan has to resolve.
+                {"op": "alias", "path": "prime.lp.iter_5", "target": "prime.lp.iter_2"},
+                {"op": "alias", "path": "prime.lp.last", "target": "prime.lp.iter_2"},
+            ],
+        ),
+        alias_case(
+            "a_last_that_is_its_own_tracked_dict_matching_no_sibling",
+            [
+                {"op": "set", "path": "prime.lp.last.value", "value": 1},
+            ],
         ),
     ]
 
