@@ -21,15 +21,31 @@ pub struct LogLine {
     pub text: String,
 }
 
+/// Parses an RFC-3339 timestamp from either source format this crate
+/// ever sees: `--events`' own millisecond-plus-`Z` timestamps and
+/// state's microsecond-plus-offset ones. The two are not
+/// lexicographically comparable as strings at all -- `Z` (0x5A) sorts
+/// after every digit, so an event's own millisecond-truncated
+/// timestamp can sort *after* a state timestamp in the very same
+/// millisecond (M1) -- so `sort_log_lines` must compare real instants.
+fn parse_instant(ts: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    chrono::DateTime::parse_from_rfc3339(ts).ok()
+}
+
 /// Sorts lines from two different observations (a state `diff` and an
 /// `--events` line, each already timestamped from its own source) into
 /// one chronological stream (DESIGN.md §2: "Log lines are sorted by
 /// those times", never by which poll noticed them first). `None` (the
 /// final run-summary line, when no timestamp was ever available at
-/// all) sorts last.
+/// all) sorts last. Falls back to a plain string compare only if a
+/// timestamp doesn't parse as RFC-3339 at all, which no real source
+/// here ever produces.
 pub fn sort_log_lines(lines: &mut [LogLine]) {
     lines.sort_by(|a, b| match (&a.ts, &b.ts) {
-        (Some(x), Some(y)) => x.cmp(y),
+        (Some(x), Some(y)) => match (parse_instant(x), parse_instant(y)) {
+            (Some(ix), Some(iy)) => ix.cmp(&iy),
+            _ => x.cmp(y),
+        },
         (Some(_), None) => std::cmp::Ordering::Less,
         (None, Some(_)) => std::cmp::Ordering::Greater,
         (None, None) => std::cmp::Ordering::Equal,
@@ -48,6 +64,37 @@ fn truncate_chars(s: &str, max: usize) -> String {
     } else {
         first_line.chars().take(max).collect()
     }
+}
+
+/// Caps a possibly multi-line failure reason to `max` characters,
+/// keeping its newlines (M2) -- unlike `truncate_chars`, which
+/// collapses an effect's own error to one line, the run summary's own
+/// reason (cof's pre-execution validation JSON, or a run_end event's)
+/// can be several lines long and still worth keeping, just indented
+/// under the first.
+fn truncate_reason(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max).collect();
+        format!("{truncated}…")
+    }
+}
+
+/// The run summary's own failure reason (M2, DESIGN.md §2.4's `■ run
+/// ...` row): the first line goes right on the `■` line itself, and any
+/// further lines print indented under it, rather than either losing
+/// them or breaking the log's one-timestamped-line-per-entry shape.
+pub fn format_reason_for_summary(reason: &str) -> String {
+    let capped = truncate_reason(reason, 500);
+    let mut lines = capped.lines();
+    let first = lines.next().unwrap_or("");
+    let mut out = first.to_string();
+    for line in lines {
+        out.push_str("\n  ");
+        out.push_str(line);
+    }
+    out
 }
 
 fn summary_for(node: &NodeMeta) -> String {
@@ -177,10 +224,15 @@ fn is_container_path(
 /// otherwise (an `each` over a path that never resolved, a CEL error
 /// evaluating an `if`'s condition, neither of which ever starts a
 /// child at all).
-fn any_descendant_failed(path: &str, flat: &BTreeMap<String, NodeMeta>) -> bool {
+fn any_descendant_failed(
+    path: &str,
+    flat: &BTreeMap<String, NodeMeta>,
+    event_failed: &BTreeSet<String>,
+) -> bool {
     let prefix = format!("{path}.");
     flat.iter()
         .any(|(other, node)| other.starts_with(&prefix) && node.error.is_some())
+        || event_failed.iter().any(|other| other.starts_with(&prefix))
 }
 
 fn on_error_suffix(path: &str, plan: &PlanTree) -> &'static str {
@@ -224,17 +276,17 @@ pub struct Differ {
     /// printing both would duplicate the same transition, once from
     /// each source.
     event_sourced: BTreeSet<String>,
-    /// Paths with a `start` event and no matching `end` yet (K5):
-    /// `diff`'s own `■ run ...` line must never print while one of
-    /// these is still open. State and events are two independently
-    /// polled files; a tick can observe the state's final write (the
-    /// run container itself is done) slightly ahead of the events
-    /// tailer catching up on the very last leaf's own `end` —
-    /// deferring the summary line until every event-sourced path has
-    /// actually closed keeps the last effect's own line from printing
-    /// *after* the run's. Cleared by a `run_end` too: an effect
-    /// interrupted mid-flight never gets its own `end` at all.
-    open_event_paths: BTreeSet<String>,
+    /// Paths whose own `end` event reported `ok: false` (M1b, a P2-6
+    /// follow-up): `any_descendant_failed` must see a sibling's
+    /// failure from earlier in the *same* tick, not just what `diff`'s
+    /// state-sourced `self.last` already knew about as of the previous
+    /// tick. Events in one tick are handled one at a time, in file
+    /// order, strictly before `diff` ever updates `self.last` from
+    /// that tick's own state poll -- so a child's own ✗, two calls
+    /// earlier in this same batch, was otherwise invisible to its
+    /// container's `end` landing right after it, producing a second,
+    /// duplicate ✗ for the container.
+    event_failed: BTreeSet<String>,
 }
 
 impl Differ {
@@ -244,7 +296,7 @@ impl Differ {
             run_line_emitted: false,
             unnamed_pass_counts: BTreeMap::new(),
             event_sourced: BTreeSet::new(),
-            open_event_paths: BTreeSet::new(),
+            event_failed: BTreeSet::new(),
         }
     }
 
@@ -260,7 +312,6 @@ impl Differ {
         match event {
             Event::Start { ts, path, .. } => {
                 self.event_sourced.insert(path.clone());
-                self.open_event_paths.insert(path.clone());
                 // A named container (the document root included) fires
                 // `start`/`end` the same as a leaf (DESIGN.md §1.4's
                 // probe notes), but gets no ▶/✓/✗ of its own — same
@@ -293,13 +344,21 @@ impl Differ {
                 ..
             } => {
                 self.event_sourced.insert(path.clone());
-                self.open_event_paths.remove(path);
+                if !*ok {
+                    // M1b: recorded *before* the container branch
+                    // below checks it, so a child's own failure a
+                    // couple of events earlier in this same batch is
+                    // already visible here, even though `diff`'s own
+                    // state-sourced `self.last` won't catch up until
+                    // this tick's later `diff` call.
+                    self.event_failed.insert(path.clone());
+                }
                 if is_container_path(path, plan, &self.last, model) {
                     // P2-6: the container's own failure, when it has
                     // one, still needs a line if nothing under it
                     // already printed one -- the events path has the
                     // exact same gap state's `diff` does.
-                    if !*ok && !any_descendant_failed(path, &self.last) {
+                    if !*ok && !any_descendant_failed(path, &self.last, &self.event_failed) {
                         let message = error.as_deref().unwrap_or("");
                         return vec![LogLine {
                             ts: Some(ts.clone()),
@@ -331,25 +390,71 @@ impl Differ {
                     text,
                 }]
             }
-            Event::RunEnd { .. } => {
-                // An effect interrupted mid-flight never gets its own
-                // `end` at all (DESIGN.md §2.1's cancelled rule) —
-                // without this, one open, never-closed path would
-                // defer the run summary line forever.
-                self.open_event_paths.clear();
-                Vec::new()
-            }
+            Event::RunEnd { .. } => Vec::new(),
             _ => Vec::new(),
         }
     }
 
-    /// Whether a `■ run ...` summary line has already been emitted
-    /// (F5): lets a caller fall back to a synthetic summary — from the
-    /// final `--out` write `diff` never saw, or from the engine's own
-    /// pre-execution JSON error, or "aborted" — only when `diff` itself
-    /// never had a completed `prime` to report one from.
+    /// Whether `finish` has already produced the `■ run ...` summary
+    /// line (F5): lets a caller fall back to a synthetic summary —
+    /// "aborted", or a reason it reads some other way — only when
+    /// `finish` never had an ended run to report one from at all.
     pub fn run_line_emitted(&self) -> bool {
         self.run_line_emitted
+    }
+
+    /// The run's own summary line (DESIGN.md §2.4's `■ run ...` row),
+    /// computed exactly once, from whichever final state the caller
+    /// hands it (M1): `diff` itself never emits this line mid-run any
+    /// more. A per-tick "every event-sourced path has closed" gate used
+    /// to approximate "the run is really over" from inside the polling
+    /// loop, but state and events are two independently polled files —
+    /// the state's final write (the run container itself marked done)
+    /// can land a tick ahead of the events tailer catching up on the
+    /// very last leaf's own `end`, printing this line before that
+    /// leaf's own `✓`/`✗`. Calling this only once, after the caller has
+    /// already fully drained both files at the engine's own exit,
+    /// removes the race by construction instead of narrowing its
+    /// window.
+    ///
+    /// `fallback_reason` (M2) fills in `prime.meta.error`'s absence — a
+    /// run that ended (`runtime.last_run.completed_at` set) with no
+    /// `prime` node at all (a document invalid enough that nothing
+    /// ran) has no error of its own to report. The caller supplies one
+    /// in priority order: a `run_end` event's own `error`, then cof's
+    /// pre-execution stdout JSON, then the engine's last stderr line.
+    pub fn finish(&mut self, state: &Value, fallback_reason: Option<&str>) -> Option<LogLine> {
+        if self.run_line_emitted || !run_ended(state) {
+            return None;
+        }
+        self.run_line_emitted = true;
+        let ok = run_ok(state);
+        let totals = run_totals(state);
+        let totals_text = totals
+            .as_ref()
+            .and_then(|t| t.get("wall_time_s"))
+            .and_then(Value::as_f64)
+            .map(|w| format!("  {w:.1}s"))
+            .unwrap_or_default();
+        let status_text = if ok {
+            "ok".to_string()
+        } else {
+            match run_error(state).filter(|e| !e.is_empty()) {
+                Some(reason) => format!("failed: {}", format_reason_for_summary(&reason)),
+                None => match fallback_reason.filter(|r| !r.is_empty()) {
+                    Some(reason) => format!("failed: {}", format_reason_for_summary(reason)),
+                    None => "failed".to_string(),
+                },
+            }
+        };
+        let run_ts = state
+            .pointer("/runtime/last_run/completed_at")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        Some(LogLine {
+            ts: run_ts,
+            text: format!("■ run {status_text}{totals_text}"),
+        })
     }
 
     /// Diffs `state` against the previous snapshot this instance was
@@ -493,7 +598,7 @@ impl Differ {
                         && prev.is_running()
                         && !node.is_running()
                         && node.error.is_some()
-                        && !any_descendant_failed(path, &flat)
+                        && !any_descendant_failed(path, &flat, &self.event_failed)
                     {
                         lines.push(LogLine {
                             ts: node.completed_at.clone(),
@@ -505,31 +610,6 @@ impl Differ {
                     }
                 }
             }
-        }
-
-        if !self.run_line_emitted && run_ended(state) && self.open_event_paths.is_empty() {
-            self.run_line_emitted = true;
-            let ok = run_ok(state);
-            let totals = run_totals(state);
-            let totals_text = totals
-                .as_ref()
-                .and_then(|t| t.get("wall_time_s"))
-                .and_then(Value::as_f64)
-                .map(|w| format!("  {w:.1}s"))
-                .unwrap_or_default();
-            let status_text = if ok {
-                "ok".to_string()
-            } else {
-                format!("failed: {}", run_error(state).unwrap_or_default())
-            };
-            let run_ts = state
-                .pointer("/runtime/last_run/completed_at")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            lines.push(LogLine {
-                ts: run_ts,
-                text: format!("■ run {status_text}{totals_text}"),
-            });
         }
 
         self.last = flat;
@@ -828,69 +908,37 @@ mod tests {
         // never "ok", right before the engine's own nonzero exit code.
         let mut differ = Differ::new();
         let state = json!({"runtime": {"last_run": {"completed_at": "t9"}}});
-        let lines = differ.diff(&state, &PlanTree::empty());
-        assert!(
-            lines.iter().any(|l| l.text.starts_with("■ run failed")),
-            "{lines:?}"
-        );
-        assert!(
-            !lines.iter().any(|l| l.text.starts_with("■ run ok")),
-            "{lines:?}"
-        );
+        let line = differ.finish(&state, None).expect("a summary line");
+        assert!(line.text.starts_with("■ run failed"), "{line:?}");
+        assert!(!line.text.starts_with("■ run ok"), "{line:?}");
     }
 
     #[test]
-    fn the_run_line_waits_for_an_open_event_sourced_path_to_close_first() {
-        // K5: state and events are two independently polled files; a
-        // tick can see the state's final write (the run container
-        // itself is done) before the events tailer catches up on the
-        // very last leaf's own `end`. The run summary must not print
-        // while any event-sourced path is still open, or it prints
-        // *before* that leaf's own ✓ line instead of after.
+    fn finish_returns_none_until_the_caller_has_an_ended_state() {
+        // M1: `finish` itself does no waiting at all -- unlike the old
+        // per-tick heuristic this replaces, it never guesses whether a
+        // run is "really" over from an in-flight state. It is the
+        // caller's job (main.rs's `do_run`/`do_watch`) to call it only
+        // after draining both files to their true end, once.
         let mut differ = Differ::new();
-        differ.diff_event(
-            &Event::Start {
-                ts: "t0".to_string(),
-                id: Some(1),
-                path: "prime.last_leaf".to_string(),
-            },
-            &PlanTree::empty(),
-            &RunModel::new(),
-        );
+        let mid_run = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
+        assert!(differ.finish(&mid_run, None).is_none());
 
-        let state = json!({
+        let ended = json!({
             "runtime": {"last_run": {"completed_at": "t9"}},
             "prime": {"value": true, "meta": {"completed_at": "t9", "error": null}}
         });
-        let lines = differ.diff(&state, &PlanTree::empty());
-        assert!(
-            !lines.iter().any(|l| l.text.starts_with("■ run")),
-            "the run line must wait for the open leaf to close: {lines:?}"
-        );
-
-        differ.diff_event(
-            &Event::End {
-                ts: "t9".to_string(),
-                id: Some(1),
-                path: "prime.last_leaf".to_string(),
-                ok: true,
-                ms: Some(5),
-                error: None,
-            },
-            &PlanTree::empty(),
-            &RunModel::new(),
-        );
-        let lines2 = differ.diff(&state, &PlanTree::empty());
-        assert!(
-            lines2.iter().any(|l| l.text.starts_with("■ run ok")),
-            "{lines2:?}"
-        );
+        let line = differ.finish(&ended, None).expect("a summary line");
+        assert!(line.text.starts_with("■ run ok"), "{line:?}");
     }
 
     #[test]
-    fn a_run_end_event_releases_any_still_open_path_so_the_run_line_is_never_stuck() {
-        // An effect interrupted mid-flight never gets its own `end` at
-        // all; `run_end` must still unblock the summary line.
+    fn finish_reports_an_interrupted_run_as_failed_even_with_an_open_event_sourced_path() {
+        // M1: there is no `open_event_paths` gate left to release --
+        // an effect interrupted mid-flight never gets its own `end`
+        // event at all, but that no longer matters, since the caller
+        // decides when to call `finish`, from a state it already
+        // knows is final.
         let mut differ = Differ::new();
         differ.diff_event(
             &Event::Start {
@@ -901,26 +949,91 @@ mod tests {
             &PlanTree::empty(),
             &RunModel::new(),
         );
-        differ.diff_event(
-            &Event::RunEnd {
-                ts: "t1".to_string(),
-                ok: false,
-                error: Some("Interrupted (Ctrl-C/SIGINT)".to_string()),
-                signal: Some("SIGINT".to_string()),
-            },
-            &PlanTree::empty(),
-            &RunModel::new(),
-        );
-
         let state = json!({
             "runtime": {"last_run": {"completed_at": "t1"}},
             "prime": {"value": false, "meta": {"completed_at": "t1", "error": "Interrupted (Ctrl-C/SIGINT)"}}
         });
-        let lines = differ.diff(&state, &PlanTree::empty());
-        assert!(
-            lines.iter().any(|l| l.text.starts_with("■ run failed")),
-            "{lines:?}"
+        let line = differ.finish(&state, None).expect("a summary line");
+        assert!(line.text.starts_with("■ run failed"), "{line:?}");
+    }
+
+    #[test]
+    fn diff_event_container_gets_no_extra_cross_mark_when_its_child_failed_in_the_same_batch() {
+        // M1b (a P2-6 follow-up): the container's own failing `end`
+        // event, landing in the same batch as its child's own, must
+        // not get a second ✗ -- `self.last` (the state diff's own
+        // record) hasn't caught up yet in the same tick, so
+        // `any_descendant_failed` needs `event_failed` to see the
+        // child's failure instead.
+        let mut differ = Differ::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(0),
+                path: "prime".to_string(),
+            },
+            &plan,
+            &model,
         );
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(1),
+                path: "prime.boom".to_string(),
+            },
+            &plan,
+            &model,
+        );
+        let child_lines = differ.diff_event(
+            &Event::End {
+                ts: "t1".to_string(),
+                id: Some(1),
+                path: "prime.boom".to_string(),
+                ok: false,
+                ms: Some(1),
+                error: Some("boom".to_string()),
+            },
+            &plan,
+            &model,
+        );
+        let container_lines = differ.diff_event(
+            &Event::End {
+                ts: "t1".to_string(),
+                id: Some(0),
+                path: "prime".to_string(),
+                ok: false,
+                ms: Some(2),
+                error: Some("prime.boom: boom".to_string()),
+            },
+            &plan,
+            &model,
+        );
+        assert!(
+            child_lines
+                .iter()
+                .any(|l| l.text.starts_with("✗ prime.boom")),
+            "{child_lines:?}"
+        );
+        assert!(
+            container_lines.is_empty(),
+            "the container must get no extra cross mark: {container_lines:?}"
+        );
+    }
+
+    #[test]
+    fn finish_keeps_a_multi_line_reasons_first_line_on_the_summary_and_indents_the_rest() {
+        // M2: cof's own validation error can be several lines long;
+        // the first goes right on the ■ line, the rest print indented
+        // under it rather than either being lost or breaking the log's
+        // one-timestamped-line-per-entry shape.
+        let mut differ = Differ::new();
+        let state = json!({"runtime": {"last_run": {"completed_at": "t9"}}});
+        let line = differ
+            .finish(&state, Some("line one\nline two"))
+            .expect("a summary line");
+        assert_eq!(line.text, "■ run failed: line one\n  line two");
     }
 
     #[test]
@@ -930,12 +1043,11 @@ mod tests {
             "runtime": {"last_run": {"completed_at": "t9", "totals": {"wall_time_s": 1.5}}},
             "prime": {"value": true, "meta": {"completed_at": "t9", "error": null}}
         });
-        let lines = differ.diff(&state, &PlanTree::empty());
-        assert!(lines.iter().any(|l| l.text.starts_with("■ run ok")));
+        let line = differ.finish(&state, None);
+        assert!(line.is_some_and(|l| l.text.starts_with("■ run ok")));
 
-        // A second diff against the same final state emits nothing more.
-        let lines2 = differ.diff(&state, &PlanTree::empty());
-        assert!(!lines2.iter().any(|l| l.text.starts_with("■")));
+        // A second call against the same final state emits nothing more.
+        assert!(differ.finish(&state, None).is_none());
     }
 
     #[test]

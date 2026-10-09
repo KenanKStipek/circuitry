@@ -268,7 +268,11 @@ fn do_run(args: RunArgs) -> ExitCode {
     };
 
     let engine = build_engine(args.engine);
-    if engine.name() == "cof" && !engine.caps().events {
+    // M4: a missing engine binary gets its own, more specific error
+    // once the later spawn fails -- this notice is only useful (and
+    // only true) when `cof` was actually found and simply predates
+    // `--events`.
+    if engine.name() == "cof" && !engine.caps().events && !engine.caps().missing {
         eprintln!("osp: this cof has no --events: running from state only");
     }
 
@@ -460,49 +464,47 @@ fn do_run(args: RunArgs) -> ExitCode {
         &plan,
     );
 
-    // F5: `diff`'s own `■ run ...` line only ever comes from a `prime`
-    // snapshot that reached `runtime.last_run.completed_at`. Two cases
-    // never produce one: the engine failed before writing any state at
-    // all (a validation error, printed as `{"ok":false,"error":...}`
-    // JSON on stdout, DESIGN.md §4.1), or the run was genuinely aborted
-    // (a second signal, SIGKILL, a crash) with no final write. Try the
+    // M1: the run's own summary line is computed exactly once, here,
+    // after every other line this run will ever produce has already
+    // been printed -- `Differ::finish` never emits it mid-run, and a
+    // per-tick heuristic no longer exists to race state and events
+    // (two independently polled files) against each other. Try the
     // authoritative `--out` file once more first -- the live-state
     // poller's own last `drain` above can miss the very last write if
-    // it lands between two polls -- before falling back to either.
-    if !differ.run_line_emitted() {
-        if let Ok(bytes) = std::fs::read(spec.out_path()) {
-            if let Ok(state) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                for line in differ.diff(&state, &plan) {
-                    print_line(&mut out, &mut clock, line.ts.as_deref(), &line.text);
-                }
-            }
+    // it lands between two polls -- which also covers the two cases
+    // `finish` itself can't: the engine failed before writing any
+    // state at all (a validation error, printed as cof's own
+    // pre-execution JSON on stdout, DESIGN.md §4.1), or the run was
+    // genuinely aborted (a second signal, SIGKILL, a crash) with no
+    // final write.
+    let final_state = std::fs::read(spec.out_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    if let Some(state) = &final_state {
+        for line in differ.diff(state, &plan) {
+            print_line(&mut out, &mut clock, line.ts.as_deref(), &line.text);
         }
     }
-    if !differ.run_line_emitted() {
-        let text = match read_stdout_json_error(&spec.stdout_path()) {
-            Some(err) => format!("■ run failed: {err}"),
-            None => "■ run aborted (no final state)".to_string(),
-        };
-        print_line(&mut out, &mut clock, None, &text);
-    }
-    // K6: a run that ended (`runtime.last_run.completed_at` set)
-    // without ever creating a `prime` node at all — a document invalid
-    // enough that nothing ran — gets a correctly "failed" summary line
-    // from `run_ok` above, but with no message at all: there is no
-    // `/prime/meta/error` to read one from. cof's own stdout JSON
-    // (DESIGN.md §4.1) has the real reason; prefer it over leaving the
-    // summary line's error text empty.
-    if let Ok(bytes) = std::fs::read(spec.out_path()) {
-        if let Ok(state) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-            let ended_without_a_message = oscilloscope_core::model::run_ended(&state)
-                && !oscilloscope_core::model::run_ok(&state)
-                && oscilloscope_core::model::run_error(&state).is_none();
-            if ended_without_a_message {
-                if let Some(err) = read_stdout_json_error(&spec.stdout_path()) {
-                    print_line(&mut out, &mut clock, None, &format!("engine: {err}"));
-                }
+    let summary = final_state
+        .as_ref()
+        .and_then(|state| {
+            differ.finish(state, failure_reason_fallback(&run_dir, &model).as_deref())
+        })
+        .or_else(|| {
+            if differ.run_line_emitted() {
+                return None;
             }
-        }
+            let text = match failure_reason_fallback(&run_dir, &model) {
+                Some(err) => format!(
+                    "■ run failed: {}",
+                    oscilloscope_core::diff::format_reason_for_summary(&err)
+                ),
+                None => "■ run aborted (no final state)".to_string(),
+            };
+            Some(oscilloscope_core::diff::LogLine { ts: None, text })
+        });
+    if let Some(line) = summary {
+        print_line(&mut out, &mut clock, line.ts.as_deref(), &line.text);
     }
     let _ = writeln!(out, "exit {}", exit_code(exit_status));
 
@@ -516,26 +518,50 @@ fn do_run(args: RunArgs) -> ExitCode {
 /// `cof`'s own pre-execution failure shape (DESIGN.md §4.1): with no
 /// orchestration ever started, it prints exactly `{"ok":false,
 /// "error":"..."}` to stdout and nothing reaches `--live-state`/`--out`
-/// at all. Scans line by line rather than parsing the whole file as
-/// one JSON value: `--quiet` is the only flag osp passes, but a build
-/// with some other banner on stdout should still have this line found.
+/// at all. Parsed as a stream of whole JSON values, not split by line
+/// (M2): stdout is a pipe, so a real `cof` pretty-prints that object
+/// across several lines (`console.print_json`'s default), and a
+/// line-by-line scan never finds it there -- only against a fixture
+/// someone had already flattened to one line by hand.
 fn read_stdout_json_error(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
-    for line in text.lines().rev() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
+    let mut found = None;
+    for value in serde_json::Deserializer::from_str(&text)
+        .into_iter::<serde_json::Value>()
+        .filter_map(Result::ok)
+    {
         if value.get("ok").and_then(serde_json::Value::as_bool) == Some(false) {
             if let Some(error) = value.get("error").and_then(serde_json::Value::as_str) {
-                return Some(error.to_string());
+                found = Some(error.to_string());
             }
         }
     }
-    None
+    found
+}
+
+/// The engine's own last word when neither state nor stdout said
+/// anything at all (M2's last-resort reason): a trimmed, non-empty
+/// line from the very end of its stderr tee.
+fn last_nonempty_stderr_line(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    text.lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_string)
+}
+
+/// The failed run's own reason, when `prime.meta.error` has none to
+/// give (M2) -- in priority order: a `run_end` event's own `error`
+/// (DESIGN.md §3's format table always carries one for a failing
+/// run), then cof's pre-execution stdout JSON (DESIGN.md §4.1), then
+/// its last stderr line.
+fn failure_reason_fallback(run_dir: &Path, model: &RunModel) -> Option<String> {
+    model
+        .run_end_error()
+        .map(str::to_string)
+        .or_else(|| read_stdout_json_error(&run_dir.join("stdout.txt")))
+        .or_else(|| last_nonempty_stderr_line(&run_dir.join("stderr.txt")))
 }
 
 /// One observation tick's lines, from whichever of state and events
@@ -774,18 +800,33 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     // exit code when it's knowable — from a signal `run_end` named, or
     // from this watch's own local Ctrl-C — rather than only ok-vs-
     // failed.
-    if !differ.run_line_emitted() {
-        if let Ok(bytes) = std::fs::read(run_dir.join("state.json")) {
-            if let Ok(state) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                for line in differ.diff(&state, &plan) {
-                    print_line(&mut out, &mut clock, line.ts.as_deref(), &line.text);
-                }
-                last_state = Some(state);
-            }
+    // M1: the same single, final `finish` call `do_run` uses, in
+    // place of the per-tick heuristic.
+    let final_state = std::fs::read(run_dir.join("state.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    if let Some(state) = &final_state {
+        for line in differ.diff(state, &plan) {
+            print_line(&mut out, &mut clock, line.ts.as_deref(), &line.text);
         }
+        last_state = Some(state.clone());
     }
-    if !differ.run_line_emitted() {
-        print_line(&mut out, &mut clock, None, "■ run aborted (no final state)");
+    let summary = final_state
+        .as_ref()
+        .and_then(|state| {
+            differ.finish(state, failure_reason_fallback(&run_dir, &model).as_deref())
+        })
+        .or_else(|| {
+            if differ.run_line_emitted() {
+                return None;
+            }
+            Some(oscilloscope_core::diff::LogLine {
+                ts: None,
+                text: "■ run aborted (no final state)".to_string(),
+            })
+        });
+    if let Some(line) = summary {
+        print_line(&mut out, &mut clock, line.ts.as_deref(), &line.text);
     }
 
     let code = if let Some(sig) = local_signal {
@@ -1208,5 +1249,180 @@ mod tests {
         assert!(!spec.live_state_path().exists());
         assert!(!spec.out_path().exists());
         assert!(!spec.events_path().exists());
+    }
+
+    const ONE_EFFECT_FINAL_STATE: &str = r#"{"runtime": {"last_run": {"completed_at": "2026-10-08T23:53:11.508492+00:00", "totals": {"wall_time_s": 0.1}}},
+        "prime": {"value": true, "meta": {"completed_at": "2026-10-08T23:53:11.508492+00:00", "error": null, "flow": "chain"},
+            "hello": {"value": "hi\n", "meta": {"created_at": "2026-10-08T23:53:11.500000+00:00", "completed_at": "2026-10-08T23:53:11.508360+00:00", "error": null, "provider": "shell", "stdout": "hi\n"}}
+        }}"#;
+
+    const ONE_EFFECT_EVENTS_COMPLETE: &str = "{\"v\":1,\"seq\":0,\"ts\":\"2026-10-08T23:53:11.497Z\",\"ev\":\"run_start\",\"run_id\":\"r\",\"orchestration\":\"d\",\"engine\":\"cof\",\"pid\":1}\n\
+         {\"v\":1,\"seq\":1,\"ts\":\"2026-10-08T23:53:11.500Z\",\"ev\":\"start\",\"id\":1,\"path\":\"prime.hello\"}\n\
+         {\"v\":1,\"seq\":2,\"ts\":\"2026-10-08T23:53:11.508Z\",\"ev\":\"end\",\"id\":1,\"path\":\"prime.hello\",\"ok\":true,\"ms\":8}\n\
+         {\"v\":1,\"seq\":3,\"ts\":\"2026-10-08T23:53:11.509Z\",\"ev\":\"run_end\",\"ok\":true}\n";
+
+    const ONE_EFFECT_EVENTS_START_ONLY: &str = "{\"v\":1,\"seq\":0,\"ts\":\"2026-10-08T23:53:11.497Z\",\"ev\":\"run_start\",\"run_id\":\"r\",\"orchestration\":\"d\",\"engine\":\"cof\",\"pid\":1}\n\
+         {\"v\":1,\"seq\":1,\"ts\":\"2026-10-08T23:53:11.500Z\",\"ev\":\"start\",\"id\":1,\"path\":\"prime.hello\"}\n";
+
+    #[test]
+    fn the_summary_line_is_last_when_the_events_stream_is_already_complete() {
+        // M1, case A: the events writer has already caught up (its own
+        // `end`/`run_end` already on disk) by the same tick the state
+        // write lands -- the exact race the measured bug hit, since
+        // the event's own millisecond-plus-`Z` timestamp and the
+        // state's microsecond-plus-offset one for the same instant
+        // are not comparable as strings at all.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("state.live.json"), ONE_EFFECT_FINAL_STATE).unwrap();
+        std::fs::write(dir.path().join("state.json"), ONE_EFFECT_FINAL_STATE).unwrap();
+        std::fs::write(dir.path().join("events.jsonl"), ONE_EFFECT_EVENTS_COMPLETE).unwrap();
+
+        let mut live_poller = LiveStatePoller::new(dir.path().join("state.live.json"));
+        let mut events_tailer = EventsTailer::new(dir.path().join("events.jsonl"));
+        let mut differ = Differ::new();
+        let mut model = RunModel::new();
+        let plan = PlanTree::empty();
+
+        let mut buf: Vec<u8> = Vec::new();
+        let mut clock = Clock::new();
+        let (lines, _state) = observe_tick(
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
+        for l in lines {
+            print_line(&mut buf, &mut clock, l.ts.as_deref(), &l.text);
+        }
+        let final_state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("state.json")).unwrap()).unwrap();
+        for l in differ.diff(&final_state, &plan) {
+            print_line(&mut buf, &mut clock, l.ts.as_deref(), &l.text);
+        }
+        if let Some(l) = differ.finish(&final_state, None) {
+            print_line(&mut buf, &mut clock, l.ts.as_deref(), &l.text);
+        }
+
+        let text = String::from_utf8(buf).unwrap();
+        let printed: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+        assert!(printed.last().unwrap().contains("■ run ok"), "{printed:?}");
+        assert!(
+            printed[printed.len() - 2].contains("✓ prime.hello"),
+            "{printed:?}"
+        );
+    }
+
+    #[test]
+    fn the_summary_line_is_last_when_the_state_write_arrives_before_the_events_stream_does() {
+        // M1, case B: the reverse race -- the live-state file already
+        // shows the run complete while the events writer is still
+        // catching up (only `start` on disk so far), the end event
+        // and the final `--out` write both landing only on the next
+        // tick (`do_run`'s own final drain, right after the engine
+        // exits).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("state.live.json"), ONE_EFFECT_FINAL_STATE).unwrap();
+        std::fs::write(
+            dir.path().join("events.jsonl"),
+            ONE_EFFECT_EVENTS_START_ONLY,
+        )
+        .unwrap();
+
+        let mut live_poller = LiveStatePoller::new(dir.path().join("state.live.json"));
+        let mut events_tailer = EventsTailer::new(dir.path().join("events.jsonl"));
+        let mut differ = Differ::new();
+        let mut model = RunModel::new();
+        let plan = PlanTree::empty();
+
+        let mut buf: Vec<u8> = Vec::new();
+        let mut clock = Clock::new();
+        let (lines, _state) = observe_tick(
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
+        for l in lines {
+            print_line(&mut buf, &mut clock, l.ts.as_deref(), &l.text);
+        }
+
+        std::fs::write(dir.path().join("events.jsonl"), ONE_EFFECT_EVENTS_COMPLETE).unwrap();
+        std::fs::write(dir.path().join("state.json"), ONE_EFFECT_FINAL_STATE).unwrap();
+
+        let (lines2, _state2) = observe_tick(
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
+        for l in lines2 {
+            print_line(&mut buf, &mut clock, l.ts.as_deref(), &l.text);
+        }
+        let final_state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("state.json")).unwrap()).unwrap();
+        for l in differ.diff(&final_state, &plan) {
+            print_line(&mut buf, &mut clock, l.ts.as_deref(), &l.text);
+        }
+        if let Some(l) = differ.finish(&final_state, None) {
+            print_line(&mut buf, &mut clock, l.ts.as_deref(), &l.text);
+        }
+
+        let text = String::from_utf8(buf).unwrap();
+        let printed: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+        assert!(printed.last().unwrap().contains("■ run ok"), "{printed:?}");
+        assert!(
+            printed[printed.len() - 2].contains("✓ prime.hello"),
+            "{printed:?}"
+        );
+    }
+
+    #[test]
+    fn read_stdout_json_error_parses_a_pretty_printed_object() {
+        // M2: a real `cof`, with stdout as a pipe, pretty-prints its
+        // pre-execution failure object across several lines -- a
+        // line-by-line scan never finds it there, only a fixture
+        // already flattened to one line by hand.
+        let dir = tempfile::tempdir().unwrap();
+        let stdout_path = dir.path().join("stdout.txt");
+        std::fs::write(
+            &stdout_path,
+            "{\n  \"ok\": false,\n  \"error\": \"Orchestration validation failed: bad type\",\n  \"warnings\": []\n}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            read_stdout_json_error(&stdout_path),
+            Some("Orchestration validation failed: bad type".to_string())
+        );
+    }
+
+    #[test]
+    fn a_validation_failure_puts_cofs_own_reason_on_the_summary_line() {
+        // M2: a run that ended with no `prime` node at all (a document
+        // invalid enough that nothing ran) has no `prime.meta.error` of
+        // its own -- cof's own pre-execution stdout JSON is the only
+        // place the real reason lives.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("stdout.txt"),
+            "{\n  \"ok\": false,\n  \"error\": \"Orchestration validation failed: bad type\",\n  \"warnings\": []\n}\n",
+        )
+        .unwrap();
+        let state: serde_json::Value = serde_json::from_str(
+            r#"{"runtime": {"last_run": {"completed_at": "t9", "totals": {"wall_time_s": 0.0}}}}"#,
+        )
+        .unwrap();
+        let mut differ = Differ::new();
+        let model = RunModel::new();
+        let reason = failure_reason_fallback(dir.path(), &model);
+        let line = differ
+            .finish(&state, reason.as_deref())
+            .expect("a summary line");
+        assert_eq!(
+            line.text,
+            "■ run failed: Orchestration validation failed: bad type  0.0s"
+        );
     }
 }

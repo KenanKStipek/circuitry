@@ -400,6 +400,17 @@ impl RunModel {
             .and_then(|(_, _, signal)| signal.as_deref())
     }
 
+    /// `run_end`'s own `error` (M2): the engine's own reason for a run
+    /// that failed before it ever wrote a usable `prime.meta.error` of
+    /// its own -- the one source DESIGN.md §3's format table always
+    /// gives a failing run_end a value for, ahead of reparsing cof's
+    /// own pre-execution stdout JSON.
+    pub fn run_end_error(&self) -> Option<&str> {
+        self.run_end
+            .as_ref()
+            .and_then(|(_, error, _)| error.as_deref())
+    }
+
     /// The engine's own pid, from `run_start` (DESIGN.md §3's format
     /// table), when an events stream carried one — lets `osp watch`
     /// tell a genuine abort (no `run_end`, dead process) from a run

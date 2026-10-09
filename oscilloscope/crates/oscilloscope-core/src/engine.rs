@@ -46,6 +46,12 @@ impl RunSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct EngineCaps {
     pub events: bool,
+    /// Set when the `--help` probe itself couldn't find the binary at
+    /// all (M4): lets a caller skip the "this cof has no --events"
+    /// notice in that case, which otherwise printed -- wrongly --
+    /// ahead of the real "couldn't launch cof" error the later spawn
+    /// goes on to report for the exact same reason.
+    pub missing: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,8 +105,9 @@ impl CofEngine {
         // silently ran the real engine state-only even on a `cof` that
         // actually has the flag.
         cmd.process_group(0);
-        let events = cmd
-            .output()
+        let output = cmd.output();
+        let missing = matches!(&output, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
+        let events = output
             .map(|out| {
                 let text = String::from_utf8_lossy(&out.stdout);
                 let err_text = String::from_utf8_lossy(&out.stderr);
@@ -109,7 +116,7 @@ impl CofEngine {
             .unwrap_or(false);
         CofEngine {
             binary,
-            caps: EngineCaps { events },
+            caps: EngineCaps { events, missing },
         }
     }
 
@@ -171,7 +178,10 @@ impl Engine for ElectricityEngine {
     }
 
     fn caps(&self) -> EngineCaps {
-        EngineCaps { events: false }
+        EngineCaps {
+            events: false,
+            missing: false,
+        }
     }
 
     fn command(&self, spec: &RunSpec) -> Result<Command, EngineError> {
@@ -219,7 +229,13 @@ mod tests {
 
     #[test]
     fn cof_command_includes_live_state_out_and_events_when_supported() {
-        let engine = CofEngine::with_caps("cof", EngineCaps { events: true });
+        let engine = CofEngine::with_caps(
+            "cof",
+            EngineCaps {
+                events: true,
+                missing: false,
+            },
+        );
         let spec = RunSpec {
             orchestration: PathBuf::from("do.yml"),
             config: None,
@@ -240,7 +256,13 @@ mod tests {
 
     #[test]
     fn cof_command_omits_events_when_unsupported() {
-        let engine = CofEngine::with_caps("cof", EngineCaps { events: false });
+        let engine = CofEngine::with_caps(
+            "cof",
+            EngineCaps {
+                events: false,
+                missing: false,
+            },
+        );
         let spec = RunSpec {
             orchestration: PathBuf::from("do.yml"),
             config: None,

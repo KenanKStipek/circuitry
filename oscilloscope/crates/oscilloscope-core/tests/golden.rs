@@ -114,7 +114,17 @@ fn replay(name: &str) -> String {
             ProcessState::Running
         };
 
-        let lines = differ.diff(state, &plan);
+        let mut lines = differ.diff(state, &plan);
+        // M1: `diff` itself never emits the `■ run ...` line any more
+        // -- `finish` is called exactly once, on the last observation,
+        // the same single call site `do_run`/`do_watch` use after
+        // draining everything else.
+        if is_last {
+            if let Some(summary) = differ.finish(state, None) {
+                lines.push(summary);
+            }
+            sort_log_lines(&mut lines);
+        }
         let rows = model.observe(state, &plan, process);
 
         let _ = writeln!(out, "--- observation {i} ---");
