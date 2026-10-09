@@ -1,0 +1,209 @@
+[
+  {
+    "name": "nested-ensure-dict-and-set",
+    "kind": "sequence",
+    "ops": [
+      {
+        "op": "set",
+        "path": "a.b.c",
+        "value": 1
+      },
+      {
+        "op": "set",
+        "path": "a.b.d",
+        "value": 2
+      },
+      {
+        "op": "set",
+        "path": "x",
+        "value": "hello"
+      }
+    ],
+    "expected_state": {
+      "a": {
+        "b": {
+          "c": 1,
+          "d": 2
+        }
+      },
+      "x": "hello"
+    }
+  },
+  {
+    "name": "ensure_dict_coerces_a_non_dict_value",
+    "kind": "sequence",
+    "ops": [
+      {
+        "op": "set",
+        "path": "count",
+        "value": 5
+      },
+      {
+        "op": "ensure_dict",
+        "path": "count"
+      },
+      {
+        "op": "set",
+        "path": "count.y",
+        "value": 1
+      }
+    ],
+    "expected_state": {
+      "count": {
+        "y": 1
+      }
+    }
+  },
+  {
+    "name": "set_overwrites_a_dict_value_with_a_scalar",
+    "kind": "sequence",
+    "ops": [
+      {
+        "op": "set",
+        "path": "cfg.a",
+        "value": 1
+      },
+      {
+        "op": "set",
+        "path": "cfg",
+        "value": "now a string"
+      }
+    ],
+    "expected_state": {
+      "cfg": "now a string"
+    }
+  },
+  {
+    "name": "non_string_feeling_but_still_json_safe_leaf_values",
+    "kind": "sequence",
+    "ops": [
+      {
+        "op": "set",
+        "path": "flags.on",
+        "value": true
+      },
+      {
+        "op": "set",
+        "path": "flags.off",
+        "value": false
+      },
+      {
+        "op": "set",
+        "path": "nothing",
+        "value": null
+      },
+      {
+        "op": "set",
+        "path": "items",
+        "value": [
+          1,
+          2,
+          3
+        ]
+      }
+    ],
+    "expected_state": {
+      "flags": {
+        "on": true,
+        "off": false
+      },
+      "nothing": null,
+      "items": [
+        1,
+        2,
+        3
+      ]
+    }
+  },
+  {
+    "name": "two_branches_collide_on_one_key_last_index_wins",
+    "kind": "merge",
+    "initial": {
+      "existing": 1
+    },
+    "branch_ops": [
+      [
+        {
+          "op": "set",
+          "path": "x",
+          "value": "from branch 0"
+        },
+        {
+          "op": "set",
+          "path": "existing",
+          "value": "overwritten by 0"
+        }
+      ],
+      [
+        {
+          "op": "set",
+          "path": "y",
+          "value": "from branch 1"
+        }
+      ],
+      [
+        {
+          "op": "set",
+          "path": "x",
+          "value": "from branch 2"
+        },
+        {
+          "op": "set",
+          "path": "existing",
+          "value": "overwritten by 2"
+        }
+      ]
+    ],
+    "expected_state": {
+      "existing": "overwritten by 2",
+      "x": "from branch 2",
+      "y": "from branch 1"
+    }
+  },
+  {
+    "name": "branch_writes_a_nested_container_of_its_own",
+    "kind": "merge",
+    "initial": {},
+    "branch_ops": [
+      [
+        {
+          "op": "set",
+          "path": "sub.a",
+          "value": 1
+        },
+        {
+          "op": "set",
+          "path": "sub.b",
+          "value": 2
+        }
+      ]
+    ],
+    "expected_state": {
+      "sub": {
+        "a": 1,
+        "b": 2
+      }
+    }
+  },
+  {
+    "name": "an_empty_branch_contributes_nothing",
+    "kind": "merge",
+    "initial": {
+      "already": "here"
+    },
+    "branch_ops": [
+      [],
+      [
+        {
+          "op": "set",
+          "path": "new",
+          "value": "value"
+        }
+      ]
+    ],
+    "expected_state": {
+      "already": "here",
+      "new": "value"
+    }
+  }
+]

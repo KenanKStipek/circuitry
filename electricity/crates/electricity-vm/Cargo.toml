@@ -16,3 +16,4 @@ tokio = { version = "1", features = ["sync", "macros"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+serde_json = { version = "1", features = ["preserve_order"] }
