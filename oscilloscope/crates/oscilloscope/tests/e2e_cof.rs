@@ -15,7 +15,17 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 fn e2e_enabled() -> bool {
-    std::env::var_os("OSP_E2E_COF").is_some() && which("cof").is_some()
+    if std::env::var_os("OSP_E2E_COF").is_none() {
+        return false;
+    }
+    // P2-3: `OSP_E2E_COF=1` with no `cof` on `PATH` is a broken CI
+    // job, not a reason to run zero tests and report green — every
+    // test below used to read this the same as the env var simply
+    // being unset at all and quietly skip.
+    if which("cof").is_none() {
+        panic!("OSP_E2E_COF=1 but `cof` is not on PATH");
+    }
+    true
 }
 
 /// `default_adapter`/`default_model` are Circuitry's own config keys
@@ -98,6 +108,33 @@ fn wait_with_timeout(mut child: Child, timeout: Duration) -> std::process::ExitS
     }
 }
 
+/// `wait_with_timeout`, with `child`'s own stdout read on its own
+/// thread rather than in this one (P2-3): every test used to call
+/// `.stdout.take().unwrap().read_to_string(...)` *before*
+/// `wait_with_timeout` ever ran, which blocks until the pipe's write
+/// end closes (normally, at the child's own exit) with no timeout of
+/// its own at all — a hung `osp` that never closed its stdout would
+/// have hung the whole test on that read, the hard timeout below
+/// never even reached. Reading concurrently with the wait means a kill
+/// on timeout closes the pipe (EOF) and unblocks the read too.
+fn wait_with_timeout_capturing_stdout(
+    mut child: Child,
+    timeout: Duration,
+) -> (std::process::ExitStatus, String) {
+    let mut stdout_pipe = child.stdout.take().expect("piped stdout");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = stdout_pipe.read_to_string(&mut buf);
+        let _ = tx.send(buf);
+    });
+    let status = wait_with_timeout(child, timeout);
+    let stdout = rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap_or_else(|_| String::from("<stdout reader thread did not finish>"));
+    (status, stdout)
+}
+
 fn write_doc(dir: &Path, name: &str, contents: &str) -> PathBuf {
     let path = dir.join(name);
     std::fs::write(&path, contents).unwrap();
@@ -119,21 +156,14 @@ fn a_simple_run_succeeds_and_prints_the_log() {
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
-    let mut child = osp_command(&home)
+    let child = osp_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--log")
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
-    let mut stdout = String::new();
-    child
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_string(&mut stdout)
-        .unwrap();
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
 
     assert!(
         status.success(),
@@ -159,21 +189,14 @@ fn on_error_continue_still_exits_ok() {
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
-    let mut child = osp_command(&home)
+    let child = osp_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--log")
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
-    let mut stdout = String::new();
-    child
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_string(&mut stdout)
-        .unwrap();
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
 
     assert!(
         status.success(),
@@ -198,7 +221,7 @@ fn a_single_sigint_forwards_and_osp_exits_130() {
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
-    let mut child = osp_command(&home)
+    let child = osp_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--log")
@@ -212,14 +235,7 @@ fn a_single_sigint_forwards_and_osp_exits_130() {
         libc::kill(pid, libc::SIGINT);
     }
 
-    let mut stdout = String::new();
-    child
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_string(&mut stdout)
-        .unwrap();
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
 
     assert_eq!(status.code(), Some(130), "stdout:\n{stdout}");
     assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
@@ -250,7 +266,7 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
-    let mut child = osp_command(&home)
+    let child = osp_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--log")
@@ -268,14 +284,7 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
         libc::kill(pid, libc::SIGINT);
     }
 
-    let mut stdout = String::new();
-    child
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_string(&mut stdout)
-        .unwrap();
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
 
     // The second SIGINT, landing while the `finally:` sleep is still
     // running, makes `cof` call `os._exit` at once (`cli/interrupts
@@ -307,7 +316,7 @@ fn sigterm_forwards_and_osp_exits_143() {
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
-    let mut child = osp_command(&home)
+    let child = osp_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--log")
@@ -321,14 +330,7 @@ fn sigterm_forwards_and_osp_exits_143() {
         libc::kill(pid, libc::SIGTERM);
     }
 
-    let mut stdout = String::new();
-    child
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_string(&mut stdout)
-        .unwrap();
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
 
     assert_eq!(status.code(), Some(143), "stdout:\n{stdout}");
     assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
@@ -402,15 +404,8 @@ fn watch_mirrors_a_run_osp_did_not_start() {
 
     let mut watch = osp_command(&home);
     watch.arg("watch").arg(run_dir.path());
-    let mut child = watch.spawn().expect("spawn osp watch");
-    let mut stdout = String::new();
-    child
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_string(&mut stdout)
-        .unwrap();
-    let watch_status = wait_with_timeout(child, Duration::from_secs(10));
+    let child = watch.spawn().expect("spawn osp watch");
+    let (watch_status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(10));
 
     assert!(watch_status.success(), "stdout:\n{stdout}");
     assert!(stdout.contains("prime.hello"), "stdout:\n{stdout}");

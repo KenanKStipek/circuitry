@@ -80,6 +80,12 @@ jobs:
   e2e-cof:
     name: end-to-end with cof
     runs-on: ubuntu-latest
+    # P2-3: a hard ceiling on the whole job, independent of each
+    # test's own in-process timeout (which only ever fires once the
+    # test binary itself is actually running) -- a hang anywhere
+    # before that (the build, cof's own install) still gets killed
+    # rather than running until the workflow's own default limit.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
