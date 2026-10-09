@@ -18,11 +18,12 @@ use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use support::{
-    SCRIPTED_CONFIG, TestHome, assert_no_leftover_process, e2e_enabled, wait_with_timeout,
-    write_doc,
+    SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process, e2e_enabled,
+    wait_with_timeout, write_doc,
 };
 
 /// Opens a fresh pty pair, unlocked and granted, ready for a child to
@@ -48,6 +49,47 @@ fn open_pty() -> (File, PathBuf) {
 
     let master = unsafe { File::from_raw_fd(master_fd as RawFd) };
     (master, PathBuf::from(slave_path))
+}
+
+/// Drains `master` continuously, from the moment it's called, into a
+/// shared buffer a caller can inspect at any time -- started right
+/// after the pty is opened, *before* the child is even spawned,
+/// rather than only read from in bursts (a redrawing TUI can fill a
+/// pty's own small kernel buffer in well under a second; nothing
+/// draining it would make osp's own writes block, delaying its exit
+/// for however long this test wasn't reading, and risking losing
+/// whatever it tried to write once it finally did get to exit).
+fn drain_continuously(mut master: File) -> Arc<Mutex<Vec<u8>>> {
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let shared = Arc::clone(&buf);
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut chunk = [0u8; 4096];
+        loop {
+            match master.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => shared.lock().unwrap().extend_from_slice(&chunk[..n]),
+            }
+        }
+    });
+    buf
+}
+
+/// Waits until `pattern` has appeared anywhere in `buf` so far, or
+/// `timeout` runs out either way.
+fn wait_for_pattern(buf: &Arc<Mutex<Vec<u8>>>, pattern: &[u8], timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if buf
+            .lock()
+            .unwrap()
+            .windows(pattern.len())
+            .any(|w| w == pattern)
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 fn open_slave(path: &std::path::Path) -> OwnedFd {
@@ -89,25 +131,22 @@ fn spawn_osp_on_pty(
     cmd.stdin(stdio_from_slave(slave_path));
     cmd.stdout(stdio_from_slave(slave_path));
     cmd.stderr(stdio_from_slave(slave_path));
-    // `setsid` (a new session, detached from the test harness's own
-    // controlling terminal) plus `TIOCSCTTY` on fd 0 (already the pty
-    // slave, Rust's own stdio redirection having already run by the
-    // time a `pre_exec` closure fires) is what makes osp a real
-    // foreground process of a real controlling terminal — without
-    // one, raw-mode's own `/dev/tty` open fails, `TerminalGuard::enter`
-    // falls back to a plain `child.wait()` with no signal-forwarding
-    // loop at all, and a signal sent straight to osp's pid hits the
-    // OS default disposition instead of osp's own handler (observed:
-    // `kill`ed outright by SIGINT rather than exiting 130). A bare
-    // `setpgid` alone, enough for `cof`'s own process-group isolation
-    // (DESIGN.md §4.1), is not enough here — osp itself needs the
-    // controlling terminal `cof` never does.
+    // Only `setpgid` (not `setsid`): a `setsid` call from a `pre_exec`
+    // closure was tried here and found to make the spawned child
+    // permanently unreapable by this test's own `std::process::Child`
+    // (`try_wait`/`wait` never see it exit, confirmed with a minimal
+    // repro with no osp involved at all -- a macOS-specific quirk of
+    // `waitpid` on a child that called `setsid`). A plain tty slave
+    // fd (no explicit `TIOCSCTTY`) is still enough for
+    // `crossterm::terminal::enable_raw_mode`'s own `tcgetattr`/
+    // `tcsetattr`, which only need an open fd referring to some tty
+    // device, not a controlling-terminal relationship -- this process
+    // group isolation is here for the same reason `osp` itself gives
+    // `cof` its own (DESIGN.md §4.1), so a signal sent to just this
+    // pid never reaches the test harness's own process group either.
     unsafe {
         cmd.pre_exec(|| {
-            if libc::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if libc::ioctl(0, libc::TIOCSCTTY as _, 0) != 0 {
+            if libc::setpgid(0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
@@ -133,6 +172,13 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
     let (master, slave_path) = open_pty();
+    // Drained continuously from the moment the pty exists (the same
+    // reasoning `wait_with_timeout_capturing_stdout` applies to a
+    // plain pipe in `e2e_cof.rs`, but doubly so here: a TUI redrawing
+    // at up to 10Hz can fill a pty's own small kernel buffer in well
+    // under a second, and nothing draining it would make osp's own
+    // writes block).
+    let captured_buf = drain_continuously(master);
 
     let doc_arg = doc.as_os_str();
     let config_arg = config.as_os_str();
@@ -142,24 +188,11 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
         &slave_path,
         &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
     );
-    // The pty's own master side is read on its own thread so the
-    // child can never block on a full pty buffer waiting for a
-    // reader that only ever showed up at the very end (the same
-    // `wait_with_timeout_capturing_stdout` reasoning `e2e_cof.rs`
-    // already applies to a plain pipe).
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        use std::io::Read;
-        let mut buf = Vec::new();
-        let mut master = master;
-        let _ = master.read_to_end(&mut buf);
-        let _ = tx.send(buf);
-    });
 
     let status = wait_with_timeout(child, Duration::from_secs(30));
     assert!(status.success(), "osp should exit 0, got {status:?}");
 
-    let captured = rx.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
+    let captured = captured_buf.lock().unwrap().clone();
     let rendered = String::from_utf8_lossy(&captured);
     // The alternate screen's own entry/exit sequences (DESIGN.md
     // §6.3's terminal safety) prove the TUI, not the plain `--log`
@@ -205,6 +238,7 @@ fn a_forwarded_sigint_still_restores_the_terminal() {
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
     let (master, slave_path) = open_pty();
+    let captured_buf = drain_continuously(master);
 
     let doc_arg = doc.as_os_str();
     let config_arg = config.as_os_str();
@@ -216,22 +250,22 @@ fn a_forwarded_sigint_still_restores_the_terminal() {
     );
     let pid = child.id() as i32;
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        use std::io::Read;
-        let mut buf = Vec::new();
-        let mut master = master;
-        let _ = master.read_to_end(&mut buf);
-        let _ = tx.send(buf);
-    });
-
-    // Longer than `support::SIGNAL_DELAY`: the TUI's own startup does
-    // everything the plain path's does (the `cof run --help` probe, the
-    // plan compile) *plus* entering raw mode and spawning the
-    // terminal before its own signal-forwarding loop is ever reached,
-    // so it needs more margin against a cold start on a shared,
-    // loaded machine -- observed flaking at 1.5s, never at 3s.
-    std::thread::sleep(Duration::from_secs(3));
+    // Waits for the TUI to have actually entered the alternate screen
+    // before sending SIGINT, rather than a fixed sleep: a fixed delay
+    // long enough to cover a `cof run --help` probe plus a plan
+    // compile plus raw-mode/pty setup on a cold, loaded machine was
+    // observed to still occasionally lose the race (flaking at both
+    // 1.5s and 3s) -- the *actual* signal osp's own render loop is
+    // ready matters, not a guess at how long getting there takes.
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    // `support::SIGNAL_DELAY` on top of the pattern wait: osp's own
+    // TUI is ready as soon as the alternate screen appears, but `cof`
+    // (a separate, independently cold-starting Python process) still
+    // needs its own moment to install its own `SIGINT` handling --
+    // skipping this was observed to occasionally have `cof` itself
+    // exit 1 (not "Interrupted") when the signal arrived during its
+    // own early start-up instead.
+    std::thread::sleep(SIGNAL_DELAY);
     unsafe {
         libc::kill(pid, libc::SIGINT);
     }
@@ -239,7 +273,12 @@ fn a_forwarded_sigint_still_restores_the_terminal() {
     let status = wait_with_timeout(child, Duration::from_secs(30));
     assert_eq!(status.code(), Some(130), "got {status:?}");
 
-    let captured = rx.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
+    // A brief grace period for the draining thread to catch up on
+    // whatever osp wrote between its last read and actually exiting
+    // (DESIGN.md §6.3: the alternate-screen exit sequence is part of
+    // that).
+    std::thread::sleep(Duration::from_millis(200));
+    let captured = captured_buf.lock().unwrap().clone();
     let rendered = String::from_utf8_lossy(&captured);
     assert!(
         rendered.contains("\u{1b}[?1049h"),
@@ -248,6 +287,75 @@ fn a_forwarded_sigint_still_restores_the_terminal() {
     assert!(
         rendered.contains("\u{1b}[?1049l"),
         "expected an alternate-screen exit sequence after the forwarded signal; got:\n{rendered:?}"
+    );
+
+    assert_no_leftover_process(work.path());
+}
+
+/// `osp watch`'s own TUI (DESIGN.md §6.3): attaches to a run `osp`
+/// did not start, renders it in the alternate screen the same as a
+/// live `osp <doc>` would, and exits cleanly once the run ends, with
+/// no confirm needed (watch owns no engine to cancel).
+#[test]
+fn osp_watch_renders_in_the_tui_and_exits_cleanly() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let run_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let mut cof = Command::new("cof");
+    cof.arg("run")
+        .arg(&doc)
+        .arg("--config")
+        .arg(&config)
+        .arg("--quiet")
+        .arg("--live-state")
+        .arg(run_dir.path().join("state.live.json"))
+        .arg("--out")
+        .arg(run_dir.path().join("state.json"))
+        .env("HOME", home.path())
+        .current_dir(work.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for key in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "CYBERDINER_TOKEN",
+        "CYBERDINER_EXPO_URL",
+    ] {
+        cof.env_remove(key);
+    }
+    let cof_status = wait_with_timeout(cof.spawn().expect("spawn cof"), Duration::from_secs(30));
+    assert!(cof_status.success());
+
+    let (master, slave_path) = open_pty();
+    let captured_buf = drain_continuously(master);
+    let run_dir_arg = run_dir.path().as_os_str();
+    let child = spawn_osp_on_pty(&home, &slave_path, &[OsStr::new("watch"), run_dir_arg]);
+
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osp watch should exit 0, got {status:?}");
+
+    std::thread::sleep(Duration::from_millis(200));
+    let captured = captured_buf.lock().unwrap().clone();
+    let rendered = String::from_utf8_lossy(&captured);
+    assert!(
+        rendered.contains("\u{1b}[?1049h"),
+        "expected an alternate-screen entry sequence; got:\n{rendered:?}"
+    );
+    assert!(
+        rendered.contains("\u{1b}[?1049l"),
+        "expected an alternate-screen exit sequence; got:\n{rendered:?}"
     );
 
     assert_no_leftover_process(work.path());

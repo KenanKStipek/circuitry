@@ -84,6 +84,11 @@ struct WatchArgs {
     /// (K4) — the same ones the watched run itself was given, if any.
     #[arg(short = 'e', value_name = "key=value")]
     set: Vec<String>,
+    /// Forces the plain-text stream (DESIGN.md §6.2) even on a TTY —
+    /// the TUI's own default otherwise, the same split `osp <doc>`
+    /// makes.
+    #[arg(long)]
+    log: bool,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -980,6 +985,13 @@ fn do_watch(args: WatchArgs) -> ExitCode {
         None => PlanTree::empty(),
     };
 
+    // DESIGN.md §6.2/§6.3: same TTY/—log split as `osp <doc>`; `q` in
+    // this one just detaches (§6.3), since watch owns no engine of
+    // its own to ever cancel.
+    if !effective_log_mode(args.log) {
+        return run_tui_watch(run_dir, live_state_path, plan, args.target.clone());
+    }
+
     let mut clock = Clock::new();
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -1078,6 +1090,218 @@ fn do_watch(args: WatchArgs) -> ExitCode {
         std::thread::sleep(POLL_INTERVAL);
     }
 
+    let code = finish_watch(
+        &mut out,
+        &mut clock,
+        &mut live_poller,
+        &mut events_tailer,
+        &mut differ,
+        &mut model,
+        &plan,
+        &run_dir,
+        &mut last_state,
+        local_signal,
+    );
+    let _ = writeln!(out, "exit {code}");
+    ExitCode::from(code as u8)
+}
+
+/// `osp watch`'s own TUI loop (DESIGN.md §6.3): the same render/key
+/// loop `run_tui` gives a live run, but with none of its own engine
+/// to supervise or cancel — `q` always just detaches (§6.3: "In `osp
+/// watch`, `q` just detaches"), with no confirm, whether or not the
+/// watched run is still going.
+fn run_tui_watch(
+    run_dir: PathBuf,
+    live_state_path: PathBuf,
+    plan: PlanTree,
+    document: String,
+) -> ExitCode {
+    let mut live_poller = LiveStatePoller::new(&live_state_path);
+    let mut events_tailer = EventsTailer::new(run_dir.join("events.jsonl"));
+    let mut differ = Differ::new();
+    let mut model = RunModel::new();
+    let mut clock = Clock::new();
+    let mut log_lines: Vec<String> = Vec::new();
+    let mut last_state: Option<serde_json::Value> = None;
+    let mut warned_no_events = false;
+    let events_path = run_dir.join("events.jsonl");
+    let mut signals = SignalWatcher::new().ok();
+    let mut local_signal: Option<ForwardSignal> = None;
+    let start = Instant::now();
+
+    let mut app = App::new(true);
+
+    let guard_and_terminal = TerminalGuard::enter()
+        .and_then(|g| Terminal::new(CrosstermBackend::new(std::io::stdout())).map(|t| (g, t)));
+    let (_guard, mut terminal) = match guard_and_terminal {
+        Ok(pair) => pair,
+        Err(err) => {
+            eprintln!("osp: couldn't start the TUI ({err}); falling back to waiting quietly");
+            let stdout = std::io::stdout();
+            let mut out = stdout.lock();
+            let code = finish_watch(
+                &mut out,
+                &mut clock,
+                &mut live_poller,
+                &mut events_tailer,
+                &mut differ,
+                &mut model,
+                &plan,
+                &run_dir,
+                &mut last_state,
+                None,
+            );
+            let _ = writeln!(out, "exit {code}");
+            return ExitCode::from(code as u8);
+        }
+    };
+
+    let mut last_draw = Instant::now() - REDRAW_INTERVAL;
+    let mut dirty = true;
+
+    loop {
+        if let Some(watcher) = signals.as_mut() {
+            if let Some(sig) = watcher.pending().into_iter().next() {
+                local_signal = Some(sig);
+                break;
+            }
+        }
+
+        let (lines, state) = observe_tick(
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
+        dirty |= !lines.is_empty();
+        for line in &lines {
+            log_lines.push(format_log_line(&mut clock, line.ts.as_deref(), &line.text));
+        }
+        if let Some(state) = state {
+            last_state = Some(state);
+            dirty = true;
+        }
+
+        if last_state
+            .as_ref()
+            .is_some_and(oscilloscope_core::model::run_ended)
+        {
+            break;
+        }
+        if !warned_no_events
+            && last_state.is_some()
+            && model.run_start_pid().is_none()
+            && !model.run_ended_by_events()
+            && !events_path.exists()
+        {
+            log_lines.push(format_log_line(
+                &mut clock,
+                None,
+                "this run has no --events stream; an aborted run can't be detected \
+                 without one. q detaches.",
+            ));
+            warned_no_events = true;
+            dirty = true;
+        }
+        if model.run_ended_by_events() {
+            let (more_lines, state) = observe_tick(
+                &mut live_poller,
+                &mut events_tailer,
+                &mut differ,
+                &mut model,
+                &plan,
+            );
+            for line in &more_lines {
+                log_lines.push(format_log_line(&mut clock, line.ts.as_deref(), &line.text));
+            }
+            if let Some(state) = state {
+                last_state = Some(state);
+            }
+            break;
+        }
+        if let Some(pid) = model.run_start_pid() {
+            if !oscilloscope_core::supervise::process_alive(pid) {
+                break;
+            }
+        }
+
+        let render_state = oscilloscope_core::render::build(
+            &document,
+            "watch",
+            &plan,
+            &mut model,
+            last_state.as_ref(),
+            ProcessState::Running,
+            start.elapsed().as_secs_f64(),
+            &[],
+        );
+        if app.follow {
+            if let Some(target) = App::follow_target(&render_state.rows) {
+                app.selected_path = Some(target.to_string());
+            }
+        }
+        if app.selected_path.is_none() {
+            app.selected_path = render_state.rows.first().map(|r| r.path.clone());
+        }
+        let visible = keys::visible_rows(&render_state.rows, &app);
+
+        if event::poll(KEY_POLL_INTERVAL).unwrap_or(false) {
+            if let Ok(ev) = event::read() {
+                match ev {
+                    CEvent::Key(key) if key.kind == KeyEventKind::Press => {
+                        // Watch owns no engine to cancel (DESIGN.md
+                        // §6.3), so `running` is always false here:
+                        // `c` does nothing, and `q` detaches at once,
+                        // with no confirm, whether the watched run is
+                        // still going or not.
+                        if let keys::Action::Quit = app.handle_key(key, &visible, false) {
+                            let stdout = std::io::stdout();
+                            let mut out = stdout.lock();
+                            drop(terminal);
+                            drop(_guard);
+                            let code = finish_watch(
+                                &mut out,
+                                &mut clock,
+                                &mut live_poller,
+                                &mut events_tailer,
+                                &mut differ,
+                                &mut model,
+                                &plan,
+                                &run_dir,
+                                &mut last_state,
+                                None,
+                            );
+                            let _ = writeln!(out, "exit {code}");
+                            return ExitCode::from(code as u8);
+                        }
+                        dirty = true;
+                    }
+                    CEvent::Resize(_, _) => dirty = true,
+                    _ => {}
+                }
+            }
+        }
+
+        if dirty && last_draw.elapsed() >= REDRAW_INTERVAL {
+            let details = app
+                .selected_path
+                .as_deref()
+                .map(|p| oscilloscope_core::render::details_for(p, &plan, last_state.as_ref()));
+            let _ = terminal.draw(|f| {
+                tui::draw(f, &render_state, details.as_ref(), &log_lines, &app);
+            });
+            last_draw = Instant::now();
+            dirty = false;
+        }
+    }
+
+    drop(terminal);
+    drop(_guard);
+
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
     let code = finish_watch(
         &mut out,
         &mut clock,
