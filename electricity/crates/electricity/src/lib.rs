@@ -165,26 +165,26 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Instant;
 
-/// Tool providers the M0-H VM accepts beyond `json` -- only ever the
-/// `test-tools` cargo feature's own `sleep`/`fail`, and only when that
-/// feature is actually compiled in (`electricity_bytecode::refusal::
-/// first_unsupported`'s own *extra_allowed_providers* seam, issue
-/// #431's gate lane). Empty, and so a strict no-op, in every ordinary
-/// build -- `electricity-cli`'s own `Cargo.toml` never enables this
-/// feature (that crate's own doc comment).
+/// Tool providers this crate's own [`tool_registry`] actually
+/// dispatches -- `json`, plus the `test-tools` cargo feature's own
+/// `sleep`/`fail` when that feature is compiled in
+/// (`electricity_bytecode::refusal::Supported::providers`, issue #449's
+/// gate lane). Just `&["json"]` in every ordinary build --
+/// `electricity-cli`'s own `Cargo.toml` never enables this feature
+/// (that crate's own doc comment).
 #[cfg(feature = "test-tools")]
-fn extra_allowed_providers() -> &'static [&'static str] {
-    &["sleep", "fail"]
+fn supported_providers() -> &'static [&'static str] {
+    &["json", "sleep", "fail"]
 }
 
 #[cfg(not(feature = "test-tools"))]
-fn extra_allowed_providers() -> &'static [&'static str] {
-    &[]
+fn supported_providers() -> &'static [&'static str] {
+    &["json"]
 }
 
 /// A fresh tool registry: `json` (M0-H's only real provider), plus
 /// `sleep`/`fail` when the `test-tools` feature is enabled -- the one
-/// place both are ever registered, so [`extra_allowed_providers`] (the
+/// place both are ever registered, so [`supported_providers`] (the
 /// refusal walker's own allow-list) never drifts from what the registry
 /// actually dispatches.
 fn tool_registry() -> electricity_tools::ToolRegistry {
@@ -970,7 +970,10 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
     // after every check error above and before any file is written --
     // no state is written for a refusal at all (this function's own
     // doc comment).
-    if let Some(refusal) = first_unsupported(&program, extra_allowed_providers()) {
+    if let Some(refusal) = first_unsupported(
+        &program,
+        &electricity_bytecode::Supported::m0(supported_providers()),
+    ) {
         return RunResult {
             ok: false,
             state: None,
