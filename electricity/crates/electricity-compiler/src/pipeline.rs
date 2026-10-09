@@ -511,101 +511,173 @@ fn cli_inline_entries(options: &CheckOptions, iface_inputs: &Dict) -> IndexMap<S
     inline
 }
 
-/// `core/interface_inputs.py::check_interface_inputs`, against the CLI's
-/// own `-e` input namespace, built from *options.inputs* exactly as
-/// `cli/runtime_shim.py::run`'s own choke point does
-/// ([`cli_inline_entries`], then `core/state_ns.py::migrate_legacy_
-/// state`'s own `input`-namespace rule --
-/// [`crate::state_ns::migrate_legacy_input_namespace`]). Empty by
-/// default (`options.inputs` empty), so every golden corpus case and
-/// every pre-#429 caller sees the exact same always-absent behavior
-/// this function used to be hard-coded to. Per declared input in
-/// document order: an absent key gets its `default:` (type-checked the
-/// same way as any other value, falling through rather than
-/// `continue`-ing past the check below) or, with no default, an error
-/// if `required: true`, or is simply skipped (an absent, optional,
-/// undefaulted input) -- a present value is coerced to its declared
-/// `type` with [`coerce_interface_value`] (`core/interface_inputs.py::
-/// _coerce`) when it doesn't already match. Keys the namespace carries
-/// but `iface_inputs` doesn't declare are never looked at: extra `-e`
-/// input stays allowed. Stops and returns the first violation, matching
-/// Python's own eager `raise`.
-fn check_interface_inputs_error(document: &Value, options: &CheckOptions) -> Option<String> {
-    let interface = document
-        .as_dict()?
-        .get(&Value::Str("interface".to_string()))?
-        .as_dict()?;
-    let iface_inputs = interface
-        .get(&Value::Str("inputs".to_string()))?
-        .as_dict()?;
-    let namespace =
+/// `core/interface_inputs.py::check_interface_inputs(interface, inputs,
+/// label="")`, against the CLI's own `-e` input namespace, built from
+/// *options.inputs* exactly as `cli/runtime_shim.py::run`'s own choke
+/// point does ([`cli_inline_entries`], then `core/state_ns.py::
+/// migrate_legacy_state`'s own `input`-namespace rule --
+/// [`crate::state_ns::migrate_legacy_input_namespace`]). Mutates and
+/// returns that namespace, Python's own way (lane D's gate needs the
+/// result, not just a pass/fail verdict -- #431's "Seams" section):
+/// a document with no `interface`/`interface.inputs` at all returns the
+/// namespace unchanged, Python's own `isinstance` early return. Per
+/// declared input, in document order:
+///
+/// - absent (missing, or present as `null`): filled from `default:`
+///   (falling through to the type check below rather than skipping it,
+///   so a malformed default is still caught) -- appended at the
+///   namespace's end if the key was missing, or left in its own
+///   position if it only held `null` (`IndexMap::insert`'s own
+///   semantics on an existing vs. a new key, matching a Python `dict`
+///   assignment exactly); with no default, an error if `required:
+///   true`, else the key is dropped from the namespace entirely
+///   ([`indexmap::IndexMap::shift_remove`] -- `dict.pop`);
+/// - present and already the declared `type`: untouched;
+/// - present, declared `type: string`, but an `int`/`float`/`bool`:
+///   replaced with its own `json.dumps` spelling ([`electricity_json::
+///   dumps`]) -- Python's own "a `-e`/Mustache value parsed numeric/
+///   boolean, convert it back to text" branch, a real mutation, not a
+///   pure validation pass-through;
+///   a `string` value otherwise coerced to its declared `type` with
+///   [`coerce_interface_value`] (`core/interface_inputs.py::_coerce`)
+///   replaces the namespace entry with the coerced value.
+///
+/// Keys the namespace carries but `iface_inputs` doesn't declare are
+/// never looked at: extra `-e` input stays allowed. `Err` is the first
+/// violation (unprefixed -- Circuitry's own call site always passes
+/// `label=""`), matching Python's own eager `raise`.
+///
+/// The namespace is keyed by [`Value`], not `String`: a declared
+/// `interface.inputs` key need not be a string (`1:`/`yes:` parse as
+/// `Value::Int`/`Value::Bool`, same as any other YAML mapping key), and
+/// Python's own `inputs[key] = ...` writes a missing key's `default:`
+/// under that exact literal key -- a `String`-keyed namespace would
+/// have nowhere to put it, silently dropping the write Python makes.
+fn build_input_namespace(
+    document: &Value,
+    options: &CheckOptions,
+) -> Result<IndexMap<Value, Value>, String> {
+    let no_declared_inputs = Dict::new();
+    let iface_inputs = document
+        .as_dict()
+        .and_then(|d| d.get(&Value::Str("interface".to_string())))
+        .and_then(|i| i.as_dict())
+        .and_then(|i| i.get(&Value::Str("inputs".to_string())))
+        .and_then(|i| i.as_dict());
+
+    let Some(iface_inputs) = iface_inputs else {
+        let namespace = crate::state_ns::migrate_legacy_input_namespace(&cli_inline_entries(
+            options,
+            &no_declared_inputs,
+        ));
+        return Ok(namespace
+            .into_iter()
+            .map(|(key, value)| (Value::Str(key), value))
+            .collect());
+    };
+
+    let string_namespace =
         crate::state_ns::migrate_legacy_input_namespace(&cli_inline_entries(options, iface_inputs));
+    // Every key `migrate_legacy_input_namespace` ever produces is a
+    // `String` (it reads `-e`/inline JSON, and JSON object keys are
+    // always strings); re-keyed by `Value` here so a declared
+    // `interface.inputs` key that isn't a string (`1:`, `yes:`) can
+    // land its own `default:` in the *same* namespace Python's own
+    // `inputs[key] = ...` would, under that exact literal key, not a
+    // stringified stand-in for it -- matching Python's own mixed-key
+    // dict exactly, and letting one loop below handle every key the
+    // same way, string or not.
+    let mut namespace: IndexMap<Value, Value> = string_namespace
+        .into_iter()
+        .map(|(key, value)| (Value::Str(key), value))
+        .collect();
+
     for (key, spec) in iface_inputs {
         let Some(spec_dict) = spec.as_dict() else {
             continue;
         };
         let key_str = key.py_str();
-        let key_as_str = match key {
-            Value::Str(s) => Some(s.as_str()),
-            _ => None,
-        };
-        let current = key_as_str.and_then(|k| namespace.get(k).cloned());
+        let current = namespace.get(key).cloned();
         let absent = matches!(current, None | Some(Value::None));
-        let value = if absent {
+        if absent {
             if let Some(default) = spec_dict.get(&Value::Str("default".to_string())) {
-                default.clone()
+                namespace.insert(key.clone(), default.clone());
             } else if is_truthy(spec_dict.get(&Value::Str("required".to_string()))) {
-                return Some(format!(
+                return Err(format!(
                     "missing required input '{key_str}' declared in orchestration interface."
                 ));
             } else {
+                namespace.shift_remove(key);
                 continue;
             }
-        } else {
-            current.expect("not absent")
-        };
+        }
         let declared_type = match spec_dict.get(&Value::Str("type".to_string())) {
             Some(Value::Str(s))
                 if crate::structural::INTERFACE_TYPE_NAMES.contains(&s.as_str()) =>
             {
-                s.as_str()
+                s.clone()
             }
             _ => continue,
         };
-        if crate::structural::matches_type(&value, declared_type) {
-            continue;
+        let value = namespace
+            .get(key)
+            .cloned()
+            .expect("present: either matched above or just inserted");
+        if let Some(coerced) = declared_type_outcome(&value, &key_str, &declared_type)? {
+            namespace.insert(key.clone(), coerced);
         }
-        if declared_type == "string"
-            && matches!(value, Value::Int(_) | Value::Float(_) | Value::Bool(_))
-        {
-            continue;
-        }
-        if let Value::Str(raw) = &value {
-            match coerce_interface_value(raw, declared_type) {
-                Ok(coerced) => {
-                    if crate::structural::matches_type(&coerced, declared_type) {
-                        continue;
-                    }
-                    return Some(format!(
+    }
+    Ok(namespace)
+}
+
+/// Checks *value* (an existing namespace entry, or a just-applied
+/// `default:` that Python falls through to this same check rather than
+/// trusting outright) against *declared_type*, matching `core/
+/// interface_inputs.py::check_interface_inputs`'s own type-check/coerce
+/// tail exactly. `Ok(None)` if *value* already matches; `Ok(Some(_))`
+/// the replacement value a caller with somewhere to store it should
+/// write back (a `string`-typed input that arrived as a number/bool, or
+/// a string value [`coerce_interface_value`] converts); `Err` the first
+/// mismatch, unconvertible value, exactly as Python's own `raise` would
+/// word it.
+fn declared_type_outcome(
+    value: &Value,
+    key_str: &str,
+    declared_type: &str,
+) -> Result<Option<Value>, String> {
+    if crate::structural::matches_type(value, declared_type) {
+        return Ok(None);
+    }
+    if declared_type == "string"
+        && matches!(value, Value::Int(_) | Value::Float(_) | Value::Bool(_))
+    {
+        let json_text = electricity_json::dumps(value, electricity_json::WriteMode::COMPACT)
+            .unwrap_or_else(|_| value.py_str());
+        return Ok(Some(Value::Str(json_text)));
+    }
+    if let Value::Str(raw) = value {
+        return match coerce_interface_value(raw, declared_type) {
+            Ok(coerced) => {
+                if crate::structural::matches_type(&coerced, declared_type) {
+                    Ok(Some(coerced))
+                } else {
+                    Err(format!(
                         "input '{key_str}' declared type '{declared_type}' but got {}.",
                         crate::structural::py_class_name(&coerced)
-                    ));
-                }
-                Err(message) => {
-                    return Some(format!(
-                        "input '{key_str}' declared type '{declared_type}' but {} could not be \
-                         converted: {message}",
-                        python_repr_str(raw)
-                    ));
+                    ))
                 }
             }
-        }
-        return Some(format!(
-            "input '{key_str}' declared type '{declared_type}' but got {}.",
-            crate::structural::py_class_name(&value)
-        ));
+            Err(message) => Err(format!(
+                "input '{key_str}' declared type '{declared_type}' but {} could not be \
+                 converted: {message}",
+                python_repr_str(raw)
+            )),
+        };
     }
-    None
+    Err(format!(
+        "input '{key_str}' declared type '{declared_type}' but got {}.",
+        crate::structural::py_class_name(value)
+    ))
 }
 
 /// Matches `runtime_shim.validate(path, config=None, skip_preflight=...,
@@ -722,59 +794,86 @@ pub fn check_report(path: &Path, options: &CheckOptions) -> CheckReport {
     }
 }
 
-/// The exact error text a `cof run` of *path* reports, matching
-/// `runtime_shim.run(RunRequest(..., validate_only=True,
-/// skip_preflight=..., trust_document=...))`.
-///
-/// **Known divergence** (crate docs' own "Known divergences" list has the
-/// full rationale): `run()` also raises, before any of the checks below,
-/// from `resolve_complexity_settings`'s validation of a malformed
-/// `runtime.complexity` block (inside `resolve_effective_settings`, before
-/// the concurrency limiter) and, between the concurrency limiter and
-/// `check_interface_inputs`, from `build_persistence_backend`'s validation
-/// of a malformed `runtime.persistence` block. Neither is ported here --
-/// complexity routing/decomposition and persistence backends have no IR
-/// representation in this crate at all -- so a document whose only fault
-/// is one of those two blocks passes this function where `cof run` would
-/// fail.
-///
-/// Order: [`load_document`]; [`concurrency_config_errors`] against the
-/// merged runtime config -- confirmed directly against
-/// `cli/runtime_shim.py::run`: `RunConcurrencyLimiter.from_runtime_config`
-/// runs *before* the document's structural checks even start, raising
-/// its own `"Invalid runtime concurrency configuration:\n  - ..."`
-/// message the instant the config itself is malformed, regardless of
-/// whether the document would otherwise be structurally valid; then
-/// [`structural_errors`] (as [`RunCheckError::Structural`]); then
-/// [`compile_document`] (lane C, as [`RunCheckError::Compile`] --
-/// already in final display form, including a composition-error
-/// message's own `"Prompt composition errors:\n  - ..."` prefix, which
-/// `compile_orchestration` bakes in itself); then
-/// [`groups::unknown_group_errors`] (lane C, as
-/// [`RunCheckError::Structural`], matching `run()`'s own
-/// `"Orchestration validation failed:"`-prefixed `raise`) against the
-/// same merged config's group names; then [`cycles::detect_cycles`]
-/// (lane C, as [`RunCheckError::Cycle`]). `Program.document`
-/// ([`electricity_bytecode::DocumentInfo`]) is filled in here, not by
-/// `compile_document` itself -- this function has *path*'s raw bytes
-/// (via [`digest::document_content_digest`]), which `compile_document`
-/// never sees; a digest failure (lane D is still a stub) is tolerated
-/// rather than failing the check (issue #408's lane B section).
-pub fn check_for_run(path: &Path, options: &CheckOptions) -> Result<Program, RunCheckError> {
-    let document = load_document(path).map_err(|err| RunCheckError::Compile(err.0))?;
+/// A loaded, not-yet-checked document -- [`prepare_document`]'s own
+/// result, and [`pre_state_checks`]/[`post_state_checks`]'s shared input.
+/// Bundles [`document_origin`]'s result (infallible, and depending only
+/// on *path* -- never on the document's own content or [`CheckOptions`])
+/// with the document itself, so neither later phase re-reads the file or
+/// re-resolves the document's directory.
+#[derive(Debug, Clone)]
+pub struct Loaded {
+    pub path: PathBuf,
+    pub document: Value,
+    pub origin: DocumentOrigin,
+    pub document_dir: PathBuf,
+    pub confinement_root: PathBuf,
+}
 
-    // `resolve_effective_settings`'s own shape checks on the document's
-    // raw `plugins:`/`runtime:` blocks -- `run()`'s own order, and
-    // before even the concurrency-limiter construction below (`cli/
-    // effective_settings.py`, confirmed directly: these run as part of
-    // building `effective`, which `RunConcurrencyLimiter.from_runtime_
-    // config` is built from immediately after).
-    if let Some(message) = effective_settings_shape_error(&document) {
+/// Phase 1 of [`check_for_run`]'s own order (issue #431's gate lane,
+/// "Seams" section): *path*'s load error, exactly as `check_for_run`
+/// already reported it (`cli/runtime_shim.py::run`'s own `_load_
+/// document` step, which a bad path/parse fails before anything else
+/// does -- step 5 of issue #431's run-wiring table).
+///
+/// *options* is accepted, not yet read, for lane D: a later caller that
+/// wants `skip_preflight`/`trust_document` to change how a document
+/// loads (neither flag is consulted anywhere in this crate today) has
+/// somewhere to add that without breaking this function's signature.
+pub fn prepare_document(path: &Path, options: &CheckOptions) -> Result<Loaded, RunCheckError> {
+    let _ = options;
+    let document = load_document(path).map_err(|err| RunCheckError::Compile(err.0))?;
+    let (origin, document_dir, confinement_root) = document_origin(path);
+    Ok(Loaded {
+        path: path.to_path_buf(),
+        document,
+        origin,
+        document_dir,
+        confinement_root,
+    })
+}
+
+/// Phase 2 of [`check_for_run`]'s own order: the shape/concurrency/
+/// complexity/persistence/interface-input checks `run()` makes *before*
+/// `check_for_run`'s own structural checks (steps 6, 7, 9 and 10 of
+/// issue #431's run-wiring table) -- and, unlike the pre-#431
+/// `check_interface_inputs_error` this replaces as `check_for_run`'s own
+/// step, *returns* [`build_input_namespace`]'s coerced/defaulted
+/// namespace rather than only a pass/fail verdict, since lane D's run
+/// wiring needs that namespace to seed `state["input"]` with (`cli/
+/// runtime_shim.py::run`, ~:640-648) -- not just know it would have
+/// succeeded.
+///
+/// *effective_runtime* is the already-merged config+document `runtime:`
+/// block the concurrency/group checks run against -- [`check_for_run`]
+/// passes [`merged_runtime_block`]'s own result (its pre-#431 shallow
+/// merge, unchanged); a caller with a real [`electricity_config::
+/// EffectiveSettings`] (lane D) passes its own `runtime` field instead,
+/// once `electricity_config::merge_runtime` replaces [`merged_runtime_
+/// block`] as the thing that produces it.
+///
+/// Order, exactly `check_for_run`'s own: [`effective_settings_shape_error`];
+/// [`electricity_config::validate_complexity`] (lane D's own hook -- a
+/// no-op today, [`electricity_config`]'s own crate docs have the
+/// resulting, already-documented divergence), matching `resolve_
+/// complexity_settings`'s own position *inside* `resolve_effective_
+/// settings`, which `cli/runtime_shim.py::run` calls before building the
+/// concurrency limiter; [`concurrency_config_errors`]; [`electricity_
+/// config::validate_persistence`] (lane D's own hook, same no-op today),
+/// matching `build_persistence_backend`'s own position *after* the
+/// limiter; [`build_input_namespace`].
+pub fn pre_state_checks(
+    loaded: &Loaded,
+    options: &CheckOptions,
+    effective_runtime: Option<&Value>,
+) -> Result<IndexMap<Value, Value>, RunCheckError> {
+    if let Some(message) = effective_settings_shape_error(&loaded.document) {
         return Err(RunCheckError::Compile(message));
     }
 
-    let merged_runtime = merged_runtime_block(options, &document);
-    let config_errors = concurrency_config_errors(merged_runtime.as_ref());
+    electricity_config::validate_complexity(&loaded.document, effective_runtime)
+        .map_err(|err| RunCheckError::Compile(err.0))?;
+
+    let config_errors = concurrency_config_errors(effective_runtime);
     if !config_errors.is_empty() {
         let lines: Vec<String> = config_errors.iter().map(|e| format!("  - {e}")).collect();
         return Err(RunCheckError::Compile(format!(
@@ -783,51 +882,110 @@ pub fn check_for_run(path: &Path, options: &CheckOptions) -> Result<Program, Run
         )));
     }
 
-    // `check_interface_inputs` against the top-level `interface.inputs`
-    // -- `run()`'s own position, after the concurrency limiter and
-    // before structural checks (`cli/runtime_shim.py::run`, confirmed
-    // directly), against *options.inputs* -- the CLI's own `-e`
-    // key=value pairs (issue #429) -- see [`check_interface_inputs_error`]'s
-    // own doc comment for how a CLI-shaped input namespace is built from
-    // them.
-    if let Some(message) = check_interface_inputs_error(&document, options) {
-        return Err(RunCheckError::Compile(message));
-    }
+    electricity_config::validate_persistence(&loaded.document, effective_runtime)
+        .map_err(|err| RunCheckError::Compile(err.0))?;
 
-    let structural = structural_errors(&document);
+    build_input_namespace(&loaded.document, options).map_err(RunCheckError::Compile)
+}
+
+/// Phase 3 of [`check_for_run`]'s own order: structural checks, compile,
+/// groups, cycles and the digest (steps 14 of issue #431's run-wiring
+/// table, plus the digest [`check_for_run`] itself has always attached
+/// to `Program.document` -- never part of `run()`'s own structural-check
+/// step, but nowhere else in this crate's two-phase-to-three split would
+/// fit it either).
+///
+/// *effective_runtime* is the same already-merged `runtime:` block
+/// [`pre_state_checks`] took -- used here only for [`groups::
+/// unknown_group_errors`]'s own known-group-name set, matching
+/// `check_for_run`'s pre-#431 order (groups are checked *after*
+/// compilation, against the compiled [`electricity_bytecode::Program`]).
+pub fn post_state_checks(
+    loaded: &Loaded,
+    effective_runtime: Option<&Value>,
+) -> Result<Program, RunCheckError> {
+    let structural = structural_errors(&loaded.document);
     if !structural.is_empty() {
         return Err(RunCheckError::Structural(structural));
     }
 
-    let (origin, document_dir, confinement_root) = document_origin(path);
+    let mut program = compile_document(&loaded.document, &loaded.origin)
+        .map_err(|err| RunCheckError::Compile(err.0))?;
 
-    let mut program =
-        compile_document(&document, &origin).map_err(|err| RunCheckError::Compile(err.0))?;
-
-    let known_groups = concurrency_group_names(merged_runtime.as_ref());
+    let known_groups = concurrency_group_names(effective_runtime);
     let group_errors = groups::unknown_group_errors(&program, &known_groups);
     if !group_errors.is_empty() {
         return Err(RunCheckError::Structural(group_errors));
     }
 
-    cycles::detect_cycles(&document, Some(path)).map_err(|err| RunCheckError::Cycle(err.0))?;
+    cycles::detect_cycles(&loaded.document, Some(&loaded.path))
+        .map_err(|err| RunCheckError::Cycle(err.0))?;
 
+    // `None` on any digest failure, matching Circuitry's own `except
+    // OSError: document_hash = None` exactly (`cli/runtime_shim.py::run`,
+    // ~:678-683) -- a digest only matters for a future `--resume`, so a
+    // failure computing it must never fail the run itself.
     let computed_digest =
-        digest::document_content_digest(path, &document, &confinement_root).unwrap_or_default();
+        digest::document_content_digest(&loaded.path, &loaded.document, &loaded.confinement_root)
+            .ok();
     program.document = Some(DocumentInfo {
-        path_as_given: path.display().to_string(),
-        resolved_directory: document_dir,
-        confinement_root,
+        path_as_given: loaded.path.display().to_string(),
+        resolved_directory: loaded.document_dir.clone(),
+        confinement_root: loaded.confinement_root.clone(),
         digest: computed_digest,
     });
 
     Ok(program)
 }
 
+/// The exact error text a `cof run` of *path* reports, matching
+/// `runtime_shim.run(RunRequest(..., validate_only=True,
+/// skip_preflight=..., trust_document=...))` -- [`prepare_document`]
+/// (step 5 of issue #431's run-wiring table), then [`pre_state_checks`]
+/// (steps 6, 7, 9, 10, in that exact order: [`effective_settings_shape_
+/// error`]; [`electricity_config::validate_complexity`] (step 6, inside
+/// `resolve_effective_settings`, *before* the concurrency limiter);
+/// [`concurrency_config_errors`] (step 7, `RunConcurrencyLimiter::
+/// from_runtime_config`, raising `"Invalid runtime concurrency
+/// configuration:\n  - ..."`, wrapped as a [`CompileError`]-shaped
+/// passthrough since that's exactly the shape `str(e)` from Circuitry's
+/// own broad `except Exception` would produce for it); [`electricity_
+/// config::validate_persistence`] (step 9, `build_persistence_backend`,
+/// *after* the limiter); [`build_input_namespace`] (step 10,
+/// `check_interface_inputs` -- its own *effective_runtime* is
+/// [`merged_runtime_block`]'s result, this function's pre-#431
+/// computation, unchanged), then [`post_state_checks`] (step 14's
+/// structural checks, compile, groups, cycles, plus the digest
+/// [`check_for_run`] has always attached to `Program.document`, never
+/// part of `run()`'s own structural-check step itself). `check_for_run`
+/// stays exactly this composition so every existing golden, `--dump-ir`,
+/// and osp's own use of this crate keep seeing `check_for_run`'s
+/// pre-#431 behavior unchanged -- the three phases above exist so lane
+/// D's run wiring can call each on its own, not to change what this
+/// function itself does.
+pub fn check_for_run(path: &Path, options: &CheckOptions) -> Result<Program, RunCheckError> {
+    let loaded = prepare_document(path, options)?;
+    let effective_runtime = merged_runtime_block(options, &loaded.document);
+    pre_state_checks(&loaded, options, effective_runtime.as_ref())?;
+    post_state_checks(&loaded, effective_runtime.as_ref())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use electricity_value::Dict;
+
+    /// [`build_input_namespace`]'s error, if any -- every pre-#431 test
+    /// below only needs the pass/fail verdict, not the namespace itself.
+    fn check_interface_inputs_error(document: &Value, options: &CheckOptions) -> Option<String> {
+        build_input_namespace(document, options).err()
+    }
+
+    /// A string namespace key wrapped as the [`Value`] [`build_input_
+    /// namespace`]'s own `IndexMap<Value, Value>` actually keys by.
+    fn vkey(s: &str) -> Value {
+        Value::Str(s.to_string())
+    }
 
     fn runtime_doc(pairs: Vec<(&str, Value)>) -> Value {
         let mut runtime = Dict::new();
@@ -954,12 +1112,21 @@ mod tests {
     }
 
     fn interface_doc_named(key: &str, spec_pairs: Vec<(&str, Value)>) -> Value {
+        interface_doc_with_key(Value::Str(key.to_string()), spec_pairs)
+    }
+
+    /// Like [`interface_doc_named`], but *key* is the declared
+    /// `interface.inputs` key's own [`Value`] directly -- a YAML/JSON
+    /// mapping key need not be a string (`1:`/`yes:` parse as
+    /// `Value::Int`/`Value::Bool`), and [`build_input_namespace`] keys
+    /// its returned namespace by `Value` for exactly that reason.
+    fn interface_doc_with_key(key: Value, spec_pairs: Vec<(&str, Value)>) -> Value {
         let mut spec = Dict::new();
         for (k, v) in spec_pairs {
             spec.insert(Value::Str(k.to_string()), v);
         }
         let mut inputs = Dict::new();
-        inputs.insert(Value::Str(key.to_string()), Value::Dict(spec));
+        inputs.insert(key, Value::Dict(spec));
         let mut interface = Dict::new();
         interface.insert(Value::Str("inputs".to_string()), Value::Dict(inputs));
         let mut dict = Dict::new();
@@ -1308,5 +1475,202 @@ mod tests {
             check_interface_inputs_error(&doc, &options),
             Some("missing required input 'prime' declared in orchestration interface.".to_string())
         );
+    }
+
+    #[test]
+    fn build_input_namespace_appends_a_missing_defaulted_key_at_the_end() {
+        let doc = interface_doc(vec![
+            ("type", Value::Str("integer".to_string())),
+            ("default", Value::from(3i64)),
+        ]);
+        let mut options = CheckOptions::default();
+        options.inputs.insert("other".to_string(), "hi".to_string());
+        let namespace = build_input_namespace(&doc, &options).unwrap();
+        // `other` was already in the namespace before the declared `x`
+        // input's default is filled in -- a brand-new key is appended at
+        // the end, matching a Python `dict`'s own insertion-order rule.
+        assert_eq!(
+            namespace.keys().cloned().collect::<Vec<_>>(),
+            vec![vkey("other"), vkey("x")]
+        );
+        assert_eq!(namespace.get(&vkey("x")), Some(&Value::Int(3.into())));
+    }
+
+    #[test]
+    fn build_input_namespace_drops_an_optional_null_key_entirely() {
+        // A non-`string`-typed input gets no raw-text restore, so `-e
+        // x=null` JSON-sniffs to the real `null` -- present but treated
+        // the same as absent, and (with no `default:`, not `required`)
+        // dropped outright.
+        let doc = interface_doc(vec![("type", Value::Str("integer".to_string()))]);
+        let namespace = build_input_namespace(&doc, &with_inputs(vec![("x", "null")])).unwrap();
+        assert!(!namespace.contains_key(&vkey("x")));
+    }
+
+    #[test]
+    fn build_input_namespace_keeps_a_present_null_keys_position_when_defaulted() {
+        let doc = interface_doc(vec![
+            ("type", Value::Str("integer".to_string())),
+            ("default", Value::from(3i64)),
+        ]);
+        let mut options = CheckOptions::default();
+        options.inputs.insert("x".to_string(), "null".to_string());
+        options.inputs.insert("other".to_string(), "hi".to_string());
+        let namespace = build_input_namespace(&doc, &options).unwrap();
+        // `x` already held a (JSON-sniffed) `null` -- its *position* (first,
+        // `-e` order) is kept even though the default overwrites its value,
+        // unlike a key that didn't exist at all.
+        assert_eq!(
+            namespace.keys().cloned().collect::<Vec<_>>(),
+            vec![vkey("x"), vkey("other")]
+        );
+        assert_eq!(namespace.get(&vkey("x")), Some(&Value::Int(3.into())));
+    }
+
+    #[test]
+    fn build_input_namespace_stringifies_a_numeric_value_for_a_string_typed_input() {
+        let doc = interface_doc(vec![("type", Value::Str("string".to_string()))]);
+        let mut options = CheckOptions::default();
+        options.inputs.insert("x".to_string(), "10".to_string());
+        let namespace = build_input_namespace(&doc, &options).unwrap();
+        // `-e x=10` JSON-sniffs to the int `10`; a `string`-typed `x`
+        // converts it back to text with `json.dumps`, not `py_str` (no
+        // capital-vs-lowercase surprise for a bool, even though this case
+        // is an int).
+        assert_eq!(
+            namespace.get(&vkey("x")),
+            Some(&Value::Str("10".to_string()))
+        );
+    }
+
+    #[test]
+    fn build_input_namespace_coerces_a_string_e_value_to_its_declared_type() {
+        let doc = interface_doc(vec![("type", Value::Str("integer".to_string()))]);
+        let namespace = build_input_namespace(&doc, &with_inputs(vec![("x", "5")])).unwrap();
+        assert_eq!(namespace.get(&vkey("x")), Some(&Value::Int(5.into())));
+    }
+
+    #[test]
+    fn build_input_namespace_defaults_a_non_string_declared_key_under_its_own_literal_value() {
+        // `1:` parses as `Value::Int(1)`, not the string `"1"` -- its
+        // own `default:` must land under that exact literal key, the
+        // same key Python's own `inputs[key] = default` would write to
+        // (issue #432's review, finding 7).
+        let doc = interface_doc_with_key(
+            Value::Int(1.into()),
+            vec![
+                ("type", Value::Str("integer".to_string())),
+                ("default", Value::from(3i64)),
+            ],
+        );
+        let namespace = build_input_namespace(&doc, &no_inputs()).unwrap();
+        assert_eq!(
+            namespace.get(&Value::Int(1.into())),
+            Some(&Value::Int(3.into()))
+        );
+        assert!(!namespace.contains_key(&vkey("1")));
+    }
+
+    #[test]
+    fn build_input_namespace_passes_through_unchanged_with_no_declared_interface() {
+        let doc = doc_with_top_level(vec![]);
+        let mut options = CheckOptions::default();
+        options.inputs.insert("x".to_string(), "hi".to_string());
+        let namespace = build_input_namespace(&doc, &options).unwrap();
+        assert_eq!(
+            namespace.get(&vkey("x")),
+            Some(&Value::Str("hi".to_string()))
+        );
+    }
+
+    #[test]
+    fn prepare_document_reports_the_same_error_check_for_run_does() {
+        let dir = std::env::temp_dir().join(format!(
+            "electricity-pipeline-phases-test-missing-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let doc_path = dir.join("missing.yml");
+
+        let prepared = prepare_document(&doc_path, &CheckOptions::default());
+        let whole = check_for_run(&doc_path, &CheckOptions::default());
+        assert_eq!(prepared.err(), whole.err());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_three_phases_compose_to_the_same_result_as_check_for_run() {
+        let dir = std::env::temp_dir().join(format!(
+            "electricity-pipeline-phases-test-ok-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let doc_path = dir.join("doc.yml");
+        std::fs::write(
+            &doc_path,
+            "interface:\n  inputs:\n    name:\n      type: string\n      default: World\n\
+             effects:\n  - type: tool\n    name: fetch\n    provider: json\n    params:\n      mode: parse\n",
+        )
+        .unwrap();
+        let options = CheckOptions::default();
+
+        let loaded = prepare_document(&doc_path, &options).unwrap();
+        let effective_runtime = merged_runtime_block(&options, &loaded.document);
+        let namespace = pre_state_checks(&loaded, &options, effective_runtime.as_ref()).unwrap();
+        assert_eq!(
+            namespace.get(&vkey("name")),
+            Some(&Value::Str("World".to_string()))
+        );
+        let program = post_state_checks(&loaded, effective_runtime.as_ref()).unwrap();
+
+        let whole = check_for_run(&doc_path, &options).unwrap();
+        assert_eq!(
+            program.document.unwrap().digest,
+            whole.document.unwrap().digest
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn pre_state_checks_reports_a_concurrency_config_error_before_post_state_checks_runs() {
+        let dir = std::env::temp_dir().join(format!(
+            "electricity-pipeline-phases-test-concurrency-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let doc_path = dir.join("doc.yml");
+        std::fs::write(&doc_path, "runtime:\n  max_concurrency: -1\neffects: []\n").unwrap();
+        let options = CheckOptions::default();
+
+        let loaded = prepare_document(&doc_path, &options).unwrap();
+        let effective_runtime = merged_runtime_block(&options, &loaded.document);
+        let err = pre_state_checks(&loaded, &options, effective_runtime.as_ref()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid runtime concurrency configuration")
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn check_for_run_fills_document_digest_as_some_not_an_empty_string() {
+        let dir = std::env::temp_dir().join(format!(
+            "electricity-pipeline-digest-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let doc_path = dir.join("doc.yml");
+        std::fs::write(&doc_path, "effects: []\n").unwrap();
+
+        let program = check_for_run(&doc_path, &CheckOptions::default()).unwrap();
+        let digest = program.document.unwrap().digest;
+        // Not `unwrap_or_default()`'s old `Some("")` -- a real digest, and
+        // never an empty string standing in for "unknown".
+        assert!(matches!(digest, Some(ref d) if !d.is_empty()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

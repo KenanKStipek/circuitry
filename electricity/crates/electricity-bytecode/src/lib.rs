@@ -23,6 +23,8 @@
 //! - [`program`] — `Program`, `DocumentInfo`: the compiled whole.
 //! - [`defaults`] — the default values Circuitry applies, named here so
 //!   every later lane applies the same one.
+//! - [`refusal`] — [`first_unsupported`]: the first effect path a
+//!   compiled `Program` has that the M0-H VM (issue #431) cannot run.
 //!
 //! # Which Python field lives where
 //!
@@ -77,6 +79,7 @@ pub mod op;
 pub mod param;
 pub mod path;
 pub mod program;
+pub mod refusal;
 pub mod region;
 pub mod template;
 
@@ -84,9 +87,10 @@ pub use effects::{
     AssetRef, Message, PromptContent, PromptOp, PromptType, ReflectorOp, RetryPolicy, Role,
     RoutingOverride, ToolOp, UseOp, UseSource, YieldOp,
 };
-pub use op::{LeafKind, NodeKind, OnError, Op};
+pub use op::{LeafKind, NodeKind, OnError, Op, python_type_name};
 pub use param::ParamNode;
 pub use path::{EffectPath, LoopId, PathSegment};
 pub use program::{DocumentInfo, Program};
+pub use refusal::{Refusal, RefusalReason, first_unsupported};
 pub use region::{Condition, ExpectCondition, LoopFlow, LoopSpec, Region};
 pub use template::{Escape, TemplateText};

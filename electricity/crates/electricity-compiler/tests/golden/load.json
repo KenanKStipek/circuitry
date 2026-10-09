@@ -904,6 +904,86 @@
     }
   },
   {
+    "name": "interface_inputs_non_string_key_required_is_a_run_only_error",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    1: {type: integer, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "missing required input '1' declared in orchestration interface.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "4d935a14d5f857a1342f9405fe9084fa597f5cf08ea4aa55996ff6cc0a4299b7",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_inputs_non_string_key_default_type_mismatch_is_a_run_only_error",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    1: {type: integer, default: 'not an int'}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "interface.inputs.1.default: declared type 'integer' but 'not an int' is str."
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input '1' declared type 'integer' but 'not an int' could not be converted: invalid literal for int() with base 10: 'not an int'",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "743cefdb60a209b67ece3f23c0754cec206511bfc10cd9b3c5061271a9b4ff39",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
     "name": "interface_input_e_string_value_int_shaped_text_is_recovered",
     "files": {
       "doc.yml": "interface:\n  inputs:\n    x: {type: string, required: true}\neffects: []\n"

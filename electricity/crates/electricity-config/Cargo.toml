@@ -1,0 +1,12 @@
+[package]
+name = "electricity-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "config.json -> effective settings for electricity orchestrations (electricity-config, lane D stub)"
+
+[dependencies]
+electricity-value = { path = "../electricity-value" }
+indexmap = { version = "2", features = ["serde"] }

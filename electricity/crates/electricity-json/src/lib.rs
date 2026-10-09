@@ -69,7 +69,7 @@ mod reader;
 mod writer;
 
 pub use reader::{ReadError, load_json, loads};
-pub use writer::{WriteError, WriteMode, dumps, dumps_default_str};
+pub use writer::{WriteError, WriteMode, dumps, dumps_default_str, stringify_key};
 
 /// Maximum nesting depth (containment depth of nested `{}`/`[]`) that
 /// [`loads`]/[`load_json`] will parse, or [`dumps`]/[`dumps_default_str`]

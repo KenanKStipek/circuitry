@@ -115,6 +115,48 @@ add({
 })
 
 add({
+    "name": "tool_params_bool_key",
+    "files": {"doc.yml": (
+        "effects:\n"
+        "  - type: tool\n"
+        "    name: fetch\n"
+        "    provider: json\n"
+        "    params:\n"
+        "      yes: 1\n"
+        "      mode: parse\n"
+    )},
+    "entry": "doc.yml",
+})
+
+# An int key (`1`) alongside an unrelated string key (`'2'`) that
+# stringifies differently -- unlike an int key next to its own string
+# spelling (`1` and `'1'`, which `electricity_json::stringify_key`
+# always stringifies to the same `"1"` on both the golden JSON and the
+# Rust-side projection, collapsing to one entry on *both* sides alike
+# and so unable to tell a correct `Value`-keyed compiler from one that
+# `py_str`-collapsed the two keys at compile time), `1`/`'2'` keep
+# distinct stringified forms (`"1"`/`"2"`), so a `py_str`-collapsing
+# compiler that mishandled the int key (e.g. rendering it as a float's
+# `py_str`, or dropping it) still shows up as a `definition.params`
+# mismatch here. `compile::params::tests::non_string_keys_are_kept_as_
+# value_not_stringified` is the complementary Rust-only unit test for
+# the same-stringified-form collision this golden case can't exercise.
+add({
+    "name": "tool_params_int_key",
+    "files": {"doc.yml": (
+        "effects:\n"
+        "  - type: tool\n"
+        "    name: fetch\n"
+        "    provider: json\n"
+        "    params:\n"
+        "      1: one\n"
+        "      '2': two\n"
+        "      mode: parse\n"
+    )},
+    "entry": "doc.yml",
+})
+
+add({
     "name": "use_path_happy_path",
     "files": {
         "doc.yml": (

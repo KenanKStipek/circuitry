@@ -961,7 +961,7 @@ mod tests {
             path_as_given: dir.join("main.yml").to_string_lossy().into_owned(),
             resolved_directory: dir.to_path_buf(),
             confinement_root: dir.to_path_buf(),
-            digest: String::new(),
+            digest: Some(String::new()),
         }
     }
 

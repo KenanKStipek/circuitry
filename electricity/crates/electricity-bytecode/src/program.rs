@@ -26,8 +26,15 @@ pub struct DocumentInfo {
     pub confinement_root: PathBuf,
     /// `document_content_digest` (`core/prompt_compose.py`) — the
     /// document bytes plus every referenced prompt file's relative-path
-    /// label, 8-byte length, and bytes.
-    pub digest: String,
+    /// label, 8-byte length, and bytes. `None` exactly when Circuitry's
+    /// own `document_hash` is `None`: an `OSError` computing it (a race
+    /// where the file vanished between the document check and this
+    /// point) -- `cli/runtime_shim.py::run`, ~:678-683, catches `OSError`
+    /// around this call and sets `document_hash = None` rather than
+    /// failing the run over a hash that only matters for a future
+    /// `--resume`. [`crate::digest::document_content_digest`]'s own
+    /// `Err` is this field's one `None` source here too.
+    pub digest: Option<String>,
 }
 
 /// A fully compiled orchestration: the root op plus everything the VM

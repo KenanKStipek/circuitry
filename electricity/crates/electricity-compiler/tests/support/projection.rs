@@ -106,7 +106,14 @@ fn param_node_to_json(node: &ParamNode) -> Json {
         ParamNode::Map(entries) => {
             let mut map = Map::new();
             for (key, child) in entries {
-                map.insert(key.clone(), param_node_to_json(child));
+                // `_dump_definition` keeps Python's own raw (possibly
+                // non-`str`) dict key, then `json.dumps` stringifies it
+                // with its own non-`str`-key rule -- `electricity_json::
+                // stringify_key`, not `Value::py_str` (`True` -> `"true"`,
+                // not `"True"`).
+                let key_str = electricity_json::stringify_key(key)
+                    .expect("param key must be str/int/float/bool/None");
+                map.insert(key_str, param_node_to_json(child));
             }
             Json::Object(map)
         }

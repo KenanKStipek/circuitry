@@ -1,0 +1,18 @@
+[package]
+name = "electricity-vm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The M0-H VM: store, execution, cancellation, limiter (electricity-vm, lane B/C stub)"
+
+[dependencies]
+electricity-value = { path = "../electricity-value" }
+electricity-bytecode = { path = "../electricity-bytecode" }
+electricity-tools = { path = "../electricity-tools" }
+indexmap = { version = "2", features = ["serde"] }
+tokio = { version = "1", features = ["sync", "macros"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }

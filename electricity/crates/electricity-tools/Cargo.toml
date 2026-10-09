@@ -1,0 +1,22 @@
+[package]
+name = "electricity-tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "ToolPlugin trait, registry, and the json tool for electricity (electricity-tools, lane C stub)"
+
+[features]
+default = []
+# Blocking `sleep`/`fail` test tools, for the signal-handling test suite
+# only (issue #431's acceptance criteria) -- never compiled into a
+# release build.
+test-tools = []
+
+[dependencies]
+electricity-value = { path = "../electricity-value" }
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
