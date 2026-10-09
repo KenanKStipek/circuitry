@@ -16,8 +16,7 @@ use std::time::Duration;
 
 use support::{
     SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process, e2e_enabled, osp_command,
-    wait_with_timeout, wait_with_timeout_capturing_stdout,
-    wait_with_timeout_capturing_stdout_and_stderr, write_doc,
+    wait_with_timeout, wait_with_timeout_capturing_stdout_and_stderr, write_doc,
 };
 
 #[test]
@@ -42,7 +41,8 @@ fn a_simple_run_succeeds_and_prints_the_log() {
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
-    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert!(
         status.success(),
@@ -51,6 +51,7 @@ fn a_simple_run_succeeds_and_prints_the_log() {
     assert!(stdout.contains("prime.hello"), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 0"), "stdout:\n{stdout}");
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 }
 
 #[test]
@@ -119,7 +120,8 @@ fn on_error_continue_still_exits_ok() {
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
-    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert!(
         status.success(),
@@ -127,6 +129,7 @@ fn on_error_continue_still_exits_ok() {
     );
     assert!(stdout.contains("✗ prime.flaky"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 0"), "stdout:\n{stdout}");
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 }
 
 #[test]
@@ -164,7 +167,8 @@ fn an_unnamed_loops_reused_if_fails_each_pass_and_gets_one_cross_mark_per_pass()
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
-    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert!(status.success(), "stdout:\n{stdout}");
     assert_eq!(
@@ -172,6 +176,7 @@ fn an_unnamed_loops_reused_if_fails_each_pass_and_gets_one_cross_mark_per_pass()
         2,
         "stdout:\n{stdout}"
     );
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 }
 
 #[test]
@@ -203,12 +208,14 @@ fn a_single_sigint_forwards_and_osp_exits_130() {
         libc::kill(pid, libc::SIGINT);
     }
 
-    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert_eq!(status.code(), Some(130), "stdout:\n{stdout}");
     assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 130"), "stdout:\n{stdout}");
     assert_eq!(stdout.matches("✗ prime ").count(), 1, "stdout:\n{stdout}");
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 
     assert_no_leftover_process(work.path());
 }
@@ -253,7 +260,8 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
         libc::kill(pid, libc::SIGINT);
     }
 
-    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     // The second SIGINT, landing while the `finally:` sleep is still
     // running, makes `cof` call `os._exit` at once (`cli/interrupts
@@ -266,6 +274,7 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
     assert_eq!(status.code(), Some(130), "stdout:\n{stdout}");
     assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 130"), "stdout:\n{stdout}");
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 
     assert_no_leftover_process(work.path());
 }
@@ -299,12 +308,14 @@ fn sigterm_forwards_and_osp_exits_143() {
         libc::kill(pid, libc::SIGTERM);
     }
 
-    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert_eq!(status.code(), Some(143), "stdout:\n{stdout}");
     assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 143"), "stdout:\n{stdout}");
     assert_eq!(stdout.matches("✗ prime ").count(), 1, "stdout:\n{stdout}");
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 
     assert_no_leftover_process(work.path());
 }
@@ -354,9 +365,11 @@ fn watch_mirrors_a_run_osp_did_not_start() {
     let mut watch = osp_command(&home);
     watch.arg("watch").arg(run_dir.path());
     let child = watch.spawn().expect("spawn osp watch");
-    let (watch_status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(10));
+    let (watch_status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(10));
 
     assert!(watch_status.success(), "stdout:\n{stdout}");
     assert!(stdout.contains("prime.hello"), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 }
