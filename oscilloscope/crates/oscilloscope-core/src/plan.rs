@@ -63,13 +63,38 @@ pub enum Flow {
     Tree,
 }
 
+/// A leaf's own effect type (DESIGN.md §6.2/§6.3's "show the effect
+/// kind from the plan (tool, prompt, use, yield) instead of `effect`"
+/// — #433): the plan is the only source that can tell a `use`/`yield`
+/// leaf from a generic one before its own state node ever carries a
+/// distinguishing field (a tool's `provider`, a prompt's `adapter`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeafEffectKind {
+    Tool,
+    Prompt,
+    Use,
+    Yield,
+    Reflector,
+}
+
+impl LeafEffectKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            LeafEffectKind::Tool => "tool",
+            LeafEffectKind::Prompt => "prompt",
+            LeafEffectKind::Use => "use",
+            LeafEffectKind::Yield => "yield",
+            LeafEffectKind::Reflector => "reflector",
+        }
+    }
+}
+
 /// What kind of plan node matched a concrete path — enough for the
 /// status/skip-reason rules (DESIGN.md §2) and the details-pane summary
 /// to tell containers from leaves without re-matching the IR.
 #[derive(Debug, Clone)]
 pub enum PlanEntryKind {
-    Leaf,
-    Use,
+    Leaf(LeafEffectKind),
     Loop {
         max_concurrency: Option<u32>,
         flow: Flow,
@@ -332,18 +357,43 @@ fn region_kind(region: &Region) -> PlanEntryKind {
     }
 }
 
-fn walk_op(
+/// An unnamed `if`/loop contributes no path segment of its own
+/// (DESIGN.md §1.3: its branch writes straight into the parent), so
+/// its own `effective_path` is exactly its enclosing scope's — it is
+/// not a real new chain sibling, and its branch isn't a fresh scope
+/// either (#433, see `walk_block`).
+fn is_transparent(op: &Op) -> bool {
+    op.name.is_none()
+        && matches!(
+            &op.kind,
+            NodeKind::Control(Region::If { .. }) | NodeKind::Control(Region::Loop { .. })
+        )
+}
+
+/// The shared first half of `walk_op`: computes `op`'s own effective
+/// path, its `PlanEntry` (the leaf/use/if/loop/dynamic/try-finally
+/// kind, with `named` cleared for an unnamed if/loop), and inserts
+/// both into the trie and `all_paths`. Split out from `walk_op` so
+/// `walk_block` can record a *transparent* op's own entry without
+/// also recursing into its region the normal way (#433: that
+/// recursion needs the enclosing chain's own `earlier` list threaded
+/// through instead, done separately by `walk_block`/
+/// `walk_transparent_branch`).
+fn record_op_entry(
     op: &Op,
     graft: Option<&EffectPath>,
     parent_flow: Option<Flow>,
     trie: &mut TrieNode,
     ctx: &mut WalkCtx,
-) {
+) -> EffectPath {
     let path = effective_path(&op.path, graft);
     let kind = match &op.kind {
         NodeKind::Leaf(leaf) => match leaf.as_ref() {
-            LeafKind::Use(_) => PlanEntryKind::Use,
-            _ => PlanEntryKind::Leaf,
+            LeafKind::Use(_) => PlanEntryKind::Leaf(LeafEffectKind::Use),
+            LeafKind::Tool(_) => PlanEntryKind::Leaf(LeafEffectKind::Tool),
+            LeafKind::Prompt(_) => PlanEntryKind::Leaf(LeafEffectKind::Prompt),
+            LeafKind::Yield(_) => PlanEntryKind::Leaf(LeafEffectKind::Yield),
+            LeafKind::Reflector(_) => PlanEntryKind::Leaf(LeafEffectKind::Reflector),
         },
         NodeKind::Control(region) => {
             let mut k = region_kind(region);
@@ -368,7 +418,17 @@ fn walk_op(
             parent_flow,
         },
     );
+    path
+}
 
+fn walk_op(
+    op: &Op,
+    graft: Option<&EffectPath>,
+    parent_flow: Option<Flow>,
+    trie: &mut TrieNode,
+    ctx: &mut WalkCtx,
+) {
+    let path = record_op_entry(op, graft, parent_flow, trie, ctx);
     match &op.kind {
         NodeKind::Leaf(leaf) => match leaf.as_ref() {
             LeafKind::Use(use_op) => {
@@ -399,21 +459,8 @@ fn walk_region(
 ) {
     match region {
         Region::Block { ops, .. } => {
-            // Each op's earlier siblings, in declaration order
-            // (DESIGN.md §2.1 rule 1) — recorded before recursing into
-            // `op` itself, so a sibling can share a display path with
-            // one of its *own* descendants (e.g. a nested chain
-            // reusing a name) without that descendant polluting this
-            // list.
             let mut earlier: Vec<String> = Vec::new();
-            for op in ops {
-                let display = display_path(&effective_path(&op.path, graft));
-                ctx.earlier_siblings
-                    .entry(display.clone())
-                    .or_insert_with(|| earlier.clone());
-                earlier.push(display);
-                walk_op(op, graft, Some(Flow::Chain), trie, ctx);
-            }
+            walk_block(ops, graft, &mut earlier, trie, ctx);
         }
         Region::Parallel { branches, .. } => {
             for op in branches {
@@ -433,6 +480,82 @@ fn walk_region(
             walk_region(body, graft, trie, ctx);
             walk_region(finally, graft, trie, ctx);
         }
+    }
+}
+
+/// Walks one chain `Region::Block`'s own ops in declaration order,
+/// threading `earlier` through (#433). A normal op gets an
+/// earlier-siblings entry (recorded before recursing into it, so a
+/// sibling can share a display path with one of its *own*
+/// descendants — e.g. a nested chain reusing a name — without that
+/// descendant polluting this list) and extends `earlier` with its own
+/// display path for whatever follows it. A *transparent* (unnamed)
+/// `if`/loop has no path of its own — its display path is simply this
+/// block's own, not a new one — so it contributes no sibling entry
+/// for itself; instead its branch's real children are walked with
+/// *this same* `earlier` list via `walk_transparent_branch`, and
+/// whatever real paths they expose are folded back into `earlier` so
+/// a later member of this block still sees them. Before this fix,
+/// `earlier` reset to empty at the top of every nested `Block`
+/// regardless of how it was reached, so a transparent branch's own
+/// children always started from nothing, and the transparent op's
+/// own (parent-duplicate) path was registered as if it were a real
+/// sibling — both threw off the "every earlier sibling is complete"
+/// heuristic (DESIGN.md §2.1 rule 1) for anything near an unnamed
+/// `if`/loop.
+fn walk_block(
+    ops: &[Op],
+    graft: Option<&EffectPath>,
+    earlier: &mut Vec<String>,
+    trie: &mut TrieNode,
+    ctx: &mut WalkCtx,
+) {
+    for op in ops {
+        if is_transparent(op) {
+            record_op_entry(op, graft, Some(Flow::Chain), trie, ctx);
+            match &op.kind {
+                NodeKind::Control(Region::If { then_, else_, .. }) => {
+                    walk_transparent_branch(then_, graft, earlier, trie, ctx);
+                    if let Some(else_) = else_ {
+                        walk_transparent_branch(else_, graft, earlier, trie, ctx);
+                    }
+                }
+                NodeKind::Control(Region::Loop { body, .. }) => {
+                    walk_transparent_branch(body, graft, earlier, trie, ctx);
+                }
+                _ => unreachable!("is_transparent only matches an unnamed If/Loop control"),
+            }
+        } else {
+            let display = display_path(&effective_path(&op.path, graft));
+            ctx.earlier_siblings
+                .entry(display.clone())
+                .or_insert_with(|| earlier.clone());
+            earlier.push(display);
+            walk_op(op, graft, Some(Flow::Chain), trie, ctx);
+        }
+    }
+}
+
+/// A transparent op's own branch, reached from `walk_block` above: a
+/// `Block` there is still the *same* chain scope (DESIGN.md §1.3), so
+/// its members thread through `earlier` too, via `walk_block` itself
+/// — recursing through a further transparent if/loop the same way.
+/// Any other region shape (a tree `Parallel`, or a *named* nested
+/// if/loop, which owns its own path and so isn't transparent) starts
+/// its own, independent scope, exactly as `walk_region` gives it
+/// anywhere else; `earlier` has nothing to gain from it; a named
+/// loop's own pass bodies, in particular, are each a fresh scope,
+/// bounded by that pass's own container node.
+fn walk_transparent_branch(
+    region: &Region,
+    graft: Option<&EffectPath>,
+    earlier: &mut Vec<String>,
+    trie: &mut TrieNode,
+    ctx: &mut WalkCtx,
+) {
+    match region {
+        Region::Block { ops, .. } => walk_block(ops, graft, earlier, trie, ctx),
+        other => walk_region(other, graft, trie, ctx),
     }
 }
 
@@ -887,7 +1010,10 @@ mod tests {
         let m = plan
             .match_path("prime.flat_branch")
             .expect("an unnamed if's branch writes into the parent, DESIGN.md §1.3");
-        assert!(matches!(m.entries[0].kind, PlanEntryKind::Leaf));
+        assert!(matches!(
+            m.entries[0].kind,
+            PlanEntryKind::Leaf(LeafEffectKind::Tool)
+        ));
     }
 
     #[test]
@@ -943,6 +1069,148 @@ mod tests {
             .match_path("prime.u_nap")
             .expect("an unnamed loop writes no pass index at all, DESIGN.md §1.3");
         assert_eq!(m.entries[0].name.as_deref(), Some("u_nap"));
+    }
+
+    /// #433: an unnamed `if` between two real chain siblings used to
+    /// register its own (parent-duplicate) path as if it were a real
+    /// earlier sibling, and its branch's own child used to start from
+    /// an empty earlier-siblings list — as though it were the very
+    /// first thing in the whole chain, not something reached only
+    /// after `a` already ran. Both are wrong: DESIGN.md §1.3 says the
+    /// branch writes straight into the parent, so `flat_branch` is, in
+    /// every way that matters to the "every earlier sibling is
+    /// complete" heuristic (§2.1 rule 1), simply `a`'s next chain
+    /// sibling, and `b` (after the if) is `flat_branch`'s.
+    #[test]
+    fn an_unnamed_ifs_branch_inherits_the_chains_earlier_siblings() {
+        let root_path = EffectPath::root();
+        let a_path = root_path.clone().push_name("a");
+        let if_path = root_path.clone();
+        let branch_child = if_path.clone().push_name("flat_branch");
+        let b_path = root_path.clone().push_name("b");
+        let root = Op {
+            path: root_path.clone(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![
+                    tool_op(a_path, "a"),
+                    Op {
+                        path: if_path,
+                        name: None,
+                        kind: NodeKind::Control(Region::If {
+                            cond: electricity_bytecode::Condition::Cel {
+                                expr: "true".to_string(),
+                                strict: false,
+                            },
+                            then_: Box::new(Region::Block {
+                                ops: vec![tool_op(branch_child, "flat_branch")],
+                                overlay: true,
+                            }),
+                            else_: None,
+                            threshold: 0.5,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    },
+                    tool_op(b_path, "b"),
+                ],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = PlanTree::from_program(&program);
+        assert_eq!(plan.earlier_siblings("prime.a"), &[] as &[String]);
+        assert_eq!(
+            plan.earlier_siblings("prime.flat_branch"),
+            &["prime.a".to_string()]
+        );
+        assert_eq!(
+            plan.earlier_siblings("prime.b"),
+            &["prime.a".to_string(), "prime.flat_branch".to_string()]
+        );
+    }
+
+    /// Same bug as above (#433), for an unnamed loop: its body's own
+    /// child inherits the outer chain's earlier siblings instead of
+    /// starting empty, and the sibling that follows the loop sees the
+    /// loop body's real child, not the loop's own duplicate path.
+    #[test]
+    fn an_unnamed_loops_body_inherits_the_chains_earlier_siblings() {
+        let root_path = EffectPath::root();
+        let a_path = root_path.clone().push_name("a");
+        let loop_path = root_path.clone();
+        let body_path = loop_path.clone().push_name("u_nap");
+        let b_path = root_path.clone().push_name("b");
+        let root = Op {
+            path: root_path.clone(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![
+                    tool_op(a_path, "a"),
+                    Op {
+                        path: loop_path,
+                        name: None,
+                        kind: NodeKind::Control(Region::Loop {
+                            spec: LoopSpec::Each {
+                                in_path: "prime.items".to_string(),
+                                as_name: "item".to_string(),
+                                truncate: false,
+                            },
+                            body: Box::new(Region::Block {
+                                ops: vec![tool_op(body_path, "u_nap")],
+                                overlay: true,
+                            }),
+                            flow: electricity_bytecode::LoopFlow::Chain,
+                            max_concurrency: None,
+                            max_iterations: None,
+                            min_iterations: 0,
+                            collect: None,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    },
+                    tool_op(b_path, "b"),
+                ],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = PlanTree::from_program(&program);
+        assert_eq!(plan.earlier_siblings("prime.a"), &[] as &[String]);
+        assert_eq!(
+            plan.earlier_siblings("prime.u_nap"),
+            &["prime.a".to_string()]
+        );
+        assert_eq!(
+            plan.earlier_siblings("prime.b"),
+            &["prime.a".to_string(), "prime.u_nap".to_string()]
+        );
     }
 
     #[test]

@@ -97,7 +97,25 @@ pub fn format_reason_for_summary(reason: &str) -> String {
     out
 }
 
-fn summary_for(node: &NodeMeta) -> String {
+/// The plan's own label for `path` (DESIGN.md §6.2/§6.3's "show the
+/// effect kind from the plan ... instead of `effect`", #433) —
+/// `summary_for`'s own fallback when a leaf's `meta` carries none of
+/// the shape-based clues (`provider`, `adapter`) it otherwise reads,
+/// and `diff_event`'s fallback for a `▶` line whose path has no state
+/// at all yet. `"effect"` remains the fallback with no plan, or for a
+/// path the plan doesn't recognise (an inline `use` child, a
+/// reflector pass) — both discovered from observations alone.
+fn plan_kind_label(path: &str, plan: &PlanTree) -> &'static str {
+    match plan.match_path(path).and_then(|m| m.entries.first()) {
+        Some(entry) => match entry.kind {
+            crate::plan::PlanEntryKind::Leaf(kind) => kind.label(),
+            _ => "effect",
+        },
+        None => "effect",
+    }
+}
+
+fn summary_for(node: &NodeMeta, path: &str, plan: &PlanTree) -> String {
     let meta = &node.meta;
     if let Some(provider) = meta.get("provider").and_then(Value::as_str) {
         if let Some(rendered) = meta.get("params_rendered") {
@@ -128,7 +146,7 @@ fn summary_for(node: &NodeMeta) -> String {
             truncate_chars(prompt_sent, 60)
         );
     }
-    "effect".to_string()
+    plan_kind_label(path, plan).to_string()
 }
 
 fn result_summary(node: &NodeMeta) -> String {
@@ -189,10 +207,7 @@ fn container_signal(
     }
     if let Some(m) = plan.match_path(path) {
         if let Some(entry) = m.entries.first() {
-            return Some(!matches!(
-                entry.kind,
-                crate::plan::PlanEntryKind::Leaf | crate::plan::PlanEntryKind::Use
-            ));
+            return Some(!matches!(entry.kind, crate::plan::PlanEntryKind::Leaf(_)));
         }
     }
     if model.dispatch_info(path).is_some() {
@@ -328,8 +343,8 @@ impl Differ {
                 let summary = self
                     .last
                     .get(path)
-                    .map(summary_for)
-                    .unwrap_or_else(|| "effect".to_string());
+                    .map(|node| summary_for(node, path, plan))
+                    .unwrap_or_else(|| plan_kind_label(path, plan).to_string());
                 vec![LogLine {
                     ts: Some(ts.clone()),
                     text: format!("▶ {path}  {summary}"),
@@ -508,12 +523,12 @@ impl Differ {
                     if node.is_running() {
                         lines.push(LogLine {
                             ts: node.created_at.clone(),
-                            text: format!("▶ {path}  {}", summary_for(node)),
+                            text: format!("▶ {path}  {}", summary_for(node, path, plan)),
                         });
                     } else {
                         lines.push(LogLine {
                             ts: node.created_at.clone(),
-                            text: format!("▶ {path}  {}", summary_for(node)),
+                            text: format!("▶ {path}  {}", summary_for(node, path, plan)),
                         });
                         lines.push(end_line(path, node, plan));
                     }
@@ -531,7 +546,10 @@ impl Differ {
                                 *pass += 1;
                                 lines.push(LogLine {
                                     ts: node.created_at.clone(),
-                                    text: format!("▶ {path} #{pass}  {}", summary_for(node)),
+                                    text: format!(
+                                        "▶ {path} #{pass}  {}",
+                                        summary_for(node, path, plan)
+                                    ),
                                 });
                                 lines.push(end_line_numbered(path, node, plan, *pass));
                             }
@@ -679,6 +697,65 @@ mod tests {
             .find(|l| l.text.starts_with("▶ prime.step1"))
             .expect("start line");
         assert!(step1_line.text.contains("sleep"));
+    }
+
+    /// #433: a `yield` leaf's own `meta` carries neither `provider`
+    /// nor `adapter`, so with no plan at all `summary_for` has nothing
+    /// to go on but the generic `"effect"` fallback (DESIGN.md §6.2's
+    /// example never needs it: every leaf there is a tool or a
+    /// prompt) — but with a real plan, osp can and should say
+    /// `"yield"` instead.
+    #[test]
+    fn a_yield_leaf_with_no_distinguishing_meta_takes_its_kind_from_the_plan() {
+        use electricity_bytecode::{
+            EffectPath, Escape, LeafKind, NodeKind, OnError, Op, Region, TemplateText, YieldOp,
+        };
+
+        let root_path = EffectPath::root();
+        let child_path = root_path.clone().push_name("announce");
+        let program = electricity_bytecode::Program {
+            root: Op {
+                path: root_path,
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops: vec![Op {
+                        path: child_path,
+                        name: Some("announce".to_string()),
+                        kind: NodeKind::Leaf(Box::new(LeafKind::Yield(YieldOp {
+                            template: TemplateText::new("hi", true, Escape::None),
+                            inputs: None,
+                            description: None,
+                        }))),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    }],
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            },
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = PlanTree::from_program(&program);
+
+        let mut differ = Differ::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "announce": {"value": null, "meta": {"created_at": "t0", "completed_at": null}}
+        }});
+        let lines = differ.diff(&state, &plan);
+        let line = lines
+            .iter()
+            .find(|l| l.text.starts_with("▶ prime.announce"))
+            .expect("start line");
+        assert_eq!(line.text, "▶ prime.announce  yield");
     }
 
     #[test]
