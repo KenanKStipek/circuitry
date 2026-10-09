@@ -546,10 +546,17 @@ fn cli_inline_entries(options: &CheckOptions, iface_inputs: &Dict) -> IndexMap<S
 /// never looked at: extra `-e` input stays allowed. `Err` is the first
 /// violation (unprefixed -- Circuitry's own call site always passes
 /// `label=""`), matching Python's own eager `raise`.
+///
+/// The namespace is keyed by [`Value`], not `String`: a declared
+/// `interface.inputs` key need not be a string (`1:`/`yes:` parse as
+/// `Value::Int`/`Value::Bool`, same as any other YAML mapping key), and
+/// Python's own `inputs[key] = ...` writes a missing key's `default:`
+/// under that exact literal key -- a `String`-keyed namespace would
+/// have nowhere to put it, silently dropping the write Python makes.
 fn build_input_namespace(
     document: &Value,
     options: &CheckOptions,
-) -> Result<IndexMap<String, Value>, String> {
+) -> Result<IndexMap<Value, Value>, String> {
     let no_declared_inputs = Dict::new();
     let iface_inputs = document
         .as_dict()
@@ -559,60 +566,48 @@ fn build_input_namespace(
         .and_then(|i| i.as_dict());
 
     let Some(iface_inputs) = iface_inputs else {
-        return Ok(crate::state_ns::migrate_legacy_input_namespace(
-            &cli_inline_entries(options, &no_declared_inputs),
+        let namespace = crate::state_ns::migrate_legacy_input_namespace(&cli_inline_entries(
+            options,
+            &no_declared_inputs,
         ));
+        return Ok(namespace
+            .into_iter()
+            .map(|(key, value)| (Value::Str(key), value))
+            .collect());
     };
 
-    let mut namespace =
+    let string_namespace =
         crate::state_ns::migrate_legacy_input_namespace(&cli_inline_entries(options, iface_inputs));
+    // Every key `migrate_legacy_input_namespace` ever produces is a
+    // `String` (it reads `-e`/inline JSON, and JSON object keys are
+    // always strings); re-keyed by `Value` here so a declared
+    // `interface.inputs` key that isn't a string (`1:`, `yes:`) can
+    // land its own `default:` in the *same* namespace Python's own
+    // `inputs[key] = ...` would, under that exact literal key, not a
+    // stringified stand-in for it -- matching Python's own mixed-key
+    // dict exactly, and letting one loop below handle every key the
+    // same way, string or not.
+    let mut namespace: IndexMap<Value, Value> = string_namespace
+        .into_iter()
+        .map(|(key, value)| (Value::Str(key), value))
+        .collect();
 
     for (key, spec) in iface_inputs {
         let Some(spec_dict) = spec.as_dict() else {
             continue;
         };
         let key_str = key.py_str();
-        // A non-string `interface.inputs` key (`1:`, `yes:`) can never
-        // equal a (always-string) namespace key, so Python's own `key
-        // not in inputs` dict-membership check is always true for it --
-        // the same "absent" path every string key takes below, except
-        // Python then writes the applied default back under the
-        // *literal* int/bool key (`inputs[key] = ...`), which this
-        // `IndexMap<String, _>` namespace has no slot for; only the
-        // required/default/type validation below is reproduced for it,
-        // never the write.
-        let Value::Str(key_as_str) = key else {
-            let value = if let Some(default) = spec_dict.get(&Value::Str("default".to_string())) {
-                default.clone()
-            } else if is_truthy(spec_dict.get(&Value::Str("required".to_string()))) {
-                return Err(format!(
-                    "missing required input '{key_str}' declared in orchestration interface."
-                ));
-            } else {
-                continue;
-            };
-            let declared_type = match spec_dict.get(&Value::Str("type".to_string())) {
-                Some(Value::Str(s))
-                    if crate::structural::INTERFACE_TYPE_NAMES.contains(&s.as_str()) =>
-                {
-                    s.clone()
-                }
-                _ => continue,
-            };
-            declared_type_outcome(&value, &key_str, &declared_type)?;
-            continue;
-        };
-        let current = namespace.get(key_as_str).cloned();
+        let current = namespace.get(key).cloned();
         let absent = matches!(current, None | Some(Value::None));
         if absent {
             if let Some(default) = spec_dict.get(&Value::Str("default".to_string())) {
-                namespace.insert(key_as_str.clone(), default.clone());
+                namespace.insert(key.clone(), default.clone());
             } else if is_truthy(spec_dict.get(&Value::Str("required".to_string()))) {
                 return Err(format!(
                     "missing required input '{key_str}' declared in orchestration interface."
                 ));
             } else {
-                namespace.shift_remove(key_as_str);
+                namespace.shift_remove(key);
                 continue;
             }
         }
@@ -625,11 +620,11 @@ fn build_input_namespace(
             _ => continue,
         };
         let value = namespace
-            .get(key_as_str)
+            .get(key)
             .cloned()
             .expect("present: either matched above or just inserted");
         if let Some(coerced) = declared_type_outcome(&value, &key_str, &declared_type)? {
-            namespace.insert(key_as_str.clone(), coerced);
+            namespace.insert(key.clone(), coerced);
         }
     }
     Ok(namespace)
@@ -870,7 +865,7 @@ pub fn pre_state_checks(
     loaded: &Loaded,
     options: &CheckOptions,
     effective_runtime: Option<&Value>,
-) -> Result<IndexMap<String, Value>, RunCheckError> {
+) -> Result<IndexMap<Value, Value>, RunCheckError> {
     if let Some(message) = effective_settings_shape_error(&loaded.document) {
         return Err(RunCheckError::Compile(message));
     }
@@ -943,15 +938,31 @@ pub fn post_state_checks(
     Ok(program)
 }
 
-/// The exact error text a `cof run` of *path* reports -- [`prepare_document`]
-/// (step 5), then [`pre_state_checks`] (steps 6, 7, 9, 10 -- its own
-/// *effective_runtime* is [`merged_runtime_block`]'s result, this
-/// function's pre-#431 computation, unchanged), then [`post_state_checks`]
-/// (step 14 plus the digest). `check_for_run` stays exactly this
-/// composition so every existing golden, `--dump-ir`, and osp's own use of
-/// this crate keep seeing `check_for_run`'s pre-#431 behavior unchanged --
-/// the three phases above exist so lane D's run wiring can call each on
-/// its own, not to change what this function itself does.
+/// The exact error text a `cof run` of *path* reports, matching
+/// `runtime_shim.run(RunRequest(..., validate_only=True,
+/// skip_preflight=..., trust_document=...))` -- [`prepare_document`]
+/// (step 5 of issue #431's run-wiring table), then [`pre_state_checks`]
+/// (steps 6, 7, 9, 10, in that exact order: [`effective_settings_shape_
+/// error`]; [`electricity_config::validate_complexity`] (step 6, inside
+/// `resolve_effective_settings`, *before* the concurrency limiter);
+/// [`concurrency_config_errors`] (step 7, `RunConcurrencyLimiter::
+/// from_runtime_config`, raising `"Invalid runtime concurrency
+/// configuration:\n  - ..."`, wrapped as a [`CompileError`]-shaped
+/// passthrough since that's exactly the shape `str(e)` from Circuitry's
+/// own broad `except Exception` would produce for it); [`electricity_
+/// config::validate_persistence`] (step 9, `build_persistence_backend`,
+/// *after* the limiter); [`build_input_namespace`] (step 10,
+/// `check_interface_inputs` -- its own *effective_runtime* is
+/// [`merged_runtime_block`]'s result, this function's pre-#431
+/// computation, unchanged), then [`post_state_checks`] (step 14's
+/// structural checks, compile, groups, cycles, plus the digest
+/// [`check_for_run`] has always attached to `Program.document`, never
+/// part of `run()`'s own structural-check step itself). `check_for_run`
+/// stays exactly this composition so every existing golden, `--dump-ir`,
+/// and osp's own use of this crate keep seeing `check_for_run`'s
+/// pre-#431 behavior unchanged -- the three phases above exist so lane
+/// D's run wiring can call each on its own, not to change what this
+/// function itself does.
 pub fn check_for_run(path: &Path, options: &CheckOptions) -> Result<Program, RunCheckError> {
     let loaded = prepare_document(path, options)?;
     let effective_runtime = merged_runtime_block(options, &loaded.document);
@@ -968,6 +979,12 @@ mod tests {
     /// below only needs the pass/fail verdict, not the namespace itself.
     fn check_interface_inputs_error(document: &Value, options: &CheckOptions) -> Option<String> {
         build_input_namespace(document, options).err()
+    }
+
+    /// A string namespace key wrapped as the [`Value`] [`build_input_
+    /// namespace`]'s own `IndexMap<Value, Value>` actually keys by.
+    fn vkey(s: &str) -> Value {
+        Value::Str(s.to_string())
     }
 
     fn runtime_doc(pairs: Vec<(&str, Value)>) -> Value {
@@ -1463,8 +1480,11 @@ mod tests {
         // `other` was already in the namespace before the declared `x`
         // input's default is filled in -- a brand-new key is appended at
         // the end, matching a Python `dict`'s own insertion-order rule.
-        assert_eq!(namespace.keys().collect::<Vec<_>>(), vec!["other", "x"]);
-        assert_eq!(namespace.get("x"), Some(&Value::Int(3.into())));
+        assert_eq!(
+            namespace.keys().cloned().collect::<Vec<_>>(),
+            vec![vkey("other"), vkey("x")]
+        );
+        assert_eq!(namespace.get(&vkey("x")), Some(&Value::Int(3.into())));
     }
 
     #[test]
@@ -1475,7 +1495,7 @@ mod tests {
         // dropped outright.
         let doc = interface_doc(vec![("type", Value::Str("integer".to_string()))]);
         let namespace = build_input_namespace(&doc, &with_inputs(vec![("x", "null")])).unwrap();
-        assert!(!namespace.contains_key("x"));
+        assert!(!namespace.contains_key(&vkey("x")));
     }
 
     #[test]
@@ -1491,8 +1511,11 @@ mod tests {
         // `x` already held a (JSON-sniffed) `null` -- its *position* (first,
         // `-e` order) is kept even though the default overwrites its value,
         // unlike a key that didn't exist at all.
-        assert_eq!(namespace.keys().collect::<Vec<_>>(), vec!["x", "other"]);
-        assert_eq!(namespace.get("x"), Some(&Value::Int(3.into())));
+        assert_eq!(
+            namespace.keys().cloned().collect::<Vec<_>>(),
+            vec![vkey("x"), vkey("other")]
+        );
+        assert_eq!(namespace.get(&vkey("x")), Some(&Value::Int(3.into())));
     }
 
     #[test]
@@ -1505,14 +1528,17 @@ mod tests {
         // converts it back to text with `json.dumps`, not `py_str` (no
         // capital-vs-lowercase surprise for a bool, even though this case
         // is an int).
-        assert_eq!(namespace.get("x"), Some(&Value::Str("10".to_string())));
+        assert_eq!(
+            namespace.get(&vkey("x")),
+            Some(&Value::Str("10".to_string()))
+        );
     }
 
     #[test]
     fn build_input_namespace_coerces_a_string_e_value_to_its_declared_type() {
         let doc = interface_doc(vec![("type", Value::Str("integer".to_string()))]);
         let namespace = build_input_namespace(&doc, &with_inputs(vec![("x", "5")])).unwrap();
-        assert_eq!(namespace.get("x"), Some(&Value::Int(5.into())));
+        assert_eq!(namespace.get(&vkey("x")), Some(&Value::Int(5.into())));
     }
 
     #[test]
@@ -1521,7 +1547,10 @@ mod tests {
         let mut options = CheckOptions::default();
         options.inputs.insert("x".to_string(), "hi".to_string());
         let namespace = build_input_namespace(&doc, &options).unwrap();
-        assert_eq!(namespace.get("x"), Some(&Value::Str("hi".to_string())));
+        assert_eq!(
+            namespace.get(&vkey("x")),
+            Some(&Value::Str("hi".to_string()))
+        );
     }
 
     #[test]
@@ -1560,7 +1589,7 @@ mod tests {
         let effective_runtime = merged_runtime_block(&options, &loaded.document);
         let namespace = pre_state_checks(&loaded, &options, effective_runtime.as_ref()).unwrap();
         assert_eq!(
-            namespace.get("name"),
+            namespace.get(&vkey("name")),
             Some(&Value::Str("World".to_string()))
         );
         let program = post_state_checks(&loaded, effective_runtime.as_ref()).unwrap();
