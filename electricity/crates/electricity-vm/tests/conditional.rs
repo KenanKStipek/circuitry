@@ -153,11 +153,13 @@ async fn an_unnamed_if_is_transparent_and_fires_no_hooks() {
     // Only the enclosing root dynamic's own balanced pair fires -- the
     // transparent `if` contributes no hook of its own (lane C's still-
     // stubbed `execute_tool` never reaches far enough to fire one for
-    // `inner` either).
+    // `inner` either). The `Write` in between is prime's own chain loop
+    // calling it once, after its one step, success or failure alike.
     assert_eq!(
         events,
         vec![
             Event::Start("prime".to_string()),
+            Event::Write,
             Event::Complete(
                 "prime".to_string(),
                 Some(format!("prime: inner: {TOOL_STUB_TEXT}"))
