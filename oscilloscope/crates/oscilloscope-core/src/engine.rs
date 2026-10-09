@@ -86,9 +86,20 @@ impl CofEngine {
     /// detection serves a `cof` built before #419 lands and any older
     /// release a user still has on `PATH`.
     pub fn detect(binary: impl Into<String>) -> Self {
+        use std::os::unix::process::CommandExt;
+
         let binary = binary.into();
-        let events = std::process::Command::new(&binary)
-            .args(["run", "--help"])
+        let mut cmd = std::process::Command::new(&binary);
+        cmd.args(["run", "--help"]);
+        // P2-10: its own process group, same as the real engine spawn
+        // (supervise.rs), so a terminal Ctrl-C landing while this
+        // probe is still running doesn't kill it directly — that used
+        // to make `.output()` return early/incomplete, which
+        // `.unwrap_or(false)` then read as "no --events support" and
+        // silently ran the real engine state-only even on a `cof` that
+        // actually has the flag.
+        cmd.process_group(0);
+        let events = cmd
             .output()
             .map(|out| {
                 let text = String::from_utf8_lossy(&out.stdout);

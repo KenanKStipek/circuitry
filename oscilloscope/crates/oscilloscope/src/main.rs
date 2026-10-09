@@ -147,6 +147,19 @@ fn exit_early(code: u8) -> ExitCode {
     ExitCode::from(code)
 }
 
+/// The exit code osp should use right now, without ever spawning the
+/// engine, if a signal already arrived (P2-10) — the same 128+signum
+/// codes `cof` itself uses. `None` means nothing is pending yet.
+fn pending_signal_exit_code(signals: &mut Option<SignalWatcher>) -> Option<u8> {
+    let watcher = signals.as_mut()?;
+    let sig = watcher.pending().into_iter().next()?;
+    Some(match sig {
+        ForwardSignal::Int => 130,
+        ForwardSignal::Term => 143,
+        ForwardSignal::Hup => 129,
+    })
+}
+
 fn unique_run_dir() -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -292,6 +305,20 @@ fn do_run(args: RunArgs) -> ExitCode {
     // anything the caller put there on purpose.
     for stale in [spec.live_state_path(), spec.out_path(), spec.events_path()] {
         let _ = std::fs::remove_file(&stale);
+    }
+
+    // P2-10: a signal that arrived any time after `SignalWatcher::new`
+    // above -- during `build_engine`'s own `cof run --help` detection,
+    // or the plan compile, both blocking steps that run before any of
+    // this -- must not go on to spawn the engine at all: forwarding it
+    // to a child started *after* the signal already arrived would
+    // still leave a brief, real window where the engine ran
+    // unsupervised before the first poll loop iteration ever checked.
+    if let Some(code) = pending_signal_exit_code(&mut signals) {
+        if is_default_dir {
+            let _ = std::fs::remove_dir_all(&run_dir);
+        }
+        return exit_early(code);
     }
 
     let (mut child, stderr_rx) =
@@ -805,6 +832,29 @@ mod tests {
     #[test]
     fn no_args_is_a_usage_error() {
         assert_eq!(run(args(&[])), ExitCode::from(2));
+    }
+
+    #[test]
+    fn a_signal_already_pending_before_the_spawn_gives_its_exit_code_with_no_spawn() {
+        // P2-10: registering *this test's own* `SignalWatcher` first,
+        // then sending the signal to this very process, exercises the
+        // exact pre-spawn race deterministically -- no engine process
+        // and no wall-clock delay involved, so the kernel's own
+        // default SIGINT disposition (process death) is never a risk
+        // the way it would be sending a signal *before* any watcher is
+        // registered at all.
+        let mut signals = SignalWatcher::new().ok();
+        assert_eq!(pending_signal_exit_code(&mut signals), None);
+
+        unsafe {
+            libc::kill(std::process::id() as i32, libc::SIGINT);
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut code = None;
+        while code.is_none() && std::time::Instant::now() < deadline {
+            code = pending_signal_exit_code(&mut signals);
+        }
+        assert_eq!(code, Some(130));
     }
 
     #[test]

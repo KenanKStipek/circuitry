@@ -270,6 +270,17 @@ mod tests {
     }
 
     #[test]
+    fn exit_code_for_signal_name_matches_cofs_own_mapping() {
+        // P2-7/P2-10: the same 128+signum codes cof itself uses
+        // (DESIGN.md §4.1), from a run_end event's own signal name
+        // rather than a real ExitStatus.
+        assert_eq!(exit_code_for_signal_name("SIGINT"), Some(130));
+        assert_eq!(exit_code_for_signal_name("SIGTERM"), Some(143));
+        assert_eq!(exit_code_for_signal_name("SIGHUP"), Some(129));
+        assert_eq!(exit_code_for_signal_name("SIGKILL"), None);
+    }
+
+    #[test]
     fn spawned_child_is_killed_on_drop_even_if_never_waited_on() {
         let mut cmd = Command::new("sleep");
         cmd.arg("5");
