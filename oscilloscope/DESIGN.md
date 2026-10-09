@@ -173,6 +173,7 @@ Two inputs feed these rules: the plan (§5), and a sequence of observations. An 
 4. A `tree` container that is running, with unfinished children (a dynamic branch or an `each` pass): those children are **running or queued** and cannot be told apart. The count is bounded: at most `max_concurrency` minus the branches already running.
    - A tree `each` without `max_concurrency` defaults to `min(32, cpu + 4)` workers. osp cannot know `cpu`, so it must say "≤ N".
    - The completed count comes from `meta.progress.done`.
+   - **With events:** the container's own `dispatch` event gives an exact bound instead of this estimate — `branches` is the true total (so progress reads "`done` of `branches`" instead of the plan's own, possibly data-dependent, count), and `concurrency`, when the stream has it, is the exact running ceiling in place of the `max_concurrency`/`cpu`-guess above.
 5. A running `use`: its plan children (from compiling a `path` child) follow rule 1. An `inline` child has no static plan, so its children are discovered from the observations.
 6. A retry: a running tool node whose `created_at` moved forward is **retrying (attempt ≥ 2)**. A prompt retry cannot be detected from state.
 7. Run status:
@@ -235,7 +236,7 @@ The runtime already has exactly the right hooks (`on_effect_start`/`on_effect_co
 
 ```json
 {"v":1,"seq":0,"ts":"2026-10-08T19:56:22.433Z","ev":"run_start","run_id":"…","orchestration":"do-thing.yml","engine":"cof 0.2.0","pid":4242}
-{"v":1,"seq":7,"ts":"…","ev":"dispatch","path":"prime.each_tree","branches":3}
+{"v":1,"seq":7,"ts":"…","ev":"dispatch","path":"prime.each_tree","branches":3,"concurrency":2}
 {"v":1,"seq":8,"ts":"…","ev":"start","id":8,"path":"prime.each_tree.iter_0.t_nap"}
 {"v":1,"seq":12,"ts":"…","ev":"end","id":8,"path":"prime.each_tree.iter_0.t_nap","ok":true,"ms":1008}
 {"v":1,"seq":20,"ts":"…","ev":"end","id":15,"path":"prime.always_fails","ok":false,"ms":5,"error":"/bin/ls failed (exit 1): ls: …"}
@@ -249,7 +250,7 @@ The runtime already has exactly the right hooks (`on_effect_start`/`on_effect_co
 | `ts` | Wall-clock UTC time, in milliseconds. |
 | `id` | Unique per effect *instance* (one per pass or branch), so `start` and `end` pair up even when several instances share an unnamed path. |
 | `path` | The absolute path, as in state and in scripted-replies keys. |
-| `dispatch` | Sent once by a tree loop or tree dynamic before its branches start. This is the existing `concurrent_dispatch` callback. |
+| `dispatch` | Sent once by a tree loop or tree dynamic before its branches start. This is the existing `concurrent_dispatch` callback. `branches` is the true branch count (an `each` loop's item total, or a `dynamic`'s effect count); `concurrency`, when present, is the ceiling — at most this many run at once. `concurrency` is optional: a stream from a `cof` built before it was added has `branches` alone, and osp still works, just with a less precise bound (DESIGN.md §2.1 rule 4). |
 | `error` | Present only when `ok` is false. Its first 500 characters, already redacted. |
 
 What the format leaves out, and why:
@@ -483,6 +484,11 @@ Polling, every 100 ms, is preferred over `notify`. The live file is replaced by 
 ---
 
 ## 7. Open questions (each with a recommendation)
+
+Each row below is already settled: Q1-Q10 here are the same Q1-Q10 the
+owner decided in issue #418's own "Taken here; the owner can override"
+table, kept here with the reasoning rather than as still-open
+questions. None of them are waiting on a decision.
 
 | # | Question | Recommendation |
 |---|---|---|

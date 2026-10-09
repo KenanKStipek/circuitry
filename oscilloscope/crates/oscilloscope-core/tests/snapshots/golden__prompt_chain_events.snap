@@ -1,0 +1,15 @@
+---
+source: crates/oscilloscope-core/tests/golden.rs
+expression: rendered
+---
+log:
+  ▶ prime.greet  effect
+  ✓ prime.greet  0.0s  ok
+  ▶ prime.thank  effect
+  ✓ prime.thank  0.0s  ok
+status:
+prime: Done skip=None retrying=false
+prime.greet: Done skip=None retrying=false
+prime.thank: Done skip=None retrying=false
+--- exit ---
+exit_code: 0

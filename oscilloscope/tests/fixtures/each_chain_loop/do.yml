@@ -1,0 +1,16 @@
+interface:
+  inputs:
+    items: {type: array, default: ["a", "b", "c"]}
+effects:
+  - type: loop
+    name: each_chain
+    each:
+      in: input.items
+      as: item
+    body:
+      - name: nap
+        type: tool
+        provider: shell
+        params:
+          command: echo
+          args: ["{{item}}"]

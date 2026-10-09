@@ -1,0 +1,12 @@
+prime.drafts.iter_0.draft:
+  - text: "cats are great"
+    tokens_sent: 6
+    tokens_received: 4
+prime.drafts.iter_1.draft:
+  - text: "dogs are great"
+    tokens_sent: 6
+    tokens_received: 4
+prime.drafts.iter_2.draft:
+  - text: "birds are great"
+    tokens_sent: 6
+    tokens_received: 4

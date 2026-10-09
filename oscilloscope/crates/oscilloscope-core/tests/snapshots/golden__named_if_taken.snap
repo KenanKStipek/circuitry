@@ -1,0 +1,16 @@
+---
+source: crates/oscilloscope-core/tests/golden.rs
+expression: rendered
+---
+--- observation 0 ---
+log:
+  ◆ prime.gate → then
+  ▶ prime.gate.chosen  shell echo then-branch
+  ✓ prime.gate.chosen  0.0s  then-branch
+  ■ run ok  0.0s
+status:
+prime: Done skip=None retrying=false
+prime.gate: Done skip=None retrying=false
+prime.gate.chosen: Done skip=None retrying=false
+--- exit ---
+exit_code: 0
