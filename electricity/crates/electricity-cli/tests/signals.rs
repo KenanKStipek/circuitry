@@ -3,21 +3,22 @@
 //! feature, temporary `HOME`, bounded time, own process group killed on
 //! teardown)").
 //!
-//! Every test here is `#[ignore = "needs-B/needs-C: ..."]`: they all
-//! dispatch a `sleep`/`fail` tool effect (the `test-tools` cargo
-//! feature) through a real, long-running orchestration, which needs
-//! both `electricity_vm::execute_root` (lane B, still `NotImplemented`
-//! as of this PR) and the tool-params/retries machinery around it
-//! (lane C, still a stub) to actually block for any length of time at
-//! all -- there is nothing yet for a signal to interrupt. Remove the
-//! `#[ignore]` once both land.
+//! `#![cfg(feature = "test-tools")]` below: this whole file compiles to
+//! nothing without that feature, so the ordinary `cargo test --workspace`
+//! gate (which never enables it) never even builds it, let alone runs
+//! or skips anything here -- PR #441 review finding 11: before this
+//! gate existed, un-ignoring a test in this file without it would have
+//! made `cargo test --workspace` build a binary that refuses every
+//! `sleep`/`fail` dispatch (`extra_allowed_providers` is empty without
+//! the feature), failing for an unrelated reason.
 //!
-//! Run them explicitly once ready:
+//! Run explicitly:
 //! ```sh
-//! cargo test -p electricity-cli --features test-tools --test signals -- --ignored
+//! cargo test -p electricity-cli --features test-tools --test signals
 //! ```
-//! (never in the default `cargo test --workspace` the rest of this
-//! workspace's gate runs, since `test-tools` is never enabled there).
+//! (`.github/workflows/electricity.yml`'s own `fmt-clippy-test` job
+//! runs exactly this, on both its Linux and macOS runners, as its own
+//! step right after the default `cargo test --workspace`).
 //!
 //! Every child runs in its own process group (`process_group(0)`, so a
 //! signal aimed at the group never reaches this test binary's own), and
@@ -25,6 +26,8 @@
 //! on teardown -- including a panicking assertion -- so a timed-out or
 //! still-sleeping child is never left behind as an orphan
 //! (`LANE-CONTRACT.md`'s own rule).
+
+#![cfg(feature = "test-tools")]
 
 use std::fs;
 use std::io::Write as _;
@@ -128,12 +131,17 @@ finally:
     params: {seconds: 5}
 ";
 
+/// *extra_args* should not itself include `--live-state`: this
+/// function always adds its own, to *home*'s own `live-state.json`,
+/// since [`wait_until_running`] needs it as a readiness probe
+/// regardless of whether a given test cares about its contents.
 fn spawn(home: &TempHome, config: &Path, doc: &Path, extra_args: &[&str]) -> TestChild {
     let mut cmd = Command::new(bin());
     cmd.env_clear();
     cmd.env("HOME", &home.path);
     cmd.env("PATH", std::env::var("PATH").unwrap_or_default());
     cmd.args([config.to_str().unwrap(), doc.to_str().unwrap()]);
+    cmd.args(["--live-state", live_state_path(home).to_str().unwrap()]);
     cmd.args(extra_args);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -142,18 +150,37 @@ fn spawn(home: &TempHome, config: &Path, doc: &Path, extra_args: &[&str]) -> Tes
     TestChild { child }
 }
 
+fn live_state_path(home: &TempHome) -> PathBuf {
+    home.path.join("live-state.json")
+}
+
+/// Waits for *home*'s own `--live-state` file to exist -- its first
+/// write is synchronous, and happens well after signals are armed (the
+/// very first thing `run_action` does) but before `execute_root` ever
+/// starts, so its existence is firm evidence the signal handler is
+/// already installed, unlike a fixed sleep: on a quiet machine a few
+/// milliseconds is enough, but a busy one sharing this machine with
+/// other work (`LANE-CONTRACT.md`'s own warning) can stretch process
+/// startup well past what looked like a safe fixed margin in testing
+/// -- confirmed directly during this test's own review (PR #441
+/// finding 5): a 200ms fixed sleep here was intermittently too short
+/// under load, sending SIGINT before the handler was installed and
+/// letting the OS's own default disposition kill the child instead.
 fn wait_until_running(home: &TempHome) {
-    // Crude but bounded: give the child time to parse args, load the
-    // document, pass every check, and actually start blocking in
-    // `sleep` before this test sends its first signal -- a real
-    // `--live-state` read-back (once lane B/C land) would be a tighter
-    // signal than a fixed sleep.
-    let _ = home;
-    std::thread::sleep(Duration::from_millis(200));
+    let path = live_state_path(home);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !path.exists() {
+        if std::time::Instant::now() >= deadline {
+            panic!(
+                "electricity never wrote its own first --live-state at {} within 10s",
+                path.display()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]
-#[ignore = "needs-B/needs-C: execute_root/exec::tool aren't implemented yet (issue #431)"]
 fn sigint_exits_130_runs_finally_and_writes_out() {
     let home = TempHome::new("sigint");
     let config = home.write("config.json", "{}");
@@ -185,7 +212,6 @@ fn sigint_exits_130_runs_finally_and_writes_out() {
 }
 
 #[test]
-#[ignore = "needs-B/needs-C: execute_root/exec::tool aren't implemented yet (issue #431)"]
 fn sigterm_exits_143() {
     let home = TempHome::new("sigterm");
     let config = home.write("config.json", "{}");
@@ -202,7 +228,6 @@ fn sigterm_exits_143() {
 }
 
 #[test]
-#[ignore = "needs-B/needs-C: execute_root/exec::tool aren't implemented yet (issue #431)"]
 fn sighup_exits_129() {
     let home = TempHome::new("sighup");
     let config = home.write("config.json", "{}");
@@ -219,7 +244,6 @@ fn sighup_exits_129() {
 }
 
 #[test]
-#[ignore = "needs-B/needs-C: execute_root/exec::tool aren't implemented yet (issue #431)"]
 fn a_double_sighup_still_exits_129_cleanly() {
     let home = TempHome::new("double-sighup");
     let config = home.write("config.json", "{}");
@@ -241,7 +265,6 @@ fn a_double_sighup_still_exits_129_cleanly() {
 }
 
 #[test]
-#[ignore = "needs-B/needs-C: execute_root/exec::tool aren't implemented yet (issue #431)"]
 fn a_second_sigint_during_a_blocking_finally_exits_immediately_with_no_out() {
     let home = TempHome::new("double-sigint");
     let config = home.write("config.json", "{}");
@@ -254,7 +277,7 @@ fn a_second_sigint_during_a_blocking_finally_exits_immediately_with_no_out() {
     // that `finally:` is still blocking, must exit at once rather than
     // waiting for it.
     child.send(libc::SIGINT);
-    std::thread::sleep(Duration::from_millis(200));
+    std::thread::sleep(Duration::from_millis(2000));
     let before_second_signal = std::time::Instant::now();
     child.send(libc::SIGINT);
     let status = child
@@ -268,7 +291,6 @@ fn a_second_sigint_during_a_blocking_finally_exits_immediately_with_no_out() {
 }
 
 #[test]
-#[ignore = "needs-B/needs-C: execute_root/exec::tool aren't implemented yet (issue #431)"]
 fn a_queued_tree_branch_never_starts() {
     // A tree `dynamic` with `max_concurrency: 1` and two branches, the
     // first a long sleep and the second a `fail` tool that would

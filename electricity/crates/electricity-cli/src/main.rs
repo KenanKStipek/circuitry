@@ -338,6 +338,18 @@ impl SignalGuard {
 fn arm_signals(token: CancellationToken) -> SignalGuard {
     let stop = std::sync::Arc::new(tokio::sync::Notify::new());
     let stop_for_thread = stop.clone();
+    // A rendezvous, not just a fire-and-forget spawn: the real
+    // `sigaction` calls below only happen once the new thread's own
+    // runtime schedules this async block, which the OS is free to
+    // delay arbitrarily under load -- without waiting for `ready` here,
+    // a signal arriving in that window would still hit the OS's
+    // default (process-killing) disposition even though this function
+    // had already returned, telling its caller the run was safe to
+    // start. Confirmed by a real race on a loaded machine during this
+    // function's own review (PR #441): a SIGINT sent as little as a
+    // few hundred milliseconds after a plain, unguarded `spawn` could
+    // still arrive before the handler was installed.
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
     let thread = std::thread::Builder::new()
         .name("electricity-signals".to_string())
         .spawn(move || {
@@ -356,6 +368,9 @@ fn arm_signals(token: CancellationToken) -> SignalGuard {
                 } else {
                     Some(signal(SignalKind::hangup()).expect("could not install a SIGHUP handler"))
                 };
+                // Every `sigaction` above has now run -- safe to let
+                // `arm_signals` return.
+                let _ = ready_tx.send(());
                 loop {
                     let signum = match sighup.as_mut() {
                         Some(sighup) => {
@@ -394,6 +409,9 @@ fn arm_signals(token: CancellationToken) -> SignalGuard {
             });
         })
         .expect("could not start the signal-handling thread");
+    ready_rx
+        .recv()
+        .expect("the signal-handling thread's own ready signal");
     SignalGuard {
         stop,
         thread: Some(thread),

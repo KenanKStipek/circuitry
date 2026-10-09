@@ -1,16 +1,10 @@
 //! `electricity::run_orchestration`'s own run wiring (issue #431's
 //! run-wiring steps 1-19), exercised directly against real temporary
-//! documents -- everything up to and including [`electricity_vm::
-//! execute_root`] itself, which is still lane B's own stub
-//! (`NotImplemented`) as of this lane's own PR: every case here either
-//! fails before execution ever starts (config, load, allowlist,
-//! effective-settings, pre/post-state-check, refusal errors -- none of
-//! which need a real VM at all) or deliberately exercises the
-//! `execute_root` stub's own deterministic failure to prove the
-//! `--events`/`--live-state`/`--out` wiring around it is correct. Once
-//! lanes B/C land and `execute_root` actually runs a document, the one
-//! test marked `needs-B/needs-C` below should be updated to assert a
-//! real success instead.
+//! documents -- most cases here fail before execution ever starts
+//! (config, load, allowlist, effective-settings, pre/post-state-check,
+//! refusal errors -- none of which need a real VM at all); a few now
+//! exercise [`electricity_vm::execute_root`]'s own real interpreter
+//! (lane B2, merged) end to end.
 
 use electricity::run::{RunRequest, Signal};
 use electricity_vm::CancellationToken;
@@ -392,13 +386,12 @@ async fn a_declared_runtime_plugin_is_refused_with_no_state_written() {
     assert!(error.contains("my-plugin"));
 }
 
-/// `execute_root` is lane B's own stub (`NotImplemented`) as of this
-/// PR -- a document that passes every check still ends in an ordinary
-/// failure today, which still exercises the full `--events`/
-/// `--live-state`/`--out` pipeline around it (run_start, the failure's
-/// own run_end, the final live-state write equalling `--out`).
+/// Lane B2 has landed: a document that passes every check now really
+/// runs, through `execute_root`'s own real interpreter -- this
+/// exercises the full `--events`/`--live-state`/`--out` pipeline
+/// around a genuine success (run_start, the success's own run_end, the
+/// final live-state write equalling `--out`).
 #[tokio::test]
-#[ignore = "needs-B/needs-C: once execute_root runs a real document, this should assert success instead"]
 async fn a_document_that_passes_every_check_still_writes_full_observability_today() {
     let dir = temp_dir("full-pipeline");
     let config = write(&dir, "config.json", "{}");
@@ -421,7 +414,7 @@ async fn a_document_that_passes_every_check_still_writes_full_observability_toda
     };
 
     let result = run(&req).await;
-    assert!(!result.ok);
+    assert!(result.ok, "{:?}", result.error);
     assert!(result.signal.is_none());
 
     let expected_out_text = electricity::out::render_state(result.state.as_ref().unwrap(), false);

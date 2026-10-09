@@ -53,6 +53,15 @@ jobs:
         working-directory: electricity
         run: cargo test --workspace
 
+      - name: cargo test -p electricity-cli --features test-tools --test signals
+        working-directory: electricity
+        # Never part of the default `cargo test --workspace` run above
+        # (`test-tools` is never enabled there) -- real SIGINT/SIGTERM/
+        # SIGHUP delivery to a spawned `electricity` child, so it needs
+        # a real OS on both CI runners this matrix already covers
+        # (issue #431's acceptance criteria; PR #441 review finding 11).
+        run: cargo test -p electricity-cli --features test-tools --test signals
+
       - name: cargo test --release -p electricity-yaml --test nesting_limit
         working-directory: electricity
         # The `[profile.dev.package.electricity-yaml]` opt-level override

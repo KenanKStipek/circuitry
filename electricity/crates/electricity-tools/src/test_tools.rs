@@ -5,17 +5,26 @@
 //! never enables this feature).
 //!
 //! Neither tool checks a cancellation token of its own while it runs --
-//! that happens one layer up, between attempts/branches
-//! (`electricity_vm::exec::tool::execute_tool`'s own job, issue #431's
-//! lane table) -- so a signal during a [`SleepTool`] call behaves
-//! exactly like Circuitry's own blocking tool call does: it runs to
-//! completion, and cancellation only takes effect at the next point the
-//! VM actually checks for it (the next attempt, the next tree branch,
-//! `finally:`'s own body). That's deliberate: it's what the signal
-//! tests' own "a second SIGINT during a blocking `finally` exits
-//! immediately" case depends on -- the first signal must *not*
-//! interrupt the call already in flight, or there would be nothing left
-//! blocking for a second signal to interrupt.
+//! that happens one layer up, in `electricity_vm::exec::tool::
+//! execute_tool`'s own dispatch `select!`, which drops the in-flight
+//! call's own future the instant the token is cancelled rather than
+//! waiting for it to finish (PR #441 review finding 12 corrected this
+//! doc comment's own earlier, wrong claim that a signal lets the call
+//! run to completion -- `exec/tool.rs`'s own `select!` around
+//! `run_tool` is the real behaviour). `finally:` still runs afterwards
+//! regardless, long enough for the signal tests' own "a second SIGINT
+//! during a blocking `finally` exits immediately" case to send that
+//! second signal while a [`SleepTool`] call inside it is still
+//! blocking -- not because the *first* signal spared the root's own
+//! call, but because `finally:` dispatches under its own brand-new,
+//! unrelated `CancellationToken` (`exec/dynamic.rs`), never a child of
+//! the one the first signal already set.
+//!
+//! A second SIGINT/SIGTERM's own "exit immediately, no `--out`" rule
+//! (issue #431's Signals section) is a CLI/signal-thread-level
+//! mechanism in any case (`electricity-cli::main::arm_signals`'s own
+//! `std::process::exit` call), entirely independent of what any VM
+//! token -- `finally:`'s own included -- is doing at that moment.
 
 use crate::{CheckResult, ToolError, ToolPlugin, ToolResult};
 use async_trait::async_trait;
