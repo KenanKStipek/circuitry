@@ -9,137 +9,15 @@
 //! every spawned process's environment regardless of what the test
 //! runner's own environment carries.
 
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+mod support;
 
-fn e2e_enabled() -> bool {
-    if std::env::var_os("OSP_E2E_COF").is_none() {
-        return false;
-    }
-    // P2-3: `OSP_E2E_COF=1` with no `cof` on `PATH` is a broken CI
-    // job, not a reason to run zero tests and report green — every
-    // test below used to read this the same as the env var simply
-    // being unset at all and quietly skip.
-    if which("cof").is_none() {
-        panic!("OSP_E2E_COF=1 but `cof` is not on PATH");
-    }
-    true
-}
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
-/// `default_adapter`/`default_model` are Circuitry's own config keys
-/// (`cli/config.py`); a bare `"adapter": "scripted"` is an unknown key
-/// the config loader silently ignores, so every one of these runs
-/// used to fall back to the built-in `ollama` default instead (K1).
-/// None of today's e2e docs prompt at all, so this makes no observable
-/// difference yet — it is here so a future prompt-effect e2e test
-/// doesn't inherit the same silent miss.
-const SCRIPTED_CONFIG: &str = r#"{"default_adapter":"scripted","default_model":"scripted-model"}"#;
-
-/// How long every signal test waits before sending its first signal.
-/// `osp` registers its signal handlers before anything else in
-/// `do_run` (F13), but that is a guarantee about *osp's own code*, not
-/// about how long the OS takes to finish loading and starting the
-/// process at all — a cold page cache under heavy memory pressure (a
-/// real, observed condition on a shared, multi-tenant dev machine) can
-/// push that past what used to be a merely-generous 500ms, and a
-/// signal arriving before `main` even runs always hits the OS default
-/// disposition no matter how early application code registers a
-/// handler. 1.5s is still well under what a human's own first Ctrl-C
-/// takes in practice.
-const SIGNAL_DELAY: Duration = Duration::from_millis(1500);
-
-fn which(bin: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .map(|dir| dir.join(bin))
-            .find(|p| p.is_file())
-    })
-}
-
-struct TestHome {
-    dir: tempfile::TempDir,
-}
-
-impl TestHome {
-    fn new() -> Self {
-        TestHome {
-            dir: tempfile::tempdir().expect("tempdir"),
-        }
-    }
-
-    fn path(&self) -> &Path {
-        self.dir.path()
-    }
-}
-
-fn osp_command(home: &TestHome) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_osp"));
-    cmd.env("HOME", home.path());
-    for key in [
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "CYBERDINER_TOKEN",
-        "CYBERDINER_EXPO_URL",
-    ] {
-        cmd.env_remove(key);
-    }
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    cmd
-}
-
-/// Waits for `child` with a hard timeout, killing it (and logging a
-/// panic) rather than ever hanging a CI job.
-fn wait_with_timeout(mut child: Child, timeout: Duration) -> std::process::ExitStatus {
-    let start = Instant::now();
-    loop {
-        if let Some(status) = child.try_wait().expect("try_wait") {
-            return status;
-        }
-        if start.elapsed() > timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("e2e test exceeded its {timeout:?} hard timeout; osp was killed");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-/// `wait_with_timeout`, with `child`'s own stdout read on its own
-/// thread rather than in this one (P2-3): every test used to call
-/// `.stdout.take().unwrap().read_to_string(...)` *before*
-/// `wait_with_timeout` ever ran, which blocks until the pipe's write
-/// end closes (normally, at the child's own exit) with no timeout of
-/// its own at all — a hung `osp` that never closed its stdout would
-/// have hung the whole test on that read, the hard timeout below
-/// never even reached. Reading concurrently with the wait means a kill
-/// on timeout closes the pipe (EOF) and unblocks the read too.
-fn wait_with_timeout_capturing_stdout(
-    mut child: Child,
-    timeout: Duration,
-) -> (std::process::ExitStatus, String) {
-    let mut stdout_pipe = child.stdout.take().expect("piped stdout");
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = String::new();
-        let _ = stdout_pipe.read_to_string(&mut buf);
-        let _ = tx.send(buf);
-    });
-    let status = wait_with_timeout(child, timeout);
-    let stdout = rx
-        .recv_timeout(Duration::from_secs(5))
-        .unwrap_or_else(|_| String::from("<stdout reader thread did not finish>"));
-    (status, stdout)
-}
-
-fn write_doc(dir: &Path, name: &str, contents: &str) -> PathBuf {
-    let path = dir.join(name);
-    std::fs::write(&path, contents).unwrap();
-    path
-}
+use support::{
+    SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process, e2e_enabled, osp_command,
+    wait_with_timeout, wait_with_timeout_capturing_stdout, write_doc,
+};
 
 #[test]
 fn a_simple_run_succeeds_and_prints_the_log() {
@@ -337,27 +215,6 @@ fn sigterm_forwards_and_osp_exits_143() {
     assert!(stdout.contains("exit 143"), "stdout:\n{stdout}");
 
     assert_no_leftover_process(work.path());
-}
-
-/// No process whose own argv names this test's unique work directory
-/// (the doc/config paths `cof`, and anything it spawned in turn, were
-/// invoked with) should still exist once osp has exited. `home.path()`
-/// doesn't work as the needle here: it is only ever set as an
-/// environment variable, which never appears in a process's own argv,
-/// so a `pgrep -f` against it can never match anything regardless of
-/// whether a process actually survived (#424 review finding F10).
-fn assert_no_leftover_process(work: &Path) {
-    std::thread::sleep(Duration::from_millis(300));
-    let ps = Command::new("pgrep")
-        .arg("-f")
-        .arg(work.display().to_string())
-        .output()
-        .expect("pgrep should be available");
-    assert!(
-        ps.stdout.is_empty(),
-        "a process matching this test's own work dir survived osp's exit: {}",
-        String::from_utf8_lossy(&ps.stdout)
-    );
 }
 
 #[test]
