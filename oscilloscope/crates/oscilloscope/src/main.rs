@@ -563,6 +563,14 @@ fn drain_observations(
 
 fn do_watch(args: WatchArgs) -> ExitCode {
     let target = PathBuf::from(&args.target);
+    // P2-4: a typo'd path used to be silently treated as a direct
+    // `state.live.json` target and waited on forever -- with no
+    // staleness timeout (N3's own decision) there was nothing to ever
+    // notice it, let alone say so.
+    if !target.exists() {
+        eprintln!("osp: watch target {} does not exist", target.display());
+        return exit_early(2);
+    }
     let (run_dir, live_state_path): (PathBuf, PathBuf) = if target.is_dir() {
         (target.clone(), target.join("state.live.json"))
     } else {
@@ -574,6 +582,15 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             target.clone(),
         )
     };
+
+    // P2-4: says once, up front, what this watch is actually waiting
+    // on, rather than leaving a user looking at a silent, running
+    // process with no clue what it's for -- the live-state file for a
+    // run that simply hasn't started yet (or never will) looks
+    // identical to one that's already hung.
+    if !live_state_path.exists() {
+        eprintln!("osp: waiting for {}", live_state_path.display());
+    }
 
     let plan = match &args.plan {
         Some(doc) => match oscilloscope_core::plan::compile(doc) {
@@ -885,6 +902,16 @@ mod tests {
         // the required `target` positional) — proving dispatch reached
         // WatchArgs, not RunArgs (which has no required `target` field).
         assert_eq!(run(args(&["watch"])), ExitCode::from(2));
+    }
+
+    #[test]
+    fn watch_exits_2_on_a_target_that_does_not_exist() {
+        // P2-4: a typo'd path must not be silently treated as a live
+        // -state file and waited on forever.
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist");
+        let code = run(args(&["watch", missing.to_str().unwrap()]));
+        assert_eq!(code, ExitCode::from(2));
     }
 
     #[test]

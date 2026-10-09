@@ -105,6 +105,51 @@ fn an_existing_world_accessible_out_dir_is_warned_about_not_chmodded() {
 }
 
 #[test]
+fn watch_says_what_its_waiting_for_when_the_live_state_file_is_not_there_yet() {
+    // P2-4: an existing but still-empty run directory (a run that
+    // hasn't started writing yet, or never will) looks identical to a
+    // silent hang without this.
+    let dir = tempfile::tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_osp"))
+        .arg("watch")
+        .arg(dir.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn osp watch");
+
+    let mut stderr = child.stderr.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        let mut collected = String::new();
+        while let Ok(n) = stderr.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            collected.push_str(&String::from_utf8_lossy(&buf[..n]));
+            if collected.contains("waiting for") {
+                break;
+            }
+        }
+        let _ = tx.send(collected);
+    });
+    let collected = rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap_or_else(|_| "<no output within 5s>".to_string());
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(collected.contains("waiting for"), "stderr:\n{collected}");
+    assert!(
+        collected.contains("state.live.json"),
+        "stderr:\n{collected}"
+    );
+}
+
+#[test]
 fn watch_with_no_events_stream_warns_once_instead_of_hanging_silently() {
     // N3: a run directory from a bare `cof run --live-state ... --out
     // ...` (no `--events`) gives `osp watch` no pid to probe, and an
