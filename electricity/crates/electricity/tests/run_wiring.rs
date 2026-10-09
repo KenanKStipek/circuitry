@@ -509,6 +509,33 @@ async fn signal_is_none_for_an_uncancelled_failure() {
     assert_eq!(result.signal, None);
 }
 
+/// PR #441 review finding 8: a signal already pending when a pre-
+/// execution check fails (here, the same structural check [`signal_
+/// is_none_for_an_uncancelled_failure`] uses) is reported as an
+/// interrupted run -- the check's own real error text and exit 1, not
+/// the interrupt text and the signal's own exit code -- matching
+/// `cli/interrupts.py`'s own handler, which raises `KeyboardInterrupt`
+/// in the main thread the instant a signal arrives, at whatever Python
+/// bytecode boundary that happens to be, including mid-check; `run()`'s
+/// own broad `except (Exception, KeyboardInterrupt)` never distinguishes
+/// where that boundary fell.
+#[tokio::test]
+async fn a_signal_pending_when_a_pre_execution_check_fails_is_reported_as_interrupted() {
+    let dir = temp_dir("signal-during-check");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(&dir, "doc.yml", "{}\n");
+    let req = request(config, doc);
+
+    let token = CancellationToken::new();
+    assert!(token.request(2)); // SIGINT -- stable POSIX number
+    let result = electricity::run_orchestration(&req, &token).await;
+
+    assert!(!result.ok);
+    assert_eq!(result.signal, Some(Signal::Sigint));
+    assert_eq!(result.error.as_deref(), Some("Interrupted (Ctrl-C/SIGINT)"));
+    assert!(result.state.is_some());
+}
+
 #[test]
 fn signal_exit_codes_match_the_posix_convention() {
     assert_eq!(Signal::Sigint.exit_code(), 130);

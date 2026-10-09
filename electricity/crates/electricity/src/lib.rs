@@ -622,26 +622,38 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
     state::seed_state(&store, &req.inputs);
 
     // A pre-execution check failure (every `fail!` call site below)
-    // never consults *token* at all, even when a signal has already
-    // arrived: Circuitry's own cancellation is a VM-execution concept
-    // (DESIGN §6.5/§6.9, `core/cancellation.py`'s `RunCancelledBySignal`)
-    // -- nothing before `execute_root` ever starts ever looks at it, so
-    // a SIGINT during, say, a structural check that was going to fail
-    // anyway still reports that check's own real error, exit 1, not
-    // the interrupt text (PR #441 review finding 13, applied
-    // symmetrically to every failure the signal's own target was
-    // never watching).
+    // reports the interrupt text/signal instead of the check's own real
+    // error whenever *token* was already cancelled by the time the
+    // check failed -- `cli/interrupts.py`'s own handler raises
+    // `KeyboardInterrupt` (or a subclass) in the main thread the moment
+    // a signal arrives, at whatever bytecode boundary Python happens to
+    // be at; `runtime_shim.run`'s own broad `except (Exception,
+    // KeyboardInterrupt)` never distinguishes where that boundary fell,
+    // so a SIGINT arriving mid-check in cof reports `Interrupted
+    // (Ctrl-C/SIGINT)`/exit 130 there too, not the check's own text
+    // (PR #441 review finding 8 -- this file's own earlier comment here
+    // claimed the opposite, which was never actually true of cof).
+    // electricity has no equivalent mid-check interrupt point of its
+    // own (every check here runs to completion once started, unlike
+    // Python's per-bytecode-instruction signal delivery), so this is
+    // the next best thing: ask *once*, right when a check has already
+    // failed, whether a signal got there first.
     macro_rules! fail {
         ($message:expr) => {{
             let totals = Totals::new();
             finalize_last_run(&store, &totals, run_t0.elapsed().as_secs_f64());
             finalize_plugins_meta(&store);
+            let signal = signal_from_token(token);
+            let error = match signal {
+                Some(signal) => signal.interrupt_text().to_string(),
+                None => $message,
+            };
             return RunResult {
                 ok: false,
                 state: Some(store.saved(&store.root)),
-                error: Some($message),
+                error: Some(error),
                 warnings,
-                signal: None,
+                signal,
             };
         }};
     }
