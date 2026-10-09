@@ -312,8 +312,19 @@ fn read_error(display_path: &str, err: &io::Error) -> ConfigError {
             "Config file could not be read: {display_path} (Permission denied)"
         )),
         _ => ConfigError(format!(
-            "Config file could not be read: {display_path} ({err})"
+            "Config file could not be read: {display_path} ({})",
+            strerror(err)
         )),
+    }
+}
+
+/// `exc.strerror`: the bare OS error message, without Rust's own
+/// `io::Error::to_string()` " (os error N)" suffix.
+fn strerror(err: &io::Error) -> String {
+    let text = err.to_string();
+    match text.rfind(" (os error ") {
+        Some(idx) if text.ends_with(')') => text[..idx].to_string(),
+        _ => text,
     }
 }
 
@@ -339,6 +350,7 @@ fn apply_env_vars(merged: Dict, env: &HashMap<String, String>) -> Dict {
     if let Some(url) = non_empty(env, "CIRCUITRY_ADAPTER_URL") {
         let adapter_name = get(&result, "default_adapter")
             .and_then(Value::as_str)
+            .filter(|a| !a.is_empty())
             .unwrap_or("ollama")
             .to_string();
         set_nested_base_url(&mut result, "adapters", &adapter_name, url);
