@@ -16,7 +16,8 @@ use std::time::Duration;
 
 use support::{
     SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process, e2e_enabled, osp_command,
-    wait_with_timeout, wait_with_timeout_capturing_stdout, write_doc,
+    wait_with_timeout, wait_with_timeout_capturing_stdout,
+    wait_with_timeout_capturing_stdout_and_stderr, write_doc,
 };
 
 #[test]
@@ -50,6 +51,50 @@ fn a_simple_run_succeeds_and_prints_the_log() {
     assert!(stdout.contains("prime.hello"), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 0"), "stdout:\n{stdout}");
+}
+
+#[test]
+fn events_are_detected_even_with_rich_styled_help_output() {
+    // Typer forces Rich's terminal styling whenever `GITHUB_ACTIONS`
+    // (set on every CI runner), `FORCE_COLOR` or `PY_COLORS` is set,
+    // which splits `--events` in `cof run --help`'s own output into
+    // separately-styled ANSI runs that a plain `.contains("--events")`
+    // never matches -- `CofEngine::detect` used to silently read every
+    // such run as "this cof has no --events" and fall back to running
+    // it with the live-state file only.
+    if !e2e_enabled() {
+        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let run_dir = work.path().join("run");
+    let child = osp_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--log")
+        .env("FORCE_COLOR", "1")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osp");
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
+
+    assert!(
+        status.success(),
+        "osp should exit 0, got {status:?}; stdout:\n{stdout}"
+    );
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
+    assert!(run_dir.join("events.jsonl").is_file());
 }
 
 #[test]

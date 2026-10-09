@@ -82,6 +82,45 @@ impl fmt::Display for EngineError {
 
 impl std::error::Error for EngineError {}
 
+/// Strips ANSI/CSI escape sequences (`\x1b\[[0-9;?]*[ -/]*[@-~]`) from
+/// a `--help` probe's own output before matching a flag's name in it.
+/// Typer forces Rich's terminal styling whenever `GITHUB_ACTIONS`,
+/// `FORCE_COLOR` or `PY_COLORS` is set in the probe's own environment
+/// (true of every CI runner, which sets `GITHUB_ACTIONS` itself), and
+/// Rich then splits a flag's own text into separately-styled runs --
+/// `--events` becomes `\x1b[1;36m-\x1b[0m\x1b[1;36m-events\x1b[0m` --
+/// which a plain `.contains("--events")` never matches, so detection
+/// silently read every such run as "this binary has no --events" and
+/// fell back to running it with the live-state file only.
+fn strip_ansi_escapes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            while matches!(chars.peek(), Some(c) if c.is_ascii_digit() || *c == ';' || *c == '?') {
+                chars.next();
+            }
+            while matches!(chars.peek(), Some(c) if (' '..='/').contains(c)) {
+                chars.next();
+            }
+            if matches!(chars.peek(), Some(c) if ('@'..='~').contains(c)) {
+                chars.next();
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Shared by [`CofEngine::detect`] and [`ElectricityEngine::detect`]:
+/// does a `--help` probe's stdout or stderr mention `flag`'s own name
+/// at all, once ANSI/CSI escape sequences are stripped from both?
+fn help_mentions(stdout: &str, stderr: &str, flag: &str) -> bool {
+    strip_ansi_escapes(stdout).contains(flag) || strip_ansi_escapes(stderr).contains(flag)
+}
+
 pub trait Engine {
     fn name(&self) -> &'static str;
     fn caps(&self) -> EngineCaps;
@@ -107,6 +146,13 @@ impl CofEngine {
         let binary = binary.into();
         let mut cmd = std::process::Command::new(&binary);
         cmd.args(["run", "--help"]);
+        // Typer/Rich otherwise style the help text (see
+        // `strip_ansi_escapes`) whenever `GITHUB_ACTIONS`, `FORCE_COLOR`
+        // or `PY_COLORS` is set in this probe's own environment --
+        // `NO_COLOR` on the probe alone (never the real run) keeps the
+        // detection itself simple without changing cof's own output
+        // formatting for the user.
+        cmd.env("NO_COLOR", "1");
         // P2-10: its own process group, same as the real engine spawn
         // (supervise.rs), so a terminal Ctrl-C landing while this
         // probe is still running doesn't kill it directly — that used
@@ -121,7 +167,7 @@ impl CofEngine {
             .map(|out| {
                 let text = String::from_utf8_lossy(&out.stdout);
                 let err_text = String::from_utf8_lossy(&out.stderr);
-                text.contains("--events") || err_text.contains("--events")
+                help_mentions(&text, &err_text, "--events")
             })
             .unwrap_or(false);
         CofEngine {
@@ -208,6 +254,9 @@ impl ElectricityEngine {
         let binary = binary.into();
         let mut cmd = std::process::Command::new(&binary);
         cmd.arg("--help");
+        // See `CofEngine::detect`'s own comment: `NO_COLOR` on the
+        // probe only, never the real run.
+        cmd.env("NO_COLOR", "1");
         cmd.process_group(0);
         let output = cmd.output();
         let missing = matches!(&output, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
@@ -215,8 +264,10 @@ impl ElectricityEngine {
             .map(|out| {
                 let text = String::from_utf8_lossy(&out.stdout);
                 let err_text = String::from_utf8_lossy(&out.stderr);
-                let has = |flag: &str| text.contains(flag) || err_text.contains(flag);
-                (has("--events"), has("--live-state"))
+                (
+                    help_mentions(&text, &err_text, "--events"),
+                    help_mentions(&text, &err_text, "--live-state"),
+                )
             })
             .unwrap_or((false, false));
         ElectricityEngine {
@@ -470,6 +521,28 @@ mod tests {
             .collect();
         assert!(!args.contains(&"--events".to_string()));
         assert!(!args.contains(&"--live-state".to_string()));
+    }
+
+    #[test]
+    fn help_mentions_finds_a_plain_flag() {
+        assert!(help_mentions(
+            "usage: cof run --help\n  --events PATH\n",
+            "",
+            "--events"
+        ));
+    }
+
+    #[test]
+    fn help_mentions_finds_a_rich_styled_flag_split_across_two_runs() {
+        // The exact bytes `cof run --help` prints under Typer/Rich
+        // once `GITHUB_ACTIONS`, `FORCE_COLOR` or `PY_COLORS` forces
+        // color (every CI runner sets `GITHUB_ACTIONS` itself): Rich
+        // styles the leading `-` and the rest of the flag's name as
+        // two separate runs, so the literal substring `--events`
+        // never appears unstyled anywhere in the output.
+        let styled = "\x1b[1;36m-\x1b[0m\x1b[1;36m-events\x1b[0m PATH";
+        assert!(help_mentions(styled, "", "--events"));
+        assert!(!help_mentions(styled, "", "--live-state"));
     }
 
     #[test]
