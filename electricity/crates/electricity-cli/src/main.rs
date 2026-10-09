@@ -1,9 +1,12 @@
-//! `electricity` — the CLI binary. This preview release has no VM: a run
-//! request runs `electricity_compiler::check_for_run` first (issue #408's
-//! CLI section) and, on success, still refuses with a message pointing to
-//! `cof run` -- only a check failure prints that failure's own exact text
-//! instead. `--version`/`--help` succeed; `--dump-ir` runs the same check
-//! and prints the result as JSON.
+//! `electricity` — the CLI binary. `Action::Run` drives
+//! `electricity::run_orchestration` (issue #431's run-wiring steps 1-19)
+//! on a current-thread Tokio runtime, arming SIGINT/SIGTERM/SIGHUP
+//! cancellation for the run alone (issue #431's Signals section),
+//! writes `--out` on success *and* failure, and follows `cof`'s own
+//! non-TTY stdout contract (issue #431's "CLI output" decision).
+//! `--version`/`--help` succeed; `--dump-ir` runs the document check
+//! alone and prints the result as JSON -- it never runs anything, and
+//! so never refuses unsupported content either.
 //!
 //! Every flag issue #431's own usage line lists parses, in any position,
 //! before or after the two positionals (`<config.json> <orchestration.yml>`)
@@ -14,15 +17,15 @@
 //! error, never silently accepted or ignored. An unknown flag is a usage
 //! error (exit 2): issue #431's gate lane tightens this from the pre-#431
 //! preview CLI, which let a trailing unknown flag fall through to the
-//! (always-refusing) run path instead. None of the four
-//! new flags changes this release's own behavior yet -- each still routes
-//! to the same preview refusal / check-failure text `Action::Run` always
-//! produced, so the conformance runner's existing "refusal keeps the
-//! preview marker" skip rule keeps working; lane D wires their real
-//! output contract in together with that runner's own update.
+//! (always-refusing) run path instead. `--profile` refuses with the
+//! preview marker (profiles are M1-I) before `run_orchestration` is ever
+//! called -- no state is written for it, same as any other refusal.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+
+use electricity::CancellationToken;
+use electricity::run::{RunRequest, RunResult, Signal};
 
 const USAGE: &str = "\
 Usage: electricity <config.json> <orchestration.yml> [-e key=value]... [--out state.json]
@@ -260,6 +263,230 @@ fn classify(args: &[String]) -> Action {
     }
 }
 
+/// The POSIX signal number [`arm_signals`]'s own task calls
+/// [`CancellationToken::request`] with for each signal it watches --
+/// stable across Linux and macOS (`man 7 signal`), and the same three
+/// numbers [`electricity::run::Signal::events_name`]/[`Signal::
+/// exit_code`] key off of.
+const SIGINT: i32 = 2;
+const SIGHUP: i32 = 1;
+const SIGTERM: i32 = 15;
+
+/// Whether SIGHUP is already ignored (`SIG_IGN`) on entry -- a caller
+/// that launched `electricity` under `nohup` means it, and this task
+/// must never install its own handler over that (issue #431's Signals
+/// section: "honours `SIG_IGN` at start"). Queried directly via
+/// `sigaction`, never changing the disposition itself (the *old*
+/// argument is `null`).
+fn sighup_is_already_ignored() -> bool {
+    #[cfg(unix)]
+    unsafe {
+        let mut current: libc::sigaction = std::mem::zeroed();
+        if libc::sigaction(libc::SIGHUP, std::ptr::null(), &mut current) != 0 {
+            return false;
+        }
+        current.sa_sigaction == libc::SIG_IGN
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+/// Arms *token* for the run: the first SIGINT/SIGTERM/SIGHUP calls
+/// [`CancellationToken::request`]; a second SIGINT/SIGTERM exits the
+/// whole process immediately with its own conventional code (no
+/// `--out`, no `run_end` -- issue #431's Signals section). SIGHUP is
+/// never treated as that second signal, and is never even watched for
+/// at all when [`sighup_is_already_ignored`] says it already is.
+/// Returns the `JoinHandle` so the caller can stop watching once the
+/// run itself is over ("signals armed for the run only") -- once
+/// `tokio`'s own signal machinery has claimed a signal number for this
+/// process, dropping every listener for it only stops *this* task from
+/// reacting; it can never hand the OS's own default (process-killing)
+/// disposition back, so there is no further cleanup needed here.
+fn arm_signals(token: CancellationToken) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut sigint =
+            signal(SignalKind::interrupt()).expect("could not install a SIGINT handler");
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("could not install a SIGTERM handler");
+        let mut sighup = if sighup_is_already_ignored() {
+            None
+        } else {
+            Some(signal(SignalKind::hangup()).expect("could not install a SIGHUP handler"))
+        };
+        loop {
+            let signum = match sighup.as_mut() {
+                Some(sighup) => {
+                    tokio::select! {
+                        _ = sigint.recv() => SIGINT,
+                        _ = sigterm.recv() => SIGTERM,
+                        _ = sighup.recv() => SIGHUP,
+                    }
+                }
+                None => {
+                    tokio::select! {
+                        _ = sigint.recv() => SIGINT,
+                        _ = sigterm.recv() => SIGTERM,
+                    }
+                }
+            };
+            let first = token.request(signum);
+            if !first {
+                if signum == SIGHUP {
+                    // Never a second signal (issue #431's Signals
+                    // section) -- a closed terminal can deliver SIGHUP
+                    // twice in quick succession, and the second must
+                    // not race whichever signal actually cancelled this
+                    // run to `std::process::exit`.
+                    continue;
+                }
+                std::process::exit(match signum {
+                    SIGINT => Signal::Sigint.exit_code(),
+                    SIGTERM => Signal::Sigterm.exit_code(),
+                    _ => unreachable!("only SIGINT/SIGTERM reach this branch"),
+                });
+            }
+        }
+    })
+}
+
+/// The preview marker refusal for a flag this preview doesn't support
+/// at all (`--profile`; profiles are M1-I) -- refused before
+/// `run_orchestration` is ever called, so no state exists to write
+/// (issue #431's "Refused before the run starts" list).
+fn profile_refusal() -> RunResult {
+    RunResult {
+        ok: false,
+        state: None,
+        error: Some(format!(
+            "electricity {} is a preview and cannot run orchestrations yet: --profile is not \
+             supported until a later milestone; use `cof run` instead",
+            electricity::VERSION
+        )),
+        warnings: Vec::new(),
+        signal: None,
+    }
+}
+
+/// `electricity`'s own non-TTY stdout contract (issue #431's "CLI
+/// output" decision, "Same as `cof` when stdout is not a terminal"):
+/// success with `--out` prints nothing; success without `--out` prints
+/// the state JSON; a failure prints `{"ok": false, ...}` regardless of
+/// `--out`. `--pretty` governs only the success-without-`--out` case --
+/// `--out`'s own file is `electricity::out::write_out`'s job, not this
+/// function's.
+fn print_stdout_contract(result: &RunResult, out_path: Option<&Path>, pretty: bool) {
+    if !result.ok {
+        print!(
+            "{}",
+            electricity::out::failure_payload(
+                result.error.as_deref().unwrap_or(""),
+                &result.warnings,
+                out_path,
+            )
+        );
+        return;
+    }
+    if out_path.is_none() {
+        if let Some(state) = &result.state {
+            print!("{}", electricity::out::render_state(state, pretty));
+        }
+    }
+}
+
+/// `Warning: ...` lines, then (on failure) a final `Error: <text>`
+/// line -- issue #431's "CLI output" decision's own stderr contract.
+fn print_stderr_contract(result: &RunResult) {
+    for warning in &result.warnings {
+        eprintln!("Warning: {warning}");
+    }
+    if !result.ok {
+        eprintln!("Error: {}", result.error.as_deref().unwrap_or(""));
+    }
+}
+
+/// The process exit code for *result* (issue #431's run-wiring step
+/// 21): 0 on success; a signal's own conventional code when one ended
+/// the run; 1 for every other failure.
+fn exit_code_for(result: &RunResult) -> ExitCode {
+    if result.ok {
+        return ExitCode::SUCCESS;
+    }
+    match result.signal {
+        Some(signal) => ExitCode::from(signal.exit_code() as u8),
+        None => ExitCode::from(1),
+    }
+}
+
+fn run_action(run_args: RunArgs) -> ExitCode {
+    // `electricity::parse_inputs`'s own malformed-`-e` text, Circuitry's
+    // own `BadParameter` message word for word (issue #429):
+    // `parse_flags` only checks that `-e` has *some* value, saying
+    // nothing about whether that value itself contains `=` -- a value
+    // with no `=` (`-e badtext`) reaches this, `cli/app.py::
+    // _parse_env_vars`'s own check proper.
+    let inputs = match electricity::parse_inputs(&run_args.inputs) {
+        Ok(inputs) => inputs,
+        Err(message) => {
+            eprintln!("electricity: {message}");
+            eprintln!("{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let out_path = run_args.out.map(PathBuf::from);
+
+    // `--profile` refuses with the preview marker before anything else
+    // runs (issue #431's CLI section) -- profiles are M1-I.
+    let result = if run_args.profile.is_some() {
+        profile_refusal()
+    } else {
+        let req = RunRequest {
+            config_path: PathBuf::from(&run_args.config),
+            orchestration_path: PathBuf::from(&run_args.orchestration),
+            inputs,
+            out_path: out_path.clone(),
+            pretty: run_args.pretty,
+            live_state_path: run_args.live_state.map(PathBuf::from),
+            events_path: run_args.events.map(PathBuf::from),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("could not start the electricity async runtime");
+        runtime.block_on(async {
+            let token = CancellationToken::new();
+            let signal_task = arm_signals(token.clone());
+            let result = electricity::run_orchestration(&req, &token).await;
+            // "Signals armed for the run only" (issue #431's Signals
+            // section): this task's own first/second-signal bookkeeping
+            // stops reacting the moment the run itself is over, not
+            // while `--out` is still being written below.
+            signal_task.abort();
+            result
+        })
+    };
+
+    if let Some(path) = &out_path {
+        if let Some(state) = &result.state {
+            if let Err(err) = electricity::out::write_out(path, state, run_args.pretty) {
+                eprintln!(
+                    "electricity: could not write --out {}: {err}",
+                    path.display()
+                );
+                return ExitCode::from(1);
+            }
+        }
+    }
+
+    print_stdout_contract(&result, out_path.as_deref(), run_args.pretty);
+    print_stderr_contract(&result);
+    exit_code_for(&result)
+}
+
 fn main() -> ExitCode {
     // `args_os` + lossy conversion instead of `args()`, which panics on a
     // non-UTF-8 argument.
@@ -276,51 +503,7 @@ fn main() -> ExitCode {
             println!("{USAGE}");
             ExitCode::SUCCESS
         }
-        Action::Run(run_args) => {
-            // `electricity::parse_inputs`'s own malformed-`-e` text,
-            // Circuitry's own `BadParameter` message word for word
-            // (issue #429): `parse_flags` only checks that `-e` has
-            // *some* value, saying nothing about whether that value
-            // itself contains `=` -- a value with no `=` (`-e badtext`)
-            // reaches this, `cli/app.py::_parse_env_vars`'s own check
-            // proper.
-            let inputs = match electricity::parse_inputs(&run_args.inputs) {
-                Ok(inputs) => inputs,
-                Err(message) => {
-                    eprintln!("electricity: {message}");
-                    eprintln!("{USAGE}");
-                    return ExitCode::from(2);
-                }
-            };
-            // `--out`/`--pretty`/`--live-state`/`--events`/`--profile`
-            // are fully parsed above (consuming their own value, and
-            // never themselves a usage error) but not yet acted on --
-            // lane D wires the real `--out`/`--live-state`/`--events`
-            // writers and `--profile`'s own preview refusal in together
-            // with `run_orchestration`'s own replacement (issue #431's
-            // CLI section). Until then every `Run` ends the same way it
-            // always has: the check failure's own text, or this
-            // preview's one unconditional refusal.
-            let _ = (
-                run_args.out,
-                run_args.pretty,
-                run_args.live_state,
-                run_args.events,
-                run_args.profile,
-            );
-            // On failure: exactly the error text on stderr, exit 1
-            // (issue #408's CLI section). On success: still exit 1
-            // with the preview refusal -- there is no VM yet.
-            eprintln!(
-                "{}",
-                electricity::run_orchestration(
-                    Path::new(&run_args.config),
-                    Path::new(&run_args.orchestration),
-                    &inputs,
-                )
-            );
-            ExitCode::from(1)
-        }
+        Action::Run(run_args) => run_action(run_args),
         Action::DumpIr(config_path, orchestration_path, raw_inputs) => {
             let inputs = match electricity::parse_inputs(&raw_inputs) {
                 Ok(inputs) => inputs,

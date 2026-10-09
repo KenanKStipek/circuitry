@@ -11,8 +11,17 @@ description = "electricity CLI binary (preview)"
 name = "electricity"
 path = "src/main.rs"
 
+[features]
+# Never enabled here: a release build of this binary never registers
+# `sleep`/`fail`. The signal-handling test suite enables it explicitly
+# (`cargo test -p electricity-cli --features test-tools --test signals`).
+test-tools = ["electricity/test-tools"]
+
 [dependencies]
 electricity = { path = "../electricity" }
+libc = "0.2"
+tokio = { version = "1", features = ["rt", "macros", "signal", "time"] }
 
 [dev-dependencies]
 serde_json = "1"
+libc = "0.2"

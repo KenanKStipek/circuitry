@@ -23,6 +23,14 @@ impl TempHome {
         fs::create_dir_all(&path).expect("create temp HOME");
         Self { path }
     }
+
+    /// `config.json` under this home, written with *contents* (`"{}"`
+    /// for every test that doesn't care what's in it).
+    fn config(&self, contents: &str) -> PathBuf {
+        let path = self.path.join("config.json");
+        fs::write(&path, contents).unwrap();
+        path
+    }
 }
 
 impl Drop for TempHome {
@@ -62,17 +70,17 @@ fn help_prints_usage_and_preview_notice_and_exits_zero() {
     assert!(stdout.contains("preview"));
 }
 
-/// `electricity <config.json> <doc>` runs `check_for_run` first (issue
-/// #408's CLI section). An empty document is one of the few checks
-/// fully resolvable without lane C's own compiler, so its exact text
+/// `electricity <config.json> <doc>` runs the document check first
+/// (issue #431's run-wiring table). An empty document is one of the
+/// few checks fully resolvable without a real VM, so its exact text
 /// -- not just a marker naming an unimplemented lane -- is a stable
-/// thing to assert here.
+/// thing to assert here. `electricity-cli`'s own stderr contract
+/// prefixes it with `Error: ` (issue #431's "CLI output" decision).
 #[test]
 fn run_request_fails_with_the_checks_own_error_text_and_exit_code_one() {
     let (mut cmd, home) = command("run");
-    let config = home.path.join("config.json");
+    let config = home.config("{}");
     let doc = home.path.join("doc.yml");
-    fs::write(&config, "{}").unwrap();
     fs::write(&doc, "").unwrap();
     let output = cmd
         .args([config.to_str().unwrap(), doc.to_str().unwrap()])
@@ -85,18 +93,55 @@ fn run_request_fails_with_the_checks_own_error_text_and_exit_code_one() {
     // match Circuitry's Python `jsonschema` text word for word
     // (DESIGN.md §1/§12) -- only the "Orchestration validation failed:"
     // wrapper and the location are Circuitry's own.
-    assert!(stderr.starts_with("Orchestration validation failed:\n  - top level: "));
+    assert!(stderr.starts_with("Error: Orchestration validation failed:\n  - top level: "));
     assert!(stderr.contains("required property"), "{stderr}");
 }
 
 #[test]
-fn known_run_flag_in_first_position_is_a_run_request() {
-    let (mut cmd, _home) = command("run-flag-first");
+fn a_missing_config_file_fails_with_circuitrys_own_text_and_writes_no_out() {
+    let (mut cmd, home) = command("missing-config");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let out = home.path.join("out.json");
     let output = cmd
-        .args(["--profile", "p", "config.json", "orchestration.yml"])
+        .args([
+            "no-such-config.json",
+            doc.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("Error: Config file not found:"),
+        "{stderr}"
+    );
+    assert!(!out.exists());
+}
+
+#[test]
+fn known_run_flag_in_first_position_is_a_run_request() {
+    let (mut cmd, home) = command("run-flag-first");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .args([
+            "--profile",
+            "p",
+            config.to_str().unwrap(),
+            doc.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    // `--profile` refuses with the preview marker before anything else
+    // runs (profiles are M1-I) -- exit 1, every time, regardless of
+    // whether the document itself would otherwise run.
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("is a preview and cannot run orchestrations yet"));
 }
 
 #[test]
@@ -115,11 +160,12 @@ fn unknown_flag_is_a_usage_error_with_exit_code_two() {
     assert_eq!(output.status.code(), Some(2));
 }
 
-/// `--dump-ir` wiring (issue #408's CLI section): `effects: []` has no
-/// structural, concurrency-configuration, compile, group, or cycle
-/// error, so `check_for_run` succeeds and `--dump-ir` prints the
-/// resulting `Program` as the documented `{"ir_version": "unstable",
-/// "program": ...}` wrapper.
+/// `--dump-ir` wiring: `effects: []` has no structural, concurrency-
+/// configuration, compile, group, or cycle error, so the document check
+/// succeeds and `--dump-ir` prints the resulting `Program` as the
+/// documented `{"ir_version": "unstable", "program": ...}` wrapper.
+/// `--dump-ir` never runs anything, so it has no VM/refusal of its own
+/// either.
 #[test]
 fn dump_ir_prints_the_program_json_and_exits_zero() {
     let (mut cmd, home) = command("dump-ir");
@@ -189,8 +235,8 @@ fn dump_ir_with_e_on_a_required_input_exits_zero_with_the_program_json() {
     assert!(value["program"].is_object());
 }
 
-/// The same document, without `-e`: the exact `check_for_run` message a
-/// plain `cof run` of it would report, not a generic failure.
+/// The same document, without `-e`: the exact check's own message a
+/// plain run of it would report, not a generic failure.
 #[test]
 fn dump_ir_without_e_on_a_required_input_fails_with_the_missing_input_message() {
     let (mut cmd, home) = command("dump-ir-no-e");
@@ -212,40 +258,16 @@ fn dump_ir_without_e_on_a_required_input_fails_with_the_missing_input_message() 
     );
 }
 
-/// The run path with valid `-e` inputs reaches the same preview
-/// refusal a document with no inputs at all does (issue #429).
+/// A document that only declares content the M0-H VM actually runs
+/// (`effects: []`) is never refused -- it reaches `execute_root`
+/// (still lane B's own stub as of this PR), so this is an *ordinary*
+/// failure, not the preview refusal: `--out`/`--events`/`--live-state`
+/// are written, same as any other failed run (issue #431's run-wiring
+/// step 20).
 #[test]
-fn run_request_with_valid_e_inputs_reaches_the_preview_refusal() {
-    let (mut cmd, home) = command("run-e-valid");
-    let doc = home.path.join("doc.yml");
-    fs::write(
-        &doc,
-        "interface:\n  inputs:\n    name:\n      type: string\n      required: true\neffects: []\n",
-    )
-    .unwrap();
-    let output = cmd
-        .args(["config.json", doc.to_str().unwrap(), "-e", "name=World"])
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("is a preview and cannot run orchestrations yet"),
-        "{stderr}"
-    );
-}
-
-/// `--out`/`--pretty`/`--events`/`--live-state` all parse (issue #431's
-/// gate lane, item 7) but none of them changes this release's own
-/// behavior yet: a run request with every one of them set still reaches
-/// the same preview refusal (exit 1, the preview marker on stderr, no
-/// file written to any of the four paths) that a plain `electricity
-/// <config> <doc>` does -- the conformance runner's "refusal keeps the
-/// preview marker" skip rule depends on this staying true until lane D
-/// wires the real output contract in.
-#[test]
-fn run_request_with_every_new_flag_still_reaches_the_preview_refusal() {
+fn run_request_with_every_new_flag_writes_out_events_and_live_state_on_an_ordinary_failure() {
     let (mut cmd, home) = command("run-new-flags");
+    let config = home.config("{}");
     let doc = home.path.join("doc.yml");
     fs::write(&doc, "effects: []\n").unwrap();
     let out = home.path.join("out.json");
@@ -253,7 +275,7 @@ fn run_request_with_every_new_flag_still_reaches_the_preview_refusal() {
     let live_state = home.path.join("live.json");
     let output = cmd
         .args([
-            "config.json",
+            config.to_str().unwrap(),
             doc.to_str().unwrap(),
             "--out",
             out.to_str().unwrap(),
@@ -266,22 +288,74 @@ fn run_request_with_every_new_flag_still_reaches_the_preview_refusal() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    // On failure, stdout carries the `{"ok": false, ...}` payload
+    // regardless of `--out` (issue #431's "CLI output" decision).
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let payload: serde_json::Value = serde_json::from_str(&stdout).expect("JSON on stdout");
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["state_out"], out.to_str().unwrap());
+
+    assert!(out.exists());
+    assert!(events.exists());
+    assert!(live_state.exists());
+    // `--pretty` governs `--out`'s own file -- sorted keys, 2-space
+    // indent.
+    let out_text = fs::read_to_string(&out).unwrap();
+    assert!(out_text.starts_with("{\n  \"_run_id\""));
+    let events_text = fs::read_to_string(&events).unwrap();
     assert!(
-        stderr.contains("is a preview and cannot run orchestrations yet"),
-        "{stderr}"
+        events_text
+            .lines()
+            .next()
+            .unwrap()
+            .contains("\"run_start\"")
     );
-    assert!(!out.exists());
-    assert!(!events.exists());
-    assert!(!live_state.exists());
+    assert!(events_text.lines().last().unwrap().contains("\"run_end\""));
+    // `--live-state` is always written compact (never `--pretty`,
+    // matching `cli/live_state.py`'s own `dumps_saved_state(state)`
+    // with no `pretty=` kwarg) -- so this compares parsed content, not
+    // bytes, when `--pretty` was given for `--out`.
+    let live_state_text = fs::read_to_string(&live_state).unwrap();
+    let out_value: serde_json::Value = serde_json::from_str(&out_text).unwrap();
+    let live_state_value: serde_json::Value = serde_json::from_str(&live_state_text).unwrap();
+    assert_eq!(out_value, live_state_value);
+}
+
+/// Without `--pretty`, `--live-state`'s final write is byte-identical
+/// to `--out` (issue #431's acceptance criteria).
+#[test]
+fn live_state_is_byte_identical_to_out_without_pretty() {
+    let (mut cmd, home) = command("live-state-byte-identical");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let out = home.path.join("out.json");
+    let live_state = home.path.join("live.json");
+    let output = cmd
+        .args([
+            config.to_str().unwrap(),
+            doc.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--live-state",
+            live_state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        fs::read_to_string(&out).unwrap(),
+        fs::read_to_string(&live_state).unwrap()
+    );
 }
 
 /// The same four flags, but written `--flag=value` instead of `--flag
 /// value` -- `cof`'s own Click parser accepts both forms for a value
 /// flag (orchestrator ruling on PR #432's review).
 #[test]
-fn run_request_with_every_new_flag_in_equals_form_still_reaches_the_preview_refusal() {
+fn run_request_with_every_new_flag_in_equals_form_also_writes_out() {
     let (mut cmd, home) = command("run-new-flags-equals");
+    let config = home.config("{}");
     let doc = home.path.join("doc.yml");
     fs::write(&doc, "effects: []\n").unwrap();
     let out = home.path.join("out.json");
@@ -289,12 +363,46 @@ fn run_request_with_every_new_flag_in_equals_form_still_reaches_the_preview_refu
     let live_state = home.path.join("live.json");
     let output = cmd
         .args([
-            "config.json".to_string(),
+            config.to_str().unwrap().to_string(),
             doc.to_str().unwrap().to_string(),
             format!("--out={}", out.to_str().unwrap()),
-            "--pretty".to_string(),
             format!("--events={}", events.to_str().unwrap()),
             format!("--live-state={}", live_state.to_str().unwrap()),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(out.exists());
+    assert!(events.exists());
+    assert!(live_state.exists());
+}
+
+/// A document naming unsupported content (here, a `prompt` effect) is
+/// refused with the preview marker before any file is written at all
+/// -- even when `--out`/`--events`/`--live-state` are all given.
+#[test]
+fn an_unsupported_effect_is_refused_with_no_files_written() {
+    let (mut cmd, home) = command("refusal");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "effects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n",
+    )
+    .unwrap();
+    let out = home.path.join("out.json");
+    let events = home.path.join("events.jsonl");
+    let live_state = home.path.join("live.json");
+    let output = cmd
+        .args([
+            config.to_str().unwrap(),
+            doc.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--events",
+            events.to_str().unwrap(),
+            "--live-state",
+            live_state.to_str().unwrap(),
         ])
         .output()
         .unwrap();
@@ -341,4 +449,27 @@ fn malformed_e_value_is_a_usage_error_with_circuitrys_own_message() {
         stderr.contains("Invalid -e format: 'badtext' (expected KEY=VALUE)"),
         "{stderr}"
     );
+}
+
+/// A run that succeeds its document check but reaches `execute_root`
+/// (still lane B's own stub) with no `--out` at all: on failure,
+/// stdout always carries the JSON payload regardless of `--out`
+/// (issue #431's "CLI output" decision) -- `state_out` is `null` since
+/// none was given.
+#[test]
+fn a_failure_with_no_out_flag_still_prints_the_json_payload_on_stdout() {
+    let (mut cmd, home) = command("no-out-failure");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .args([config.to_str().unwrap(), doc.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let payload: serde_json::Value = serde_json::from_str(&stdout).expect("JSON on stdout");
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["state_out"], serde_json::Value::Null);
+    assert!(payload["error"].as_str().unwrap().contains("execute_root"));
 }

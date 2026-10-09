@@ -11,12 +11,14 @@ description = "ToolPlugin trait, registry, and the json tool for electricity (el
 default = []
 # Blocking `sleep`/`fail` test tools, for the signal-handling test suite
 # only (issue #431's acceptance criteria) -- never compiled into a
-# release build.
-test-tools = []
+# release build. Pulls in `tokio`'s own timer (`SleepTool::execute`)
+# only when this feature is actually enabled.
+test-tools = ["dep:tokio"]
 
 [dependencies]
 electricity-value = { path = "../electricity-value" }
 async-trait = "0.1"
+tokio = { version = "1", features = ["time"], optional = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "time", "test-util"] }

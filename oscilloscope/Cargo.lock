@@ -119,6 +119,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
 
 [[package]]
+name = "async-trait"
+version = "0.1.92"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
+]
+
+[[package]]
 name = "atomic"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -595,11 +606,18 @@ checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 name = "electricity"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "electricity-bytecode",
  "electricity-compiler",
+ "electricity-config",
  "electricity-json",
+ "electricity-redaction",
+ "electricity-tools",
  "electricity-value",
+ "electricity-vm",
  "indexmap",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -659,6 +677,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "electricity-redaction"
+version = "0.1.0"
+dependencies = [
+ "electricity-value",
+]
+
+[[package]]
 name = "electricity-schema"
 version = "0.1.0"
 dependencies = [
@@ -674,6 +699,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "electricity-tools"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "electricity-value",
+]
+
+[[package]]
 name = "electricity-value"
 version = "0.1.0"
 dependencies = [
@@ -682,6 +715,17 @@ dependencies = [
  "num-bigint 0.5.1",
  "num-traits",
  "serde",
+]
+
+[[package]]
+name = "electricity-vm"
+version = "0.1.0"
+dependencies = [
+ "electricity-bytecode",
+ "electricity-tools",
+ "electricity-value",
+ "indexmap",
+ "tokio",
 ]
 
 [[package]]
@@ -2129,7 +2173,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys",
@@ -2267,6 +2311,27 @@ checksum = "b1e27c91459209c2986af3dcf603a5a74a4368754ce37414f59acc971167f643"
 dependencies = [
  "displaydoc",
  "zerovec",
+]
+
+[[package]]
+name = "tokio"
+version = "1.53.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
+dependencies = [
+ "pin-project-lite",
+ "tokio-macros",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
 ]
 
 [[package]]

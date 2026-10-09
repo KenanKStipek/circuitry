@@ -11,7 +11,7 @@
 //! that a failure case's `returncode` is actually nonzero. Comparing a
 //! case's *content* against `electricity::run_orchestration`'s own
 //! output is lanes B-D's job, once there is a VM to run anything with
-//! (`../run_corpus.rs`'s own `#[ignore = "needs lanes B-D"]` tests).
+//! (`../run_corpus.rs`'s own `#[ignore = "needs lanes B-C"]` tests).
 
 use serde_json::Value;
 use std::fs;

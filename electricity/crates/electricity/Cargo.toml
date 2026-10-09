@@ -11,9 +11,25 @@ description = "Rust runner for Circuitry orchestrations (preview library crate)"
 name = "electricity"
 path = "src/lib.rs"
 
+[features]
+# Forwarded to `electricity-tools`: blocking `sleep`/`fail` test tools for
+# the signal-handling test suite only (issue #431's acceptance criteria).
+# Never enabled by `electricity-cli`'s own default build.
+test-tools = ["electricity-tools/test-tools"]
+
 [dependencies]
+electricity-bytecode = { path = "../electricity-bytecode" }
 electricity-compiler = { path = "../electricity-compiler" }
+electricity-config = { path = "../electricity-config" }
 electricity-json = { path = "../electricity-json" }
+electricity-redaction = { path = "../electricity-redaction" }
+electricity-tools = { path = "../electricity-tools" }
 electricity-value = { path = "../electricity-value" }
+electricity-vm = { path = "../electricity-vm" }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 indexmap = "2"
 serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

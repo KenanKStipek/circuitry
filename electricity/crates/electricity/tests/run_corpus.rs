@@ -1,11 +1,16 @@
 //! Exercises the golden run corpus `electricity/scripts/generate_vm_run_
-//! corpus.py` writes (issue #431's Test strategy section). For now (lane
-//! A), only the corpus's own shape is checked -- every case parses, and
-//! a few sanity properties about its result hold. The comparison tests
-//! (running `electricity::run_orchestration`'s eventual VM output against
-//! each case and asserting it matches) are `#[ignore = "needs lanes
-//! B-D"]`: there is no VM yet, so they would either always fail or
-//! always vacuously pass, neither of which is useful signal today.
+//! corpus.py` writes (issue #431's Test strategy section). For now, only
+//! the corpus's own shape is checked -- every case parses, and a few
+//! sanity properties about its result hold. Lane D's own run wiring has
+//! landed (`electricity::run_orchestration` now resolves the config,
+//! seeds and checks the document, and calls `electricity_vm::
+//! execute_root`), but the comparison tests below are still `#[ignore =
+//! "needs lanes B-C"]`: `execute_root` itself (lane B) and the `json`
+//! tool (lane C) are both still stubs that always error, so every case
+//! would fail the exact same way regardless of its own content -- not
+//! useful signal until both land. `electricity/crates/electricity/tests/
+//! run_wiring.rs` exercises lane D's own run wiring directly in the
+//! meantime (everything up to and including the `execute_root` call).
 
 mod support;
 
@@ -98,7 +103,7 @@ fn the_tree_case_has_a_dispatch_event_with_two_branches() {
 }
 
 #[test]
-#[ignore = "needs lanes B-D"]
+#[ignore = "needs lanes B-C"]
 fn electricity_run_orchestration_matches_the_corpus_state() {
     // Lane B-D's own comparison: run each case's document through
     // `electricity::run_orchestration` (once it actually has a VM) and
@@ -109,7 +114,7 @@ fn electricity_run_orchestration_matches_the_corpus_state() {
 }
 
 #[test]
-#[ignore = "needs lanes B-D"]
+#[ignore = "needs lanes B-C"]
 fn electricity_events_match_the_corpus_events() {
     // Lane D's own comparison: `--events` from `electricity::
     // run_orchestration`, normalized the same way, matched against
@@ -121,7 +126,7 @@ fn electricity_events_match_the_corpus_events() {
 }
 
 #[test]
-#[ignore = "needs lanes B-D"]
+#[ignore = "needs lanes B-C"]
 fn electricity_live_state_matches_the_out_state() {
     // Lane D's own comparison: the final `--live-state` write must be
     // byte-identical to `--out` (issue #431's acceptance criteria).

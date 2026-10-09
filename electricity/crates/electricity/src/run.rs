@@ -82,6 +82,16 @@ impl Signal {
             Signal::Sighup => "Interrupted (SIGHUP)",
         }
     }
+
+    /// `--events`'s own `run_end.signal` string (`cli/events.py`'s own
+    /// `"SIGTERM"`/`"SIGHUP"`/`"SIGINT"`).
+    pub fn events_name(self) -> &'static str {
+        match self {
+            Signal::Sigint => "SIGINT",
+            Signal::Sigterm => "SIGTERM",
+            Signal::Sighup => "SIGHUP",
+        }
+    }
 }
 
 #[cfg(test)]

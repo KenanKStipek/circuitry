@@ -1,23 +1,26 @@
-//! Preview skeleton of the electricity library crate.
-//!
-//! This release ships no VM, tool, or adapter implementation (see
-//! `../../DESIGN.md`; `../../docs/spec/vm-lanes.md` has the full M0-H
-//! lane ownership map for this crate and its sibling VM-lane crates).
-//! [`run`] reserves [`RunRequest`]/[`RunResult`], the shapes lane D's
-//! own `run_orchestration` (issue #431) will take and return once it
-//! replaces the function below of the same name. [`run_orchestration`] runs
-//! `electricity_compiler::check_for_run` first (issue #408's CLI
-//! section) and only ever reports one of two outcomes --
-//! [`RunOutcome::CheckFailed`] on a check failure, or
-//! [`RunOutcome::PreviewRefusal`] once a document actually checks out,
-//! since there is still no VM to run it with. [`dump_ir`] is a
-//! separate, unstable debugging aid that runs the same check and
-//! prints the result as JSON.
+//! The electricity library crate: [`run_orchestration`] (issue #431's
+//! run-wiring steps 1-19) is the real VM run `electricity-cli`'s own
+//! `Run` action drives -- resolve the config, seed and check the
+//! document, refuse unsupported content, then execute
+//! ([`electricity_vm::execute_root`], lanes B/C) with `--events`/
+//! `--live-state` observing it. `--out`/stdout ([`out`]), `--events`
+//! ([`events`]) and `--live-state` ([`live_state`]) are this crate's own
+//! writers; [`state`] seeds a fresh run's store. `../../DESIGN.md` and
+//! `../../docs/spec/vm-lanes.md` have the full M0-H lane ownership map
+//! for this crate and its sibling VM-lane crates. [`dump_ir`] is a
+//! separate, unstable debugging aid that runs the document check alone
+//! and prints the result as JSON -- it never runs anything, so it has
+//! no refusal of its own either.
 
-use std::fmt;
 use std::path::Path;
 
+pub mod events;
+pub mod live_state;
+pub mod out;
 pub mod run;
+pub mod state;
+
+pub use electricity_vm::CancellationToken;
 pub use run::{RunRequest, RunResult, Signal};
 
 /// The crate's version, taken from the workspace's `Cargo.toml`.
@@ -27,21 +30,6 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn version_string() -> String {
     format!("electricity {VERSION} (preview)")
 }
-
-/// Returned by every attempt to run an orchestration in this preview release.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PreviewUnsupported;
-
-impl fmt::Display for PreviewUnsupported {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "electricity {VERSION} is a preview and cannot run orchestrations yet; use `cof run` instead"
-        )
-    }
-}
-
-impl std::error::Error for PreviewUnsupported {}
 
 /// Parses the CLI's `-e key=value` entries, in order, into
 /// [`electricity_compiler::CheckOptions`]'s own `inputs` shape --
@@ -104,48 +92,6 @@ pub fn check_options(
     }
 }
 
-/// Runs *orchestration_path* the way `electricity <config.json> <doc> ...`
-/// does (issue #408's CLI section): [`electricity_compiler::check_for_run`]
-/// first, against [`check_options`]'s own options -- then, on success,
-/// still this preview's one refusal, since there is no VM yet.
-///
-/// A [`RunOutcome::CheckFailed`] carries [`electricity_compiler::check_for_run`]'s
-/// own error text verbatim -- the exact text the CLI writes to stderr on a
-/// check failure (issue #408's CLI section: "On failure: exactly the error
-/// text on stderr, exit 1"). [`RunOutcome::PreviewRefusal`] is the
-/// unconditional "On success: keep the current preview refusal" branch.
-pub fn run_orchestration(
-    config_path: &Path,
-    orchestration_path: &Path,
-    inputs: &indexmap::IndexMap<String, String>,
-) -> RunOutcome {
-    let options = check_options(config_path, inputs);
-    match electricity_compiler::check_for_run(orchestration_path, &options) {
-        Ok(_) => RunOutcome::PreviewRefusal(PreviewUnsupported),
-        Err(err) => RunOutcome::CheckFailed(err.to_string()),
-    }
-}
-
-/// Why [`run_orchestration`] didn't run the orchestration -- either
-/// outcome is a CLI failure (exit 1) in this preview release; the two
-/// variants exist only so the CLI can tell which text to print.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RunOutcome {
-    /// [`electricity_compiler::check_for_run`]'s own error text.
-    CheckFailed(String),
-    /// The check passed; this preview still has no VM to run it with.
-    PreviewRefusal(PreviewUnsupported),
-}
-
-impl fmt::Display for RunOutcome {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RunOutcome::CheckFailed(message) => write!(f, "{message}"),
-            RunOutcome::PreviewRefusal(preview) => write!(f, "{preview}"),
-        }
-    }
-}
-
 /// *config_path*'s own `runtime:` block, or `None` when the file doesn't
 /// exist, isn't valid UTF-8 JSON, or has no such key -- lenient on
 /// purpose (issue #408's lane B section only asks for "what the
@@ -177,9 +123,9 @@ fn config_runtime_block(config_path: &Path) -> Option<electricity_value::Value> 
 /// the same document would report).
 ///
 /// *inputs* ([`parse_inputs`]'s own output, issue #429) is passed
-/// through as `CheckOptions.inputs`, same as [`run_orchestration`] --
-/// so a document with a required input needs `-e` on `--dump-ir` too,
-/// exactly as it does on a plain run.
+/// through as `CheckOptions.inputs`, same as [`run_orchestration`]'s own
+/// document check -- so a document with a required input needs `-e` on
+/// `--dump-ir` too, exactly as it does on a plain run.
 pub fn dump_ir(
     config_path: &Path,
     orchestration_path: &Path,
@@ -203,6 +149,781 @@ pub fn dump_ir(
     serde_json::to_string_pretty(&serde_json::Value::Object(wrapper)).map_err(|err| err.to_string())
 }
 
+// ---------------------------------------------------------------------
+// run_orchestration -- issue #431's run-wiring steps 1-19
+// ---------------------------------------------------------------------
+
+use electricity_bytecode::{EffectPath, Refusal, RefusalReason, first_unsupported};
+use electricity_config::CircuitryConfig;
+use electricity_value::{Dict, Value};
+use electricity_vm::{Limiter, RunContext, RunObserver, Store};
+use std::cell::Cell;
+use std::time::Instant;
+
+/// Tool providers the M0-H VM accepts beyond `json` -- only ever the
+/// `test-tools` cargo feature's own `sleep`/`fail`, and only when that
+/// feature is actually compiled in (`electricity_bytecode::refusal::
+/// first_unsupported`'s own *extra_allowed_providers* seam, issue
+/// #431's gate lane). Empty, and so a strict no-op, in every ordinary
+/// build -- `electricity-cli`'s own `Cargo.toml` never enables this
+/// feature (that crate's own doc comment).
+#[cfg(feature = "test-tools")]
+fn extra_allowed_providers() -> &'static [&'static str] {
+    &["sleep", "fail"]
+}
+
+#[cfg(not(feature = "test-tools"))]
+fn extra_allowed_providers() -> &'static [&'static str] {
+    &[]
+}
+
+/// A fresh tool registry: `json` (M0-H's only real provider), plus
+/// `sleep`/`fail` when the `test-tools` feature is enabled -- the one
+/// place both are ever registered, so [`extra_allowed_providers`] (the
+/// refusal walker's own allow-list) never drifts from what the registry
+/// actually dispatches.
+fn tool_registry() -> electricity_tools::ToolRegistry {
+    let mut registry = electricity_tools::ToolRegistry::new();
+    registry.register(Box::new(electricity_tools::json::JsonTool));
+    #[cfg(feature = "test-tools")]
+    {
+        registry.register(Box::new(electricity_tools::test_tools::SleepTool));
+        registry.register(Box::new(electricity_tools::test_tools::FailTool));
+    }
+    registry
+}
+
+/// `electricity_bytecode::RefusalReason` -> the human-readable half of
+/// the refusal message [`format_refusal`] builds (issue #431's gate
+/// lane: "the refusal message keeps the existing preview marker phrase
+/// and adds the effect path and the reason").
+fn refusal_reason_text(reason: &RefusalReason) -> String {
+    match reason {
+        RefusalReason::Prompt => "a prompt effect".to_string(),
+        RefusalReason::Loop => "a loop effect".to_string(),
+        RefusalReason::Use => "a use effect".to_string(),
+        RefusalReason::Reflector => "a reflector effect".to_string(),
+        RefusalReason::Yield => "a yield effect".to_string(),
+        RefusalReason::ModelCondition => "an if/while condition in mode: model".to_string(),
+        RefusalReason::ModelExpect => "an expect: in mode: model".to_string(),
+        RefusalReason::DeclaredPrompts => "a document that declares prompts:".to_string(),
+        RefusalReason::UnsupportedToolProvider(provider) => {
+            format!("a tool effect with provider {provider:?}")
+        }
+        RefusalReason::PartialReference => "an unexpanded {{> name}} partial reference".to_string(),
+    }
+}
+
+/// The exact text a refusal reports: the preview marker phrase (kept so
+/// the conformance runner's "refusal keeps the preview marker" skip
+/// rule keeps working), the effect path, and the reason.
+fn format_refusal(refusal: &Refusal) -> String {
+    format!(
+        "electricity {VERSION} is a preview and cannot run orchestrations yet: {} is {}; use `cof run` instead",
+        refusal.path,
+        refusal_reason_text(&refusal.reason)
+    )
+}
+
+/// *runtime*'s own `max_concurrency`/`concurrency_groups`, already
+/// validated (the caller only ever reaches this after `electricity_
+/// compiler::pre_state_checks` -- which runs the same parse internally
+/// for its own config-error check -- has returned `Ok`) -- parsed again
+/// here, directly, since that validation is `electricity-compiler`'s
+/// own private helper, not a public seam this crate can call to get the
+/// numbers back out. `electricity_vm::Limiter::with_limits` takes it
+/// from here.
+fn concurrency_limits(runtime: Option<&Value>) -> (Option<usize>, Vec<(String, usize)>) {
+    let dict = runtime.and_then(Value::as_dict);
+    let max_concurrency = dict
+        .and_then(|d| d.get(&Value::Str("max_concurrency".to_string())))
+        .and_then(Value::as_int)
+        .map(|n| n.to_f64().max(0.0) as usize);
+    let groups = dict
+        .and_then(|d| d.get(&Value::Str("concurrency_groups".to_string())))
+        .and_then(Value::as_dict)
+        .map(|groups| {
+            groups
+                .iter()
+                .filter_map(|(name, limit)| {
+                    let name = name.as_str()?.to_string();
+                    let limit = limit.as_int()?.to_f64().max(0.0) as usize;
+                    Some((name, limit))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    (max_concurrency, groups)
+}
+
+/// *path*'s own directory, resolved (symlinks followed) the same way
+/// Python's `orchestration_path.resolve().parent` is -- falling back to
+/// the unresolved, merely-absolute form on an `io::Error` (a path that
+/// no longer exists between the earlier load and here), since this
+/// string only ever lands in `runtime.effective_settings.runtime.
+/// _orchestration_dir` metadata, never anything this crate's own checks
+/// rely on.
+fn orchestration_dir_string(path: &std::path::Path) -> String {
+    let resolved = path
+        .canonicalize()
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join(path));
+    resolved.parent().unwrap_or(&resolved).display().to_string()
+}
+
+/// *effective_runtime* (already deep-merged config+document), with the
+/// three private keys `cli/runtime_shim.py::run` installs into its own
+/// `runtime_config` bag before any tool dispatches -- `_orchestration_
+/// dir`, `_allowlists`, `_capability_allow` (issue #431's run-wiring
+/// step 8; `electricity-config`'s own `vm-lanes.md` row names this as
+/// this lane's first caller). The same `Value` this function returns is
+/// both [`RunContext::runtime_config`] (what a tool dispatch actually
+/// reads) and, after [`electricity_redaction::redact`], `state.runtime.
+/// effective_settings.runtime` (confirmed byte-for-byte against the
+/// golden run corpus's own `json_parse_failure` case) -- one value, not
+/// two that could drift apart.
+fn build_runtime_config(
+    effective_runtime: Option<&Value>,
+    cfg: &CircuitryConfig,
+    orchestration_dir: &str,
+) -> Value {
+    let mut dict = effective_runtime
+        .and_then(Value::as_dict)
+        .cloned()
+        .unwrap_or_default();
+    dict.insert(
+        Value::Str("_orchestration_dir".to_string()),
+        Value::Str(orchestration_dir.to_string()),
+    );
+    let allowlists = electricity_config::allowlists(cfg);
+    let mut allowlists_dict = Dict::new();
+    allowlists_dict.insert(
+        Value::Str("adapters".to_string()),
+        match allowlists.adapters {
+            Some(names) => Value::List(names.into_iter().map(Value::Str).collect()),
+            None => Value::None,
+        },
+    );
+    allowlists_dict.insert(
+        Value::Str("tools".to_string()),
+        match allowlists.tools {
+            Some(names) => Value::List(names.into_iter().map(Value::Str).collect()),
+            None => Value::None,
+        },
+    );
+    dict.insert(
+        Value::Str("_allowlists".to_string()),
+        Value::Dict(allowlists_dict),
+    );
+    dict.insert(
+        Value::Str("_capability_allow".to_string()),
+        Value::List(
+            electricity_config::capability_allow()
+                .into_iter()
+                .map(Value::Str)
+                .collect(),
+        ),
+    );
+    Value::Dict(dict)
+}
+
+/// `runtime.plugins` metadata (issue #431's run-wiring step 13):
+/// `contract_version`/`configured` are real (the merged plugin-name
+/// list `electricity_config::effective_settings` already resolved);
+/// `loaded`/`events` are always empty -- M0-H has no plugin loader of
+/// its own (`electricity-config`'s own crate docs: a document that
+/// configures runtime plugins is refused with the preview marker, after
+/// this validation, so nothing here is ever actually instantiated).
+fn plugins_meta_value(configured: &[Value]) -> Value {
+    let mut dict = Dict::new();
+    dict.insert(
+        Value::Str("contract_version".to_string()),
+        Value::Str("1".to_string()),
+    );
+    dict.insert(
+        Value::Str("configured".to_string()),
+        Value::List(configured.to_vec()),
+    );
+    dict.insert(Value::Str("loaded".to_string()), Value::List(Vec::new()));
+    dict.insert(Value::Str("events".to_string()), Value::List(Vec::new()));
+    Value::Dict(dict)
+}
+
+/// Wall-clock UTC, second precision, no offset suffix --
+/// `cli/runtime_shim.py::_now_iso`'s own `datetime.now(timezone.utc)
+/// .isoformat()`-shaped timestamp (`started_at`/`completed_at`).
+fn now_iso() -> String {
+    chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S%.6f+00:00")
+        .to_string()
+}
+
+/// `state.runtime.last_run.totals` (issue #431's run-wiring step 17/18):
+/// `effects_run` counts every completed node, root and containers
+/// included (`RunObserver::effect_complete`'s own call count) --
+/// `tokens_sent`/`tokens_received`/`cost_usd` stay at Circuitry's own
+/// zero/zero/`null` defaults through M0-H, since no prompt effect (the
+/// only thing that ever sets them) exists yet to report anything else.
+struct Totals {
+    effects_run: Cell<u64>,
+}
+
+impl Totals {
+    fn new() -> Self {
+        Totals {
+            effects_run: Cell::new(0),
+        }
+    }
+
+    fn observe_complete(&self) {
+        self.effects_run.set(self.effects_run.get() + 1);
+    }
+
+    fn value(&self, wall_time_s: f64) -> Value {
+        let mut dict = Dict::new();
+        dict.insert(
+            Value::Str("wall_time_s".to_string()),
+            Value::from(wall_time_s),
+        );
+        dict.insert(
+            Value::Str("effects_run".to_string()),
+            Value::from(self.effects_run.get() as i64),
+        );
+        dict.insert(Value::Str("tokens_sent".to_string()), Value::from(0i64));
+        dict.insert(Value::Str("tokens_received".to_string()), Value::from(0i64));
+        dict.insert(Value::Str("cost_usd".to_string()), Value::None);
+        Value::Dict(dict)
+    }
+}
+
+/// Fans every [`RunObserver`] hook out to `--events`/`--live-state`
+/// (issue #431's run-wiring step 16) and [`Totals`] -- the one place
+/// `execute_root`'s three observer hooks (`effect_start`/
+/// `effect_complete`/`dispatch`) and its `write` hook (DESIGN.md's own
+/// "coalesced by the caller" rule) are composed, since `RunObserver`
+/// itself has no `&mut self` of its own to fan out with (every method
+/// takes `&self`; this struct's own interior state -- [`Totals`],
+/// `EventLog`, `LiveStateMirror` -- is each already `Cell`/`RefCell`-
+/// based for exactly that reason).
+struct Observer<'a> {
+    store: &'a Store,
+    totals: &'a Totals,
+    events: Option<&'a events::EventLog>,
+    live_state: Option<&'a live_state::LiveStateMirror>,
+}
+
+impl RunObserver for Observer<'_> {
+    fn effect_start(&self, path: &EffectPath) {
+        if let Some(log) = self.events {
+            log.on_start(&path.to_string());
+        }
+    }
+
+    fn effect_complete(&self, path: &EffectPath, error: Option<&str>) {
+        self.totals.observe_complete();
+        if let Some(log) = self.events {
+            log.on_complete(&path.to_string(), error);
+        }
+    }
+
+    fn dispatch(&self, path: &EffectPath, branches: usize, concurrency: usize) {
+        if let Some(log) = self.events {
+            log.on_dispatch(&path.to_string(), branches, concurrency);
+        }
+    }
+
+    fn write(&self) {
+        if let Some(mirror) = self.live_state {
+            mirror.write_coalesced(|| self.store.saved(&self.store.root));
+        }
+    }
+}
+
+/// `state.setdefault("runtime", {}).setdefault("last_run", {})`, then
+/// `["completed_at"] = ...; ["totals"] = ...` -- issue #431's run-wiring
+/// steps 17/18, applied uniformly whether `runtime.last_run` already
+/// carries the full shape step 12 wrote (a failure after that point:
+/// only `completed_at`/`totals` are overwritten, every other key kept)
+/// or doesn't exist at all yet (a failure before it: a sparse `{
+/// completed_at, totals }` is all this ever produces, matching Python's
+/// own `setdefault`-only behaviour exactly -- `run_id`/`orchestration_
+/// path`/... are never backfilled for a failure that happened before
+/// they were ever assigned).
+fn finalize_last_run(store: &Store, totals: &Totals, wall_time_s: f64) {
+    let runtime = store
+        .ensure_dict(&store.root, Value::Str("runtime".to_string()))
+        .expect("Store::ensure_dict never fails");
+    let last_run = store
+        .ensure_dict(&runtime, Value::Str("last_run".to_string()))
+        .expect("Store::ensure_dict never fails");
+    store.set_leaf(
+        &last_run,
+        Value::Str("completed_at".to_string()),
+        Value::Str(now_iso()),
+    );
+    store.set_leaf(
+        &last_run,
+        Value::Str("totals".to_string()),
+        totals.value(wall_time_s),
+    );
+}
+
+/// `state.setdefault("runtime", {}).setdefault("plugins", {})`, then
+/// default `configured`/`loaded`/`events` to `[]` unless each is
+/// already a list -- issue #431's run-wiring step 18's own plugins-meta
+/// setdefault, applied the same way regardless of how early the failure
+/// happened (see [`finalize_last_run`]'s own doc comment).
+fn finalize_plugins_meta(store: &Store) {
+    let runtime = store
+        .ensure_dict(&store.root, Value::Str("runtime".to_string()))
+        .expect("Store::ensure_dict never fails");
+    let plugins = store
+        .ensure_dict(&runtime, Value::Str("plugins".to_string()))
+        .expect("Store::ensure_dict never fails");
+    for key in ["configured", "loaded", "events"] {
+        let already_list = matches!(
+            plugins.borrow().get(&Value::Str(key.to_string())),
+            Some(electricity_vm::store::Slot::Value(Value::List(_)))
+        );
+        if !already_list {
+            store.set_leaf(
+                &plugins,
+                Value::Str(key.to_string()),
+                Value::List(Vec::new()),
+            );
+        }
+    }
+}
+
+/// The signal `token` was first cancelled with, if any -- POSIX's own
+/// stable `SIGHUP`/`SIGINT`/`SIGTERM` numbers (1/2/15, identical on
+/// Linux and macOS), matching the raw signum `electricity-cli`'s own
+/// signal-handling task calls [`CancellationToken::request`] with.
+fn signal_from_token(token: &CancellationToken) -> Option<Signal> {
+    match token.signum() {
+        Some(2) => Some(Signal::Sigint),
+        Some(15) => Some(Signal::Sigterm),
+        Some(1) => Some(Signal::Sighup),
+        _ => None,
+    }
+}
+
+/// Runs *req* the way `electricity <config.json> <doc> ...` does (issue
+/// #431's run-wiring table, steps 1-19) -- resolving the config,
+/// seeding and checking the document, refusing unsupported content,
+/// then executing it ([`electricity_vm::execute_root`]) with
+/// `--events`/`--live-state` observing it, every error path producing
+/// the same [`RunResult`] shape a success does. *token* is armed for
+/// the duration of this call only -- `electricity-cli`'s own job (issue
+/// #431's Signals section), not this function's.
+///
+/// `RunResult::state` is `None` for exactly two outcomes, both before
+/// any effect could possibly have run: a config error (step 1, this
+/// function's very first fallible step) and a refusal of unsupported
+/// content (wired in right after every check error and before any file
+/// is written, issue #408's gate lane) -- the refusal is the one place
+/// after state-seeding that deliberately *discards* whatever this
+/// function already wrote to *store* rather than reporting it, so a
+/// refused run leaves no `--out`/`--events`/`--live-state` trace at all.
+pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> RunResult {
+    let run_t0 = Instant::now();
+    let mut warnings: Vec<String> = Vec::new();
+
+    // Step 1: config -- a config error exits 1 with Circuitry's own
+    // text and writes no --out (no state exists yet to write).
+    let env_vars: std::collections::HashMap<String, String> = std::env::vars().collect();
+    let cfg = match electricity_config::resolve_config(&req.config_path, &env_vars) {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            return RunResult {
+                ok: false,
+                state: None,
+                error: Some(err.0),
+                warnings,
+                signal: None,
+            };
+        }
+    };
+
+    // Step 4: seed state (`input` namespace) -- every failure from here
+    // on reports *some* state, even if sparse.
+    let store = Store::new();
+    state::seed_state(&store);
+
+    macro_rules! fail {
+        ($message:expr) => {{
+            let totals = Totals::new();
+            finalize_last_run(&store, &totals, run_t0.elapsed().as_secs_f64());
+            finalize_plugins_meta(&store);
+            let signal = signal_from_token(token);
+            let error = signal
+                .map(|s| s.interrupt_text().to_string())
+                .unwrap_or($message);
+            return RunResult {
+                ok: false,
+                state: Some(store.saved(&store.root)),
+                error: Some(error),
+                warnings,
+                signal,
+            };
+        }};
+    }
+
+    // Step 5: load the document -- a load error still writes --out.
+    let check_options = electricity_compiler::CheckOptions {
+        skip_preflight: true,
+        trust_document: true,
+        config_runtime: cfg.runtime.clone(),
+        inputs: req.inputs.clone(),
+    };
+    let loaded =
+        match electricity_compiler::prepare_document(&req.orchestration_path, &check_options) {
+            Ok(loaded) => loaded,
+            Err(err) => fail!(err.to_string()),
+        };
+
+    // `electricity-config`'s own first caller (vm-lanes.md's own row for
+    // this module): between resolve_config and effective_settings, the
+    // same position `runtime_shim.run` checks it in.
+    let allow_errors = electricity_config::check_allowlist(&loaded.document, &cfg);
+    if !allow_errors.is_empty() {
+        fail!(format!(
+            "Allowlist enforcement failed: {}",
+            allow_errors.join("; ")
+        ));
+    }
+
+    // Step 6 (part 1): effective settings -- model/adapter/plugins/
+    // runtime merge and `sources`, *document_name* naming the "Applied
+    // host settings" notice exactly as `resolve_effective_settings`'s
+    // own parameter of the same name does.
+    let document_name = req.orchestration_path.file_name().and_then(|n| n.to_str());
+    let mut effective =
+        match electricity_config::effective_settings(&cfg, &loaded.document, document_name) {
+            Ok(effective) => effective,
+            Err(err) => fail!(err.0),
+        };
+    warnings.extend(effective.warnings.clone());
+
+    // Step 6 (part 2)/7/9/10: complexity validation (before the
+    // limiter), the concurrency-config-error check, persistence
+    // validation (after the limiter), then check_interface_inputs --
+    // `pre_state_checks` is this exact composition (its own doc
+    // comment), returning the coerced/defaulted `input` namespace this
+    // function still has to write into *store* itself.
+    let input_namespace = match electricity_compiler::pre_state_checks(
+        &loaded,
+        &check_options,
+        effective.runtime.as_ref(),
+    ) {
+        Ok(namespace) => namespace,
+        Err(err) => fail!(err.to_string()),
+    };
+    let input_node = store
+        .ensure_dict(&store.root, Value::Str("input".to_string()))
+        .expect("Store::ensure_dict never fails");
+    for (key, value) in input_namespace {
+        store.set_leaf(&input_node, key, value);
+    }
+
+    // Step 5 (limiter build): already-validated counts straight into
+    // `Limiter::with_limits` (concurrency_limits' own doc comment).
+    let (max_concurrency, groups) = concurrency_limits(effective.runtime.as_ref());
+    let limiter = Limiter::with_limits(max_concurrency, groups);
+
+    // Step 8: runtime_config -- the merged runtime block plus the three
+    // private keys a tool dispatch and this run's own metadata both
+    // read off the identical value.
+    let orchestration_dir = orchestration_dir_string(&req.orchestration_path);
+    let runtime_config_value =
+        build_runtime_config(effective.runtime.as_ref(), &cfg, &orchestration_dir);
+
+    // Step 12 (part 1): `state.setdefault("runtime", {})` -- Python's
+    // own order has this *before* `_run_id`/`_timestamp` are assigned
+    // (`cli/runtime_shim.py::run`, ~:651-660), so the top-level key
+    // order this run's own state ends up in is `input, runtime,
+    // _run_id, _timestamp, prime` (confirmed against the golden run
+    // corpus's own `json_parse_failure` case).
+    let runtime_node = store
+        .ensure_dict(&store.root, Value::Str("runtime".to_string()))
+        .expect("Store::ensure_dict never fails");
+
+    // Step 11: run_id/timestamp.
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
+    let started_at = now_iso();
+    store.set_leaf(
+        &store.root,
+        Value::Str("_run_id".to_string()),
+        Value::Str(run_id.clone()),
+    );
+    store.set_leaf(
+        &store.root,
+        Value::Str("_timestamp".to_string()),
+        Value::Str(timestamp),
+    );
+
+    // Step 12 (part 2): runtime.last_run -- document_hash comes from
+    // `post_state_checks`'s own digest attachment below (it needs a
+    // compiled Program first); written once that's available.
+
+    // Step 14: structural checks, compile, groups, cycles, digest --
+    // `post_state_checks`'s own composition (errors formatted exactly
+    // as `check_for_run` already does).
+    let program = match electricity_compiler::post_state_checks(&loaded, effective.runtime.as_ref())
+    {
+        Ok(program) => program,
+        Err(err) => {
+            // `runtime.last_run`/`effective_settings`/`plugins` were
+            // never written for this path (a structural/compile/group/
+            // cycle error happens before step 12 in `run()`'s own order
+            // too) -- `fail!` still backfills a sparse `last_run`/
+            // `plugins` the same way every other early failure does.
+            fail!(err.to_string());
+        }
+    };
+    let document_hash = program.document.as_ref().and_then(|doc| doc.digest.clone());
+
+    let last_run_node = store
+        .ensure_dict(&runtime_node, Value::Str("last_run".to_string()))
+        .expect("Store::ensure_dict never fails");
+    store.set_leaf(
+        &last_run_node,
+        Value::Str("run_id".to_string()),
+        Value::Str(run_id.clone()),
+    );
+    store.set_leaf(
+        &last_run_node,
+        Value::Str("orchestration_path".to_string()),
+        Value::Str(req.orchestration_path.display().to_string()),
+    );
+    store.set_leaf(
+        &last_run_node,
+        Value::Str("document_hash".to_string()),
+        document_hash.map(Value::Str).unwrap_or(Value::None),
+    );
+    store.set_leaf(
+        &last_run_node,
+        Value::Str("dry_run".to_string()),
+        Value::Bool(false),
+    );
+    store.set_leaf(
+        &last_run_node,
+        Value::Str("validate_only".to_string()),
+        Value::Bool(false),
+    );
+    store.set_leaf(
+        &last_run_node,
+        Value::Str("verbose".to_string()),
+        Value::Bool(false),
+    );
+    store.set_leaf(
+        &last_run_node,
+        Value::Str("started_at".to_string()),
+        Value::Str(started_at),
+    );
+    store.set_leaf(
+        &last_run_node,
+        Value::Str("completed_at".to_string()),
+        Value::None,
+    );
+
+    // Step 13: runtime.effective_settings (redacted, limiter dropped --
+    // there never was one in this Value to begin with, unlike Python's
+    // own dict; `sources["out"]` is "cli" exactly when --out was given,
+    // the one override this crate makes to `effective_settings`'s own
+    // always-"default" entry), runtime.plugins.
+    if req.out_path.is_some() {
+        effective
+            .sources
+            .insert("out".to_string(), "cli".to_string());
+    }
+    let redacted_runtime = electricity_redaction::redact(runtime_config_value.clone());
+    let mut effective_settings_dict = Dict::new();
+    effective_settings_dict.insert(
+        Value::Str("model".to_string()),
+        effective
+            .model
+            .clone()
+            .map(Value::Str)
+            .unwrap_or(Value::None),
+    );
+    effective_settings_dict.insert(
+        Value::Str("adapter".to_string()),
+        effective
+            .adapter
+            .clone()
+            .map(Value::Str)
+            .unwrap_or(Value::None),
+    );
+    effective_settings_dict.insert(
+        Value::Str("out".to_string()),
+        req.out_path
+            .as_ref()
+            .map(|p| Value::Str(p.display().to_string()))
+            .unwrap_or(Value::None),
+    );
+    effective_settings_dict.insert(
+        Value::Str("plugins".to_string()),
+        Value::List(effective.plugins.clone()),
+    );
+    effective_settings_dict.insert(Value::Str("runtime".to_string()), redacted_runtime);
+    effective_settings_dict.insert(
+        Value::Str("sources".to_string()),
+        Value::Dict(
+            effective
+                .sources
+                .iter()
+                .map(|(k, v)| (Value::Str(k.clone()), Value::Str(v.clone())))
+                .collect(),
+        ),
+    );
+    store.set_leaf(
+        &runtime_node,
+        Value::Str("effective_settings".to_string()),
+        Value::Dict(effective_settings_dict),
+    );
+    store.set_leaf(
+        &runtime_node,
+        Value::Str("plugins".to_string()),
+        plugins_meta_value(&effective.plugins),
+    );
+
+    // Lane A's own refusal walker (issue #408's gate lane), wired in
+    // after every check error above and before any file is written --
+    // no state is written for a refusal at all (this function's own
+    // doc comment).
+    if let Some(refusal) = first_unsupported(&program, extra_allowed_providers()) {
+        return RunResult {
+            ok: false,
+            state: None,
+            error: Some(format_refusal(&refusal)),
+            warnings,
+            signal: None,
+        };
+    }
+
+    // Step 16: the live-state mirror (first write synchronous and
+    // fatal), then EventLog + run_start.
+    let live_mirror = match &req.live_state_path {
+        Some(path) => {
+            let mirror = live_state::LiveStateMirror::new(path.clone());
+            if let Err(err) = mirror.write_initial(&store.saved(&store.root)) {
+                fail!(format!(
+                    "Could not write --live-state {}: {err}",
+                    path.display()
+                ));
+            }
+            Some(mirror)
+        }
+        None => None,
+    };
+    let event_log = req.events_path.as_ref().map(|path| {
+        let log = events::EventLog::open(path);
+        log.run_start(
+            &run_id,
+            req.orchestration_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(""),
+        );
+        log
+    });
+
+    let totals = Totals::new();
+    let observer = Observer {
+        store: &store,
+        totals: &totals,
+        events: event_log.as_ref(),
+        live_state: live_mirror.as_ref(),
+    };
+
+    let model = effective.model.clone().unwrap_or_default();
+    let registry = tool_registry();
+    let run_ctx = RunContext {
+        registry: &registry,
+        limiter: &limiter,
+        model: &model,
+        // Step 15: no prompt effects exist in M0-H, so this is always
+        // the no-op adapter sentinel -- `effective.adapter` (the real
+        // resolved name) is still what `runtime.effective_settings.
+        // adapter` reports, a separate, metadata-only field above.
+        adapter: "_noop",
+        runtime_config: &runtime_config_value,
+        dry_run: false,
+    };
+
+    // Step 17/18: execute the root, then the success or failure tail.
+    let exec_result = electricity_vm::execute_root(
+        &program,
+        &store,
+        &store.snapshot(&store.root),
+        &run_ctx,
+        &observer,
+        token,
+    )
+    .await;
+
+    let wall_time_s = run_t0.elapsed().as_secs_f64();
+    let (ok, error) = match exec_result {
+        Ok(()) => {
+            let last_run_node = store
+                .ensure_dict(&runtime_node, Value::Str("last_run".to_string()))
+                .expect("Store::ensure_dict never fails");
+            store.set_leaf(
+                &last_run_node,
+                Value::Str("completed_at".to_string()),
+                Value::Str(now_iso()),
+            );
+            store.set_leaf(
+                &last_run_node,
+                Value::Str("totals".to_string()),
+                totals.value(wall_time_s),
+            );
+            (true, None)
+        }
+        Err(err) => {
+            finalize_last_run(&store, &totals, wall_time_s);
+            finalize_plugins_meta(&store);
+            let signal = signal_from_token(token);
+            let message = signal
+                .map(|s| s.interrupt_text().to_string())
+                .unwrap_or_else(|| err.to_string());
+            (false, Some(message))
+        }
+    };
+    let signal = if ok { None } else { signal_from_token(token) };
+
+    // Step 19: live-state final write, then run_end (with signal),
+    // then close -- a failed write to either folds into one warning,
+    // never changing the run's own result.
+    let final_state = store.saved(&store.root);
+    if let Some(mirror) = &live_mirror {
+        if mirror.close(&final_state) {
+            warnings.push(format!(
+                "Could not keep --live-state {} in sync with the run; see the log for details.",
+                req.live_state_path.as_ref().unwrap().display()
+            ));
+        }
+    }
+    if let Some(log) = &event_log {
+        log.run_end(ok, error.as_deref(), signal.map(Signal::events_name));
+        if log.close() {
+            warnings.push(format!(
+                "Could not keep --events {} in sync with the run; see the log for details.",
+                req.events_path.as_ref().unwrap().display()
+            ));
+        }
+    }
+
+    RunResult {
+        ok,
+        state: Some(final_state),
+        error,
+        warnings,
+        signal,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,94 +934,6 @@ mod tests {
         assert!(s.starts_with("electricity "));
         assert!(s.ends_with("(preview)"));
         assert!(s.contains(VERSION));
-    }
-
-    #[test]
-    fn run_orchestration_refuses_a_document_that_checks_out() {
-        let dir = std::env::temp_dir().join(format!(
-            "electricity-run-orchestration-test-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let config = dir.join("config.json");
-        let doc = dir.join("doc.yml");
-        std::fs::write(&config, "{}").unwrap();
-        std::fs::write(&doc, "effects: []\n").unwrap();
-
-        let outcome = run_orchestration(&config, &doc, &indexmap::IndexMap::new());
-        let message = outcome.to_string();
-        // `effects: []` is structurally valid, has no `runtime:`
-        // configuration error, and compiles cleanly, so this preview's
-        // one unconditional refusal is the only outcome left.
-        assert!(
-            matches!(outcome, RunOutcome::PreviewRefusal(_)),
-            "{outcome:?}"
-        );
-        assert!(
-            message.contains("is a preview and cannot run orchestrations yet"),
-            "{message}"
-        );
-
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn run_orchestration_reports_a_check_failure_verbatim() {
-        let dir = std::env::temp_dir().join(format!(
-            "electricity-run-orchestration-test-fail-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let config = dir.join("config.json");
-        let doc = dir.join("doc.yml");
-        std::fs::write(&doc, "").unwrap();
-
-        let outcome = run_orchestration(&config, &doc, &indexmap::IndexMap::new());
-        let message = outcome.to_string();
-        // The "required property" text past the location is the Rust
-        // `jsonschema` crate's own (third-party) wording, not required
-        // to match Circuitry's Python `jsonschema` text word for word
-        // (DESIGN.md §1/§12) -- only the `"Orchestration validation
-        // failed:"` wrapper and the location are Circuitry's own.
-        assert!(message.starts_with("Orchestration validation failed:\n  - top level: "));
-        assert!(message.contains("required property"), "{message}");
-
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn run_orchestration_passes_e_inputs_to_check_for_run() {
-        let dir = std::env::temp_dir().join(format!(
-            "electricity-run-orchestration-test-inputs-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let config = dir.join("config.json");
-        let doc = dir.join("doc.yml");
-        std::fs::write(
-            &doc,
-            "interface:\n  inputs:\n    name:\n      type: string\n      required: true\neffects: []\n",
-        )
-        .unwrap();
-
-        let outcome = run_orchestration(&config, &doc, &indexmap::IndexMap::new());
-        assert!(matches!(outcome, RunOutcome::CheckFailed(_)), "{outcome:?}");
-        assert!(
-            outcome
-                .to_string()
-                .contains("missing required input 'name'"),
-            "{outcome}"
-        );
-
-        let mut inputs = indexmap::IndexMap::new();
-        inputs.insert("name".to_string(), "World".to_string());
-        let outcome = run_orchestration(&config, &doc, &inputs);
-        assert!(
-            matches!(outcome, RunOutcome::PreviewRefusal(_)),
-            "{outcome:?}"
-        );
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
