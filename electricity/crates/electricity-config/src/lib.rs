@@ -32,6 +32,7 @@
 //!   until lane D fills both in.
 
 use electricity_value::Value;
+use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
@@ -127,6 +128,18 @@ pub fn merge_runtime(
 /// config layer supplied each one -- `_record_complexity_sources`
 /// included).
 ///
+/// Lane D also still has to add: `out` (`--out`'s own effective path),
+/// `plugins` and `warnings` (`orchestration_host_setting_warnings`'s
+/// own list) to this struct; `enabled_tools`/`enabled_adapters`/
+/// `enabled_plugins` to [`CircuitryConfig`]; and the `check_allowlist`
+/// seam (`runtime_shim.py`'s own call, between `resolve_config` and
+/// this function) as either a new function here or a field this
+/// function's own caller fills in first -- none of that is lane A's own
+/// final shape to fix, since nothing outside this crate reads
+/// `EffectiveSettings`/`CircuitryConfig` yet, but it's not done either;
+/// tracked here, not invented a signature for, until lane D is the one
+/// actually writing the body that needs it.
+///
 /// Lane A stub: a bare, empty shape -- every field lane D's real
 /// `resolve_effective_settings` port fills in.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -136,20 +149,33 @@ pub struct EffectiveSettings {
     pub runtime: Option<Value>,
     /// `sources`: a dotted-settings-path -> provenance-label map
     /// (`"config"`/`"document"`/`"env"`/`"default"`, `cli/
-    /// effective_settings.py`'s own `sources` dict).
-    pub sources: HashMap<String, String>,
+    /// effective_settings.py`'s own `sources` dict) -- `IndexMap`, not
+    /// `HashMap`: `--out`'s own `runtime.effective_settings.sources`
+    /// writes this in insertion order (`json.dumps`'s own dict-order
+    /// rule), and a `HashMap` has no order of its own to preserve.
+    pub sources: IndexMap<String, String>,
 }
 
 /// `resolve_effective_settings(config, document)` -- merges
 /// [`CircuitryConfig`] and the document's own top-level settings the way
 /// `cli/effective_settings.py` does, recording each field's `sources`
-/// provenance.
+/// provenance. `Err` the same way Python's own `resolve_effective_
+/// settings` raises (a malformed `plugins:`/`runtime:` shape;
+/// `effective_settings_shape_error` in `electricity-compiler` already
+/// checks that *before* this function would ever be called, but this
+/// function's own signature has to be able to report it too, not only
+/// its caller) -- not infallible: an infallible stub here would have
+/// forced lane D to widen this signature out from under whatever lane B
+/// built against it in the meantime.
 ///
-/// Lane A stub: always the all-`None`, empty-`sources` default --
-/// nothing yet reads *config*/*document* at all.
-pub fn effective_settings(config: &CircuitryConfig, document: &Value) -> EffectiveSettings {
+/// Lane A stub: always `Ok` of the all-`None`, empty-`sources` default
+/// -- nothing yet reads *config*/*document* at all.
+pub fn effective_settings(
+    config: &CircuitryConfig,
+    document: &Value,
+) -> Result<EffectiveSettings, ConfigError> {
     let _ = (config, document);
-    EffectiveSettings::default()
+    Ok(EffectiveSettings::default())
 }
 
 /// Lane D's own hook (issue #431's run-wiring step 6): validates a
@@ -232,7 +258,8 @@ mod tests {
 
     #[test]
     fn effective_settings_is_a_lane_d_stub() {
-        let settings = effective_settings(&CircuitryConfig::default(), &Value::Dict(Dict::new()));
+        let settings =
+            effective_settings(&CircuitryConfig::default(), &Value::Dict(Dict::new())).unwrap();
         assert_eq!(settings, EffectiveSettings::default());
     }
 
