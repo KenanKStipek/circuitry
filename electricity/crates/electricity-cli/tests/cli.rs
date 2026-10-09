@@ -276,6 +276,53 @@ fn run_request_with_every_new_flag_still_reaches_the_preview_refusal() {
     assert!(!live_state.exists());
 }
 
+/// The same four flags, but written `--flag=value` instead of `--flag
+/// value` -- `cof`'s own Click parser accepts both forms for a value
+/// flag (orchestrator ruling on PR #432's review).
+#[test]
+fn run_request_with_every_new_flag_in_equals_form_still_reaches_the_preview_refusal() {
+    let (mut cmd, home) = command("run-new-flags-equals");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let out = home.path.join("out.json");
+    let events = home.path.join("events.jsonl");
+    let live_state = home.path.join("live.json");
+    let output = cmd
+        .args([
+            "config.json".to_string(),
+            doc.to_str().unwrap().to_string(),
+            format!("--out={}", out.to_str().unwrap()),
+            "--pretty".to_string(),
+            format!("--events={}", events.to_str().unwrap()),
+            format!("--live-state={}", live_state.to_str().unwrap()),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("is a preview and cannot run orchestrations yet"),
+        "{stderr}"
+    );
+    assert!(!out.exists());
+    assert!(!events.exists());
+    assert!(!live_state.exists());
+}
+
+/// A boolean flag given `=value` is a usage error, not silently
+/// accepted or ignored.
+#[test]
+fn a_boolean_flag_with_an_equals_value_is_a_usage_error() {
+    let (mut cmd, home) = command("pretty-equals");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .args(["config.json", doc.to_str().unwrap(), "--pretty=true"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+}
+
 /// A malformed `-e` (no `=`) gets Circuitry's own exact
 /// `cli/app.py::_parse_env_vars` message and this preview's usage-error
 /// exit code.

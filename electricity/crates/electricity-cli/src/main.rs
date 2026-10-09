@@ -7,10 +7,14 @@
 //!
 //! Every flag issue #431's own usage line lists parses, in any position,
 //! before or after the two positionals (`<config.json> <orchestration.yml>`)
-//! -- `--out`/`--pretty`/`--live-state`/`--events` included. An unknown
-//! flag is a usage error (exit 2): issue #431's gate lane tightens this
-//! from the pre-#431 preview CLI, which let a trailing unknown flag fall
-//! through to the (always-refusing) run path instead. None of the four
+//! -- `--out`/`--pretty`/`--live-state`/`--events` included. A value-taking
+//! long flag also accepts `--flag=value`, not just `--flag value`
+//! (`cof`'s own Click parser accepts both; orchestrator ruling on PR
+//! #432's review) -- `=` on a boolean flag (`--pretty=true`) is a usage
+//! error, never silently accepted or ignored. An unknown flag is a usage
+//! error (exit 2): issue #431's gate lane tightens this from the pre-#431
+//! preview CLI, which let a trailing unknown flag fall through to the
+//! (always-refusing) run path instead. None of the four
 //! new flags changes this release's own behavior yet -- each still routes
 //! to the same preview refusal / check-failure text `Action::Run` always
 //! produced, so the conformance runner's existing "refusal keeps the
@@ -145,7 +149,20 @@ fn parse_flags(args: &[String]) -> Result<ParsedFlags, String> {
             i += 1;
             continue;
         }
-        let Some(arity) = flag_arity(arg) else {
+        // `--name=value` (a long flag only -- getopt/Click's own
+        // convention never extends this to a short flag like `-e`,
+        // which instead always takes its value as a separate token):
+        // split *once*, so a value that itself contains `=` (`--out
+        // =a=b`, however unlikely) stays whole.
+        let (flag_name, inline_value): (&str, Option<&str>) = if arg.starts_with("--") {
+            match arg.split_once('=') {
+                Some((name, value)) => (name, Some(value)),
+                None => (arg, None),
+            }
+        } else {
+            (arg, None)
+        };
+        let Some(arity) = flag_arity(flag_name) else {
             if arg.starts_with('-') {
                 return Err(format!("unrecognized option '{arg}'"));
             }
@@ -155,7 +172,10 @@ fn parse_flags(args: &[String]) -> Result<ParsedFlags, String> {
         };
         match arity {
             Arity::Boolean => {
-                match arg {
+                if inline_value.is_some() {
+                    return Err(format!("{flag_name} does not take a value"));
+                }
+                match flag_name {
                     "-V" | "--version" => parsed.version = true,
                     "-h" | "--help" => parsed.help = true,
                     "--dump-ir" => parsed.dump_ir = true,
@@ -165,11 +185,14 @@ fn parse_flags(args: &[String]) -> Result<ParsedFlags, String> {
                 i += 1;
             }
             Arity::Value => {
-                let value = args
-                    .get(i + 1)
-                    .ok_or_else(|| format!("{arg} requires an argument"))?
-                    .clone();
-                match arg {
+                let value = match inline_value {
+                    Some(value) => value.to_string(),
+                    None => args
+                        .get(i + 1)
+                        .ok_or_else(|| format!("{flag_name} requires an argument"))?
+                        .clone(),
+                };
+                match flag_name {
                     "-e" => parsed.inputs.push(value),
                     "--out" => parsed.out = Some(value),
                     "--live-state" => parsed.live_state = Some(value),
@@ -177,7 +200,7 @@ fn parse_flags(args: &[String]) -> Result<ParsedFlags, String> {
                     "--profile" => parsed.profile = Some(value),
                     _ => unreachable!("every Arity::Value flag is handled above"),
                 }
-                i += 2;
+                i += if inline_value.is_some() { 1 } else { 2 };
             }
         }
     }
@@ -575,6 +598,98 @@ mod unit_tests {
             Action::Run(run_args) => {
                 assert_eq!(run_args.out.as_deref(), Some("run-dir/state.json"));
                 assert_eq!(run_args.inputs, vec!["name=World".to_string()]);
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn every_long_value_flag_accepts_the_equals_form() {
+        match classify(&[
+            "config.json".to_string(),
+            "orchestration.yml".to_string(),
+            "--out=state.json".to_string(),
+            "--live-state=live.json".to_string(),
+            "--events=events.jsonl".to_string(),
+            "--profile=p.json".to_string(),
+        ]) {
+            Action::Run(run_args) => {
+                assert_eq!(run_args.out.as_deref(), Some("state.json"));
+                assert_eq!(run_args.live_state.as_deref(), Some("live.json"));
+                assert_eq!(run_args.events.as_deref(), Some("events.jsonl"));
+                assert_eq!(run_args.profile.as_deref(), Some("p.json"));
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn the_equals_form_works_before_the_positionals_too() {
+        match classify(&[
+            "--out=state.json".to_string(),
+            "config.json".to_string(),
+            "orchestration.yml".to_string(),
+        ]) {
+            Action::Run(run_args) => assert_eq!(run_args.out.as_deref(), Some("state.json")),
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn a_value_containing_an_equals_sign_is_kept_whole() {
+        match classify(&[
+            "config.json".to_string(),
+            "orchestration.yml".to_string(),
+            "--out=a=b.json".to_string(),
+        ]) {
+            Action::Run(run_args) => assert_eq!(run_args.out.as_deref(), Some("a=b.json")),
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn a_boolean_flag_with_an_equals_value_is_a_usage_error() {
+        assert!(matches!(
+            classify(&[
+                "config.json".to_string(),
+                "orchestration.yml".to_string(),
+                "--pretty=true".to_string(),
+            ]),
+            Action::UsageError(_)
+        ));
+        assert!(matches!(
+            classify(&[
+                "config.json".to_string(),
+                "orchestration.yml".to_string(),
+                "--dump-ir=1".to_string(),
+            ]),
+            Action::UsageError(_)
+        ));
+    }
+
+    #[test]
+    fn an_unknown_flag_with_an_equals_value_is_still_a_usage_error() {
+        assert!(matches!(
+            classify(&[
+                "config.json".to_string(),
+                "orchestration.yml".to_string(),
+                "--bogus=1".to_string(),
+            ]),
+            Action::UsageError(_)
+        ));
+    }
+
+    #[test]
+    fn osps_own_invocation_shape_still_parses_with_the_equals_form() {
+        match classify(&[
+            "config.json".to_string(),
+            "doc.yml".to_string(),
+            "-e".to_string(),
+            "name=World".to_string(),
+            "--out=run-dir/state.json".to_string(),
+        ]) {
+            Action::Run(run_args) => {
+                assert_eq!(run_args.out.as_deref(), Some("run-dir/state.json"));
             }
             _ => panic!("expected Run"),
         }
