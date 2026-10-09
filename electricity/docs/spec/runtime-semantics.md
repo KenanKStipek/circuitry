@@ -1537,6 +1537,14 @@ counts as the *second* signal during cleanup (§6.5) — only SIGINT/SIGTERM do
 — and if it is ignored at process start (`nohup`), it stays ignored for the
 whole run (electricity/DESIGN.md §6.9; issue #431's Signals section).
 
+electricity's own non-TTY stdout matches this reference's byte for byte, with one
+deliberate narrowing: a run failure's error goes out only in the stdout JSON
+payload, never duplicated onto stderr. A config error, caught before a run
+ever starts, is the one case that prints on stderr alone (`Error: <text>`)
+and nothing on stdout. electricity does not yet print this reference's own
+Python `logging` warnings mid-run (#442). See electricity/DESIGN.md §6.9,
+"CLI output", for the full statement.
+
 ### 8.5 `--resume` rules
 
 Three state sources (`cli/app.py:490` `_resolve_resume_state`):

@@ -15,11 +15,15 @@ A "success" case stores the plain `--out` bytes exactly (insertion order,
 no indent — key order is part of parity, see §3.4); generation never uses
 `--pretty` for that file (`c23-out-plain-vs-pretty` is the one case that
 also needs the `--pretty` serialization, via `also_pretty` in `case.json`,
-stored separately as `expected.pretty.json`). A "failure" case — a
-load/check failure the document is expected to hit before any effect
-dispatches — records the failure's message, not a state: generation never
-writes `expected.json` from `--out` for one of these, only from the CLI's
-own `{"ok": false, "error": ...}` stdout.
+stored separately as `expected.pretty.json`). A "failure" case — one the
+document is expected to fail, whether at load/check time before any effect
+ever dispatches, or during the run itself (a tool exhausting its retries,
+a `stop_on_error` cancellation, a failed `finally:`) — records the
+failure's message, not a state: generation never writes `expected.json`
+from `--out` for one of these, only from the CLI's own
+`{"ok": false, "error": ...}` stdout. It also records `--out` itself
+(`expected.out.json`), since `cof run` writes one on any failure, not
+only on success.
 
 `--out`'s own run id/timestamps/durations are freshly generated on every
 invocation (`cof run` doesn't replay history), so regenerating a case that
@@ -116,18 +120,18 @@ def _generate_failure(case_dir: Path, metadata: dict[str, Any], tmp_root: Path) 
     out_path = tmp_root / "out.json"
     result = harness.run_case(case_dir, metadata, out_path=out_path, home_dir=home_dir)
     if result.returncode == 0:
-        raise RuntimeError(
-            f"{case_dir.name}: expected a load/check failure, but `cof run` exited 0"
-        )
+        raise RuntimeError(f"{case_dir.name}: expected a failure, but `cof run` exited 0")
     error = harness.parse_cli_error(result.stdout)
     payload = {"error": error}
     text = json.dumps(payload, indent=2, ensure_ascii=True, sort_keys=True) + "\n"
-    # `cof run` writes `--out` on a load/check failure too (run-wiring step
-    # 20, issue #431): a minimal seed state plus whatever of
-    # `runtime`/`effective_settings` got resolved before the failure, which
-    # varies by *which* step failed. Captured and normalized the same way a
-    # success case's state is, so electricity's own `--out` on the matching
-    # failure can be compared against it, not just the error text.
+    # `cof run` writes `--out` on any failure too (run-wiring step 20,
+    # issue #431): a load/check failure gets a minimal seed state plus
+    # whatever of `runtime`/`effective_settings` got resolved before the
+    # failure; a run failure gets the full state as it stood when the run
+    # gave up. Either way it varies by *which* step failed. Captured and
+    # normalized the same way a success case's state is, so electricity's
+    # own `--out` on the matching failure can be compared against it, not
+    # just the error text.
     return {
         "expected.json": text.encode("utf-8"),
         "expected.out.json": _redact_and_reserialize(out_path.read_bytes(), pretty=False),

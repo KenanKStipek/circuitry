@@ -146,7 +146,8 @@ electricity-tools        native Rust tool plugins (shell, json, fs, awk, imagema
 electricity-adapters     model adapters (OpenAI-compatible family, anthropic, the vendor
                           adapter, host_claude's stub)
 electricity-plugin-bridge  the NDJSON JSON-RPC client half of the external plugin protocol
-electricity-runtime-plugins  persistence backends, OTel, live state, progress/totals
+electricity-runtime-plugins  persistence backends, OTel, progress (live state and run totals
+                          landed in electricity-vm/electricity instead, M0-H)
 electricity-redaction    the shared deny-list redaction + capability tags (used by tools,
                           adapters, and runtime plugins alike)
 electricity-config       config.json parsing, the merged runtime: view
@@ -1023,6 +1024,24 @@ exit code `2` — not a deliberate "usage errors are 2" design choice in the ref
 electricity reproduces that same case-by-case mapping rather than grouping every pre-run failure
 under one code. None of these four write `--out`, since there is no state yet to write when any
 of them fires.
+
+**CLI output** (issue #431's "CLI output" decision, as built): when stdout is not a terminal,
+electricity's own stdout matches `cof run`'s byte for byte — success with `--out` given prints
+nothing; success without `--out` prints the final state as JSON; a run failure prints
+`{"ok": false, "error": ..., "warnings": [...], "state_out": ...}` and nothing else, regardless of
+`--out`. A run failure's own error therefore never reaches stderr — it is already in that stdout
+payload — so stderr during a run carries only `Warning: ...` lines (from `--events`/`--live-state`
+write failures folded into `result.warnings`; see the known gap below). A **config error** (a bad
+`config.json`, caught before `run_orchestration` is ever reached) is the one case that prints
+nothing on stdout at all and a single `Error: <text>` line on stderr instead, matching Circuitry's
+own `CircuitryGroup.invoke`, which catches a `ConfigError` around the whole CLI command before its
+JSON-output logic runs. **Known gap (#442):** `cof run`'s own Python `logging` warnings — the
+`WARNING: ...` lines `core/dynamic.py`/`core/conditional.py` emit mid-run for an `on_error:
+skip`/`continue` degradation or a `finally:` that fails after the body already did — have no VM
+observer hook yet and are not printed by electricity today; state, stdout, and `--events`/
+`--live-state` are unaffected, and the conformance suite never compares stderr, but a human
+watching the terminal sees fewer `Warning:` lines from electricity than from `cof run` for the same
+document.
 
 ### 6.10 Run-level state (`runtime.last_run`, `effective_settings`, `plugins`)
 
@@ -2322,7 +2341,7 @@ features layered on top of a document set that already runs, not gates on any on
 | M0-E | `electricity-cel`: the `cel` crate wrapped in the strict/non-strict layer, the two binding entry points (§7.2). | M0-A |
 | M0-F | `electricity-schema`: Draft7 validation against the synced schema copy, offline, plus the sync script and its CI check. | M0-A |
 | M0-G | `electricity-bytecode` + `electricity-compiler`: IR types, the load-and-check pipeline (§4), compiling a document with no effects that need runtime support yet. | M0-B, M0-C, M0-D, M0-E, M0-F (the compile-time checks in §4 step 4 walk every template and every `mode: cel` expression, so the compiler needs the tokenizer and the CEL parser, not just YAML/JSON/schema) |
-| M0-H **(done)** | `electricity-vm`: frames, the state store (`NodeRef`-based, §6.7), `fire_effect_start`/`complete`, the concurrency limiter, cancellation tree, run wiring, signals, the CLI and its output contract — runs a document made of `tool` (the real `json` provider, not a fake), `dynamic` (chain and tree), `if` (CEL mode) and `finally:` end to end, with `--out`/`--events`/`--live-state` matching `cof run`'s own byte for byte after the conformance normalizer (issue #431). The live-state mirror and its run-totals accumulator (§10.5's first two bullets) land here, not in M3-B — only loop progress (which needs `loop`, M1-E) still does. | M0-G |
+| M0-H **(done)** | `electricity-vm`: frames, the state store (`NodeRef`-based, §6.7), `fire_effect_start`/`complete`, the concurrency limiter, cancellation tree, run wiring, signals, the CLI and its output contract — runs a document made of `tool` (the real `json` provider, not a fake), `dynamic` (chain and tree), `if` (CEL mode) and `finally:` end to end, with `--out`/`--events`/`--live-state` matching `cof run`'s own byte for byte after the conformance normalizer (issue #431). The live-state mirror and its run-totals accumulator (§10.5's first and third bullets) land here, not in M3-B — only loop progress (§10.5's second bullet, which needs `loop`, M1-E) still does. | M0-G |
 | M0-I | The conformance harness itself: running `cof run` from the same checkout to generate expected state, diffing with normalization rules (§12). | — (parallel with all of the above) |
 | M0-J **(gate, Python side)** | The `scripted` fixture adapter and the shared fixture-config format (§12) — a change to Circuitry's Python package in the same repository; blocks any conformance case that needs a scripted model reply, which is most of them. | — (parallel with M0-A..I, but gates M0-I actually producing usable fixtures) |
 
@@ -2388,7 +2407,7 @@ state to `cof run`.
 | Lane | Deliverable | Depends on |
 |---|---|---|
 | M3-A | OpenTelemetry runtime plugin (OTLP/http, console-exporter fallback when unconfigured — §10.4), including the thread/task-identity span disambiguation under unnamed `tree` concurrency. | M1 |
-| M3-B | Loop progress (§10.5's third bullet, `meta.progress`) — needs `loop` (M1-E). The live state mirror and the live-event-stream-based run-totals accumulator (§10.5's first two bullets) already landed in M0-H, not here. | M1 |
+| M3-B | Loop progress (§10.5's second bullet, `meta.progress`) — needs `loop` (M1-E). The live state mirror and the live-event-stream-based run-totals accumulator (§10.5's first and third bullets) already landed in M0-H, not here. | M1 |
 | M3-C | The public embedding API (`electricity` lib crate): a stable `run_orchestration()`-shaped entry point, caller-supplied tool/adapter sets, `initial_state` for resume without a file stash. | M1 (crate boundary already exists from §2; this lane is the API-stability pass) |
 | M3-D | v1 release hardening: the preview release jobs from M0-0 lose their preview label once M1–M3 pass; `mimalloc` on the musl targets; the container image hardened (scratch/distroless, CA roots); crates.io publishing stays out of v1 (Decisions, §1). | M1 (needs a stable, buildable binary; does not need M2) |
 

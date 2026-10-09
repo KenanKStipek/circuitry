@@ -48,9 +48,10 @@ config case); the electricity runner has a different fallback for the same
 "omitted" case, see "Running it" below.
 
 A case document never calls a real model or network: cases accepted so far
-use only the pure-Python `json` tool (no subprocess, no network), so none
-need `fakes/`, `config.json`, or `replies.json` yet — the slots exist for
-cases that will.
+use only the pure-Python `json` tool (no subprocess, no network). `config.json`
+is used by a case that needs one (e.g. `config-deep-merge-adapters`); `fakes/`
+and `replies.json` remain unused — those two slots exist for cases that will
+need a process-backed tool fake or (once #362 lands) a scripted model reply.
 
 ## How a case runs
 
@@ -62,6 +63,14 @@ own `fakes/` first on `PATH` if present, and `cwd` set to the case
 directory. Both `scripts/generate-conformance-cases.py` and
 `test_python_runner.py` call it, so generation and verification can never
 silently diverge on *how* a case is run.
+
+`test_electricity_runner.py` parses electricity's own stdout the same way
+`harness.parse_cli_error` parses `cof run`'s, per the non-TTY CLI output
+contract both engines commit to byte for byte (electricity/DESIGN.md §6.9,
+"CLI output"): a run failure's error is in the `{"ok": false, ...}` stdout
+payload, never on stderr; only a config error (never a case this suite
+exercises, since every case's `config.json`, if any, is valid) prints a
+bare `Error: <text>` line on stderr instead.
 
 ## Normalization
 
@@ -108,10 +117,13 @@ property C23 exists to check (`assert_out_serialization` round-trips a
 file's own content through the exact `json.dumps` call that should have
 produced it and asserts byte equality).
 
-`cof run` writes `--out` on a load/check failure too, not only on success
-(run-wiring step 20, issue #431) — a minimal seeded state plus whatever of
-`runtime`/`effective_settings` had already resolved before the failure,
-which varies by which step failed. Every failure case therefore also
+`cof run` writes `--out` on any failure too, not only on success
+(run-wiring step 20, issue #431) — a load/check failure before any effect
+ever dispatches gets a minimal seeded state plus whatever of
+`runtime`/`effective_settings` had already resolved by then; a run failure
+(a tool exhausting its retries, a `dynamic`'s `stop_on_error`, a failed
+`finally:`) gets the full state as it stood when the run gave up. Either
+way it varies by which step failed. Every failure case therefore also
 commits `expected.out.json`, captured and redacted the same way a success
 case's `expected.json` is, and both runners compare their own `--out`
 against it (under `normalize()`, like any other state) in addition to the
