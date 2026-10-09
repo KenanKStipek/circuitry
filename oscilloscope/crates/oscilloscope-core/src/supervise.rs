@@ -66,6 +66,17 @@ impl SupervisedChild {
         stdout_path: &Path,
         stderr_path: &Path,
     ) -> io::Result<(Self, Receiver<String>)> {
+        // Both tee files are opened *before* `cmd.spawn()` (N1): if
+        // either `File::create` failed after the engine was already
+        // spawned, the early `?` return would drop a plain
+        // `std::process::Child` with no `SupervisedChild` ever built
+        // around it — never killed, since `SupervisedChild::drop` only
+        // runs for an instance that actually got constructed — leaving
+        // the engine running, unsupervised, in its own process group,
+        // while osp prints an error and exits.
+        let stdout_file = File::create(stdout_path)?;
+        let stderr_file = File::create(stderr_path)?;
+
         cmd.stdin(Stdio::null());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
@@ -76,8 +87,6 @@ impl SupervisedChild {
 
         let stdout = child.stdout.take().expect("piped stdout");
         let stderr = child.stderr.take().expect("piped stderr");
-        let stdout_file = File::create(stdout_path)?;
-        let stderr_file = File::create(stderr_path)?;
 
         let stdout_thread = thread::spawn(move || tee_lines(stdout, stdout_file, None));
         let (tx, rx) = mpsc::channel();
@@ -261,6 +270,44 @@ mod tests {
         assert!(
             !alive,
             "child should have been killed when SupervisedChild was dropped"
+        );
+    }
+
+    #[test]
+    fn a_stdout_file_that_cannot_be_created_never_spawns_the_engine() {
+        // N1 probe: `stdout_path` is a directory, so `File::create`
+        // fails. Before the fix, `cmd.spawn()` ran first, so the
+        // engine (a `sleep` whose argument is this test's own unique
+        // needle) was already running by the time `spawn` returned
+        // `Err` -- left behind forever, since no `SupervisedChild` was
+        // ever built to `Drop` it.
+        let dir = tempfile::tempdir().unwrap();
+        let stdout_as_dir = dir.path().join("stdout.txt");
+        std::fs::create_dir(&stdout_as_dir).unwrap();
+
+        // A fractional-second `sleep` argument, unique to this test
+        // run, serves both roles at once: a real duration `sleep`
+        // accepts (so, had it wrongly been spawned, it would still be
+        // running for the `pgrep` check below) and a needle unlikely
+        // to collide with anything else on a shared machine.
+        let needle = format!("5.{}", std::process::id());
+        let mut cmd = Command::new("sleep");
+        cmd.arg(&needle);
+
+        let result = SupervisedChild::spawn(cmd, &stdout_as_dir, &dir.path().join("stderr.txt"));
+        assert!(result.is_err(), "File::create on a directory should fail");
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let needle_arg = needle.clone();
+        let ps = Command::new("pgrep")
+            .arg("-f")
+            .arg(needle_arg)
+            .output()
+            .expect("pgrep should be available");
+        assert!(
+            ps.stdout.is_empty(),
+            "the engine must never be spawned when a tee file can't be created: {}",
+            String::from_utf8_lossy(&ps.stdout)
         );
     }
 
