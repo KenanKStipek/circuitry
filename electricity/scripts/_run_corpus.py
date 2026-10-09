@@ -155,32 +155,49 @@ _COMPACT_TS_RE = re.compile(r"^\d{8}_\d{6}$")
 _ISO_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
 
 #: Key name -> placeholder, for a field whose *value* is test-environment
-#: dependent (a run id, a timestamp, a process id, an events-stream
-#: duration) rather than document-content dependent -- matched by key
-#: name alone, regardless of nesting depth, the same approach
-#: `tests/conformance/normalize.py` takes for the Python/electricity
-#: conformance suite.
+#: dependent (a run id or a timestamp) rather than document-content
+#: dependent -- matched by key name alone, regardless of nesting depth,
+#: the same approach `tests/conformance/normalize.py` takes for the
+#: Python/electricity conformance suite. Reserved for key names unlikely
+#: enough to appear as a document's own content (a tool's own params or
+#: output) that any-depth matching is safe -- `pid`/`ts`/`ms`/`engine`
+#: are *not* here (see [`_EVENT_KEYS`]/[`_UNCONDITIONAL_EVENT_KEYS`]
+#: below): they're generic enough that a document could legitimately use
+#: one of them for its own content (`params: {ms: 5}` for a timer tool,
+#: say), so normalizing them at any depth could mask a real state
+#: difference as readily as it hides an environment-dependent one.
 _NORMALIZED_KEYS: dict[str, str] = {
     "run_id": "<RUN_ID>",
     "_run_id": "<RUN_ID>",
-    "pid": "<PID>",
     "started_at": "<TIMESTAMP>",
     "completed_at": "<TIMESTAMP>",
     "created_at": "<TIMESTAMP>",
     "_timestamp": "<TIMESTAMP>",
-    "ts": "<TS>",
-    "ms": "<MS>",
     "wall_time_s": "<DURATION>",
 }
 
-#: Key name -> placeholder, replaced unconditionally (never gated on
-#: [`_looks_environment_dependent`], unlike [`_NORMALIZED_KEYS`]) --
+#: Key name -> placeholder, for a field whose *value* is test-environment
+#: dependent -- but, unlike [`_NORMALIZED_KEYS`], only ever consulted on
+#: a single `--events` line's own top-level keys ([`_normalize_event`]),
+#: never recursively on `state`/`live_state` or on a nested value inside
+#: an event: `pid`/`ts`/`ms` are common enough names that a document's
+#: own tool params or output could use one for its own content, and
+#: `--events` is the only place these three are ever Circuitry's own
+#: metadata rather than a document's.
+_EVENT_KEYS: dict[str, str] = {
+    "pid": "<PID>",
+    "ts": "<TS>",
+    "ms": "<MS>",
+}
+
+#: Event-top-level-only, like [`_EVENT_KEYS`], but replaced
+#: unconditionally (never gated on [`_looks_environment_dependent`]) --
 #: `run_start`'s own `engine` field (`cli/events.py::_engine_label`) is
 #: always the installed `cof <version>` text, which doesn't match any of
 #: [`_looks_environment_dependent`]'s own shapes but would otherwise go
 #: stale on *any* `pyproject.toml` version bump, failing `--check` for a
 #: change this corpus has nothing to do with.
-_UNCONDITIONALLY_NORMALIZED_KEYS: dict[str, str] = {
+_UNCONDITIONAL_EVENT_KEYS: dict[str, str] = {
     "engine": "<ENGINE>",
 }
 
@@ -200,8 +217,6 @@ def _looks_environment_dependent(value: Any) -> bool:
 
 
 def _normalize(key: str | None, value: Any, root: str) -> Any:
-    if key is not None and key in _UNCONDITIONALLY_NORMALIZED_KEYS:
-        return _UNCONDITIONALLY_NORMALIZED_KEYS[key]
     if isinstance(value, str):
         value = value.replace(root, "<root>")
         placeholder = _NORMALIZED_KEYS.get(key) if key is not None else None
@@ -216,6 +231,26 @@ def _normalize(key: str | None, value: Any, root: str) -> Any:
     if placeholder is not None and _looks_environment_dependent(value):
         return placeholder
     return value
+
+
+def _normalize_event(event: dict[str, Any], root: str) -> dict[str, Any]:
+    """One `--events` line, normalized: [`_UNCONDITIONAL_EVENT_KEYS`]/
+    [`_EVENT_KEYS`] on *event*'s own top-level keys only (`engine`/
+    `pid`/`ts`/`ms` -- never recursively, and never on `state`/
+    `live_state`, where a document's own content could use one of those
+    names for something else entirely), then the ordinary any-depth
+    [`_normalize`] for every other key (a `path`'s own `<root>`
+    substitution included).
+    """
+    normalized: dict[str, Any] = {}
+    for key, value in event.items():
+        if key in _UNCONDITIONAL_EVENT_KEYS:
+            normalized[key] = _UNCONDITIONAL_EVENT_KEYS[key]
+        elif key in _EVENT_KEYS and _looks_environment_dependent(value):
+            normalized[key] = _EVENT_KEYS[key]
+        else:
+            normalized[key] = _normalize(key, value, root)
+    return normalized
 
 
 def _branch_sort_key(
@@ -348,7 +383,17 @@ def canonical_event_order(
             if copy.get("ev") == "start":
                 id_map[old_id] = next_id
                 next_id += 1
-            copy["id"] = id_map.get(old_id, old_id)
+                copy["id"] = id_map[old_id]
+            else:
+                # An `end` whose own id never appeared on a `start` in
+                # this same stream (a swapped/duplicated/dropped event,
+                # not the documented "no matching start at all" case,
+                # which already carries `id: null` straight from `cof
+                # run --events` itself) -- a sentinel, not the raw id
+                # left alone, so it can never coincide with some other
+                # event's own canonical numeric id and compare equal to
+                # a differently-broken stream by accident.
+                copy["id"] = id_map.get(old_id, f"<UNMATCHED:{old_id}>")
         renumbered.append(copy)
     return renumbered
 
@@ -363,7 +408,7 @@ def normalize_result(result: dict[str, Any], root: str) -> dict[str, Any]:
         "stdout": result["stdout"].replace(root, "<root>"),
         "stderr": result["stderr"].replace(root, "<root>"),
         "state": _normalize(None, result["state"], root),
-        "events": _normalize(None, result["events"], root),
+        "events": [_normalize_event(event, root) for event in result["events"]],
         "live_state": _normalize(None, result["live_state"], root),
     }
 
