@@ -9,3 +9,4 @@ description = "Credential-shaped-value redaction for electricity state/meta.raw 
 
 [dependencies]
 electricity-value = { path = "../electricity-value" }
+regex = "1"
