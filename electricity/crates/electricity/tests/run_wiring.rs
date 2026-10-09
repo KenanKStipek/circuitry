@@ -542,3 +542,36 @@ fn signal_exit_codes_match_the_posix_convention() {
     assert_eq!(Signal::Sigterm.exit_code(), 143);
     assert_eq!(Signal::Sighup.exit_code(), 129);
 }
+
+/// PR #441 review finding 10: without `--live-state`, `run_orchestration`
+/// never needs a timer driver at all -- built on a bare `rt` Tokio
+/// runtime (no `enable_time`/`enable_all`), the select-against-a-sleep-
+/// tick loop this test's own document would otherwise panic inside
+/// (`tokio::time::sleep` requires one) must never even be reached.
+#[test]
+fn a_run_with_no_live_state_never_touches_tokios_timer_driver() {
+    let dir = temp_dir("no-live-state-no-timer");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - name: a\n    type: tool\n    provider: json\n    params: {mode: stringify, input: {}}\n",
+    );
+    let req = RunRequest {
+        config_path: config,
+        orchestration_path: doc,
+        inputs: IndexMap::new(),
+        out_path: None,
+        pretty: false,
+        live_state_path: None,
+        events_path: None,
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("a bare rt runtime with no timer driver");
+    let result = runtime.block_on(async {
+        let token = CancellationToken::new();
+        electricity::run_orchestration(&req, &token).await
+    });
+    assert!(result.ok, "{:?}", result.error);
+}

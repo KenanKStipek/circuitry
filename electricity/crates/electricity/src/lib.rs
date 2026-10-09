@@ -1013,16 +1013,23 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
     };
 
     // Step 17/18: execute the root, then the success or failure tail.
-    // `tokio::select!`s this future against a plain poll tick rather
-    // than just `.await`ing it directly, so `--live-state`'s own
-    // pending-change flush (finding 7: see `live_state.rs`'s own doc
-    // comment) gets a chance to run between `execute_root`'s own polls
-    // -- never while it's still holding control, so never while any
-    // node's own store borrow from that exact poll could still be
+    // With `--live-state`, `tokio::select!`s this future against a
+    // plain poll tick rather than just `.await`ing it directly, so its
+    // own pending-change flush (finding 7: see `live_state.rs`'s own
+    // doc comment) gets a chance to run between `execute_root`'s own
+    // polls -- never while it's still holding control, so never while
+    // any node's own store borrow from that exact poll could still be
     // live. The tick itself is far shorter than `LIVE_STATE_INTERVAL`
     // (`flush_if_due` is the one place that actually enforces that
-    // interval; this is only how often this loop gets to ask).
-    const LIVE_STATE_POLL_TICK: std::time::Duration = std::time::Duration::from_millis(50);
+    // interval; this is only how often this loop gets to ask). Without
+    // `--live-state` there is nothing for that tick to ever do, so this
+    // just `.await`s *exec_fut* directly instead (PR #441 review
+    // finding 10) -- `tokio::time::sleep` needs a timer driver
+    // (`Builder::enable_time`/`enable_all`), which a caller embedding
+    // this crate's own public `run_orchestration` on a runtime built
+    // without one (this crate's own tests included, when they build a
+    // bare `rt` runtime rather than `electricity-cli`'s `enable_all`
+    // one) would otherwise panic on, for a feature it never asked for.
     let ctx_snapshot = store.snapshot(&store.root);
     let mut exec_fut = std::pin::pin!(electricity_vm::execute_root(
         &program,
@@ -1032,15 +1039,19 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
         &observer,
         token,
     ));
-    let exec_result = loop {
-        tokio::select! {
-            result = &mut exec_fut => break result,
-            () = tokio::time::sleep(LIVE_STATE_POLL_TICK) => {
-                if let Some(mirror) = &live_mirror {
-                    mirror.flush_if_due(|| store.saved(&store.root));
+    let exec_result = match &live_mirror {
+        Some(mirror) => {
+            const LIVE_STATE_POLL_TICK: std::time::Duration = std::time::Duration::from_millis(50);
+            loop {
+                tokio::select! {
+                    result = &mut exec_fut => break result,
+                    () = tokio::time::sleep(LIVE_STATE_POLL_TICK) => {
+                        mirror.flush_if_due(|| store.saved(&store.root));
+                    }
                 }
             }
         }
+        None => exec_fut.await,
     };
 
     let wall_time_s = run_t0.elapsed().as_secs_f64();
