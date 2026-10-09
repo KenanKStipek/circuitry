@@ -1,0 +1,7 @@
+{
+  "spec_case": "electricity/docs/spec/tools-adapters-plugins.md §12 (process-backed tool fakes)",
+  "description": "`shell` resolves `command` through PATH, and the case's own `fakes/` directory is prepended to PATH for both engines (issue #450 item 4): `fakes/fake`, a fixed-stdout/exit-code fake, stands in for a real binary with nothing actually installed. The fake's own resolved path lands in the tool result's `raw.binary`, exercising the case-directory/fakes-directory path normalizer (item 5).",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "electricity_preview_ok": true
+}

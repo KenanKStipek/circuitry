@@ -167,7 +167,52 @@ exposes the unused counts via `ScriptedAdapter.leftover_replies()` for a conform
 harness, which built the instance itself, to call after the run and fail the *case* on
 anything left over.
 
-## 7. Example
+## 7. The leftover-replies export (for a subprocess harness)
+
+A conformance harness that runs `cof run` as a subprocess (`tests/conformance/harness.py`)
+has no handle to the adapter instance it built — only the subprocess's exit code,
+stdout/stderr, and `--out` state — so it cannot call `leftover_replies()` directly
+after the run the way an in-process test (`tests/adapters/test_scripted.py`) can.
+Both engines export leftover counts the same way:
+
+- **Variable**: `CIRCUITRY_TEST_SCRIPTED_LEFTOVER_REPLIES_FILE`, naming a filesystem
+  path. Never read when unset — an ordinary run (including every real use of this
+  adapter outside a conformance harness) pays nothing for this, and nothing is
+  written.
+- **When it is written**: once, at process exit, regardless of whether the run
+  itself succeeded or failed. Every scripted-adapter instance that actually
+  dispatches at least one real model call anywhere during the process's lifetime
+  (a fallback chain, or more than one `runtime.adapters.*` block naming
+  `scripted`, can build more than one) registers itself the first time it is
+  called — never merely constructed: a preflight-only instance, built solely to
+  call `check()` (which loads the replies file but never consumes a reply), must
+  never contribute a false "leftover" count for replies nothing ever asked it to
+  use. At exit, every registered instance's `leftover_replies()` results are
+  merged — summed per path, across every instance — into one JSON object and
+  written to the named path.
+- **File format**: a single JSON object, `{"<path>": <count>, ...}` — the same
+  mapping `leftover_replies()` itself returns, as plain JSON (no YAML fallback;
+  this file is only ever machine-written and machine-read, never hand-authored).
+  Written as `{}` when every instance's queues were fully consumed, so a harness
+  can tell "ran, nothing left over" from "the variable was never read" (the second
+  case — the file is simply absent — means no scripted-adapter instance was ever
+  built during the run; a harness that always sets the variable can treat an
+  absent file the same as an empty object).
+- **Failure behaviour**: the write itself is best-effort — if it fails (an
+  unwritable path, a vanished parent directory), that failure is never allowed to
+  mask the run's own outcome; it does not raise past the process's own exit code.
+  A harness that relies on this file checks for its existence/validity itself
+  rather than trusting a non-zero exit code to imply it was skipped.
+
+Circuitry's own implementation (`circuitry.adapters.scripted`) hangs this off
+`atexit`, scoped to the `ScriptedAdapter` class alone (nothing else in the
+process is affected) — electricity's own test-only `scripted` adapter (lane F1,
+§448) implements an equivalent exit-time hook reading the identical variable
+name and writing the identical JSON shape, so one harness-side check
+(`tests/conformance/harness.py`) works unmodified against either engine's
+subprocess.
+
+## 8. Example
 
 ```yaml
 prime.left:

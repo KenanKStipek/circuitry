@@ -7,12 +7,14 @@ run takes, with a :class:`ScriptedAdapter` injected via ``RunRequest.adapter``
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
 
+from circuitry.adapters import scripted
 from circuitry.adapters.factory import build_adapter
 from circuitry.adapters.scripted import ScriptedAdapter
 from circuitry.cli.config import CircuitryConfig
@@ -468,3 +470,55 @@ def test_config_resolves_relative_replies_file_against_cwd(
     assert isinstance(adapter, ScriptedAdapter)
     check_result = adapter.check()
     assert check_result.ok
+
+
+def test_leftover_export_writes_nothing_when_env_var_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(scripted.LEFTOVER_REPLIES_EXPORT_ENV_VAR, raising=False)
+    replies_path = _write_replies(tmp_path, {"prime.x": [{"text": "a"}, {"text": "b"}]})
+    ScriptedAdapter(replies_file=str(replies_path))
+
+    export_path = tmp_path / "leftover.json"
+    scripted._write_leftover_export()
+
+    assert not export_path.exists()
+
+
+def test_leftover_export_merges_every_registered_instance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    export_path = tmp_path / "leftover.json"
+    monkeypatch.setenv(scripted.LEFTOVER_REPLIES_EXPORT_ENV_VAR, str(export_path))
+    monkeypatch.setattr(scripted, "_export_instances", [], raising=False)
+    monkeypatch.setattr(scripted, "_export_hook_registered", False, raising=False)
+
+    replies_path_a = _write_replies(
+        tmp_path, {"prime.a": [{"text": "used"}, {"text": "leftover-a"}]}, name="a.yaml"
+    )
+    replies_path_b = _write_replies(
+        tmp_path, {"prime.b": [{"text": "leftover-b-1"}, {"text": "leftover-b-2"}]},
+        name="b.yaml",
+    )
+    adapter_a = ScriptedAdapter(replies_file=str(replies_path_a))
+    adapter_b = ScriptedAdapter(replies_file=str(replies_path_b))
+
+    monkeypatch.setattr(scripted, "current_call_path", lambda: "prime.a")
+    adapter_a.generate(model="test", prompt="p")
+    monkeypatch.setattr(scripted, "current_call_path", lambda: "prime.b")
+    adapter_b.generate(model="test", prompt="p")
+
+    scripted._write_leftover_export()
+
+    assert json.loads(export_path.read_text(encoding="utf-8")) == {
+        "prime.a": 1,
+        "prime.b": 1,
+    }
+    # An instance that never actually dispatches a call (a preflight-only
+    # instance built solely for ``check()``, which loads the replies file
+    # but never consumes one) never registers at all -- it must never
+    # contribute a false "leftover" count for replies nothing asked it to
+    # use.
+    untouched = ScriptedAdapter(replies_file=str(replies_path_b))
+    untouched.check()
+    assert all(instance is not untouched for instance in scripted._export_instances)

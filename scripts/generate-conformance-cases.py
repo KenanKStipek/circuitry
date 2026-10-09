@@ -52,20 +52,24 @@ from tests.conformance.normalize import (  # noqa: E402
     assert_states_equal,
     normalize,
     redact_leaked_paths,
+    redact_runtime_strings,
 )
 
 
-def _redact_and_reserialize(raw_bytes: bytes, *, pretty: bool) -> bytes:
+def _redact_and_reserialize(
+    raw_bytes: bytes, *, pretty: bool, replacements: list[tuple[str, str]]
+) -> bytes:
     """Replace the two absolute-path fields `effective_settings` echoes back
     (the generating machine's own checkout and temp-file locations) with
-    their stable placeholder (`<out>`, `<case>`) before anything is written
-    to disk, so a contributor's local paths never reach a committed file or
-    a public PR. Re-serializes with
-    the same rules `--out`/`--out --pretty` themselves use
+    their stable placeholder (`<out>`, `<case>`), then every case-directory/
+    fakes-directory/mock-port substring *anywhere* a string leaf carries one
+    (`redact_runtime_strings`), before anything is written to disk, so a
+    contributor's local paths never reach a committed file or a public PR.
+    Re-serializes with the same rules `--out`/`--out --pretty` themselves use
     (`normalize.assert_out_serialization`), so the committed file still
     round-trips through that check."""
     data = json.loads(raw_bytes.decode("utf-8"))
-    redacted = redact_leaked_paths(data)
+    redacted = redact_runtime_strings(redact_leaked_paths(data), replacements)
     if pretty:
         text = json.dumps(redacted, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
     else:
@@ -73,21 +77,47 @@ def _redact_and_reserialize(raw_bytes: bytes, *, pretty: bool) -> bytes:
     return text.encode("utf-8")
 
 
-def _generate_success(case_dir: Path, metadata: dict[str, Any], tmp_root: Path) -> dict[str, bytes]:
+def _assert_no_leftover_replies(leftover_path: Path, *, case_name: str) -> None:
+    leftover = harness.read_leftover_replies(leftover_path)
+    if leftover:
+        raise RuntimeError(
+            f"{case_name}: scripted replies left over after the run: {leftover} "
+            "-- remove them from the replies file or make the document consume them"
+        )
+
+
+def _generate_success(
+    case_dir: Path,
+    metadata: dict[str, Any],
+    tmp_root: Path,
+    *,
+    server: Any,
+    replacements: list[tuple[str, str]],
+) -> dict[str, bytes]:
     home_dir = tmp_root / "home"
     home_dir.mkdir(exist_ok=True)
     out_path = tmp_root / "out.json"
     events_path = tmp_root / "events.jsonl"
+    leftover_replies_path = tmp_root / "leftover-replies.json"
     result = harness.run_case(
-        case_dir, metadata, out_path=out_path, home_dir=home_dir, events_path=events_path
+        case_dir,
+        metadata,
+        out_path=out_path,
+        home_dir=home_dir,
+        events_path=events_path,
+        leftover_replies_path=leftover_replies_path,
+        mock_http_port=server.port if server else None,
     )
     if result.returncode != 0:
         raise RuntimeError(
             f"{case_dir.name}: expected success, `cof run` exited {result.returncode}\n"
             f"stdout: {result.stdout}\nstderr: {result.stderr}"
         )
+    _assert_no_leftover_replies(leftover_replies_path, case_name=case_dir.name)
     files = {
-        "expected.json": _redact_and_reserialize(out_path.read_bytes(), pretty=False),
+        "expected.json": _redact_and_reserialize(
+            out_path.read_bytes(), pretty=False, replacements=replacements
+        ),
         # No path redaction needed: `--events` carries `path`/`orchestration`
         # (already relative) and `run_id`/`ts`/`pid`/`engine` (not absolute
         # paths at all) -- nothing a contributor's own checkout or temp
@@ -109,19 +139,41 @@ def _generate_success(case_dir: Path, metadata: dict[str, Any], tmp_root: Path) 
                 f"stderr: {pretty_result.stderr}"
             )
         files["expected.pretty.json"] = _redact_and_reserialize(
-            pretty_out.read_bytes(), pretty=True
+            pretty_out.read_bytes(), pretty=True, replacements=replacements
         )
+    if server is not None:
+        requests_json = [r.to_json() for r in server.requests]
+        redacted_requests = redact_runtime_strings(requests_json, replacements)
+        files["expected.http_requests.json"] = (
+            json.dumps(redacted_requests, indent=2, ensure_ascii=True) + "\n"
+        ).encode("utf-8")
     return files
 
 
-def _generate_failure(case_dir: Path, metadata: dict[str, Any], tmp_root: Path) -> dict[str, bytes]:
+def _generate_failure(
+    case_dir: Path,
+    metadata: dict[str, Any],
+    tmp_root: Path,
+    *,
+    server: Any,
+    replacements: list[tuple[str, str]],
+) -> dict[str, bytes]:
     home_dir = tmp_root / "home"
     home_dir.mkdir(exist_ok=True)
     out_path = tmp_root / "out.json"
-    result = harness.run_case(case_dir, metadata, out_path=out_path, home_dir=home_dir)
+    leftover_replies_path = tmp_root / "leftover-replies.json"
+    result = harness.run_case(
+        case_dir,
+        metadata,
+        out_path=out_path,
+        home_dir=home_dir,
+        leftover_replies_path=leftover_replies_path,
+        mock_http_port=server.port if server else None,
+    )
     if result.returncode == 0:
         raise RuntimeError(f"{case_dir.name}: expected a failure, but `cof run` exited 0")
-    error = harness.parse_cli_error(result.stdout)
+    _assert_no_leftover_replies(leftover_replies_path, case_name=case_dir.name)
+    error = redact_runtime_strings(harness.parse_cli_error(result.stdout), replacements)
     payload = {"error": error}
     text = json.dumps(payload, indent=2, ensure_ascii=True, sort_keys=True) + "\n"
     # `cof run` writes `--out` on any failure too (run-wiring step 20,
@@ -134,7 +186,9 @@ def _generate_failure(case_dir: Path, metadata: dict[str, Any], tmp_root: Path) 
     # just the error text.
     return {
         "expected.json": text.encode("utf-8"),
-        "expected.out.json": _redact_and_reserialize(out_path.read_bytes(), pretty=False),
+        "expected.out.json": _redact_and_reserialize(
+            out_path.read_bytes(), pretty=False, replacements=replacements
+        ),
     }
 
 
@@ -142,10 +196,18 @@ def generate_case(case_dir: Path) -> dict[str, bytes]:
     metadata = harness.load_case(case_dir)
     with tempfile.TemporaryDirectory(prefix="circuitry-conformance-gen-") as tmp:
         tmp_root = Path(tmp)
-        if metadata["expect"] == "success":
-            return _generate_success(case_dir, metadata, tmp_root)
-        if metadata["expect"] == "failure":
-            return _generate_failure(case_dir, metadata, tmp_root)
+        with harness.mock_http_server(case_dir, metadata) as server:
+            replacements = harness.case_redaction_replacements(
+                case_dir, mock_http_port=server.port if server else None
+            )
+            if metadata["expect"] == "success":
+                return _generate_success(
+                    case_dir, metadata, tmp_root, server=server, replacements=replacements
+                )
+            if metadata["expect"] == "failure":
+                return _generate_failure(
+                    case_dir, metadata, tmp_root, server=server, replacements=replacements
+                )
         raise ValueError(f"{case_dir.name}: unknown case.json 'expect': {metadata['expect']!r}")
 
 

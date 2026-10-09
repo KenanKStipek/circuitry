@@ -27,12 +27,23 @@ The two absolute-path fields get a named, stable placeholder (`<out>`,
 (`normalize()`) and — via the same table, `redact_leaked_paths()` — before
 a case's `expected.json` is ever written to disk, so no contributor's own
 checkout path or OS temp directory is committed.
+
+A third category, `redact_runtime_strings`, is matched by neither key name
+nor exact location: a literal substring (a case directory's own absolute
+path, its `fakes/` subdirectory, a mock HTTP server's ephemeral port)
+replaced wherever it appears inside any string leaf, because — unlike the
+first two categories — it can land at a genuinely unpredictable key (a
+subprocess timeout message naming the binary it resolved, a configured
+`base_url` `effective_settings.runtime` echoes back). Applied the same way,
+at both comparison time and before a case's expected state is written.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import re
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -180,6 +191,66 @@ def redact_leaked_paths(value: Any, *, field_path: str | None = None) -> Any:
     if isinstance(value, list):
         return [redact_leaked_paths(v, field_path=field_path) for v in value]
     return value
+
+
+def redact_runtime_strings(value: Any, replacements: Sequence[tuple[str, str]]) -> Any:
+    """Recursively replace, in every string leaf regardless of key name or
+    nesting location, each ``(literal, placeholder)`` pair in
+    *replacements*, applied in order -- unlike `normalize()`'s key-name/
+    exact-location rules, this catches a value Circuitry's own code embeds
+    somewhere unpredictable: a case directory's absolute path inside a
+    subprocess timeout message naming the resolved binary it ran
+    (`plugins._subprocess.run_binary`'s own text), or inside a tool
+    result's own ``raw.binary`` field; an ephemeral mock-HTTP-server port
+    inside a configured ``base_url`` `effective_settings.runtime` echoes
+    back, or inside a recorded request's own ``Host`` header. Also usable
+    directly on a bare string (a failure case's own error text), not just
+    a state tree. Order matters when one replacement's literal is a prefix
+    of another's -- a case directory is always a prefix of its own
+    ``fakes/`` subdirectory, so replace the more specific (longer) one
+    first; callers build *replacements* in that order."""
+    if isinstance(value, dict):
+        return {k: redact_runtime_strings(v, replacements) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact_runtime_strings(v, replacements) for v in value]
+    if isinstance(value, str):
+        for literal, placeholder in replacements:
+            value = value.replace(literal, placeholder)
+        return value
+    return value
+
+
+def apply_known_divergence(state: Any, *, location: str, value: Any) -> Any:
+    """A deep copy of *state* with the value at dotted *location* replaced
+    by *value* -- a `case.json` `known_divergence`'s own documented,
+    pinned electricity value, applied to the Python-engine-captured
+    `expected.json` before it's compared against electricity's own run
+    (both engines succeed; only this one value is allowed to differ).
+    A segment that parses as a non-negative integer indexes a list;
+    otherwise it's a dict key. Raises if *location* doesn't resolve to an
+    existing leaf -- a divergence with nowhere left to land is a stale
+    fixture, not something to silently skip."""
+    root = copy.deepcopy(state)
+    node: Any = root
+    segments = location.split(".")
+    for segment in segments[:-1]:
+        node = node[int(segment)] if isinstance(node, list) else node[segment]
+    last = segments[-1]
+    if isinstance(node, list):
+        node[int(last)] = value
+    else:
+        if last not in node:
+            raise KeyError(f"known_divergence location {location!r} does not exist in state")
+        node[last] = value
+    return root
+
+
+def normalize_for_comparison(value: Any, replacements: Sequence[tuple[str, str]]) -> Any:
+    """`redact_runtime_strings` then `normalize()` -- the one call every
+    comparison (and the generator, before writing) makes from here on, so
+    a case-directory/fakes-directory/mock-port leak and a volatile-field
+    substitution are never applied out of order or only partially."""
+    return normalize(redact_runtime_strings(value, replacements))
 
 
 def assert_states_equal(actual: Any, expected: Any, *, path: str = "$") -> None:

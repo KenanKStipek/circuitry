@@ -14,15 +14,29 @@ result.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from circuitry.adapters.scripted import LEFTOVER_REPLIES_EXPORT_ENV_VAR
+
+from .mock_http import MockHttpServer
+
 CASES_DIR = Path(__file__).resolve().parent / "cases"
+
+#: Substituted, verbatim, for the mock HTTP server's real ephemeral port
+#: wherever a case's own `config` file content or `cli_args` need to name
+#: it -- an adapter's `base_url` (config) or a `-e` input an `http` tool
+#: URL template reads (cli_args). The harness materializes both with the
+#: real port right before invoking either engine; see `run_case` and
+#: `materialize_cli_args` below.
+MOCK_HTTP_PORT_PLACEHOLDER = "__MOCK_HTTP_PORT__"
 
 #: Mirrors `tests/cli/test_run_cancel_parallel.py`'s `_CREDENTIAL_ENV_VARS` —
 #: a case subprocess must never see a live credential, real or scripted.
@@ -67,8 +81,9 @@ _CASE_JSON_KEYS = frozenset(
         "also_pretty",
         "error_compare",
         "location_pattern",
-        "replies_file",
+        "mock_http_fixture",
         "known_divergence",
+        "electricity_preview_ok",
         "orchestration",
         "timeout_seconds",
     }
@@ -76,6 +91,10 @@ _CASE_JSON_KEYS = frozenset(
 _VALID_EXPECT = frozenset({"success", "failure"})
 _VALID_ERROR_COMPARE = frozenset({"exact", "location"})
 _VALID_ENGINES = frozenset({"python", "electricity"})
+#: `known_divergence`'s only two keys (`tests/conformance/README.md`'s table):
+#: the dotted-path location in the captured state, and the value electricity
+#: is documented to produce there instead.
+_KNOWN_DIVERGENCE_KEYS = frozenset({"location", "electricity_value"})
 
 
 def load_case(case_dir: Path) -> dict[str, Any]:
@@ -91,9 +110,13 @@ def load_case(case_dir: Path) -> dict[str, Any]:
     metadata.setdefault("cli_args", [])
     metadata.setdefault("engines", ["python"])
     metadata.setdefault("config", None)
-    metadata.setdefault("replies_file", None)
+    metadata.setdefault("mock_http_fixture", None)
     metadata.setdefault("known_divergence", None)
+    metadata.setdefault("electricity_preview_ok", False)
     metadata.setdefault("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
+
+    if not isinstance(metadata["electricity_preview_ok"], bool):
+        raise ValueError(f"{case_dir.name}: case.json 'electricity_preview_ok' must be a bool")
 
     if "expect" not in metadata:
         raise ValueError(f"{case_dir.name}: case.json is missing the required 'expect' key")
@@ -117,10 +140,39 @@ def load_case(case_dir: Path) -> dict[str, Any]:
         raise ValueError(
             f"{case_dir.name}: case.json 'also_pretty' only applies to a 'success' case"
         )
+    known_divergence = metadata["known_divergence"]
+    if known_divergence is not None:
+        if (
+            not isinstance(known_divergence, dict)
+            or set(known_divergence) != _KNOWN_DIVERGENCE_KEYS
+        ):
+            raise ValueError(
+                f"{case_dir.name}: case.json 'known_divergence' must be a mapping with "
+                f"exactly {sorted(_KNOWN_DIVERGENCE_KEYS)}"
+            )
+        if not isinstance(known_divergence["location"], str) or not known_divergence["location"]:
+            raise ValueError(
+                f"{case_dir.name}: case.json 'known_divergence.location' must be a "
+                "non-empty string"
+            )
+        if metadata["expect"] != "success":
+            raise ValueError(
+                f"{case_dir.name}: case.json 'known_divergence' only applies to a "
+                "'success' case -- a documented divergence is by definition a case "
+                "both engines succeed on"
+            )
+        if set(engines) != _VALID_ENGINES:
+            raise ValueError(
+                f"{case_dir.name}: case.json 'known_divergence' requires 'engines' to "
+                f"list both {sorted(_VALID_ENGINES)} -- there is nothing to diverge "
+                "from with only one engine running"
+            )
     return metadata
 
 
-def _sandboxed_env(case_dir: Path, home_dir: Path) -> dict[str, str]:
+def _sandboxed_env(
+    case_dir: Path, home_dir: Path, *, leftover_replies_path: Path | None = None
+) -> dict[str, str]:
     env = {
         k: v
         for k, v in os.environ.items()
@@ -130,7 +182,73 @@ def _sandboxed_env(case_dir: Path, home_dir: Path) -> dict[str, str]:
     fakes_dir = case_dir / "fakes"
     if fakes_dir.is_dir():
         env["PATH"] = f"{fakes_dir}{os.pathsep}{env.get('PATH', '')}"
+    # Deliberately set *after* the CIRCUITRY_* filter above: a test-only
+    # variable the harness itself injects for this one subprocess, not
+    # inherited from the caller's shell (electricity/docs/spec/
+    # scripted-replies.md §7) -- never a real config knob, so it is never
+    # one of `config.py`'s CONFIG_ENV_VARS and can't change
+    # `effective_settings`.
+    if leftover_replies_path is not None:
+        env[LEFTOVER_REPLIES_EXPORT_ENV_VAR] = str(leftover_replies_path)
     return env
+
+
+def read_leftover_replies(path: Path) -> dict[str, int]:
+    """The merged leftover-reply counts a run exported (scripted-replies.md
+    §7), or `{}` when the file is absent -- meaning either no
+    scripted-adapter instance was built during the run, or every one that
+    was had nothing left over by the time it exported."""
+    if not path.exists():
+        return {}
+    return dict(json.loads(path.read_text(encoding="utf-8")))
+
+
+def materialize_cli_args(cli_args: list[Any], *, mock_http_port: int | None) -> list[str]:
+    """`cli_args` as given, or with `MOCK_HTTP_PORT_PLACEHOLDER` substituted
+    for the mock server's real port in every element -- the only way a
+    `-e key=value` input can name the port an `http` tool URL needs, since
+    the port is only known once the harness has actually started the
+    server for this run."""
+    args = [str(a) for a in cli_args]
+    if mock_http_port is None:
+        return args
+    return [a.replace(MOCK_HTTP_PORT_PLACEHOLDER, str(mock_http_port)) for a in args]
+
+
+def materialize_config(
+    case_dir: Path, config_name: str, *, mock_http_port: int, tmp_dir: Path
+) -> Path:
+    """Write *config_name*'s own content, with `MOCK_HTTP_PORT_PLACEHOLDER`
+    substituted for the mock server's real port, to *tmp_dir*, and return
+    the new absolute path -- an adapter's `base_url` can only name the
+    port this way, materialized fresh for each run since the port is
+    different every time (electricity/DESIGN.md §12). Both runners and the
+    generator call this (and `materialize_cli_args`) so generation and
+    verification can never diverge on how the port reaches either engine.
+    """
+    text = (case_dir / config_name).read_text(encoding="utf-8")
+    materialized = text.replace(MOCK_HTTP_PORT_PLACEHOLDER, str(mock_http_port))
+    target = tmp_dir / f"materialized-{config_name}"
+    target.write_text(materialized, encoding="utf-8")
+    return target
+
+
+def case_redaction_replacements(
+    case_dir: Path, *, mock_http_port: int | None = None
+) -> list[tuple[str, str]]:
+    """`(literal, placeholder)` pairs for `normalize.redact_runtime_strings`,
+    in the order they must be applied: the case's own `fakes/`
+    subdirectory (a longer path than, and a prefix of, the case directory
+    itself) before the case directory, then the mock server's own
+    ephemeral port, if one is running for this case."""
+    replacements: list[tuple[str, str]] = []
+    fakes_dir = case_dir / "fakes"
+    if fakes_dir.is_dir():
+        replacements.append((str(fakes_dir), "<FAKES_DIR>"))
+    replacements.append((str(case_dir), "<CASE_DIR>"))
+    if mock_http_port is not None:
+        replacements.append((str(mock_http_port), "<MOCK_PORT>"))
+    return replacements
 
 
 def run_case(
@@ -142,10 +260,16 @@ def run_case(
     pretty: bool = False,
     events_path: Path | None = None,
     live_state_path: Path | None = None,
+    leftover_replies_path: Path | None = None,
+    mock_http_port: int | None = None,
 ) -> CaseResult:
     """Run one case's document through `cof run`, writing state to
     `out_path`. `cwd` is the case directory, so `orchestration.yml` and any
-    relative `config`/`fakes/` resolve the same way for every case."""
+    relative `config`/`fakes/` resolve the same way for every case.
+    `mock_http_port`, when given, is substituted for
+    `MOCK_HTTP_PORT_PLACEHOLDER` in both `cli_args` and (materialized to a
+    fresh file under `out_path`'s own directory, never the committed
+    `config.json` itself) the case's own `config`."""
     cmd = [
         sys.executable,
         "-m",
@@ -162,20 +286,47 @@ def run_case(
         cmd += ["--events", str(events_path)]
     if live_state_path is not None:
         cmd += ["--live-state", str(live_state_path)]
-    if metadata.get("config"):
-        cmd += ["--config", metadata["config"]]
-    cmd += [str(arg) for arg in metadata.get("cli_args", [])]
+    config_name = metadata.get("config")
+    if config_name:
+        if mock_http_port is not None:
+            config_path = materialize_config(
+                case_dir, config_name, mock_http_port=mock_http_port, tmp_dir=out_path.parent
+            )
+            cmd += ["--config", str(config_path)]
+        else:
+            cmd += ["--config", config_name]
+    cmd += materialize_cli_args(metadata.get("cli_args", []), mock_http_port=mock_http_port)
 
     proc = subprocess.run(
         cmd,
         cwd=case_dir,
-        env=_sandboxed_env(case_dir, home_dir),
+        env=_sandboxed_env(case_dir, home_dir, leftover_replies_path=leftover_replies_path),
         capture_output=True,
         text=True,
         timeout=metadata.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS),
         check=False,
     )
     return CaseResult(proc.returncode, proc.stdout, proc.stderr, out_path)
+
+
+@contextlib.contextmanager
+def mock_http_server(case_dir: Path, metadata: dict[str, Any]) -> Iterator[MockHttpServer | None]:
+    """Start the case's own mock HTTP server (`case.json`'s
+    `mock_http_fixture`) for the duration of the `with` block, or yield
+    `None` when the case doesn't set one. Always stops the server, even
+    on failure -- the one place that owns its lifecycle, used by both
+    pytest runners and the generator so a case is scripted identically
+    everywhere it runs."""
+    fixture_name = metadata.get("mock_http_fixture")
+    if fixture_name is None:
+        yield None
+        return
+    server = MockHttpServer(case_dir / fixture_name)
+    server.start()
+    try:
+        yield server
+    finally:
+        server.stop()
 
 
 def parse_cli_error(stdout: str) -> str:

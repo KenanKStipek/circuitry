@@ -16,7 +16,9 @@ loop or dynamic makes nondeterministic.
 
 from __future__ import annotations
 
+import atexit
 import json
+import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,6 +51,51 @@ _ALWAYS_RETRYABLE = frozenset({"timeout", "connection"})
 
 class ScriptedRepliesError(RuntimeError):
     """The replies file itself is malformed — a load/``check()``-time failure."""
+
+
+#: Test-only hook (electricity/docs/spec/scripted-replies.md §7): a
+#: conformance harness runs ``cof run`` as a *subprocess* and has no
+#: handle to the adapter instance it built, so it cannot call
+#: :meth:`ScriptedAdapter.leftover_replies` directly after the run. When
+#: this variable names a writable path, every :class:`ScriptedAdapter`
+#: built in the process registers itself here; at process exit, their
+#: ``leftover_replies()`` counts are merged (summed per path, across every
+#: instance — a fallback chain can build more than one) and written to
+#: that path as a single JSON object. Never read when unset: an ordinary
+#: run pays nothing for this.
+LEFTOVER_REPLIES_EXPORT_ENV_VAR = "CIRCUITRY_TEST_SCRIPTED_LEFTOVER_REPLIES_FILE"
+
+_export_lock = threading.Lock()
+_export_instances: list[ScriptedAdapter] = []
+_export_hook_registered = False
+
+
+def _merge_leftover_replies(instances: list[ScriptedAdapter]) -> dict[str, int]:
+    merged: dict[str, int] = {}
+    for instance in instances:
+        for path, count in instance.leftover_replies().items():
+            merged[path] = merged.get(path, 0) + count
+    return merged
+
+
+def _write_leftover_export() -> None:
+    target = os.environ.get(LEFTOVER_REPLIES_EXPORT_ENV_VAR)
+    if not target:
+        return
+    with _export_lock:
+        merged = _merge_leftover_replies(_export_instances)
+    Path(target).write_text(json.dumps(merged), encoding="utf-8")
+
+
+def _register_for_leftover_export(adapter: ScriptedAdapter) -> None:
+    global _export_hook_registered
+    if not os.environ.get(LEFTOVER_REPLIES_EXPORT_ENV_VAR):
+        return
+    with _export_lock:
+        _export_instances.append(adapter)
+        if not _export_hook_registered:
+            atexit.register(_write_leftover_export)
+            _export_hook_registered = True
 
 
 @dataclass(frozen=True)
@@ -225,6 +272,7 @@ class ScriptedAdapter:
     _queues: dict[str, list[_Reply]] | None = field(
         default=None, repr=False, compare=False
     )
+    _registered_for_export: bool = field(default=False, repr=False, compare=False)
 
     def _path(self) -> Path:
         return Path(self.replies_file).expanduser()
@@ -244,6 +292,15 @@ class ScriptedAdapter:
         options: GenerateOptions | None = None,
     ) -> GenerateResult:
         del model, prompt, timeout_seconds
+        if not self._registered_for_export:
+            # Registered here, on first actual dispatch -- never at
+            # construction time -- so a preflight-only instance (built
+            # solely to call `check()`, which loads the replies file but
+            # never consumes one, see `cli.runtime_shim.preflight`) never
+            # contributes a false "leftover" count for replies nothing
+            # ever asked it to use.
+            _register_for_leftover_export(self)
+            self._registered_for_export = True
         path = current_call_path()
         if path is None:
             raise RuntimeError(
