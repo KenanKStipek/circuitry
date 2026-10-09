@@ -386,6 +386,25 @@ fn do_run(args: RunArgs) -> ExitCode {
         };
         print_line(&mut out, &mut clock, None, &text);
     }
+    // K6: a run that ended (`runtime.last_run.completed_at` set)
+    // without ever creating a `prime` node at all — a document invalid
+    // enough that nothing ran — gets a correctly "failed" summary line
+    // from `run_ok` above, but with no message at all: there is no
+    // `/prime/meta/error` to read one from. cof's own stdout JSON
+    // (DESIGN.md §4.1) has the real reason; prefer it over leaving the
+    // summary line's error text empty.
+    if let Ok(bytes) = std::fs::read(spec.out_path()) {
+        if let Ok(state) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+            let ended_without_a_message = oscilloscope_core::model::run_ended(&state)
+                && !oscilloscope_core::model::run_ok(&state)
+                && oscilloscope_core::model::run_error(&state).is_none();
+            if ended_without_a_message {
+                if let Some(err) = read_stdout_json_error(&spec.stdout_path()) {
+                    print_line(&mut out, &mut clock, None, &format!("engine: {err}"));
+                }
+            }
+        }
+    }
     let _ = writeln!(out, "exit {}", exit_code(exit_status));
 
     if args.out_dir.is_none() {

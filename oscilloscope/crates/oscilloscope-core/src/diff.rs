@@ -665,6 +665,25 @@ mod tests {
     }
 
     #[test]
+    fn a_run_that_ended_with_no_prime_node_never_prints_run_ok() {
+        // K6: a document invalid enough that nothing ever ran still
+        // sets runtime.last_run.completed_at in its final write, with
+        // no `prime` key at all. The run summary must say "failed",
+        // never "ok", right before the engine's own nonzero exit code.
+        let mut differ = Differ::new();
+        let state = json!({"runtime": {"last_run": {"completed_at": "t9"}}});
+        let lines = differ.diff(&state, &PlanTree::empty());
+        assert!(
+            lines.iter().any(|l| l.text.starts_with("■ run failed")),
+            "{lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.text.starts_with("■ run ok")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
     fn run_summary_line_appears_once_the_run_ends() {
         let mut differ = Differ::new();
         let state = json!({

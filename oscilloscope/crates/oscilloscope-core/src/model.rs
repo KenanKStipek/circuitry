@@ -113,10 +113,19 @@ pub fn run_ended(state: &Value) -> bool {
 }
 
 /// `prime.meta.error == null` (DESIGN.md §2.1 rule 7).
+///
+/// Requires the key to be explicitly present and `null`, not merely
+/// absent (K6): a run that failed *before* ever creating a `prime`
+/// node at all (a document invalid enough that nothing ran) still
+/// gets `runtime.last_run.completed_at` set in its final write, with
+/// no `prime` key whatsoever — `/prime/meta/error` then fails to
+/// resolve, and treating a missing pointer the same as an explicit
+/// `null` printed `■ run ok` right before the engine's own nonzero
+/// exit code. A nonzero exit is never "ok".
 pub fn run_ok(state: &Value) -> bool {
     state
         .pointer("/prime/meta/error")
-        .is_none_or(Value::is_null)
+        .is_some_and(Value::is_null)
 }
 
 pub fn run_error(state: &Value) -> Option<String> {
@@ -873,6 +882,19 @@ mod tests {
 
         let mid_run = json!({"runtime": {"last_run": {"completed_at": null}}});
         assert!(!run_ended(&mid_run));
+    }
+
+    #[test]
+    fn run_ok_is_false_when_the_run_ended_with_no_prime_node_at_all() {
+        // K6: a document invalid enough that nothing ever ran still
+        // gets runtime.last_run.completed_at set in its final write,
+        // with no `prime` key whatsoever -- `run_ok` must not treat a
+        // missing `/prime/meta/error` pointer the same as an explicit
+        // `null`, or this prints `■ run ok` right before the engine's
+        // own nonzero exit code.
+        let no_prime_at_all = json!({"runtime": {"last_run": {"completed_at": "t"}}});
+        assert!(run_ended(&no_prime_at_all));
+        assert!(!run_ok(&no_prime_at_all));
     }
 
     #[test]
