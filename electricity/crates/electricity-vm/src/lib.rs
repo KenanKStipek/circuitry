@@ -18,22 +18,35 @@
 //! See `electricity/docs/spec/vm-lanes.md` for which lane owns which
 //! file and function in this crate (and its sibling VM-lane crates).
 
-pub mod cancel;
+pub mod adapter;
 pub mod exec;
 pub mod limiter;
 pub mod observer;
 pub mod params;
+pub mod retry;
 pub mod store;
 
-pub use cancel::CancellationToken;
+/// Moved to `electricity-value` (issue #449's gate lane): a `ToolCall`
+/// (`electricity-tools`) and the VM both need the same concrete token
+/// type, and the workspace's dependency direction (DESIGN.md §2) rules
+/// out defining it in either one -- re-exported here unchanged so every
+/// existing `electricity_vm::CancellationToken` path keeps working.
+pub use electricity_value::CancellationToken;
 pub use limiter::{Limiter, LimiterError, SlotGuard};
 pub use observer::{NullObserver, RunObserver};
 pub use store::{NodeRef, Slot, Store, StoreError};
 
 use electricity_bytecode::Program;
+use electricity_config::ComplexitySettings;
 use electricity_tools::ToolRegistry;
 use electricity_value::Value;
+use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::fmt;
+use std::path::Path;
+use std::rc::Rc;
+
+pub use adapter::Adapter;
 
 /// Everything [`execute_root`]'s own tree-walking interpreter (lane B)
 /// and [`exec::tool::run_tool`] (through it) need that isn't the store,
@@ -60,6 +73,10 @@ pub struct RunContext<'a> {
     pub registry: &'a ToolRegistry,
     pub limiter: &'a Limiter,
     pub model: &'a str,
+    /// M0-H's own bare adapter-name field, kept verbatim (always
+    /// `"_noop"` through M1-A: run-wiring step 15) -- a `dynamic` node's
+    /// own `meta.adapter` reads this directly, never [`Self::default_adapter`]
+    /// (`exec::dynamic::write_dynamic_meta_start`).
     pub adapter: &'a str,
     pub runtime_config: &'a Value,
     /// `--dry-run`-style execution with no tool side effects -- reserved
@@ -67,6 +84,53 @@ pub struct RunContext<'a> {
     /// wiring (issue #431 never mentions a dry-run flag), kept here
     /// rather than added to this struct's shape later.
     pub dry_run: bool,
+    /// `true` only for a CLI-driven run -- [`electricity_tools::ToolCall::armed`]'s
+    /// own doc comment (issue #449's gate lane item 1).
+    pub armed: bool,
+    /// `adapters/factory.py::build_adapter`'s own per-attempt builder
+    /// table (issue #449's gate lane item 4) -- lane G's `prompt` effect
+    /// is the first real reader.
+    pub adapters: &'a adapter::AdapterRegistry,
+    /// The run's own default adapter, already built -- `adapter::NoopAdapter`
+    /// for every M0/M1-A run (no real adapter is ever configured yet).
+    /// `Rc`, not `Box`/a bare reference: a fallback attempt chain
+    /// (lane G) hands this same instance to more than one concurrent
+    /// borrow site without this struct itself needing to be `Clone`.
+    pub default_adapter: Rc<dyn adapter::Adapter>,
+    /// A profile's run-level `model:` locks routing off for every prompt
+    /// in the run (`model_reason` stays `"default"`) -- lane J2/K2.
+    pub model_locked: bool,
+    /// `adapters/factory.py::configured_timeout_seconds(...) or 120` --
+    /// the run's own adapter dispatch timeout, before a per-prompt
+    /// `timeout_ms` can shorten it (lane G).
+    pub adapter_timeout_seconds: u32,
+    /// The resolved `runtime.complexity` settings (`electricity_config::
+    /// complexity::validate_complexity`) -- lane K1/K2.
+    pub complexity: &'a ComplexitySettings,
+    /// How many `use`/decomposition levels deep this run already is --
+    /// lane I/L's own recursion-depth ceiling.
+    pub decomposition_depth: u32,
+    /// `core/use.py`'s own `use_call_stack` -- names of every `use`
+    /// effect currently on the call stack, for cycle detection; shared
+    /// (interior-mutable) across a `use` child's own nested `RunContext`
+    /// borrow, never cloned per level. Lane I.
+    pub use_call_stack: &'a RefCell<Vec<String>>,
+    /// The directory a relative `use: {path: ...}`/asset reference
+    /// resolves against -- `Program.document`'s own `resolved_directory`.
+    /// Lane I.
+    pub orchestration_dir: &'a Path,
+    /// `Program.prompts` -- the document's own top-level `prompts:` map
+    /// (name -> template text), for `{{> name}}` expansion. Lane P.
+    pub declared_prompts: &'a indexmap::IndexMap<String, String>,
+    /// `Program.effect_names` -- every named effect in the document, for
+    /// `{{> name}}`'s own "not a declared prompt" vs "a declared prompt
+    /// that hasn't run yet" distinction. Lane P.
+    pub effect_names: &'a BTreeSet<String>,
+    /// `core/prompt.py`'s own container-nesting display depth
+    /// (`structure.depth`), threaded alongside the store path rather
+    /// than derived from it -- see electricity/docs/spec/vm-lanes.md's
+    /// M1 table, §4 finding 3. Lane K1.
+    pub display_depth: u32,
 }
 
 /// Any error [`execute_root`] (or one of its own sub-executors) can
@@ -74,12 +138,13 @@ pub struct RunContext<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VmError {
     /// A `tool` effect's `provider:` has no registered
-    /// [`electricity_tools::ToolPlugin`].
-    ToolNotFound(String),
-    /// A registered plugin's own [`electricity_tools::ToolError`], or any
-    /// other tool-effect failure (a render error, an allowlist denial, a
-    /// failed `expect:`), as text -- what [`crate::exec::tool::execute_tool`]
-    /// returns for `on_error: fail` once retries are exhausted.
+    /// [`electricity_tools::ToolPlugin`] -- `electricity_tools::registry::
+    /// build_plugin`'s own exact unknown-plugin text (issue #449's gate
+    /// lane item 2), or a registered plugin's own
+    /// [`electricity_tools::ToolError`], or any other tool-effect failure
+    /// (a render error, an allowlist denial, a failed `expect:`), as
+    /// text -- what [`crate::exec::tool::execute_tool`] returns for
+    /// `on_error: fail` once retries are exhausted.
     Tool(String),
     /// This run's own [`CancellationToken`] was requested while an effect
     /// was blocked waiting (a concurrency slot, a retry backoff) -- bypasses
@@ -108,7 +173,6 @@ pub enum VmError {
 impl fmt::Display for VmError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            VmError::ToolNotFound(provider) => write!(f, "Unknown tool provider: {provider}"),
             VmError::Tool(message) => write!(f, "{message}"),
             VmError::Cancelled => write!(f, "cancelled"),
             VmError::NotImplemented(message) => write!(f, "{message}"),
@@ -215,6 +279,12 @@ mod tests {
         let registry = ToolRegistry::new();
         let limiter = Limiter::new();
         let runtime_config = Value::None;
+        let adapters = adapter::AdapterRegistry::new();
+        let complexity = ComplexitySettings::default();
+        let use_call_stack = RefCell::new(Vec::new());
+        let orchestration_dir = Path::new(".");
+        let declared_prompts = indexmap::IndexMap::new();
+        let effect_names = BTreeSet::new();
         let run_ctx = RunContext {
             registry: &registry,
             limiter: &limiter,
@@ -222,6 +292,18 @@ mod tests {
             adapter: "_noop",
             runtime_config: &runtime_config,
             dry_run: false,
+            armed: false,
+            adapters: &adapters,
+            default_adapter: Rc::new(adapter::NoopAdapter),
+            model_locked: false,
+            adapter_timeout_seconds: 120,
+            complexity: &complexity,
+            decomposition_depth: 0,
+            use_call_stack: &use_call_stack,
+            orchestration_dir,
+            declared_prompts: &declared_prompts,
+            effect_names: &effect_names,
+            display_depth: 0,
         };
         execute_root(
             &program,

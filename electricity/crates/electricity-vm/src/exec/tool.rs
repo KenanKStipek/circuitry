@@ -66,45 +66,68 @@ use crate::params::{
 use crate::store::Slot;
 use crate::{CancellationToken, RunContext, RunObserver, VmError};
 use electricity_bytecode::{ExpectCondition, OnError, Op, ParamNode, ToolOp};
-use electricity_tools::ToolRegistry;
+use electricity_tools::{ToolCall, ToolRegistry};
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
-use rand::Rng;
 
 /// Runs *provider* (a tool effect's own `provider:`) against *registry*,
 /// with *params* already rendered (lane B/C's own `params.rs` -- `{from:
 /// ...}` resolved, templates rendered, `params_json` deep-merged; out of
-/// scope for this function) and *timeout_seconds* already resolved by
-/// the caller (`core/tool.py::ToolRuntime._resolve_timeout_seconds`'s
-/// own `timeout_ms`-vs-`runtime.tools.timeout_seconds`-vs-default
-/// policy needs the merged runtime config this function doesn't take --
-/// [`crate::RunContext::runtime_config`] is where lane B's own caller
-/// reads it from before calling this).
+/// scope for this function) -- *runtime_config* is the merged `runtime:`
+/// block [`crate::RunContext::runtime_config`] carries, read for the
+/// [`electricity_tools::ToolCall::config`] slice the plugin's own
+/// `execute` receives (and, on the fallback path below, for
+/// `build_plugin`'s own per-attempt build too).
 ///
-/// `Err` is [`VmError::ToolNotFound`] for an unregistered *provider*, or
-/// the plugin's own [`electricity_tools::ToolError`] wrapped the same
-/// way.
+/// *registry* (still [`crate::RunContext::registry`]) is tried first --
+/// an embedder's own long-lived [`electricity_tools::ToolPlugin`]
+/// instance (or a test double, as this module's own unit tests below
+/// still register) always wins when one is registered under
+/// *provider*'s own normalized name. Only a *provider* with no such
+/// entry falls through to [`electricity_tools::build_plugin`] (issue
+/// #449's gate lane item 2) -- called fresh on *this* call, i.e. inside
+/// the retry loop below, exactly where `core/tool.py::ToolRuntime.
+/// execute` calls Python's own `build_plugin` every attempt -- so a
+/// per-plugin config error on that path fails just the one attempt.
+///
+/// `Err` is [`VmError::Tool`] -- `build_plugin`'s own exact
+/// unknown-plugin text (naming Circuitry's **full** registry) for a
+/// *provider* neither *registry* nor `build_plugin` knows, or the
+/// resolved plugin's own [`electricity_tools::ToolError`], either way
+/// wrapped the same way.
 pub async fn run_tool(
     registry: &ToolRegistry,
     provider: &str,
     params: Value,
+    runtime_config: &Value,
     timeout_seconds: u32,
+    token: &CancellationToken,
+    armed: bool,
 ) -> Result<electricity_tools::ToolResult, VmError> {
     let normalized = provider.trim().to_lowercase();
-    let plugin = registry
-        .get(&normalized)
-        .ok_or_else(|| VmError::ToolNotFound(provider.to_string()))?;
+    let config = electricity_tools::registry::plugin_config_slice(runtime_config, &normalized);
+    let call = ToolCall {
+        timeout_seconds,
+        config: &config,
+        token,
+        armed,
+    };
+    if let Some(plugin) = registry.get(&normalized) {
+        return plugin
+            .execute(params, &call)
+            .await
+            .map_err(|err| VmError::Tool(err.to_string()));
+    }
+    let plugin = electricity_tools::build_plugin(&normalized, runtime_config)
+        .map_err(|err| VmError::Tool(err.to_string()))?;
     plugin
-        .execute(params, timeout_seconds)
+        .execute(params, &call)
         .await
         .map_err(|err| VmError::Tool(err.to_string()))
 }
 
 /// `core/tool.py::DEFAULT_TOOL_TIMEOUT_SECONDS`.
 const DEFAULT_TOOL_TIMEOUT_SECONDS: u32 = 300;
-
-/// `adapters/_retry.py::RETRY_BACKOFF_CAP_MS`.
-const RETRY_BACKOFF_CAP_MS: u32 = 60_000;
 
 /// `core/tool.py::_SECURITY_SENSITIVE_PARAM_KEYS`.
 const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 1] = ["allowed_commands"];
@@ -329,27 +352,6 @@ fn now_iso() -> Value {
     Value::Str(chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false))
 }
 
-/// `adapters/_retry.py::next_backoff_delay_ms`, minus the `Retry-After`
-/// override: no HTTP-family tool exists in this crate's own
-/// [`electricity_tools::ToolRegistry`] yet, so *retry_info.retry_after*
-/// is always `None` for every provider `run_tool` can actually dispatch
-/// to, same as every other non-HTTP-family Python plugin already is.
-fn full_jitter_backoff_ms(attempt_index: u32, base_ms: u32) -> u32 {
-    // `base_ms * 2**attempt_index`: any shift at or beyond 20 already
-    // sends the product past `RETRY_BACKOFF_CAP_MS` for every `base_ms`
-    // at least 1, so capping the shift there (rather than at the full
-    // 63 bits a `u64` could hold) keeps the multiplication itself clear
-    // of overflow without changing the clamped result for any ceiling
-    // this function could ever actually return.
-    let shift = attempt_index.min(20);
-    let scaled = u64::from(base_ms).saturating_mul(1u64 << shift);
-    let ceiling = scaled.min(u64::from(RETRY_BACKOFF_CAP_MS)) as u32;
-    if ceiling == 0 {
-        return 0;
-    }
-    rand::thread_rng().gen_range(0..=ceiling)
-}
-
 /// Test-only now: `execute_tool`'s own `setdefault`-shaped check reads
 /// the node's own `IndexMap` directly (`contains_key`), since this
 /// function's `None`-on-either collapsing can't tell a `Slot::Node`
@@ -452,7 +454,7 @@ pub async fn execute_tool(
     // start/complete pair unbalanced, exactly as Python's own
     // `AllowlistError` (never caught, so `fire_effect_complete` is never
     // reached either) does.
-    observer.effect_start(&op.path);
+    let instance = observer.effect_start(&op.path);
 
     let max_attempts = tool.retries.max_attempts.max(1);
     let base_backoff_ms = tool.retries.backoff_ms;
@@ -582,7 +584,10 @@ pub async fn execute_tool(
                                 run_ctx.registry,
                                 &tool.provider,
                                 rendered_value,
+                                run_ctx.runtime_config,
                                 timeout_seconds,
+                                token,
+                                run_ctx.armed,
                             ) => Some(result),
                             () = token.cancelled() => None,
                         };
@@ -702,13 +707,17 @@ pub async fn execute_tool(
             // `core/tool.py`'s own `_HTTP_FAMILY_PROVIDERS` (this
             // module's own doc comment).
             if !is_last_attempt {
-                next_delay_ms = full_jitter_backoff_ms(attempt_index, base_backoff_ms);
+                next_delay_ms = crate::retry::next_backoff_delay_ms(
+                    &crate::retry::RetryInfo::retryable(),
+                    attempt_index,
+                    base_backoff_ms,
+                );
                 continue;
             }
             if matches!(op.on_error, OnError::Skip | OnError::Continue) {
                 set_leaf(store, &effect_node, "value", Value::None);
             }
-            observer.effect_complete(&op.path, Some(&message));
+            observer.effect_complete(&op.path, instance, Some(&message));
             // The final store write for this effect (whichever
             // `on_error` branch below actually returns) -- same
             // contract as the per-attempt reset's own `observer.
@@ -729,7 +738,7 @@ pub async fn execute_tool(
                 Value::from(i64::from(attempt_index)),
             );
         }
-        observer.effect_complete(&op.path, None);
+        observer.effect_complete(&op.path, instance, None);
         observer.write();
         return Ok(());
     }
@@ -741,31 +750,58 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn an_unregistered_provider_is_reported_by_name() {
+    async fn an_unknown_provider_lists_pythons_full_registry() {
         let registry = ToolRegistry::new();
-        let err = run_tool(&registry, "json", Value::None, 300)
-            .await
-            .unwrap_err();
-        assert_eq!(err, VmError::ToolNotFound("json".to_string()));
+        let token = CancellationToken::new();
+        let err = run_tool(
+            &registry,
+            "bogus",
+            Value::None,
+            &Value::None,
+            300,
+            &token,
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, VmError::Tool(message) if message.starts_with("Unknown plugin: 'bogus'."))
+        );
     }
 
     #[tokio::test]
-    async fn a_provider_name_is_normalized_before_lookup() {
-        let mut registry = ToolRegistry::new();
-        registry.register(Box::new(electricity_tools::json::JsonTool));
-        let err = run_tool(&registry, "  JSON ", Value::None, 300)
-            .await
-            .unwrap_err();
+    async fn a_provider_name_is_normalized_before_dispatch() {
+        let registry = ToolRegistry::new();
+        let token = CancellationToken::new();
+        let err = run_tool(
+            &registry,
+            "  JSON ",
+            Value::None,
+            &Value::None,
+            300,
+            &token,
+            false,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, VmError::Tool(_)));
     }
 
     #[tokio::test]
-    async fn a_registered_providers_own_error_is_wrapped() {
-        let mut registry = ToolRegistry::new();
-        registry.register(Box::new(electricity_tools::json::JsonTool));
-        let err = run_tool(&registry, "json", Value::None, 300)
-            .await
-            .unwrap_err();
+    async fn a_built_providers_own_error_is_wrapped() {
+        let registry = ToolRegistry::new();
+        let token = CancellationToken::new();
+        let err = run_tool(
+            &registry,
+            "json",
+            Value::None,
+            &Value::None,
+            300,
+            &token,
+            false,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, VmError::Tool(_)));
     }
 
@@ -814,6 +850,22 @@ mod tests {
         limiter: &'a crate::Limiter,
         runtime_config: &'a Value,
     ) -> RunContext<'a> {
+        // Leaked (test-only helper, called many times across this
+        // module's own tests): every M1-A field below has no test here
+        // that reads it, so there is nothing to thread a real lifetime
+        // through -- a `'static` default is simpler than adding four
+        // more parameters to every one of this function's own callers.
+        let adapters: &'a crate::adapter::AdapterRegistry =
+            Box::leak(Box::new(crate::adapter::AdapterRegistry::new()));
+        let complexity: &'a electricity_config::ComplexitySettings =
+            Box::leak(Box::new(electricity_config::ComplexitySettings::default()));
+        let use_call_stack: &'a std::cell::RefCell<Vec<String>> =
+            Box::leak(Box::new(std::cell::RefCell::new(Vec::new())));
+        let dir: &'static std::path::PathBuf = Box::leak(Box::new(std::path::PathBuf::from(".")));
+        let declared_prompts: &'a indexmap::IndexMap<String, String> =
+            Box::leak(Box::new(indexmap::IndexMap::new()));
+        let effect_names: &'a std::collections::BTreeSet<String> =
+            Box::leak(Box::new(std::collections::BTreeSet::new()));
         RunContext {
             registry,
             limiter,
@@ -821,6 +873,18 @@ mod tests {
             adapter: "_noop",
             runtime_config,
             dry_run: false,
+            armed: false,
+            adapters,
+            default_adapter: std::rc::Rc::new(crate::adapter::NoopAdapter),
+            model_locked: false,
+            adapter_timeout_seconds: 120,
+            complexity,
+            decomposition_depth: 0,
+            use_call_stack,
+            orchestration_dir: dir.as_path(),
+            declared_prompts,
+            effect_names,
+            display_depth: 0,
         }
     }
 
@@ -1006,6 +1070,7 @@ mod tests {
             fn effect_complete(
                 &self,
                 _path: &electricity_bytecode::EffectPath,
+                _instance: crate::observer::InstanceId,
                 _error: Option<&str>,
             ) {
                 self.0.set(self.0.get() + 1);
@@ -1527,7 +1592,7 @@ mod tests {
         async fn execute(
             &self,
             _params: Value,
-            _timeout_seconds: u32,
+            _call: &electricity_tools::ToolCall<'_>,
         ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
             let call = self.calls.get();
             self.calls.set(call + 1);
@@ -1619,7 +1684,7 @@ mod tests {
             async fn execute(
                 &self,
                 _params: Value,
-                _timeout_seconds: u32,
+                _call: &electricity_tools::ToolCall<'_>,
             ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
                 let mut result =
                     electricity_tools::ToolResult::new(Value::None, Value::Dict(Dict::new()));
@@ -1686,7 +1751,7 @@ mod tests {
             async fn execute(
                 &self,
                 _params: Value,
-                _timeout_seconds: u32,
+                _call: &electricity_tools::ToolCall<'_>,
             ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
                 let mut raw = Dict::new();
                 let body = "a".repeat(electricity_redaction::RAW_META_MAX_BYTES + 1);
@@ -1906,7 +1971,7 @@ mod tests {
             async fn execute(
                 &self,
                 _params: Value,
-                _timeout_seconds: u32,
+                _call: &electricity_tools::ToolCall<'_>,
             ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
                 std::future::pending::<()>().await;
                 unreachable!("never resolves")

@@ -54,7 +54,7 @@ pub(crate) fn execute_conditional<'a>(
                 let meta = store.ensure_dict(&node, key("meta")).map_err(store_err)?;
                 write_conditional_meta_start(store, &meta, cond, *threshold, op.labels.as_ref());
 
-                observer.effect_start(&op.path);
+                let instance = observer.effect_start(&op.path);
                 let result = decide_and_run(
                     op,
                     cond,
@@ -77,7 +77,7 @@ pub(crate) fn execute_conditional<'a>(
                 // still returns `Ok`) and for an interrupted branch
                 // (`decide_and_run` returns `Err(Cancelled)`, but
                 // meta.error is never written for a cancellation).
-                observer.effect_complete(&op.path, node_error(store, &meta).as_deref());
+                observer.effect_complete(&op.path, instance, node_error(store, &meta).as_deref());
                 result
             }
             None => {

@@ -161,7 +161,8 @@ use electricity_bytecode::{EffectPath, Refusal, RefusalReason, first_unsupported
 use electricity_config::CircuitryConfig;
 use electricity_value::{Dict, Value};
 use electricity_vm::{Limiter, RunContext, RunObserver, Store};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::time::Instant;
 
 /// Tool providers the M0-H VM accepts beyond `json` -- only ever the
@@ -440,16 +441,32 @@ struct Observer<'a> {
     totals: &'a Totals,
     events: Option<&'a events::EventLog>,
     live_state: Option<&'a live_state::LiveStateMirror>,
+    /// Issue #449's gate lane item 7's own per-instance `--events`
+    /// pairing seam -- a plain incrementing counter is enough here:
+    /// M0-H never runs two overlapping calls at the same
+    /// [`EffectPath`] (no `loop`, and a tree's own branches are each
+    /// at their *own* concretized path), so `--events` output stays
+    /// byte-identical either way; this only has to hand back a value
+    /// `effect_complete` can be given.
+    next_instance: std::cell::Cell<electricity_vm::observer::InstanceId>,
 }
 
 impl RunObserver for Observer<'_> {
-    fn effect_start(&self, path: &EffectPath) {
+    fn effect_start(&self, path: &EffectPath) -> electricity_vm::observer::InstanceId {
         if let Some(log) = self.events {
             log.on_start(&path.to_string());
         }
+        let instance = self.next_instance.get() + 1;
+        self.next_instance.set(instance);
+        instance
     }
 
-    fn effect_complete(&self, path: &EffectPath, error: Option<&str>) {
+    fn effect_complete(
+        &self,
+        path: &EffectPath,
+        _instance: electricity_vm::observer::InstanceId,
+        error: Option<&str>,
+    ) {
         self.totals.observe_complete();
         if let Some(log) = self.events {
             log.on_complete(&path.to_string(), error);
@@ -995,10 +1012,20 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
         totals: &totals,
         events: event_log.as_ref(),
         live_state: live_mirror.as_ref(),
+        next_instance: std::cell::Cell::new(0),
     };
 
     let model = effective.model.clone().unwrap_or_default();
     let registry = tool_registry();
+    let adapters = electricity_vm::adapter::AdapterRegistry::new();
+    let complexity = electricity_config::resolve_complexity_settings(effective.runtime.as_ref())
+        .unwrap_or_default();
+    let use_call_stack: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    let orchestration_dir: &Path = program
+        .document
+        .as_ref()
+        .map(|doc| doc.resolved_directory.as_path())
+        .unwrap_or_else(|| Path::new("."));
     let run_ctx = RunContext {
         registry: &registry,
         limiter: &limiter,
@@ -1010,6 +1037,21 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
         adapter: "_noop",
         runtime_config: &runtime_config_value,
         dry_run: false,
+        // This function is `electricity-cli`'s own entry point -- always
+        // an armed, CLI-driven run (M1-A has no embedding caller of its
+        // own yet).
+        armed: true,
+        adapters: &adapters,
+        default_adapter: Rc::new(electricity_vm::adapter::NoopAdapter),
+        model_locked: false,
+        adapter_timeout_seconds: 120,
+        complexity: &complexity,
+        decomposition_depth: 0,
+        use_call_stack: &use_call_stack,
+        orchestration_dir,
+        declared_prompts: &program.prompts,
+        effect_names: &program.effect_names,
+        display_depth: 0,
     };
 
     // Step 17/18: execute the root, then the success or failure tail.

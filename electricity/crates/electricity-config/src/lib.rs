@@ -43,7 +43,7 @@ pub use allowlist::{
 };
 pub use complexity::{
     ComplexityBand, ComplexitySettings, DecompositionSettings, RoutingSettings, SCORE_MAX,
-    SCORE_MIN, ScoringSettings,
+    SCORE_MIN, ScoringSettings, resolve_complexity_settings,
 };
 pub use config::{CircuitryConfig, ConfigError, resolve_config};
 pub use effective_settings::{EffectiveSettings, effective_settings};

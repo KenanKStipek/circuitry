@@ -26,7 +26,7 @@
 //! `std::process::exit` call), entirely independent of what any VM
 //! token -- `finally:`'s own included -- is doing at that moment.
 
-use crate::{CheckResult, ToolError, ToolPlugin, ToolResult};
+use crate::{CheckResult, ToolCall, ToolError, ToolPlugin, ToolResult};
 use async_trait::async_trait;
 use electricity_value::{Dict, Value};
 
@@ -55,7 +55,7 @@ impl ToolPlugin for SleepTool {
         "sleep"
     }
 
-    async fn execute(&self, params: Value, _timeout_seconds: u32) -> Result<ToolResult, ToolError> {
+    async fn execute(&self, params: Value, _call: &ToolCall<'_>) -> Result<ToolResult, ToolError> {
         let seconds = seconds_param(&params);
         tokio::time::sleep(std::time::Duration::from_secs_f64(seconds)).await;
         Ok(ToolResult::new(
@@ -84,9 +84,9 @@ impl ToolPlugin for FailTool {
         "fail"
     }
 
-    async fn execute(&self, params: Value, _timeout_seconds: u32) -> Result<ToolResult, ToolError> {
+    async fn execute(&self, params: Value, _call: &ToolCall<'_>) -> Result<ToolResult, ToolError> {
         let _ = params;
-        Err(ToolError("FailTool: deliberate failure".to_string()))
+        Err(ToolError::message("FailTool: deliberate failure"))
     }
 
     fn check(&self) -> CheckResult {
@@ -101,6 +101,18 @@ impl ToolPlugin for FailTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use electricity_value::CancellationToken;
+
+    static NONE: Value = Value::None;
+
+    fn call(token: &CancellationToken) -> ToolCall<'_> {
+        ToolCall {
+            timeout_seconds: 30,
+            config: &NONE,
+            token,
+            armed: false,
+        }
+    }
 
     #[test]
     fn both_test_tools_report_their_own_names() {
@@ -113,14 +125,19 @@ mod tests {
         let mut params = Dict::new();
         params.insert(Value::Str("seconds".to_string()), Value::from(5i64));
         let started = tokio::time::Instant::now();
-        SleepTool.execute(Value::Dict(params), 30).await.unwrap();
+        let token = CancellationToken::new();
+        SleepTool
+            .execute(Value::Dict(params), &call(&token))
+            .await
+            .unwrap();
         assert_eq!(started.elapsed(), std::time::Duration::from_secs(5));
     }
 
     #[tokio::test]
     async fn sleep_tool_defaults_to_zero_with_no_seconds_param() {
+        let token = CancellationToken::new();
         let result = SleepTool
-            .execute(Value::Dict(Dict::new()), 30)
+            .execute(Value::Dict(Dict::new()), &call(&token))
             .await
             .unwrap();
         assert!(result.ok);
@@ -128,10 +145,11 @@ mod tests {
 
     #[tokio::test]
     async fn fail_tool_always_fails_with_a_fixed_message() {
+        let token = CancellationToken::new();
         let err = FailTool
-            .execute(Value::Dict(Dict::new()), 30)
+            .execute(Value::Dict(Dict::new()), &call(&token))
             .await
             .unwrap_err();
-        assert_eq!(err.0, "FailTool: deliberate failure");
+        assert_eq!(err.message, "FailTool: deliberate failure");
     }
 }
