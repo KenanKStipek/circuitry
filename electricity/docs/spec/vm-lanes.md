@@ -37,9 +37,9 @@ reality: a lane that fills in a stub should update the row(s) it touches in the 
 | `electricity-vm` | `src/params.rs` | tool/`use` params rendering | C (final) | `{from: ...}` resolved (with `default:`), Mustache leaves rendered, `params_json` deep-merged through `JsonAwareCtx` -- `execute_tool`'s own caller for this half of `core/tool.py::ToolRuntime.execute`. |
 | `electricity-vm` | `src/lib.rs` | `execute_root` | A (stub) | Lane B's own tree-walking interpreter (`src/exec/mod.rs`, `src/exec/dynamic.rs`, `src/exec/conditional.rs`, all new lane B files), now reading *run_ctx* (`RunContext`) for the registry/limiter/model/adapter/runtime config. Runs tree branches as futures inside one `FuturesUnordered` (gated by `Limiter` for `max_concurrency`), not `tokio::task::spawn_local` -- `execute_root`'s borrowed arguments aren't `'static`, which `spawn_local` requires. |
 | `electricity-tools` | `src/lib.rs` | `ToolPlugin`, `ToolResult`, `ToolError`, `CheckResult`, `ToolRegistry` | A | Final and complete. |
-| `electricity-tools` | `src/json.rs` | `JsonTool` | A (stub) | Lane C implements `parse`/`stringify`/`extract`. |
+| `electricity-tools` | `src/json.rs` | `JsonTool` | C (final) | `parse`/`stringify`/`extract`, exact messages ported from `plugins/json.py`. |
 | `electricity-tools` | `src/test_tools.rs` (`test-tools` feature) | `SleepTool`, `FailTool` | A (stub) | Lane D's own signal tests implement the real blocking bodies. |
-| `electricity-redaction` | `src/lib.rs` | `redact` | A (stub, pass-through) | Lane C implements the real deny-list port of `cli/redaction.py`. |
+| `electricity-redaction` | `src/lib.rs` | `redact` | C (final) | The real deny-list port of `cli/redaction.py`. |
 | `electricity-redaction` | `src/lib.rs` | `cap_raw`, `RawCapMarker` | A | Final and complete -- the 64 KiB `meta.raw` cap has no redaction logic of its own. |
 | `electricity` (lib) | `src/run.rs` | `RunRequest`, `RunResult` | A | Final request/result shapes; lane D's own `run_orchestration` (steps 4-19 of #431's run-wiring table) replaces the current preview-refusal `run_orchestration` in `src/lib.rs`. |
 | `electricity-cli` | `src/main.rs` | argument parsing | A | Final: every flag from #431's usage parses in any position; `--out`/`--pretty`/`--live-state`/`--events` route to the preview-refusal stub lane D replaces with the real output contract. |
