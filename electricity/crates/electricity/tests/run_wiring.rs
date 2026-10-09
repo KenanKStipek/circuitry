@@ -253,6 +253,34 @@ async fn an_unsupported_effect_is_refused_with_no_state_written() {
     assert!(error.contains("prime.ask"));
 }
 
+/// A document naming its own top-level `adapter:` is refused the same
+/// way, before the VM would otherwise run it fine (`json`/`dynamic`
+/// only) -- `cof run` would fail this one in preflight instead (no
+/// `OPENAI_API_KEY` in this test's own `env_clear`'d process), which
+/// M0-H doesn't port yet.
+#[tokio::test]
+async fn a_document_level_adapter_is_refused_with_no_state_written() {
+    let dir = temp_dir("document-adapter-refusal");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "adapter: openai\neffects:\n  - name: parse\n    type: tool\n    provider: json\n    params: {mode: parse, input: '{\"a\": 1}'}\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+
+    assert!(!result.ok);
+    assert!(
+        result.state.is_none(),
+        "a refusal must write no state at all"
+    );
+    let error = result.error.unwrap();
+    assert!(error.contains("is a preview and cannot run orchestrations yet"));
+    assert!(error.contains("openai"));
+}
+
 #[tokio::test]
 async fn a_config_default_model_is_recorded_as_its_own_source() {
     let dir = temp_dir("config-model");
