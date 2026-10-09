@@ -1,6 +1,6 @@
 {
   "spec_case": "DESIGN.md §6.3 / §6.7",
-  "description": "An unnamed `if` nested inside a nested `dynamic` merges its branch's effects directly into the parent's own namespace (transparent control); a later step in that same chain reads the branch's tool output through `{from: prime.outer.inner.step.value}`, which must see the write live -- the interpreter's own live-context rule (deep-copying the enclosing scope per render, not a once-per-run snapshot), not a value frozen at container-entry time (electricity/DESIGN.md §6.3, §6.7; issue #442's interpreter-cost note).",
+  "description": "An unnamed `if` nested inside a nested `dynamic` merges its branch's effects directly into the parent's own namespace (transparent control); the branch's own *second* step reads the branch's *first* step's tool output through `{from: prime.outer.inner.step.value}`, which must see the write live -- the within-branch scope overlay is rebuilt from the enclosing context after every step, never resolved once up front or carried forward as a frozen snapshot (electricity/DESIGN.md §6.3; the P0 finding on PR #440 this rule guards against).",
   "engines": ["python", "electricity"],
   "expect": "success"
 }

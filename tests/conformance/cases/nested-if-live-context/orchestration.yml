@@ -13,14 +13,14 @@ effects:
                 name: step
                 provider: json
                 params: {mode: stringify, input: {phase: "then"}}
+              - type: tool
+                name: reader
+                provider: json
+                params:
+                  mode: stringify
+                  input: {from: prime.outer.inner.step.value}
             else:
               - type: tool
                 name: step
                 provider: json
                 params: {mode: stringify, input: {phase: "else"}}
-          - type: tool
-            name: reader
-            provider: json
-            params:
-              mode: stringify
-              input: {from: prime.outer.inner.step.value}
