@@ -70,8 +70,15 @@ fn a_dash_e_input_reaches_the_plan_compile() {
     // rendering UI yet) -- `--engine electricity` with a config but
     // with the binary itself not on PATH still reaches the plan
     // compile before the later launch failure, so this needs no real
-    // engine at all.
+    // engine at all. PATH is pointed at an empty directory rather than
+    // relying on `electricity` simply not being installed on whatever
+    // machine runs this (a review finding): with it on PATH, this
+    // would spawn a real engine under a real HOME instead.
     let work = tempfile::tempdir().unwrap();
+    let empty_path = work.path().join("empty-path");
+    std::fs::create_dir(&empty_path).unwrap();
+    let home = work.path().join("home");
+    std::fs::create_dir(&home).unwrap();
     let doc = work.path().join("do.yml");
     std::fs::write(
         &doc,
@@ -89,6 +96,8 @@ fn a_dash_e_input_reaches_the_plan_compile() {
         .arg("electricity")
         .arg("--out-dir")
         .arg(&out_dir)
+        .env("PATH", &empty_path)
+        .env("HOME", &home)
         .stdin(Stdio::null())
         .output()
         .expect("spawn osp");
@@ -107,6 +116,8 @@ fn a_dash_e_input_reaches_the_plan_compile() {
         .arg("electricity")
         .arg("--out-dir")
         .arg(&out_dir)
+        .env("PATH", &empty_path)
+        .env("HOME", &home)
         .stdin(Stdio::null())
         .output()
         .expect("spawn osp");
@@ -124,12 +135,17 @@ fn an_existing_world_accessible_out_dir_is_warned_about_not_chmodded() {
     // directory is an unrequested, possibly even EPERM-failing,
     // change) -- it only warns on stderr. `--engine electricity` with
     // a config but with the `electricity` binary itself not on PATH
-    // (true in this environment, and never assumed otherwise) reaches
-    // the launch-failure path (exit 1) only *after* `create_run_dir`
-    // has already run (P2-1 moved it to immediately before the
-    // spawn) -- with no `cof` needed at all, so this never touches the
-    // owner's own real `cof`/HOME either (F11).
+    // reaches the launch-failure path (exit 1) only *after*
+    // `create_run_dir` has already run (P2-1 moved it to immediately
+    // before the spawn) -- with no `cof` needed at all, so this never
+    // touches the owner's own real `cof`/HOME either (F11). PATH is
+    // pointed at an empty directory and HOME at a scratch one rather
+    // than relying on the ambient environment (a review finding).
     let work = tempfile::tempdir().unwrap();
+    let empty_path = work.path().join("empty-path");
+    std::fs::create_dir(&empty_path).unwrap();
+    let home = work.path().join("home");
+    std::fs::create_dir(&home).unwrap();
     let doc = work.path().join("do.yml");
     std::fs::write(&doc, "effects: []\n").unwrap();
     let config = work.path().join("config.json");
@@ -145,6 +161,8 @@ fn an_existing_world_accessible_out_dir_is_warned_about_not_chmodded() {
         .arg("electricity")
         .arg("--out-dir")
         .arg(&out_dir)
+        .env("PATH", &empty_path)
+        .env("HOME", &home)
         .stdin(Stdio::null())
         .output()
         .expect("spawn osp");
