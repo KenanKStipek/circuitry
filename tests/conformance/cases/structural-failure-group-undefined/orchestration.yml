@@ -1,0 +1,7 @@
+name: structural-failure-group-undefined
+effects:
+  - type: tool
+    name: upscale
+    provider: json
+    group: gpu
+    params: {mode: stringify, input: {x: 1}}

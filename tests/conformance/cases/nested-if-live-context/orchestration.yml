@@ -1,0 +1,26 @@
+name: nested-if-live-context
+effects:
+  - type: dynamic
+    name: outer
+    effects:
+      - type: dynamic
+        name: inner
+        effects:
+          - type: if
+            if: {mode: cel, expr: "true"}
+            then:
+              - type: tool
+                name: step
+                provider: json
+                params: {mode: stringify, input: {phase: "then"}}
+            else:
+              - type: tool
+                name: step
+                provider: json
+                params: {mode: stringify, input: {phase: "else"}}
+          - type: tool
+            name: reader
+            provider: json
+            params:
+              mode: stringify
+              input: {from: prime.outer.inner.step.value}

@@ -1,0 +1,7 @@
+{
+  "spec_case": "runtime-semantics.md §8.6",
+  "description": "`runtime.adapters.<name>` merges key by key with the config file's own block, not whole-block replace: the document's `runtime.adapters.ollama.timeout_seconds` overrides just that key, and `config.json`'s own `base_url` survives untouched (electricity/docs/spec/runtime-semantics.md §8.6, orchestration-reference.md 'File Structure').",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}
