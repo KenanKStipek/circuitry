@@ -9,4 +9,6 @@ description = "config.json -> effective settings for electricity orchestrations 
 
 [dependencies]
 electricity-value = { path = "../electricity-value" }
+electricity-json = { path = "../electricity-json" }
 indexmap = { version = "2", features = ["serde"] }
+regex = "1"
