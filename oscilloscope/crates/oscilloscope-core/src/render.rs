@@ -276,7 +276,12 @@ pub fn details_for(path: &str, plan: &PlanTree, state: Option<&Value>) -> Detail
         meta_summary.push(("command".to_string(), display_value(args)));
     }
     if let Some(stderr) = meta.get("stderr").and_then(Value::as_str) {
-        let tail: String = stderr.lines().rev().take(5).collect::<Vec<_>>().join("\n");
+        // Finding 12: `.rev()` picks the *last* 5 lines, but without
+        // reversing back they'd join in reverse reading order too —
+        // the most recent line first, not last.
+        let mut last_lines: Vec<&str> = stderr.lines().rev().take(5).collect();
+        last_lines.reverse();
+        let tail = last_lines.join("\n");
         if !tail.is_empty() {
             meta_summary.push(("stderr".to_string(), tail));
         }
@@ -917,6 +922,28 @@ mod tests {
         );
         assert_eq!(rendered.header.effects_planned, Some(1));
         assert!(rendered.header.effects_planned_is_lower_bound);
+    }
+
+    #[test]
+    fn details_for_keeps_the_stderr_tails_own_reading_order() {
+        // Finding 12: the last 5 lines, in the order they were
+        // written — not newest first.
+        let plan = PlanTree::empty();
+        let stderr = (1..=8)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "tool": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell", "stderr": stderr}}
+        }});
+        let details = details_for("prime.tool", &plan, Some(&state_json));
+        let tail = details
+            .meta_summary
+            .iter()
+            .find(|(k, _)| k == "stderr")
+            .map(|(_, v)| v.as_str())
+            .expect("a stderr summary entry");
+        assert_eq!(tail, "line 4\nline 5\nline 6\nline 7\nline 8");
     }
 
     #[test]

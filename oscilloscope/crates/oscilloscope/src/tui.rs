@@ -174,7 +174,9 @@ fn details_lines(details: &Details, kind: RowKind) -> Vec<Line<'static>> {
         lines.push(Line::from(format!("plan   {}", details.plan_summary)));
     }
     for (key, value) in &details.meta_summary {
-        lines.push(Line::from(format!("{key:<7}{value}")));
+        // Finding 11: a label of 7+ characters ("provider",
+        // "adapter_noop") left no gap from `{key:<7}` alone.
+        lines.push(Line::from(format!("{key:<8} {value}")));
     }
     if let Some(error) = &details.error {
         lines.push(Line::from(""));

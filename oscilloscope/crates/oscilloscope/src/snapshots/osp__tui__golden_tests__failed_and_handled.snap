@@ -9,7 +9,7 @@ expression: text
 "│✓ prime                                 ││path   prime.b            │"
 "│✓ a  shell                              ││type   tool               │"
 "│! b  shell                              ││plan   tool "b"           │"
-"│↷ fan                                   ││providershell             │"
+"│↷ fan                                   ││provider shell            │"
 "│                                        ││                          │"
 "│                                        ││error  /bin/ls failed     │"
 "│                                        ││(exit 1): ls: no          │"

@@ -9,7 +9,7 @@ expression: text
 "│◐ prime                                 ││path   prime.a            │"
 "│◐ a  shell                              ││type   tool               │"
 "│· b                                     ││plan   tool "a"           │"
-"│· fan                                   ││providershell             │"
+"│· fan                                   ││provider shell            │"
 "│                                        ││                          │"
 "│                                        ││                          │"
 "│                                        ││                          │"

@@ -606,6 +606,22 @@ const REDRAW_INTERVAL: Duration = Duration::from_millis(100);
 /// not to spin a whole CPU core on a shared machine.
 const KEY_POLL_INTERVAL: Duration = Duration::from_millis(30);
 
+/// How many of the TUI's own log lines are kept at most (review
+/// finding 13): unlike `--log`'s own stdout stream, the TUI's log
+/// pane buffer lives in memory for as long as osp does, and a long-
+/// running orchestration never had anything bounding it at all.
+const MAX_LOG_LINES: usize = 10_000;
+
+/// Pushes one line onto the TUI's own log buffer, then trims it back
+/// to `MAX_LOG_LINES` (finding 13) — the oldest lines go first, same
+/// as a terminal's own scrollback eventually would.
+fn push_log_line(log_lines: &mut Vec<String>, line: String) {
+    log_lines.push(line);
+    if log_lines.len() > MAX_LOG_LINES {
+        log_lines.drain(0..log_lines.len() - MAX_LOG_LINES);
+    }
+}
+
 /// Sends one cancelling signal to the engine's process group and
 /// applies the same escalation `do_run`'s plain loop applies to a real
 /// forwarded signal (DESIGN.md §4.1) — shared by both, since `c`/a
@@ -627,11 +643,10 @@ fn cancel_once(
     *signal_count += 1;
     child.forward(sig);
     if *signal_count == 1 {
-        log_lines.push(format_log_line(
-            clock,
-            None,
-            "cancelling, finally running...",
-        ));
+        push_log_line(
+            log_lines,
+            format_log_line(clock, None, "cancelling, finally running..."),
+        );
     } else if *signal_count == 2 {
         *kill_deadline = Some(Instant::now() + Duration::from_secs(10));
     }
@@ -797,11 +812,14 @@ fn run_tui(
         }
         if let Some(deadline) = kill_deadline {
             if Instant::now() >= deadline && matches!(child.try_wait(), Ok(None)) {
-                log_lines.push(format_log_line(
-                    &mut clock,
-                    None,
-                    "engine still running 10s after the second signal; sending SIGKILL",
-                ));
+                push_log_line(
+                    &mut log_lines,
+                    format_log_line(
+                        &mut clock,
+                        None,
+                        "engine still running 10s after the second signal; sending SIGKILL",
+                    ),
+                );
                 child.kill_group();
                 kill_deadline = None;
                 dirty = true;
@@ -809,11 +827,10 @@ fn run_tui(
         }
 
         for line in stderr_rx.try_iter() {
-            log_lines.push(format_log_line(
-                &mut clock,
-                None,
-                &format!("engine: {line}"),
-            ));
+            push_log_line(
+                &mut log_lines,
+                format_log_line(&mut clock, None, &format!("engine: {line}")),
+            );
             dirty = true;
         }
 
@@ -827,7 +844,10 @@ fn run_tui(
             );
             dirty |= !lines.is_empty();
             for line in &lines {
-                log_lines.push(format_log_line(&mut clock, line.ts.as_deref(), &line.text));
+                push_log_line(
+                    &mut log_lines,
+                    format_log_line(&mut clock, line.ts.as_deref(), &line.text),
+                );
             }
             if let Some(state) = state {
                 current_state = Some(state);
@@ -1409,7 +1429,10 @@ fn run_tui_watch(
             );
             dirty |= !lines.is_empty();
             for line in &lines {
-                log_lines.push(format_log_line(&mut clock, line.ts.as_deref(), &line.text));
+                push_log_line(
+                    &mut log_lines,
+                    format_log_line(&mut clock, line.ts.as_deref(), &line.text),
+                );
             }
             if let Some(state) = state {
                 last_state = Some(state);
@@ -1428,12 +1451,15 @@ fn run_tui_watch(
                 && !model.run_ended_by_events()
                 && !events_path.exists()
             {
-                log_lines.push(format_log_line(
-                    &mut clock,
-                    None,
-                    "this run has no --events stream; an aborted run can't be detected \
+                push_log_line(
+                    &mut log_lines,
+                    format_log_line(
+                        &mut clock,
+                        None,
+                        "this run has no --events stream; an aborted run can't be detected \
                      without one. q detaches.",
-                ));
+                    ),
+                );
                 warned_no_events = true;
                 dirty = true;
             }
@@ -1446,7 +1472,10 @@ fn run_tui_watch(
                     &plan,
                 );
                 for line in &more_lines {
-                    log_lines.push(format_log_line(&mut clock, line.ts.as_deref(), &line.text));
+                    push_log_line(
+                        &mut log_lines,
+                        format_log_line(&mut clock, line.ts.as_deref(), &line.text),
+                    );
                 }
                 if let Some(state) = state {
                     last_state = Some(state);
@@ -1946,6 +1975,22 @@ mod tests {
         assert!(
             text.contains("■ detached (the run is still going)"),
             "{text:?}"
+        );
+    }
+
+    #[test]
+    fn push_log_line_keeps_only_the_most_recent_max_log_lines() {
+        // Finding 13: the TUI's own log buffer has nothing else
+        // bounding it for as long as osp keeps running.
+        let mut log_lines: Vec<String> = Vec::new();
+        for n in 0..MAX_LOG_LINES + 5 {
+            push_log_line(&mut log_lines, format!("line {n}"));
+        }
+        assert_eq!(log_lines.len(), MAX_LOG_LINES);
+        assert_eq!(log_lines.first().unwrap(), "line 5");
+        assert_eq!(
+            log_lines.last().unwrap(),
+            &format!("line {}", MAX_LOG_LINES + 4)
         );
     }
 

@@ -222,6 +222,11 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     let status = wait_with_timeout(child, Duration::from_secs(30));
     assert!(status.success(), "osp should exit 0, got {status:?}");
 
+    // Finding 17: the same grace period every other test here gives
+    // the draining thread to catch up on whatever osp wrote between
+    // its last read and actually exiting — the alternate-screen exit
+    // sequence included — before this one reads the captured buffer.
+    std::thread::sleep(Duration::from_millis(200));
     let captured = captured_buf.lock().unwrap().clone();
     let rendered = String::from_utf8_lossy(&captured);
     // The alternate screen's own entry/exit sequences (DESIGN.md
